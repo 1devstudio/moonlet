@@ -286,7 +286,7 @@ export function CreatePrDialog() {
     try {
       const pr = await rpc<PullRequest>(host, M.prCreate, { path: ws.path, title, body, base: ws.base, draft });
       toast(`Opened PR #${pr.number}`);
-      useStore.setState({ rightTab: "checks", rightOpen: true });
+      useStore.setState({ rightTab: "review", rightOpen: true });
       close();
     } catch (e) {
       errorToast(e);

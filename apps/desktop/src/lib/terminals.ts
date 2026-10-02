@@ -30,11 +30,11 @@ export const defaultTermSettings: TermSettings = {
 };
 
 const THEME = {
-  background: "#0e0f12",
-  foreground: "#d7dae0",
-  cursor: "#c8ccd4",
-  cursorAccent: "#0e0f12",
-  selectionBackground: "#3a4a6b99",
+  background: "#121212",
+  foreground: "#e2e2e2",
+  cursor: "#d0d0d0",
+  cursorAccent: "#121212",
+  selectionBackground: "#d9775740",
   black: "#1c1f26",
   red: "#ef6b73",
   green: "#8fd18e",
@@ -250,7 +250,7 @@ export class TermEntry {
   }
 
   private decorate(block: CommandBlock) {
-    const d = this.term.registerDecoration({ marker: block.prompt, x: 0, width: 1, overviewRulerOptions: { color: block.exit ? "#ef6b73" : "#3d4452" } });
+    const d = this.term.registerDecoration({ marker: block.prompt, x: 0, width: 1, overviewRulerOptions: { color: block.exit ? "#ef5f5f" : "#333333" } });
     d?.onRender((el) => {
       el.classList.add("jaunt-block-mark");
       el.classList.toggle("failed", !!block.exit);

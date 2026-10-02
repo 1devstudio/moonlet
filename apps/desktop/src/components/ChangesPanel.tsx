@@ -103,7 +103,8 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
 export default function ChangesPanel({ host, ws }: { host: string; ws: Workspace }) {
   const status = useStore((s) => s.git[wsKey(host, ws.id)]);
   const [mode, setMode] = useState<Mode>("base");
-  const [selected, setSelected] = useState<string | null>(null);
+  const selected = useStore((s) => s.diffFile);
+  const setSelected = (f: string | null) => useStore.setState({ diffFile: f });
   const [versions, setVersions] = useState<FileVersions | null>(null);
   const [diff, setDiff] = useState<ParsedDiff | null>(null);
   const [sideBySide, setSideBySide] = useState(true);

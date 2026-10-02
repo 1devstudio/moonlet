@@ -18,7 +18,7 @@ function FindBar({ onClose }: { onClose: () => void }) {
   useEffect(() => ref.current?.focus(), []);
   const go = (back = false) => setMiss(!terminalSearch(q, back));
   return (
-    <div className="absolute right-4 top-[86px] z-30 flex items-center gap-1 rounded-lg border border-border-strong bg-panel-2 px-2 py-1 shadow-xl">
+    <div className="absolute right-6 top-[62px] z-30 flex items-center gap-1 rounded-lg border border-border-strong bg-panel-2 px-2 py-1 shadow-xl">
       <Search size={12} className="text-faint" />
       <input
         ref={ref}
@@ -52,11 +52,13 @@ function Home() {
   const hasRepos = useStore((s) => Object.values(s.repos).some((r) => r.length > 0));
   const local = useStore((s) => s.hosts.local);
   return (
-    <div className="flex h-full flex-col">
-      <div className="drag h-[46px] shrink-0 border-b border-border" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
+    <div className="flex h-full flex-col bg-bg">
+      <div className="drag h-[52px] shrink-0 bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
       <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-        <div className="text-[22px] font-semibold tracking-tight">jaunt</div>
-        <div className="max-w-md text-[13px] text-muted">Run coding agents side by side, each in its own worktree. They keep running when you close the app.</div>
+        <div className="font-mono text-[22px] tracking-tight">
+          <span className="text-accent">❯</span> jaunt
+        </div>
+        <div className="max-w-md text-[13.5px] text-muted">Run coding agents side by side, each in its own worktree. They keep running when you close the app.</div>
         {local && local.status !== "connected" && (
           <div className="text-[12px] text-blocked">{local.status === "error" ? `Daemon: ${local.message}` : "Starting the jaunt daemon…"}</div>
         )}
@@ -70,7 +72,7 @@ function Home() {
             <FolderPlus size={14} /> Add repository
           </Button>
         </div>
-        <div className="mt-2 text-[11.5px] text-faint">
+        <div className="mt-2 font-mono text-[11.5px] text-faint">
           <Kbd>⌘K</Kbd> command palette · <Kbd>⌘T</Kbd> new terminal · <Kbd>⌘D</Kbd> split · <Kbd>⇧⌘D</Kbd> changes
         </div>
       </div>

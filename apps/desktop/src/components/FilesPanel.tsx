@@ -66,7 +66,7 @@ export function FilesPanel({ host, ws }: { host: string; ws: Workspace }) {
   const current = openFile && openFile.host === host ? openFile : null;
   const onOpen = useCallback(
     (e: DirEntry) => {
-      if (isMarkdown(e.path)) useStore.setState({ preview: { host, path: e.path }, rightTab: "preview" });
+      if (isMarkdown(e.path)) useStore.setState({ preview: { host, path: e.path }, rightTab: "files" });
       else useStore.setState({ openFile: { host, path: e.path } });
     },
     [host],

@@ -199,6 +199,16 @@ async fn daemon_service(action: String) -> Result<Value, RpcError> {
     serde_json::from_slice(&status.stdout).map_err(err)
 }
 
+/// Webview warnings and errors, mirrored into the app log for diagnostics.
+#[tauri::command]
+fn log_js(level: String, message: String) {
+    let message: String = message.chars().take(2000).collect();
+    match level.as_str() {
+        "error" => tracing::error!(target: "webview", "{message}"),
+        _ => tracing::warn!(target: "webview", "{message}"),
+    }
+}
+
 #[tauri::command]
 fn app_info() -> Value {
     serde_json::json!({
@@ -238,6 +248,7 @@ pub fn run() {
             open_targets,
             open_in,
             daemon_service,
+            log_js,
             app_info
         ])
         .run(tauri::generate_context!())

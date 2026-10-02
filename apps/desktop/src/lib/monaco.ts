@@ -20,15 +20,15 @@ monaco.editor.defineTheme("jaunt", {
   inherit: true,
   rules: [],
   colors: {
-    "editor.background": "#0e0f12",
-    "editorGutter.background": "#0e0f12",
-    "editor.lineHighlightBackground": "#16181d",
+    "editor.background": "#121212",
+    "editorGutter.background": "#121212",
+    "editor.lineHighlightBackground": "#1a1a1a",
     "diffEditor.insertedTextBackground": "#6fcf8a1f",
     "diffEditor.removedTextBackground": "#ef6b7324",
     "diffEditor.insertedLineBackground": "#6fcf8a12",
     "diffEditor.removedLineBackground": "#ef6b7314",
-    "editorWidget.background": "#16181d",
-    "scrollbarSlider.background": "#2c303966",
+    "editorWidget.background": "#1a1a1a",
+    "scrollbarSlider.background": "#2a2a2a66",
   },
 });
 

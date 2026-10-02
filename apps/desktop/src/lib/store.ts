@@ -21,7 +21,7 @@ import {
 import { sanitize } from "./sanitize";
 import { disposeEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
-export type RightTab = "changes" | "files" | "preview" | "checks";
+export type RightTab = "files" | "changes" | "review";
 
 export interface Selection {
   host: string;
@@ -48,7 +48,15 @@ const UI_KEY = "jaunt.ui";
 function loadJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
-    return raw ? { ...fallback, ...JSON.parse(raw) } : fallback;
+    const v = raw ? { ...fallback, ...JSON.parse(raw) } : fallback;
+    // Defaults from older versions (wider review panel).
+    if (v && typeof v === "object" && (v as { rightWidth?: number }).rightWidth === 520) (v as { rightWidth: number }).rightWidth = 380;
+    if (v && typeof v === "object" && (v as { sidebarWidth?: number }).sidebarWidth === 264) (v as { sidebarWidth: number }).sidebarWidth = 280;
+    // Tabs from older versions.
+    if (v && typeof v === "object" && "rightTab" in v && !["files", "changes", "review"].includes((v as { rightTab: string }).rightTab)) {
+      (v as { rightTab: string }).rightTab = "files";
+    }
+    return v;
   } catch {
     return fallback;
   }
@@ -74,13 +82,25 @@ interface UiPersist {
 
 const uiDefaults: UiPersist = {
   selected: null,
-  sidebarWidth: 264,
-  rightWidth: 520,
+  sidebarWidth: 280,
+  rightWidth: 380,
   rightOpen: true,
   sidebarOpen: true,
-  rightTab: "changes",
+  rightTab: "files",
   collapsed: {},
 };
+
+/** In-app card when an agent in the open workspace finishes or needs input. */
+export interface AgentCard {
+  host: string;
+  session: number;
+  workspace: string;
+  agent: string | null;
+  state: AgentState;
+  message: string;
+  workedMs: number | null;
+  at: number;
+}
 
 export interface Toast {
   id: number;
@@ -105,6 +125,11 @@ interface State extends UiPersist {
   settings: Settings;
   toasts: Toast[];
   lastAttention: { host: string; session: number; at: number } | null;
+  /** When each agent session last started working (for "worked for 7s"). */
+  workingSince: Record<string, number>;
+  card: AgentCard | null;
+  /** File shown in the Changes diff (set from the Files list). */
+  diffFile: string | null;
 }
 
 export const useStore = create<State>(() => ({
@@ -124,6 +149,9 @@ export const useStore = create<State>(() => ({
   settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false }),
   toasts: [],
   lastAttention: null,
+  workingSince: {},
+  card: null,
+  diffFile: null,
 }));
 
 const set = useStore.setState;
@@ -190,9 +218,18 @@ export function repoOf(s: State, host: string, ws: Workspace): Repo | undefined 
 
 // ------------------------------------------------------------------ actions
 
-export async function loadHost(host: string) {
+/**
+ * Loads a host's repos, workspaces and sessions. The output channel and the
+ * data are independent, so one failing never blanks the other; failures are
+ * logged and retried with backoff.
+ */
+export async function loadHost(host: string, attempt = 0): Promise<void> {
   try {
     await subscribeHost(host);
+  } catch (e) {
+    console.warn(`output channel for ${host} failed`, e);
+  }
+  try {
     const [repos, workspaces, sessions] = await Promise.all([
       rpc<Repo[]>(host, M.repoList),
       rpc<Workspace[]>(host, M.wsList),
@@ -207,7 +244,10 @@ export async function loadHost(host: string) {
     reattachHost(host);
     void refreshAllGit(host);
   } catch (e) {
-    console.warn("load host failed", host, e);
+    console.warn(`loading ${host} failed (attempt ${attempt + 1})`, e);
+    if (attempt < 8 && get().hosts[host]?.status === "connected") {
+      setTimeout(() => void loadHost(host, attempt + 1), Math.min(500 * 2 ** attempt, 8000));
+    }
   }
 }
 
@@ -257,7 +297,7 @@ export function focusSession(host: string, session: number) {
 }
 
 export function selectWorkspace(host: string, id: string) {
-  set({ selected: { host, workspace: id } });
+  set({ selected: { host, workspace: id }, diffFile: null, preview: null });
   const layout = getLayout(host, id);
   if (layout.focused !== null) {
     set((s) => {
@@ -318,6 +358,23 @@ function isVisible(host: string, session: number): boolean {
 
 async function onAttention(host: string, a: Attention) {
   const s = get();
+  if (a.workspace_id && s.selected?.host === host && s.selected.workspace === a.workspace_id) {
+    const since = s.workingSince[sessKey(host, a.session)];
+    const info = s.sessions[host]?.[a.session];
+    set({
+      card: {
+        host,
+        session: a.session,
+        workspace: a.workspace_id,
+        agent: info?.agent ?? null,
+        state: a.state,
+        message: sanitize(a.message, 240),
+        workedMs: since ? Date.now() - since : null,
+        at: Date.now(),
+      },
+    });
+    void refreshGit(host, a.workspace_id);
+  }
   const focused = document.hasFocus();
   const visible = focused && isVisible(host, a.session);
   if (!visible) {
@@ -335,7 +392,13 @@ async function onAttention(host: string, a: Attention) {
 }
 
 function upsertSession(host: string, info: SessionInfo) {
-  set((s) => ({ sessions: { ...s.sessions, [host]: { ...(s.sessions[host] ?? {}), [info.id]: info } } }));
+  set((s) => {
+    const prev = s.sessions[host]?.[info.id];
+    const key = sessKey(host, info.id);
+    let workingSince = s.workingSince;
+    if (info.agent_state === "working" && prev?.agent_state !== "working") workingSince = { ...workingSince, [key]: Date.now() };
+    return { sessions: { ...s.sessions, [host]: { ...(s.sessions[host] ?? {}), [info.id]: info } }, workingSince };
+  });
 }
 
 function handleEvent(e: DaemonEvent) {

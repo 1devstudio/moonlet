@@ -4,7 +4,7 @@ import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
 import { errorToast, getLayout, setLayout, useStore } from "../lib/store";
 import { getEntry } from "../lib/terminals";
-import { Button, cx } from "./ui";
+import { Button } from "./ui";
 
 function resolvePath(base: string, p: string, home: string | null): string {
   if (p.startsWith("/")) return p;
@@ -34,7 +34,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
       const base = entry.cwd || cur?.reported_cwd || cur?.cwd || "/";
       const path = resolvePath(base, p, home);
       const target = { host, path, line };
-      if (path.endsWith(".md") || path.endsWith(".markdown")) useStore.setState({ preview: target, rightTab: "preview", rightOpen: true });
+      if (path.endsWith(".md") || path.endsWith(".markdown")) useStore.setState({ preview: target, rightTab: "files", rightOpen: true });
       else useStore.setState({ openFile: target, rightTab: "files", rightOpen: true });
     };
     return () => entry.unmount();
@@ -47,7 +47,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
   const exited = info?.exit;
   return (
     <div
-      className={cx("relative h-full w-full overflow-hidden bg-[#0e0f12]", focused ? "ring-1 ring-inset ring-[#2f3b5a]" : "")}
+      className="relative h-full w-full overflow-hidden bg-bg"
       onMouseDown={() => {
         const l = getLayout(host, wsId);
         if (l.focused !== session) setLayout(host, wsId, { ...l, focused: session });

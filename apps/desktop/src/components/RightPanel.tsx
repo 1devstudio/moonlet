@@ -1,55 +1,248 @@
-import { lazy, Suspense, useEffect } from "react";
-import { rpc } from "../lib/daemon";
-import { M, type Workspace } from "../lib/protocol";
-import { type RightTab, useStore, wsKey } from "../lib/store";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { ArrowRight, ChevronDown, ChevronRight, MoreHorizontal, Play, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
+import { hostsApi, rpc } from "../lib/daemon";
+import { M, type FileChange, type PullRequest, type RepoConfig, type Workspace } from "../lib/protocol";
+import { errorToast, repoOf, type RightTab, useStore, wsKey } from "../lib/store";
+import { archiveWorkspace, runScript } from "../lib/actions";
 import { ChecksPanel } from "./ChecksPanel";
 import { FilesPanel } from "./FilesPanel";
 import { PreviewPanel } from "./PreviewPanel";
-import { cx } from "./ui";
+import { Empty, cx } from "./ui";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
-const TABS: { id: RightTab; label: string; key: string }[] = [
-  { id: "changes", label: "Changes", key: "⇧⌘D" },
-  { id: "files", label: "Files", key: "⇧⌘E" },
-  { id: "preview", label: "Preview", key: "" },
-  { id: "checks", label: "Checks", key: "" },
+const TABS: { id: RightTab; label: string }[] = [
+  { id: "files", label: "Files" },
+  { id: "changes", label: "Changes" },
+  { id: "review", label: "Review" },
 ];
+
+function MoreMenu({ host, ws }: { host: string; ws: Workspace }) {
+  const [open, setOpen] = useState(false);
+  const [targets, setTargets] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => {
+    if (open && !targets.length) void hostsApi.openTargets().then(setTargets);
+  }, [open, targets.length]);
+  const remote = host !== "local";
+  const usable = targets.filter((t) => !remote || t.id === "vscode" || t.id === "cursor");
+  const item = (label: string, run: () => void, danger = false) => (
+    <button
+      key={label}
+      className={cx("block w-full px-3 py-1.5 text-left text-[13px] hover:bg-hover", danger && "text-error")}
+      onClick={() => {
+        setOpen(false);
+        run();
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="no-drag relative">
+      <button title="More" className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-fg" onClick={() => setOpen(!open)}>
+        <MoreHorizontal size={16} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-40 mt-1 w-52 overflow-hidden rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
+            {usable.map((t) => item(`Open in ${t.label}`, () => void hostsApi.openIn(t.id, ws.path, host).catch(errorToast)))}
+            <div className="my-1 border-t border-border" />
+            {item("Commit…", () => useStore.setState({ dialog: { kind: "commit" } }))}
+            {item("Re-run setup script", () => void runScript("setup"))}
+            {item("Toggle sidebar  ⌘B", () => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen })))}
+            <div className="my-1 border-t border-border" />
+            {item("Archive workspace…", () => void archiveWorkspace(), true)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TopActions({ host, ws }: { host: string; ws: Workspace }) {
+  const repo = useStore((s) => repoOf(s, host, ws));
+  const [config, setConfig] = useState<RepoConfig | null>(null);
+  const [pr, setPr] = useState<PullRequest | null>(null);
+  useEffect(() => {
+    if (repo) void rpc<RepoConfig>(host, M.repoConfig, { id: repo.id }).then(setConfig).catch(() => setConfig(null));
+  }, [host, repo]);
+  useEffect(() => {
+    let live = true;
+    const load = () => void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path }).then((p) => live && setPr(p)).catch(() => live && setPr(null));
+    load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [host, ws.path]);
+  return (
+    <div className="drag flex h-[52px] shrink-0 items-center gap-1 px-4">
+      <button
+        className="no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised disabled:text-faint disabled:hover:bg-transparent"
+        disabled={!config?.run}
+        title={config?.run ? `Run: ${config.run} (⌘R)` : 'Add run = "…" to .jaunt/config.toml'}
+        onClick={() => void runScript("run")}
+      >
+        <Play size={13} fill="currentColor" strokeWidth={0} /> Run
+      </button>
+      <button
+        className="no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
+        title={pr ? pr.title : "Create pull request (⇧⌘P)"}
+        onClick={() => (pr ? void openUrl(pr.url) : useStore.setState({ dialog: { kind: "create-pr" } }))}
+      >
+        <svg viewBox="0 0 16 16" width="13" height="13" className="text-accent" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <circle cx="4" cy="3.5" r="1.6" />
+          <circle cx="4" cy="12.5" r="1.6" />
+          <circle cx="12" cy="12.5" r="1.6" />
+          <path d="M4 5.1v5.8M12 10.9V7a2.5 2.5 0 0 0-2.5-2.5H7m0 0 1.6-1.6M7 4.5l1.6 1.6" />
+        </svg>
+        PR {pr && <span className="text-muted">#{pr.number}</span>}
+      </button>
+      <span className="ml-auto" />
+      <MoreMenu host={host} ws={ws} />
+    </div>
+  );
+}
+
+function StatusBox({ status }: { status: FileChange["status"] }) {
+  const p = { size: 14, strokeWidth: 1.5, className: "shrink-0 text-muted" };
+  if (status === "added" || status === "untracked") return <SquarePlus {...p} />;
+  if (status === "deleted") return <SquareMinus {...p} />;
+  return <SquareDot {...p} />;
+}
+
+/** Changed files grouped by directory, as in the reference design. */
+function ChangedFiles({ host, ws }: { host: string; ws: Workspace }) {
+  const git = useStore((s) => s.git[wsKey(host, ws.id)]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const groups = useMemo(() => {
+    const m = new Map<string, FileChange[]>();
+    for (const f of git?.files ?? []) {
+      const i = f.path.lastIndexOf("/");
+      const dir = i < 0 ? "" : f.path.slice(0, i);
+      m.set(dir, [...(m.get(dir) ?? []), f]);
+    }
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [git]);
+  if (!git) return null;
+  if (git.files.length === 0) return <Empty title="No changes yet">{`Nothing differs from ${ws.base}.`}</Empty>;
+  return (
+    <div className="pb-4">
+      {groups.map(([dir, files]) => (
+        <div key={dir} className="mt-3">
+          <button
+            className="flex w-full items-center gap-2 px-5 py-1.5 text-left font-mono text-[12px] uppercase tracking-[0.06em] text-muted hover:text-fg"
+            onClick={() => setCollapsed((c) => ({ ...c, [dir]: !c[dir] }))}
+          >
+            {collapsed[dir] ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+            <span className="truncate">{dir || "/"}</span>
+          </button>
+          {!collapsed[dir] &&
+            files.map((f) => {
+              const name = f.path.slice(dir ? dir.length + 1 : 0);
+              const count = f.binary ? "bin" : f.additions && f.deletions ? `+${f.additions} −${f.deletions}` : f.deletions ? `−${f.deletions}` : `+${f.additions}`;
+              return (
+                <button
+                  key={f.path}
+                  title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
+                  className="flex h-[38px] w-full items-center gap-3 pl-[34px] pr-5 text-left hover:bg-panel-2"
+                  onClick={() => {
+                    if (/\.(md|markdown)$/i.test(f.path) && f.status !== "deleted") {
+                      useStore.setState({ preview: { host, path: `${ws.path}/${f.path}` } });
+                    } else {
+                      useStore.setState({ diffFile: f.path, rightTab: "changes" });
+                    }
+                  }}
+                >
+                  <StatusBox status={f.status} />
+                  <span className={cx("min-w-0 flex-1 truncate text-[14px]", f.status === "deleted" ? "text-muted line-through" : "text-fg")}>{name}</span>
+                  <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">{count}</span>
+                </button>
+              );
+            })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SummaryLine({ host, ws }: { host: string; ws: Workspace }) {
+  const git = useStore((s) => s.git[wsKey(host, ws.id)]);
+  return (
+    <div className="flex items-center gap-2 px-5 pb-1 pt-4 font-mono text-[12.5px] text-muted">
+      {git ? (
+        <>
+          <span className="text-add">+{git.additions}</span>
+          <span className="text-del">−{git.deletions}</span>
+          <span className="text-faint">·</span>
+          <span>
+            {git.files.length} file{git.files.length === 1 ? "" : "s"}
+          </span>
+          <span className="text-faint">·</span>
+          <ArrowRight size={12} />
+          <span className="rounded bg-raised px-1.5 py-0.5 text-fg">{ws.base}</span>
+        </>
+      ) : (
+        <span className="text-faint">loading…</span>
+      )}
+    </div>
+  );
+}
 
 export function RightPanel({ host, ws }: { host: string; ws: Workspace }) {
   const tab = useStore((s) => s.rightTab);
-  const count = useStore((s) => s.git[wsKey(host, ws.id)]?.files.length ?? 0);
+  const preview = useStore((s) => s.preview);
+  const [allFiles, setAllFiles] = useState(false);
 
-  // Watch the worktree for live refresh of Changes, Files and Preview.
+  // Watch the worktree for live refresh of Files, Changes and Preview.
   useEffect(() => {
     void rpc(host, M.fsWatch, { path: ws.path }).catch(() => {});
     return () => void rpc(host, M.fsUnwatch, { path: ws.path }).catch(() => {});
   }, [host, ws.path]);
 
   return (
-    <div className="flex h-full flex-col border-l border-border bg-panel">
-      <div className="drag flex h-[46px] shrink-0 items-end gap-0.5 border-b border-border px-2">
+    <div className="flex h-full flex-col bg-panel">
+      <TopActions host={host} ws={ws} />
+      <div className="flex h-[48px] shrink-0 items-stretch px-2">
         {TABS.map((t) => (
           <button
             key={t.id}
-            title={t.key ? `${t.label} (${t.key})` : t.label}
-            onClick={() => useStore.setState({ rightTab: t.id })}
+            onClick={() => useStore.setState({ rightTab: t.id, preview: null })}
             className={cx(
-              "no-drag -mb-px flex items-center gap-1.5 border-b-2 px-2.5 pb-2 pt-1 text-[12.5px]",
-              tab === t.id ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg",
+              "flex-1 rounded-t-md text-[14px] transition-colors",
+              tab === t.id && !preview ? "bg-bg font-semibold text-fg" : "text-muted hover:text-fg",
             )}
           >
             {t.label}
-            {t.id === "changes" && count > 0 && <span className="rounded-full bg-raised px-1.5 text-[10.5px] text-muted">{count}</span>}
           </button>
         ))}
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-bg">
         <Suspense fallback={null}>
-          {tab === "changes" && <ChangesPanel host={host} ws={ws} />}
-          {tab === "files" && <FilesPanel host={host} ws={ws} />}
-          {tab === "preview" && <PreviewPanel />}
-          {tab === "checks" && <ChecksPanel host={host} ws={ws} />}
+          {preview ? (
+            <PreviewPanel />
+          ) : tab === "files" ? (
+            <div className="flex h-full flex-col">
+              <div className="flex items-center">
+                <SummaryLine host={host} ws={ws} />
+                <button
+                  className="ml-auto mr-4 mt-3 rounded px-2 py-0.5 font-mono text-[11.5px] text-faint hover:bg-raised hover:text-fg"
+                  onClick={() => setAllFiles(!allFiles)}
+                  title={allFiles ? "Show changed files" : "Browse all files"}
+                >
+                  {allFiles ? "changed" : "all files"}
+                </button>
+              </div>
+              <div className="min-h-0 flex-1">{allFiles ? <FilesPanel host={host} ws={ws} /> : <ChangedFiles host={host} ws={ws} />}</div>
+            </div>
+          ) : tab === "changes" ? (
+            <ChangesPanel host={host} ws={ws} />
+          ) : (
+            <ChecksPanel host={host} ws={ws} />
+          )}
         </Suspense>
       </div>
     </div>

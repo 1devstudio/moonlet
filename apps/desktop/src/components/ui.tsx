@@ -1,5 +1,5 @@
 import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useEffect } from "react";
-import { AlertTriangle, Check, CircleDashed, LoaderCircle, X } from "lucide-react";
+import { GitBranch, SquareTerminal, X } from "lucide-react";
 import type { AgentState } from "../lib/protocol";
 
 export function cx(...c: (string | false | null | undefined)[]) {
@@ -15,7 +15,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
       className={cx(
         "no-drag inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
         size === "sm" ? "h-6 px-2 text-[12px]" : "h-7 px-2.5 text-[12.5px]",
-        variant === "primary" && "bg-accent text-[#0b0c0e] hover:bg-[#93adff]",
+        variant === "primary" && "bg-fg text-bg hover:bg-white",
         variant === "subtle" && "border border-border-strong bg-raised text-fg hover:bg-hover",
         variant === "ghost" && "text-muted hover:bg-hover hover:text-fg",
         variant === "danger" && "border border-[#5a2a2e] bg-[#2a1416] text-error hover:bg-[#3a1b1e]",
@@ -52,20 +52,78 @@ export const STATE_LABEL: Record<AgentState, string> = {
   idle: "Idle",
 };
 
+/** Sidebar/tab status: dots in the reference style, a branch for no agent. */
 export function StateGlyph({ state, size = 13 }: { state: AgentState | null; size?: number }) {
+  const box = { width: size, height: size };
+  const dot = (cls: string, d = 7) => (
+    <span className="inline-flex shrink-0 items-center justify-center" style={box}>
+      <span className={cx("rounded-full", cls)} style={{ width: d, height: d }} />
+    </span>
+  );
   switch (state) {
     case "working":
-      return <LoaderCircle size={size} className="spin text-working" aria-label="working" />;
+      return (
+        <span className="inline-flex shrink-0 items-center justify-center" style={box} aria-label="working">
+          <span className="jaunt-dots">
+            <i />
+            <i />
+            <i />
+          </span>
+        </span>
+      );
     case "blocked":
-      return <AlertTriangle size={size} className="pulse text-blocked" aria-label="needs input" />;
+      return dot("bg-blocked");
     case "done":
-      return <Check size={size} className="text-done" aria-label="done" />;
+      return dot("bg-done");
     case "error":
-      return <X size={size} className="text-error" aria-label="failed" />;
+      return dot("bg-error");
     case "idle":
-      return <CircleDashed size={size} className="text-idle" aria-label="idle" />;
+      return dot("bg-idle", 5);
     default:
-      return <span className="inline-block h-1.5 w-1.5 rounded-full bg-border-strong" style={{ margin: (size - 6) / 2 }} />;
+      return (
+        <span className="inline-flex shrink-0 items-center justify-center text-muted" style={box}>
+          <GitBranch size={size - 1} strokeWidth={1.75} />
+        </span>
+      );
+  }
+}
+
+/** Agent brand marks for tabs and cards; terminals for everything else. */
+export function AgentIcon({ agent, size = 14 }: { agent?: string | null; size?: number }) {
+  const s = { width: size, height: size };
+  switch (agent) {
+    case "claude":
+      return (
+        <svg viewBox="0 0 24 24" style={s} className="shrink-0 text-accent" fill="currentColor" aria-label="Claude">
+          {[0, 30, 60, 90, 120, 150].map((r) => (
+            <rect key={r} x="11" y="2" width="2" height="20" rx="1" transform={`rotate(${r} 12 12)`} />
+          ))}
+        </svg>
+      );
+    case "codex":
+      return (
+        <svg viewBox="0 0 24 24" style={s} className="shrink-0 text-fg" fill="none" stroke="currentColor" strokeWidth="1.6" aria-label="Codex">
+          {[0, 60, 120].map((r) => (
+            <ellipse key={r} cx="12" cy="12" rx="9" ry="4.2" transform={`rotate(${r} 12 12)`} />
+          ))}
+        </svg>
+      );
+    case "cursor":
+      return (
+        <svg viewBox="0 0 24 24" style={s} className="shrink-0 text-fg" fill="currentColor" aria-label="Cursor">
+          <path d="M12 2 21 7v10l-9 5-9-5V7l9-5Z" opacity=".35" />
+          <path d="M12 2 21 7l-9 5-9-5 9-5Z" />
+        </svg>
+      );
+    case "opencode":
+      return (
+        <svg viewBox="0 0 24 24" style={s} className="shrink-0 text-fg" fill="none" stroke="currentColor" strokeWidth="2" aria-label="OpenCode">
+          <rect x="4" y="3" width="16" height="18" rx="1" />
+          <rect x="8" y="7" width="8" height="10" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    default:
+      return <SquareTerminal size={size} className="shrink-0 text-muted" strokeWidth={1.75} />;
   }
 }
 

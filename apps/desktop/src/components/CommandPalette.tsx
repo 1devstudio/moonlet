@@ -59,7 +59,7 @@ export function CommandPalette() {
       { id: "setup", label: "Re-run setup script", run: () => void runScript("setup") },
       { id: "changes", label: "Show changes", keys: "⇧⌘D", run: () => useStore.setState({ rightTab: "changes", rightOpen: true }) },
       { id: "files", label: "Show files", keys: "⇧⌘E", run: () => useStore.setState({ rightTab: "files", rightOpen: true }) },
-      { id: "checks", label: "Show checks", run: () => useStore.setState({ rightTab: "checks", rightOpen: true }) },
+      { id: "checks", label: "Show review (PR, checks, commits)", run: () => useStore.setState({ rightTab: "review", rightOpen: true }) },
       { id: "commit", label: "Commit…", run: () => useStore.setState({ dialog: { kind: "commit" } }) },
       { id: "pr", label: "Create pull request…", keys: "⇧⌘P", run: () => useStore.setState({ dialog: { kind: "create-pr" } }) },
       { id: "archive", label: "Archive workspace…", run: () => void archiveWorkspace() },
