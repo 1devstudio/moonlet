@@ -7,6 +7,9 @@
 //! prompt marks) and OSC 9 / OSC 777 desktop notifications.
 
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
+/// Smallest size the emulator accepts; tiny grids trip edge cases in vt100.
+const MIN_ROWS: u16 = 2;
+const MIN_COLS: u16 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Signal {
@@ -123,8 +126,8 @@ impl TermState {
     pub fn with_scrollback(rows: u16, cols: u16, scrollback: usize) -> Self {
         Self {
             parser: vt100::Parser::new_with_callbacks(
-                rows.max(1),
-                cols.max(1),
+                rows.max(MIN_ROWS),
+                cols.max(MIN_COLS),
                 scrollback,
                 Signals::default(),
             ),
@@ -134,7 +137,22 @@ impl TermState {
 
     /// Feeds PTY output; returns the signals it produced.
     pub fn process(&mut self, bytes: &[u8]) -> Vec<Signal> {
-        self.parser.process(bytes);
+        let parser = &mut self.parser;
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.process(bytes)))
+            .is_ok();
+        if !ok {
+            // An emulator bug must not take the session down: start a fresh
+            // screen of the same size and keep streaming.
+            tracing::error!("terminal emulator panicked; resetting screen state");
+            let (rows, cols) = self.size();
+            self.parser = vt100::Parser::new_with_callbacks(
+                rows,
+                cols,
+                DEFAULT_SCROLLBACK,
+                Signals::default(),
+            );
+            return Vec::new();
+        }
         let signals = std::mem::take(&mut self.parser.callbacks_mut().pending);
         for s in &signals {
             if let Signal::Title(t) = s {
@@ -145,7 +163,9 @@ impl TermState {
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        self.parser.screen_mut().set_size(rows.max(1), cols.max(1));
+        self.parser
+            .screen_mut()
+            .set_size(rows.max(MIN_ROWS), cols.max(MIN_COLS));
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -329,6 +349,13 @@ mod tests {
         let mut t = TermState::new(5, 20);
         t.process("日本語 e\u{301} 👍🏽 ok\r\n".as_bytes());
         assert_round_trip(&mut t);
+    }
+
+    #[test]
+    fn tiny_sizes_are_clamped() {
+        let mut t = TermState::new(0, 0);
+        t.process("wide 日本 text that wraps\r\n".repeat(5).as_bytes());
+        assert_eq!(t.size(), (MIN_ROWS, MIN_COLS));
     }
 
     #[test]

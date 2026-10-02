@@ -26,6 +26,10 @@ pub const SESSION_SEARCH: &str = "session.search";
 // Agents
 pub const AGENT_REPORT: &str = "agent.report";
 
+pub const HOOKS_STATUS: &str = "hooks.status";
+pub const HOOKS_INSTALL: &str = "hooks.install";
+pub const HOOKS_UNINSTALL: &str = "hooks.uninstall";
+
 // Repos and workspaces
 pub const REPO_ADD: &str = "repo.add";
 pub const REPO_LIST: &str = "repo.list";
@@ -68,7 +72,7 @@ pub const EV_REPOS_CHANGED: &str = "repos.changed";
 pub const EV_WORKSPACES_CHANGED: &str = "workspaces.changed";
 pub const EV_FS_CHANGED: &str = "fs.changed";
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCreate {
     pub cwd: String,
     /// argv; empty means the user's login shell.
@@ -88,6 +92,22 @@ pub struct SessionCreate {
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,
+}
+
+impl Default for SessionCreate {
+    fn default() -> Self {
+        Self {
+            cwd: String::new(),
+            command: Vec::new(),
+            env: BTreeMap::new(),
+            cols: default_cols(),
+            rows: default_rows(),
+            kind: SessionKind::default(),
+            title: None,
+            workspace_id: None,
+            agent: None,
+        }
+    }
 }
 
 fn default_cols() -> u16 {
@@ -341,4 +361,12 @@ pub struct FsPath {
 pub struct FsChanged {
     pub root: String,
     pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HooksInstall {
+    #[serde(default = "yes")]
+    pub claude: bool,
+    #[serde(default = "yes")]
+    pub codex: bool,
 }
