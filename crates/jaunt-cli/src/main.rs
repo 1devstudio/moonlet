@@ -63,6 +63,12 @@ enum Cmd {
         #[command(subcommand)]
         action: PaneAction,
     },
+    /// Call any daemon method and print the JSON result (for scripts).
+    Rpc {
+        method: String,
+        /// JSON params, e.g. '{"path": "~/code/app"}'.
+        params: Option<String>,
+    },
     /// Start agents.
     Agent {
         #[command(subcommand)]
@@ -277,6 +283,15 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                     },
                 )
                 .await?;
+        }
+        Cmd::Rpc { method, params } => {
+            let params: serde_json::Value = match params {
+                Some(p) => serde_json::from_str(&p).context("params must be JSON")?,
+                None => serde_json::json!({}),
+            };
+            let mut c = connect(&socket).await?;
+            let out: serde_json::Value = c.request(&method, params).await?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
         }
         Cmd::Agent {
             action: AgentAction::Start { agent, cwd, prompt },
