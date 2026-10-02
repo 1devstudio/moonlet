@@ -101,7 +101,8 @@ export class TermEntry {
       cursorBlink: true,
       macOptionIsMeta: settings.optionIsMeta,
       macOptionClickForcesSelection: true,
-      scrollback: 10000,
+      // The daemon keeps 10k lines for replay and search; the view needs fewer.
+      scrollback: 5000,
       theme: THEME,
       drawBoldTextInBrightColors: false,
       minimumContrastRatio: 1,
