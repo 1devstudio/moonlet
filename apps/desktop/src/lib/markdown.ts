@@ -42,9 +42,21 @@ let mermaidId = 0;
 async function renderMermaid(source: string): Promise<string> {
   try {
     const { default: mermaid } = await import("mermaid");
-    mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict", fontFamily: "-apple-system, sans-serif" });
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "strict",
+      htmlLabels: false,
+      flowchart: { htmlLabels: false },
+      fontFamily: "-apple-system, sans-serif",
+    });
     const { svg } = await mermaid.render(`jaunt-mermaid-${++mermaidId}`, source);
-    return svg;
+    // As an image the SVG is inert (no scripts, no external loads) and the
+    // sanitizer has nothing to strip from it.
+    const bytes = new TextEncoder().encode(svg);
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return `<img class="mermaid-img" alt="diagram" src="data:image/svg+xml;base64,${btoa(bin)}">`;
   } catch (e) {
     return `<pre class="mermaid-error">Mermaid: ${escapeHtml(e instanceof Error ? e.message : String(e))}</pre>`;
   }
@@ -91,7 +103,7 @@ tr:nth-child(2n) td{background:#121318}
 img{max-width:100%}
 hr{border:0;border-top:1px solid #23262e}
 .mermaid{margin:1em 0;text-align:center}
-.mermaid svg{max-width:100%;height:auto}
+.mermaid svg,.mermaid img{max-width:100%;height:auto}
 .mermaid-error{color:#ef6b73}
 ul.contains-task-list{list-style:none;padding-left:1.2em}
 .hljs-keyword,.hljs-selector-tag,.hljs-built_in{color:#c49bff}

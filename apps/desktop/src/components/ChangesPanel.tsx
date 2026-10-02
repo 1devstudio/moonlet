@@ -283,6 +283,8 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Workspace
                 original={versions.original ?? ""}
                 modified={versions.modified ?? ""}
                 onMount={onMount}
+                keepCurrentOriginalModel
+                keepCurrentModifiedModel
                 options={{ ...editorOptions, readOnly: true, renderIndicators: false, renderMarginRevertIcon: false, renderSideBySide: sideBySide, originalEditable: false, renderOverviewRuler: false, hideUnchangedRegions: { enabled: true } }}
               />
             ) : null}
