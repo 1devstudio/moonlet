@@ -42,26 +42,6 @@ pub fn socket_path() -> PathBuf {
 /// `sun_path` is 104 bytes on macOS (108 on Linux), including the NUL.
 const MAX_SOCKET_PATH: usize = 100;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn long_homes_get_a_short_socket_path() {
-        // SAFETY: test-only env mutation, no concurrent env readers in this test binary's case.
-        unsafe {
-            std::env::remove_var("JAUNT_SOCK");
-            std::env::set_var("JAUNT_HOME", format!("/tmp/{}", "x".repeat(120)));
-        }
-        let p = super::socket_path();
-        assert!(
-            p.as_os_str().len() < super::MAX_SOCKET_PATH,
-            "{}",
-            p.display()
-        );
-        assert!(p.to_string_lossy().starts_with("/tmp/jaunt-"));
-        unsafe { std::env::remove_var("JAUNT_HOME") };
-    }
-}
-
 pub fn state_file() -> PathBuf {
     home().join("state.json")
 }
@@ -92,4 +72,24 @@ pub fn hostname() -> String {
         .ok()
         .and_then(|h| h.into_string().ok())
         .unwrap_or_else(|| "localhost".into())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn long_homes_get_a_short_socket_path() {
+        // SAFETY: test-only env mutation, no concurrent env readers in this test binary's case.
+        unsafe {
+            std::env::remove_var("JAUNT_SOCK");
+            std::env::set_var("JAUNT_HOME", format!("/tmp/{}", "x".repeat(120)));
+        }
+        let p = super::socket_path();
+        assert!(
+            p.as_os_str().len() < super::MAX_SOCKET_PATH,
+            "{}",
+            p.display()
+        );
+        assert!(p.to_string_lossy().starts_with("/tmp/jaunt-"));
+        unsafe { std::env::remove_var("JAUNT_HOME") };
+    }
 }
