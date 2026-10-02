@@ -226,10 +226,11 @@ async fn proxy(socket: PathBuf) -> Result<()> {
         }
         Err(_) => true,
     };
-    if outdated && upgrade::pid_file().exists() {
-        if let Err(e) = upgrade::request_upgrade(&socket, std::env::current_exe()?).await {
-            eprintln!("jauntd: upgrade of the running daemon failed: {e:#}");
-        }
+    if outdated
+        && upgrade::pid_file().exists()
+        && let Err(e) = upgrade::request_upgrade(&socket, std::env::current_exe()?).await
+    {
+        eprintln!("jauntd: upgrade of the running daemon failed: {e:#}");
     }
     let stream = tokio::net::UnixStream::connect(&socket).await?;
     let (mut sr, mut sw) = stream.into_split();
