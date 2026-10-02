@@ -35,3 +35,7 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | F3 | Open file from terminal output | P1 | 3 | implemented | [F3-open-from-terminal.md](F3-open-from-terminal.md) |
 | M1 | Markdown preview (M1, M2) | P0 | 1 | implemented | [M1-markdown-preview.md](M1-markdown-preview.md) |
 | S3 | Daemon upgrade without killing sessions | P1 | 3 | implemented | [S3-live-upgrade.md](S3-live-upgrade.md) |
+| R1 | Remote hosts via system OpenSSH | P0 | 2 | implemented | [R1-ssh-hosts.md](R1-ssh-hosts.md) |
+| R2 | Version-pinned, checksummed remote helper | P0 | 2 | implemented | [R2-remote-helper-install.md](R2-remote-helper-install.md) |
+| R3 | Remote sessions survive disconnects | P0 | 2 | implemented | [R3-remote-sessions-reconnect.md](R3-remote-sessions-reconnect.md) |
+| R4 | Local and remote hosts in one sidebar | P1 | 3 | implemented | [R4-unified-hosts-sidebar.md](R4-unified-hosts-sidebar.md) |
