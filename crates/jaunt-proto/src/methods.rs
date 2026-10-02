@@ -38,6 +38,7 @@ pub const REPO_CONFIG: &str = "repo.config";
 pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_ARCHIVE: &str = "workspace.archive";
+pub const WORKSPACE_UNARCHIVE: &str = "workspace.unarchive";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
 pub const WORKSPACE_RUN: &str = "workspace.run";
 

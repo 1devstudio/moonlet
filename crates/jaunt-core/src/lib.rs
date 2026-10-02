@@ -3,8 +3,11 @@
 
 pub mod agent;
 pub mod client;
+pub mod fs;
+pub mod git;
 pub mod hooks;
 pub mod paths;
 pub mod pty;
 pub mod session;
 pub mod term;
+pub mod workspace;

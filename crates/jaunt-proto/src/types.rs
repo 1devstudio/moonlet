@@ -126,6 +126,9 @@ pub struct RestoreEntry {
     pub cwd: String,
     pub command: Vec<String>,
     pub agent: Option<String>,
+    /// Live session this entry describes; reassigned on restore.
+    #[serde(default)]
+    pub session: Option<SessionId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
