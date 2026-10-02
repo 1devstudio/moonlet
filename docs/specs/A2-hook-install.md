@@ -1,6 +1,6 @@
 # A2: One-click hook install for Claude Code and Codex
 
-- **Status:** implemented (CLI and RPC); the UI button lands with [A3](A3-sidebar-and-notifications.md)
+- **Status:** implemented
 - **Priority / phase:** P0 · phase 1
 - **PRD refs:** A2
 

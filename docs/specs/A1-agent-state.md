@@ -1,6 +1,6 @@
 # A1: Agent state per pane
 
-- **Status:** implemented (daemon side); UI in [A3](A3-sidebar-and-notifications.md)
+- **Status:** implemented
 - **Priority / phase:** P0 · phase 1
 - **PRD refs:** A1, goal 2, journey J3, metric "blocked to notified < 2 s"
 

@@ -1,6 +1,6 @@
 # X2: Create PR and Checks tab
 
-- **Status:** implemented (daemon); UI in progress
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3 (new scope from the Superset/Conductor UI direction)
 
 ## Summary
@@ -11,7 +11,7 @@ From a workspace, the user can push the branch and open a GitHub pull request wi
 
 - [x] `gh.pr_create {path, title, body, base, draft}` runs `git push -u origin HEAD`, then `gh pr create`, and returns the PR.
 - [x] `gh.pr_status {path}` returns the number, URL, state, title, review decision and checks; it returns `null` when the branch has no PR.
-- [ ] UI: a Create PR dialog (Cmd+Shift+P) prefilled from the workspace name and commit log, and a Checks tab that polls every 30 s while visible.
+- [x] UI: a Create PR dialog (Cmd+Shift+P) prefilled from the workspace name and commit log, and a Checks tab that polls every 30 s while visible.
 
 ## Security considerations
 

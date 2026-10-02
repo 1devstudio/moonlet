@@ -1,6 +1,6 @@
 # X1: Repo scripts (setup, run, archive) and Run button
 
-- **Status:** implemented (daemon); UI in progress
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3 (new scope from the Superset/Conductor UI direction)
 
 ## Summary
@@ -12,4 +12,4 @@ Each repo can declare `setup`, `run` and `archive` commands in `.jaunt/config.to
 - [x] `workspace.run {id, script}` starts `run` or `setup` in a tab titled after the script. Running it again replaces the previous tab, so run panes don't pile up.
 - [x] Scripts run through `$SHELL -lic` with the workspace env vars from [A4](A4-new-workspace.md).
 - [x] A missing script is a clear error: "no `run` script in .jaunt/config.toml".
-- [ ] UI: a Run ▶ button (disabled with a tooltip when no script is configured) and a Stop control.
+- [x] UI: a Run ▶ button (disabled with a tooltip when no script is configured) and a Stop control.
