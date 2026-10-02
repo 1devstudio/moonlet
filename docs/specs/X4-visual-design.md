@@ -65,5 +65,5 @@ jaunt's look matches the reference: a neutral near-black UI with Claude's orange
 
 ## Test plan
 
-- Demo: `scripts`-free fake agents report through `jaunt notify` (see [manual-checks](../manual-checks.md) M9).
+- Demo: fake agent scripts report state through `jaunt notify` (see [manual-checks](../manual-checks.md) M9).
 - Compare the window screenshot with the reference.
