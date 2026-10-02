@@ -1,6 +1,6 @@
 # A4: New workspace (agent task)
 
-- **Status:** implemented (daemon); UI in progress
+- **Status:** implemented
 - **Priority / phase:** P0 · phase 1
 - **PRD refs:** A4, journey J1; UI direction in plan section 2 (Superset/Conductor)
 
@@ -35,7 +35,7 @@ A workspace is one task: a git worktree on its own branch, the agent working in 
 - [x] `workspace.unarchive` recreates the worktree if needed and opens a shell.
 - [x] State is saved atomically to `~/.jaunt/state.json`. Changes emit `workspaces.changed` / `repos.changed`.
 - [x] A repo can't be removed while it has active workspaces.
-- [ ] UI: new-workspace dialog, sidebar rows, History view.
+- [x] UI: new-workspace dialog, sidebar rows, History view.
 
 ## Data and config
 

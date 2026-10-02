@@ -1,6 +1,6 @@
 # S4: Workspace restore after daemon restart
 
-- **Status:** implemented (daemon); UI layout restore with [T2](T2-tabs-splits-workspaces.md)
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** S4
 

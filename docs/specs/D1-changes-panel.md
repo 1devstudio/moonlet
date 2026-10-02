@@ -1,6 +1,6 @@
 # D1: Changes panel
 
-- **Status:** implemented (daemon); UI in progress
+- **Status:** implemented
 - **Priority / phase:** P0 · phase 1
 - **PRD refs:** D1, goal 3, journey J4
 
@@ -19,7 +19,7 @@ The right panel's Changes tab lists every file the workspace changed and shows a
 - [x] `git.diff` returns a unified patch for one file or all files, including untracked files (via `--no-index`).
 - [x] Paths must be relative; `..` and absolute paths are rejected.
 - [x] Status refreshes live: `fs.watch` on the worktree emits `fs.changed`, debounced to 150 ms, including `.git/index` and `HEAD` changes.
-- [ ] UI: file list with diffstat, a toggle between base and HEAD, a split/inline toggle, Cmd+Shift+D.
+- [x] UI: file list with diffstat, a toggle between base and HEAD, a split/inline toggle, Cmd+Shift+D.
 
 ## Test plan
 

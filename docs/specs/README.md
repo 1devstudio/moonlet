@@ -16,10 +16,21 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | A1 | Agent state per pane | P0 | 1 | implemented | [A1-agent-state.md](A1-agent-state.md) |
 | A2 | One-click hook install | P0 | 1 | implemented | [A2-hook-install.md](A2-hook-install.md) |
 | A6 | Local CLI and socket API | P1 | 3 | implemented (slice) | [A6-cli-and-socket-api.md](A6-cli-and-socket-api.md) |
-| A4 | New workspace (agent task) | P0 | 1 | in progress (daemon done) | [A4-new-workspace.md](A4-new-workspace.md) |
+| A4 | New workspace (agent task) | P0 | 1 | implemented | [A4-new-workspace.md](A4-new-workspace.md) |
 | S4 | Workspace restore after daemon restart | P1 | 3 | implemented (daemon) | [S4-restore-after-restart.md](S4-restore-after-restart.md) |
-| D1 | Changes panel | P0 | 1 | in progress (daemon done) | [D1-changes-panel.md](D1-changes-panel.md) |
-| D2 | Stage, unstage, revert, commit | P1 | 3 | in progress (daemon done) | [D2-stage-revert-commit.md](D2-stage-revert-commit.md) |
-| F1 | File tree | P0 | 1 | in progress (daemon done) | [F1-file-tree.md](F1-file-tree.md) |
-| X1 | Repo scripts and Run button | P1 | 3 | in progress (daemon done) | [X1-repo-scripts.md](X1-repo-scripts.md) |
-| X2 | Create PR and Checks tab | P1 | 3 | in progress (daemon done) | [X2-pull-requests-and-checks.md](X2-pull-requests-and-checks.md) |
+| D1 | Changes panel | P0 | 1 | implemented | [D1-changes-panel.md](D1-changes-panel.md) |
+| D2 | Stage, unstage, revert, commit | P1 | 3 | implemented | [D2-stage-revert-commit.md](D2-stage-revert-commit.md) |
+| F1 | File tree | P0 | 1 | implemented | [F1-file-tree.md](F1-file-tree.md) |
+| X1 | Repo scripts and Run button | P1 | 3 | implemented | [X1-repo-scripts.md](X1-repo-scripts.md) |
+| X2 | Create PR and Checks tab | P1 | 3 | implemented | [X2-pull-requests-and-checks.md](X2-pull-requests-and-checks.md) |
+| T1 | Terminal emulation and rendering | P0 | 1 | implemented | [T1-terminal-emulation.md](T1-terminal-emulation.md) |
+| T2 | Tabs, splits, keyboard-first workspaces | P0 | 1 | implemented | [T2-tabs-splits-workspaces.md](T2-tabs-splits-workspaces.md) |
+| T3 | Shell integration (OSC 133 / OSC 7) | P1 | 3 | approved | [T3-shell-integration.md](T3-shell-integration.md) |
+| T4 | Command blocks | P1 | 3 | implemented | [T4-command-blocks.md](T4-command-blocks.md) |
+| T5 | Command palette and scrollback search | P1 | 3 | implemented | [T5-palette-and-search.md](T5-palette-and-search.md) |
+| A3 | Sidebar state and notifications | P0 | 1 | implemented | [A3-sidebar-and-notifications.md](A3-sidebar-and-notifications.md) |
+| A5 | Approval inbox | P1 | 3 | implemented | [A5-approval-inbox.md](A5-approval-inbox.md) |
+| D3 | Comment to agent | P1 | 3 | implemented | [D3-comment-to-agent.md](D3-comment-to-agent.md) |
+| F2 | Code viewer with light editing | P1 | 3 | implemented | [F2-code-viewer.md](F2-code-viewer.md) |
+| F3 | Open file from terminal output | P1 | 3 | implemented | [F3-open-from-terminal.md](F3-open-from-terminal.md) |
+| M1 | Markdown preview (M1, M2) | P0 | 1 | implemented | [M1-markdown-preview.md](M1-markdown-preview.md) |
