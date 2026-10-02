@@ -39,7 +39,7 @@
         "connect-src": "'self' ipc: http://ipc.localhost",
         "frame-src": "'self' blob: data:"
       },
-      "freezePrototype": true
+      "freezePrototype": false
     }
   },
   "bundle": {

@@ -5,6 +5,7 @@
 //! The daemon keeps sessions alive meanwhile, so a dropped link only pauses
 //! output. PTY output is batched every 8 ms into one binary message per host
 //! for the webview: repeated `[u32 BE session][u32 BE len][bytes]` records.
+//! A session id with [`RESET_FLAG`] set carries an attach snapshot.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,6 +25,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub const LOCAL: &str = "local";
+
+/// High bit on a session id in the output stream: reset the terminal and
+/// treat the record as an attach snapshot.
+pub const RESET_FLAG: SessionId = 0x8000_0000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +65,8 @@ pub struct Host {
     info: Mutex<HostInfo>,
     link: Mutex<Option<Link>>,
     pending: Mutex<Pending>,
+    /// Request id of each in-flight `session.attach`, with its session.
+    attaching: Mutex<HashMap<u64, SessionId>>,
     next_id: AtomicU64,
     output: Mutex<Option<Channel<InvokeResponseBody>>>,
     batch: Mutex<Vec<u8>>,
@@ -89,6 +96,11 @@ impl Host {
                 ));
             };
             self.pending.lock().unwrap().insert(id, tx);
+            if method == jaunt_proto::methods::SESSION_ATTACH
+                && let Some(sid) = params.get("id").and_then(Value::as_u64)
+            {
+                self.attaching.lock().unwrap().insert(id, sid as SessionId);
+            }
             let frame = Frame::Json(Message::Request {
                 id,
                 method: method.into(),
@@ -256,6 +268,7 @@ impl HostManager {
             }),
             link: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
+            attaching: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             output: Mutex::new(None),
             batch: Mutex::new(Vec::new()),
@@ -575,7 +588,24 @@ struct DaemonEvent<'a> {
 fn dispatch(app: &AppHandle, host: &Arc<Host>, frame: Frame) {
     match frame {
         Frame::Output { session, data } => host.push_output(session, &data),
-        Frame::Json(Message::Response { id, result, error }) => {
+        Frame::Json(Message::Response {
+            id,
+            mut result,
+            error,
+        }) => {
+            // Attach snapshots travel on the output stream, flagged as a reset,
+            // so the webview sees them strictly before the live output after them.
+            if let Some(session) = host.attaching.lock().unwrap().remove(&id)
+                && let Some(snapshot) = result
+                    .as_mut()
+                    .and_then(|r| r.as_object_mut())
+                    .and_then(|o| o.remove("snapshot"))
+            {
+                host.push_output(
+                    session | RESET_FLAG,
+                    snapshot.as_str().unwrap_or("").as_bytes(),
+                );
+            }
             if let Some(tx) = host.pending.lock().unwrap().remove(&id) {
                 let _ = tx.send(match error {
                     Some(e) => Err(e),

@@ -1,0 +1,218 @@
+// TypeScript mirror of crates/jaunt-proto/src/types.rs and methods.rs.
+// Keep in sync with the Rust definitions.
+
+export type AgentState = "idle" | "working" | "blocked" | "done" | "error";
+export type SessionKind = "agent" | "shell" | "run" | "setup";
+
+export interface ExitInfo {
+  code: number | null;
+  signal: number | null;
+}
+
+export interface SessionInfo {
+  id: number;
+  kind: SessionKind;
+  title: string;
+  cwd: string;
+  command: string[];
+  workspace_id?: string;
+  agent?: string;
+  agent_state: AgentState;
+  agent_message?: string;
+  cols: number;
+  rows: number;
+  pid: number | null;
+  exit?: ExitInfo;
+  reported_cwd?: string;
+  created_at: number;
+  last_output_at: number;
+}
+
+export interface Repo {
+  id: string;
+  name: string;
+  path: string;
+  base_branch: string;
+}
+
+export interface RepoConfig {
+  setup?: string | null;
+  run?: string | null;
+  archive?: string | null;
+  default_agent?: string | null;
+  base_branch?: string | null;
+  agents: Record<string, string>;
+}
+
+export interface Workspace {
+  id: string;
+  repo_id: string;
+  name: string;
+  branch: string;
+  base: string;
+  path: string;
+  agent: string | null;
+  archived: boolean;
+  created_at: number;
+  sessions: number[];
+  layout: unknown;
+}
+
+export interface FileChange {
+  path: string;
+  old_path?: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted";
+  staged: boolean;
+  unstaged: boolean;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+export interface GitStatus {
+  branch: string | null;
+  head: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  against: string;
+  files: FileChange[];
+  additions: number;
+  deletions: number;
+}
+
+export interface FileVersions {
+  original: string | null;
+  modified: string | null;
+  binary: boolean;
+}
+
+export interface Commit {
+  sha: string;
+  subject: string;
+  author: string;
+  time: number;
+}
+
+export interface DirEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  ignored: boolean;
+}
+
+export interface FileContent {
+  path: string;
+  content: string;
+  binary: boolean;
+  truncated: boolean;
+  size: number;
+}
+
+export interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  url: string | null;
+}
+
+export interface PullRequest {
+  number: number;
+  url: string;
+  state: string;
+  title: string;
+  checks: CheckRun[];
+  review_decision: string | null;
+}
+
+export interface Attention {
+  session: number;
+  workspace_id: string | null;
+  state: AgentState;
+  title: string;
+  message: string | null;
+}
+
+export interface HookStatus {
+  claude_settings: string;
+  claude_installed: boolean;
+  claude_missing_events: string[];
+  codex_config: string;
+  codex_installed: boolean;
+  codex_conflict: string | null;
+}
+
+export interface SearchHit {
+  line: number;
+  text: string;
+}
+
+export type HostStatus = "connecting" | "connected" | "reconnecting" | "needs_install" | "error";
+
+export interface HostInfo {
+  id: string;
+  label: string;
+  remote: boolean;
+  status: HostStatus;
+  message: string | null;
+  daemon_version: string | null;
+  hostname: string | null;
+  home: string | null;
+}
+
+export interface FsChanged {
+  root: string;
+  paths: string[];
+}
+
+export const M = {
+  sessionCreate: "session.create",
+  sessionList: "session.list",
+  sessionAttach: "session.attach",
+  sessionDetach: "session.detach",
+  sessionResize: "session.resize",
+  sessionKill: "session.kill",
+  sessionWrite: "session.write",
+  sessionSearch: "session.search",
+  hooksStatus: "hooks.status",
+  hooksInstall: "hooks.install",
+  repoAdd: "repo.add",
+  repoList: "repo.list",
+  repoRemove: "repo.remove",
+  repoConfig: "repo.config",
+  wsCreate: "workspace.create",
+  wsList: "workspace.list",
+  wsArchive: "workspace.archive",
+  wsUnarchive: "workspace.unarchive",
+  wsUpdate: "workspace.update",
+  wsRun: "workspace.run",
+  gitStatus: "git.status",
+  gitFileVersions: "git.file_versions",
+  gitDiff: "git.diff",
+  gitStage: "git.stage",
+  gitUnstage: "git.unstage",
+  gitRevert: "git.revert",
+  gitApplyPatch: "git.apply_patch",
+  gitCommit: "git.commit",
+  gitLog: "git.log",
+  gitBranches: "git.branches",
+  prCreate: "gh.pr_create",
+  prStatus: "gh.pr_status",
+  fsList: "fs.list",
+  fsRead: "fs.read",
+  fsWrite: "fs.write",
+  fsWatch: "fs.watch",
+  fsUnwatch: "fs.unwatch",
+} as const;
+
+export const EV = {
+  sessionCreated: "session.created",
+  sessionUpdated: "session.updated",
+  sessionExited: "session.exited",
+  sessionRemoved: "session.removed",
+  attention: "agent.attention",
+  reposChanged: "repos.changed",
+  workspacesChanged: "workspaces.changed",
+  fsChanged: "fs.changed",
+} as const;

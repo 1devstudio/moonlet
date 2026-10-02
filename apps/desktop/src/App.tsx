@@ -1,0 +1,147 @@
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, FolderPlus, Plus, Search, X } from "lucide-react";
+import { Sidebar } from "./components/Sidebar";
+import { WorkspaceView } from "./components/WorkspaceView";
+import { RightPanel } from "./components/RightPanel";
+import { Splitter } from "./components/Splitter";
+import { Dialogs } from "./components/Dialogs";
+import { CommandPalette } from "./components/CommandPalette";
+import { Button, IconButton, Kbd, cx } from "./components/ui";
+import { selectedWorkspace, startStore, useStore } from "./lib/store";
+import { installShortcuts } from "./lib/keys";
+import { terminalSearch } from "./lib/actions";
+
+function FindBar({ onClose }: { onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [miss, setMiss] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => ref.current?.focus(), []);
+  const go = (back = false) => setMiss(!terminalSearch(q, back));
+  return (
+    <div className="absolute right-4 top-[86px] z-30 flex items-center gap-1 rounded-lg border border-border-strong bg-panel-2 px-2 py-1 shadow-xl">
+      <Search size={12} className="text-faint" />
+      <input
+        ref={ref}
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setMiss(!terminalSearch(e.target.value));
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") go(e.shiftKey);
+          if (e.key === "Escape") onClose();
+        }}
+        placeholder="Find in terminal"
+        className={cx("w-52 bg-transparent text-[12.5px] outline-none", miss && q && "text-error")}
+      />
+      <IconButton title="Previous (⇧↵)" onClick={() => go(true)}>
+        <ChevronUp size={12} />
+      </IconButton>
+      <IconButton title="Next (↵)" onClick={() => go()}>
+        <ChevronDown size={12} />
+      </IconButton>
+      <IconButton title="Close" onClick={onClose}>
+        <X size={12} />
+      </IconButton>
+    </div>
+  );
+}
+
+function Home() {
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const hasRepos = useStore((s) => Object.values(s.repos).some((r) => r.length > 0));
+  const local = useStore((s) => s.hosts.local);
+  return (
+    <div className="flex h-full flex-col">
+      <div className="drag h-[46px] shrink-0 border-b border-border" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
+        <div className="text-[22px] font-semibold tracking-tight">jaunt</div>
+        <div className="max-w-md text-[13px] text-muted">Run coding agents side by side, each in its own worktree. They keep running when you close the app.</div>
+        {local && local.status !== "connected" && (
+          <div className="text-[12px] text-blocked">{local.status === "error" ? `Daemon: ${local.message}` : "Starting the jaunt daemon…"}</div>
+        )}
+        <div className="flex gap-2">
+          {hasRepos ? (
+            <Button variant="primary" onClick={() => useStore.setState({ dialog: { kind: "new-workspace" } })}>
+              <Plus size={14} /> New workspace <Kbd>⇧⌘N</Kbd>
+            </Button>
+          ) : null}
+          <Button onClick={() => useStore.setState({ dialog: { kind: "add-repo" } })}>
+            <FolderPlus size={14} /> Add repository
+          </Button>
+        </div>
+        <div className="mt-2 text-[11.5px] text-faint">
+          <Kbd>⌘K</Kbd> command palette · <Kbd>⌘T</Kbd> new terminal · <Kbd>⌘D</Kbd> split · <Kbd>⇧⌘D</Kbd> changes
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Toasts() {
+  const toasts = useStore((s) => s.toasts);
+  return (
+    <div className="pointer-events-none fixed bottom-4 left-1/2 z-[60] flex -translate-x-1/2 flex-col items-center gap-2">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={cx(
+            "selectable pointer-events-auto max-w-[560px] rounded-lg border px-3 py-2 text-[12.5px] shadow-xl",
+            t.kind === "error" ? "border-[#5a2a2e] bg-[#2a1416] text-[#ffb3b8]" : "border-border-strong bg-panel-2 text-fg",
+          )}
+        >
+          {t.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function App() {
+  const s = useStore();
+  const ws = selectedWorkspace(s);
+  const host = s.selected?.host;
+  const [finding, setFinding] = useState(false);
+
+  useEffect(() => {
+    void startStore();
+    const off = installShortcuts();
+    const onFind = () => setFinding(true);
+    window.addEventListener("jaunt:find", onFind);
+    return () => {
+      off();
+      window.removeEventListener("jaunt:find", onFind);
+    };
+  }, []);
+
+  const clampSide = (w: number) => Math.max(200, Math.min(420, w));
+  const clampRight = (w: number) => Math.max(320, Math.min(window.innerWidth * 0.6, w));
+
+  return (
+    <div className="flex h-full w-full">
+      {s.sidebarOpen && (
+        <>
+          <div style={{ width: s.sidebarWidth }} className="shrink-0">
+            <Sidebar />
+          </div>
+          <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ sidebarWidth: clampSide(st.sidebarWidth + d) }))} />
+        </>
+      )}
+      <main className="relative min-w-0 flex-1">
+        {ws && host && !ws.archived ? <WorkspaceView key={host + ws.id} host={host} ws={ws} /> : <Home />}
+        {finding && ws && <FindBar onClose={() => setFinding(false)} />}
+      </main>
+      {s.rightOpen && ws && host && !ws.archived && (
+        <>
+          <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ rightWidth: clampRight(st.rightWidth - d) }))} />
+          <div style={{ width: s.rightWidth }} className="shrink-0">
+            <RightPanel host={host} ws={ws} />
+          </div>
+        </>
+      )}
+      <Dialogs />
+      {s.dialog?.kind === "palette" && <CommandPalette />}
+      <Toasts />
+    </div>
+  );
+}
