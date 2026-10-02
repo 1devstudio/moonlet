@@ -25,7 +25,7 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X2 | Create PR and Checks tab | P1 | 3 | implemented | [X2-pull-requests-and-checks.md](X2-pull-requests-and-checks.md) |
 | T1 | Terminal emulation and rendering | P0 | 1 | implemented | [T1-terminal-emulation.md](T1-terminal-emulation.md) |
 | T2 | Tabs, splits, keyboard-first workspaces | P0 | 1 | implemented | [T2-tabs-splits-workspaces.md](T2-tabs-splits-workspaces.md) |
-| T3 | Shell integration (OSC 133 / OSC 7) | P1 | 3 | approved | [T3-shell-integration.md](T3-shell-integration.md) |
+| T3 | Shell integration (OSC 133 / OSC 7) | P1 | 3 | implemented | [T3-shell-integration.md](T3-shell-integration.md) |
 | T4 | Command blocks | P1 | 3 | implemented | [T4-command-blocks.md](T4-command-blocks.md) |
 | T5 | Command palette and scrollback search | P1 | 3 | implemented | [T5-palette-and-search.md](T5-palette-and-search.md) |
 | A3 | Sidebar state and notifications | P0 | 1 | implemented | [A3-sidebar-and-notifications.md](A3-sidebar-and-notifications.md) |
