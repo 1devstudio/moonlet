@@ -56,8 +56,10 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
         }
     }
     // Only remove the socket if it is still ours (an upgraded daemon may own it now).
+    // After a handoff the socket path belongs to the new daemon.
     if !daemon.handed_off() {
         std::fs::remove_file(&socket).ok();
+        std::fs::remove_file(crate::upgrade::pid_file()).ok();
     }
     Ok(())
 }
