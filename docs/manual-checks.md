@@ -11,6 +11,7 @@ These checks need a person at the app. Run them before each phase gate and recor
 | M5 | Quit and reopen | Every pane restored | Run agents, quit with Cmd+Q, reopen. |
 | M6 | Sleep | Sessions alive | Close the lid for 10 minutes and reopen. |
 | M7 | launchd agent | Daemon restarts after a crash | Settings › "Start the jaunt daemon at login", then `pkill -9 -f 'jauntd daemon'`; `launchctl print gui/$UID/dev.onedevstudio.jaunt.daemon` shows it running again and workspaces are restored. |
+| M9 | Visual parity | Matches the Superset reference | Create workspaces in different states (working, done, blocked, idle, no agent) and compare the window with the reference screenshot in the X4 spec. |
 | M8 | Remote host | Same as local | Add an SSH host, accept the helper install, create a workspace there, drop the network (Wi-Fi off) for 30 s, then reconnect. |
 
 ## Results

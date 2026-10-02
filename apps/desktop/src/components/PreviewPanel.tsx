@@ -54,7 +54,7 @@ export function PreviewPanel() {
       {error ? (
         <Empty title="Cannot render">{error}</Empty>
       ) : (
-        <iframe title="Markdown preview" sandbox="" srcDoc={doc ?? ""} className="min-h-0 flex-1 border-0 bg-[#0e0f12]" />
+        <iframe title="Markdown preview" sandbox="" srcDoc={doc ?? ""} className="min-h-0 flex-1 border-0 bg-bg" />
       )}
     </div>
   );

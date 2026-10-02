@@ -216,6 +216,15 @@ impl WorkspaceManager {
     /// Starts a session inside a workspace and remembers how to restart it.
     pub fn spawn_in(&self, ws: &Workspace, mut req: SessionCreate) -> Result<SessionInfo> {
         let repo = self.repo(&ws.repo_id)?;
+        // "New agent tab": an agent session without a command runs that agent.
+        if req.kind == SessionKind::Agent
+            && req.command.is_empty()
+            && let Some(agent) = req.agent.clone()
+        {
+            let base = self.agent_session(ws, &repo, &agent, None, false, req.cols, req.rows);
+            req.command = base.command;
+            req.title.get_or_insert(agent);
+        }
         req.workspace_id = Some(ws.id.clone());
         if req.cwd.is_empty() {
             req.cwd = ws.path.clone();

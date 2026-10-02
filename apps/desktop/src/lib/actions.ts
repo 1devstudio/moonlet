@@ -39,6 +39,20 @@ export async function newTab() {
   }
 }
 
+/** Opens another agent (or a shell) as a new tab in the selected workspace. */
+export async function newAgentTab(agent: string) {
+  const c = current();
+  if (!c) return;
+  try {
+    const info = await rpc<SessionInfo>(c.host, M.sessionCreate, { cwd: c.ws.path, workspace_id: c.ws.id, kind: "agent", agent, cols: 120, rows: 32 });
+    const layout = getLayout(c.host, c.ws.id);
+    const existing = tabOf(layout, info.id);
+    setLayout(c.host, c.ws.id, existing ? { ...layout, active: existing.id, focused: info.id } : addTab(layout, info.id));
+  } catch (e) {
+    errorToast(e);
+  }
+}
+
 export async function split(dir: "row" | "col") {
   const c = current();
   if (!c) return;
@@ -152,7 +166,7 @@ export function selectWorkspaceByIndex(i: number) {
   const flat: { host: string; id: string }[] = [];
   for (const h of hosts) {
     for (const r of s.repos[h.id] ?? []) {
-      const list = (s.workspaces[h.id] ?? []).filter((w) => !w.archived && w.repo_id === r.id).sort((a, b) => a.created_at - b.created_at);
+      const list = (s.workspaces[h.id] ?? []).filter((w) => !w.archived && w.repo_id === r.id).sort((a, b) => b.created_at - a.created_at);
       flat.push(...list.map((w) => ({ host: h.id, id: w.id })));
     }
   }
@@ -166,7 +180,7 @@ export function terminalSearch(query: string, backwards = false) {
   const focused = getLayout(c.host, c.ws.id).focused;
   const e = focused !== null ? findEntry(c.host, focused) : undefined;
   if (!e || !query) return false;
-  const opts = { decorations: { matchOverviewRuler: "#7c9cff", activeMatchColorOverviewRuler: "#f2b84b", matchBackground: "#3a4a6b", activeMatchBackground: "#7a5a1e" } };
+  const opts = { decorations: { matchOverviewRuler: "#d97757", activeMatchColorOverviewRuler: "#f2c94c", matchBackground: "#5a3a2a", activeMatchBackground: "#7a5a1e" } };
   return backwards ? e.search.findPrevious(query, opts) : e.search.findNext(query, opts);
 }
 
