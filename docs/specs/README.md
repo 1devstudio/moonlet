@@ -34,3 +34,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | F2 | Code viewer with light editing | P1 | 3 | implemented | [F2-code-viewer.md](F2-code-viewer.md) |
 | F3 | Open file from terminal output | P1 | 3 | implemented | [F3-open-from-terminal.md](F3-open-from-terminal.md) |
 | M1 | Markdown preview (M1, M2) | P0 | 1 | implemented | [M1-markdown-preview.md](M1-markdown-preview.md) |
+| S3 | Daemon upgrade without killing sessions | P1 | 3 | implemented | [S3-live-upgrade.md](S3-live-upgrade.md) |

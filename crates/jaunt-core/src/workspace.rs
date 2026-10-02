@@ -558,13 +558,17 @@ impl WorkspaceManager {
         restored
     }
 
-    fn forget_session(&self, id: SessionId) {
+    /// `removed`: the tab was closed. Otherwise the process exited while the
+    /// daemon ran, so there is nothing to bring back after a restart.
+    fn forget_session(&self, id: SessionId, removed: bool) {
         let changed = self
             .mutate(|st| {
                 let mut changed = false;
                 for w in &mut st.workspaces {
                     let before = (w.sessions.len(), w.restore.len());
-                    w.sessions.retain(|s| *s != id);
+                    if removed {
+                        w.sessions.retain(|s| *s != id);
+                    }
                     w.restore.retain(|e| e.session != Some(id));
                     changed |= before != (w.sessions.len(), w.restore.len());
                 }
@@ -577,17 +581,19 @@ impl WorkspaceManager {
     }
 }
 
-/// A closed tab is gone for good: stop restoring it.
+/// Closed tabs and processes that exited on their own are not restored.
 async fn track_removed_sessions(mgr: std::sync::Weak<WorkspaceManager>) {
     let Some(m) = mgr.upgrade() else { return };
     let mut rx = m.sessions.subscribe_events();
     drop(m);
     loop {
         match rx.recv().await {
-            Ok(Message::Event { name, data }) if name == methods::EV_SESSION_REMOVED => {
+            Ok(Message::Event { name, data })
+                if name == methods::EV_SESSION_REMOVED || name == methods::EV_SESSION_EXITED =>
+            {
                 let Some(m) = mgr.upgrade() else { return };
-                if let Ok(r) = serde_json::from_value::<methods::SessionRef>(data) {
-                    m.forget_session(r.id);
+                if let Some(id) = data.get("id").and_then(serde_json::Value::as_u64) {
+                    m.forget_session(id as SessionId, name == methods::EV_SESSION_REMOVED);
                 }
             }
             Ok(_) => {}
@@ -849,6 +855,43 @@ mod tests {
             mgr.agent_command(&r, "fake", None, false)
                 .starts_with("sh -c")
         );
+    }
+
+    #[tokio::test]
+    async fn exited_sessions_are_not_restored() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr
+            .add_repo(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        let ws = mgr
+            .create_workspace(WorkspaceCreate {
+                repo_id: r.id.clone(),
+                name: "t".into(),
+                branch: None,
+                from: None,
+                existing_branch: false,
+                agent: Some("none".into()),
+                prompt: None,
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+        assert_eq!(ws.restore.len(), 1, "the shell is restorable");
+        let id = ws.restore[0].session.unwrap();
+        mgr.sessions.write(id, b"exit\n".to_vec()).unwrap();
+        for _ in 0..200 {
+            if mgr.workspace(&ws.id).unwrap().restore.is_empty() {
+                assert!(
+                    mgr.sessions.get(id).is_some(),
+                    "exited session stays visible"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        panic!("exited shell still scheduled for restore");
     }
 
     #[test]

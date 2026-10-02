@@ -11,7 +11,7 @@ PTYs can't survive a daemon crash or reboot. Workspaces remember how each of the
 ## Behaviour and acceptance criteria
 
 - [x] Agent and shell sessions started in a workspace add a `restore` entry (kind, title, cwd, command, agent, session id). Setup and run sessions are not restored.
-- [x] Closing a tab (`session.kill` with `remove`) drops its entry.
+- [x] Closing a tab (`session.kill` with `remove`) drops its entry, and so does a process exiting while the daemon is running. Only sessions cut off by a daemon restart come back.
 - [x] On daemon start, each non-archived workspace whose directory exists restarts every entry without a live session:
   - agents use the resume command (`claude --continue`, `codex resume --last`) and the first prompt is not replayed;
   - shells, and agents jaunt does not know how to resume, use their original command.

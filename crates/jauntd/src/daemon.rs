@@ -25,7 +25,6 @@ pub struct Daemon {
     pub sessions: Arc<SessionManager>,
     pub workspaces: Arc<WorkspaceManager>,
     watchers: Arc<Watchers>,
-    pub socket: PathBuf,
     started_at: u64,
     shutdown: watch::Sender<bool>,
     handed_off: AtomicBool,
@@ -60,7 +59,6 @@ impl Daemon {
             sessions,
             workspaces,
             watchers,
-            socket,
             started_at: now_ms(),
             shutdown,
             handed_off: AtomicBool::new(false),
@@ -108,6 +106,20 @@ impl Daemon {
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     me.request_shutdown();
+                });
+                ok(true)
+            }
+            m::DAEMON_UPGRADE => {
+                #[derive(serde::Deserialize)]
+                struct Req {
+                    binary: PathBuf,
+                }
+                let r: Req = params(p)?;
+                let me = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = crate::upgrade::hand_off(me, Some(r.binary)).await {
+                        tracing::error!("upgrade failed, still serving: {e:#}");
+                    }
                 });
                 ok(true)
             }

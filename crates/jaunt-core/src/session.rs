@@ -40,6 +40,9 @@ pub struct Session {
     pub id: SessionId,
     state: Mutex<SessionState>,
     input: mpsc::UnboundedSender<Vec<u8>>,
+    /// Reader/writer tasks; aborted before a handoff so this process stops
+    /// consuming PTY output the next daemon must see.
+    tasks: Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
 impl Session {
@@ -70,6 +73,11 @@ impl SessionManager {
         });
         tokio::spawn(quiet_watcher(Arc::downgrade(&mgr)));
         mgr
+    }
+
+    /// Environment every session starts from (the captured login env).
+    pub fn base_env(&self) -> &BTreeMap<String, String> {
+        &self.base_env
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<Message> {
@@ -196,6 +204,7 @@ impl SessionManager {
         let session = Arc::new(Session {
             id,
             input: input_tx,
+            tasks: Mutex::new(Vec::new()),
             state: Mutex::new(SessionState {
                 info,
                 term,
@@ -207,8 +216,35 @@ impl SessionManager {
             }),
         });
         self.sessions.lock().unwrap().insert(id, session.clone());
-        tokio::spawn(write_loop(writer_fd, input_rx));
-        tokio::spawn(read_loop(Arc::downgrade(self), session, reader_fd));
+        let w = tokio::spawn(write_loop(writer_fd, input_rx)).abort_handle();
+        let r = tokio::spawn(read_loop(Arc::downgrade(self), session.clone(), reader_fd))
+            .abort_handle();
+        session.tasks.lock().unwrap().extend([w, r]);
+        Ok(())
+    }
+
+    /// Installs a PTY received from a previous daemon (S3): the terminal
+    /// state is rebuilt by replaying its snapshot, the agent state carries over.
+    pub fn adopt(
+        self: &Arc<Self>,
+        info: SessionInfo,
+        rows: u16,
+        cols: u16,
+        snapshot: &[u8],
+        fd: std::os::fd::RawFd,
+    ) -> Result<()> {
+        let pid = info.pid.context("adopted session has no pid")?;
+        // SAFETY: the fd was received via SCM_RIGHTS and is owned by us now.
+        let pty = unsafe { Pty::adopt(fd, pid)? };
+        let mut term = TermState::new(rows, cols);
+        term.process(snapshot);
+        let id = info.id;
+        let (state, message) = (info.agent_state, info.agent_message.clone());
+        self.install(info, term, pty)?;
+        if let Some(s) = self.get(id) {
+            let mut st = s.state.lock().unwrap();
+            st.agent.report(state, StateSource::Process, message);
+        }
         Ok(())
     }
 
@@ -376,6 +412,9 @@ impl SessionManager {
         let sessions = self.sessions.lock().unwrap();
         let mut out = Vec::new();
         for s in sessions.values() {
+            for t in s.tasks.lock().unwrap().drain(..) {
+                t.abort();
+            }
             let mut st = s.state.lock().unwrap();
             if st.info.exit.is_some() {
                 continue;
@@ -384,7 +423,7 @@ impl SessionManager {
             pty.forget_child();
             let fd = pty.master_fd();
             let (rows, cols) = st.term.size();
-            let snapshot = st.term.snapshot();
+            let snapshot = String::from_utf8_lossy(&st.term.snapshot()).into_owned();
             out.push(ExportedSession {
                 info: st.info.clone(),
                 fd,
@@ -404,7 +443,7 @@ pub struct ExportedSession {
     pub fd: std::os::fd::RawFd,
     pub rows: u16,
     pub cols: u16,
-    pub snapshot: Vec<u8>,
+    pub snapshot: String,
 }
 
 fn resize_locked(st: &mut SessionState, cols: u16, rows: u16) {

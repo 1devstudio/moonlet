@@ -336,6 +336,22 @@ pub fn sibling_binary(name: &str) -> Result<PathBuf> {
     bail!("{name} not found next to {}", exe.display())
 }
 
+/// Asks the running local daemon to hand its sessions to the bundled
+/// `jauntd` (S3). Used once per app run when versions differ.
+async fn upgrade_local() -> Result<()> {
+    let jauntd = sibling_binary("jauntd")?;
+    let status = tokio::process::Command::new(&jauntd)
+        .arg("upgrade")
+        .status()
+        .await?;
+    if !status.success() {
+        bail!("jauntd upgrade failed ({status})");
+    }
+    Ok(())
+}
+
+static UPGRADE_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 async fn connect_local() -> Result<(Reader, Writer)> {
     let socket = jaunt_core::paths::socket_path();
     if tokio::net::UnixStream::connect(&socket).await.is_err() {
@@ -517,6 +533,18 @@ async fn run_link(
             break frame;
         }
     };
+    let mismatch = match &welcome {
+        Frame::Json(Message::Welcome { daemon_version, .. }) => {
+            daemon_version != env!("CARGO_PKG_VERSION")
+        }
+        Frame::Json(Message::Response { error: Some(e), .. }) => e.code == "protocol_mismatch",
+        _ => false,
+    };
+    if mismatch && !host.remote && !UPGRADE_TRIED.swap(true, Ordering::SeqCst) {
+        tracing::info!("local daemon is a different version; upgrading it in place");
+        upgrade_local().await?;
+        bail!("daemon upgraded; reconnecting");
+    }
     match welcome {
         Frame::Json(Message::Welcome {
             daemon_version,
