@@ -40,6 +40,7 @@ export const hostsApi = {
   install: (host: string) => invoke<{ triple: string; version: string }>("remote_install", { host }),
   openTargets: () => invoke<{ id: string; label: string }[]>("open_targets"),
   openIn: (target: string, path: string, host?: string) => invoke("open_in", { target, path, host }),
+  service: (action: "install" | "uninstall" | "status") => invoke<{ installed: boolean; loaded: boolean; plist: string }>("daemon_service", { action }),
 };
 
 /** Must match `RESET_FLAG` in src-tauri/src/hosts.rs. */

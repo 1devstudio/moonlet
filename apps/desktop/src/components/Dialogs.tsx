@@ -483,10 +483,40 @@ function TerminalSection() {
   );
 }
 
+function DaemonSection() {
+  const [status, setStatus] = useState<{ installed: boolean; loaded: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void hostsApi.service("status").then(setStatus).catch(() => setStatus(null));
+  }, []);
+  const toggle = async (on: boolean) => {
+    setBusy(true);
+    try {
+      setStatus(await hostsApi.service(on ? "install" : "uninstall"));
+      toast(on ? "The jaunt daemon now starts at login" : "Login item removed");
+    } catch (e) {
+      errorToast(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="mb-5">
+      <h3 className="mb-1 text-[12px] font-semibold">Background daemon</h3>
+      <p className="mb-2 text-[12px] text-muted">Agents run in jauntd, not in this window. Running it under launchd starts it at login and restarts it if it ever crashes.</p>
+      <label className="flex items-center gap-2 text-[12.5px]">
+        <input type="checkbox" disabled={busy || !status} checked={!!status?.installed} onChange={(e) => void toggle(e.target.checked)} /> Start the jaunt daemon at login
+        {status?.installed && !status.loaded && <span className="text-[11px] text-blocked">installed but not loaded</span>}
+      </label>
+    </section>
+  );
+}
+
 export function SettingsDialog() {
   return (
     <Dialog title="Settings" width={600} onClose={close}>
       <HooksSection />
+      <DaemonSection />
       <HostsSection />
       <TerminalSection />
     </Dialog>
