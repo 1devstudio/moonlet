@@ -1,5 +1,21 @@
 # Jaunt (Agent-First Terminal): tech confirmation and high-level plan
 
+## Implementation status (2026-10-02)
+
+Every P0 and P1 requirement has a spec in [`docs/specs/`](specs/README.md) and an implementation, except these open items:
+
+- **X3 distribution:** signing, notarization and the updater need an Apple Developer ID and an updater key ([release.md](release.md)).
+- **R2 helpers:** Linux helpers need `cargo-zigbuild` to build (`scripts/build-remote.sh`). The code type-checks for both musl targets. Helper signing is pending.
+- **T1 ligatures:** depend on the font; there is no ligature addon in the WebGL renderer.
+- **T4 collapsing blocks:** blocks are decorations for now (answers the PRD's open question).
+
+Deviations from this plan:
+- Phase 0 spikes were folded into tests and ADRs ([ADR 0001](adr/0001-spikes-folded-into-build.md)).
+- vt100 won for terminal state ([ADR 0003](adr/0003-vt100-terminal-state.md)).
+- The launchd plist replaces SMAppService until builds are signed ([ADR 0004](adr/0004-launchagent-plist.md)).
+
+Manual GUI checks and measured numbers are in [manual-checks.md](manual-checks.md).
+
 ## Context
 
 The PRD (Notion, "PRD — Agent-First Terminal", 2026-10-01) describes **Paddock** (working name; project name is now **jaunt**), a macOS-first desktop terminal for running and supervising AI coding agents. Its core promise is that sessions survive app quit, crash, sleep and network loss, locally and on remote Linux hosts. It also asks for agent-state awareness, built-in diff, file and Markdown review, and the same features on remote hosts as on local ones.
