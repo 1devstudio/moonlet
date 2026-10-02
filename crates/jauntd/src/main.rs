@@ -9,6 +9,7 @@
 mod daemon;
 mod launch;
 mod server;
+mod service;
 mod upgrade;
 
 use std::path::PathBuf;
@@ -30,6 +31,13 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum ServiceAction {
+    Install,
+    Uninstall,
+    Status,
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Run the daemon in the foreground.
     Daemon {
@@ -39,6 +47,11 @@ enum Cmd {
     },
     /// Replace the running daemon with this binary, keeping every session.
     Upgrade,
+    /// Manage the launchd LaunchAgent (macOS).
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
     /// Start the daemon in the background if needed.
     Start,
     /// Bridge stdin/stdout to the daemon socket.
@@ -58,6 +71,16 @@ fn main() -> Result<()> {
     match cli.cmd.unwrap_or(Cmd::Daemon { handoff: None }) {
         Cmd::Daemon { handoff } => run_daemon(rt, socket, handoff),
         Cmd::Upgrade => rt.block_on(upgrade::request_upgrade(&socket, std::env::current_exe()?)),
+        Cmd::Service { action } => {
+            match action {
+                ServiceAction::Install => service::install()?,
+                ServiceAction::Uninstall => service::uninstall()?,
+                ServiceAction::Status => {
+                    println!("{}", serde_json::to_string_pretty(&service::status()?)?)
+                }
+            }
+            Ok(())
+        }
         Cmd::Start => rt.block_on(launch::ensure_running(&socket)),
         Cmd::Proxy => rt.block_on(proxy(socket)),
         Cmd::Status => rt.block_on(async {
@@ -111,9 +134,18 @@ fn run_daemon(
             None => {
                 // Bind first so clients waiting for the socket never time out;
                 // they queue in the backlog while the login env is captured.
-                let listener = server::bind(&socket)
-                    .await
-                    .inspect_err(|e| tracing::error!("cannot listen: {e:#}"))?;
+                let listener = match server::bind(&socket).await {
+                    Ok(l) => l,
+                    Err(e) if e.to_string().contains("already listening") => {
+                        // Not a failure: launchd must not keep restarting us.
+                        tracing::info!("{e:#}; exiting");
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        tracing::error!("cannot listen: {e:#}");
+                        return Err(e);
+                    }
+                };
                 tracing::info!(pid = std::process::id(), socket = %socket.display(), "jauntd listening");
                 let env = tokio::task::spawn_blocking(launch::login_environment).await?;
                 set_path(&env);

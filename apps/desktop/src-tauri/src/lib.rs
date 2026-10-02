@@ -173,6 +173,32 @@ fn open_in(target: String, path: String, host: Option<String>) -> Result<(), Rpc
     Ok(())
 }
 
+/// Runs the bundled `jauntd service install|uninstall|status` (S1b).
+#[tauri::command]
+async fn daemon_service(action: String) -> Result<Value, RpcError> {
+    if !["install", "uninstall", "status"].contains(&action.as_str()) {
+        return Err(RpcError::new("invalid_params", "unknown action"));
+    }
+    let jauntd = hosts::sibling_binary("jauntd").map_err(err)?;
+    let out = tokio::process::Command::new(&jauntd)
+        .args(["service", &action])
+        .output()
+        .await
+        .map_err(err)?;
+    if !out.status.success() {
+        return Err(RpcError::new(
+            "failed",
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    let status = tokio::process::Command::new(&jauntd)
+        .args(["service", "status"])
+        .output()
+        .await
+        .map_err(err)?;
+    serde_json::from_slice(&status.stdout).map_err(err)
+}
+
 #[tauri::command]
 fn app_info() -> Value {
     serde_json::json!({
@@ -211,6 +237,7 @@ pub fn run() {
             remote_install,
             open_targets,
             open_in,
+            daemon_service,
             app_info
         ])
         .run(tauri::generate_context!())
