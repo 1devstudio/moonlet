@@ -108,7 +108,8 @@ impl SessionManager {
     pub fn create(self: &Arc<Self>, req: SessionCreate) -> Result<SessionInfo> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let shell = user_shell();
-        let (program, args) = if req.command.is_empty() {
+        let default_shell = req.command.is_empty();
+        let (program, args) = if default_shell {
             (shell.clone(), vec!["-l".to_string()])
         } else {
             (req.command[0].clone(), req.command[1..].to_vec())
@@ -136,6 +137,12 @@ impl SessionManager {
         }
         env.extend(req.env.clone());
 
+        // Interactive shells get prompt marks and cwd reporting (T3).
+        let args = if default_shell {
+            crate::shell::apply(&crate::shell::dir(), &program, args, &mut env)
+        } else {
+            args
+        };
         let pty = Pty::spawn(SpawnSpec {
             program: program.clone().into(),
             args: args.iter().map(Into::into).collect(),

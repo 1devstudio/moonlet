@@ -530,8 +530,12 @@ impl WorkspaceManager {
                 Ok(())
             });
             for entry in dead {
+                let known = |a: &str| {
+                    builtin_agent(a, true).is_some()
+                        || read_config(Path::new(&repo.path)).agents.contains_key(a)
+                };
                 let req = match (&entry.kind, &entry.agent) {
-                    (SessionKind::Agent, Some(agent)) => {
+                    (SessionKind::Agent, Some(agent)) if known(agent) => {
                         let mut r = self.agent_session(&ws, &repo, agent, None, true, 120, 32);
                         r.title = Some(entry.title.clone());
                         r
@@ -540,6 +544,8 @@ impl WorkspaceManager {
                         cwd: entry.cwd.clone(),
                         command: entry.command.clone(),
                         title: Some(entry.title.clone()),
+                        kind: entry.kind,
+                        agent: entry.agent.clone(),
                         ..Default::default()
                     },
                 };
