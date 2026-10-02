@@ -12,3 +12,12 @@ These checks need a person at the app. Run them before each phase gate and recor
 | M6 | Sleep | Sessions alive | Close the lid for 10 minutes and reopen. |
 | M7 | launchd agent | Daemon restarts after a crash | Settings › "Start the jaunt daemon at login", then `pkill -9 -f 'jauntd daemon'`; `launchctl print gui/$UID/dev.onedevstudio.jaunt.daemon` shows it running again and workspaces are restored. |
 | M8 | Remote host | Same as local | Add an SSH host, accept the helper install, create a workspace there, drop the network (Wi-Fi off) for 30 s, then reconnect. |
+
+## Results
+
+| Date | Build | Check | Result |
+|---|---|---|---|
+| 2026-10-02 | debug (Vite dev server) | M3: 10 panes streaming `ls -la /usr/bin` every 50 ms, all visible in one 2×5 split | App 106 MB + WebContent 458 MB + GPU 48 MB + network 9 MB ≈ 620 MB. Daemon 175 MB with full 10k-line scrollbacks. CPU: app 9%, WebContent 10%, GPU 3%, daemon 5%. The client scrollback was then reduced from 10k to 5k lines; re-measure on a release build. |
+| 2026-10-02 | debug | M5: quit with the agent pane open, reopen | Workspace selection and terminal screen restored from the daemon snapshot. |
+| 2026-10-02 | debug | S3 in the app: `jauntd upgrade` while connected | App reconnected; shell output from before the upgrade still on screen; input works. |
+| 2026-10-02 | release bundle (15.65 MiB) | M3 idle: 10 visible panes in a 2×5 split plus the Monaco diff open | App 111 MB + WebContent 262 MB + GPU 63 MB + network 9 MB ≈ **445 MB** (target < 600 MB). Idle CPU ≈ 4.5% in total. |

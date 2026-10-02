@@ -10,7 +10,7 @@ The Preview tab renders Markdown with tables, task lists, syntax-highlighted cod
 
 ## Behaviour and acceptance criteria
 
-- [x] Rendering uses `markdown-it` with `highlight.js`. Mermaid blocks render to SVG in the app and are inlined; a diagram error shows in place.
+- [x] Rendering uses `markdown-it` with `highlight.js`. Mermaid blocks render to SVG in the app and are embedded as `<img src="data:image/svg+xml…">`; an SVG image is inert (no scripts, no external loads) and keeps its HTML labels. A diagram error shows in place.
 - [x] The output is sanitised with DOMPurify: no scripts, iframes, forms, event handlers or `javascript:` URLs. It is shown in `<iframe sandbox="">` with the CSP `default-src 'none'; style-src 'unsafe-inline'; img-src data:`.
 - [x] Live reload: any `fs.changed` under the file's watched root re-renders it.
 - [x] M2: `.md` files open in Preview automatically from the file tree and from terminal links.

@@ -13,7 +13,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
     <button
       ref={ref}
       className={cx(
-        "no-drag inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+        "no-drag inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
         size === "sm" ? "h-6 px-2 text-[12px]" : "h-7 px-2.5 text-[12.5px]",
         variant === "primary" && "bg-accent text-[#0b0c0e] hover:bg-[#93adff]",
         variant === "subtle" && "border border-border-strong bg-raised text-fg hover:bg-hover",

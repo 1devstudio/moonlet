@@ -40,3 +40,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | R3 | Remote sessions survive disconnects | P0 | 2 | implemented | [R3-remote-sessions-reconnect.md](R3-remote-sessions-reconnect.md) |
 | R4 | Local and remote hosts in one sidebar | P1 | 3 | implemented | [R4-unified-hosts-sidebar.md](R4-unified-hosts-sidebar.md) |
 | S1b | Run the daemon under launchd | P0 | 2 | implemented | [S1b-launchd.md](S1b-launchd.md) |
+| X3 | Signed, notarized app with auto-update | P1 | 3 | partial | [X3-distribution.md](X3-distribution.md) |
