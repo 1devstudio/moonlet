@@ -21,7 +21,45 @@ pub fn socket_path() -> PathBuf {
     if let Some(s) = std::env::var_os("JAUNT_SOCK") {
         return PathBuf::from(s);
     }
-    run_dir().join("jauntd.sock")
+    let path = run_dir().join("jauntd.sock");
+    if path.as_os_str().len() < MAX_SOCKET_PATH {
+        return path;
+    }
+    // Unix socket paths are limited to ~104 bytes on macOS. With a long home
+    // directory, fall back to a short per-user directory, like tmux does.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in home().as_os_str().as_encoded_bytes() {
+        hash = (hash ^ u64::from(*b)).wrapping_mul(0x100000001b3);
+    }
+    PathBuf::from(format!(
+        "/tmp/jaunt-{}-{:08x}",
+        nix::unistd::getuid(),
+        hash as u32
+    ))
+    .join("jauntd.sock")
+}
+
+/// `sun_path` is 104 bytes on macOS (108 on Linux), including the NUL.
+const MAX_SOCKET_PATH: usize = 100;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn long_homes_get_a_short_socket_path() {
+        // SAFETY: test-only env mutation, no concurrent env readers in this test binary's case.
+        unsafe {
+            std::env::remove_var("JAUNT_SOCK");
+            std::env::set_var("JAUNT_HOME", format!("/tmp/{}", "x".repeat(120)));
+        }
+        let p = super::socket_path();
+        assert!(
+            p.as_os_str().len() < super::MAX_SOCKET_PATH,
+            "{}",
+            p.display()
+        );
+        assert!(p.to_string_lossy().starts_with("/tmp/jaunt-"));
+        unsafe { std::env::remove_var("JAUNT_HOME") };
+    }
 }
 
 pub fn state_file() -> PathBuf {

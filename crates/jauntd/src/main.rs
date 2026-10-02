@@ -94,14 +94,18 @@ fn run_daemon(rt: tokio::runtime::Runtime, socket: PathBuf) -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
         libc::signal(libc::SIGHUP, libc::SIG_IGN);
     }
-    let env = launch::login_environment();
-    if let Some(path) = env.get("PATH") {
-        // SAFETY: still single-threaded with respect to env access.
-        unsafe { std::env::set_var("PATH", path) };
-    }
     rt.block_on(async move {
-        let listener = server::bind(&socket).await?;
+        // Bind first so clients waiting for the socket never time out; they
+        // queue in the backlog while the login environment is captured.
+        let listener = server::bind(&socket)
+            .await
+            .inspect_err(|e| tracing::error!("cannot listen: {e:#}"))?;
         tracing::info!(pid = std::process::id(), socket = %socket.display(), "jauntd listening");
+        let env = tokio::task::spawn_blocking(launch::login_environment).await?;
+        if let Some(path) = env.get("PATH") {
+            // SAFETY: no other task reads or writes the environment yet.
+            unsafe { std::env::set_var("PATH", path) };
+        }
         let daemon = daemon::Daemon::new(socket.clone(), env);
         let restored = daemon.workspaces.restore_after_restart();
         if restored > 0 {
