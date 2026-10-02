@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "externalBin": [
+      "binaries/jauntd",
+      "binaries/jaunt"
+    ],
+    "resources": {
+      "remote/": "remote/"
+    }
+  }
+}

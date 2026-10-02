@@ -1,0 +1,10 @@
+{
+  "name": "jaunt",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @jaunt/desktop tauri dev",
+    "build": "pnpm --filter @jaunt/desktop tauri build",
+    "test": "cargo test --workspace && pnpm --filter @jaunt/desktop test"
+  },
+  "packageManager": "pnpm@11.20.0"
+}
