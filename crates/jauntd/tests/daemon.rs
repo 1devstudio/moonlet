@@ -24,6 +24,8 @@ impl TestDaemon {
             .env("JAUNT_HOME", home.path())
             .env("JAUNT_SOCK", &socket)
             .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .unwrap();
         wait_for_socket(&socket, Duration::from_secs(15))

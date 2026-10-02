@@ -13,3 +13,6 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 |----|-------|----------|-------|--------|------|
 | S1 | Daemon-owned sessions | P0 | 1 | implemented | [S1-daemon-owned-sessions.md](S1-daemon-owned-sessions.md) |
 | S2 | Reattach with screen and scrollback replay | P0 | 1 | implemented | [S2-reattach-replay.md](S2-reattach-replay.md) |
+| A1 | Agent state per pane | P0 | 1 | implemented | [A1-agent-state.md](A1-agent-state.md) |
+| A2 | One-click hook install | P0 | 1 | implemented | [A2-hook-install.md](A2-hook-install.md) |
+| A6 | Local CLI and socket API | P1 | 3 | implemented (slice) | [A6-cli-and-socket-api.md](A6-cli-and-socket-api.md) |

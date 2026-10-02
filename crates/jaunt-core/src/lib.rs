@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod client;
+pub mod hooks;
 pub mod paths;
 pub mod pty;
 pub mod session;

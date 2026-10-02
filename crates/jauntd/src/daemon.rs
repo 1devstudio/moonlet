@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use jaunt_core::hooks::{self, HookPaths};
 use jaunt_core::paths::{hostname, now_ms};
 use jaunt_core::session::SessionManager;
 use jaunt_proto::methods::{self as m, AttachResult};
@@ -137,12 +138,37 @@ impl Daemon {
                     .map_err(internal)?;
                 ok(true)
             }
+            m::HOOKS_STATUS => ok(hooks::status(&HookPaths::default_paths()).map_err(internal)?),
+            m::HOOKS_INSTALL => {
+                let r: m::HooksInstall = params(p)?;
+                let bin = jaunt_cli_path().map_err(internal)?;
+                ok(
+                    hooks::install(&HookPaths::default_paths(), &bin, r.claude, r.codex)
+                        .map_err(internal)?,
+                )
+            }
+            m::HOOKS_UNINSTALL => {
+                ok(hooks::uninstall(&HookPaths::default_paths()).map_err(internal)?)
+            }
             other => Err(RpcError::new(
                 "unknown_method",
                 format!("unknown method {other}"),
             )),
         }
     }
+}
+
+/// The `jaunt` CLI ships next to `jauntd` (app bundle `Contents/MacOS`,
+/// `~/.jaunt/bin` on remote hosts, `target/*` in development).
+fn jaunt_cli_path() -> anyhow::Result<PathBuf> {
+    let exe = std::env::current_exe()?.canonicalize()?;
+    let bin = exe.with_file_name("jaunt");
+    anyhow::ensure!(
+        bin.exists(),
+        "jaunt CLI not found next to jauntd at {}",
+        bin.display()
+    );
+    Ok(bin)
 }
 
 fn dirs_home() -> String {
