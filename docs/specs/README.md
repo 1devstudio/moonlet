@@ -16,3 +16,10 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | A1 | Agent state per pane | P0 | 1 | implemented | [A1-agent-state.md](A1-agent-state.md) |
 | A2 | One-click hook install | P0 | 1 | implemented | [A2-hook-install.md](A2-hook-install.md) |
 | A6 | Local CLI and socket API | P1 | 3 | implemented (slice) | [A6-cli-and-socket-api.md](A6-cli-and-socket-api.md) |
+| A4 | New workspace (agent task) | P0 | 1 | in progress (daemon done) | [A4-new-workspace.md](A4-new-workspace.md) |
+| S4 | Workspace restore after daemon restart | P1 | 3 | implemented (daemon) | [S4-restore-after-restart.md](S4-restore-after-restart.md) |
+| D1 | Changes panel | P0 | 1 | in progress (daemon done) | [D1-changes-panel.md](D1-changes-panel.md) |
+| D2 | Stage, unstage, revert, commit | P1 | 3 | in progress (daemon done) | [D2-stage-revert-commit.md](D2-stage-revert-commit.md) |
+| F1 | File tree | P0 | 1 | in progress (daemon done) | [F1-file-tree.md](F1-file-tree.md) |
+| X1 | Repo scripts and Run button | P1 | 3 | in progress (daemon done) | [X1-repo-scripts.md](X1-repo-scripts.md) |
+| X2 | Create PR and Checks tab | P1 | 3 | in progress (daemon done) | [X2-pull-requests-and-checks.md](X2-pull-requests-and-checks.md) |
