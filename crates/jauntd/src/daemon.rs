@@ -5,9 +5,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use jaunt_core::fs::Watchers;
 use jaunt_core::hooks::{self, HookPaths};
 use jaunt_core::paths::{hostname, now_ms};
 use jaunt_core::session::SessionManager;
+use jaunt_core::workspace::WorkspaceManager;
+use jaunt_core::{fs, git};
 use jaunt_proto::methods::{self as m, AttachResult};
 use jaunt_proto::types::DaemonInfo;
 use jaunt_proto::{PROTOCOL_VERSION, RpcError};
@@ -20,6 +23,8 @@ use crate::server::Conn;
 
 pub struct Daemon {
     pub sessions: Arc<SessionManager>,
+    pub workspaces: Arc<WorkspaceManager>,
+    watchers: Arc<Watchers>,
     pub socket: PathBuf,
     started_at: u64,
     shutdown: watch::Sender<bool>,
@@ -43,8 +48,18 @@ pub fn internal(e: impl std::fmt::Display) -> RpcError {
 impl Daemon {
     pub fn new(socket: PathBuf, base_env: BTreeMap<String, String>) -> Arc<Self> {
         let (shutdown, _) = watch::channel(false);
+        let sessions = SessionManager::new(socket.clone(), base_env);
+        let workspaces = WorkspaceManager::load(
+            jaunt_core::paths::state_file(),
+            jaunt_core::paths::home().join("worktrees"),
+            sessions.clone(),
+        );
+        let emitter = sessions.clone();
+        let watchers = Watchers::new(Arc::new(move |m| emitter.emit(m)));
         Arc::new(Self {
-            sessions: SessionManager::new(socket.clone(), base_env),
+            sessions,
+            workspaces,
+            watchers,
             socket,
             started_at: now_ms(),
             shutdown,
@@ -68,7 +83,9 @@ impl Daemon {
         self.handed_off.store(true, Ordering::SeqCst);
     }
 
-    pub fn on_disconnect(&self, _client: u64) {}
+    pub fn on_disconnect(&self, client: u64) {
+        self.watchers.release_client(client);
+    }
 
     pub fn info(&self) -> DaemonInfo {
         DaemonInfo {
@@ -94,7 +111,16 @@ impl Daemon {
                 });
                 ok(true)
             }
-            m::SESSION_CREATE => ok(s.create(params(p)?).map_err(internal)?),
+            m::SESSION_CREATE => {
+                let req: m::SessionCreate = params(p)?;
+                match req.workspace_id.clone() {
+                    Some(id) => {
+                        let ws = self.workspaces.workspace(&id).map_err(internal)?;
+                        ok(self.workspaces.spawn_in(&ws, req).map_err(internal)?)
+                    }
+                    None => ok(s.create(req).map_err(internal)?),
+                }
+            }
             m::SESSION_LIST => ok(s.list()),
             m::SESSION_ATTACH => {
                 let a: m::SessionAttach = params(p)?;
@@ -150,6 +176,140 @@ impl Daemon {
             m::HOOKS_UNINSTALL => {
                 ok(hooks::uninstall(&HookPaths::default_paths()).map_err(internal)?)
             }
+            _ => self.handle_project(conn, method, p).await,
+        }
+    }
+
+    /// Repos, workspaces, git and files.
+    async fn handle_project(&self, conn: &Conn, method: &str, p: Value) -> HandlerResult {
+        let w = &self.workspaces;
+        match method {
+            m::REPO_ADD => {
+                let r: m::RepoAdd = params(p)?;
+                ok(w.add_repo(&r.path).await.map_err(internal)?)
+            }
+            m::REPO_LIST => ok(w.list_repos()),
+            m::REPO_REMOVE => {
+                let r: m::IdRef = params(p)?;
+                w.remove_repo(&r.id).map_err(internal)?;
+                ok(true)
+            }
+            m::REPO_CONFIG => {
+                let r: m::IdRef = params(p)?;
+                ok(w.repo_config(&r.id).map_err(internal)?)
+            }
+            m::WORKSPACE_CREATE => ok(w.create_workspace(params(p)?).await.map_err(internal)?),
+            m::WORKSPACE_LIST => ok(w.list_workspaces()),
+            m::WORKSPACE_ARCHIVE => {
+                w.archive(params(p)?).await.map_err(internal)?;
+                ok(true)
+            }
+            m::WORKSPACE_UNARCHIVE => {
+                let r: m::IdRef = params(p)?;
+                ok(w.unarchive(&r.id).await.map_err(internal)?)
+            }
+            m::WORKSPACE_UPDATE => ok(w.update(params(p)?).map_err(internal)?),
+            m::WORKSPACE_RUN => {
+                let r: m::WorkspaceRun = params(p)?;
+                ok(w.run_script(&r.id, &r.script, r.cols, r.rows)
+                    .await
+                    .map_err(internal)?)
+            }
+            m::GIT_STATUS => {
+                let r: m::GitPath = params(p)?;
+                ok(git::status(&path(&r.path), r.base.as_deref())
+                    .await
+                    .map_err(internal)?)
+            }
+            m::GIT_FILE_VERSIONS => {
+                let r: m::GitFile = params(p)?;
+                ok(
+                    git::file_versions(&path(&r.path), &r.file, r.base.as_deref(), r.staged)
+                        .await
+                        .map_err(internal)?,
+                )
+            }
+            m::GIT_DIFF => {
+                let r: m::GitFile = params(p)?;
+                ok(
+                    git::diff(&path(&r.path), &r.file, r.base.as_deref(), r.staged)
+                        .await
+                        .map_err(internal)?,
+                )
+            }
+            m::GIT_STAGE | m::GIT_UNSTAGE | m::GIT_REVERT => {
+                let r: m::GitFiles = params(p)?;
+                let root = path(&r.path);
+                match method {
+                    m::GIT_STAGE => git::stage(&root, &r.files).await,
+                    m::GIT_UNSTAGE => git::unstage(&root, &r.files).await,
+                    _ => git::revert(&root, &r.files).await,
+                }
+                .map_err(internal)?;
+                ok(true)
+            }
+            m::GIT_APPLY_PATCH => {
+                let r: m::GitApplyPatch = params(p)?;
+                git::apply_patch(&path(&r.path), &r.patch, r.cached, r.reverse)
+                    .await
+                    .map_err(internal)?;
+                ok(true)
+            }
+            m::GIT_COMMIT => {
+                let r: m::GitCommit = params(p)?;
+                ok(git::commit(&path(&r.path), &r.message, r.all)
+                    .await
+                    .map_err(internal)?)
+            }
+            m::GIT_LOG => {
+                let r: m::GitPath = params(p)?;
+                ok(git::log(&path(&r.path), r.base.as_deref())
+                    .await
+                    .map_err(internal)?)
+            }
+            m::GIT_BRANCHES => {
+                let r: m::GitPath = params(p)?;
+                ok(git::branches(&path(&r.path)).await.map_err(internal)?)
+            }
+            m::GH_PR_CREATE => {
+                let r: m::PrCreate = params(p)?;
+                ok(git::pr_create(
+                    &path(&r.path),
+                    &r.title,
+                    &r.body,
+                    r.base.as_deref(),
+                    r.draft,
+                )
+                .await
+                .map_err(internal)?)
+            }
+            m::GH_PR_STATUS => {
+                let r: m::GitPath = params(p)?;
+                ok(git::pr_status(&path(&r.path)).await.map_err(internal)?)
+            }
+            m::FS_LIST => {
+                let r: m::FsList = params(p)?;
+                ok(fs::list(&r.path, r.show_ignored).map_err(internal)?)
+            }
+            m::FS_READ => {
+                let r: m::FsRead = params(p)?;
+                ok(fs::read(&r.path, r.max_bytes).map_err(internal)?)
+            }
+            m::FS_WRITE => {
+                let r: m::FsWrite = params(p)?;
+                fs::write(&r.path, &r.content).map_err(internal)?;
+                ok(true)
+            }
+            m::FS_WATCH => {
+                let r: m::FsPath = params(p)?;
+                self.watchers.watch(&r.path, conn.id).map_err(internal)?;
+                ok(true)
+            }
+            m::FS_UNWATCH => {
+                let r: m::FsPath = params(p)?;
+                self.watchers.unwatch(&r.path, conn.id);
+                ok(true)
+            }
             other => Err(RpcError::new(
                 "unknown_method",
                 format!("unknown method {other}"),
@@ -169,6 +329,10 @@ fn jaunt_cli_path() -> anyhow::Result<PathBuf> {
         bin.display()
     );
     Ok(bin)
+}
+
+fn path(p: &str) -> PathBuf {
+    jaunt_core::session::expand_home(p)
 }
 
 fn dirs_home() -> String {
