@@ -306,7 +306,12 @@ impl WorkspaceManager {
         git::worktree_add(&repo_path, &dir, &branch, &from, req.existing_branch).await?;
 
         let config = read_config(&repo_path);
-        let agent = req.agent.clone().or(config.default_agent.clone());
+        // Absent means "the repo default"; "none" (or empty) means a plain shell.
+        let agent = match req.agent.as_deref() {
+            None => config.default_agent.clone(),
+            Some("") | Some("none") => None,
+            Some(a) => Some(a.to_string()),
+        };
         let ws = Workspace {
             id: new_id(),
             repo_id: repo.id.clone(),

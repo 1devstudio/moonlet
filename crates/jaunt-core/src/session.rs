@@ -260,6 +260,26 @@ impl SessionManager {
             }
             st.info.exit.is_some()
         };
+        if !exited {
+            // Some programs (agents included) ignore SIGHUP: escalate.
+            let weak = Arc::downgrade(&s);
+            tokio::spawn(async move {
+                for (delay, sig) in [
+                    (1500, nix::sys::signal::Signal::SIGTERM),
+                    (3000, nix::sys::signal::Signal::SIGKILL),
+                ] {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    let Some(s) = weak.upgrade() else { return };
+                    let st = s.state.lock().unwrap();
+                    if st.info.exit.is_some() {
+                        return;
+                    }
+                    if let Some(pty) = &st.pty {
+                        let _ = pty.signal(sig);
+                    }
+                }
+            });
+        }
         if remove {
             if exited {
                 self.remove(id);
@@ -749,6 +769,39 @@ mod tests {
             }
         }
         mgr.kill(info.id, true).unwrap();
+    }
+
+    #[tokio::test]
+    async fn kill_escalates_when_sighup_is_ignored() {
+        let mgr = manager();
+        let info = mgr
+            .create(SessionCreate {
+                cwd: "/tmp".into(),
+                command: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "trap '' HUP; echo ready; sleep 60".into(),
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        let mut events = mgr.subscribe_events();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        mgr.kill(info.id, true).unwrap();
+        let start = std::time::Instant::now();
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(10), events.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if let Message::Event { name, .. } = ev
+                && name == methods::EV_SESSION_REMOVED
+            {
+                break;
+            }
+        }
+        assert!(start.elapsed() < Duration::from_secs(6));
+        assert!(mgr.get(info.id).is_none());
     }
 
     #[test]
