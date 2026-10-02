@@ -11,3 +11,5 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 
 | ID | Title | Priority | Phase | Status | Spec |
 |----|-------|----------|-------|--------|------|
+| S1 | Daemon-owned sessions | P0 | 1 | implemented | [S1-daemon-owned-sessions.md](S1-daemon-owned-sessions.md) |
+| S2 | Reattach with screen and scrollback replay | P0 | 1 | implemented | [S2-reattach-replay.md](S2-reattach-replay.md) |
