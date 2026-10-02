@@ -2018,6 +2018,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dirs 6.0.0",
  "jaunt-core",
  "jaunt-proto",
  "libc",
