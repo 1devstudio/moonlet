@@ -103,6 +103,13 @@ fn run_daemon(rt: tokio::runtime::Runtime, socket: PathBuf) -> Result<()> {
         let listener = server::bind(&socket).await?;
         tracing::info!(pid = std::process::id(), socket = %socket.display(), "jauntd listening");
         let daemon = daemon::Daemon::new(socket.clone(), env);
+        let restored = daemon.workspaces.restore_after_restart();
+        if restored > 0 {
+            tracing::info!(
+                restored,
+                "restarted workspace sessions after daemon restart"
+            );
+        }
         let d = daemon.clone();
         tokio::spawn(async move {
             let mut term =

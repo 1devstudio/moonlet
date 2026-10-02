@@ -195,3 +195,71 @@ async fn unknown_method_is_an_error_not_a_disconnect() {
     assert!(err.to_string().contains("unknown_method"));
     let _: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
 }
+
+#[tokio::test]
+async fn workspace_lifecycle_over_rpc() {
+    use jaunt_proto::types::{GitStatus, Repo, Workspace};
+    let d = TestDaemon::start().await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "git {args:?}"
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
+
+    let mut c = d.client().await;
+    let r: Repo = c
+        .request(methods::REPO_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    let ws: Workspace = c
+        .request(
+            methods::WORKSPACE_CREATE,
+            serde_json::json!({"repo_id": r.id, "name": "Add docs"}),
+        )
+        .await
+        .unwrap();
+    std::fs::write(std::path::Path::new(&ws.path).join("NOTES.md"), "# hi\n").unwrap();
+    let st: GitStatus = c
+        .request(
+            methods::GIT_STATUS,
+            serde_json::json!({"path": ws.path, "base": ws.base}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(st.files.len(), 1);
+    assert_eq!(st.branch.as_deref(), Some("jaunt/add-docs"));
+    let shell: SessionInfo = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({"cwd": "", "workspace_id": ws.id}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(shell.cwd, ws.path);
+    let _: bool = c
+        .request(methods::WORKSPACE_ARCHIVE, serde_json::json!({"id": ws.id}))
+        .await
+        .unwrap();
+    assert!(!std::path::Path::new(&ws.path).exists());
+}
