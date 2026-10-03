@@ -12,7 +12,7 @@ The structured Claude view had a model and effort picker but no way to change Cl
 ## User journey
 
 1. The user opens a Claude session. The footer shows a mode chip next to the model chip. A new session starts in **Manual**, which is what Claude does without a flag.
-2. Clicking the chip (or pressing ⇧Tab in the editor) opens the Mode menu. Picking a mode, or pressing 1–4, changes it.
+2. Clicking the chip opens the Mode menu. Picking a mode, or pressing 1–4 while the menu is open, changes it. ⇧Tab in the editor cycles to the next mode without opening the menu.
 3. The mode applies from the next message. The current turn, if any, finishes in the old mode.
 4. In **Settings › Agents** the user picks the default mode (Auto, Manual, Accept edits or Plan; never Bypass). It is Manual until changed.
 5. The new-session modal shows a Mode picker (Claude only) next to the model picker. It starts at the default from Settings, every time. The chosen mode is used for the session's first start, structured view or TUI.
@@ -31,7 +31,9 @@ The structured Claude view had a model and effort picker but no way to change Cl
 - [x] Settings has a default permission mode (Auto, Manual, Accept edits, Plan). A missing or unknown stored value reads as Manual (`resolveMode`, unit-tested; the select itself is not checked in the app).
 - [ ] The new-session modal has the same Mode menu for Claude and starts at the Settings default. It is not remembered per project.
 - [x] `session.create {mode}` starts the first chat with `--permission-mode <mode>`. With `tui: true`, the TUI command gets the same flag (tests: `a_new_chat_starts_in_the_requested_mode`, `session_mode_is_recorded_…`, `names_and_agent_flags`).
-- [x] `session.create` and `terminal.create` reject an unknown mode and create nothing (`session.create` and `ChatManager::create` have tests; the `terminal.create` handler only calls the shared `check_mode`).
+- [x] `session.create` and `terminal.create` reject an unknown or empty mode and create nothing (`session.create` and `ChatManager::create` have tests; the `terminal.create` handler only calls the shared `check_mode`).
+- [ ] "Open in terminal" starts `claude --resume <id>` with `--permission-mode` for the chat's current mode. An explicit `mode` on an agent `terminal.create` wins over `Session.mode` when the command is built.
+- [ ] ⇧Tab cycles the mode even while the `@` or `/` completion list is open; Tab and Enter still accept a completion. Escape closes an open Mode menu without also closing the new-session modal.
 - [ ] The new-session modal is narrower and shorter than before (720px wide, 200px prompt area).
 
 ## UI

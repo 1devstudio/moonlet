@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { CLAUDE_MODELS, DEFAULT_MODE, EFFORTS, agentLabel, nextMode } from "../lib/agents";
+import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, agentLabel, nextMode } from "../lib/agents";
 import {
   activeToken,
   chatKey,
@@ -312,7 +312,7 @@ function ChatEditor({
         setSel((s) => (s + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
         return;
       }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+      if ((e.key === "Tab" && !e.shiftKey) || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault();
         accept(options[sel]);
         return;
@@ -423,7 +423,9 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
     toast("The conversation has not started yet");
     return;
   }
-  const command = info.agent === "codex" ? ["codex", "resume", id] : ["claude", "--resume", id];
+  // The TUI starts in the mode the footer shows (X7).
+  const mode = st.mode && [...CLAUDE_MODES.map((m) => m.id), BYPASS_MODE.id].includes(st.mode) ? ["--permission-mode", st.mode] : [];
+  const command = info.agent === "codex" ? ["codex", "resume", id] : ["claude", "--resume", id, ...mode];
   try {
     const t = await rpc<TerminalInfo>(host, M.terminalCreate, {
       cwd: info.cwd,

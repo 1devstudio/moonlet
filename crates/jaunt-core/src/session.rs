@@ -517,7 +517,12 @@ impl SessionManager {
             && !req.chat
             && let Some(agent) = req.agent.clone()
         {
-            let base = self.agent_session(ws, &repo, &agent, None, false, req.cols, req.rows);
+            // An explicit mode wins over the one the session was created with.
+            let mut with_mode = ws.clone();
+            if req.mode.is_some() {
+                with_mode.mode = req.mode.clone();
+            }
+            let base = self.agent_session(&with_mode, &repo, &agent, None, false, req.cols, req.rows);
             req.command = base.command;
             req.title.get_or_insert(agent);
         }
@@ -601,7 +606,7 @@ impl SessionManager {
 
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
         let mut req = req;
-        crate::chat::check_mode(req.mode.as_deref().filter(|m| !m.is_empty()))?;
+        crate::chat::check_mode(req.mode.as_deref())?;
         let repo = self.project(&req.project_id)?;
         let repo_path = PathBuf::from(&repo.path);
         let name = derive_name(req.name.as_deref(), req.prompt.as_deref());
@@ -658,7 +663,7 @@ impl SessionManager {
             section: None,
             model: req.model.clone().filter(|m| !m.is_empty()),
             effort: req.effort.clone().filter(|e| !e.is_empty()),
-            mode: req.mode.clone().filter(|m| !m.is_empty()),
+            mode: req.mode.clone(),
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
@@ -1058,6 +1063,10 @@ mod tests {
             pr: None,
             tui: false,
         };
+        for bad in ["", "yolo"] {
+            let err = mgr.create_session(req(bad)).await.unwrap_err();
+            assert!(err.to_string().contains("unknown permission mode"), "{err}");
+        }
         let err = mgr.create_session(req("yolo")).await.unwrap_err();
         assert!(err.to_string().contains("unknown permission mode"), "{err}");
         assert!(mgr.list_sessions().is_empty(), "nothing was created");
