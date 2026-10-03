@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { CLAUDE_MODELS, EFFORTS, agentLabel } from "../lib/agents";
+import { CLAUDE_MODELS, DEFAULT_MODE, EFFORTS, agentLabel, nextMode } from "../lib/agents";
 import {
   activeToken,
   chatKey,
@@ -41,6 +41,7 @@ import { firstWord, suggest } from "../lib/suggest";
 import { errorToast, getLayout, setLayout, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
 import { Menu, type MenuItem } from "./Menu";
+import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { AgentIcon, Button, cx } from "./ui";
 
 // ------------------------------------------------------------ messages
@@ -234,6 +235,7 @@ function ChatEditor({
   focused,
   onSend,
   onStop,
+  onCycleMode,
 }: {
   host: string;
   root: string;
@@ -242,6 +244,8 @@ function ChatEditor({
   focused: boolean;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** Shift+Tab; absent for agents without a permission mode. */
+  onCycleMode?: () => void;
 }) {
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -322,6 +326,9 @@ function ChatEditor({
     if (e.key === "." && e.metaKey) {
       e.preventDefault();
       onStop();
+    } else if (e.key === "Tab" && e.shiftKey && onCycleMode) {
+      e.preventDefault();
+      onCycleMode();
     } else if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       send();
@@ -478,6 +485,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       onSelect: () => void call(M.chatSettings, { effort: e.id }),
     })),
   ];
+  const modeMenu = useModeMenu(st?.mode ?? DEFAULT_MODE, (m) => void call(M.chatSettings, { mode: m }));
   const more: MenuItem[] = [
     { label: "Open in terminal", icon: <SquareTerminal size={14} />, onSelect: () => info && st && void openInTerminal(host, info, st) },
     {
@@ -554,6 +562,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                 <Square size={10} fill="currentColor" /> Stop
               </Button>
             )}
+            {agent === "claude" && <ModeMenu menu={modeMenu} className="h-6 px-2" iconSize={12} />}
             <Menu
               side="top"
               align="right"
@@ -589,6 +598,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           focused={focused && visible}
           onSend={send}
           onStop={stop}
+          onCycleMode={agent === "claude" ? () => modeMenu.pick(nextMode(modeMenu.mode, modeMenu.bypassOn)) : undefined}
         />
       </div>
     </div>

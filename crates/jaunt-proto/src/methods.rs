@@ -125,6 +125,9 @@ pub struct TerminalCreate {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Claude permission mode (X7).
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 impl Default for TerminalCreate {
@@ -143,6 +146,7 @@ impl Default for TerminalCreate {
             classic: false,
             model: None,
             effort: None,
+            mode: None,
         }
     }
 }
@@ -280,6 +284,9 @@ pub struct SessionCreate {
     /// Effort level (`low` … `max`).
     #[serde(default)]
     pub effort: Option<String>,
+    /// Claude permission mode (X7).
+    #[serde(default)]
+    pub mode: Option<String>,
     /// Start from this pull request's branch.
     #[serde(default)]
     pub pr: Option<u64>,
@@ -498,6 +505,9 @@ pub struct ChatSettings {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Claude permission mode, see `ChatState::mode`.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 /// `chat.item` event payload.

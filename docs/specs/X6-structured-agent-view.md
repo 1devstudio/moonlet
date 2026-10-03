@@ -42,7 +42,7 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 - `chat.send {id, text}` sends a message. During a running turn, Claude Code takes it as queued input. Codex steers the running turn with it (`turn/steer`). Before a Codex thread exists, messages wait in the adapter until it is created. If a saved Codex thread cannot be resumed, a new thread is started and the note says so. `ChatState.queued` is reserved and currently always empty.
 - `chat.permission {id, ask, decision: allow|always|deny, message?}` answers a permission request.
 - `chat.interrupt {id}` stops the current turn. Stopping the process (`terminal.kill` without remove, or a settings restart) also closes a running turn with a "Stopped" note. Open permission requests are denied first. The turn ends with an "Interrupted" note and status `idle`, not an error.
-- `chat.settings {id, model?, effort?}` changes the model or effort. The agent restarts with resume before the next message.
+- `chat.settings {id, model?, effort?, mode?}` changes the model, effort or (Claude only) permission mode, see [X7](X7-agent-permission-mode.md). The agent restarts with resume before the next message.
 - `fs.files {root}` lists the project's non-ignored files for `@` mentions.
 - Events: `chat.item {id, item}`, `chat.state {id, state}` (everything except the items), and the usual `terminal.*`.
 - Item ids for jaunt's own items (user, system, error) include a timestamp. A resumed agent starts a fresh adapter, and its ids must not clash with the saved transcript.

@@ -73,6 +73,7 @@ export interface ChatState {
   status: ChatStatus;
   model?: string | null;
   effort?: string | null;
+  mode?: string | null;
   cost_usd: number;
   input_tokens: number;
   output_tokens: number;

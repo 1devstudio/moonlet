@@ -146,6 +146,9 @@ fn agent_flags(cmd: &str, s: &Session) -> String {
             if let Some(e) = &s.effort {
                 out.push_str(&format!(" --effort {}", shell_quote(e)));
             }
+            if let Some(m) = s.mode.as_deref().filter(|m| crate::chat::PERMISSION_MODES.contains(m)) {
+                out.push_str(&format!(" --permission-mode {}", shell_quote(m)));
+            }
             out.push_str(&format!(" -n {}", shell_quote(&s.name)));
         }
         Some("codex") => {
@@ -532,6 +535,7 @@ impl SessionManager {
                 agent: req.agent.clone().unwrap_or_default(),
                 model: req.model.clone().or_else(|| ws.model.clone()),
                 effort: req.effort.clone().or_else(|| ws.effort.clone()),
+                mode: req.mode.clone().or_else(|| ws.mode.clone()),
                 name: ws.name.clone(),
                 title: req.title.clone(),
                 session_id: Some(ws.id.clone()),
@@ -597,6 +601,7 @@ impl SessionManager {
 
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
         let mut req = req;
+        crate::chat::check_mode(req.mode.as_deref().filter(|m| !m.is_empty()))?;
         let repo = self.project(&req.project_id)?;
         let repo_path = PathBuf::from(&repo.path);
         let name = derive_name(req.name.as_deref(), req.prompt.as_deref());
@@ -653,6 +658,7 @@ impl SessionManager {
             section: None,
             model: req.model.clone().filter(|m| !m.is_empty()),
             effort: req.effort.clone().filter(|e| !e.is_empty()),
+            mode: req.mode.clone().filter(|m| !m.is_empty()),
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
@@ -1033,6 +1039,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_mode_is_recorded_and_unknown_modes_create_nothing() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let req = |mode: &str| SessionCreate {
+            project_id: r.id.clone(),
+            name: Some("Planned".into()),
+            branch: None,
+            from: None,
+            existing_branch: false,
+            agent: Some("none".into()),
+            prompt: None,
+            cols: 80,
+            rows: 24,
+            model: None,
+            effort: None,
+            mode: Some(mode.into()),
+            pr: None,
+            tui: false,
+        };
+        let err = mgr.create_session(req("yolo")).await.unwrap_err();
+        assert!(err.to_string().contains("unknown permission mode"), "{err}");
+        assert!(mgr.list_sessions().is_empty(), "nothing was created");
+        let s = mgr.create_session(req("plan")).await.unwrap();
+        assert_eq!(s.mode.as_deref(), Some("plan"));
+        assert_eq!(mgr.session(&s.id).unwrap().mode.as_deref(), Some("plan"));
+    }
+
+    #[tokio::test]
     async fn create_run_archive_workspace() {
         let (repo, home, mgr) = setup().await;
         let r = mgr
@@ -1069,6 +1103,7 @@ mod tests {
                 rows: 24,
                 model: None,
                 effort: None,
+                mode: None,
                 pr: None,
                 tui: false,
             })
@@ -1100,6 +1135,7 @@ mod tests {
                 rows: 24,
                 model: None,
                 effort: None,
+                mode: None,
                 pr: None,
                 tui: false,
             })
@@ -1156,6 +1192,7 @@ mod tests {
                 rows: 24,
                 model: None,
                 effort: None,
+                mode: None,
                 pr: None,
                 tui: false,
             })
@@ -1211,6 +1248,7 @@ mod tests {
                 rows: 24,
                 model: None,
                 effort: None,
+                mode: None,
                 pr: None,
                 tui: false,
             })
@@ -1272,6 +1310,7 @@ mod tests {
                 rows: 24,
                 model: None,
                 effort: None,
+                mode: None,
                 pr: None,
                 tui: false,
             })
@@ -1391,6 +1430,7 @@ mod tests {
                 prompt: Some("Make the login page faster\nand more".into()),
                 model: None,
                 effort: None,
+                mode: None,
                 pr: None,
                 tui: false,
                 cols: 80,
@@ -1451,13 +1491,14 @@ mod tests {
             section: None,
             model: Some("sonnet".into()),
             effort: Some("high".into()),
+            mode: Some("plan".into()),
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
         };
         assert_eq!(
             agent_flags("claude", &s),
-            " --model 'sonnet' --effort 'high' -n 'it'\\''s fine'"
+            " --model 'sonnet' --effort 'high' --permission-mode 'plan' -n 'it'\\''s fine'"
         );
         assert_eq!(
             agent_flags("codex", &s),

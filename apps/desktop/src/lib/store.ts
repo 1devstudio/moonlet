@@ -21,6 +21,7 @@ import {
   type Workspace,
 } from "./protocol";
 import { sanitize } from "./sanitize";
+import { DEFAULT_MODE } from "./agents";
 import { forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import type { ChatItem, ChatState } from "./protocol";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
@@ -41,6 +42,8 @@ export interface OpenFile {
 export interface Settings {
   term: TermSettings;
   notifyWhenFocused: boolean;
+  /** Permission mode a new Claude session starts in (X7). */
+  defaultMode: string;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -169,7 +172,7 @@ function makeStore() {
   preview: null,
   showHistory: false,
   dialog: null,
-  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false }),
+  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE }),
   toasts: [],
   lastAttention: null,
   workingSince: {},

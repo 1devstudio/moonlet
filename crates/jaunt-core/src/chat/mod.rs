@@ -13,6 +13,17 @@ use jaunt_proto::types::{ChatItem, ChatState, ToolCall};
 
 use crate::paths::now_ms;
 
+/// Values `--permission-mode` accepts for Claude, as the picker offers them.
+pub const PERMISSION_MODES: [&str; 5] = ["auto", "manual", "acceptEdits", "plan", "bypassPermissions"];
+
+/// Rejects a permission mode `--permission-mode` would not accept.
+pub fn check_mode(mode: Option<&str>) -> anyhow::Result<()> {
+    match mode {
+        Some(m) if !PERMISSION_MODES.contains(&m) => anyhow::bail!("unknown permission mode: {m}"),
+        _ => Ok(()),
+    }
+}
+
 /// How to start an agent.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -20,6 +31,8 @@ pub struct ChatConfig {
     pub agent: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Claude permission mode, one of `PERMISSION_MODES`.
+    pub mode: Option<String>,
     /// The agent's own conversation id to resume (Claude session, Codex thread).
     pub resume: Option<String>,
     /// Display name, passed to agents that accept one.

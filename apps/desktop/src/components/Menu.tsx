@@ -4,7 +4,7 @@ import { Check, ChevronRight } from "lucide-react";
 import { cx } from "./ui";
 
 export type MenuItem =
-  | { kind?: "item"; label: string; icon?: ReactNode; checked?: boolean; danger?: boolean; hint?: string; onSelect: () => void }
+  | { kind?: "item"; label: string; icon?: ReactNode; checked?: boolean; danger?: boolean; hint?: string; description?: string; onSelect: () => void }
   | { kind: "submenu"; label: string; icon?: ReactNode; items: MenuItem[] }
   | { kind: "divider" }
   | { kind: "label"; label: string };
@@ -46,7 +46,14 @@ export function MenuItems({ items, onClose }: { items: MenuItem[]; onClose: () =
             }}
           >
             {it.icon}
-            <span className="flex-1 truncate">{it.label}</span>
+            {it.description ? (
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate">{it.label}</span>
+                <span className="truncate text-[12.5px] text-muted">{it.description}</span>
+              </span>
+            ) : (
+              <span className="flex-1 truncate">{it.label}</span>
+            )}
             {it.hint && <span className="font-mono text-[11.5px] text-faint">{it.hint}</span>}
             {it.checked && <Check size={14} className="text-fg" />}
           </button>
@@ -77,9 +84,21 @@ export function Menu({
   const anchor = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const open = rect !== null;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setRect(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return setRect(null);
+      // A single-character hint doubles as the item's shortcut while the menu is open.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const hit = itemsRef.current.find((it) => (it.kind === undefined || it.kind === "item") && it.hint?.length === 1 && it.hint === e.key);
+      if (hit && (hit.kind === undefined || hit.kind === "item")) {
+        e.preventDefault();
+        setRect(null);
+        hit.onSelect();
+      }
+    };
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (!panel.current?.contains(t) && !anchor.current?.contains(t)) setRect(null);

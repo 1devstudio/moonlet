@@ -6,6 +6,7 @@ import { M, type Commit, type HookStatus, type PullRequest, type Project } from 
 import { errorToast, refreshGit, selectedSession, toast, updateSettings, useStore } from "../lib/store";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
+import { CLAUDE_MODES, resolveMode } from "../lib/agents";
 
 const close = () => useStore.setState({ dialog: null });
 
@@ -381,6 +382,24 @@ function HostsSection() {
   );
 }
 
+function AgentsSection() {
+  const mode = useStore((s) => resolveMode(s.settings.defaultMode));
+  return (
+    <section>
+      <h3 className="mb-2 text-[12px] font-semibold">Agents</h3>
+      <Field label="Default permission mode for new Claude sessions">
+        <select className={inputCls} value={mode} onChange={(e) => updateSettings({ defaultMode: e.target.value })}>
+          {CLAUDE_MODES.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label} · {m.description}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </section>
+  );
+}
+
 function TerminalSection() {
   const settings = useStore((s) => s.settings);
   const t = settings.term;
@@ -459,6 +478,7 @@ export function SettingsDialog() {
       <HooksSection />
       <DaemonSection />
       <HostsSection />
+      <AgentsSection />
       <TerminalSection />
     </Dialog>
   );
