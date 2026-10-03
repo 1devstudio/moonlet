@@ -3,6 +3,9 @@ import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { Check, FileDiff, Minus, MessageSquarePlus, Plus, RotateCcw, Undo2 } from "lucide-react";
 import "../lib/monaco";
+
+/** Pending diff-model cleanups per session, cancelled if the panel reopens. */
+const modelCleanup = new Map<string, number>();
 import { editorOptions, languageFor, monaco } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
 import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } from "../lib/patch";
@@ -106,11 +109,17 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
   // Diff models are kept per file while the panel is open, then released.
   useEffect(() => {
     const prefix = `jaunt-diff://${ws.id}/`;
+    // Reopened before a pending cleanup ran: its models are in use again.
+    window.clearTimeout(modelCleanup.get(ws.id));
     return () => {
       // After the editor itself has unmounted.
-      setTimeout(() => {
-        for (const m of monaco.editor.getModels()) if (m.uri.toString().startsWith(prefix)) m.dispose();
-      }, 0);
+      modelCleanup.set(
+        ws.id,
+        window.setTimeout(() => {
+          modelCleanup.delete(ws.id);
+          for (const m of monaco.editor.getModels()) if (m.uri.toString().startsWith(prefix)) m.dispose();
+        }, 0),
+      );
     };
   }, [ws.id]);
   const selected = useStore((s) => s.diffFile);

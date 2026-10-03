@@ -77,6 +77,13 @@ export async function loadChat(host: string, id: number) {
     for (const it of buf?.items ?? []) items = mergeItem(items, it);
     const latest = buf?.state ? { ...buf.state, items } : { ...st, items };
     useChat.setState((s) => ({ chats: { ...s.chats, [key]: { ...empty, ...latest } } }));
+  } catch (e) {
+    // A reload of a chat already shown failed: keep the events it held.
+    const buf = buffered.get(key);
+    buffered.delete(key);
+    for (const it of buf?.items ?? []) onChatItem(host, id, it);
+    if (buf?.state) onChatState(host, id, buf.state);
+    throw e;
   } finally {
     buffered.delete(key);
     loading.delete(key);
