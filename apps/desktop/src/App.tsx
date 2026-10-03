@@ -93,6 +93,17 @@ function Toasts() {
           )}
         >
           {t.text}
+          {t.action && (
+            <button
+              className="ml-3 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover"
+              onClick={() => {
+                t.action?.run();
+                useStore.setState((s) => ({ toasts: s.toasts.filter((x) => x.id !== t.id) }));
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
         </div>
       ))}
     </div>
