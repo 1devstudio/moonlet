@@ -263,3 +263,65 @@ async fn workspace_lifecycle_over_rpc() {
         .unwrap();
     assert!(!std::path::Path::new(&ws.path).exists());
 }
+
+#[tokio::test]
+async fn terminals_do_not_inherit_the_daemon_starters_environment() {
+    let home = tempfile::tempdir().unwrap();
+    let socket = home.path().join("run").join("d.sock");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jauntd"))
+        .arg("daemon")
+        .env("JAUNT_HOME", home.path())
+        .env("JAUNT_SOCK", &socket)
+        .env("CLAUDE_CODE_MESSAGING_TOKEN", "leaked-secret")
+        .env("CLAUDECODE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_socket(&socket, Duration::from_secs(15))
+        .await
+        .unwrap();
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let t: TerminalInfo = c
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
+                cwd: home.path().display().to_string(),
+                command: vec!["/bin/sh".into(), "-c".into(), "echo tok=[$CLAUDE_CODE_MESSAGING_TOKEN] cc=[$CLAUDECODE] home=[$HOME]; sleep 5".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let _: AttachResult = c
+        .request(
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
+                id: t.id,
+                cols: None,
+                rows: None,
+            },
+        )
+        .await
+        .unwrap();
+    output_until(&mut c, "home=[").await;
+    let screen: AttachResult = c
+        .request(
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
+                id: t.id,
+                cols: None,
+                rows: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        screen.snapshot.contains("tok=[] cc=[]"),
+        "{}",
+        screen.snapshot
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
