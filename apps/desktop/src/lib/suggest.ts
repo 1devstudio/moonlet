@@ -32,20 +32,26 @@ export function commonPrefix(items: readonly string[]): string {
 
 const cache = new Map<string, string[]>();
 const loading = new Map<string, Promise<string[]>>();
+/** Hosts whose history arrived from the daemon (not just local additions). */
+const loaded = new Set<string>();
 
 /** Shell history of a host, loaded once and extended locally as commands run. */
 export function historyFor(host: string): Promise<string[]> {
-  const hit = cache.get(host);
+  const hit = loaded.has(host) ? cache.get(host) : undefined;
   if (hit) return Promise.resolve(hit);
   let p = loading.get(host);
   if (!p) {
     p = rpc<string[]>(host, M.shellHistory, {})
-      .catch(() => [] as string[])
       .then((h) => {
-        cache.set(host, h);
-        loading.delete(host);
-        return h;
-      });
+        // Keep commands run while the history was loading, newest last.
+        const local = cache.get(host) ?? [];
+        const merged = [...h.filter((x) => !local.includes(x)), ...local];
+        cache.set(host, merged);
+        loaded.add(host);
+        return merged;
+      })
+      .catch(() => cache.get(host) ?? []) // not cached as loaded: retried next time
+      .finally(() => loading.delete(host));
     loading.set(host, p);
   }
   return p;

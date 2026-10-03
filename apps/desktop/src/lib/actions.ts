@@ -158,8 +158,10 @@ export async function sendToAgent(text: string): Promise<boolean> {
 export async function setClassic(host: string, id: number, classic: boolean) {
   try {
     const info = await rpc<TerminalInfo>(host, M.terminalSetClassic, { id, classic });
-    // An empty Enter redraws the prompt in the new mode right away.
-    if (info.prompt) void sendInput(host, id, "\r");
+    // An empty Enter redraws the prompt in the new mode right away. Leaving
+    // Classic, the shell line may hold a half-typed command: Ctrl+U clears
+    // it first (it stays in the shell's kill ring) so Enter cannot run it.
+    if (info.prompt) void sendInput(host, id, classic ? "\r" : "\x15\r");
   } catch (e) {
     errorToast(e);
   }
