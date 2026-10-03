@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, compact } from "./sidebar";
+import { arrange, compact, dropResult, type Group } from "./sidebar";
 import type { Project, Session, Workspace } from "./protocol";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
@@ -51,6 +51,15 @@ describe("sidebar arrange", () => {
     expect(g[1].sessions.map((x) => x.id)).toEqual(["s2"]);
   });
 
+  it("keeps sections in every grouping mode", () => {
+    for (const group_by of ["project", "status", "none"] as const) {
+      const g = arrange(ws({ group_by }, { sections: [{ id: "w:x", name: "Today" }] }), projects, [s("s1", "a", { section: "w:x" }), s("s2", "a")], () => "working", () => 0);
+      expect(g[0]).toMatchObject({ kind: "section", label: "Today" });
+      expect(g[0].sessions.map((x) => x.id)).toEqual(["s1"]);
+      expect(g.slice(1).flatMap((x) => x.sessions.map((y) => y.id))).toEqual(["s2"]);
+    }
+  });
+
   it("sorts by recent activity", () => {
     const g = arrange(ws({ sort_by: "recent", group_by: "none" }), projects, sessions, () => null, (x) => (x.id === "s1" ? 99 : 1));
     expect(g[0].sessions[0].id).toBe("s1");
@@ -60,5 +69,24 @@ describe("sidebar arrange", () => {
     expect(compact(41)).toBe("41");
     expect(compact(5512)).toBe("5.5k");
     expect(compact(12400)).toBe("12k");
+  });
+});
+
+describe("drag and drop", () => {
+  const g = (kind: Group["kind"], extra: Partial<Group> = {}): Group => ({ key: kind, kind, label: kind, sessions: [], ...extra });
+  const loose = { sessionId: "s1", projectId: "a", section: null };
+  const filed = { sessionId: "s1", projectId: "a", section: "w:x" };
+
+  it("moves a session into a section", () => {
+    expect(dropResult(loose, g("section", { sectionId: "w:x" }))).toEqual({ section: "w:x" });
+    expect(dropResult(filed, g("section", { sectionId: "w:y" }))).toEqual({ section: "w:y" });
+    expect(dropResult(filed, g("section", { sectionId: "w:x" }))).toBeNull();
+  });
+
+  it("takes it out again only onto its own project or a non-project group", () => {
+    expect(dropResult(filed, g("project", { projectId: "a" }))).toEqual({ section: "" });
+    expect(dropResult(filed, g("project", { projectId: "b" }))).toBeNull();
+    expect(dropResult(filed, g("status"))).toEqual({ section: "" });
+    expect(dropResult(loose, g("project", { projectId: "a" }))).toBeNull();
   });
 });

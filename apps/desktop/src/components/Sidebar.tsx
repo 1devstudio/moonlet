@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, ChevronDown, ChevronRight, Folder, FolderPlus, History, MoreHorizontal, Plus, RotateCcw, Settings } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
-import { arrange, compact, type Group } from "../lib/sidebar";
+import { arrange, compact, dropResult, type Dragged, type Group } from "../lib/sidebar";
 import { errorToast, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { archiveSession } from "../lib/actions";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
@@ -84,6 +84,9 @@ function InlineInput({ initial, placeholder, onDone }: { initial: string; placeh
 
 // ------------------------------------------------------------------- rows
 
+/** The session being dragged (HTML drag data is not readable during dragover). */
+let dragging: (Dragged & { host: string }) | null = null;
+
 interface RowMenuState {
   x: number;
   y: number;
@@ -110,6 +113,15 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
         selectSession(host, s.id);
       }}
       onDoubleClick={() => setRenaming(true)}
+      draggable={!renaming}
+      onDragStart={(e) => {
+        dragging = { host, sessionId: s.id, projectId: s.project_id, section: s.section };
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", s.name);
+      }}
+      onDragEnd={() => {
+        dragging = null;
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu(e);
@@ -151,6 +163,35 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
   const key = `${host}/${ws.id}/${g.key}`;
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const toggle = () => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }));
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+  const accepts = () => !!dragging && dragging.host === host && dropResult(dragging, g) !== null;
+  const dropProps = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!accepts()) return;
+      e.preventDefault();
+      depth.current += 1;
+      setOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!accepts()) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    },
+    onDragLeave: () => {
+      depth.current = Math.max(0, depth.current - 1);
+      if (depth.current === 0) setOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      depth.current = 0;
+      setOver(false);
+      const d = dragging;
+      dragging = null;
+      const r = d && dropResult(d, g);
+      if (d && r) void rpc(host, M.sessionUpdate, { id: d.sessionId, section: r.section }).catch(errorToast);
+    },
+  };
   const header =
     g.kind === "project" ? (
       <>
@@ -166,7 +207,7 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
       <span className="truncate text-[11.5px] font-medium uppercase tracking-[0.1em] text-muted">{g.label}</span>
     ) : null;
   return (
-    <div className="mb-1">
+    <div {...dropProps} className={cx("mb-1 rounded-md transition-colors", over && "bg-selected outline outline-1 outline-accent/60")}>
       {header && (
         <div className="group flex h-[38px] items-center gap-2.5 pl-4 pr-3">
           <button onClick={toggle} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
@@ -191,7 +232,7 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
       )}
       {!collapsed && g.sessions.map((s) => <SessionRow key={s.id} host={host} s={s} onMenu={(e) => onRowMenu(s, e)} />)}
       {!collapsed && g.kind === "section" && g.sessions.length === 0 && (
-        <div className="pb-1 pl-[30px] text-[12.5px] text-faint">Right-click a session › Move to section</div>
+        <div className="pb-1.5 pl-[30px] text-[12.5px] text-faint">Drag sessions here</div>
       )}
     </div>
   );
