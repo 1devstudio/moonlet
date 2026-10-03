@@ -64,6 +64,27 @@ pub fn list(path: &str, show_ignored: bool) -> Result<Vec<DirEntry>> {
     Ok(out)
 }
 
+/// Every non-ignored file under `root`, relative to it, for `@` mentions
+/// and quick open. Capped at `limit` entries.
+pub fn files(root: &str, limit: usize) -> Result<Vec<String>> {
+    let dir = expand_home(root);
+    if !dir.is_dir() {
+        bail!("{} is not a directory", dir.display());
+    }
+    let mut out: Vec<String> = ignore::WalkBuilder::new(&dir)
+        .hidden(false)
+        .require_git(false)
+        .filter_entry(|e| e.file_name() != ".git")
+        .build()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .filter_map(|e| e.path().strip_prefix(&dir).ok().map(|p| p.display().to_string()))
+        .take(limit)
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
 pub fn read(path: &str, max_bytes: Option<u64>) -> Result<FileContent> {
     let p = expand_home(path);
     let size = std::fs::metadata(&p)
@@ -229,6 +250,18 @@ fn debounce(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_are_relative_and_skip_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("target")).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+        std::fs::write(dir.path().join("target/out"), "").unwrap();
+        let f = files(&dir.path().display().to_string(), 100).unwrap();
+        assert_eq!(f, vec![".gitignore", "src/main.rs"]);
+    }
 
     #[test]
     fn lists_with_gitignore() {

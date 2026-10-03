@@ -73,6 +73,7 @@ pub const GH_PR_STATUS: &str = "gh.pr_status";
 
 // Files
 pub const FS_LIST: &str = "fs.list";
+pub const FS_FILES: &str = "fs.files";
 pub const FS_READ: &str = "fs.read";
 pub const FS_WRITE: &str = "fs.write";
 pub const FS_WATCH: &str = "fs.watch";
@@ -408,6 +409,17 @@ pub struct FsList {
     pub path: String,
     #[serde(default)]
     pub show_ignored: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsFiles {
+    pub root: String,
+    #[serde(default = "default_file_limit")]
+    pub limit: usize,
+}
+
+fn default_file_limit() -> usize {
+    20_000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
