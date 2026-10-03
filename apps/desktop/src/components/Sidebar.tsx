@@ -7,7 +7,7 @@ import { arrange, compact, dropResult, lastActive, type Dragged, type Group } fr
 import { errorToast, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { archiveSession } from "../lib/actions";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
-import { IconButton, StateGlyph, cx } from "./ui";
+import { IconButton, Kbd, StateGlyph, cx } from "./ui";
 
 // ------------------------------------------------------------------ helpers
 
@@ -480,7 +480,7 @@ function NavRow({ icon, label, active, onClick, hint }: { icon: ReactNode; label
     >
       <span className="flex w-4 justify-center">{icon}</span>
       <span className="flex-1">{label}</span>
-      {hint && <span className="font-mono text-[11px] text-faint">{hint}</span>}
+      {hint && <Kbd>{hint}</Kbd>}
     </button>
   );
 }
@@ -543,7 +543,9 @@ export function Sidebar() {
         <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ dialog: { kind: "settings" } })}>
           <Settings size={14} />
         </IconButton>
-        <span className="ml-auto font-mono text-[11px] text-faint">⌘K</span>
+        <span className="ml-auto">
+          <Kbd>⌘K</Kbd>
+        </span>
       </div>
       {rowMenu && <RowContextMenu m={rowMenu} onClose={() => setRowMenu(null)} />}
     </aside>
