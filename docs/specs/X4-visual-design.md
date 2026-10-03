@@ -16,7 +16,7 @@ jaunt's look matches the reference: a neutral near-black UI with Claude's orange
 | `panel` | `#161616` | Sidebar, right panel, tab strip |
 | `raised` | `#1e1e1e` | Active tab, hover |
 | `border` | `#242424` | Hairlines |
-| `fg` / `muted` / `faint` | `#e6e6e6` / `#8c8c8c` / `#7a7a7a` | Text levels (`faint` is ≈4.5:1 on `bg`, readable for small hints) |
+| `fg` / `muted` / `faint` | `#e6e6e6` / `#8c8c8c` / `#7d7d7d` | Text levels (`faint` is at least 4.5:1 on `bg`, readable for small hints) |
 | `accent` | `#d97757` | Claude orange: selection bar, working spinner, prompts |
 | `done` | `#3ecf6e` | Finished / ready for review |
 | `blocked` | `#f2c94c` | Needs the user |
