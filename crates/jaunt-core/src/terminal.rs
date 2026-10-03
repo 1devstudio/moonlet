@@ -58,7 +58,11 @@ pub struct TerminalManager {
     events: broadcast::Sender<Message>,
     socket: PathBuf,
     base_env: BTreeMap<String, String>,
+    /// Stops (and with `true`, forgets) a structured agent (X6).
+    chat_stop: Mutex<Option<ChatStop>>,
 }
+
+pub type ChatStop = Arc<dyn Fn(TerminalId, bool) + Send + Sync>;
 
 impl TerminalManager {
     pub fn new(socket: PathBuf, base_env: BTreeMap<String, String>) -> Arc<Self> {
@@ -70,6 +74,7 @@ impl TerminalManager {
             events,
             socket,
             base_env,
+            chat_stop: Mutex::new(None),
         });
         tokio::spawn(quiet_watcher(Arc::downgrade(&mgr)));
         mgr
@@ -86,6 +91,53 @@ impl TerminalManager {
 
     pub fn emit(&self, message: Message) {
         let _ = self.events.send(message);
+    }
+
+    pub fn set_chat_stop(&self, f: ChatStop) {
+        *self.chat_stop.lock().unwrap() = Some(f);
+    }
+
+    /// A fresh terminal id (also used for structured agents).
+    pub fn allocate_id(&self) -> TerminalId {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Registers a structured agent (X6): a terminal without a PTY whose
+    /// conversation lives in the chat runtime. `info.id` is kept if free.
+    pub fn register_chat(&self, mut info: TerminalInfo) -> TerminalInfo {
+        let mut terminals = self.terminals.lock().unwrap();
+        if terminals.contains_key(&info.id) || info.id == 0 {
+            info.id = self.allocate_id();
+        }
+        self.next_id.fetch_max(info.id + 1, Ordering::Relaxed);
+        info.chat = true;
+        let (input, _) = mpsc::unbounded_channel();
+        let terminal = Arc::new(Terminal {
+            id: info.id,
+            input,
+            tasks: Mutex::new(Vec::new()),
+            state: Mutex::new(TerminalState {
+                info: info.clone(),
+                term: TermState::new(info.rows.max(1), info.cols.max(1)),
+                pty: None,
+                subscribers: HashMap::new(),
+                agent: AgentTracker::default(),
+                last_output: Instant::now(),
+                remove_on_exit: false,
+            }),
+        });
+        terminals.insert(info.id, terminal);
+        drop(terminals);
+        self.emit(Message::event(methods::EV_TERMINAL_CREATED, &info));
+        info
+    }
+
+    /// Changes a terminal's info and tells clients.
+    pub fn update_info(&self, id: TerminalId, f: impl FnOnce(&mut TerminalInfo)) {
+        let Some(t) = self.get(id) else { return };
+        let mut st = t.state.lock().unwrap();
+        f(&mut st.info);
+        self.emit(Message::event(methods::EV_TERMINAL_UPDATED, &st.info));
     }
 
     pub fn new_client_id(&self) -> ClientId {
@@ -188,6 +240,7 @@ impl TerminalManager {
             reported_cwd: None,
             prompt: None,
             alt_screen: false,
+            chat: false,
             created_at: now,
             last_output_at: now,
         };
@@ -298,6 +351,16 @@ impl TerminalManager {
 
     pub fn kill(&self, id: TerminalId, remove: bool) -> Result<()> {
         let s = self.get(id).context("no such terminal")?;
+        if s.info().chat {
+            let stop = self.chat_stop.lock().unwrap().clone();
+            if let Some(stop) = stop {
+                stop(id, remove);
+            }
+            if remove {
+                self.remove(id);
+            }
+            return Ok(());
+        }
         let exited = {
             let st = s.state.lock().unwrap();
             if let Some(pty) = &st.pty {
@@ -695,6 +758,7 @@ async fn quiet_watcher(mgr: std::sync::Weak<TerminalManager>) {
         for s in terminals {
             let mut st = s.state.lock().unwrap();
             if st.info.kind == TerminalKind::Agent
+                && !st.info.chat
                 && now.duration_since(st.last_output) > Duration::from_secs(4)
                 && st.agent.on_quiet(now)
             {

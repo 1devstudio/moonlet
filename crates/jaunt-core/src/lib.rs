@@ -2,6 +2,7 @@
 //! repos and worktree workspaces, git and files.
 
 pub mod agent;
+pub mod chat;
 pub mod client;
 pub mod fs;
 pub mod git;

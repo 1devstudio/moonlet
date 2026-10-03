@@ -92,6 +92,8 @@ pub struct SessionManager {
     file: PathBuf,
     worktrees_root: PathBuf,
     terminals: Arc<TerminalManager>,
+    /// Structured agents (X6); absent in tests that do not need them.
+    chats: std::sync::OnceLock<Arc<crate::chat::runtime::ChatManager>>,
 }
 
 fn new_id() -> String {
@@ -184,9 +186,19 @@ impl SessionManager {
             file,
             worktrees_root,
             terminals,
+            chats: std::sync::OnceLock::new(),
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
+    }
+
+    pub fn set_chats(&self, chats: Arc<crate::chat::runtime::ChatManager>) {
+        let _ = self.chats.set(chats);
+    }
+
+    /// The chat runtime when `agent` should run structured.
+    fn chat_runtime(&self, agent: Option<&str>) -> Option<&Arc<crate::chat::runtime::ChatManager>> {
+        agent.filter(|a| crate::chat::supports(a)).and(self.chats.get())
     }
 
     fn save(&self, state: &State) -> Result<()> {
@@ -458,6 +470,7 @@ impl SessionManager {
         // "New agent tab": an agent session without a command runs that agent.
         if req.kind == TerminalKind::Agent
             && req.command.is_empty()
+            && !req.chat
             && let Some(agent) = req.agent.clone()
         {
             let base = self.agent_session(ws, &repo, &agent, None, false, req.cols, req.rows);
@@ -471,8 +484,22 @@ impl SessionManager {
         for (k, v) in self.script_env(ws, &repo) {
             req.env.entry(k).or_insert(v);
         }
-        let info = self.terminals.create(req.clone())?;
-        if matches!(info.kind, TerminalKind::Agent | TerminalKind::Shell) {
+        let chats = if req.chat { self.chat_runtime(req.agent.as_deref()) } else { None };
+        let info = match chats {
+            Some(chats) => chats.create(crate::chat::runtime::ChatCreate {
+                cwd: req.cwd.clone(),
+                agent: req.agent.clone().unwrap_or_default(),
+                model: req.model.clone().or_else(|| ws.model.clone()),
+                effort: req.effort.clone().or_else(|| ws.effort.clone()),
+                name: ws.name.clone(),
+                title: req.title.clone(),
+                session_id: Some(ws.id.clone()),
+                env: req.env.clone(),
+            })?,
+            None => self.terminals.create(req.clone())?,
+        };
+        // Chats persist and restore themselves; they need no restore entry.
+        if matches!(info.kind, TerminalKind::Agent | TerminalKind::Shell) && !info.chat {
             let entry = RestoreEntry {
                 kind: info.kind,
                 title: info.title.clone(),
@@ -608,7 +635,28 @@ impl SessionManager {
                 },
             )?;
         }
-        if let Some(agent) = &agent {
+        if let Some(agent) = &agent
+            && !req.tui
+            && self.chat_runtime(Some(agent)).is_some()
+        {
+            let info = self.spawn_in(
+                &ws,
+                TerminalCreate {
+                    kind: TerminalKind::Agent,
+                    title: Some(agent.clone()),
+                    agent: Some(agent.clone()),
+                    chat: true,
+                    cols: req.cols,
+                    rows: req.rows,
+                    ..Default::default()
+                },
+            )?;
+            if let Some(p) = req.prompt.as_deref().filter(|p| !p.trim().is_empty())
+                && let Some(chats) = self.chats.get()
+            {
+                chats.send(info.id, p)?;
+            }
+        } else if let Some(agent) = &agent {
             self.spawn_in(
                 &ws,
                 self.agent_session(
@@ -967,6 +1015,7 @@ mod tests {
                 model: None,
                 effort: None,
                 pr: None,
+                tui: false,
             })
             .await
             .unwrap();
@@ -997,6 +1046,7 @@ mod tests {
                 model: None,
                 effort: None,
                 pr: None,
+                tui: false,
             })
             .await
             .unwrap();
@@ -1052,6 +1102,7 @@ mod tests {
                 model: None,
                 effort: None,
                 pr: None,
+                tui: false,
             })
             .await
             .unwrap();
@@ -1106,6 +1157,7 @@ mod tests {
                 model: None,
                 effort: None,
                 pr: None,
+                tui: false,
             })
             .await
             .unwrap();
@@ -1166,6 +1218,7 @@ mod tests {
                 model: None,
                 effort: None,
                 pr: None,
+                tui: false,
             })
             .await
             .unwrap();
@@ -1252,6 +1305,7 @@ mod tests {
                 model: None,
                 effort: None,
                 pr: None,
+                tui: false,
                 cols: 80,
                 rows: 24,
             })
