@@ -56,4 +56,4 @@ claude-yolo = "claude --dangerously-skip-permissions"
 
 ## Remote hosts
 
-Settings › Remote hosts lists the aliases in your `~/.ssh/config`. jaunt installs a version-pinned, checksum-verified `jauntd` into `~/.jaunt/bin` on the host, only after you confirm. Linux helpers are built with `scripts/build-remote.sh` (needs `cargo-zigbuild`).
+Settings › Remote hosts lists the aliases in your `~/.ssh/config`. jaunt installs a checksum-verified `jauntd` built for the host's platform into `~/.jaunt/bin`, only after you confirm. The app checks the helper's version when it connects and offers to reinstall on a mismatch. Linux helpers are built with `scripts/build-remote.sh` (needs `cargo-zigbuild`).

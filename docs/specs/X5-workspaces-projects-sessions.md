@@ -50,7 +50,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
   - `view` holds group/sort/filter and is persisted.
 - **Projects** (`project.*`): `add`, `list`, `remove`, `config`.
 - **Sessions** (`session.*`): `create`, `list`, `archive`, `unarchive`, `update {name?, section?, layout?}`, `run`.
-  - `session.create` takes `{project_id, prompt?, name?, agent?, model?, effort?, from?, existing_branch?, issue?}`.
+  - `session.create` takes `{project_id, prompt?, name?, agent?, model?, effort?, from?, branch?, existing_branch?, pr?, tui?, cols, rows}`. An issue from the picker only fills the prompt and the name. A `pr` session works on a local `pr/<number>` branch, fetched from the PR head.
 - **Terminals** (`terminal.*`): the old PTY `session.*` methods, renamed.
 - **Migration:** see ADR 0005.
 
