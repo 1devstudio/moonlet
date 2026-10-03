@@ -449,7 +449,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
         />
         <div className="flex items-center gap-2 px-5 pb-4">
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
-          {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 text-[15px]" iconSize={15} align="left" />}
+          {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 text-[14px]" iconSize={14} align="left" />}
           <span className="ml-auto" />
           <button title="Attach files" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg" onClick={() => void attach()}>
             <Plus size={16} />
