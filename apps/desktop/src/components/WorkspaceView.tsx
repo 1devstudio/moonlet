@@ -99,7 +99,7 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Workspace; id: s
         title="Close tab"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => {
-          for (const x of ids) void rpc(host, M.sessionKill, { id: x, remove: true });
+          for (const x of ids) void rpc(host, M.terminalKill, { id: x, remove: true });
         }}
       >
         <X size={12} />

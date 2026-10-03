@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use jaunt_core::fs::Watchers;
 use jaunt_core::hooks::{self, HookPaths};
 use jaunt_core::paths::{hostname, now_ms};
-use jaunt_core::session::SessionManager;
+use jaunt_core::terminal::TerminalManager;
 use jaunt_core::workspace::WorkspaceManager;
 use jaunt_core::{fs, git};
 use jaunt_proto::methods::{self as m, AttachResult};
@@ -22,7 +22,7 @@ use tokio::sync::watch;
 use crate::server::Conn;
 
 pub struct Daemon {
-    pub sessions: Arc<SessionManager>,
+    pub terminals: Arc<TerminalManager>,
     pub workspaces: Arc<WorkspaceManager>,
     watchers: Arc<Watchers>,
     started_at: u64,
@@ -47,16 +47,16 @@ pub fn internal(e: impl std::fmt::Display) -> RpcError {
 impl Daemon {
     pub fn new(socket: PathBuf, base_env: BTreeMap<String, String>) -> Arc<Self> {
         let (shutdown, _) = watch::channel(false);
-        let sessions = SessionManager::new(socket.clone(), base_env);
+        let terminals = TerminalManager::new(socket.clone(), base_env);
         let workspaces = WorkspaceManager::load(
             jaunt_core::paths::state_file(),
             jaunt_core::paths::home().join("worktrees"),
-            sessions.clone(),
+            terminals.clone(),
         );
-        let emitter = sessions.clone();
+        let emitter = terminals.clone();
         let watchers = Watchers::new(Arc::new(move |m| emitter.emit(m)));
         Arc::new(Self {
-            sessions,
+            terminals,
             workspaces,
             watchers,
             started_at: now_ms(),
@@ -93,12 +93,12 @@ impl Daemon {
             host: hostname(),
             home: dirs_home(),
             started_at: self.started_at,
-            sessions: self.sessions.len(),
+            terminals: self.terminals.len(),
         }
     }
 
     pub async fn handle(self: &Arc<Self>, conn: &Conn, method: &str, p: Value) -> HandlerResult {
-        let s = &self.sessions;
+        let s = &self.terminals;
         match method {
             m::DAEMON_INFO => ok(self.info()),
             m::DAEMON_SHUTDOWN => {
@@ -123,8 +123,8 @@ impl Daemon {
                 });
                 ok(true)
             }
-            m::SESSION_CREATE => {
-                let req: m::SessionCreate = params(p)?;
+            m::TERMINAL_CREATE => {
+                let req: m::TerminalCreate = params(p)?;
                 match req.workspace_id.clone() {
                     Some(id) => {
                         let ws = self.workspaces.workspace(&id).map_err(internal)?;
@@ -133,9 +133,9 @@ impl Daemon {
                     None => ok(s.create(req).map_err(internal)?),
                 }
             }
-            m::SESSION_LIST => ok(s.list()),
-            m::SESSION_ATTACH => {
-                let a: m::SessionAttach = params(p)?;
+            m::TERMINAL_LIST => ok(s.list()),
+            m::TERMINAL_ATTACH => {
+                let a: m::TerminalAttach = params(p)?;
                 let size = a.cols.zip(a.rows);
                 let (info, snapshot) = s
                     .attach(a.id, conn.id, conn.tx.clone(), size)
@@ -145,34 +145,34 @@ impl Daemon {
                     snapshot: String::from_utf8_lossy(&snapshot).into_owned(),
                 })
             }
-            m::SESSION_DETACH => {
-                let r: m::SessionRef = params(p)?;
+            m::TERMINAL_DETACH => {
+                let r: m::TerminalRef = params(p)?;
                 s.detach(r.id, conn.id);
                 ok(true)
             }
-            m::SESSION_RESIZE => {
-                let r: m::SessionResize = params(p)?;
+            m::TERMINAL_RESIZE => {
+                let r: m::TerminalResize = params(p)?;
                 s.resize(r.id, r.cols, r.rows).map_err(internal)?;
                 ok(true)
             }
-            m::SESSION_KILL => {
-                let r: m::SessionKill = params(p)?;
+            m::TERMINAL_KILL => {
+                let r: m::TerminalKill = params(p)?;
                 s.kill(r.id, r.remove).map_err(internal)?;
                 ok(true)
             }
-            m::SESSION_WRITE => {
-                let r: m::SessionWrite = params(p)?;
+            m::TERMINAL_WRITE => {
+                let r: m::TerminalWrite = params(p)?;
                 s.write(r.id, r.data.into_bytes()).map_err(internal)?;
                 ok(true)
             }
-            m::SESSION_SEARCH => {
-                let r: m::SessionSearch = params(p)?;
+            m::TERMINAL_SEARCH => {
+                let r: m::TerminalSearch = params(p)?;
                 ok(s.search(r.id, &r.query, r.regex, r.case_sensitive)
                     .map_err(internal)?)
             }
             m::AGENT_REPORT => {
                 let r: m::AgentReport = params(p)?;
-                s.report(r.session, r.state, r.source, r.message, r.agent)
+                s.report(r.terminal, r.state, r.source, r.message, r.agent)
                     .map_err(internal)?;
                 ok(true)
             }
@@ -344,7 +344,7 @@ fn jaunt_cli_path() -> anyhow::Result<PathBuf> {
 }
 
 fn path(p: &str) -> PathBuf {
-    jaunt_core::session::expand_home(p)
+    jaunt_core::terminal::expand_home(p)
 }
 
 fn dirs_home() -> String {

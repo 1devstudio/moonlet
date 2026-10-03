@@ -29,14 +29,14 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// Upper bound for a single frame. Larger frames are a protocol error.
 pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 
-pub type SessionId = u32;
+pub type TerminalId = u32;
 
 /// One unit on the wire.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Frame {
     Json(Message),
-    Output { session: SessionId, data: Vec<u8> },
-    Input { session: SessionId, data: Vec<u8> },
+    Output { terminal: TerminalId, data: Vec<u8> },
+    Input { terminal: TerminalId, data: Vec<u8> },
 }
 
 impl Frame {

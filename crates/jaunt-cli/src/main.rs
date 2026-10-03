@@ -11,9 +11,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use jaunt_core::client::Client;
 use jaunt_core::hooks::{self, HookPaths};
-use jaunt_proto::SessionId;
-use jaunt_proto::methods::{self, AgentReport, SessionCreate, SessionWrite};
-use jaunt_proto::types::{AgentState, SessionInfo, SessionKind, StateSource};
+use jaunt_proto::TerminalId;
+use jaunt_proto::methods::{self, AgentReport, TerminalCreate, TerminalWrite};
+use jaunt_proto::types::{AgentState, StateSource, TerminalInfo, TerminalKind};
 
 #[derive(Parser)]
 #[command(
@@ -37,9 +37,9 @@ enum Cmd {
         state: StateArg,
         #[arg(long, short)]
         message: Option<String>,
-        /// Session id (defaults to $JAUNT_SESSION_ID).
-        #[arg(long, env = "JAUNT_SESSION_ID")]
-        session: Option<SessionId>,
+        /// Session id (defaults to $JAUNT_TERMINAL_ID).
+        #[arg(long, env = "JAUNT_TERMINAL_ID")]
+        session: Option<TerminalId>,
     },
     /// Entry point for agent hooks. Never fails, so a missing daemon cannot break an agent.
     Hook {
@@ -92,7 +92,10 @@ enum HooksAction {
 #[derive(Subcommand)]
 enum PaneAction {
     /// Type a command into a pane and press Enter.
-    Run { id: SessionId, command: Vec<String> },
+    Run {
+        id: TerminalId,
+        command: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -165,9 +168,14 @@ async fn connect(socket: &std::path::Path) -> Result<Client> {
 }
 
 async fn hook(socket: &std::path::Path, agent: HookAgent, payload: Option<String>) -> Result<()> {
-    let Some(session) = std::env::var("JAUNT_SESSION_ID")
-        .ok()
-        .and_then(|s| s.parse::<SessionId>().ok())
+    // Terminals started before ADR 0005 still carry JAUNT_SESSION_ID.
+    let Some(session) = ["JAUNT_TERMINAL_ID", "JAUNT_SESSION_ID"]
+        .iter()
+        .find_map(|k| {
+            std::env::var(k)
+                .ok()
+                .and_then(|s| s.parse::<TerminalId>().ok())
+        })
     else {
         return Ok(());
     };
@@ -192,7 +200,7 @@ async fn hook(socket: &std::path::Path, agent: HookAgent, payload: Option<String
         .request(
             methods::AGENT_REPORT,
             AgentReport {
-                session,
+                terminal: session,
                 state,
                 message,
                 source: StateSource::Hook,
@@ -219,7 +227,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                 .request(
                     methods::AGENT_REPORT,
                     AgentReport {
-                        session,
+                        terminal: session,
                         state: state.into(),
                         message,
                         source: StateSource::Hook,
@@ -245,7 +253,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
         }
         Cmd::Ls { json } => {
             let mut c = connect(&socket).await?;
-            let list: Vec<SessionInfo> = c.request(methods::SESSION_LIST, ()).await?;
+            let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&list)?);
             } else {
@@ -276,8 +284,8 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
             let mut c = connect(&socket).await?;
             let _: bool = c
                 .request(
-                    methods::SESSION_WRITE,
-                    SessionWrite {
+                    methods::TERMINAL_WRITE,
+                    TerminalWrite {
                         id,
                         data: format!("{}\r", command.join(" ")),
                     },
@@ -304,13 +312,13 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
             }
             let shell = jaunt_core::pty::user_shell();
             let mut c = connect(&socket).await?;
-            let info: SessionInfo = c
+            let info: TerminalInfo = c
                 .request(
-                    methods::SESSION_CREATE,
-                    SessionCreate {
+                    methods::TERMINAL_CREATE,
+                    TerminalCreate {
                         cwd: cwd.display().to_string(),
                         command: vec![shell, "-lic".into(), line],
-                        kind: SessionKind::Agent,
+                        kind: TerminalKind::Agent,
                         agent: Some(agent),
                         cols: 120,
                         rows: 32,

@@ -1,5 +1,5 @@
 //! Live upgrade (S3): hand every PTY to a new `jauntd` binary over a private
-//! Unix socket with `SCM_RIGHTS`, then exit without touching the sessions.
+//! Unix socket with `SCM_RIGHTS`, then exit without touching the terminals.
 
 use std::io::{IoSlice, IoSliceMut, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use jaunt_core::session::{ExportedSession, SessionManager};
+use jaunt_core::terminal::{ExportedTerminal, TerminalManager};
 use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
 
 use crate::daemon::Daemon;
@@ -107,16 +107,16 @@ pub async fn hand_off(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<()
     let mut child = cmd
         .spawn()
         .with_context(|| format!("cannot start {}", binary.display()))?;
-    tracing::info!(binary = %binary.display(), pid = child.id(), "handing sessions to new daemon");
+    tracing::info!(binary = %binary.display(), pid = child.id(), "handing terminals to new daemon");
 
-    let sessions = daemon.sessions.clone();
+    let terminals = daemon.terminals.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<()> {
         listener.set_nonblocking(false)?;
         // Wait for the child to connect, but notice if it dies first.
         let (stream, _) = accept_with_timeout(&listener, &mut child, Duration::from_secs(15))?;
         check_peer(&stream)?;
-        let exported = sessions.export();
-        send_sessions(&stream, sessions.base_env(), &exported)?;
+        let exported = terminals.export();
+        send_terminals(&stream, terminals.base_env(), &exported)?;
         let mut ack = [0u8; 1];
         (&stream)
             .read_exact(&mut ack)
@@ -181,24 +181,26 @@ fn check_peer(stream: &UnixStream) -> Result<()> {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Header {
     env: std::collections::BTreeMap<String, String>,
-    sessions: Vec<ExportedSession>,
+    // "sessions" in handoffs from daemons before the rename (ADR 0005).
+    #[serde(alias = "sessions")]
+    terminals: Vec<ExportedTerminal>,
 }
 
-fn send_sessions(
+fn send_terminals(
     stream: &UnixStream,
     env: &std::collections::BTreeMap<String, String>,
-    sessions: &[ExportedSession],
+    terminals: &[ExportedTerminal],
 ) -> Result<()> {
     #[derive(serde::Serialize)]
     struct HeaderRef<'a> {
         env: &'a std::collections::BTreeMap<String, String>,
-        sessions: &'a [ExportedSession],
+        terminals: &'a [ExportedTerminal],
     }
-    let header = serde_json::to_vec(&HeaderRef { env, sessions })?;
+    let header = serde_json::to_vec(&HeaderRef { env, terminals })?;
     let mut s = stream;
     s.write_all(&(header.len() as u32).to_be_bytes())?;
     s.write_all(&header)?;
-    for chunk in sessions.chunks(FD_CHUNK) {
+    for chunk in terminals.chunks(FD_CHUNK) {
         let fds: Vec<RawFd> = chunk.iter().map(|e| e.fd).collect();
         let cmsg = [ControlMessage::ScmRights(&fds)];
         let n = [chunk.len() as u8];
@@ -216,7 +218,7 @@ fn send_sessions(
 pub struct Incoming {
     stream: UnixStream,
     pub env: std::collections::BTreeMap<String, String>,
-    exported: Vec<ExportedSession>,
+    exported: Vec<ExportedTerminal>,
     fds: Vec<RawFd>,
 }
 
@@ -232,7 +234,7 @@ pub fn receive(path: &Path) -> Result<Incoming> {
     s.read_exact(&mut header)?;
     let Header {
         env,
-        sessions: exported,
+        terminals: exported,
     } = serde_json::from_slice(&header)?;
     let mut fds: Vec<RawFd> = Vec::with_capacity(exported.len());
     while fds.len() < exported.len() {
@@ -264,8 +266,8 @@ pub fn receive(path: &Path) -> Result<Incoming> {
     })
 }
 
-/// Step 2: adopt the sessions under the same ids, then confirm to the old daemon.
-pub fn adopt(incoming: Incoming, sessions: &Arc<SessionManager>) -> Result<()> {
+/// Step 2: adopt the terminals under the same ids, then confirm to the old daemon.
+pub fn adopt(incoming: Incoming, terminals: &Arc<TerminalManager>) -> Result<()> {
     let Incoming {
         stream,
         exported,
@@ -273,14 +275,14 @@ pub fn adopt(incoming: Incoming, sessions: &Arc<SessionManager>) -> Result<()> {
         ..
     } = incoming;
     for (e, fd) in exported.iter().zip(fds) {
-        if let Err(err) = sessions.adopt(e.info.clone(), e.rows, e.cols, e.snapshot.as_bytes(), fd)
+        if let Err(err) = terminals.adopt(e.info.clone(), e.rows, e.cols, e.snapshot.as_bytes(), fd)
         {
             tracing::error!(session = e.info.id, "could not adopt session: {err:#}");
         }
     }
     tracing::info!(
         count = exported.len(),
-        "adopted sessions from previous daemon"
+        "adopted terminals from previous daemon"
     );
     (&stream).write_all(b"A")?;
     Ok(())

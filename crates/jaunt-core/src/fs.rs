@@ -11,7 +11,7 @@ use jaunt_proto::methods::{self, FsChanged};
 use jaunt_proto::types::{DirEntry, FileContent};
 use notify::{RecursiveMode, Watcher};
 
-use crate::session::expand_home;
+use crate::terminal::expand_home;
 
 const DEFAULT_MAX_READ: u64 = 4 * 1024 * 1024;
 

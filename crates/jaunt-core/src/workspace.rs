@@ -1,5 +1,5 @@
 //! Repos and workspaces (A4, S4). A workspace is one task: a git worktree
-//! on its own branch plus the sessions running in it. State is persisted
+//! on its own branch plus the terminals running in it. State is persisted
 //! to `~/.jaunt/state.json` so it survives daemon restarts.
 
 use std::collections::BTreeMap;
@@ -8,16 +8,16 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use jaunt_proto::methods::{
-    self, SessionCreate, WorkspaceArchive, WorkspaceCreate, WorkspaceUpdate,
+    self, TerminalCreate, WorkspaceArchive, WorkspaceCreate, WorkspaceUpdate,
 };
-use jaunt_proto::types::{Repo, RepoConfig, RestoreEntry, SessionInfo, SessionKind, Workspace};
-use jaunt_proto::{Message, SessionId};
+use jaunt_proto::types::{Repo, RepoConfig, RestoreEntry, TerminalInfo, TerminalKind, Workspace};
+use jaunt_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 
 use crate::git;
 use crate::paths::now_ms;
 use crate::pty::user_shell;
-use crate::session::{SessionManager, expand_home};
+use crate::terminal::{TerminalManager, expand_home};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct State {
@@ -31,7 +31,7 @@ pub struct WorkspaceManager {
     state: Mutex<State>,
     file: PathBuf,
     worktrees_root: PathBuf,
-    sessions: Arc<SessionManager>,
+    terminals: Arc<TerminalManager>,
 }
 
 fn new_id() -> String {
@@ -57,7 +57,7 @@ impl WorkspaceManager {
     pub fn load(
         file: PathBuf,
         worktrees_root: PathBuf,
-        sessions: Arc<SessionManager>,
+        terminals: Arc<TerminalManager>,
     ) -> Arc<Self> {
         let state = std::fs::read_to_string(&file)
             .ok()
@@ -67,7 +67,7 @@ impl WorkspaceManager {
             state: Mutex::new(state),
             file,
             worktrees_root,
-            sessions,
+            terminals,
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
@@ -91,7 +91,7 @@ impl WorkspaceManager {
     }
 
     fn emit_workspaces(&self) {
-        self.sessions.emit(Message::event(
+        self.terminals.emit(Message::event(
             methods::EV_WORKSPACES_CHANGED,
             self.list_workspaces(),
         ));
@@ -102,11 +102,11 @@ impl WorkspaceManager {
     }
 
     pub fn list_workspaces(&self) -> Vec<Workspace> {
-        let live: std::collections::HashSet<SessionId> =
-            self.sessions.list().into_iter().map(|s| s.id).collect();
+        let live: std::collections::HashSet<TerminalId> =
+            self.terminals.list().into_iter().map(|s| s.id).collect();
         let mut list = self.state.lock().unwrap().workspaces.clone();
         for w in &mut list {
-            w.sessions.retain(|id| live.contains(id));
+            w.terminals.retain(|id| live.contains(id));
         }
         list
     }
@@ -158,7 +158,7 @@ impl WorkspaceManager {
             st.repos.push(r);
             Ok(())
         })?;
-        self.sessions
+        self.terminals
             .emit(Message::event(methods::EV_REPOS_CHANGED, self.list_repos()));
         Ok(repo)
     }
@@ -172,7 +172,7 @@ impl WorkspaceManager {
             st.workspaces.retain(|w| w.repo_id != id);
             Ok(())
         })?;
-        self.sessions
+        self.terminals
             .emit(Message::event(methods::EV_REPOS_CHANGED, self.list_repos()));
         Ok(())
     }
@@ -214,10 +214,10 @@ impl WorkspaceManager {
     }
 
     /// Starts a session inside a workspace and remembers how to restart it.
-    pub fn spawn_in(&self, ws: &Workspace, mut req: SessionCreate) -> Result<SessionInfo> {
+    pub fn spawn_in(&self, ws: &Workspace, mut req: TerminalCreate) -> Result<TerminalInfo> {
         let repo = self.repo(&ws.repo_id)?;
         // "New agent tab": an agent session without a command runs that agent.
-        if req.kind == SessionKind::Agent
+        if req.kind == TerminalKind::Agent
             && req.command.is_empty()
             && let Some(agent) = req.agent.clone()
         {
@@ -232,19 +232,19 @@ impl WorkspaceManager {
         for (k, v) in self.script_env(ws, &repo) {
             req.env.entry(k).or_insert(v);
         }
-        let info = self.sessions.create(req.clone())?;
-        if matches!(info.kind, SessionKind::Agent | SessionKind::Shell) {
+        let info = self.terminals.create(req.clone())?;
+        if matches!(info.kind, TerminalKind::Agent | TerminalKind::Shell) {
             let entry = RestoreEntry {
                 kind: info.kind,
                 title: info.title.clone(),
                 cwd: info.cwd.clone(),
                 command: info.command.clone(),
                 agent: info.agent.clone(),
-                session: Some(info.id),
+                terminal: Some(info.id),
             };
             self.mutate(|st| {
                 if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == ws.id) {
-                    w.sessions.push(info.id);
+                    w.terminals.push(info.id);
                     w.restore.push(entry);
                 }
                 Ok(())
@@ -252,7 +252,7 @@ impl WorkspaceManager {
         } else {
             self.mutate(|st| {
                 if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == ws.id) {
-                    w.sessions.push(info.id);
+                    w.terminals.push(info.id);
                 }
                 Ok(())
             })?;
@@ -271,8 +271,8 @@ impl WorkspaceManager {
         resume: bool,
         cols: u16,
         rows: u16,
-    ) -> SessionCreate {
-        SessionCreate {
+    ) -> TerminalCreate {
+        TerminalCreate {
             cwd: ws.path.clone(),
             command: vec![
                 user_shell(),
@@ -281,7 +281,7 @@ impl WorkspaceManager {
             ],
             cols,
             rows,
-            kind: SessionKind::Agent,
+            kind: TerminalKind::Agent,
             title: Some(agent.to_string()),
             agent: Some(agent.to_string()),
             ..Default::default()
@@ -335,7 +335,7 @@ impl WorkspaceManager {
             agent: agent.clone(),
             archived: false,
             created_at: now_ms(),
-            sessions: vec![],
+            terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
         };
@@ -348,9 +348,9 @@ impl WorkspaceManager {
         if let Some(setup) = config.setup.filter(|s| !s.trim().is_empty()) {
             self.spawn_in(
                 &ws,
-                SessionCreate {
+                TerminalCreate {
                     command: vec![user_shell(), "-lic".into(), setup],
-                    kind: SessionKind::Setup,
+                    kind: TerminalKind::Setup,
                     title: Some("setup".into()),
                     cols: req.cols,
                     rows: req.rows,
@@ -374,7 +374,7 @@ impl WorkspaceManager {
         } else {
             self.spawn_in(
                 &ws,
-                SessionCreate {
+                TerminalCreate {
                     cols: req.cols,
                     rows: req.rows,
                     ..Default::default()
@@ -390,27 +390,27 @@ impl WorkspaceManager {
         script: &str,
         cols: u16,
         rows: u16,
-    ) -> Result<SessionInfo> {
+    ) -> Result<TerminalInfo> {
         let ws = self.workspace(id)?;
         let config = read_config(Path::new(&self.repo(&ws.repo_id)?.path));
         let (cmd, kind) = match script {
-            "run" => (config.run, SessionKind::Run),
-            "setup" => (config.setup, SessionKind::Setup),
-            "archive" => (config.archive, SessionKind::Run),
+            "run" => (config.run, TerminalKind::Run),
+            "setup" => (config.setup, TerminalKind::Setup),
+            "archive" => (config.archive, TerminalKind::Run),
             other => bail!("unknown script {other}"),
         };
         let cmd = cmd
             .filter(|c| !c.trim().is_empty())
             .with_context(|| format!("no `{script}` script in .jaunt/config.toml"))?;
         // Restart instead of piling up run panes.
-        for s in self.sessions.list() {
+        for s in self.terminals.list() {
             if s.workspace_id.as_deref() == Some(id) && s.kind == kind && s.title == script {
-                let _ = self.sessions.kill(s.id, true);
+                let _ = self.terminals.kill(s.id, true);
             }
         }
         self.spawn_in(
             &ws,
-            SessionCreate {
+            TerminalCreate {
                 command: vec![user_shell(), "-lic".into(), cmd],
                 kind,
                 title: Some(script.into()),
@@ -435,9 +435,9 @@ impl WorkspaceManager {
                 .kill_on_drop(true);
             let _ = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.status()).await;
         }
-        for s in self.sessions.list() {
+        for s in self.terminals.list() {
             if s.workspace_id.as_deref() == Some(ws.id.as_str()) {
-                let _ = self.sessions.kill(s.id, true);
+                let _ = self.terminals.kill(s.id, true);
             }
         }
         if req.remove_worktree {
@@ -449,7 +449,7 @@ impl WorkspaceManager {
         self.mutate(|st| {
             if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == ws.id) {
                 w.archived = true;
-                w.sessions.clear();
+                w.terminals.clear();
                 w.restore.clear();
             }
             Ok(())
@@ -479,7 +479,7 @@ impl WorkspaceManager {
             Ok(())
         })?;
         let ws = self.workspace(id)?;
-        self.spawn_in(&ws, SessionCreate::default())?;
+        self.spawn_in(&ws, TerminalCreate::default())?;
         self.workspace(id)
     }
 
@@ -502,11 +502,11 @@ impl WorkspaceManager {
         self.workspace(&req.id)
     }
 
-    /// After a daemon restart, sessions are gone: restart each workspace's
+    /// After a daemon restart, terminals are gone: restart each workspace's
     /// agents (resuming where the agent supports it) and shells (S4).
     pub fn restore_after_restart(&self) -> usize {
-        let live: std::collections::HashSet<SessionId> =
-            self.sessions.list().into_iter().map(|s| s.id).collect();
+        let live: std::collections::HashSet<TerminalId> =
+            self.terminals.list().into_iter().map(|s| s.id).collect();
         let pending: Vec<Workspace> = self
             .state
             .lock()
@@ -524,7 +524,7 @@ impl WorkspaceManager {
             let dead: Vec<RestoreEntry> = ws
                 .restore
                 .iter()
-                .filter(|e| e.session.is_none_or(|id| !live.contains(&id)))
+                .filter(|e| e.terminal.is_none_or(|id| !live.contains(&id)))
                 .cloned()
                 .collect();
             if dead.is_empty() {
@@ -533,8 +533,8 @@ impl WorkspaceManager {
             let _ = self.mutate(|st| {
                 if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == ws.id) {
                     w.restore
-                        .retain(|e| e.session.is_some_and(|id| live.contains(&id)));
-                    w.sessions.retain(|id| live.contains(id));
+                        .retain(|e| e.terminal.is_some_and(|id| live.contains(&id)));
+                    w.terminals.retain(|id| live.contains(id));
                 }
                 Ok(())
             });
@@ -544,12 +544,12 @@ impl WorkspaceManager {
                         || read_config(Path::new(&repo.path)).agents.contains_key(a)
                 };
                 let req = match (&entry.kind, &entry.agent) {
-                    (SessionKind::Agent, Some(agent)) if known(agent) => {
+                    (TerminalKind::Agent, Some(agent)) if known(agent) => {
                         let mut r = self.agent_session(&ws, &repo, agent, None, true, 120, 32);
                         r.title = Some(entry.title.clone());
                         r
                     }
-                    _ => SessionCreate {
+                    _ => TerminalCreate {
                         cwd: entry.cwd.clone(),
                         command: entry.command.clone(),
                         title: Some(entry.title.clone()),
@@ -569,17 +569,17 @@ impl WorkspaceManager {
 
     /// `removed`: the tab was closed. Otherwise the process exited while the
     /// daemon ran, so there is nothing to bring back after a restart.
-    fn forget_session(&self, id: SessionId, removed: bool) {
+    fn forget_session(&self, id: TerminalId, removed: bool) {
         let changed = self
             .mutate(|st| {
                 let mut changed = false;
                 for w in &mut st.workspaces {
-                    let before = (w.sessions.len(), w.restore.len());
+                    let before = (w.terminals.len(), w.restore.len());
                     if removed {
-                        w.sessions.retain(|s| *s != id);
+                        w.terminals.retain(|s| *s != id);
                     }
-                    w.restore.retain(|e| e.session != Some(id));
-                    changed |= before != (w.sessions.len(), w.restore.len());
+                    w.restore.retain(|e| e.terminal != Some(id));
+                    changed |= before != (w.terminals.len(), w.restore.len());
                 }
                 Ok(changed)
             })
@@ -593,16 +593,16 @@ impl WorkspaceManager {
 /// Closed tabs and processes that exited on their own are not restored.
 async fn track_removed_sessions(mgr: std::sync::Weak<WorkspaceManager>) {
     let Some(m) = mgr.upgrade() else { return };
-    let mut rx = m.sessions.subscribe_events();
+    let mut rx = m.terminals.subscribe_events();
     drop(m);
     loop {
         match rx.recv().await {
             Ok(Message::Event { name, data })
-                if name == methods::EV_SESSION_REMOVED || name == methods::EV_SESSION_EXITED =>
+                if name == methods::EV_TERMINAL_REMOVED || name == methods::EV_TERMINAL_EXITED =>
             {
                 let Some(m) = mgr.upgrade() else { return };
                 if let Some(id) = data.get("id").and_then(serde_json::Value::as_u64) {
-                    m.forget_session(id as SessionId, name == methods::EV_SESSION_REMOVED);
+                    m.forget_session(id as TerminalId, name == methods::EV_TERMINAL_REMOVED);
                 }
             }
             Ok(_) => {}
@@ -653,11 +653,11 @@ mod tests {
             .unwrap();
         let home = tempfile::tempdir().unwrap();
         let env: BTreeMap<String, String> = std::env::vars().collect();
-        let sessions = SessionManager::new(home.path().join("s.sock"), env);
+        let terminals = TerminalManager::new(home.path().join("s.sock"), env);
         let mgr = WorkspaceManager::load(
             home.path().join("state.json"),
             home.path().join("worktrees"),
-            sessions,
+            terminals,
         );
         (repo, home, mgr)
     }
@@ -702,14 +702,14 @@ mod tests {
             .unwrap();
         assert_eq!(ws.branch, "jaunt/fix-login");
         assert!(Path::new(&ws.path).join("a.txt").exists());
-        let sessions = mgr.sessions.list();
-        let agent = sessions
+        let terminals = mgr.terminals.list();
+        let agent = terminals
             .iter()
-            .find(|s| s.kind == SessionKind::Agent)
+            .find(|s| s.kind == TerminalKind::Agent)
             .expect("agent started");
         assert_eq!(agent.agent.as_deref(), Some("fake"));
         assert!(agent.command.last().unwrap().ends_with("'it'\\''s broken'"));
-        assert!(sessions.iter().any(|s| s.kind == SessionKind::Setup));
+        assert!(terminals.iter().any(|s| s.kind == TerminalKind::Setup));
         assert_eq!(ws.restore.len(), 1, "setup is not restored, the agent is");
 
         // Second workspace with the same name gets unique branch and dir.
@@ -731,7 +731,7 @@ mod tests {
         assert_ne!(ws2.path, ws.path);
 
         let run = mgr.run_script(&ws.id, "run", 80, 24).await.unwrap();
-        assert_eq!(run.kind, SessionKind::Run);
+        assert_eq!(run.kind, TerminalKind::Run);
 
         // State is persisted.
         let saved: State =
@@ -750,7 +750,7 @@ mod tests {
         assert!(mgr.workspace(&ws.id).unwrap().archived);
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(
-            mgr.sessions
+            mgr.terminals
                 .list()
                 .iter()
                 .all(|s| s.workspace_id.as_deref() != Some(ws.id.as_str()))
@@ -781,16 +781,16 @@ mod tests {
             .unwrap();
         assert_eq!(ws.restore.len(), 1);
 
-        // Simulate a daemon restart: a fresh session manager with no sessions.
+        // Simulate a daemon restart: a fresh session manager with no terminals.
         let env: BTreeMap<String, String> = std::env::vars().collect();
-        let sessions = SessionManager::new(home.path().join("s2.sock"), env);
+        let terminals = TerminalManager::new(home.path().join("s2.sock"), env);
         let mgr2 = WorkspaceManager::load(
             home.path().join("state.json"),
             home.path().join("worktrees"),
-            sessions,
+            terminals,
         );
         assert_eq!(mgr2.restore_after_restart(), 1);
-        let s = mgr2.sessions.list();
+        let s = mgr2.terminals.list();
         assert_eq!(s.len(), 1);
         assert!(
             s[0].command.last().unwrap().contains("agent:"),
@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(
             mgr2.restore_after_restart(),
             0,
-            "idempotent while sessions live"
+            "idempotent while terminals live"
         );
     }
 
@@ -830,8 +830,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let id = ws.restore[0].session.unwrap();
-        mgr.sessions.kill(id, true).unwrap();
+        let id = ws.restore[0].terminal.unwrap();
+        mgr.terminals.kill(id, true).unwrap();
         for _ in 0..100 {
             if mgr.workspace(&ws.id).unwrap().restore.is_empty() {
                 return;
@@ -888,12 +888,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ws.restore.len(), 1, "the shell is restorable");
-        let id = ws.restore[0].session.unwrap();
-        mgr.sessions.write(id, b"exit\n".to_vec()).unwrap();
+        let id = ws.restore[0].terminal.unwrap();
+        mgr.terminals.write(id, b"exit\n".to_vec()).unwrap();
         for _ in 0..200 {
             if mgr.workspace(&ws.id).unwrap().restore.is_empty() {
                 assert!(
-                    mgr.sessions.get(id).is_some(),
+                    mgr.terminals.get(id).is_some(),
                     "exited session stays visible"
                 );
                 return;

@@ -15,7 +15,7 @@ import {
   type HostInfo,
   M,
   type Repo,
-  type SessionInfo,
+  type TerminalInfo,
   type Workspace,
 } from "./protocol";
 import { sanitize } from "./sanitize";
@@ -112,7 +112,7 @@ interface State extends UiPersist {
   hosts: Record<string, HostInfo>;
   repos: Record<string, Repo[]>;
   workspaces: Record<string, Workspace[]>;
-  sessions: Record<string, Record<number, SessionInfo>>;
+  sessions: Record<string, Record<number, TerminalInfo>>;
   layouts: Record<string, Layout>;
   git: Record<string, GitStatus | undefined>;
   /** Sessions that need attention and have not been looked at. */
@@ -201,7 +201,7 @@ export function selectedWorkspace(s: State = get()): Workspace | undefined {
   return s.workspaces[s.selected.host]?.find((w) => w.id === s.selected!.workspace);
 }
 
-export function workspaceSessions(s: State, host: string, wsId: string): SessionInfo[] {
+export function workspaceSessions(s: State, host: string, wsId: string): TerminalInfo[] {
   return Object.values(s.sessions[host] ?? {})
     .filter((x) => x.workspace_id === wsId)
     .sort((a, b) => a.id - b.id);
@@ -240,7 +240,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     const [repos, workspaces, sessions] = await Promise.all([
       rpc<Repo[]>(host, M.repoList),
       rpc<Workspace[]>(host, M.wsList),
-      rpc<SessionInfo[]>(host, M.sessionList),
+      rpc<TerminalInfo[]>(host, M.terminalList),
     ]);
     set((s) => ({
       repos: { ...s.repos, [host]: repos },
@@ -366,12 +366,12 @@ function isVisible(host: string, session: number): boolean {
 async function onAttention(host: string, a: Attention) {
   const s = get();
   if (a.workspace_id && s.selected?.host === host && s.selected.workspace === a.workspace_id) {
-    const since = s.workingSince[sessKey(host, a.session)];
-    const info = s.sessions[host]?.[a.session];
+    const since = s.workingSince[sessKey(host, a.terminal)];
+    const info = s.sessions[host]?.[a.terminal];
     set({
       card: {
         host,
-        session: a.session,
+        session: a.terminal,
         workspace: a.workspace_id,
         agent: info?.agent ?? null,
         state: a.state,
@@ -383,9 +383,9 @@ async function onAttention(host: string, a: Attention) {
     void refreshGit(host, a.workspace_id);
   }
   const focused = document.hasFocus();
-  const visible = focused && isVisible(host, a.session);
+  const visible = focused && isVisible(host, a.terminal);
   if (!visible) {
-    set((st) => ({ unread: { ...st.unread, [sessKey(host, a.session)]: a.state } }));
+    set((st) => ({ unread: { ...st.unread, [sessKey(host, a.terminal)]: a.state } }));
     updateBadge();
   }
   if (!focused || (s.settings.notifyWhenFocused && !visible)) {
@@ -393,12 +393,12 @@ async function onAttention(host: string, a: Attention) {
     const verb = a.state === "blocked" ? "needs you" : a.state === "error" ? "failed" : "is done";
     const where = ws ? ws.name : sanitize(a.title, 60);
     const hostLabel = host === "local" ? "" : ` · ${host}`;
-    set({ lastAttention: { host, session: a.session, at: Date.now() } });
+    set({ lastAttention: { host, session: a.terminal, at: Date.now() } });
     await notify(`${where} ${verb}${hostLabel}`, sanitize(a.message) || sanitize(a.title));
   }
 }
 
-function upsertSession(host: string, info: SessionInfo) {
+function upsertSession(host: string, info: TerminalInfo) {
   set((s) => {
     const prev = s.sessions[host]?.[info.id];
     const key = sessKey(host, info.id);
@@ -411,10 +411,10 @@ function upsertSession(host: string, info: SessionInfo) {
 function handleEvent(e: DaemonEvent) {
   const { host, name, data } = e;
   switch (name) {
-    case EV.sessionCreated:
-    case EV.sessionUpdated:
-    case EV.sessionExited: {
-      const info = data as SessionInfo;
+    case EV.terminalCreated:
+    case EV.terminalUpdated:
+    case EV.terminalExited: {
+      const info = data as TerminalInfo;
       const isNew = !get().sessions[host]?.[info.id];
       upsertSession(host, info);
       if (info.workspace_id && isNew) {
@@ -423,7 +423,7 @@ function handleEvent(e: DaemonEvent) {
       }
       break;
     }
-    case EV.sessionRemoved: {
+    case EV.terminalRemoved: {
       const id = (data as { id: number }).id;
       const info = get().sessions[host]?.[id];
       set((s) => {

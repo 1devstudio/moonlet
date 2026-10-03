@@ -4,7 +4,7 @@
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc, sendInput } from "./daemon";
 import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
-import { M, type SessionInfo, type Workspace } from "./protocol";
+import { M, type TerminalInfo, type Workspace } from "./protocol";
 import { errorToast, getLayout, selectedWorkspace, setLayout, toast, useStore, workspaceSessions } from "./store";
 import { findEntry } from "./terminals";
 
@@ -14,10 +14,10 @@ function current(): { host: string; ws: Workspace } | null {
   return s.selected && ws ? { host: s.selected.host, ws } : null;
 }
 
-async function spawnShell(host: string, ws: Workspace, cwd?: string): Promise<SessionInfo> {
+async function spawnShell(host: string, ws: Workspace, cwd?: string): Promise<TerminalInfo> {
   const focused = getLayout(host, ws.id).focused;
   const entry = focused !== null ? findEntry(host, focused) : undefined;
-  return rpc<SessionInfo>(host, M.sessionCreate, {
+  return rpc<TerminalInfo>(host, M.terminalCreate, {
     cwd: cwd ?? entry?.cwd ?? ws.path,
     workspace_id: ws.id,
     cols: entry?.term.cols ?? 100,
@@ -44,7 +44,7 @@ export async function newAgentTab(agent: string) {
   const c = current();
   if (!c) return;
   try {
-    const info = await rpc<SessionInfo>(c.host, M.sessionCreate, { cwd: c.ws.path, workspace_id: c.ws.id, kind: "agent", agent, cols: 120, rows: 32 });
+    const info = await rpc<TerminalInfo>(c.host, M.terminalCreate, { cwd: c.ws.path, workspace_id: c.ws.id, kind: "agent", agent, cols: 120, rows: 32 });
     const layout = getLayout(c.host, c.ws.id);
     const existing = tabOf(layout, info.id);
     setLayout(c.host, c.ws.id, existing ? { ...layout, active: existing.id, focused: info.id } : addTab(layout, info.id));
@@ -83,7 +83,7 @@ export async function closeFocused() {
     const ok = await confirm(`Stop the ${info.agent ?? "agent"} running in this tab?`, { title: "Close agent", kind: "warning" });
     if (!ok) return;
   }
-  void rpc(c.host, M.sessionKill, { id: focused, remove: true }).catch(errorToast);
+  void rpc(c.host, M.terminalKill, { id: focused, remove: true }).catch(errorToast);
 }
 
 export function focusPane(delta: number) {
@@ -105,7 +105,7 @@ export function switchTab(delta: number) {
 }
 
 /** The agent session of the selected workspace (first live one). */
-export function agentSession(): { host: string; session: SessionInfo } | null {
+export function agentSession(): { host: string; session: TerminalInfo } | null {
   const c = current();
   if (!c) return null;
   const s = useStore.getState();
@@ -134,7 +134,7 @@ export async function runScript(script: "run" | "setup") {
   const c = current();
   if (!c) return;
   try {
-    const info = await rpc<SessionInfo>(c.host, M.wsRun, { id: c.ws.id, script, cols: 120, rows: 30 });
+    const info = await rpc<TerminalInfo>(c.host, M.wsRun, { id: c.ws.id, script, cols: 120, rows: 30 });
     const layout = getLayout(c.host, c.ws.id);
     const tab = tabOf(layout, info.id);
     setLayout(c.host, c.ws.id, tab ? { ...layout, active: tab.id, focused: info.id } : addTab(layout, info.id));

@@ -176,9 +176,9 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SessionManager;
+    use crate::terminal::TerminalManager;
     use jaunt_proto::Frame;
-    use jaunt_proto::methods::SessionCreate;
+    use jaunt_proto::methods::TerminalCreate;
     use std::time::Duration;
 
     async fn run_shell(shell: &str) -> Option<String> {
@@ -193,11 +193,11 @@ mod tests {
             ("SHELL".into(), shell.into()),
         ]);
         let args = apply(&root, shell, vec!["-l".into()], &mut env);
-        let mgr = SessionManager::new(home.path().join("s.sock"), env);
+        let mgr = TerminalManager::new(home.path().join("s.sock"), env);
         let mut command = vec![shell.to_string()];
         command.extend(args);
         let info = mgr
-            .create(SessionCreate {
+            .create(TerminalCreate {
                 cwd: home.path().display().to_string(),
                 command,
                 ..Default::default()

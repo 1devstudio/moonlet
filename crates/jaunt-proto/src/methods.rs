@@ -4,8 +4,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::SessionId;
-use crate::types::{AgentState, SessionKind, StateSource};
+use crate::TerminalId;
+use crate::types::{AgentState, StateSource, TerminalKind};
 
 // Daemon
 pub const DAEMON_INFO: &str = "daemon.info";
@@ -14,14 +14,14 @@ pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
 pub const DAEMON_UPGRADE: &str = "daemon.upgrade";
 
 // Sessions
-pub const SESSION_CREATE: &str = "session.create";
-pub const SESSION_LIST: &str = "session.list";
-pub const SESSION_ATTACH: &str = "session.attach";
-pub const SESSION_DETACH: &str = "session.detach";
-pub const SESSION_RESIZE: &str = "session.resize";
-pub const SESSION_KILL: &str = "session.kill";
-pub const SESSION_WRITE: &str = "session.write";
-pub const SESSION_SEARCH: &str = "session.search";
+pub const TERMINAL_CREATE: &str = "terminal.create";
+pub const TERMINAL_LIST: &str = "terminal.list";
+pub const TERMINAL_ATTACH: &str = "terminal.attach";
+pub const TERMINAL_DETACH: &str = "terminal.detach";
+pub const TERMINAL_RESIZE: &str = "terminal.resize";
+pub const TERMINAL_KILL: &str = "terminal.kill";
+pub const TERMINAL_WRITE: &str = "terminal.write";
+pub const TERMINAL_SEARCH: &str = "terminal.search";
 
 // Agents
 pub const AGENT_REPORT: &str = "agent.report";
@@ -64,17 +64,17 @@ pub const FS_WATCH: &str = "fs.watch";
 pub const FS_UNWATCH: &str = "fs.unwatch";
 
 // Events
-pub const EV_SESSION_CREATED: &str = "session.created";
-pub const EV_SESSION_UPDATED: &str = "session.updated";
-pub const EV_SESSION_EXITED: &str = "session.exited";
-pub const EV_SESSION_REMOVED: &str = "session.removed";
+pub const EV_TERMINAL_CREATED: &str = "terminal.created";
+pub const EV_TERMINAL_UPDATED: &str = "terminal.updated";
+pub const EV_TERMINAL_EXITED: &str = "terminal.exited";
+pub const EV_TERMINAL_REMOVED: &str = "terminal.removed";
 pub const EV_AGENT_ATTENTION: &str = "agent.attention";
 pub const EV_REPOS_CHANGED: &str = "repos.changed";
 pub const EV_WORKSPACES_CHANGED: &str = "workspaces.changed";
 pub const EV_FS_CHANGED: &str = "fs.changed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionCreate {
+pub struct TerminalCreate {
     pub cwd: String,
     /// argv; empty means the user's login shell.
     #[serde(default)]
@@ -86,7 +86,7 @@ pub struct SessionCreate {
     #[serde(default = "default_rows")]
     pub rows: u16,
     #[serde(default)]
-    pub kind: SessionKind,
+    pub kind: TerminalKind,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -95,7 +95,7 @@ pub struct SessionCreate {
     pub agent: Option<String>,
 }
 
-impl Default for SessionCreate {
+impl Default for TerminalCreate {
     fn default() -> Self {
         Self {
             cwd: String::new(),
@@ -103,7 +103,7 @@ impl Default for SessionCreate {
             env: BTreeMap::new(),
             cols: default_cols(),
             rows: default_rows(),
-            kind: SessionKind::default(),
+            kind: TerminalKind::default(),
             title: None,
             workspace_id: None,
             agent: None,
@@ -119,13 +119,13 @@ fn default_rows() -> u16 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionRef {
-    pub id: SessionId,
+pub struct TerminalRef {
+    pub id: TerminalId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionAttach {
-    pub id: SessionId,
+pub struct TerminalAttach {
+    pub id: TerminalId,
     #[serde(default)]
     pub cols: Option<u16>,
     #[serde(default)]
@@ -138,20 +138,20 @@ pub struct SessionAttach {
 /// connection, with nothing lost or duplicated in between.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachResult {
-    pub info: crate::types::SessionInfo,
+    pub info: crate::types::TerminalInfo,
     pub snapshot: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionResize {
-    pub id: SessionId,
+pub struct TerminalResize {
+    pub id: TerminalId,
     pub cols: u16,
     pub rows: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionKill {
-    pub id: SessionId,
+pub struct TerminalKill {
+    pub id: TerminalId,
     /// When true the session record is removed after the process exits.
     #[serde(default)]
     pub remove: bool,
@@ -159,14 +159,14 @@ pub struct SessionKill {
 
 /// Text input over JSON, for scripts and the CLI (`jaunt pane run`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionWrite {
-    pub id: SessionId,
+pub struct TerminalWrite {
+    pub id: TerminalId,
     pub data: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionSearch {
-    pub id: SessionId,
+pub struct TerminalSearch {
+    pub id: TerminalId,
     pub query: String,
     #[serde(default)]
     pub regex: bool,
@@ -183,7 +183,7 @@ pub struct SearchHit {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentReport {
-    pub session: SessionId,
+    pub terminal: TerminalId,
     pub state: AgentState,
     #[serde(default)]
     pub message: Option<String>,
@@ -200,7 +200,7 @@ fn default_source() -> StateSource {
 /// Emitted when a session needs the user (blocked, done or error).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attention {
-    pub session: SessionId,
+    pub terminal: TerminalId,
     pub workspace_id: Option<String>,
     pub state: AgentState,
     pub title: String,
