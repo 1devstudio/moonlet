@@ -15,4 +15,4 @@ From a workspace, the user can push the branch and open a GitHub pull request wi
 
 ## Security considerations
 
-Pushing and opening a PR are outward-facing, so they happen only from the dialog's explicit confirm button. Authentication stays with `gh`.
+Pushing and opening a PR are outward-facing. The UI calls `gh.pr_create` only after the user confirms in the dialog. The daemon RPC itself is not gated: any client allowed on the socket (the same user) can call it directly. Authentication stays with `gh`.
