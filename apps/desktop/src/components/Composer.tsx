@@ -138,11 +138,11 @@ function ModelPicker({ agents, choice, onChange, label, effortLabel }: { agents:
   const efforts = EFFORTS.filter((e) => choice.agent === "claude" || ["low", "medium", "high"].includes(e.id));
   return (
     <div ref={ref} className="relative">
-      <button className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[15px] hover:bg-hover" onClick={() => setOpen(!open)}>
+      <button className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[14px] hover:bg-hover" onClick={() => setOpen(!open)}>
         {choice.agent !== "claude" && choice.agent !== "none" && <AgentIcon agent={choice.agent} size={14} />}
         <span className="text-fg">{label}</span>
         {effortLabel && <span className="text-muted">{effortLabel}</span>}
-        <ChevronDown size={15} className="text-muted" />
+        <ChevronDown size={14} className="text-muted" />
       </button>
       {open && (
         <div className="absolute bottom-full left-0 z-50 mb-2 flex rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
@@ -318,7 +318,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
     return (
       <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[14vh]" onMouseDown={close}>
         <div className="w-[560px] rounded-2xl border border-border-strong bg-[#1f1f1f] p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="mb-2 text-[16px] font-semibold">Add a project first</div>
+          <div className="mb-2 text-[14px] font-semibold">Add a project first</div>
           <p className="mb-4 text-[14px] text-muted">A project is a git repository folder on disk. Sessions are created as worktrees of it.</p>
           <button className="rounded-lg bg-fg px-3 py-1.5 text-[14px] font-medium text-bg" onClick={() => useStore.setState({ dialog: { kind: "add-project", workspace: presetWorkspace } })}>
             Add project…
@@ -342,10 +342,10 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
             items={projectItems}
             width={300}
             trigger={(open) => (
-              <button className="flex items-center gap-2 rounded-md px-1 py-1 text-[17px] font-medium hover:bg-hover" onClick={open}>
+              <button className="flex items-center gap-2 rounded-md px-1 py-1 text-[14px] font-medium hover:bg-hover" onClick={open}>
                 {current.project.name}
                 {current.host !== "local" && <span className="font-mono text-[12px] text-faint">@{current.host}</span>}
-                <ChevronDown size={16} className="text-muted" />
+                <ChevronDown size={14} className="text-muted" />
               </button>
             )}
           />
@@ -354,7 +354,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
             width={280}
             trigger={(open) => (
               <button className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg" title="Branch options" onClick={open}>
-                <MoreHorizontal size={18} />
+                <MoreHorizontal size={16} />
               </button>
             )}
           />
@@ -440,20 +440,20 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
             }
           }}
           placeholder="What do you want to work on?"
-          className="block h-[300px] w-full resize-none bg-transparent px-6 py-5 text-[17px] leading-relaxed text-fg outline-none placeholder:text-faint"
+          className="block h-[300px] w-full resize-none bg-transparent px-6 py-5 text-[14px] leading-relaxed text-fg outline-none placeholder:text-faint"
         />
         <div className="flex items-center gap-2 px-5 pb-4">
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
           <span className="ml-auto" />
-          <button title="Attach files" className="flex h-10 w-10 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg" onClick={() => void attach()}>
-            <Plus size={20} />
+          <button title="Attach files" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg" onClick={() => void attach()}>
+            <Plus size={16} />
           </button>
           <button
             disabled={busy}
-            className="flex items-center gap-2.5 rounded-lg bg-fg px-4 py-2 text-[16px] font-medium text-bg hover:bg-white disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg bg-fg px-3 py-1.5 text-[14px] font-medium text-bg hover:bg-white disabled:opacity-50"
             onClick={() => void create()}
           >
-            {busy ? "Creating…" : "Create"} <CornerDownLeft size={16} />
+            {busy ? "Creating…" : "Create"} <CornerDownLeft size={14} />
           </button>
         </div>
       </div>
