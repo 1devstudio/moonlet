@@ -32,12 +32,13 @@ The structured Claude view had a model and effort picker but no way to change Cl
 - [ ] The new-session modal has the same Mode menu for Claude and starts at the Settings default. It is not remembered per project.
 - [x] `session.create {mode}` starts the first chat with `--permission-mode <mode>`. With `tui: true`, the TUI command gets the same flag (tests: `a_new_chat_starts_in_the_requested_mode`, `session_mode_is_recorded_…`, `names_and_agent_flags`).
 - [x] `session.create` and `terminal.create` reject an unknown mode and create nothing (`session.create` and `ChatManager::create` have tests; the `terminal.create` handler only calls the shared `check_mode`).
+- [ ] The new-session modal is narrower and shorter than before (720px wide, 200px prompt area).
 
 ## UI
 
 - **Chip:** an icon and the mode label, left of the model chip, in the same footer row.
 - **Settings:** a new "Agents" section with a "Default permission mode" select. The Bypass option is not listed.
-- **New-session modal:** the Mode picker sits right of the model and effort picker, same chip look, menu opens upward.
+- **New-session modal:** the Mode picker sits right of the model and effort picker, same chip look, menu opens upward. The modal is `min(720px, 90vw)` wide with a 200px prompt area.
 - **Menu:** shared by the footer and the modal; title "Mode"; each row has a label, a one-line description and the number hint; the current row has a check. The last row is "Bypass permissions" with an "Enable" action in place of the number, and a confirmation dialog.
 
 | Row | `--permission-mode` | Description |

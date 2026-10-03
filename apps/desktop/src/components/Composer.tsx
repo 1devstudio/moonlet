@@ -336,7 +336,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[12vh]" onMouseDown={close}>
       <div
-        className="w-[min(920px,90vw)] rounded-2xl border border-border-strong bg-[#1f1f1f] shadow-2xl"
+        className="w-[min(720px,90vw)] rounded-2xl border border-border-strong bg-[#1f1f1f] shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Escape") close();
@@ -445,7 +445,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
             }
           }}
           placeholder="What do you want to work on?"
-          className="block h-[300px] w-full resize-none bg-transparent px-6 py-5 text-[14px] leading-relaxed text-fg outline-none placeholder:text-faint"
+          className="block h-[200px] w-full resize-none bg-transparent px-6 py-5 text-[14px] leading-relaxed text-fg outline-none placeholder:text-faint"
         />
         <div className="flex items-center gap-2 px-5 pb-4">
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
