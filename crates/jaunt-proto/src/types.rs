@@ -52,7 +52,11 @@ pub struct TerminalInfo {
     pub title: String,
     pub cwd: String,
     pub command: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "workspace_id"
+    )]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,

@@ -97,7 +97,7 @@ pub struct TerminalCreate {
     pub kind: TerminalKind,
     #[serde(default)]
     pub title: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "workspace_id")]
     pub session_id: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,
@@ -209,6 +209,7 @@ fn default_source() -> StateSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attention {
     pub terminal: TerminalId,
+    #[serde(alias = "workspace_id")]
     pub session_id: Option<String>,
     pub state: AgentState,
     pub title: String,

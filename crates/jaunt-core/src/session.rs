@@ -761,6 +761,16 @@ impl SessionManager {
 
     /// After a daemon restart, terminals are gone: restart each workspace's
     /// agents (resuming where the agent supports it) and shells (S4).
+    /// Re-links live terminals to the sessions that list them.
+    pub fn relink_terminals(&self) {
+        let st = self.state.lock().unwrap();
+        for s in &st.sessions {
+            for id in &s.terminals {
+                self.terminals.link_session(*id, &s.id);
+            }
+        }
+    }
+
     pub fn restore_after_restart(&self) -> usize {
         let live: std::collections::HashSet<TerminalId> =
             self.terminals.list().into_iter().map(|s| s.id).collect();
