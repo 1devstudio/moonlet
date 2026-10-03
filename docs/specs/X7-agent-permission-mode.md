@@ -11,7 +11,7 @@ The structured Claude view had a model and effort picker but no way to change Cl
 
 ## User journey
 
-1. The user opens a Claude session. The footer shows a mode chip next to the model chip. A new session starts in **Manual**, which is what Claude does without a flag.
+1. The user opens a Claude session. The footer shows a mode chip next to the model chip. By default a new session starts in **Manual**, which is what Claude does without a flag; the Settings default (step 4) can change that.
 2. Clicking the chip opens the Mode menu. Picking a mode, or pressing 1–4 while the menu is open, changes it. ⇧Tab in the editor cycles to the next mode without opening the menu.
 3. The mode applies from the next message. The current turn, if any, finishes in the old mode.
 4. In **Settings › Agents** the user picks the default mode (Auto, Manual, Accept edits or Plan; never Bypass). It is Manual until changed.
