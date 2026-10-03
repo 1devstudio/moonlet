@@ -19,6 +19,8 @@ export interface TermSettings {
   optionIsMeta: boolean;
   allowOsc52: boolean;
   webgl: boolean;
+  /** New shells keep their own prompt instead of Warp mode (T7). */
+  classicPrompt: boolean;
 }
 
 export const defaultTermSettings: TermSettings = {
@@ -26,6 +28,7 @@ export const defaultTermSettings: TermSettings = {
   fontSize: 13,
   optionIsMeta: true,
   allowOsc52: false,
+  classicPrompt: false,
   webgl: true,
 };
 
@@ -60,6 +63,19 @@ export interface CommandBlock {
   end?: IMarker;
   exit?: number;
   command?: string;
+  /** App clock at the `C` and `D` marks; absent for replayed blocks. */
+  startedAt?: number;
+  endedAt?: number;
+  chip?: IDisposable;
+}
+
+/** Right-hand block chip (T7): `✓ 1.2s`, `✗ 1 · 0.3s`, or `…` while running. */
+export function blockChip(b: { exit?: number; startedAt?: number; endedAt?: number; end?: unknown }): string {
+  if (!b.end) return "…";
+  const ms = b.startedAt !== undefined && b.endedAt !== undefined ? b.endedAt - b.startedAt : null;
+  const dur = ms === null ? "" : ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+  if (b.exit) return dur ? `✗ ${b.exit} · ${dur}` : `✗ ${b.exit}`;
+  return dur ? `✓ ${dur}` : "✓";
 }
 
 export interface FileLinkHandler {
@@ -83,6 +99,9 @@ export class TermEntry {
   private unregister: () => void;
   blocks: CommandBlock[] = [];
   cwd = "";
+  /** The shell draws no prompt; the app's editor is the input (T7). */
+  warp = false;
+  private replaying = false;
   onTitle?: (title: string) => void;
   onFileLink?: FileLinkHandler;
   /** Set while the input editor is shown: printable keys typed into the
@@ -151,7 +170,9 @@ export class TermEntry {
       reset: (data) => {
         this.blocks = [];
         this.term.reset();
-        this.term.write(data);
+        // Marks replayed from the snapshot carry no timing.
+        this.replaying = true;
+        this.term.write(data, () => (this.replaying = false));
         this.ready = true;
       },
       write: (data) => {
@@ -242,18 +263,35 @@ export class TermEntry {
         break;
       case "B":
         break;
-      case "C":
+      case "C": {
+        // No open block when the prompt came before we attached (snapshots
+        // carry no marks): the command is on the line above the cursor.
+        let last = this.blocks[this.blocks.length - 1];
+        if (!last || last.output) {
+          const prompt = this.term.registerMarker(-1);
+          if (prompt) {
+            last = { prompt };
+            this.blocks.push(last);
+          }
+        }
         if (last) {
           last.output = marker;
-          last.command = this.lineText(last.prompt.line).replace(/^.*?[$%#❯>]\s/, "").trim();
+          const line = this.lineText(last.prompt.line);
+          // A blank prompt leaves just the command on the line.
+          last.command = (this.warp ? line : line.replace(/^.*?[$%#❯>]\s/, "")).trim();
+          if (!this.replaying) last.startedAt = Date.now();
+          if (this.warp) this.chip(last);
         }
         break;
+      }
       case "D":
         if (last) {
           last.end = marker;
           const code = Number(rest[0]);
           last.exit = Number.isFinite(code) ? code : undefined;
+          if (!this.replaying && last.startedAt !== undefined) last.endedAt = Date.now();
           this.decorate(last);
+          if (this.warp) this.chip(last);
         }
         break;
     }
@@ -267,6 +305,32 @@ export class TermEntry {
       el.classList.toggle("failed", !!block.exit);
       el.title = block.exit ? `exit ${block.exit}` : "ok";
     });
+  }
+
+  /** Separator and status chip on a command's line (T7). */
+  private chip(block: CommandBlock) {
+    block.chip?.dispose();
+    const text = blockChip(block);
+    const width = Math.min(text.length + 2, Math.max(4, this.term.cols));
+    const sep = this.term.registerDecoration({ marker: block.prompt, x: 0, width: this.term.cols, layer: "bottom" });
+    sep?.onRender((el) => el.classList.add("jaunt-block-sep"));
+    const d = this.term.registerDecoration({ marker: block.prompt, anchor: "right", x: 0, width });
+    d?.onRender((el) => {
+      el.classList.add("jaunt-block-chip");
+      // xterm only sets `right` for a non-zero offset.
+      el.style.left = "auto";
+      el.style.right = "0px";
+      el.classList.toggle("failed", !!block.exit);
+      el.classList.toggle("running", !block.end);
+      el.textContent = text;
+    });
+    block.chip = { dispose: () => (sep?.dispose(), d?.dispose()) };
+  }
+
+  /** Warp mode hides the terminal's cursor while the editor has the input. */
+  setEditorActive(active: boolean) {
+    this.term.options.cursorInactiveStyle = active ? "none" : "outline";
+    this.term.options.cursorBlink = !active;
   }
 
   private onOsc52(data: string): boolean {

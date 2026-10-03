@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { RotateCw, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
+import { setClassic } from "../lib/actions";
 import { errorToast, getLayout, setLayout, useStore } from "../lib/store";
 import { findEntry, getEntry } from "../lib/terminals";
 import { InputEditor } from "./InputEditor";
@@ -41,8 +42,15 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
     return () => entry.unmount();
   }, [host, session, visible, home]);
 
-  // The Warp-style editor takes over input while the shell waits at a prompt (T6).
-  const editing = !!info && info.kind === "shell" && info.prompt === true && !info.alt_screen && !info.exit;
+  // The Warp-style editor takes over input while the shell waits at a prompt
+  // (T6), unless the tab is in classic mode (T7).
+  const warp = !!info && info.kind === "shell" && info.prompt !== undefined && !info.classic && !info.exit;
+  const editing = warp && info.prompt === true && !info.alt_screen;
+  useEffect(() => {
+    const entry = getEntry(host, session);
+    entry.warp = warp;
+    entry.setEditorActive(editing);
+  }, [host, session, warp, editing]);
   const branch = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.branch : undefined));
 
   useEffect(() => {
@@ -70,6 +78,15 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
           branch={branch}
           focused={focused}
         />
+      )}
+      {info?.classic && info.kind === "shell" && !exited && visible && (
+        <button
+          className="absolute bottom-3 right-4 z-20 rounded-full border border-border-strong bg-panel/95 px-3 py-1 text-[12px] text-muted shadow-lg hover:text-fg"
+          title="Use jaunt's input editor and hide the shell prompt"
+          onClick={() => void setClassic(host, session, false)}
+        >
+          Warp input
+        </button>
       )}
       {exited && (
         <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-t border-border bg-panel/95 px-3 py-1.5 text-[12px] text-muted">

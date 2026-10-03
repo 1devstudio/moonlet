@@ -21,6 +21,7 @@ async function spawnShell(host: string, ws: Session, cwd?: string): Promise<Term
   return rpc<TerminalInfo>(host, M.terminalCreate, {
     cwd: cwd ?? entry?.cwd ?? ws.path,
     session_id: ws.id,
+    classic: useStore.getState().settings.term.classicPrompt,
     cols: entry?.term.cols ?? 100,
     rows: entry?.term.rows ?? 30,
   });
@@ -139,6 +140,17 @@ export async function sendToAgent(text: string): Promise<boolean> {
   await sendInput(a.host, a.session.id, `\x1b[200~${text}\x1b[201~`);
   setTimeout(() => void sendInput(a.host, a.session.id, "\r"), 60);
   return true;
+}
+
+/** Switches a shell between Warp mode and its own prompt (T7). */
+export async function setClassic(host: string, id: number, classic: boolean) {
+  try {
+    const info = await rpc<TerminalInfo>(host, M.terminalSetClassic, { id, classic });
+    // An empty Enter redraws the prompt in the new mode right away.
+    if (info.prompt) void sendInput(host, id, "\r");
+  } catch (e) {
+    errorToast(e);
+  }
 }
 
 export async function runScript(script: "run" | "setup") {
