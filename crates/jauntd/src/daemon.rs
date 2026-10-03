@@ -377,6 +377,13 @@ impl Daemon {
                 let r: m::FsList = params(p)?;
                 ok(fs::list(&r.path, r.show_ignored).map_err(internal)?)
             }
+            m::FS_FILES => {
+                let r: m::FsFiles = params(p)?;
+                let files = tokio::task::spawn_blocking(move || fs::files(&r.root, r.limit))
+                    .await
+                    .map_err(internal)?;
+                ok(files.map_err(internal)?)
+            }
             m::FS_READ => {
                 let r: m::FsRead = params(p)?;
                 ok(fs::read(&r.path, r.max_bytes).map_err(internal)?)
