@@ -381,6 +381,17 @@ impl TerminalManager {
         }
     }
 
+    /// Links a terminal to its session if it lost the link (e.g. adopted from
+    /// a daemon that called sessions "workspaces").
+    pub fn link_session(&self, id: TerminalId, session: &str) {
+        if let Some(t) = self.get(id) {
+            let mut st = t.state.lock().unwrap();
+            if st.info.session_id.is_none() {
+                st.info.session_id = Some(session.to_string());
+            }
+        }
+    }
+
     pub fn search(
         &self,
         id: TerminalId,

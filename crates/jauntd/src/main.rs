@@ -178,6 +178,7 @@ fn run_daemon(
             }
         };
         upgrade::write_pid();
+        daemon.sessions.relink_terminals();
         let restored = daemon.sessions.restore_after_restart();
         if restored > 0 {
             tracing::info!(restored, "restarted workspace sessions after daemon restart");
