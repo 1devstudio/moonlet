@@ -7,7 +7,7 @@ default-members = ["crates/*", "apps/desktop/src-tauri"]
 version = "0.1.0"
 edition = "2024"
 license = "UNLICENSED"
-repository = "https://github.com/cotampanie/jaunt"
+repository = "https://github.com/1devstudio/jaunt"
 
 [workspace.dependencies]
 jaunt-proto = { path = "crates/jaunt-proto" }
