@@ -61,6 +61,13 @@ pub const GIT_BRANCHES: &str = "git.branches";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
 pub const GH_ISSUES: &str = "gh.issues";
 pub const SHELL_HISTORY: &str = "shell.history";
+pub const CHAT_STATE: &str = "chat.state";
+pub const CHAT_SEND: &str = "chat.send";
+pub const CHAT_PERMISSION: &str = "chat.permission";
+pub const CHAT_INTERRUPT: &str = "chat.interrupt";
+pub const CHAT_SETTINGS: &str = "chat.settings";
+pub const EV_CHAT_ITEM: &str = "chat.item";
+pub const EV_CHAT_STATE: &str = "chat.state";
 pub const GH_PRS: &str = "gh.prs";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
 
@@ -102,6 +109,14 @@ pub struct TerminalCreate {
     pub session_id: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,
+    /// Run `agent` headless with the structured view (X6) instead of its TUI.
+    #[serde(default)]
+    pub chat: bool,
+    /// Model and effort for a structured agent.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 impl Default for TerminalCreate {
@@ -116,6 +131,9 @@ impl Default for TerminalCreate {
             title: None,
             session_id: None,
             agent: None,
+            chat: false,
+            model: None,
+            effort: None,
         }
     }
 }
@@ -256,6 +274,10 @@ pub struct SessionCreate {
     /// Start from this pull request's branch.
     #[serde(default)]
     pub pr: Option<u64>,
+    /// Run the agent in its own terminal UI instead of the structured view
+    /// (Claude Code and Codex default to the structured view, X6).
+    #[serde(default)]
+    pub tui: bool,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
@@ -425,4 +447,43 @@ pub struct ShellHistory {
     /// `zsh`, `bash` or `fish`; the login shell when absent.
     #[serde(default)]
     pub shell: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatSend {
+    pub id: TerminalId,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatPermission {
+    pub id: TerminalId,
+    pub ask: String,
+    /// `allow`, `always` or `deny`.
+    pub decision: String,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatSettings {
+    pub id: TerminalId,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+}
+
+/// `chat.item` event payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatItemEvent {
+    pub id: TerminalId,
+    pub item: crate::types::ChatItem,
+}
+
+/// `chat.state` event payload: everything except the items.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatStateEvent {
+    pub id: TerminalId,
+    pub state: crate::types::ChatState,
 }
