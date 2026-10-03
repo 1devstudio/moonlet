@@ -162,6 +162,8 @@ export interface GitStatus {
   ahead: number;
   behind: number;
   against: string;
+  /** Base that could not be resolved; the diff fell back to HEAD. */
+  base_missing?: string;
   files: FileChange[];
   additions: number;
   deletions: number;
@@ -312,6 +314,7 @@ export const EV = {
   terminalUpdated: "terminal.updated",
   terminalExited: "terminal.exited",
   terminalRemoved: "terminal.removed",
+  terminalResync: "terminal.resync",
   attention: "agent.attention",
   projectsChanged: "projects.changed",
   sessionsChanged: "sessions.changed",

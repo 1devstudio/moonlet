@@ -191,6 +191,11 @@ function SummaryLine({ host, ws }: { host: string; ws: Session }) {
           <span className="text-faint">·</span>
           <ArrowRight size={12} />
           <span className="rounded bg-raised px-1.5 py-0.5 text-fg">{ws.base}</span>
+          {git.base_missing && (
+            <span className="text-blocked" title={`"${git.base_missing}" was not found (not fetched?), so only uncommitted changes against HEAD are shown.`}>
+              base not found · showing HEAD
+            </span>
+          )}
         </>
       ) : (
         <span className="text-faint">loading…</span>

@@ -23,7 +23,7 @@ import {
 import { sanitize } from "./sanitize";
 import { forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import type { ChatItem, ChatState } from "./protocol";
-import { disposeEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
+import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
 export type RightTab = "files" | "changes" | "review";
 
@@ -110,6 +110,7 @@ export interface Toast {
   id: number;
   kind: "info" | "error";
   text: string;
+  action?: { label: string; run: () => void };
 }
 
 interface State extends UiPersist {
@@ -202,10 +203,10 @@ useStore.subscribe((s, prev) => {
 });
 
 let toastId = 0;
-export function toast(text: string, kind: Toast["kind"] = "info") {
+export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast["action"]) {
   const id = ++toastId;
-  set((s) => ({ toasts: [...s.toasts, { id, kind, text }] }));
-  setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), kind === "error" ? 7000 : 3500);
+  set((s) => ({ toasts: [...s.toasts, { id, kind, text, action }] }));
+  setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), action ? 10_000 : kind === "error" ? 7000 : 3500);
 }
 
 export function errorToast(e: unknown) {
@@ -482,6 +483,10 @@ function handleEvent(e: DaemonEvent) {
     case EV.attention:
       void onAttention(host, data as Attention);
       break;
+    case EV.terminalResync:
+      // The daemon detached us because output piled up: start from a snapshot.
+      void findEntry(host, (data as { id: number }).id)?.attach().catch(() => {});
+      break;
     case EV.chatItem: {
       const d = data as { id: number; item: ChatItem };
       onChatItem(host, d.id, d.item);
@@ -540,12 +545,15 @@ export async function startStore() {
   set({ hosts: Object.fromEntries(hosts.map((h) => [h.id, h])) });
   for (const h of hosts) if (h.status === "connected") void loadHost(h.id);
 
-  // Clicking a notification activates the app; jump to that agent (A3).
+  // Tauri cannot tell a notification click from any other activation, so
+  // coming back soon after one offers the jump instead of doing it (A3).
   window.addEventListener("focus", () => {
     const la = get().lastAttention;
     if (la && Date.now() - la.at < 120_000) {
       set({ lastAttention: null });
-      focusTerminal(la.host, la.session);
+      const info = get().terminals[la.host]?.[la.session];
+      const ws = info?.session_id ? get().sessions[la.host]?.find((w) => w.id === info.session_id) : undefined;
+      toast(`${ws?.name ?? info?.title ?? "An agent"} needs attention`, "info", { label: "Go to", run: () => focusTerminal(la.host, la.session) });
     }
   });
   setInterval(() => {
