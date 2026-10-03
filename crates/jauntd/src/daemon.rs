@@ -203,6 +203,10 @@ impl Daemon {
                 s.kill(r.id, r.remove).map_err(internal)?;
                 ok(true)
             }
+            m::TERMINAL_SET_CLASSIC => {
+                let r: m::TerminalSetClassic = params(p)?;
+                ok(s.set_classic(r.id, r.classic).map_err(internal)?)
+            }
             m::TERMINAL_WRITE => {
                 let r: m::TerminalWrite = params(p)?;
                 s.write(r.id, r.data.into_bytes()).map_err(internal)?;

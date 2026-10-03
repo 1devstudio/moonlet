@@ -22,6 +22,7 @@ pub const TERMINAL_RESIZE: &str = "terminal.resize";
 pub const TERMINAL_KILL: &str = "terminal.kill";
 pub const TERMINAL_WRITE: &str = "terminal.write";
 pub const TERMINAL_SEARCH: &str = "terminal.search";
+pub const TERMINAL_SET_CLASSIC: &str = "terminal.set_classic";
 
 // Agents
 pub const AGENT_REPORT: &str = "agent.report";
@@ -113,6 +114,9 @@ pub struct TerminalCreate {
     /// Run `agent` headless with the structured view (X6) instead of its TUI.
     #[serde(default)]
     pub chat: bool,
+    /// Start a shell with its own prompt instead of Warp mode (T7).
+    #[serde(default)]
+    pub classic: bool,
     /// Model and effort for a structured agent.
     #[serde(default)]
     pub model: Option<String>,
@@ -133,6 +137,7 @@ impl Default for TerminalCreate {
             session_id: None,
             agent: None,
             chat: false,
+            classic: false,
             model: None,
             effort: None,
         }
@@ -459,6 +464,12 @@ pub struct ShellHistory {
     /// `zsh`, `bash` or `fish`; the login shell when absent.
     #[serde(default)]
     pub shell: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalSetClassic {
+    pub id: TerminalId,
+    pub classic: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

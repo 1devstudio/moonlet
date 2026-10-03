@@ -81,6 +81,9 @@ pub struct TerminalInfo {
     /// Structured agent (X6): no PTY, the UI shows the chat view.
     #[serde(default)]
     pub chat: bool,
+    /// Shell shows its own prompt instead of the app's editor (T7).
+    #[serde(default)]
+    pub classic: bool,
     pub created_at: u64,
     pub last_output_at: u64,
 }
