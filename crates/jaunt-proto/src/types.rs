@@ -78,6 +78,9 @@ pub struct TerminalInfo {
     /// A full-screen program (vim, htop, less) holds the alternate screen.
     #[serde(default)]
     pub alt_screen: bool,
+    /// Structured agent (X6): no PTY, the UI shows the chat view.
+    #[serde(default)]
+    pub chat: bool,
     pub created_at: u64,
     pub last_output_at: u64,
 }
@@ -307,4 +310,86 @@ pub struct DaemonInfo {
     pub started_at: u64,
     #[serde(alias = "sessions")]
     pub terminals: usize,
+}
+
+// ------------------------------------------------------------ chat (X6)
+
+/// One entry in a structured agent conversation. Streaming updates replace
+/// the item with the same `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatItem {
+    pub id: String,
+    /// `user`, `assistant`, `thinking`, `tool`, `system` or `error`.
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolCall>,
+    pub ts: u64,
+    /// Still streaming.
+    #[serde(default)]
+    pub partial: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub name: String,
+    /// One line for the collapsed row, e.g. the command or file path.
+    pub summary: String,
+    #[serde(default)]
+    pub input: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    /// `running`, `ok`, `error` or `denied`.
+    pub status: String,
+    /// Unified diff for edits, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+}
+
+/// The agent asks to use a tool and waits for the user.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PermissionAsk {
+    pub id: String,
+    pub tool: String,
+    pub summary: String,
+    #[serde(default)]
+    pub input: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// "Always allow" is meaningful for this request.
+    #[serde(default)]
+    pub can_always: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatState {
+    #[serde(default)]
+    pub items: Vec<ChatItem>,
+    #[serde(default)]
+    pub pending: Vec<PermissionAsk>,
+    /// `idle`, `working`, `blocked`, `done` or `error`.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub cost_usd: f64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// When the running turn started (ms), for the elapsed timer.
+    #[serde(default)]
+    pub turn_started_at: Option<u64>,
+    /// The agent's own conversation id (Claude session id, Codex thread id).
+    #[serde(default)]
+    pub agent_session: Option<String>,
+    #[serde(default)]
+    pub slash_commands: Vec<String>,
+    /// Messages sent while a turn was running, delivered in order.
+    #[serde(default)]
+    pub queued: Vec<String>,
 }
