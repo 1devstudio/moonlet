@@ -21,7 +21,7 @@ function resolvePath(base: string, p: string, home: string | null): string {
 
 export function TerminalPane({ host, session, wsId, focused, visible }: { host: string; session: number; wsId: string; focused: boolean; visible: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  const info = useStore((s) => s.sessions[host]?.[session]);
+  const info = useStore((s) => s.terminals[host]?.[session]);
   const home = useStore((s) => s.hosts[host]?.home ?? null);
 
   useEffect(() => {
@@ -30,7 +30,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
     const entry = getEntry(host, session);
     entry.mount(el);
     entry.onFileLink = (p, line) => {
-      const cur = useStore.getState().sessions[host]?.[session];
+      const cur = useStore.getState().terminals[host]?.[session];
       const base = entry.cwd || cur?.reported_cwd || cur?.cwd || "/";
       const path = resolvePath(base, p, home);
       const target = { host, path, line };
@@ -71,7 +71,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
                     kind: info.kind,
                     title: info.title,
                     agent: info.agent,
-                    workspace_id: info.workspace_id,
+                    session_id: info.session_id,
                   });
                   await rpc(host, M.terminalKill, { id: session, remove: true });
                 } catch (e) {

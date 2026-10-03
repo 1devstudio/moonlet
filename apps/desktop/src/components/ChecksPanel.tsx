@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CircleCheck, CircleDashed, CircleX, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { M, type Commit, type PullRequest, type Workspace } from "../lib/protocol";
-import { useStore, wsKey } from "../lib/store";
+import { M, type Commit, type PullRequest, type Session } from "../lib/protocol";
+import { useStore, sesKey } from "../lib/store";
 import { Button, Empty, cx } from "./ui";
 
 function CheckIcon({ status, conclusion }: { status: string; conclusion: string | null }) {
@@ -14,8 +14,8 @@ function CheckIcon({ status, conclusion }: { status: string; conclusion: string 
 }
 
 /** Branch state, PR, review and CI at a glance (X2), polled while visible. */
-export function ChecksPanel({ host, ws }: { host: string; ws: Workspace }) {
-  const git = useStore((s) => s.git[wsKey(host, ws.id)]);
+export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
+  const git = useStore((s) => s.git[sesKey(host, ws.id)]);
   const [pr, setPr] = useState<PullRequest | null | undefined>(undefined);
   const [prError, setPrError] = useState<string | null>(null);
   const [log, setLog] = useState<Commit[]>([]);

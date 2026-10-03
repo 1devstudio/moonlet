@@ -1,4 +1,4 @@
-// xterm.js instances live outside React so switching tabs or workspaces
+// xterm.js instances live outside React so switching tabs or sessions
 // never re-attaches or loses scrollback. A terminal renders with WebGL
 // only while it is on screen (WebKit caps live WebGL contexts), and falls
 // back to the DOM renderer if WebGL is unavailable (T1).

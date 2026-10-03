@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Eye, EyeOff, File, FileText, Folder, FolderOpen } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { M, type DirEntry, type Workspace } from "../lib/protocol";
+import { M, type DirEntry, type Session } from "../lib/protocol";
 import { useStore } from "../lib/store";
 import { IconButton, cx } from "./ui";
 
@@ -59,7 +59,7 @@ function Dir({ host, path, depth, showIgnored, version, onOpen, selected }: { ho
   );
 }
 
-export function FilesPanel({ host, ws }: { host: string; ws: Workspace }) {
+export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
   const [showIgnored, setShowIgnored] = useState(false);
   const openFile = useStore((s) => s.openFile);
   const version = useStore((s) => s.fsVersion[`${host}|${ws.path}`] ?? 0);

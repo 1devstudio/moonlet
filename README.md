@@ -2,7 +2,7 @@
 
 An agent-first terminal for macOS. Run Claude Code, Codex and other coding agents side by side, each in its own git worktree. They keep running when you quit the app, close the lid or lose the network, on your Mac and on remote Linux hosts over SSH.
 
-- **Workspaces, not tabs.** Each task is a worktree on its own branch, with its agent, terminals and diff, in a Superset/Conductor-style sidebar.
+- **Workspaces → projects → sessions** (as in Conductor). A workspace groups projects (repo folders). Every session is a worktree on its own branch with its agent, terminals and diff. See [CONTEXT.md](CONTEXT.md).
 - **Knows what agents are doing.** Hooks report working / needs input / done / failed. You get a notification, a badge, and one place listing every blocked agent (⌘K).
 - **Review in place.** Changes against the base branch with hunk staging, comment-to-agent, file tree, code viewer and Markdown preview (with Mermaid). Then Create PR via `gh`.
 - **Sessions you cannot lose.** `jauntd` owns every PTY. Reattach restores the screen and scrollback. Daemon upgrades hand live PTYs to the new binary.

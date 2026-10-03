@@ -1,6 +1,6 @@
 # A4: New workspace (agent task)
 
-- **Status:** implemented
+- **Status:** superseded by [X5](X5-workspaces-projects-sessions.md): what this spec calls a workspace is now a **session**, and repos are **projects** ([ADR 0005](../adr/0005-workspace-project-session-terminal.md)). The worktree, scripts and archive behaviour below still apply to sessions.
 - **Priority / phase:** P0 · phase 1
 - **PRD refs:** A4, journey J1; UI direction in plan section 2 (Superset/Conductor)
 

@@ -2,21 +2,21 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, GitPullRequest, Plus, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { leaves } from "../lib/layout";
-import { M, type RepoConfig, type Workspace } from "../lib/protocol";
-import { focusSession, getLayout, repoOf, sessKey, setLayout, useStore, wsKey } from "../lib/store";
+import { M, type ProjectConfig, type Session } from "../lib/protocol";
+import { focusTerminal, getLayout, projectOf, termKey, setLayout, useStore, sesKey } from "../lib/store";
 import { newAgentTab, newTab, sendToAgent, split } from "../lib/actions";
 import { PaneTree } from "./PaneTree";
 import { AgentIcon, Kbd, cx } from "./ui";
 import { agentLabel } from "../lib/agents";
 
 
-function AddMenu({ host, ws }: { host: string; ws: Workspace }) {
+function AddMenu({ host, ws }: { host: string; ws: Session }) {
   const [open, setOpen] = useState(false);
-  const repo = useStore((s) => repoOf(s, host, ws));
+  const repo = useStore((s) => projectOf(s, host, ws));
   const [agents, setAgents] = useState<string[]>(["claude", "codex"]);
   useEffect(() => {
     if (!open || !repo) return;
-    void rpc<RepoConfig>(host, M.repoConfig, { id: repo.id })
+    void rpc<ProjectConfig>(host, M.projectConfig, { id: repo.id })
       .then((c) => setAgents(["claude", "codex", ...Object.keys(c.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")]))
       .catch(() => {});
   }, [open, host, repo]);
@@ -69,9 +69,9 @@ function AddMenu({ host, ws }: { host: string; ws: Workspace }) {
   );
 }
 
-function Tab({ host, ws, id, ids, active }: { host: string; ws: Workspace; id: string; ids: number[]; active: boolean }) {
-  const info = useStore((s) => s.sessions[host]?.[ids[0]]);
-  const unread = useStore((s) => ids.some((x) => s.unread[sessKey(host, x)]));
+function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: string; ids: number[]; active: boolean }) {
+  const info = useStore((s) => s.terminals[host]?.[ids[0]]);
+  const unread = useStore((s) => ids.some((x) => s.unread[termKey(host, x)]));
   const state = info?.kind === "agent" && !info.exit ? info.agent_state : null;
   const name = info ? (info.agent ?? info.title) : "…";
   return (
@@ -108,8 +108,8 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Workspace; id: s
   );
 }
 
-function TabStrip({ host, ws }: { host: string; ws: Workspace }) {
-  const layout = useStore((s) => s.layouts[wsKey(host, ws.id)]);
+function TabStrip({ host, ws }: { host: string; ws: Session }) {
+  const layout = useStore((s) => s.layouts[sesKey(host, ws.id)]);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   return (
     <div className="drag flex h-[52px] shrink-0 items-stretch bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }}>
@@ -126,10 +126,10 @@ function TabStrip({ host, ws }: { host: string; ws: Workspace }) {
 }
 
 /** `❯ ▌ Type a task for Claude…`: typed into the agent as one paste. */
-function PromptLine({ host, ws }: { host: string; ws: Workspace }) {
+function PromptLine({ host, ws }: { host: string; ws: Session }) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
-  const agent = useStore((s) => Object.values(s.sessions[host] ?? {}).find((x) => x.workspace_id === ws.id && x.kind === "agent" && !x.exit));
+  const agent = useStore((s) => Object.values(s.terminals[host] ?? {}).find((x) => x.session_id === ws.id && x.kind === "agent" && !x.exit));
   if (!agent) return null;
   const submit = async () => {
     if (!text.trim()) return;
@@ -164,9 +164,9 @@ function fmtDuration(ms: number) {
 }
 
 /** Floating card when an agent in this workspace finishes or needs input. */
-function AgentCard({ host, ws }: { host: string; ws: Workspace }) {
-  const card = useStore((s) => (s.card && s.card.host === host && s.card.workspace === ws.id ? s.card : null));
-  const git = useStore((s) => s.git[wsKey(host, ws.id)]);
+function AgentCard({ host, ws }: { host: string; ws: Session }) {
+  const card = useStore((s) => (s.card && s.card.host === host && s.card.session === ws.id ? s.card : null));
+  const git = useStore((s) => s.git[sesKey(host, ws.id)]);
   useEffect(() => {
     if (!card || card.state === "blocked") return;
     const t = setTimeout(() => useStore.setState((s) => (s.card?.at === card.at ? { card: null } : {})), 12_000);
@@ -177,7 +177,7 @@ function AgentCard({ host, ws }: { host: string; ws: Workspace }) {
     card.state === "blocked" ? "needs input" : card.state === "error" ? "failed" : `finished${card.workedMs ? ` · worked for ${fmtDuration(card.workedMs)}` : ""}`;
   return (
     <div className="jaunt-card-in absolute bottom-5 right-7 z-20 w-[440px] overflow-hidden rounded-xl border border-border-strong bg-[#171717] shadow-2xl">
-      <div role="button" className="block w-full cursor-default px-5 pb-4 pt-4 text-left" onClick={() => focusSession(host, card.session)}>
+      <div role="button" className="block w-full cursor-default px-5 pb-4 pt-4 text-left" onClick={() => focusTerminal(host, card.terminal)}>
         <div className="mb-2 flex items-center gap-2.5 text-[14px]">
           <AgentIcon agent={card.agent} size={15} />
           <span className="font-semibold">{card.agent ?? "agent"}</span>
@@ -213,8 +213,8 @@ function AgentCard({ host, ws }: { host: string; ws: Workspace }) {
   );
 }
 
-export function WorkspaceView({ host, ws }: { host: string; ws: Workspace }) {
-  const layout = useStore((s) => s.layouts[wsKey(host, ws.id)]);
+export function SessionView({ host, ws }: { host: string; ws: Session }) {
+  const layout = useStore((s) => s.layouts[sesKey(host, ws.id)]);
   const hostInfo = useStore((s) => s.hosts[host]);
   return (
     <div className="flex h-full min-w-0 flex-col bg-bg">
@@ -234,7 +234,7 @@ export function WorkspaceView({ host, ws }: { host: string; ws: Workspace }) {
         ))}
         {(!layout || layout.tabs.length === 0) && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
-            <div className="text-[14px]">No terminals in this workspace.</div>
+            <div className="text-[14px]">No terminals in this session.</div>
             <button className="rounded-md border border-border-strong px-3 py-1.5 text-[13px] text-fg hover:bg-hover" onClick={() => void newTab()}>
               New terminal <Kbd>⌘T</Kbd>
             </button>

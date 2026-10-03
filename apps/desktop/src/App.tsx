@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, FolderPlus, Plus, Search, X } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
-import { WorkspaceView } from "./components/WorkspaceView";
+import { SessionView } from "./components/SessionView";
 import { RightPanel } from "./components/RightPanel";
 import { Splitter } from "./components/Splitter";
 import { Dialogs } from "./components/Dialogs";
 import { CommandPalette } from "./components/CommandPalette";
 import { Button, IconButton, Kbd, cx } from "./components/ui";
-import { selectedWorkspace, startStore, useStore } from "./lib/store";
+import { selectedSession, startStore, useStore } from "./lib/store";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 
@@ -49,7 +49,7 @@ function FindBar({ onClose }: { onClose: () => void }) {
 
 function Home() {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
-  const hasRepos = useStore((s) => Object.values(s.repos).some((r) => r.length > 0));
+  const hasRepos = useStore((s) => Object.values(s.projects).some((r) => r.length > 0));
   const local = useStore((s) => s.hosts.local);
   return (
     <div className="flex h-full flex-col bg-bg">
@@ -58,18 +58,18 @@ function Home() {
         <div className="font-mono text-[22px] tracking-tight">
           <span className="text-accent">❯</span> jaunt
         </div>
-        <div className="max-w-md text-[13.5px] text-muted">Run coding agents side by side, each in its own worktree. They keep running when you close the app.</div>
+        <div className="max-w-md text-[13.5px] text-muted">Group projects into workspaces; every session runs its agent in its own worktree. They keep running when you close the app.</div>
         {local && local.status !== "connected" && (
           <div className="text-[12px] text-blocked">{local.status === "error" ? `Daemon: ${local.message}` : "Starting the jaunt daemon…"}</div>
         )}
         <div className="flex gap-2">
           {hasRepos ? (
-            <Button variant="primary" onClick={() => useStore.setState({ dialog: { kind: "new-workspace" } })}>
-              <Plus size={14} /> New workspace <Kbd>⇧⌘N</Kbd>
+            <Button variant="primary" onClick={() => useStore.setState({ dialog: { kind: "new-session" } })}>
+              <Plus size={14} /> New session <Kbd>⇧⌘N</Kbd>
             </Button>
           ) : null}
-          <Button onClick={() => useStore.setState({ dialog: { kind: "add-repo" } })}>
-            <FolderPlus size={14} /> Add repository
+          <Button onClick={() => useStore.setState({ dialog: { kind: "add-project" } })}>
+            <FolderPlus size={14} /> Add project
           </Button>
         </div>
         <div className="mt-2 font-mono text-[11.5px] text-faint">
@@ -101,7 +101,7 @@ function Toasts() {
 
 export default function App() {
   const s = useStore();
-  const ws = selectedWorkspace(s);
+  const ws = selectedSession(s);
   const host = s.selected?.host;
   const [finding, setFinding] = useState(false);
 
@@ -130,7 +130,7 @@ export default function App() {
         </>
       )}
       <main className="relative min-w-0 flex-1">
-        {ws && host && !ws.archived ? <WorkspaceView key={host + ws.id} host={host} ws={ws} /> : <Home />}
+        {ws && host && !ws.archived ? <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
         {finding && ws && <FindBar onClose={() => setFinding(false)} />}
       </main>
       {s.rightOpen && ws && host && !ws.archived && (

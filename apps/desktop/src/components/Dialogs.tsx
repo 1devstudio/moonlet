@@ -1,25 +1,31 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { open as openDialog, ask } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, Server, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type Commit, type HookStatus, type PullRequest, type Repo, type RepoConfig, type Workspace } from "../lib/protocol";
-import { errorToast, refreshGit, repoOf, selectWorkspace, selectedWorkspace, toast, updateSettings, useStore } from "../lib/store";
-import { Button, Dialog, Field, Kbd, cx, inputCls } from "./ui";
+import { M, type Commit, type HookStatus, type PullRequest, type Project } from "../lib/protocol";
+import { errorToast, refreshGit, selectedSession, toast, updateSettings, useStore } from "../lib/store";
+import { Button, Dialog, Field, cx, inputCls } from "./ui";
+import { Composer } from "./Composer";
 
 const close = () => useStore.setState({ dialog: null });
 
-export function AddRepoDialog() {
+export function AddProjectDialog({ host: presetHost, workspace: presetWorkspace }: { host?: string; workspace?: string }) {
   const hosts = useStore((s) => s.hosts);
-  const [host, setHost] = useState("local");
+  const workspaces = useStore((s) => s.workspaces);
+  const [host, setHost] = useState(presetHost ?? "local");
+  const [wsId, setWsId] = useState(presetWorkspace ?? workspaces[presetHost ?? "local"]?.[0]?.id ?? "");
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const connected = Object.values(hosts).filter((h) => h.status === "connected");
+  const hostWorkspaces = workspaces[host] ?? [];
   const add = async () => {
     setBusy(true);
     try {
-      const repo = await rpc<Repo>(host, M.repoAdd, { path });
-      toast(`Added ${repo.name}`);
-      useStore.setState({ dialog: { kind: "new-workspace", host, repo: repo.id } });
+      const project = wsId
+        ? await rpc<Project>(host, M.workspaceAddProject, { id: wsId, path })
+        : await rpc<Project>(host, M.projectAdd, { path });
+      toast(`Added ${project.name}`);
+      useStore.setState({ dialog: { kind: "new-session", host, project: project.id, workspace: wsId || undefined } });
     } catch (e) {
       errorToast(e);
     } finally {
@@ -28,7 +34,7 @@ export function AddRepoDialog() {
   };
   return (
     <Dialog
-      title="Add repository"
+      title="Add project"
       onClose={close}
       footer={
         <>
@@ -36,11 +42,92 @@ export function AddRepoDialog() {
             Cancel
           </Button>
           <Button variant="primary" disabled={!path || busy} onClick={() => void add()}>
-            Add repository
+            Add project
           </Button>
         </>
       }
     >
+      <p className="mb-3 text-[12.5px] text-muted">A project is a git repository folder. Each session you start in it gets its own worktree and branch.</p>
+      {connected.length > 1 && (
+        <Field label="Host">
+          <select
+            className={inputCls}
+            value={host}
+            onChange={(e) => {
+              setHost(e.target.value);
+              setWsId(workspaces[e.target.value]?.[0]?.id ?? "");
+            }}
+          >
+            {connected.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field label="Folder" hint={host === "local" ? "Any folder inside a git repository." : "Path on the remote host, e.g. ~/src/api"}>
+        <div className="flex gap-2">
+          <input autoFocus className={inputCls} value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/code/my-project" onKeyDown={(e) => e.key === "Enter" && path && void add()} />
+          {host === "local" && (
+            <Button
+              onClick={async () => {
+                const dir = await openDialog({ directory: true, multiple: false, title: "Choose a project folder" });
+                if (typeof dir === "string") setPath(dir);
+              }}
+            >
+              Browse…
+            </Button>
+          )}
+        </div>
+      </Field>
+      {hostWorkspaces.length > 0 && (
+        <Field label="Workspace">
+          <select className={inputCls} value={wsId} onChange={(e) => setWsId(e.target.value)}>
+            {hostWorkspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+    </Dialog>
+  );
+}
+
+export function NewWorkspaceDialog() {
+  const hosts = useStore((s) => s.hosts);
+  const [name, setName] = useState("");
+  const [host, setHost] = useState("local");
+  const connected = Object.values(hosts).filter((h) => h.status === "connected");
+  const create = async () => {
+    try {
+      await rpc(host, M.workspaceCreate, { name });
+      close();
+    } catch (e) {
+      errorToast(e);
+    }
+  };
+  return (
+    <Dialog
+      title="New workspace"
+      onClose={close}
+      footer={
+        <>
+          <Button variant="ghost" onClick={close}>
+            Cancel
+          </Button>
+          <Button variant="primary" disabled={!name.trim()} onClick={() => void create()}>
+            Create
+          </Button>
+        </>
+      }
+    >
+      <p className="mb-3 text-[12.5px] text-muted">A workspace is a set of projects shown together in the sidebar, e.g. "Work" or "Personal".</p>
+      <Field label="Name">
+        <input autoFocus className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="Work" onKeyDown={(e) => e.key === "Enter" && name.trim() && void create()} />
+      </Field>
       {connected.length > 1 && (
         <Field label="Host">
           <select className={inputCls} value={host} onChange={(e) => setHost(e.target.value)}>
@@ -52,169 +139,13 @@ export function AddRepoDialog() {
           </select>
         </Field>
       )}
-      <Field label="Folder" hint={host === "local" ? "Any folder inside a git repository." : "Path on the remote host, e.g. ~/src/api"}>
-        <div className="flex gap-2">
-          <input autoFocus className={inputCls} value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/code/my-repo" onKeyDown={(e) => e.key === "Enter" && path && void add()} />
-          {host === "local" && (
-            <Button
-              onClick={async () => {
-                const dir = await openDialog({ directory: true, multiple: false, title: "Choose a repository" });
-                if (typeof dir === "string") setPath(dir);
-              }}
-            >
-              Browse…
-            </Button>
-          )}
-        </div>
-      </Field>
-    </Dialog>
-  );
-}
-
-export function NewWorkspaceDialog({ host: presetHost, repo: presetRepo }: { host?: string; repo?: string }) {
-  const hosts = useStore((s) => s.hosts);
-  const allRepos = useStore((s) => s.repos);
-  const options = useMemo(
-    () => Object.entries(allRepos).flatMap(([h, list]) => (hosts[h]?.status === "connected" ? list.map((r) => ({ host: h, repo: r })) : [])),
-    [allRepos, hosts],
-  );
-  const [choice, setChoice] = useState(() => {
-    const pre = options.find((o) => o.host === presetHost && o.repo.id === presetRepo) ?? options[0];
-    return pre ? `${pre.host}|${pre.repo.id}` : "";
-  });
-  const [name, setName] = useState("");
-  const [agent, setAgent] = useState("claude");
-  const [prompt, setPrompt] = useState("");
-  const [from, setFrom] = useState("");
-  const [existing, setExisting] = useState(false);
-  const [branches, setBranches] = useState<string[]>([]);
-  const [config, setConfig] = useState<RepoConfig | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [host, repoId] = choice.split("|");
-  const repo = options.find((o) => o.host === host && o.repo.id === repoId)?.repo;
-
-  useEffect(() => {
-    if (!repo) return;
-    void rpc<RepoConfig>(host, M.repoConfig, { id: repo.id })
-      .then((c) => {
-        setConfig(c);
-        if (c.default_agent) setAgent(c.default_agent);
-      })
-      .catch(() => setConfig(null));
-    void rpc<string[]>(host, M.gitBranches, { path: repo.path }).then(setBranches).catch(() => setBranches([]));
-  }, [host, repo]);
-
-  const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex"), "none"];
-
-  const create = async () => {
-    if (!repo) return;
-    setBusy(true);
-    try {
-      const ws = await rpc<Workspace>(host, M.wsCreate, {
-        repo_id: repo.id,
-        name: name.trim() || prompt.trim().split("\n")[0].slice(0, 48) || "New task",
-        agent,
-        prompt: prompt.trim() || null,
-        from: !existing && from ? from : null,
-        existing_branch: existing,
-        branch: existing ? from : null,
-        cols: 120,
-        rows: 32,
-      });
-      close();
-      selectWorkspace(host, ws.id);
-    } catch (e) {
-      errorToast(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!options.length) {
-    return (
-      <Dialog title="New workspace" onClose={close}>
-        <p className="mb-3 text-muted">Add a repository first.</p>
-        <Button variant="primary" onClick={() => useStore.setState({ dialog: { kind: "add-repo" } })}>
-          Add repository…
-        </Button>
-      </Dialog>
-    );
-  }
-
-  return (
-    <Dialog
-      title="New workspace"
-      width={560}
-      onClose={close}
-      footer={
-        <>
-          <span className="mr-auto self-center text-[11px] text-faint">
-            Creates a git worktree on its own branch{config?.setup ? " and runs the setup script" : ""}.
-          </span>
-          <Button variant="ghost" onClick={close}>
-            Cancel
-          </Button>
-          <Button variant="primary" disabled={busy || !repo || (existing && !from)} onClick={() => void create()}>
-            {busy ? "Creating…" : "Create"} <Kbd>⌘↵</Kbd>
-          </Button>
-        </>
-      }
-    >
-      <div
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && e.metaKey) void create();
-        }}
-      >
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Repository">
-            <select className={inputCls} value={choice} onChange={(e) => setChoice(e.target.value)}>
-              {options.map((o) => (
-                <option key={o.host + o.repo.id} value={`${o.host}|${o.repo.id}`}>
-                  {o.repo.name}
-                  {o.host !== "local" ? ` (${o.host})` : ""}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Agent">
-            <select className={inputCls} value={agent} onChange={(e) => setAgent(e.target.value)}>
-              {agents.map((a) => (
-                <option key={a} value={a}>
-                  {a === "none" ? "No agent (shell)" : a}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <Field label="Task name" hint={name ? `Branch: jaunt/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}` : undefined}>
-          <input autoFocus className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="Fix flaky login test" />
-        </Field>
-        {agent !== "none" && (
-          <Field label="First prompt (optional)">
-            <textarea className={cx(inputCls, "min-h-[84px] resize-y")} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the task for the agent…" />
-          </Field>
-        )}
-        <div className="grid grid-cols-[1fr_auto] items-end gap-3">
-          <Field label={existing ? "Existing branch" : `Start from (default ${repo?.base_branch ?? "base"})`}>
-            <input className={inputCls} list="jaunt-branches" value={from} onChange={(e) => setFrom(e.target.value)} placeholder={existing ? "feature/x" : repo?.base_branch} />
-            <datalist id="jaunt-branches">
-              {branches.slice(0, 200).map((b) => (
-                <option key={b} value={b} />
-              ))}
-            </datalist>
-          </Field>
-          <label className="mb-4 flex items-center gap-1.5 text-[12px] text-muted">
-            <input type="checkbox" checked={existing} onChange={(e) => setExisting(e.target.checked)} /> Use existing branch
-          </label>
-        </div>
-      </div>
     </Dialog>
   );
 }
 
 export function CommitDialog() {
   const s = useStore.getState();
-  const ws = selectedWorkspace(s);
+  const ws = selectedSession(s);
   const host = s.selected?.host ?? "local";
   const [message, setMessage] = useState("");
   const [all, setAll] = useState(true);
@@ -265,7 +196,7 @@ export function CommitDialog() {
 
 export function CreatePrDialog() {
   const s = useStore.getState();
-  const ws = selectedWorkspace(s);
+  const ws = selectedSession(s);
   const host = s.selected?.host ?? "local";
   const [title, setTitle] = useState(ws?.name ?? "");
   const [body, setBody] = useState("");
@@ -525,14 +456,13 @@ export function SettingsDialog() {
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  const ws = useStore((s) => selectedWorkspace(s));
-  const repo = useStore((s) => (ws && s.selected ? repoOf(s, s.selected.host, ws) : undefined));
-  void repo;
   switch (dialog?.kind) {
-    case "add-repo":
-      return <AddRepoDialog />;
+    case "add-project":
+      return <AddProjectDialog host={dialog.host} workspace={dialog.workspace} />;
     case "new-workspace":
-      return <NewWorkspaceDialog host={dialog.host} repo={dialog.repo} />;
+      return <NewWorkspaceDialog />;
+    case "new-session":
+      return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} />;
     case "commit":
       return <CommitDialog />;
     case "create-pr":

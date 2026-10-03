@@ -6,8 +6,8 @@ import "../lib/monaco";
 import { editorOptions, languageFor, monaco } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
 import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } from "../lib/patch";
-import { M, type FileChange, type FileVersions, type Workspace } from "../lib/protocol";
-import { errorToast, refreshGit, toast, useStore, wsKey } from "../lib/store";
+import { M, type FileChange, type FileVersions, type Session } from "../lib/protocol";
+import { errorToast, refreshGit, toast, useStore, sesKey } from "../lib/store";
 import { sendToAgent } from "../lib/actions";
 import { Button, DiffStat, Empty, IconButton, Kbd, cx } from "./ui";
 
@@ -100,8 +100,8 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
   );
 }
 
-export default function ChangesPanel({ host, ws }: { host: string; ws: Workspace }) {
-  const status = useStore((s) => s.git[wsKey(host, ws.id)]);
+export default function ChangesPanel({ host, ws }: { host: string; ws: Session }) {
+  const status = useStore((s) => s.git[sesKey(host, ws.id)]);
   const [mode, setMode] = useState<Mode>("base");
   const selected = useStore((s) => s.diffFile);
   const setSelected = (f: string | null) => useStore.setState({ diffFile: f });

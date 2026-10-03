@@ -1,0 +1,116 @@
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Check, ChevronRight } from "lucide-react";
+import { cx } from "./ui";
+
+export type MenuItem =
+  | { kind?: "item"; label: string; icon?: ReactNode; checked?: boolean; danger?: boolean; hint?: string; onSelect: () => void }
+  | { kind: "submenu"; label: string; icon?: ReactNode; items: MenuItem[] }
+  | { kind: "divider" }
+  | { kind: "label"; label: string };
+
+export function MenuItems({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
+  const [open, setOpen] = useState<number | null>(null);
+  return (
+    <>
+      {items.map((it, i) => {
+        if (it.kind === "divider") return <div key={i} className="my-1 border-t border-border" />;
+        if (it.kind === "label")
+          return (
+            <div key={i} className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-[0.08em] text-faint">
+              {it.label}
+            </div>
+          );
+        if (it.kind === "submenu")
+          return (
+            <div key={i} className="relative" onMouseEnter={() => setOpen(i)} onMouseLeave={() => setOpen((o) => (o === i ? null : o))}>
+              <div className={cx("flex cursor-default items-center gap-2.5 rounded-md px-3 py-[7px] text-[14px]", open === i && "bg-hover")}>
+                {it.icon}
+                <span className="flex-1">{it.label}</span>
+                <ChevronRight size={14} className="text-muted" />
+              </div>
+              {open === i && (
+                <div className="absolute left-full top-[-5px] z-50 ml-1 min-w-[200px] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
+                  <MenuItems items={it.items} onClose={onClose} />
+                </div>
+              )}
+            </div>
+          );
+        return (
+          <button
+            key={i}
+            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left text-[14px] hover:bg-hover", it.danger && "text-error")}
+            onClick={() => {
+              onClose();
+              it.onSelect();
+            }}
+          >
+            {it.icon}
+            <span className="flex-1 truncate">{it.label}</span>
+            {it.hint && <span className="font-mono text-[11.5px] text-faint">{it.hint}</span>}
+            {it.checked && <Check size={14} className="text-fg" />}
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * Click-to-open menu anchored to its trigger, with hover submenus. Rendered
+ * in a portal so scroll containers (the sidebar) never clip it.
+ */
+export function Menu({
+  trigger,
+  items,
+  align = "left",
+  side = "bottom",
+  width = 230,
+}: {
+  trigger: (open: () => void) => ReactNode;
+  items: MenuItem[];
+  align?: "left" | "right";
+  side?: "bottom" | "top";
+  width?: number;
+}) {
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const anchor = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const open = rect !== null;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setRect(null);
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!panel.current?.contains(t) && !anchor.current?.contains(t)) setRect(null);
+    };
+    const onScroll = () => setRect(null);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [open]);
+  const toggle = () => setRect((r) => (r ? null : (anchor.current?.getBoundingClientRect() ?? null)));
+  const style: React.CSSProperties = { width, position: "fixed" };
+  if (rect) {
+    style.left = align === "right" ? Math.max(8, rect.right - width) : Math.min(rect.left, window.innerWidth - width - 8);
+    if (side === "top") style.bottom = window.innerHeight - rect.top + 4;
+    else style.top = rect.bottom + 4;
+  }
+  return (
+    <div ref={anchor} className="no-drag relative">
+      {trigger(toggle)}
+      {rect &&
+        createPortal(
+          <div ref={panel} style={style} className="z-[60] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
+            <MenuItems items={items} onClose={() => setRect(null)} />
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
