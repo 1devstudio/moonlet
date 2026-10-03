@@ -180,6 +180,10 @@ fn run_daemon(
             }
         };
         upgrade::write_pid();
+        let chats = daemon.chats.restore();
+        if chats > 0 {
+            tracing::info!(chats, "restored structured agent conversations");
+        }
         daemon.sessions.relink_terminals();
         let restored = daemon.sessions.restore_after_restart();
         if restored > 0 {

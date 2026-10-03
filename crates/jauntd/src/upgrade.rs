@@ -109,6 +109,8 @@ pub async fn hand_off(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<()
         .with_context(|| format!("cannot start {}", binary.display()))?;
     tracing::info!(binary = %binary.display(), pid = child.id(), "handing terminals to new daemon");
 
+    // Chats are not handed over: the new daemon resumes them from disk.
+    daemon.chats.shutdown();
     let terminals = daemon.terminals.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<()> {
         listener.set_nonblocking(false)?;
