@@ -12,7 +12,7 @@ use jaunt_core::chat::runtime::{ChatCreate, ChatManager, chats_dir};
 use jaunt_core::session::SessionManager;
 use jaunt_core::terminal::TerminalManager;
 use jaunt_core::{fs, git};
-use jaunt_proto::methods::{self as m, AttachResult};
+use jaunt_proto::methods as m;
 use jaunt_proto::types::DaemonInfo;
 use jaunt_proto::{PROTOCOL_VERSION, RpcError};
 use serde::Serialize;
@@ -30,6 +30,7 @@ pub struct Daemon {
     started_at: u64,
     shutdown: watch::Sender<bool>,
     handed_off: AtomicBool,
+    upgrading: AtomicBool,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -40,6 +41,14 @@ fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
 
 fn ok<T: Serialize>(v: T) -> HandlerResult {
     serde_json::to_value(v).map_err(|e| RpcError::new("internal", e.to_string()))
+}
+
+/// Runs synchronous filesystem work off the async workers, so a large
+/// directory walk does not stall other connections.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> Result<T, RpcError> {
+    tokio::task::spawn_blocking(f).await.map_err(internal)?.map_err(internal)
 }
 
 pub fn internal(e: impl std::fmt::Display) -> RpcError {
@@ -67,6 +76,7 @@ impl Daemon {
             started_at: now_ms(),
             shutdown,
             handed_off: AtomicBool::new(false),
+            upgrading: AtomicBool::new(false),
         })
     }
 
@@ -80,6 +90,15 @@ impl Daemon {
 
     pub fn handed_off(&self) -> bool {
         self.handed_off.load(Ordering::SeqCst)
+    }
+
+    /// False if another upgrade is already running.
+    pub fn begin_upgrade(&self) -> bool {
+        !self.upgrading.swap(true, Ordering::SeqCst)
+    }
+
+    pub fn end_upgrade(&self) {
+        self.upgrading.store(false, Ordering::SeqCst);
     }
 
     pub fn set_handed_off(&self) {
@@ -120,6 +139,9 @@ impl Daemon {
                     binary: PathBuf,
                 }
                 let r: Req = params(p)?;
+                if self.upgrading.load(Ordering::SeqCst) {
+                    return Err(RpcError::new("busy", "an upgrade is already in progress"));
+                }
                 let me = self.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::upgrade::hand_off(me, Some(r.binary)).await {
@@ -177,17 +199,6 @@ impl Daemon {
                 ok(self.chats.settings(r.id, r.model, r.effort).map_err(internal)?)
             }
             m::TERMINAL_LIST => ok(s.list()),
-            m::TERMINAL_ATTACH => {
-                let a: m::TerminalAttach = params(p)?;
-                let size = a.cols.zip(a.rows);
-                let (info, snapshot) = s
-                    .attach(a.id, conn.id, conn.tx.clone(), size)
-                    .map_err(internal)?;
-                ok(AttachResult {
-                    info,
-                    snapshot: String::from_utf8_lossy(&snapshot).into_owned(),
-                })
-            }
             m::TERMINAL_DETACH => {
                 let r: m::TerminalRef = params(p)?;
                 s.detach(r.id, conn.id);
@@ -379,7 +390,7 @@ impl Daemon {
             }
             m::FS_LIST => {
                 let r: m::FsList = params(p)?;
-                ok(fs::list(&r.path, r.show_ignored).map_err(internal)?)
+                ok(blocking(move || fs::list(&r.path, r.show_ignored)).await?)
             }
             m::FS_FILES => {
                 let r: m::FsFiles = params(p)?;
@@ -390,11 +401,11 @@ impl Daemon {
             }
             m::FS_READ => {
                 let r: m::FsRead = params(p)?;
-                ok(fs::read(&r.path, r.max_bytes).map_err(internal)?)
+                ok(blocking(move || fs::read(&r.path, r.max_bytes)).await?)
             }
             m::FS_WRITE => {
                 let r: m::FsWrite = params(p)?;
-                fs::write(&r.path, &r.content).map_err(internal)?;
+                blocking(move || fs::write(&r.path, &r.content)).await?;
                 ok(true)
             }
             m::FS_WATCH => {

@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use jaunt_core::terminal::{ClientId, ClientTx};
+use jaunt_core::terminal::{ClientId, ClientTx, dequeued};
+use std::sync::atomic::AtomicUsize;
 use jaunt_proto::{Frame, Message, PROTOCOL_VERSION, RpcError, encode_frame, read_frame};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -17,7 +18,21 @@ use crate::daemon::Daemon;
 /// Binds the daemon socket. Refuses to start if another daemon answers on it.
 pub async fn bind(path: &Path) -> Result<UnixListener> {
     if let Some(dir) = path.parent() {
-        jaunt_core::paths::ensure_private_dir(dir)?;
+        // Only jaunt's own directories are created and locked down; a
+        // socket elsewhere (`--socket`, `JAUNT_SOCK`) must not change the
+        // mode of a directory jaunt does not own, such as `$HOME`.
+        let default_dir = jaunt_core::paths::default_socket_path().parent().map(Path::to_path_buf);
+        if default_dir.as_deref() == Some(dir) {
+            jaunt_core::paths::ensure_private_dir(dir)?;
+        } else {
+            let mode = std::fs::metadata(dir)
+                .with_context(|| format!("socket directory {}", dir.display()))?
+                .permissions()
+                .mode();
+            if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+                bail!("socket directory {} is writable by other users", dir.display());
+            }
+        }
     }
     if path.exists() {
         if UnixStream::connect(path).await.is_ok() {
@@ -77,8 +92,9 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let (tx, rx) = mpsc::unbounded_channel::<Frame>();
-    let writer_task = tokio::spawn(write_loop(writer, rx));
+    let (raw_tx, rx) = mpsc::unbounded_channel::<Frame>();
+    let tx = ClientTx::new(raw_tx);
+    let writer_task = tokio::spawn(write_loop(writer, rx, tx.counter()));
 
     let client = match read_frame(&mut reader).await? {
         Some(Frame::Json(Message::Hello { protocol, client })) => {
@@ -121,7 +137,7 @@ where
         loop {
             match events.recv().await {
                 Ok(m) => {
-                    if ev_tx.send(Frame::Json(m)).is_err() {
+                    if !ev_tx.send(Frame::Json(m)) {
                         break;
                     }
                 }
@@ -139,6 +155,30 @@ where
             match frame {
                 Frame::Input { terminal, data } => {
                     let _ = daemon.terminals.write(terminal, data);
+                }
+                Frame::Json(Message::Request { id, method, params })
+                    if method == jaunt_proto::methods::TERMINAL_ATTACH =>
+                {
+                    // Inline, so the reply is queued before live output (S2).
+                    let result = serde_json::from_value::<jaunt_proto::methods::TerminalAttach>(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))
+                        .and_then(|a| {
+                            daemon
+                                .terminals
+                                .attach_with(a.id, conn.id, conn.tx.clone(), a.cols.zip(a.rows), |info, snapshot| {
+                                    Some(Frame::Json(Message::ok(
+                                        id,
+                                        jaunt_proto::methods::AttachResult {
+                                            info,
+                                            snapshot: String::from_utf8_lossy(&snapshot).into_owned(),
+                                        },
+                                    )))
+                                })
+                                .map_err(|e| RpcError::new("failed", format!("{e:#}")))
+                        });
+                    if let Err(e) = result {
+                        let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
+                    }
                 }
                 Frame::Json(Message::Request { id, method, params }) => {
                     let daemon = daemon.clone();
@@ -193,14 +233,22 @@ fn push_frame(buf: &mut Vec<u8>, frame: Frame) {
 
 /// Writes queued frames, coalescing whatever is already queued into one
 /// syscall so bursts of PTY output cost one write.
-async fn write_loop<W: AsyncWrite + Unpin>(mut writer: W, mut rx: mpsc::UnboundedReceiver<Frame>) {
+async fn write_loop<W: AsyncWrite + Unpin>(
+    mut writer: W,
+    mut rx: mpsc::UnboundedReceiver<Frame>,
+    queued: Arc<AtomicUsize>,
+) {
     let mut buf = Vec::with_capacity(64 * 1024);
     while let Some(frame) = rx.recv().await {
         buf.clear();
+        dequeued(&queued, &frame);
         push_frame(&mut buf, frame);
         while buf.len() < 256 * 1024 {
             match rx.try_recv() {
-                Ok(f) => push_frame(&mut buf, f),
+                Ok(f) => {
+                    dequeued(&queued, &f);
+                    push_frame(&mut buf, f)
+                }
                 Err(_) => break,
             }
         }

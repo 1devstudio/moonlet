@@ -21,6 +21,12 @@ pub fn socket_path() -> PathBuf {
     if let Some(s) = std::env::var_os("JAUNT_SOCK") {
         return PathBuf::from(s);
     }
+    default_socket_path()
+}
+
+/// The socket jaunt places itself (ignoring `JAUNT_SOCK`); its directory is
+/// owned by jaunt and kept at mode 0700.
+pub fn default_socket_path() -> PathBuf {
     let path = run_dir().join("jauntd.sock");
     if path.as_os_str().len() < MAX_SOCKET_PATH {
         return path;
