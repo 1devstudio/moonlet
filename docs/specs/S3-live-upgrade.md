@@ -18,7 +18,7 @@ A new `jauntd` binary takes over every live PTY from the running daemon. Agents 
    - the PTY master fds via `SCM_RIGHTS`, in chunks of up to 64.
 4. The new daemon rebuilds terminal state by replaying each snapshot, installs the sessions under the **same ids**, and replies `A` (adopted).
 5. The old daemon stops listening, removes its pid file and exits without touching the PTYs. The new daemon keeps trying to bind the socket for up to 10 s, then serves. Workspace state is reloaded from `state.json`. Restore is a no-op because the sessions are alive.
-6. If anything fails before `A`, the old daemon closes the handoff, keeps serving and logs the error. No session is lost.
+6. If anything fails before `A`, the old daemon closes the handoff and logs the error. It then restarts the terminal I/O it stopped for the export and keeps serving, so no session is lost. A terminal's exit code may be unknown afterwards, because the child handle was released for the handoff. Only one upgrade runs at a time; a second request is refused while one is in progress.
 
 ## Behaviour and acceptance criteria
 
