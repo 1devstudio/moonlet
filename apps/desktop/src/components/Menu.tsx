@@ -89,7 +89,11 @@ export function Menu({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") return setRect(null);
+      if (e.key === "Escape") {
+        // The menu's own Escape; a dialog around it must not also close.
+        e.stopPropagation();
+        return setRect(null);
+      }
       // A single-character hint doubles as the item's shortcut while the menu is open.
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const hit = itemsRef.current.find((it) => (it.kind === undefined || it.kind === "item") && it.hint?.length === 1 && it.hint === e.key);
