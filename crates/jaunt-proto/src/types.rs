@@ -245,6 +245,10 @@ pub struct GitStatus {
     pub behind: u32,
     /// Ref the diff is computed against (merge-base with the workspace base, or HEAD).
     pub against: String,
+    /// The requested base could not be resolved (typo, or not fetched), so
+    /// the diff fell back to HEAD and committed work is not shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_missing: Option<String>,
     pub files: Vec<FileChange>,
     pub additions: u32,
     pub deletions: u32,

@@ -16,10 +16,24 @@ __jaunt_precmd() {
   local ret=$?
   if [[ -n $__jaunt_ran ]]; then printf '\e]133;D;%s\a' "$ret"; fi
   unset __jaunt_ran
-  printf '\e]7;file://%s%s\a' "${HOST}" "${PWD// /%20}"
+  __jaunt_urlpath "$PWD"
+  printf '\e]7;file://%s%s\a' "${HOST}" "$REPLY"
   printf '\e]133;A\a'
 }
 __jaunt_preexec() { printf '\e]133;C\a'; __jaunt_ran=1; }
+# Percent-encodes a path for OSC 7 (into $REPLY), byte by byte.
+__jaunt_urlpath() {
+  emulate -L zsh
+  local LC_ALL=C s=$1 out= c i
+  for (( i = 1; i <= ${#s}; i++ )); do
+    c=$s[i]
+    case $c in
+      ([a-zA-Z0-9/._~-]) out+=$c ;;
+      (*) printf -v c '%%%02X' "'$c"; out+=$c ;;
+    esac
+  done
+  REPLY=$out
+}
 __jaunt_blank() {
   if [[ -n $JAUNT_CLASSIC_FILE && ! -e $JAUNT_CLASSIC_FILE ]]; then
     [[ -n $PROMPT ]] && __jaunt_ps1=$PROMPT
@@ -75,7 +89,8 @@ __jaunt_prompt() {
   local ret=$?
   if [ -n "$__jaunt_ran" ]; then printf '\e]133;D;%s\a' "$ret"; fi
   __jaunt_ran=
-  printf '\e]7;file://%s%s\a' "$HOSTNAME" "${PWD// /%20}"
+  __jaunt_urlpath "$PWD"
+  printf '\e]7;file://%s%s\a' "$HOSTNAME" "$__jaunt_url"
   printf '\e]133;A\a'
 }
 __jaunt_blank() {
@@ -91,7 +106,26 @@ __jaunt_blank() {
   # Armed last, so the user's PROMPT_COMMAND parts do not count as a command.
   __jaunt_armed=1
 }
+# Percent-encodes a path for OSC 7 (into $__jaunt_url), byte by byte.
+__jaunt_urlpath() {
+  local LC_ALL=C s=$1 out= c i
+  for (( i = 0; i < ${#s}; i++ )); do
+    c=${s:i:1}
+    case $c in
+      [a-zA-Z0-9/._~-]) out+=$c ;;
+      *) printf -v c '%%%02X' "'$c"; out+=$c ;;
+    esac
+  done
+  __jaunt_url=$out
+}
+# A DEBUG trap the user's startup files set keeps running (bash allows one).
+__jaunt_user_debug=
+__jaunt_capture_trap() { __jaunt_user_debug=$1; }
+__jaunt_prev_trap=$(trap -p DEBUG)
+[ -n "$__jaunt_prev_trap" ] && eval "__jaunt_capture_trap ${__jaunt_prev_trap#trap -- }"
+unset __jaunt_prev_trap
 __jaunt_debug() {
+  [ -n "$__jaunt_user_debug" ] && eval "$__jaunt_user_debug"
   [ -n "$__jaunt_armed" ] || return 0
   case "$BASH_COMMAND" in __jaunt_*) return 0 ;; esac
   __jaunt_armed=
@@ -109,7 +143,7 @@ if status is-interactive
       printf '\e]133;D;%s\a' $__jaunt_status
       set -e __jaunt_ran
     end
-    printf '\e]7;file://%s%s\a' (hostname) (string replace -a ' ' '%20' -- $PWD)
+    printf '\e]7;file://%s%s\a' (hostname) (string escape --style=url -- $PWD)
     printf '\e]133;A\a'
     # Wrap the user's prompt once, so Warp mode can blank it (T7).
     if not functions -q __jaunt_user_fish_prompt
@@ -362,6 +396,63 @@ mod tests {
     #[tokio::test]
     async fn bash_warp_mode_blanks_the_prompt() {
         blanks_and_restores("/bin/bash", ".bash_profile", "PS1='USERPROMPT> '\n").await;
+    }
+
+    /// Runs `commands` in an integrated shell whose rc file holds `rc_body`.
+    async fn session_output(shell: &str, rc: &str, rc_body: &str, commands: &str, until: &str) -> Option<String> {
+        if !Path::new(shell).exists() {
+            return None;
+        }
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(rc), rc_body).unwrap();
+        std::fs::create_dir_all(home.path().join("a%b c")).unwrap();
+        let root = home.path().join("shell");
+        let mut env: BTreeMap<String, String> = BTreeMap::from([
+            ("HOME".into(), home.path().display().to_string()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+            ("SHELL".into(), shell.into()),
+        ]);
+        let args = apply(&root, shell, vec!["-l".into()], &mut env);
+        let mgr = TerminalManager::new(home.path().join("s.sock"), env);
+        let mut command = vec![shell.to_string()];
+        command.extend(args);
+        let info = mgr
+            .create(TerminalCreate { cwd: home.path().display().to_string(), command, ..Default::default() })
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        mgr.attach(info.id, 1, tx, None).unwrap();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        mgr.write(info.id, commands.as_bytes().to_vec()).unwrap();
+        let out = read_until(&mut rx, until).await;
+        let _ = mgr.kill(info.id, true);
+        Some(out)
+    }
+
+    #[tokio::test]
+    async fn cwd_reports_are_fully_percent_encoded() {
+        for (shell, rc) in [("/bin/zsh", ".zshrc"), ("/bin/bash", ".bash_profile")] {
+            let Some(out) = session_output(shell, rc, "", "cd 'a%b c'\n", "a%25b%20c").await else {
+                continue;
+            };
+            assert!(out.contains("a%25b%20c"), "{shell}: {out:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn bash_keeps_the_users_debug_trap() {
+        let Some(out) = session_output(
+            "/bin/bash",
+            ".bash_profile",
+            "trap 'printf USERTRAP' DEBUG\n",
+            "true\n",
+            "133;D;0",
+        )
+        .await
+        else {
+            return;
+        };
+        assert!(out.contains("USERTRAP"), "{out:?}");
+        assert!(out.contains("133;C"), "jaunt's own mark still works: {out:?}");
     }
 
     #[test]

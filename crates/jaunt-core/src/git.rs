@@ -28,6 +28,21 @@ async fn run_raw(
     timeout: Duration,
 ) -> Result<Output> {
     let mut cmd = Command::new(program);
+    // Repository-location variables inherited from whoever started the
+    // daemon (a git hook, say) would point every call at another repo.
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_PREFIX",
+    ] {
+        cmd.env_remove(var);
+    }
     cmd.args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -131,17 +146,25 @@ async fn has_head(cwd: &Path) -> bool {
 
 /// Ref to diff against: the merge-base with `base` when given, else HEAD.
 pub async fn resolve_against(cwd: &Path, base: Option<&str>) -> String {
+    resolve_base(cwd, base).await.0
+}
+
+/// Like [`resolve_against`], also returning the base name when it was given
+/// but could not be resolved (the result then falls back to HEAD).
+pub async fn resolve_base(cwd: &Path, base: Option<&str>) -> (String, Option<String>) {
     if !has_head(cwd).await {
-        return EMPTY_TREE.into();
+        return (EMPTY_TREE.into(), None);
     }
     if let Some(base) = base.filter(|b| !b.is_empty() && *b != "HEAD") {
         for candidate in [base.to_string(), format!("origin/{base}")] {
             if let Ok(mb) = git_text(cwd, &["merge-base", "HEAD", &candidate]).await {
-                return mb;
+                return (mb, None);
             }
         }
+        tracing::warn!(base, cwd = %cwd.display(), "diff base not found; using HEAD");
+        return ("HEAD".into(), Some(base.to_string()));
     }
-    "HEAD".into()
+    ("HEAD".into(), None)
 }
 
 struct Porcelain {
@@ -249,7 +272,7 @@ pub async fn status(path: &Path, base: Option<&str>) -> Result<GitStatus> {
         )
         .await?,
     );
-    let against = resolve_against(&root, base).await;
+    let (against, base_missing) = resolve_base(&root, base).await;
 
     // Status letters against the diff base (covers committed and uncommitted work).
     let mut files: Vec<FileChange> = Vec::new();
@@ -355,6 +378,7 @@ pub async fn status(path: &Path, base: Option<&str>) -> Result<GitStatus> {
         ahead: porcelain.ahead,
         behind: porcelain.behind,
         against,
+        base_missing,
         files,
         additions,
         deletions,
@@ -886,6 +910,10 @@ pub(crate) mod tests {
             .expect("committed change visible against base");
         assert_eq!((a.additions, a.deletions), (2, 1));
         assert_ne!(vs_main.against, "HEAD");
+        assert!(vs_main.base_missing.is_none());
+        let typo = status(p, Some("mian")).await.unwrap();
+        assert_eq!(typo.against, "HEAD");
+        assert_eq!(typo.base_missing.as_deref(), Some("mian"));
     }
 
     #[tokio::test]

@@ -42,9 +42,20 @@ impl State {
     /// Reads `state.json`, migrating the pre-ADR-0005 layout where `repos`
     /// were projects and `workspaces` were what are now sessions.
     pub fn parse(text: &str) -> State {
-        let Ok(mut v) = serde_json::from_str::<serde_json::Value>(text) else {
-            return State::default();
-        };
+        Self::try_parse(text).unwrap_or_else(|_| {
+            let mut st = State {
+                version: STATE_VERSION,
+                ..Default::default()
+            };
+            st.ensure_workspace();
+            st
+        })
+    }
+
+    /// Parses (and migrates) a state file; fails on unreadable JSON instead
+    /// of silently starting empty.
+    pub fn try_parse(text: &str) -> Result<State, serde_json::Error> {
+        let mut v = serde_json::from_str::<serde_json::Value>(text)?;
         if v.get("version").and_then(|x| x.as_u64()).unwrap_or(0) < 2
             && let Some(obj) = v.as_object_mut()
         {
@@ -53,10 +64,10 @@ impl State {
             obj.insert("projects".into(), repos);
             obj.insert("sessions".into(), tasks);
         }
-        let mut st: State = serde_json::from_value(v).unwrap_or_default();
+        let mut st: State = serde_json::from_value(v)?;
         st.version = STATE_VERSION;
         st.ensure_workspace();
-        st
+        Ok(st)
     }
 
     /// There is always at least one workspace; projects nobody groups land
@@ -172,7 +183,20 @@ impl SessionManager {
         terminals: Arc<TerminalManager>,
     ) -> Arc<Self> {
         let state = std::fs::read_to_string(&file)
-            .map(|s| State::parse(&s))
+            .map(|s| match State::try_parse(&s) {
+                Ok(st) => st,
+                Err(e) => {
+                    // Keep the damaged file: the next save would overwrite it.
+                    let backup = file.with_extension(format!("json.corrupt-{}", now_ms()));
+                    let _ = std::fs::copy(&file, &backup);
+                    tracing::warn!(
+                        "{} is unreadable ({e}); starting empty, kept a copy at {}",
+                        file.display(),
+                        backup.display()
+                    );
+                    State::parse("")
+                }
+            })
             .unwrap_or_else(|_| {
                 let mut st = State {
                     version: STATE_VERSION,
@@ -1236,6 +1260,23 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(30)).await;
         }
         panic!("exited shell still scheduled for restore");
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_state_file_is_kept_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state.json");
+        std::fs::write(&file, "{ not json").unwrap();
+        let terms = TerminalManager::new(dir.path().join("s.sock"), BTreeMap::new());
+        let mgr = SessionManager::load(file.clone(), dir.path().join("wt"), terms);
+        assert!(mgr.list_projects().is_empty());
+        let kept: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(std::fs::read_to_string(kept[0].path()).unwrap(), "{ not json");
     }
 
     #[test]

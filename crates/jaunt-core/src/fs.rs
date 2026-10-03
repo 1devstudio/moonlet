@@ -14,6 +14,8 @@ use notify::{RecursiveMode, Watcher};
 use crate::terminal::expand_home;
 
 const DEFAULT_MAX_READ: u64 = 4 * 1024 * 1024;
+/// Upper bound for `max_bytes` from a client.
+const MAX_READ: u64 = 64 * 1024 * 1024;
 
 /// Lists one directory (the tree loads lazily), dirs first, `.gitignore`-aware.
 pub fn list(path: &str, show_ignored: bool) -> Result<Vec<DirEntry>> {
@@ -87,10 +89,13 @@ pub fn files(root: &str, limit: usize) -> Result<Vec<String>> {
 
 pub fn read(path: &str, max_bytes: Option<u64>) -> Result<FileContent> {
     let p = expand_home(path);
-    let size = std::fs::metadata(&p)
-        .with_context(|| format!("cannot open {}", p.display()))?
-        .len();
-    let max = max_bytes.unwrap_or(DEFAULT_MAX_READ);
+    let meta = std::fs::metadata(&p).with_context(|| format!("cannot open {}", p.display()))?;
+    // FIFOs block on open and devices never end: only regular files.
+    if !meta.is_file() {
+        bail!("{} is not a regular file", p.display());
+    }
+    let size = meta.len();
+    let max = max_bytes.unwrap_or(DEFAULT_MAX_READ).min(MAX_READ);
     let mut data = Vec::new();
     {
         use std::io::Read;
@@ -112,18 +117,28 @@ pub fn read(path: &str, max_bytes: Option<u64>) -> Result<FileContent> {
 
 /// Saves a text file atomically, keeping its permissions.
 pub fn write(path: &str, content: &str) -> Result<()> {
-    let p = expand_home(path);
+    let mut p = expand_home(path);
+    // Write through a symlink to its target instead of replacing the link.
+    if let Ok(real) = p.canonicalize() {
+        p = real;
+    }
     let perms = std::fs::metadata(&p).ok().map(|m| m.permissions());
     let tmp = p.with_file_name(format!(
         ".{}.jaunt-tmp",
         p.file_name().context("not a file path")?.to_string_lossy()
     ));
-    std::fs::write(&tmp, content)?;
-    if let Some(perms) = perms {
-        std::fs::set_permissions(&tmp, perms)?;
+    let result = (|| -> Result<()> {
+        std::fs::write(&tmp, content)?;
+        if let Some(perms) = perms {
+            std::fs::set_permissions(&tmp, perms)?;
+        }
+        std::fs::rename(&tmp, &p)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    std::fs::rename(&tmp, &p)?;
-    Ok(())
+    result
 }
 
 struct Watch {
@@ -250,6 +265,19 @@ fn debounce(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_refuses_special_files_and_write_follows_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read(&dir.path().display().to_string(), None).is_err(), "directory");
+        let target = dir.path().join("real.txt");
+        std::fs::write(&target, "old").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        write(&link.display().to_string(), "new").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+    }
 
     #[test]
     fn files_are_relative_and_skip_ignored() {
