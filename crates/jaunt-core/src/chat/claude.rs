@@ -225,6 +225,7 @@ impl Adapter for Claude {
                     st.pending.push(PermissionAsk {
                         id: rid.clone(),
                         summary: summarize(&tool, &input),
+                        diff: crate::chat::diff_for(&tool, &input),
                         tool,
                         input: input.clone(),
                         reason,
@@ -251,12 +252,12 @@ impl Adapter for Claude {
                 st.turn_started_at = None;
                 st.pending.clear();
                 if std::mem::take(&mut self.interrupted) {
-                    let id = self.next_id("system");
+                    let id = super::local_id("system");
                     out.push(upsert(st, item(id, "system", "Interrupted")));
                     st.status = "idle".into();
                 } else if failed {
                     let msg = v["result"].as_str().or_else(|| v["errors"][0].as_str()).unwrap_or("The turn failed.").to_string();
-                    let id = self.next_id("error");
+                    let id = super::local_id("error");
                     out.push(upsert(st, item(id, "error", msg)));
                     st.status = "error".into();
                 } else {
@@ -280,7 +281,7 @@ impl Adapter for Claude {
     }
 
     fn send(&mut self, text: &str, st: &mut ChatState) -> Vec<Out> {
-        let id = self.next_id("user");
+        let id = super::local_id("user");
         let mut out = vec![upsert(st, item(id, "user", text)), Out::Write(Self::user_line(text))];
         if st.status != "working" && st.status != "blocked" {
             st.turn_started_at = Some(now_ms());
@@ -404,6 +405,7 @@ mod tests {
         let write = st.items.iter().filter_map(|i| i.tool.as_ref()).find(|t| t.name == "Write").unwrap();
         assert_eq!(write.status, "ok");
         assert!(write.diff.as_deref().unwrap().contains("+hi"));
+        assert!(writes.iter().any(|w| w.contains("\"allow\"")));
         assert_eq!(st.status, "done");
     }
 

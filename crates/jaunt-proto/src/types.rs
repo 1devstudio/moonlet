@@ -360,6 +360,9 @@ pub struct PermissionAsk {
     /// "Always allow" is meaningful for this request.
     #[serde(default)]
     pub can_always: bool,
+    /// Preview of a file change, when the request is an edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

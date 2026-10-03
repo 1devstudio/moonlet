@@ -112,6 +112,9 @@ impl TerminalManager {
         self.next_id.fetch_max(info.id + 1, Ordering::Relaxed);
         info.chat = true;
         let (input, _) = mpsc::unbounded_channel();
+        // A restored chat keeps its state without announcing it again.
+        let mut agent = AgentTracker::default();
+        agent.report(info.agent_state, StateSource::Hook, info.agent_message.clone());
         let terminal = Arc::new(Terminal {
             id: info.id,
             input,
@@ -121,7 +124,7 @@ impl TerminalManager {
                 term: TermState::new(info.rows.max(1), info.cols.max(1)),
                 pty: None,
                 subscribers: HashMap::new(),
-                agent: AgentTracker::default(),
+                agent,
                 last_output: Instant::now(),
                 remove_on_exit: false,
             }),

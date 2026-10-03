@@ -68,6 +68,14 @@ pub fn supports(agent: &str) -> bool {
 
 // ------------------------------------------------------------ helpers
 
+/// An id that stays unique across agent restarts (adapters start fresh
+/// when a conversation is resumed, the transcript does not).
+pub(crate) fn local_id(prefix: &str) -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}-{}-{n}", now_ms())
+}
+
 pub(crate) fn item(id: impl Into<String>, kind: &str, text: impl Into<String>) -> ChatItem {
     ChatItem { id: id.into(), kind: kind.into(), text: text.into(), tool: None, ts: now_ms(), partial: false }
 }
@@ -135,6 +143,7 @@ pub fn summarize(name: &str, input: &serde_json::Value) -> String {
         "WebSearch" => str_field(input, &["query"]).map(String::from),
         "Task" | "Agent" => str_field(input, &["description", "prompt"]).map(String::from),
         "TodoWrite" => Some("update todos".into()),
+        "Skill" => str_field(input, &["skill", "command", "name"]).map(String::from),
         _ => None,
     };
     s.or_else(|| str_field(input, &["command", "file_path", "path", "description", "query"]).map(String::from))
