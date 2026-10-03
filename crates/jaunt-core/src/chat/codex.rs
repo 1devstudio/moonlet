@@ -117,17 +117,12 @@ impl Codex {
 
     fn ask(&mut self, rid: Value, method: &str, p: &Value, st: &mut ChatState) -> Out {
         let item_id = p["itemId"].as_str().unwrap_or_default().to_string();
-        let (tool, input) = if method.contains("fileChange") {
-            let paths = st
-                .items
-                .iter()
-                .find(|x| x.id == item_id)
-                .and_then(|x| x.tool.as_ref())
-                .map(|t| t.summary.clone())
-                .unwrap_or_default();
-            ("Edit".to_string(), json!({"file_path": paths}))
+        let change = st.items.iter().find(|x| x.id == item_id).and_then(|x| x.tool.as_ref());
+        let (tool, input, diff) = if method.contains("fileChange") {
+            let paths = change.map(|t| t.summary.clone()).unwrap_or_default();
+            ("Edit".to_string(), json!({"file_path": paths}), change.and_then(|t| t.diff.clone()))
         } else {
-            ("Bash".to_string(), json!({"command": p["command"], "cwd": p["cwd"]}))
+            ("Bash".to_string(), json!({"command": p["command"], "cwd": p["cwd"]}), None)
         };
         let id = format!("codex-{}", rid);
         st.pending.push(PermissionAsk {
@@ -137,6 +132,7 @@ impl Codex {
             input,
             reason: p["reason"].as_str().map(super::strip_ansi),
             can_always: true,
+            diff,
         });
         self.asks.insert(id, (rid, item_id));
         st.status = "blocked".into();
@@ -174,7 +170,7 @@ impl Adapter for Codex {
                 let kind = id.as_u64().and_then(|n| self.calls.remove(&n)).unwrap_or(Pending::Other);
                 if let Some(err) = v.get("error") {
                     let msg = err["message"].as_str().unwrap_or("Codex request failed").to_string();
-                    let eid = format!("error-{}", now_ms());
+                    let eid = super::local_id("error");
                     out.push(upsert(st, item(eid, "error", msg)));
                     if kind != Pending::Other {
                         st.status = "error".into();
@@ -261,7 +257,7 @@ impl Adapter for Codex {
                     }
                     "error" if !p["willRetry"].as_bool().unwrap_or(false) => {
                         let msg = p["error"]["message"].as_str().unwrap_or("Codex reported an error").to_string();
-                        out.push(upsert(st, item(format!("error-{}", now_ms()), "error", msg)));
+                        out.push(upsert(st, item(super::local_id("error"), "error", msg)));
                     }
                     "serverRequest/resolved" => {
                         // Answered elsewhere (or timed out): drop the card.
@@ -283,11 +279,11 @@ impl Adapter for Codex {
                         st.pending.clear();
                         self.asks.clear();
                         if status == "interrupted" {
-                            out.push(upsert(st, item(format!("system-{}", now_ms()), "system", "Interrupted")));
+                            out.push(upsert(st, item(super::local_id("system"), "system", "Interrupted")));
                             st.status = "idle".into();
                         } else if status == "failed" {
                             let msg = turn["error"]["message"].as_str().unwrap_or("The turn failed.").to_string();
-                            out.push(upsert(st, item(format!("error-{}", now_ms()), "error", msg)));
+                            out.push(upsert(st, item(super::local_id("error"), "error", msg)));
                             st.status = "error".into();
                         } else {
                             st.status = "done".into();
@@ -312,7 +308,7 @@ impl Adapter for Codex {
     }
 
     fn send(&mut self, text: &str, st: &mut ChatState) -> Vec<Out> {
-        let mut out = vec![upsert(st, item(format!("user-{}", now_ms()), "user", text))];
+        let mut out = vec![upsert(st, item(super::local_id("user"), "user", text))];
         if self.thread.is_none() {
             self.queued.push(text.to_string());
         } else if let Some(turn) = self.turn.clone() {

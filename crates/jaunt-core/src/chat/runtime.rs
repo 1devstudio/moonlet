@@ -326,7 +326,7 @@ impl ChatManager {
             self.chats.lock().unwrap().insert(chat.id, chat.clone());
             let mut inner = chat.inner.lock().unwrap();
             if interrupted {
-                let id = format!("system-{}", now_ms());
+                let id = super::local_id("system");
                 upsert(&mut inner.state, item(id, "system", "Interrupted by a daemon restart"));
             }
             self.save(&chat, &mut inner);
@@ -376,7 +376,7 @@ impl ChatManager {
     }
 
     fn fail(&self, chat: &Chat, inner: &mut Inner, message: &str) {
-        let id = format!("error-{}", now_ms());
+        let id = super::local_id("error");
         let o = upsert(&mut inner.state, item(id, "error", message));
         inner.state.status = "error".into();
         inner.state.turn_started_at = None;
@@ -584,13 +584,21 @@ done
         chats.save_all();
 
         // A new daemon: same id, transcript back, agent not yet started.
-        let terms2 = TerminalManager::new(dir.path().join("sock2"), BTreeMap::new());
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
         let chats2 = ChatManager::new(terms2.clone(), dir.path().join("chats"));
         assert_eq!(chats2.restore(), 1);
         let st2 = chats2.state(info.id).unwrap();
         assert_eq!(st2.items.len(), st.items.len());
         assert_eq!(st2.agent_session.as_deref(), Some("sess-1"));
         assert!(terms2.get(info.id).unwrap().info().chat);
+        assert_eq!(terms2.get(info.id).unwrap().info().agent_state, AgentState::Done);
+
+        // The next message resumes the agent and keeps earlier messages intact.
+        chats2.send(info.id, "again").unwrap();
+        let st3 = wait_for(&chats2, info.id, |s| s.status == "done" && s.items.len() > st2.items.len()).await;
+        let users: Vec<_> = st3.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect();
+        assert_eq!(users, ["hi", "again"]);
+        chats2.shutdown();
 
         // Closing the tab forgets the conversation.
         terms.kill(info.id, true).unwrap();
