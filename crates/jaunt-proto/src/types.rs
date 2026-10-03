@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::SessionId;
+use crate::TerminalId;
 
 /// What the agent in a session is doing, as far as jaunt can tell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub enum StateSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SessionKind {
+pub enum TerminalKind {
     Agent,
     #[default]
     Shell,
@@ -46,9 +46,9 @@ pub struct ExitInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SessionInfo {
-    pub id: SessionId,
-    pub kind: SessionKind,
+pub struct TerminalInfo {
+    pub id: TerminalId,
+    pub kind: TerminalKind,
     pub title: String,
     pub cwd: String,
     pub command: Vec<String>,
@@ -110,7 +110,7 @@ pub struct Workspace {
     pub archived: bool,
     pub created_at: u64,
     #[serde(default)]
-    pub sessions: Vec<SessionId>,
+    pub terminals: Vec<TerminalId>,
     /// Opaque UI layout (tabs, splits), owned by the client.
     #[serde(default)]
     pub layout: serde_json::Value,
@@ -121,14 +121,14 @@ pub struct Workspace {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RestoreEntry {
-    pub kind: SessionKind,
+    pub kind: TerminalKind,
     pub title: String,
     pub cwd: String,
     pub command: Vec<String>,
     pub agent: Option<String>,
-    /// Live session this entry describes; reassigned on restore.
+    /// Live terminal this entry describes; reassigned on restore.
     #[serde(default)]
-    pub session: Option<SessionId>,
+    pub terminal: Option<TerminalId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -220,5 +220,6 @@ pub struct DaemonInfo {
     pub host: String,
     pub home: String,
     pub started_at: u64,
-    pub sessions: usize,
+    #[serde(alias = "sessions")]
+    pub terminals: usize,
 }

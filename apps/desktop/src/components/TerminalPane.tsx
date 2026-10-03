@@ -65,7 +65,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
               size="sm"
               onClick={async () => {
                 try {
-                  await rpc(host, M.sessionCreate, {
+                  await rpc(host, M.terminalCreate, {
                     cwd: info.cwd,
                     command: info.command,
                     kind: info.kind,
@@ -73,7 +73,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
                     agent: info.agent,
                     workspace_id: info.workspace_id,
                   });
-                  await rpc(host, M.sessionKill, { id: session, remove: true });
+                  await rpc(host, M.terminalKill, { id: session, remove: true });
                 } catch (e) {
                   errorToast(e);
                 }
@@ -81,7 +81,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
             >
               <RotateCw size={12} /> Restart
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => void rpc(host, M.sessionKill, { id: session, remove: true })}>
+            <Button size="sm" variant="ghost" onClick={() => void rpc(host, M.terminalKill, { id: session, remove: true })}>
               <X size={12} /> Close
             </Button>
           </span>

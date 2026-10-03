@@ -2,16 +2,16 @@
 // Keep in sync with the Rust definitions.
 
 export type AgentState = "idle" | "working" | "blocked" | "done" | "error";
-export type SessionKind = "agent" | "shell" | "run" | "setup";
+export type TerminalKind = "agent" | "shell" | "run" | "setup";
 
 export interface ExitInfo {
   code: number | null;
   signal: number | null;
 }
 
-export interface SessionInfo {
+export interface TerminalInfo {
   id: number;
-  kind: SessionKind;
+  kind: TerminalKind;
   title: string;
   cwd: string;
   command: string[];
@@ -54,7 +54,7 @@ export interface Workspace {
   agent: string | null;
   archived: boolean;
   created_at: number;
-  sessions: number[];
+  terminals: number[];
   layout: unknown;
 }
 
@@ -127,7 +127,7 @@ export interface PullRequest {
 }
 
 export interface Attention {
-  session: number;
+  terminal: number;
   workspace_id: string | null;
   state: AgentState;
   title: string;
@@ -167,14 +167,14 @@ export interface FsChanged {
 }
 
 export const M = {
-  sessionCreate: "session.create",
-  sessionList: "session.list",
-  sessionAttach: "session.attach",
-  sessionDetach: "session.detach",
-  sessionResize: "session.resize",
-  sessionKill: "session.kill",
-  sessionWrite: "session.write",
-  sessionSearch: "session.search",
+  terminalCreate: "terminal.create",
+  terminalList: "terminal.list",
+  terminalAttach: "terminal.attach",
+  terminalDetach: "terminal.detach",
+  terminalResize: "terminal.resize",
+  terminalKill: "terminal.kill",
+  terminalWrite: "terminal.write",
+  terminalSearch: "terminal.search",
   hooksStatus: "hooks.status",
   hooksInstall: "hooks.install",
   repoAdd: "repo.add",
@@ -207,10 +207,10 @@ export const M = {
 } as const;
 
 export const EV = {
-  sessionCreated: "session.created",
-  sessionUpdated: "session.updated",
-  sessionExited: "session.exited",
-  sessionRemoved: "session.removed",
+  terminalCreated: "terminal.created",
+  terminalUpdated: "terminal.updated",
+  terminalExited: "terminal.exited",
+  terminalRemoved: "terminal.removed",
   attention: "agent.attention",
   reposChanged: "repos.changed",
   workspacesChanged: "workspaces.changed",

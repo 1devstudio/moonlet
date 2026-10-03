@@ -29,7 +29,7 @@ pub(crate) fn encode_into(frame: &Frame, out: &mut Vec<u8>) {
             out.push(KIND_JSON);
             out.extend_from_slice(&body);
         }
-        Frame::Output { session, data } | Frame::Input { session, data } => {
+        Frame::Output { terminal, data } | Frame::Input { terminal, data } => {
             let kind = if matches!(frame, Frame::Output { .. }) {
                 KIND_OUTPUT
             } else {
@@ -37,7 +37,7 @@ pub(crate) fn encode_into(frame: &Frame, out: &mut Vec<u8>) {
             };
             out.extend_from_slice(&((data.len() + 5) as u32).to_be_bytes());
             out.push(kind);
-            out.extend_from_slice(&session.to_be_bytes());
+            out.extend_from_slice(&terminal.to_be_bytes());
             out.extend_from_slice(data);
         }
     }
@@ -50,12 +50,12 @@ fn decode_body(kind: u8, body: &[u8]) -> Result<Frame, ProtoError> {
             if body.len() < 4 {
                 return Err(ProtoError::Truncated);
             }
-            let session = u32::from_be_bytes(body[..4].try_into().unwrap());
+            let terminal = u32::from_be_bytes(body[..4].try_into().unwrap());
             let data = body[4..].to_vec();
             Ok(if kind == KIND_OUTPUT {
-                Frame::Output { session, data }
+                Frame::Output { terminal, data }
             } else {
-                Frame::Input { session, data }
+                Frame::Input { terminal, data }
             })
         }
         other => Err(ProtoError::UnknownKind(other)),
@@ -143,19 +143,19 @@ mod tests {
         vec![
             Frame::Json(Message::Request {
                 id: 7,
-                method: "session.list".into(),
+                method: "terminal.list".into(),
                 params: json!({}),
             }),
             Frame::Output {
-                session: 3,
+                terminal: 3,
                 data: b"\x1b[31mhello\x1b[0m".to_vec(),
             },
             Frame::Input {
-                session: u32::MAX,
+                terminal: u32::MAX,
                 data: vec![],
             },
             Frame::Json(Message::Event {
-                name: "session.exited".into(),
+                name: "terminal.exited".into(),
                 data: json!({"id": 3}),
             }),
         ]

@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use jaunt_proto::methods::{self, Attention, SessionCreate};
-use jaunt_proto::types::{AgentState, ExitInfo, SessionInfo, SessionKind, StateSource};
-use jaunt_proto::{Frame, Message, SessionId};
+use jaunt_proto::methods::{self, Attention, TerminalCreate};
+use jaunt_proto::types::{AgentState, ExitInfo, StateSource, TerminalInfo, TerminalKind};
+use jaunt_proto::{Frame, Message, TerminalId};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{broadcast, mpsc};
 
@@ -26,8 +26,8 @@ pub type ClientId = u64;
 /// Outbound queue of one client connection.
 pub type ClientTx = mpsc::UnboundedSender<Frame>;
 
-struct SessionState {
-    info: SessionInfo,
+struct TerminalState {
+    info: TerminalInfo,
     term: TermState,
     pty: Option<Pty>,
     subscribers: HashMap<ClientId, ClientTx>,
@@ -36,23 +36,23 @@ struct SessionState {
     remove_on_exit: bool,
 }
 
-pub struct Session {
-    pub id: SessionId,
-    state: Mutex<SessionState>,
+pub struct Terminal {
+    pub id: TerminalId,
+    state: Mutex<TerminalState>,
     input: mpsc::UnboundedSender<Vec<u8>>,
     /// Reader/writer tasks; aborted before a handoff so this process stops
     /// consuming PTY output the next daemon must see.
     tasks: Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
-impl Session {
-    pub fn info(&self) -> SessionInfo {
+impl Terminal {
+    pub fn info(&self) -> TerminalInfo {
         self.state.lock().unwrap().info.clone()
     }
 }
 
-pub struct SessionManager {
-    sessions: Mutex<BTreeMap<SessionId, Arc<Session>>>,
+pub struct TerminalManager {
+    terminals: Mutex<BTreeMap<TerminalId, Arc<Terminal>>>,
     next_id: AtomicU32,
     next_client: AtomicU64,
     events: broadcast::Sender<Message>,
@@ -60,11 +60,11 @@ pub struct SessionManager {
     base_env: BTreeMap<String, String>,
 }
 
-impl SessionManager {
+impl TerminalManager {
     pub fn new(socket: PathBuf, base_env: BTreeMap<String, String>) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
         let mgr = Arc::new(Self {
-            sessions: Mutex::new(BTreeMap::new()),
+            terminals: Mutex::new(BTreeMap::new()),
             next_id: AtomicU32::new(1),
             next_client: AtomicU64::new(1),
             events,
@@ -75,7 +75,7 @@ impl SessionManager {
         mgr
     }
 
-    /// Environment every session starts from (the captured login env).
+    /// Environment every terminal starts from (the captured login env).
     pub fn base_env(&self) -> &BTreeMap<String, String> {
         &self.base_env
     }
@@ -92,12 +92,12 @@ impl SessionManager {
         self.next_client.fetch_add(1, Ordering::Relaxed)
     }
 
-    pub fn get(&self, id: SessionId) -> Option<Arc<Session>> {
-        self.sessions.lock().unwrap().get(&id).cloned()
+    pub fn get(&self, id: TerminalId) -> Option<Arc<Terminal>> {
+        self.terminals.lock().unwrap().get(&id).cloned()
     }
 
-    pub fn list(&self) -> Vec<SessionInfo> {
-        self.sessions
+    pub fn list(&self) -> Vec<TerminalInfo> {
+        self.terminals
             .lock()
             .unwrap()
             .values()
@@ -106,14 +106,14 @@ impl SessionManager {
     }
 
     pub fn len(&self) -> usize {
-        self.sessions.lock().unwrap().len()
+        self.terminals.lock().unwrap().len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn create(self: &Arc<Self>, req: SessionCreate) -> Result<SessionInfo> {
+    pub fn create(self: &Arc<Self>, req: TerminalCreate) -> Result<TerminalInfo> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let shell = user_shell();
         let default_shell = req.command.is_empty();
@@ -135,7 +135,7 @@ impl SessionManager {
             "TERM_PROGRAM_VERSION".into(),
             env!("CARGO_PKG_VERSION").into(),
         );
-        env.insert("JAUNT_SESSION_ID".into(), id.to_string());
+        env.insert("JAUNT_TERMINAL_ID".into(), id.to_string());
         env.insert("JAUNT_SOCK".into(), self.socket.display().to_string());
         env.entry("SHELL".into()).or_insert(shell);
         env.entry("LANG".into())
@@ -164,14 +164,14 @@ impl SessionManager {
         let mut command = vec![program];
         command.extend(args);
         let agent = req.agent.clone().or_else(|| {
-            if req.kind == SessionKind::Agent {
+            if req.kind == TerminalKind::Agent {
                 detect_agent(command.last().map(String::as_str).unwrap_or("")).map(String::from)
             } else {
                 None
             }
         });
         let now = now_ms();
-        let info = SessionInfo {
+        let info = TerminalInfo {
             id,
             kind: req.kind,
             title: req.title.clone().unwrap_or_else(|| default_title(&command)),
@@ -190,22 +190,22 @@ impl SessionManager {
             last_output_at: now,
         };
         self.install(info.clone(), TermState::new(req.rows, req.cols), pty)?;
-        self.emit(Message::event(methods::EV_SESSION_CREATED, &info));
+        self.emit(Message::event(methods::EV_TERMINAL_CREATED, &info));
         Ok(info)
     }
 
     /// Registers a running PTY (fresh or adopted) and starts its I/O tasks.
-    pub fn install(self: &Arc<Self>, info: SessionInfo, term: TermState, pty: Pty) -> Result<()> {
+    pub fn install(self: &Arc<Self>, info: TerminalInfo, term: TermState, pty: Pty) -> Result<()> {
         let id = info.id;
         self.next_id.fetch_max(id + 1, Ordering::Relaxed);
         let reader_fd = pty.clone_master()?;
         let writer_fd = pty.clone_master()?;
         let (input_tx, input_rx) = mpsc::unbounded_channel();
-        let session = Arc::new(Session {
+        let terminal = Arc::new(Terminal {
             id,
             input: input_tx,
             tasks: Mutex::new(Vec::new()),
-            state: Mutex::new(SessionState {
+            state: Mutex::new(TerminalState {
                 info,
                 term,
                 pty: Some(pty),
@@ -215,11 +215,11 @@ impl SessionManager {
                 remove_on_exit: false,
             }),
         });
-        self.sessions.lock().unwrap().insert(id, session.clone());
+        self.terminals.lock().unwrap().insert(id, terminal.clone());
         let w = tokio::spawn(write_loop(writer_fd, input_rx)).abort_handle();
-        let r = tokio::spawn(read_loop(Arc::downgrade(self), session.clone(), reader_fd))
+        let r = tokio::spawn(read_loop(Arc::downgrade(self), terminal.clone(), reader_fd))
             .abort_handle();
-        session.tasks.lock().unwrap().extend([w, r]);
+        terminal.tasks.lock().unwrap().extend([w, r]);
         Ok(())
     }
 
@@ -227,13 +227,13 @@ impl SessionManager {
     /// state is rebuilt by replaying its snapshot, the agent state carries over.
     pub fn adopt(
         self: &Arc<Self>,
-        info: SessionInfo,
+        info: TerminalInfo,
         rows: u16,
         cols: u16,
         snapshot: &[u8],
         fd: std::os::fd::RawFd,
     ) -> Result<()> {
-        let pid = info.pid.context("adopted session has no pid")?;
+        let pid = info.pid.context("adopted terminal has no pid")?;
         // SAFETY: the fd was received via SCM_RIGHTS and is owned by us now.
         let pty = unsafe { Pty::adopt(fd, pid)? };
         let mut term = TermState::new(rows, cols);
@@ -252,13 +252,13 @@ impl SessionManager {
     /// continues exactly where the snapshot ends.
     pub fn attach(
         &self,
-        id: SessionId,
+        id: TerminalId,
         client: ClientId,
         tx: ClientTx,
         size: Option<(u16, u16)>,
-    ) -> Result<(SessionInfo, Vec<u8>)> {
-        let session = self.get(id).context("no such session")?;
-        let mut st = session.state.lock().unwrap();
+    ) -> Result<(TerminalInfo, Vec<u8>)> {
+        let terminal = self.get(id).context("no such terminal")?;
+        let mut st = terminal.state.lock().unwrap();
         if let Some((cols, rows)) = size {
             resize_locked(&mut st, cols, rows);
         }
@@ -267,35 +267,35 @@ impl SessionManager {
         Ok((st.info.clone(), snapshot))
     }
 
-    pub fn detach(&self, id: SessionId, client: ClientId) {
+    pub fn detach(&self, id: TerminalId, client: ClientId) {
         if let Some(s) = self.get(id) {
             s.state.lock().unwrap().subscribers.remove(&client);
         }
     }
 
     pub fn detach_all(&self, client: ClientId) {
-        for s in self.sessions.lock().unwrap().values() {
+        for s in self.terminals.lock().unwrap().values() {
             s.state.lock().unwrap().subscribers.remove(&client);
         }
     }
 
-    pub fn write(&self, id: SessionId, data: Vec<u8>) -> Result<()> {
-        let s = self.get(id).context("no such session")?;
-        s.input.send(data).ok().context("session input closed")
+    pub fn write(&self, id: TerminalId, data: Vec<u8>) -> Result<()> {
+        let s = self.get(id).context("no such terminal")?;
+        s.input.send(data).ok().context("terminal input closed")
     }
 
-    pub fn resize(&self, id: SessionId, cols: u16, rows: u16) -> Result<()> {
-        let s = self.get(id).context("no such session")?;
+    pub fn resize(&self, id: TerminalId, cols: u16, rows: u16) -> Result<()> {
+        let s = self.get(id).context("no such terminal")?;
         let mut st = s.state.lock().unwrap();
         resize_locked(&mut st, cols, rows);
         let info = st.info.clone();
         drop(st);
-        self.emit(Message::event(methods::EV_SESSION_UPDATED, &info));
+        self.emit(Message::event(methods::EV_TERMINAL_UPDATED, &info));
         Ok(())
     }
 
-    pub fn kill(&self, id: SessionId, remove: bool) -> Result<()> {
-        let s = self.get(id).context("no such session")?;
+    pub fn kill(&self, id: TerminalId, remove: bool) -> Result<()> {
+        let s = self.get(id).context("no such terminal")?;
         let exited = {
             let st = s.state.lock().unwrap();
             if let Some(pty) = &st.pty {
@@ -334,28 +334,28 @@ impl SessionManager {
         Ok(())
     }
 
-    pub fn remove(&self, id: SessionId) {
-        if self.sessions.lock().unwrap().remove(&id).is_some() {
+    pub fn remove(&self, id: TerminalId) {
+        if self.terminals.lock().unwrap().remove(&id).is_some() {
             self.emit(Message::event(
-                methods::EV_SESSION_REMOVED,
-                methods::SessionRef { id },
+                methods::EV_TERMINAL_REMOVED,
+                methods::TerminalRef { id },
             ));
         }
     }
 
     pub fn report(
         &self,
-        id: SessionId,
+        id: TerminalId,
         state: AgentState,
         source: StateSource,
         message: Option<String>,
         agent: Option<String>,
     ) -> Result<()> {
-        let s = self.get(id).context("no such session")?;
+        let s = self.get(id).context("no such terminal")?;
         let mut st = s.state.lock().unwrap();
         if st.info.agent.is_none() {
             st.info.agent = agent.or(Some("agent".into()));
-            st.info.kind = SessionKind::Agent;
+            st.info.kind = TerminalKind::Agent;
         }
         if st.agent.report(state, source, message) {
             self.publish_agent(&mut st);
@@ -363,15 +363,15 @@ impl SessionManager {
         Ok(())
     }
 
-    fn publish_agent(&self, st: &mut SessionState) {
+    fn publish_agent(&self, st: &mut TerminalState) {
         st.info.agent_state = st.agent.state;
         st.info.agent_message = st.agent.message.clone();
-        self.emit(Message::event(methods::EV_SESSION_UPDATED, &st.info));
+        self.emit(Message::event(methods::EV_TERMINAL_UPDATED, &st.info));
         if needs_attention(st.agent.state) {
             self.emit(Message::event(
                 methods::EV_AGENT_ATTENTION,
                 Attention {
-                    session: st.info.id,
+                    terminal: st.info.id,
                     workspace_id: st.info.workspace_id.clone(),
                     state: st.agent.state,
                     title: st.info.title.clone(),
@@ -383,12 +383,12 @@ impl SessionManager {
 
     pub fn search(
         &self,
-        id: SessionId,
+        id: TerminalId,
         query: &str,
         regex: bool,
         case_sensitive: bool,
     ) -> Result<Vec<methods::SearchHit>> {
-        let s = self.get(id).context("no such session")?;
+        let s = self.get(id).context("no such terminal")?;
         let lines = s.state.lock().unwrap().term.all_lines();
         let pattern = if regex {
             query.to_string()
@@ -406,12 +406,12 @@ impl SessionManager {
             .collect())
     }
 
-    /// Everything needed to hand live sessions to a new daemon process.
+    /// Everything needed to hand live terminals to a new daemon process.
     /// Subscribers are dropped; clients reattach to the new daemon.
-    pub fn export(&self) -> Vec<ExportedSession> {
-        let sessions = self.sessions.lock().unwrap();
+    pub fn export(&self) -> Vec<ExportedTerminal> {
+        let terminals = self.terminals.lock().unwrap();
         let mut out = Vec::new();
-        for s in sessions.values() {
+        for s in terminals.values() {
             for t in s.tasks.lock().unwrap().drain(..) {
                 t.abort();
             }
@@ -424,7 +424,7 @@ impl SessionManager {
             let fd = pty.master_fd();
             let (rows, cols) = st.term.size();
             let snapshot = String::from_utf8_lossy(&st.term.snapshot()).into_owned();
-            out.push(ExportedSession {
+            out.push(ExportedTerminal {
                 info: st.info.clone(),
                 fd,
                 rows,
@@ -437,8 +437,8 @@ impl SessionManager {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct ExportedSession {
-    pub info: SessionInfo,
+pub struct ExportedTerminal {
+    pub info: TerminalInfo,
     #[serde(skip)]
     pub fd: std::os::fd::RawFd,
     pub rows: u16,
@@ -446,7 +446,7 @@ pub struct ExportedSession {
     pub snapshot: String,
 }
 
-fn resize_locked(st: &mut SessionState, cols: u16, rows: u16) {
+fn resize_locked(st: &mut TerminalState, cols: u16, rows: u16) {
     if (st.info.cols, st.info.rows) == (cols, rows) {
         return;
     }
@@ -512,11 +512,11 @@ async fn write_loop(fd: OwnedFd, mut rx: mpsc::UnboundedReceiver<Vec<u8>>) {
     }
 }
 
-async fn read_loop(mgr: std::sync::Weak<SessionManager>, session: Arc<Session>, fd: OwnedFd) {
+async fn read_loop(mgr: std::sync::Weak<TerminalManager>, terminal: Arc<Terminal>, fd: OwnedFd) {
     let fd = match AsyncFd::new(fd) {
         Ok(fd) => fd,
         Err(e) => {
-            tracing::error!(session = session.id, "cannot watch pty: {e}");
+            tracing::error!(terminal = terminal.id, "cannot watch pty: {e}");
             return;
         }
     };
@@ -547,16 +547,16 @@ async fn read_loop(mgr: std::sync::Weak<SessionManager>, session: Arc<Session>, 
             Ok(Err(_)) => break, // EIO: slave side closed.
         };
         let Some(mgr) = mgr.upgrade() else { return };
-        on_output(&mgr, &session, &buf[..n]);
+        on_output(&mgr, &terminal, &buf[..n]);
     }
     let Some(mgr) = mgr.upgrade() else { return };
-    let exit = wait_exit(&session).await;
+    let exit = wait_exit(&terminal).await;
     let (info, remove) = {
-        let mut st = session.state.lock().unwrap();
+        let mut st = terminal.state.lock().unwrap();
         st.info.exit = Some(exit.clone());
         st.info.pid = None;
         let remove = st.remove_on_exit;
-        let is_agent = st.info.kind == SessionKind::Agent;
+        let is_agent = st.info.kind == TerminalKind::Agent;
         let failed = exit.code.is_some_and(|c| c != 0) || exit.signal.is_some();
         if is_agent {
             let state = if failed {
@@ -575,16 +575,16 @@ async fn read_loop(mgr: std::sync::Weak<SessionManager>, session: Arc<Session>, 
         }
         (st.info.clone(), remove)
     };
-    mgr.emit(Message::event(methods::EV_SESSION_EXITED, &info));
+    mgr.emit(Message::event(methods::EV_TERMINAL_EXITED, &info));
     if remove {
         mgr.remove(info.id);
     }
 }
 
-async fn wait_exit(session: &Arc<Session>) -> ExitInfo {
+async fn wait_exit(terminal: &Arc<Terminal>) -> ExitInfo {
     for _ in 0..200 {
         {
-            let mut st = session.state.lock().unwrap();
+            let mut st = terminal.state.lock().unwrap();
             let Some(pty) = st.pty.as_mut() else { break };
             if let Some((code, signal)) = pty.try_wait() {
                 return ExitInfo { code, signal };
@@ -604,15 +604,15 @@ async fn wait_exit(session: &Arc<Session>) -> ExitInfo {
     }
 }
 
-fn on_output(mgr: &SessionManager, session: &Session, data: &[u8]) {
-    let mut st = session.state.lock().unwrap();
+fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
+    let mut st = terminal.state.lock().unwrap();
     let now = Instant::now();
     st.last_output = now;
     st.info.last_output_at = now_ms();
     let signals = st.term.process(data);
     st.subscribers.retain(|_, tx| {
         tx.send(Frame::Output {
-            session: session.id,
+            terminal: terminal.id,
             data: data.to_vec(),
         })
         .is_ok()
@@ -622,7 +622,7 @@ fn on_output(mgr: &SessionManager, session: &Session, data: &[u8]) {
     let mut agent_changed = false;
     for signal in signals {
         match signal {
-            Signal::Title(t) if !t.is_empty() && st.info.kind != SessionKind::Agent => {
+            Signal::Title(t) if !t.is_empty() && st.info.kind != TerminalKind::Agent => {
                 st.info.title = t;
                 info_changed = true;
             }
@@ -630,7 +630,7 @@ fn on_output(mgr: &SessionManager, session: &Session, data: &[u8]) {
                 st.info.reported_cwd = Some(cwd);
                 info_changed = true;
             }
-            Signal::Notify { title, body } if st.info.kind == SessionKind::Agent => {
+            Signal::Notify { title, body } if st.info.kind == TerminalKind::Agent => {
                 let msg = Some(match title {
                     Some(t) if !t.is_empty() => format!("{t}: {body}"),
                     _ => body,
@@ -639,7 +639,7 @@ fn on_output(mgr: &SessionManager, session: &Session, data: &[u8]) {
                     .agent
                     .report(AgentState::Blocked, StateSource::Terminal, msg);
             }
-            Signal::Bell if st.info.kind == SessionKind::Agent => {
+            Signal::Bell if st.info.kind == TerminalKind::Agent => {
                 agent_changed |= st
                     .agent
                     .report(AgentState::Blocked, StateSource::Heuristic, None);
@@ -647,27 +647,27 @@ fn on_output(mgr: &SessionManager, session: &Session, data: &[u8]) {
             _ => {}
         }
     }
-    if st.info.kind == SessionKind::Agent && !agent_changed {
+    if st.info.kind == TerminalKind::Agent && !agent_changed {
         agent_changed = st.agent.on_output(now);
     }
     if agent_changed {
         mgr.publish_agent(&mut st);
     } else if info_changed {
-        mgr.emit(Message::event(methods::EV_SESSION_UPDATED, &st.info));
+        mgr.emit(Message::event(methods::EV_TERMINAL_UPDATED, &st.info));
     }
 }
 
-/// Flips hook-less agent sessions back to idle after output stops.
-async fn quiet_watcher(mgr: std::sync::Weak<SessionManager>) {
+/// Flips hook-less agent terminals back to idle after output stops.
+async fn quiet_watcher(mgr: std::sync::Weak<TerminalManager>) {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tick.tick().await;
         let Some(mgr) = mgr.upgrade() else { return };
-        let sessions: Vec<_> = mgr.sessions.lock().unwrap().values().cloned().collect();
+        let terminals: Vec<_> = mgr.terminals.lock().unwrap().values().cloned().collect();
         let now = Instant::now();
-        for s in sessions {
+        for s in terminals {
             let mut st = s.state.lock().unwrap();
-            if st.info.kind == SessionKind::Agent
+            if st.info.kind == TerminalKind::Agent
                 && now.duration_since(st.last_output) > Duration::from_secs(4)
                 && st.agent.on_quiet(now)
             {
@@ -681,9 +681,9 @@ async fn quiet_watcher(mgr: std::sync::Weak<SessionManager>) {
 mod tests {
     use super::*;
 
-    fn manager() -> Arc<SessionManager> {
+    fn manager() -> Arc<TerminalManager> {
         let env: BTreeMap<String, String> = std::env::vars().collect();
-        SessionManager::new(PathBuf::from("/tmp/jaunt-test.sock"), env)
+        TerminalManager::new(PathBuf::from("/tmp/jaunt-test.sock"), env)
     }
 
     async fn read_until(rx: &mut mpsc::UnboundedReceiver<Frame>, needle: &str) -> String {
@@ -706,12 +706,12 @@ mod tests {
         let mgr = manager();
         let mut events = mgr.subscribe_events();
         let info = mgr
-            .create(SessionCreate {
+            .create(TerminalCreate {
                 cwd: "/tmp".into(),
                 command: vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    "echo hi-$JAUNT_SESSION_ID; exit 3".into(),
+                    "echo hi-$JAUNT_TERMINAL_ID; exit 3".into(),
                 ],
                 cols: 80,
                 rows: 24,
@@ -724,9 +724,9 @@ mod tests {
                 .unwrap()
                 .unwrap();
             if let Message::Event { name, data } = ev
-                && name == methods::EV_SESSION_EXITED
+                && name == methods::EV_TERMINAL_EXITED
             {
-                let exited: SessionInfo = serde_json::from_value(data).unwrap();
+                let exited: TerminalInfo = serde_json::from_value(data).unwrap();
                 assert_eq!(exited.exit.unwrap().code, Some(3));
                 break;
             }
@@ -746,7 +746,7 @@ mod tests {
     async fn attach_replays_screen_then_streams_live_output() {
         let mgr = manager();
         let info = mgr
-            .create(SessionCreate {
+            .create(TerminalCreate {
                 cwd: "/tmp".into(),
                 command: vec!["/bin/cat".into()],
                 cols: 40,
@@ -785,10 +785,10 @@ mod tests {
         let mgr = manager();
         let mut events = mgr.subscribe_events();
         let info = mgr
-            .create(SessionCreate {
+            .create(TerminalCreate {
                 cwd: "/tmp".into(),
                 command: vec!["/bin/sleep".into(), "5".into()],
-                kind: SessionKind::Agent,
+                kind: TerminalKind::Agent,
                 ..Default::default()
             })
             .unwrap();
@@ -821,7 +821,7 @@ mod tests {
     async fn kill_escalates_when_sighup_is_ignored() {
         let mgr = manager();
         let info = mgr
-            .create(SessionCreate {
+            .create(TerminalCreate {
                 cwd: "/tmp".into(),
                 command: vec![
                     "/bin/sh".into(),
@@ -841,7 +841,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             if let Message::Event { name, .. } = ev
-                && name == methods::EV_SESSION_REMOVED
+                && name == methods::EV_TERMINAL_REMOVED
             {
                 break;
             }

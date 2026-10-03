@@ -4,8 +4,8 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use jaunt_proto::methods::{self, AttachResult, SessionAttach, SessionCreate};
-use jaunt_proto::types::SessionInfo;
+use jaunt_proto::methods::{self, AttachResult, TerminalAttach, TerminalCreate};
+use jaunt_proto::types::TerminalInfo;
 use jaunt_proto::{Frame, Message, PROTOCOL_VERSION, read_frame, write_frame};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
@@ -106,10 +106,10 @@ impl Link {
 async fn proxy_autostarts_daemon_and_sessions_survive_link_loss() {
     let home = tempfile::tempdir().unwrap();
     let mut link = Link::open(home.path()).await;
-    let s: SessionInfo = link
+    let s: TerminalInfo = link
         .call(
-            methods::SESSION_CREATE,
-            serde_json::to_value(SessionCreate {
+            methods::TERMINAL_CREATE,
+            serde_json::to_value(TerminalCreate {
                 cwd: home.path().display().to_string(),
                 command: vec!["/bin/sh".into()],
                 ..Default::default()
@@ -119,8 +119,8 @@ async fn proxy_autostarts_daemon_and_sessions_survive_link_loss() {
         .await;
     let _: AttachResult = link
         .call(
-            methods::SESSION_ATTACH,
-            serde_json::to_value(SessionAttach {
+            methods::TERMINAL_ATTACH,
+            serde_json::to_value(TerminalAttach {
                 id: s.id,
                 cols: None,
                 rows: None,
@@ -131,7 +131,7 @@ async fn proxy_autostarts_daemon_and_sessions_survive_link_loss() {
     write_frame(
         &mut link.stdin,
         &Frame::Input {
-            session: s.id,
+            terminal: s.id,
             data: b"echo over-ssh-$((2*21))\n".to_vec(),
         },
     )
@@ -147,8 +147,8 @@ async fn proxy_autostarts_daemon_and_sessions_survive_link_loss() {
     let mut link = Link::open(home.path()).await;
     let attach: AttachResult = link
         .call(
-            methods::SESSION_ATTACH,
-            serde_json::to_value(SessionAttach {
+            methods::TERMINAL_ATTACH,
+            serde_json::to_value(TerminalAttach {
                 id: s.id,
                 cols: None,
                 rows: None,

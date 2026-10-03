@@ -153,7 +153,7 @@ export class TermEntry {
   async attach() {
     this.ready = false;
     const { cols, rows } = this.term;
-    await rpc(this.host, M.sessionAttach, { id: this.session, cols, rows });
+    await rpc(this.host, M.terminalAttach, { id: this.session, cols, rows });
     this.lastSize = `${cols}x${rows}`;
   }
 
@@ -203,7 +203,7 @@ export class TermEntry {
     window.clearTimeout(this.resizeTimer);
     this.resizeTimer = window.setTimeout(() => {
       this.lastSize = key;
-      void rpc(this.host, M.sessionResize, { id: this.session, cols, rows }).catch(() => {});
+      void rpc(this.host, M.terminalResize, { id: this.session, cols, rows }).catch(() => {});
     }, 60);
   }
 

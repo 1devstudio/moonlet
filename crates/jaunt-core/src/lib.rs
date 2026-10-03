@@ -8,7 +8,7 @@ pub mod git;
 pub mod hooks;
 pub mod paths;
 pub mod pty;
-pub mod session;
 pub mod shell;
 pub mod term;
+pub mod terminal;
 pub mod workspace;

@@ -51,7 +51,7 @@ const SKIP: &[&str] = &[
     "TERM_PROGRAM_VERSION",
     "COLORTERM",
     "PS1",
-    "JAUNT_SESSION_ID",
+    "JAUNT_TERMINAL_ID",
     "JAUNT_WORKSPACE_ID",
 ];
 

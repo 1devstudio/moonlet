@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use jaunt_core::session::{ClientId, ClientTx};
+use jaunt_core::terminal::{ClientId, ClientTx};
 use jaunt_proto::{Frame, Message, PROTOCOL_VERSION, RpcError, encode_frame, read_frame};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -107,14 +107,14 @@ where
     }));
 
     let conn = Arc::new(Conn {
-        id: daemon.sessions.new_client_id(),
+        id: daemon.terminals.new_client_id(),
         tx: tx.clone(),
         client,
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
 
     // Fan daemon events out to this client.
-    let mut events = daemon.sessions.subscribe_events();
+    let mut events = daemon.terminals.subscribe_events();
     let ev_tx = tx.clone();
     let event_task = tokio::spawn(async move {
         loop {
@@ -136,8 +136,8 @@ where
     let result = async {
         while let Some(frame) = read_frame(&mut reader).await? {
             match frame {
-                Frame::Input { session, data } => {
-                    let _ = daemon.sessions.write(session, data);
+                Frame::Input { terminal, data } => {
+                    let _ = daemon.terminals.write(terminal, data);
                 }
                 Frame::Json(Message::Request { id, method, params }) => {
                     let daemon = daemon.clone();
@@ -162,7 +162,7 @@ where
     }
     .await;
 
-    daemon.sessions.detach_all(conn.id);
+    daemon.terminals.detach_all(conn.id);
     daemon.on_disconnect(conn.id);
     event_task.abort();
     drop(conn);

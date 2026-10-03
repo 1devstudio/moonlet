@@ -7,8 +7,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use jaunt_core::client::{Client, wait_for_socket};
-use jaunt_proto::methods::{self, Attention, SessionCreate};
-use jaunt_proto::types::{AgentState, SessionInfo, SessionKind};
+use jaunt_proto::methods::{self, Attention, TerminalCreate};
+use jaunt_proto::types::{AgentState, TerminalInfo, TerminalKind};
 use jaunt_proto::{Frame, Message};
 
 fn target_bin(name: &str) -> PathBuf {
@@ -58,13 +58,13 @@ async fn claude_hook_raises_attention_quickly() {
     let script = format!(
         "sleep 0.3; echo '{{\"hook_event_name\":\"Notification\",\"message\":\"Claude needs your permission to use Bash\"}}' | '{jaunt}' hook claude; sleep 5"
     );
-    let info: SessionInfo = c
+    let info: TerminalInfo = c
         .request(
-            methods::SESSION_CREATE,
-            SessionCreate {
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
                 cwd: home.path().display().to_string(),
                 command: vec!["/bin/sh".into(), "-c".into(), script],
-                kind: SessionKind::Agent,
+                kind: TerminalKind::Agent,
                 ..Default::default()
             },
         )
@@ -84,7 +84,7 @@ async fn claude_hook_raises_attention_quickly() {
         }
     };
     let elapsed = started.elapsed();
-    assert_eq!(attention.session, info.id);
+    assert_eq!(attention.terminal, info.id);
     assert_eq!(attention.state, AgentState::Blocked);
     assert_eq!(
         attention.message.as_deref(),
@@ -102,7 +102,7 @@ async fn claude_hook_raises_attention_quickly() {
 fn hook_is_silent_outside_jaunt() {
     let out = Command::new(env!("CARGO_BIN_EXE_jaunt"))
         .args(["hook", "claude"])
-        .env_remove("JAUNT_SESSION_ID")
+        .env_remove("JAUNT_TERMINAL_ID")
         .env("JAUNT_SOCK", "/nonexistent/sock")
         .stdin(Stdio::null())
         .output()

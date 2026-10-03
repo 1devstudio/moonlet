@@ -159,7 +159,7 @@ fn run_daemon(
                     .inspect_err(|e| tracing::error!("handoff failed: {e:#}"))?;
                 set_path(&incoming.env);
                 let daemon = daemon::Daemon::new(socket.clone(), incoming.env.clone());
-                let sessions = daemon.sessions.clone();
+                let sessions = daemon.terminals.clone();
                 tokio::task::spawn_blocking(move || upgrade::adopt(incoming, &sessions)).await??;
                 let mut attempt = 0;
                 let listener = loop {

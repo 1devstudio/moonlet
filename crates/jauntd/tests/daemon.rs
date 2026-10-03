@@ -5,8 +5,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use jaunt_core::client::{Client, wait_for_socket};
-use jaunt_proto::methods::{self, AttachResult, SessionAttach, SessionCreate, SessionKill};
-use jaunt_proto::types::{DaemonInfo, SessionInfo};
+use jaunt_proto::methods::{self, AttachResult, TerminalAttach, TerminalCreate, TerminalKill};
+use jaunt_proto::types::{DaemonInfo, TerminalInfo};
 use jaunt_proto::{Frame, Message, PROTOCOL_VERSION, read_frame, write_frame};
 
 pub struct TestDaemon {
@@ -108,10 +108,10 @@ async fn session_survives_client_disconnect_and_replays_on_reattach() {
     let info: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     assert_eq!(info.protocol, PROTOCOL_VERSION);
 
-    let s: SessionInfo = c
+    let s: TerminalInfo = c
         .request(
-            methods::SESSION_CREATE,
-            SessionCreate {
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
                 cwd: d.home.path().display().to_string(),
                 command: vec!["/bin/sh".into()],
                 cols: 60,
@@ -123,8 +123,8 @@ async fn session_survives_client_disconnect_and_replays_on_reattach() {
         .unwrap();
     let _: AttachResult = c
         .request(
-            methods::SESSION_ATTACH,
-            SessionAttach {
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
                 id: s.id,
                 cols: None,
                 rows: None,
@@ -133,7 +133,7 @@ async fn session_survives_client_disconnect_and_replays_on_reattach() {
         .await
         .unwrap();
     c.send(&Frame::Input {
-        session: s.id,
+        terminal: s.id,
         data: b"echo marker-$((40+2))\n".to_vec(),
     })
     .await
@@ -143,15 +143,15 @@ async fn session_survives_client_disconnect_and_replays_on_reattach() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     let mut c2 = d.client().await;
-    let list: Vec<SessionInfo> = c2.request(methods::SESSION_LIST, ()).await.unwrap();
+    let list: Vec<TerminalInfo> = c2.request(methods::TERMINAL_LIST, ()).await.unwrap();
     assert!(
         list.iter().any(|x| x.id == s.id && x.exit.is_none()),
         "session still running"
     );
     let attach: AttachResult = c2
         .request(
-            methods::SESSION_ATTACH,
-            SessionAttach {
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
                 id: s.id,
                 cols: None,
                 rows: None,
@@ -166,7 +166,7 @@ async fn session_survives_client_disconnect_and_replays_on_reattach() {
 
     // Live output keeps flowing after reattach.
     c2.send(&Frame::Input {
-        session: s.id,
+        terminal: s.id,
         data: b"echo again-$((1+1))\n".to_vec(),
     })
     .await
@@ -174,8 +174,8 @@ async fn session_survives_client_disconnect_and_replays_on_reattach() {
     output_until(&mut c2, "again-2").await;
     let _: bool = c2
         .request(
-            methods::SESSION_KILL,
-            SessionKill {
+            methods::TERMINAL_KILL,
+            TerminalKill {
                 id: s.id,
                 remove: true,
             },
@@ -249,9 +249,9 @@ async fn workspace_lifecycle_over_rpc() {
         .unwrap();
     assert_eq!(st.files.len(), 1);
     assert_eq!(st.branch.as_deref(), Some("jaunt/add-docs"));
-    let shell: SessionInfo = c
+    let shell: TerminalInfo = c
         .request(
-            methods::SESSION_CREATE,
+            methods::TERMINAL_CREATE,
             serde_json::json!({"cwd": "", "workspace_id": ws.id}),
         )
         .await

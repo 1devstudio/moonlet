@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use jaunt_core::client::{Client, wait_for_socket};
 use jaunt_proto::Frame;
-use jaunt_proto::methods::{self, AttachResult, SessionAttach, SessionCreate};
-use jaunt_proto::types::{DaemonInfo, SessionInfo};
+use jaunt_proto::methods::{self, AttachResult, TerminalAttach, TerminalCreate};
+use jaunt_proto::types::{DaemonInfo, TerminalInfo};
 
 struct Kill(Child);
 impl Drop for Kill {
@@ -54,10 +54,10 @@ async fn upgrade_keeps_sessions_alive() {
 
     let mut c = Client::connect(&socket, "test").await.unwrap();
     let before: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
-    let s: SessionInfo = c
+    let s: TerminalInfo = c
         .request(
-            methods::SESSION_CREATE,
-            SessionCreate {
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
                 cwd: home.path().display().to_string(),
                 command: vec!["/bin/sh".into()],
                 ..Default::default()
@@ -67,8 +67,8 @@ async fn upgrade_keeps_sessions_alive() {
         .unwrap();
     let _: AttachResult = c
         .request(
-            methods::SESSION_ATTACH,
-            SessionAttach {
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
                 id: s.id,
                 cols: None,
                 rows: None,
@@ -77,7 +77,7 @@ async fn upgrade_keeps_sessions_alive() {
         .await
         .unwrap();
     c.send(&Frame::Input {
-        session: s.id,
+        terminal: s.id,
         data: b"echo before-$((6*7))\n".to_vec(),
     })
     .await
@@ -91,7 +91,7 @@ async fn upgrade_keeps_sessions_alive() {
     let mut c = Client::connect(&socket, "test").await.unwrap();
     let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     assert_ne!(after.pid, before.pid, "a new daemon process serves");
-    let list: Vec<SessionInfo> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     let same = list
         .iter()
         .find(|x| x.id == s.id)
@@ -100,8 +100,8 @@ async fn upgrade_keeps_sessions_alive() {
     assert!(same.exit.is_none());
     let attach: AttachResult = c
         .request(
-            methods::SESSION_ATTACH,
-            SessionAttach {
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
                 id: s.id,
                 cols: None,
                 rows: None,
@@ -114,7 +114,7 @@ async fn upgrade_keeps_sessions_alive() {
         "screen survives the upgrade"
     );
     c.send(&Frame::Input {
-        session: s.id,
+        terminal: s.id,
         data: b"echo after-$((1+2))\n".to_vec(),
     })
     .await

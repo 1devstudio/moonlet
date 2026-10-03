@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use jaunt_proto::{
-    Frame, FrameDecoder, Message, PROTOCOL_VERSION, RpcError, SessionId, encode_frame,
+    Frame, FrameDecoder, Message, PROTOCOL_VERSION, RpcError, TerminalId, encode_frame,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,7 +28,7 @@ pub const LOCAL: &str = "local";
 
 /// High bit on a session id in the output stream: reset the terminal and
 /// treat the record as an attach snapshot.
-pub const RESET_FLAG: SessionId = 0x8000_0000;
+pub const RESET_FLAG: TerminalId = 0x8000_0000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -66,7 +66,7 @@ pub struct Host {
     link: Mutex<Option<Link>>,
     pending: Mutex<Pending>,
     /// Request id of each in-flight `session.attach`, with its session.
-    attaching: Mutex<HashMap<u64, SessionId>>,
+    attaching: Mutex<HashMap<u64, TerminalId>>,
     next_id: AtomicU64,
     output: Mutex<Option<Channel<InvokeResponseBody>>>,
     batch: Mutex<Vec<u8>>,
@@ -96,10 +96,10 @@ impl Host {
                 ));
             };
             self.pending.lock().unwrap().insert(id, tx);
-            if method == jaunt_proto::methods::SESSION_ATTACH
+            if method == jaunt_proto::methods::TERMINAL_ATTACH
                 && let Some(sid) = params.get("id").and_then(Value::as_u64)
             {
-                self.attaching.lock().unwrap().insert(id, sid as SessionId);
+                self.attaching.lock().unwrap().insert(id, sid as TerminalId);
             }
             let frame = Frame::Json(Message::Request {
                 id,
@@ -129,13 +129,16 @@ impl Host {
         }
     }
 
-    pub fn input(&self, session: SessionId, data: Vec<u8>) -> Result<(), RpcError> {
+    pub fn input(&self, session: TerminalId, data: Vec<u8>) -> Result<(), RpcError> {
         let link = self.link.lock().unwrap();
         let link = link
             .as_ref()
             .ok_or_else(|| RpcError::new("disconnected", "not connected"))?;
         link.tx
-            .send(encode_frame(&Frame::Input { session, data }))
+            .send(encode_frame(&Frame::Input {
+                terminal: session,
+                data,
+            }))
             .map_err(|_| RpcError::new("disconnected", "connection closed"))
     }
 
@@ -149,7 +152,7 @@ impl Host {
         let _ = app.emit("host-status", info);
     }
 
-    fn push_output(&self, session: SessionId, data: &[u8]) {
+    fn push_output(&self, session: TerminalId, data: &[u8]) {
         let mut b = self.batch.lock().unwrap();
         b.extend_from_slice(&session.to_be_bytes());
         b.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -615,7 +618,7 @@ struct DaemonEvent<'a> {
 
 fn dispatch(app: &AppHandle, host: &Arc<Host>, frame: Frame) {
     match frame {
-        Frame::Output { session, data } => host.push_output(session, &data),
+        Frame::Output { terminal, data } => host.push_output(terminal, &data),
         Frame::Json(Message::Response {
             id,
             mut result,

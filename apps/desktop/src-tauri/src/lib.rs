@@ -8,7 +8,7 @@ mod remote;
 use std::sync::Arc;
 
 use hosts::{HostInfo, HostManager};
-use jaunt_proto::{RpcError, SessionId};
+use jaunt_proto::{RpcError, TerminalId};
 use serde_json::Value;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
@@ -72,7 +72,7 @@ async fn rpc(
 fn send_input(
     hosts: Hosts,
     host: String,
-    session: SessionId,
+    session: TerminalId,
     data: String,
 ) -> Result<(), RpcError> {
     hosts.get(&host)?.input(session, data.into_bytes())
