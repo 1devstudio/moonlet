@@ -200,7 +200,16 @@ impl TerminalManager {
         }
         env.extend(req.env.clone());
 
-        // Interactive shells get prompt marks and cwd reporting (T3).
+        // Interactive shells get prompt marks and cwd reporting (T3), and
+        // Warp mode with a blank prompt unless classic is chosen (T7).
+        if default_shell {
+            let marker = self.classic_file(id);
+            if req.classic {
+                let _ = std::fs::create_dir_all(marker.parent().unwrap_or(&marker));
+                let _ = std::fs::write(&marker, b"");
+            }
+            env.insert("JAUNT_CLASSIC_FILE".into(), marker.display().to_string());
+        }
         let args = if default_shell {
             crate::shell::apply(&crate::shell::dir(), &program, args, &mut env)
         } else {
@@ -244,6 +253,7 @@ impl TerminalManager {
             prompt: None,
             alt_screen: false,
             chat: false,
+            classic: req.classic,
             created_at: now,
             last_output_at: now,
         };
@@ -402,7 +412,31 @@ impl TerminalManager {
         Ok(())
     }
 
+    /// Marker whose presence keeps a shell's own prompt (T7). Lives next to
+    /// the socket, in the daemon's private run directory.
+    fn classic_file(&self, id: TerminalId) -> PathBuf {
+        self.socket.with_file_name("prompt").join(id.to_string())
+    }
+
+    /// Switches a shell between Warp mode and its own prompt (T7). Takes
+    /// effect at the shell's next prompt.
+    pub fn set_classic(&self, id: TerminalId, classic: bool) -> Result<TerminalInfo> {
+        let t = self.get(id).context("no such terminal")?;
+        let marker = self.classic_file(id);
+        if classic {
+            std::fs::create_dir_all(marker.parent().context("no run directory")?)?;
+            std::fs::write(&marker, b"")?;
+        } else if marker.exists() {
+            std::fs::remove_file(&marker)?;
+        }
+        let mut st = t.state.lock().unwrap();
+        st.info.classic = classic;
+        self.emit(Message::event(methods::EV_TERMINAL_UPDATED, &st.info));
+        Ok(st.info.clone())
+    }
+
     pub fn remove(&self, id: TerminalId) {
+        let _ = std::fs::remove_file(self.classic_file(id));
         if self.terminals.lock().unwrap().remove(&id).is_some() {
             self.emit(Message::event(
                 methods::EV_TERMINAL_REMOVED,
@@ -793,6 +827,28 @@ mod tests {
             }
         }
         seen
+    }
+
+    #[tokio::test]
+    async fn classic_mode_is_a_marker_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = TerminalManager::new(dir.path().join("run").join("d.sock"), BTreeMap::new());
+        let info = mgr
+            .create(TerminalCreate {
+                cwd: "/tmp".into(),
+                command: vec!["/bin/sleep".into(), "5".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        let marker = dir.path().join("run").join("prompt").join(info.id.to_string());
+        assert!(mgr.set_classic(info.id, true).unwrap().classic);
+        assert!(marker.exists());
+        assert!(!mgr.set_classic(info.id, false).unwrap().classic);
+        assert!(!marker.exists());
+        mgr.set_classic(info.id, true).unwrap();
+        mgr.kill(info.id, false).unwrap();
+        mgr.remove(info.id);
+        assert!(!marker.exists(), "removed with the terminal");
     }
 
     #[tokio::test]

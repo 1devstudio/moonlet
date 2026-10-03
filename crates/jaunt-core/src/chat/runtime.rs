@@ -143,6 +143,7 @@ impl ChatManager {
             prompt: None,
             alt_screen: false,
             chat: true,
+            classic: false,
             created_at: now,
             last_output_at: now,
         });

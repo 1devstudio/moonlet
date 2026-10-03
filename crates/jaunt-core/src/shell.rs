@@ -1,6 +1,10 @@
 //! Shell integration (T3): zsh, bash and fish sessions emit OSC 133 prompt
 //! marks and OSC 7 working-directory updates, after the user's own startup
 //! files have run unchanged.
+//!
+//! Warp mode (T7): when `$JAUNT_CLASSIC_FILE` is set and that file does not
+//! exist, the shell draws an empty prompt because the app's editor is the
+//! input. The user's prompt is kept and comes back in classic mode.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,9 +20,24 @@ __jaunt_precmd() {
   printf '\e]133;A\a'
 }
 __jaunt_preexec() { printf '\e]133;C\a'; __jaunt_ran=1; }
+__jaunt_blank() {
+  if [[ -n $JAUNT_CLASSIC_FILE && ! -e $JAUNT_CLASSIC_FILE ]]; then
+    [[ -n $PROMPT ]] && __jaunt_ps1=$PROMPT
+    [[ -n $RPROMPT ]] && __jaunt_rps1=$RPROMPT
+    [[ -n $PS2 ]] && __jaunt_ps2=$PS2
+    PROMPT='' RPROMPT='' PS2=''
+    __jaunt_blanked=1
+  elif [[ -n $__jaunt_blanked ]]; then
+    PROMPT=$__jaunt_ps1 RPROMPT=$__jaunt_rps1 PS2=$__jaunt_ps2
+    unset __jaunt_blanked
+  fi
+  # Stay last, after hooks that themes add later.
+  precmd_functions=(${precmd_functions:#__jaunt_blank} __jaunt_blank)
+}
 autoload -Uz add-zsh-hook
 add-zsh-hook precmd __jaunt_precmd
 add-zsh-hook preexec __jaunt_preexec
+add-zsh-hook precmd __jaunt_blank
 "#;
 
 /// One zsh startup file: run the user's version with their ZDOTDIR, then
@@ -58,6 +77,18 @@ __jaunt_prompt() {
   __jaunt_ran=
   printf '\e]7;file://%s%s\a' "$HOSTNAME" "${PWD// /%20}"
   printf '\e]133;A\a'
+}
+__jaunt_blank() {
+  if [ -n "$JAUNT_CLASSIC_FILE" ] && [ ! -e "$JAUNT_CLASSIC_FILE" ]; then
+    [ -n "$PS1" ] && __jaunt_ps1=$PS1
+    [ -n "$PS2" ] && __jaunt_ps2=$PS2
+    PS1='' PS2=''
+    __jaunt_blanked=1
+  elif [ -n "$__jaunt_blanked" ]; then
+    PS1=$__jaunt_ps1 PS2=$__jaunt_ps2
+    __jaunt_blanked=
+  fi
+  # Armed last, so the user's PROMPT_COMMAND parts do not count as a command.
   __jaunt_armed=1
 }
 __jaunt_debug() {
@@ -68,7 +99,7 @@ __jaunt_debug() {
   printf '\e]133;C\a'
 }
 trap '__jaunt_debug' DEBUG
-PROMPT_COMMAND="__jaunt_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+PROMPT_COMMAND="__jaunt_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}; __jaunt_blank"
 "#;
 
 const FISH_CONF: &str = r#"# jaunt shell integration for fish
@@ -80,6 +111,20 @@ if status is-interactive
     end
     printf '\e]7;file://%s%s\a' (hostname) (string replace -a ' ' '%20' -- $PWD)
     printf '\e]133;A\a'
+    # Wrap the user's prompt once, so Warp mode can blank it (T7).
+    if not functions -q __jaunt_user_fish_prompt
+      functions -q fish_prompt; and functions -c fish_prompt __jaunt_user_fish_prompt
+      functions -q fish_right_prompt; and functions -c fish_right_prompt __jaunt_user_fish_right_prompt
+      function fish_prompt
+        __jaunt_classic; and functions -q __jaunt_user_fish_prompt; and __jaunt_user_fish_prompt
+      end
+      function fish_right_prompt
+        __jaunt_classic; and functions -q __jaunt_user_fish_right_prompt; and __jaunt_user_fish_right_prompt
+      end
+    end
+  end
+  function __jaunt_classic
+    test -z "$JAUNT_CLASSIC_FILE"; or test -e "$JAUNT_CLASSIC_FILE"
   end
   function __jaunt_preexec --on-event fish_preexec
     printf '\e]133;C\a'
@@ -247,6 +292,76 @@ mod tests {
         assert!(out.contains("\x1b]133;A\x07"), "prompt mark: {out:?}");
         assert!(out.contains("\x1b]133;D;1\x07"), "exit status: {out:?}");
         assert!(out.contains("\x1b]7;file://"), "cwd: {out:?}");
+    }
+
+    /// Output until `needle` shows up (or a timeout).
+    async fn read_until(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<Frame>,
+        needle: &str,
+    ) -> String {
+        let mut out = String::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !out.contains(needle) {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(Frame::Output { data, .. })) => {
+                    out.push_str(&String::from_utf8_lossy(&data))
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
+    /// Warp mode hides the user's prompt; the classic marker brings it back.
+    async fn blanks_and_restores(shell: &str, rc: &str, rc_body: &str) {
+        if !Path::new(shell).exists() {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(rc), rc_body).unwrap();
+        let root = home.path().join("shell");
+        let marker = home.path().join("classic");
+        let mut env: BTreeMap<String, String> = BTreeMap::from([
+            ("HOME".into(), home.path().display().to_string()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+            ("SHELL".into(), shell.into()),
+            ("JAUNT_CLASSIC_FILE".into(), marker.display().to_string()),
+        ]);
+        let args = apply(&root, shell, vec!["-l".into()], &mut env);
+        let mgr = TerminalManager::new(home.path().join("s.sock"), env);
+        let mut command = vec![shell.to_string()];
+        command.extend(args);
+        let info = mgr
+            .create(TerminalCreate {
+                cwd: home.path().display().to_string(),
+                command,
+                ..Default::default()
+            })
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        mgr.attach(info.id, 1, tx, None).unwrap();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        mgr.write(info.id, b"echo hi\n".to_vec()).unwrap();
+        let warp = read_until(&mut rx, "133;D;0").await;
+        let warp = warp + &read_until(&mut rx, "133;A").await;
+        assert!(warp.contains("hi"), "{shell}: {warp:?}");
+        assert!(!warp.contains("USERPROMPT"), "{shell} blanked: {warp:?}");
+
+        std::fs::write(&marker, b"").unwrap();
+        mgr.write(info.id, b"\n".to_vec()).unwrap();
+        let classic = read_until(&mut rx, "USERPROMPT").await;
+        let _ = mgr.kill(info.id, true);
+        assert!(classic.contains("USERPROMPT"), "{shell} classic: {classic:?}");
+    }
+
+    #[tokio::test]
+    async fn zsh_warp_mode_blanks_the_prompt() {
+        blanks_and_restores("/bin/zsh", ".zshrc", "PROMPT='USERPROMPT> '\n").await;
+    }
+
+    #[tokio::test]
+    async fn bash_warp_mode_blanks_the_prompt() {
+        blanks_and_restores("/bin/bash", ".bash_profile", "PS1='USERPROMPT> '\n").await;
     }
 
     #[test]
