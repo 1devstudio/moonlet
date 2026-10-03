@@ -39,9 +39,9 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 
 - `terminal.create {agent, chat: true, model?, effort?}` starts one. `session.create` uses the structured view for Claude Code and Codex unless `tui: true`. The session's first prompt is sent as the first message.
 - `chat.state {id}` returns the `ChatState`.
-- `chat.send {id, text}` sends a message. Queued if a turn is running (Claude accepts queued input; Codex starts the next turn when the current one completes).
+- `chat.send {id, text}` sends a message. During a running turn, Claude Code takes it as queued input. Codex steers the running turn with it (`turn/steer`). Before a Codex thread exists, messages wait in the adapter until it is created. If a saved Codex thread cannot be resumed, a new thread is started and the note says so. `ChatState.queued` is reserved and currently always empty.
 - `chat.permission {id, ask, decision: allow|always|deny, message?}` answers a permission request.
-- `chat.interrupt {id}` stops the current turn. Open permission requests are denied first. The turn ends with an "Interrupted" note and status `idle`, not an error.
+- `chat.interrupt {id}` stops the current turn. Stopping the process (`terminal.kill` without remove, or a settings restart) also closes a running turn with a "Stopped" note. Open permission requests are denied first. The turn ends with an "Interrupted" note and status `idle`, not an error.
 - `chat.settings {id, model?, effort?}` changes the model or effort. The agent restarts with resume before the next message.
 - `fs.files {root}` lists the project's non-ignored files for `@` mentions.
 - Events: `chat.item {id, item}`, `chat.state {id, state}` (everything except the items), and the usual `terminal.*`.
@@ -57,7 +57,7 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 - **Editor:**
   - Multi-line with mouse editing.
   - **Enter** sends; **⇧Enter** adds a new line; **↑** in an empty editor recalls the previous prompt.
-  - `@` completes project files (fuzzy, from `fs.list`/`git ls-files`); `/` lists the agent's slash commands.
+  - `@` completes project files (fuzzy, from `fs.files`: non-ignored files, relative to the session); `/` lists the agent's slash commands.
   - Ghost text suggests from the user's previous prompts to that agent.
 - **Header menu:**
   - Model and effort switch, applied from the next turn (Claude restarts with `--resume`; Codex passes them per turn).
