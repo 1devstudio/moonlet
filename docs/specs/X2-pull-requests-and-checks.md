@@ -13,6 +13,8 @@ From a workspace, the user can push the branch and open a GitHub pull request wi
 - [x] `gh.pr_status {path}` returns the number, URL, state, title, review decision and checks; it returns `null` when the branch has no PR.
 - [x] UI: a Create PR dialog (Cmd+Shift+P) prefilled from the workspace name and commit log, and a Checks tab that polls every 30 s while visible.
 
+- [x] The PR button in the right panel's top bar opens the PR in the browser when one exists, and shows an external-link icon on hover. With no PR it opens the Create PR dialog and shows a plus icon on hover.
+
 ## Security considerations
 
 Pushing and opening a PR are outward-facing. The UI calls `gh.pr_create` only after the user confirms in the dialog. The daemon RPC itself is not gated: any client allowed on the socket (the same user) can call it directly. Authentication stays with `gh`.
