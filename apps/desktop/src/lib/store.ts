@@ -132,7 +132,11 @@ interface State extends UiPersist {
   diffFile: string | null;
 }
 
-export const useStore = create<State>(() => ({
+// One store per page, even when Vite hot-reloads this module: a fresh copy
+// would be empty and never wired to daemon events.
+const g = globalThis as { __jauntStore?: ReturnType<typeof makeStore>; __jauntStarted?: boolean };
+function makeStore() {
+  return create<State>(() => ({
   ...loadJson(UI_KEY, uiDefaults),
   hosts: {},
   repos: {},
@@ -152,9 +156,12 @@ export const useStore = create<State>(() => ({
   workingSince: {},
   card: null,
   diffFile: null,
-}));
+  }));
+}
+export const useStore = (g.__jauntStore ??= makeStore());
 
 const set = useStore.setState;
+
 const get = useStore.getState;
 
 useStore.subscribe((s, prev) => {
@@ -464,10 +471,9 @@ function scheduleGit(host: string, id: string) {
   gitTimers[key] = window.setTimeout(() => void refreshGit(host, id), 400);
 }
 
-let started = false;
 export async function startStore() {
-  if (started) return;
-  started = true;
+  if (g.__jauntStarted) return;
+  g.__jauntStarted = true;
   setTermSettings(get().settings.term);
   await onDaemonEvent(handleEvent);
   await onHostStatus((h) => {
