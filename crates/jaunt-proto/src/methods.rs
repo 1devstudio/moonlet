@@ -31,16 +31,21 @@ pub const HOOKS_INSTALL: &str = "hooks.install";
 pub const HOOKS_UNINSTALL: &str = "hooks.uninstall";
 
 // Repos and workspaces
-pub const REPO_ADD: &str = "repo.add";
-pub const REPO_LIST: &str = "repo.list";
-pub const REPO_REMOVE: &str = "repo.remove";
-pub const REPO_CONFIG: &str = "repo.config";
+pub const PROJECT_ADD: &str = "project.add";
+pub const PROJECT_LIST: &str = "project.list";
+pub const PROJECT_REMOVE: &str = "project.remove";
+pub const PROJECT_CONFIG: &str = "project.config";
 pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
-pub const WORKSPACE_ARCHIVE: &str = "workspace.archive";
-pub const WORKSPACE_UNARCHIVE: &str = "workspace.unarchive";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
-pub const WORKSPACE_RUN: &str = "workspace.run";
+pub const WORKSPACE_DELETE: &str = "workspace.delete";
+pub const WORKSPACE_ADD_PROJECT: &str = "workspace.add_project";
+pub const SESSION_CREATE: &str = "session.create";
+pub const SESSION_LIST: &str = "session.list";
+pub const SESSION_ARCHIVE: &str = "session.archive";
+pub const SESSION_UNARCHIVE: &str = "session.unarchive";
+pub const SESSION_UPDATE: &str = "session.update";
+pub const SESSION_RUN: &str = "session.run";
 
 // Git
 pub const GIT_STATUS: &str = "git.status";
@@ -54,6 +59,8 @@ pub const GIT_COMMIT: &str = "git.commit";
 pub const GIT_LOG: &str = "git.log";
 pub const GIT_BRANCHES: &str = "git.branches";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
+pub const GH_ISSUES: &str = "gh.issues";
+pub const GH_PRS: &str = "gh.prs";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
 
 // Files
@@ -69,7 +76,8 @@ pub const EV_TERMINAL_UPDATED: &str = "terminal.updated";
 pub const EV_TERMINAL_EXITED: &str = "terminal.exited";
 pub const EV_TERMINAL_REMOVED: &str = "terminal.removed";
 pub const EV_AGENT_ATTENTION: &str = "agent.attention";
-pub const EV_REPOS_CHANGED: &str = "repos.changed";
+pub const EV_PROJECTS_CHANGED: &str = "projects.changed";
+pub const EV_SESSIONS_CHANGED: &str = "sessions.changed";
 pub const EV_WORKSPACES_CHANGED: &str = "workspaces.changed";
 pub const EV_FS_CHANGED: &str = "fs.changed";
 
@@ -90,7 +98,7 @@ pub struct TerminalCreate {
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
-    pub workspace_id: Option<String>,
+    pub session_id: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,
 }
@@ -105,7 +113,7 @@ impl Default for TerminalCreate {
             rows: default_rows(),
             kind: TerminalKind::default(),
             title: None,
-            workspace_id: None,
+            session_id: None,
             agent: None,
         }
     }
@@ -201,14 +209,14 @@ fn default_source() -> StateSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attention {
     pub terminal: TerminalId,
-    pub workspace_id: Option<String>,
+    pub session_id: Option<String>,
     pub state: AgentState,
     pub title: String,
     pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoAdd {
+pub struct ProjectAdd {
     pub path: String,
 }
 
@@ -218,9 +226,11 @@ pub struct IdRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceCreate {
-    pub repo_id: String,
-    pub name: String,
+pub struct SessionCreate {
+    pub project_id: String,
+    /// Display name; derived from the prompt's first line when absent.
+    #[serde(default)]
+    pub name: Option<String>,
     /// New branch name; derived from `name` when absent.
     #[serde(default)]
     pub branch: Option<String>,
@@ -235,6 +245,15 @@ pub struct WorkspaceCreate {
     /// First prompt passed to the agent.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Model alias for the agent (e.g. `sonnet`, `opus`).
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Effort level (`low` … `max`).
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Start from this pull request's branch.
+    #[serde(default)]
+    pub pr: Option<u64>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
@@ -242,7 +261,7 @@ pub struct WorkspaceCreate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceArchive {
+pub struct SessionArchive {
     pub id: String,
     /// Remove the worktree directory (branch is kept).
     #[serde(default = "yes")]
@@ -256,16 +275,43 @@ fn yes() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceUpdate {
+pub struct SessionUpdate {
     pub id: String,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub layout: Option<serde_json::Value>,
+    /// Move into a section; `Some("")` removes it from any section.
+    #[serde(default)]
+    pub section: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceRun {
+pub struct WorkspaceCreate {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceUpdate {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub sections: Option<Vec<crate::types::Section>>,
+    #[serde(default)]
+    pub view: Option<crate::types::WorkspaceView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAddProject {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRun {
     pub id: String,
     /// `run`, `setup` or `archive`.
     pub script: String,

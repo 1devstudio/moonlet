@@ -52,7 +52,7 @@ const SKIP: &[&str] = &[
     "COLORTERM",
     "PS1",
     "JAUNT_TERMINAL_ID",
-    "JAUNT_WORKSPACE_ID",
+    "JAUNT_SESSION",
 ];
 
 /// Runs the login shell once to read the environment the user's terminals
