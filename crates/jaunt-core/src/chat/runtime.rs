@@ -185,6 +185,7 @@ impl ChatManager {
         let mut inner = chat.inner.lock().unwrap();
         if inner.restart || inner.stdin.is_none() {
             self.kill_process(&mut inner);
+            self.settle(&chat, &mut inner, "Stopped to apply new settings");
             inner.restart = false;
             if let Err(e) = self.spawn(&chat, &mut inner) {
                 self.fail(&chat, &mut inner, &format!("{e:#}"));
@@ -240,6 +241,7 @@ impl ChatManager {
             let mut inner = chat.inner.lock().unwrap();
             self.kill_process(&mut inner);
             if !remove {
+                self.settle(&chat, &mut inner, "Stopped");
                 self.save(&chat, &mut inner);
             }
         }
@@ -374,6 +376,30 @@ impl ChatManager {
                 let _ = nix::sys::signal::killpg(pg, nix::sys::signal::Signal::SIGKILL);
             });
         }
+    }
+
+    /// After stopping the process ourselves: its exit handler is skipped
+    /// (stale generation), so a running turn is closed here.
+    fn settle(&self, chat: &Chat, inner: &mut Inner, note: &str) {
+        if !matches!(inner.state.status.as_str(), "working" | "blocked") {
+            return;
+        }
+        inner.state.status = "idle".into();
+        inner.state.pending.clear();
+        inner.state.turn_started_at = None;
+        let mut outs = Vec::new();
+        for it in inner.state.items.iter_mut().filter(|i| i.partial || i.tool.as_ref().is_some_and(|t| t.status == "running")) {
+            it.partial = false;
+            if let Some(t) = it.tool.as_mut()
+                && t.status == "running"
+            {
+                t.status = "error".into();
+            }
+            outs.push(Out::Item(Box::new(it.clone())));
+        }
+        outs.push(upsert(&mut inner.state, item(super::local_id("system"), "system", note)));
+        outs.push(Out::State);
+        self.apply(chat, inner, outs);
     }
 
     fn fail(&self, chat: &Chat, inner: &mut Inner, message: &str) {
@@ -605,6 +631,18 @@ done
         terms.kill(info.id, true).unwrap();
         assert!(!chats.is_chat(info.id));
         assert!(!dir.path().join("chats").join(format!("{}.json", info.id)).exists());
+    }
+
+    #[tokio::test]
+    async fn stopping_a_busy_agent_ends_its_turn() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        chats.get(info.id).unwrap().inner.lock().unwrap().state.status = "working".into();
+        terms.kill(info.id, false).unwrap();
+        let st = chats.state(info.id).unwrap();
+        assert_eq!(st.status, "idle");
+        assert_eq!(st.items.last().unwrap().text, "Stopped");
+        assert_eq!(terms.get(info.id).unwrap().info().agent_state, AgentState::Idle);
     }
 
     #[tokio::test]

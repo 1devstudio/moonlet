@@ -234,7 +234,6 @@ fn send_terminals(
 
 pub struct Incoming {
     stream: UnixStream,
-    pub env: std::collections::BTreeMap<String, String>,
     exported: Vec<ExportedTerminal>,
     /// Owned, so fds that are not adopted get closed.
     fds: Vec<OwnedFd>,
@@ -250,8 +249,10 @@ pub fn receive(path: &Path) -> Result<Incoming> {
     s.read_exact(&mut len)?;
     let mut header = vec![0u8; u32::from_be_bytes(len) as usize];
     s.read_exact(&mut header)?;
+    // The old daemon's environment is ignored: the new one captures a clean
+    // login environment itself (the field stays in the header for older peers).
     let Header {
-        env,
+        env: _,
         terminals: exported,
     } = serde_json::from_slice(&header)?;
     let mut fds: Vec<OwnedFd> = Vec::with_capacity(exported.len());
@@ -279,7 +280,6 @@ pub fn receive(path: &Path) -> Result<Incoming> {
     }
     Ok(Incoming {
         stream,
-        env,
         exported,
         fds,
     })
