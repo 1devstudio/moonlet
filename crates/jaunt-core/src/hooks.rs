@@ -117,8 +117,14 @@ impl HookPaths {
     }
 }
 
+/// Exactly a jaunt hook command: a program named `jaunt` (optionally
+/// quoted, any directory) followed by `hook claude` or `hook codex`.
 fn is_ours(command: &str) -> bool {
-    command.contains("jaunt") && command.contains(" hook ")
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r#"^\s*['"]?(?:[^'"]*/)?jaunt['"]?\s+hook\s+(?:claude|codex)\s*$"#).unwrap()
+    })
+    .is_match(command)
 }
 
 fn quote(path: &Path) -> String {
@@ -207,8 +213,12 @@ pub fn status(paths: &HookPaths) -> Result<HookStatus> {
 }
 
 fn codex_notify(paths: &HookPaths) -> Result<(bool, Option<String>)> {
-    let Ok(text) = std::fs::read_to_string(&paths.codex_config) else {
-        return Ok((false, None));
+    let text = match std::fs::read_to_string(&paths.codex_config) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((false, None)),
+        Err(e) => {
+            return Err(e).with_context(|| format!("cannot read {}", paths.codex_config.display()));
+        }
     };
     let doc: toml_edit::DocumentMut = text
         .parse()
@@ -221,7 +231,7 @@ fn codex_notify(paths: &HookPaths) -> Result<(bool, Option<String>)> {
         .filter_map(|v| v.as_str().map(String::from))
         .collect();
     let line = joined.join(" ");
-    if is_ours(&format!("{line} ")) {
+    if is_ours(&line) {
         Ok((true, None))
     } else {
         Ok((false, Some(line)))
@@ -301,7 +311,16 @@ pub fn install(
             );
         }
         if !installed {
-            let text = std::fs::read_to_string(&paths.codex_config).unwrap_or_default();
+            // Only a missing file starts empty; an unreadable one must not be
+            // replaced by a file holding just our `notify`.
+            let text = match std::fs::read_to_string(&paths.codex_config) {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("cannot read {}", paths.codex_config.display()));
+                }
+            };
             let mut doc: toml_edit::DocumentMut = text.parse()?;
             let mut arr = toml_edit::Array::new();
             arr.push(jaunt_bin.display().to_string());
@@ -481,5 +500,15 @@ mod tests {
             status(&p).unwrap().codex_conflict.as_deref(),
             Some("terminal-notifier")
         );
+    }
+
+    #[test]
+    fn only_jaunt_hook_commands_are_ours() {
+        assert!(is_ours("/usr/local/bin/jaunt hook claude"));
+        assert!(is_ours("'/Users/a b/.jaunt/bin/jaunt' hook codex"));
+        assert!(is_ours("jaunt hook claude"));
+        assert!(!is_ours("~/scripts/jaunty-notify hook x"));
+        assert!(!is_ours("/bin/jaunt-helper hook claude"));
+        assert!(!is_ours("jaunt hook claude && rm -rf ~"));
     }
 }

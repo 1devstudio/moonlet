@@ -116,6 +116,7 @@ fn percent_decode(s: &str) -> String {
 pub struct TermState {
     parser: vt100::Parser<Signals>,
     title: String,
+    scrollback: usize,
 }
 
 impl TermState {
@@ -132,6 +133,7 @@ impl TermState {
                 Signals::default(),
             ),
             title: String::new(),
+            scrollback,
         }
     }
 
@@ -148,7 +150,7 @@ impl TermState {
             self.parser = vt100::Parser::new_with_callbacks(
                 rows,
                 cols,
-                DEFAULT_SCROLLBACK,
+                self.scrollback,
                 Signals::default(),
             );
             return Vec::new();
