@@ -37,6 +37,22 @@ impl Codex {
         Out::Write(json!({"id": self.next, "method": method, "params": params}).to_string())
     }
 
+    /// `thread/resume` when there is a thread to continue, else `thread/start`.
+    fn thread_request(&mut self) -> Out {
+        let mut params = json!({"cwd": self.cfg.cwd, "approvalPolicy": "on-request", "sandbox": "workspace-write"});
+        if let Some(m) = &self.cfg.model {
+            params["model"] = json!(m);
+        }
+        match self.cfg.resume.clone() {
+            Some(t) => {
+                params["threadId"] = json!(t);
+                params["excludeTurns"] = json!(true);
+                self.request(Pending::Thread, "thread/resume", params)
+            }
+            None => self.request(Pending::Thread, "thread/start", params),
+        }
+    }
+
     fn turn_start(&mut self, text: &str) -> Out {
         let mut params = json!({
             "threadId": self.thread.clone().unwrap_or_default(),
@@ -170,6 +186,19 @@ impl Adapter for Codex {
                 let kind = id.as_u64().and_then(|n| self.calls.remove(&n)).unwrap_or(Pending::Other);
                 if let Some(err) = v.get("error") {
                     let msg = err["message"].as_str().unwrap_or("Codex request failed").to_string();
+                    if kind == Pending::Thread && self.cfg.resume.take().is_some() {
+                        // The saved thread is gone: continue in a new one.
+                        let note = format!("Could not resume the previous Codex thread ({msg}); started a new one.");
+                        out.push(upsert(st, item(super::local_id("system"), "system", note)));
+                        out.push(self.thread_request());
+                        out.push(Out::State);
+                        return out;
+                    }
+                    if kind == Pending::Thread && !self.queued.is_empty() {
+                        let lost = std::mem::take(&mut self.queued).len();
+                        let note = format!("{lost} message(s) not delivered: no Codex thread.");
+                        out.push(upsert(st, item(super::local_id("error"), "error", note)));
+                    }
                     let eid = super::local_id("error");
                     out.push(upsert(st, item(eid, "error", msg)));
                     if kind != Pending::Other {
@@ -183,18 +212,7 @@ impl Adapter for Codex {
                 match kind {
                     Pending::Initialize => {
                         out.push(Out::Write(json!({"method": "initialized"}).to_string()));
-                        let mut params = json!({"cwd": self.cfg.cwd, "approvalPolicy": "on-request", "sandbox": "workspace-write"});
-                        if let Some(m) = &self.cfg.model {
-                            params["model"] = json!(m);
-                        }
-                        out.push(match self.cfg.resume.clone() {
-                            Some(t) => {
-                                params["threadId"] = json!(t);
-                                params["excludeTurns"] = json!(true);
-                                self.request(Pending::Thread, "thread/resume", params)
-                            }
-                            None => self.request(Pending::Thread, "thread/start", params),
-                        });
+                        out.push(self.thread_request());
                     }
                     Pending::Thread => {
                         self.thread = r["thread"]["id"].as_str().map(String::from);
@@ -449,5 +467,21 @@ mod tests {
         assert_eq!(w[0], json!({"id": "x", "result": {"decision": "cancel"}}));
         assert_eq!(w[1]["method"], "turn/interrupt");
         assert!(st.pending.is_empty());
+    }
+
+    #[test]
+    fn a_failed_resume_starts_a_new_thread_and_delivers_queued_messages() {
+        let mut a = Codex::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig { resume: Some("gone".into()), ..Default::default() }, &mut st);
+        a.send("hi", &mut st);
+        feed(&mut a, &mut st, json!({"id": 1, "result": {}}));
+        let w = writes(&feed(&mut a, &mut st, json!({"id": 2, "error": {"message": "thread not found"}})));
+        assert_eq!(w[0]["method"], "thread/start");
+        assert_ne!(st.status, "error");
+        let w = writes(&feed(&mut a, &mut st, json!({"id": 3, "result": {"thread": {"id": "new"}}})));
+        assert_eq!(w[0]["method"], "turn/start");
+        assert_eq!(w[0]["params"]["input"][0]["text"], "hi");
+        assert_eq!(st.agent_session.as_deref(), Some("new"));
     }
 }

@@ -149,13 +149,30 @@ if status is-interactive
     if not functions -q __jaunt_user_fish_prompt
       functions -q fish_prompt; and functions -c fish_prompt __jaunt_user_fish_prompt
       functions -q fish_right_prompt; and functions -c fish_right_prompt __jaunt_user_fish_right_prompt
+      functions -q fish_mode_prompt; and functions -c fish_mode_prompt __jaunt_user_fish_mode_prompt
+      # Each wrapper hands the user's prompt the last command's $status.
       function fish_prompt
-        __jaunt_classic; and functions -q __jaunt_user_fish_prompt; and __jaunt_user_fish_prompt
+        set -l s $status
+        if __jaunt_classic; and functions -q __jaunt_user_fish_prompt
+          __jaunt_status $s; __jaunt_user_fish_prompt
+        end
       end
       function fish_right_prompt
-        __jaunt_classic; and functions -q __jaunt_user_fish_right_prompt; and __jaunt_user_fish_right_prompt
+        set -l s $status
+        if __jaunt_classic; and functions -q __jaunt_user_fish_right_prompt
+          __jaunt_status $s; __jaunt_user_fish_right_prompt
+        end
+      end
+      function fish_mode_prompt
+        set -l s $status
+        if __jaunt_classic; and functions -q __jaunt_user_fish_mode_prompt
+          __jaunt_status $s; __jaunt_user_fish_mode_prompt
+        end
       end
     end
+  end
+  function __jaunt_status
+    return $argv[1]
   end
   function __jaunt_classic
     test -z "$JAUNT_CLASSIC_FILE"; or test -e "$JAUNT_CLASSIC_FILE"

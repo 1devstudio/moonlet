@@ -157,10 +157,12 @@ fn run_daemon(
                 let incoming = tokio::task::spawn_blocking(move || upgrade::receive(&path))
                     .await?
                     .inspect_err(|e| tracing::error!("handoff failed: {e:#}"))?;
-                let mut incoming = incoming;
-                launch::scrub_agent_markers(&mut incoming.env);
-                set_path(&incoming.env);
-                let daemon = daemon::Daemon::new(socket.clone(), incoming.env.clone());
+                // Terminals get a freshly captured login environment, never
+                // the old daemon's: an older daemon may have inherited
+                // credentials from whatever started it.
+                let env = tokio::task::spawn_blocking(launch::login_environment).await?;
+                set_path(&env);
+                let daemon = daemon::Daemon::new(socket.clone(), env);
                 let sessions = daemon.terminals.clone();
                 tokio::task::spawn_blocking(move || upgrade::adopt(incoming, &sessions)).await??;
                 let mut attempt = 0;

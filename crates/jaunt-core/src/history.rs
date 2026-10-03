@@ -55,8 +55,51 @@ pub fn parse_bash(text: &str) -> Vec<String> {
 pub fn parse_fish(text: &str) -> Vec<String> {
     text.lines()
         .filter_map(|l| l.strip_prefix("- cmd: "))
-        .map(|c| c.replace("\\n", "\n").replace("\\\\", "\\"))
+        .map(unescape_fish)
         .collect()
+}
+
+/// One pass, so an escaped backslash before `n` stays a backslash.
+fn unescape_fish(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Only the newest part of a history file is read.
+const MAX_HISTORY_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The last `MAX_HISTORY_BYTES` of a file, starting at a line boundary.
+fn read_tail(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    if len <= MAX_HISTORY_BYTES {
+        let mut buf = Vec::with_capacity(len as usize);
+        f.read_to_end(&mut buf)?;
+        return Ok(buf);
+    }
+    f.seek(SeekFrom::Start(len - MAX_HISTORY_BYTES))?;
+    let mut buf = Vec::with_capacity(MAX_HISTORY_BYTES as usize);
+    f.read_to_end(&mut buf)?;
+    let start = buf.iter().position(|b| *b == b'\n').map_or(0, |i| i + 1);
+    buf.drain(..start);
+    Ok(buf)
 }
 
 /// Trims, drops empties and keeps only the newest copy of each command.
@@ -110,7 +153,7 @@ pub fn read(shell: Option<&str>) -> Vec<String> {
     let home = dirs::home_dir().unwrap_or_default();
     let file = history_file(&name, &home);
     // zsh history may contain non-UTF-8 "metafied" bytes; decode lossily.
-    let Ok(bytes) = std::fs::read(&file) else {
+    let Ok(bytes) = read_tail(&file) else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&bytes);
@@ -145,6 +188,26 @@ mod tests {
             parse_bash("#1700000000\nmake test\n#notatime\ncargo build\n"),
             vec!["make test", "#notatime", "cargo build"]
         );
+    }
+
+    #[test]
+    fn fish_escapes_decode_in_one_pass() {
+        assert_eq!(parse_fish("- cmd: echo a\\\\nb\n"), vec!["echo a\\nb"]);
+        assert_eq!(parse_fish("- cmd: printf x\\ny\n"), vec!["printf x\ny"]);
+    }
+
+    #[test]
+    fn large_histories_are_read_from_the_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("h");
+        let line = "x".repeat(99) + "\n";
+        let mut text = line.repeat((MAX_HISTORY_BYTES / 100) as usize + 100);
+        text.push_str("newest\n");
+        std::fs::write(&file, &text).unwrap();
+        let tail = read_tail(&file).unwrap();
+        assert!(tail.len() as u64 <= MAX_HISTORY_BYTES);
+        assert!(tail.ends_with(b"newest\n"));
+        assert!(tail.starts_with(b"x"), "starts at a line boundary");
     }
 
     #[test]

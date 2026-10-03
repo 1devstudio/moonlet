@@ -129,38 +129,8 @@ pub fn login_environment() -> BTreeMap<String, String> {
     env
 }
 
-/// Drops session markers and tokens that agents (Claude Code, Codex) set in
-/// their own processes; used on environments inherited from older daemons.
-pub fn scrub_agent_markers(env: &mut BTreeMap<String, String>) {
-    env.retain(|k, _| {
-        !(k == "CLAUDECODE"
-            || k.starts_with("CLAUDE_CODE_")
-            || k == "CLAUDE_PID"
-            || k == "CLAUDE_EFFORT"
-            || k.starts_with("CODEX_SESSION")
-            || k.starts_with("CODEX_THREAD"))
-    });
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn scrubs_agent_markers() {
-        let mut env: std::collections::BTreeMap<String, String> = [
-            ("CLAUDE_CODE_SESSION_ID", "s"),
-            ("CLAUDECODE", "1"),
-            ("CLAUDE_CONFIG_DIR", "/c"),
-            ("PATH", "/bin"),
-        ]
-        .map(|(k, v)| (k.into(), v.into()))
-        .into();
-        super::scrub_agent_markers(&mut env);
-        assert_eq!(
-            env.keys().cloned().collect::<Vec<_>>(),
-            vec!["CLAUDE_CONFIG_DIR", "PATH"]
-        );
-    }
-
     #[test]
     fn passthrough_keeps_only_safe_basics() {
         let vars = [

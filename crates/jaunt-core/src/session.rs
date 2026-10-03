@@ -677,8 +677,11 @@ impl SessionManager {
             )?;
             if let Some(p) = req.prompt.as_deref().filter(|p| !p.trim().is_empty())
                 && let Some(chats) = self.chats.get()
+                && let Err(e) = chats.send(info.id, p)
             {
-                chats.send(info.id, p)?;
+                // The session exists and the chat shows the error; creating
+                // it again would only add a second worktree.
+                tracing::warn!(session = %ws.id, "first message not delivered: {e:#}");
             }
         } else if let Some(agent) = &agent {
             self.spawn_in(

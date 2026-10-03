@@ -252,8 +252,18 @@ impl TerminalManager {
         if default_shell {
             let marker = self.classic_file(id);
             if req.classic {
-                let _ = std::fs::create_dir_all(marker.parent().unwrap_or(&marker));
-                let _ = std::fs::write(&marker, b"");
+                std::fs::create_dir_all(marker.parent().context("no run directory")?)
+                    .and_then(|()| std::fs::write(&marker, b""))
+                    .with_context(|| format!("cannot write {}", marker.display()))?;
+            } else {
+                // A marker left by an earlier terminal with this id (ids are
+                // reused after a restart) would wrongly keep the prompt.
+                match std::fs::remove_file(&marker) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(e).with_context(|| format!("cannot remove {}", marker.display()));
+                    }
+                    _ => {}
+                }
             }
             env.insert("JAUNT_CLASSIC_FILE".into(), marker.display().to_string());
         }
