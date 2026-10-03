@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { open as openDialog, ask } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, ask, confirm } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, Server, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type Commit, type HookStatus, type PullRequest, type Project } from "../lib/protocol";
@@ -99,8 +99,8 @@ export function AddProjectDialog({ host: presetHost, workspace: presetWorkspace 
 export function NewWorkspaceDialog() {
   const hosts = useStore((s) => s.hosts);
   const [name, setName] = useState("");
-  const [host, setHost] = useState("local");
   const connected = Object.values(hosts).filter((h) => h.status === "connected");
+  const [host, setHost] = useState(() => (connected.some((h) => h.id === "local") ? "local" : (connected[0]?.id ?? "local")));
   const create = async () => {
     try {
       await rpc(host, M.workspaceCreate, { name });
@@ -424,6 +424,13 @@ function DaemonSection() {
     void hostsApi.service("status").then(setStatus).catch(() => setStatus(null));
   }, []);
   const toggle = async (on: boolean) => {
+    if (!on && status?.loaded) {
+      const ok = await confirm(
+        "Turning this off stops the daemon that launchd is running. Terminals and agents it holds may end. Turn it off?",
+        { title: "Stop the background daemon", kind: "warning" },
+      );
+      if (!ok) return;
+    }
     setBusy(true);
     try {
       setStatus(await hostsApi.service(on ? "install" : "uninstall"));

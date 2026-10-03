@@ -25,14 +25,26 @@ async fn ssh(alias: &str, command: &str, stdin: Option<&[u8]>) -> Result<(i32, S
         .kill_on_drop(true)
         .spawn()
         .context("cannot run ssh")?;
-    if let (Some(data), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        pipe.write_all(data).await?;
-        drop(pipe);
-    }
-    let out = tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        child.wait_with_output(),
-    )
+    // Write stdin while the output pipes drain, all under one timeout: a
+    // remote that fills stderr must not deadlock a multi-MB upload.
+    let writer = match (stdin, child.stdin.take()) {
+        (Some(data), Some(mut pipe)) => {
+            let data = data.to_vec();
+            Some(tokio::spawn(async move {
+                let r = pipe.write_all(&data).await;
+                drop(pipe);
+                r
+            }))
+        }
+        _ => None,
+    };
+    let out = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        let out = child.wait_with_output().await?;
+        if let Some(w) = writer {
+            w.await.context("stdin writer failed")??;
+        }
+        anyhow::Ok(out)
+    })
     .await
     .context("ssh timed out")??;
     Ok((
@@ -190,6 +202,10 @@ pub async fn install(alias: &str, resource_dir: Option<PathBuf>) -> Result<Insta
     let version = remote_version(alias)
         .await?
         .context("helper installed but does not run")?;
+    let want = env!("CARGO_PKG_VERSION");
+    if version != want {
+        bail!("installed helper reports {version}, but this app expects {want}; rebuild the helpers (scripts/build-remote.sh)");
+    }
     Ok(InstallResult {
         triple: triple.into(),
         version,

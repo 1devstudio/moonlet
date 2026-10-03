@@ -4,12 +4,23 @@ import App from "./App";
 import "./index.css";
 import { invoke } from "@tauri-apps/api/core";
 
+/** Never throws: circular objects and bigints must not break logging. */
+function fmt(a: unknown): string {
+  if (a instanceof Error) return `${a.message}\n${a.stack}`;
+  if (typeof a === "string") return a;
+  try {
+    return JSON.stringify(a, (_k, v) => (typeof v === "bigint" ? v.toString() : v)) ?? String(a);
+  } catch {
+    return String(a);
+  }
+}
+
 // Mirror webview problems into the app log (stderr / Console.app).
 for (const level of ["warn", "error"] as const) {
   const orig = console[level].bind(console);
   console[level] = (...args: unknown[]) => {
     orig(...args);
-    const text = args.map((a) => (a instanceof Error ? `${a.message}\n${a.stack}` : typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+    const text = args.map(fmt).join(" ");
     void invoke("log_js", { level, message: text }).catch(() => {});
   };
 }

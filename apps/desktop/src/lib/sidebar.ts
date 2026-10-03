@@ -93,3 +93,10 @@ export function dropResult(d: Dragged, target: Group): { section: string } | nul
       return inSection ? { section: "" } : null;
   }
 }
+
+/** Latest output of a session's terminals (its "recent" sort key). */
+export function lastActive(terminals: Record<number, { session_id?: string; last_output_at: number }>, s: Session): number {
+  return Object.values(terminals)
+    .filter((t) => t.session_id === s.id)
+    .reduce((m, t) => Math.max(m, t.last_output_at), s.created_at);
+}

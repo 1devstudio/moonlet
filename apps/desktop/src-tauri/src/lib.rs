@@ -137,6 +137,29 @@ fn open_targets() -> Vec<OpenTarget> {
     v
 }
 
+/// Percent-encodes everything but unreserved characters (and `/` in paths).
+fn url_escape(s: &str, keep_slash: bool) -> Result<String, RpcError> {
+    if s.is_empty() {
+        return Err(RpcError::new("invalid_params", "empty URL component"));
+    }
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) || (keep_slash && b == b'/') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    Ok(out)
+}
+
+fn url_path(path: &str) -> Result<String, RpcError> {
+    if !path.starts_with('/') {
+        return Err(RpcError::new("invalid_params", "remote path must be absolute"));
+    }
+    url_escape(path, true)
+}
+
 /// Opens a workspace in another app. Remote paths open through the editor's
 /// SSH remote support where it has one.
 #[tauri::command]
@@ -146,8 +169,9 @@ fn open_in(target: String, path: String, host: Option<String>) -> Result<(), Rpc
     match (target.as_str(), remote) {
         ("finder", None) => cmd.arg(&path),
         ("reveal", None) => cmd.args(["-R", &path]),
-        ("vscode", Some(h)) => cmd.arg(format!("vscode://vscode-remote/ssh-remote+{h}{path}")),
-        ("cursor", Some(h)) => cmd.arg(format!("cursor://vscode-remote/ssh-remote+{h}{path}")),
+        (app @ ("vscode" | "cursor"), Some(h)) => {
+            cmd.arg(format!("{app}://vscode-remote/ssh-remote+{}{}", url_escape(&h, false)?, url_path(&path)?))
+        }
         (_, Some(_)) => {
             return Err(RpcError::new(
                 "unsupported",
@@ -196,6 +220,12 @@ async fn daemon_service(action: String) -> Result<Value, RpcError> {
         .output()
         .await
         .map_err(err)?;
+    if !status.status.success() {
+        return Err(RpcError::new(
+            "failed",
+            String::from_utf8_lossy(&status.stderr).trim().to_string(),
+        ));
+    }
     serde_json::from_slice(&status.stdout).map_err(err)
 }
 

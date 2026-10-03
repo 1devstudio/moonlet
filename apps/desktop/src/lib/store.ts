@@ -513,7 +513,7 @@ function handleEvent(e: DaemonEvent) {
       const ch = data as FsChanged;
       set((s) => ({ fsVersion: { ...s.fsVersion, [`${host}|${ch.root}`]: (s.fsVersion[`${host}|${ch.root}`] ?? 0) + 1 } }));
       for (const w of get().sessions[host] ?? []) {
-        if (ch.root === w.path || ch.root.startsWith(w.path + "/") || w.path.startsWith(ch.root)) scheduleGit(host, w.id);
+        if (ch.root === w.path || ch.root.startsWith(w.path + "/") || w.path.startsWith(ch.root.replace(/\/$/, "") + "/")) scheduleGit(host, w.id);
       }
       break;
     }

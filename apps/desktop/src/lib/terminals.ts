@@ -123,8 +123,8 @@ export class TermEntry {
       cursorBlink: true,
       macOptionIsMeta: settings.optionIsMeta,
       macOptionClickForcesSelection: true,
-      // The daemon keeps 10k lines for replay and search; the view needs fewer.
-      scrollback: 5000,
+      // Same depth as the daemon, so in-view search finds what it keeps.
+      scrollback: 10_000,
       theme: THEME,
       drawBoldTextInBrightColors: false,
       minimumContrastRatio: 1,
@@ -185,7 +185,15 @@ export class TermEntry {
   async attach() {
     this.ready = false;
     const { cols, rows } = this.term;
-    await rpc(this.host, M.terminalAttach, { id: this.session, cols, rows });
+    try {
+      await rpc(this.host, M.terminalAttach, { id: this.session, cols, rows });
+    } catch (e) {
+      // No snapshot is coming: keep showing live output rather than freezing,
+      // and try again shortly (reconnects re-attach everything anyway).
+      this.ready = true;
+      window.setTimeout(() => void this.attach().catch(() => {}), 2000);
+      throw e;
+    }
     this.lastSize = `${cols}x${rows}`;
   }
 

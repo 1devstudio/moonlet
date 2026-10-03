@@ -4,7 +4,7 @@ import { rpc } from "../lib/daemon";
 import { leaves } from "../lib/layout";
 import { M, type ProjectConfig, type Session } from "../lib/protocol";
 import { focusTerminal, getLayout, projectOf, termKey, setLayout, useStore, sesKey } from "../lib/store";
-import { newAgentTab, newTab, sendToAgent, split } from "../lib/actions";
+import { closeTab, newAgentTab, newTab, sendToAgent, split } from "../lib/actions";
 import { PaneTree } from "./PaneTree";
 import { AgentIcon, Kbd, cx } from "./ui";
 import { agentLabel } from "../lib/agents";
@@ -95,12 +95,10 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: str
       )}
       {info?.exit && <span className="font-mono text-[11px] text-faint">exited</span>}
       <button
-        className="ml-auto rounded p-0.5 text-faint opacity-0 hover:bg-hover hover:text-fg group-hover:opacity-100"
+        className="ml-auto rounded p-0.5 text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
         title="Close tab"
         onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => {
-          for (const x of ids) void rpc(host, M.terminalKill, { id: x, remove: true });
-        }}
+        onClick={() => void closeTab(host, ids)}
       >
         <X size={12} />
       </button>
