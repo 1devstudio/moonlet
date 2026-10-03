@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowRight, ChevronDown, ChevronRight, MoreHorizontal, Play, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronRight, ExternalLink, MoreHorizontal, Play, Plus, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type FileChange, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
@@ -96,8 +96,8 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
         <Play size={13} fill="currentColor" strokeWidth={0} /> Run
       </button>
       <button
-        className="no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
-        title={pr ? pr.title : "Create pull request (⇧⌘P)"}
+        className="no-drag group flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
+        title={pr ? `#${pr.number} ${pr.title} · Open in browser` : "Create pull request (⇧⌘P)"}
         onClick={() => (pr ? void openUrl(pr.url) : useStore.setState({ dialog: { kind: "create-pr" } }))}
       >
         <svg viewBox="0 0 16 16" width="13" height="13" className="text-accent" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -107,6 +107,11 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
           <path d="M4 5.1v5.8M12 10.9V7a2.5 2.5 0 0 0-2.5-2.5H7m0 0 1.6-1.6M7 4.5l1.6 1.6" />
         </svg>
         PR {pr && <span className="text-muted">#{pr.number}</span>}
+        {pr ? (
+          <ExternalLink size={11} className="text-faint opacity-0 group-hover:opacity-100" />
+        ) : (
+          <Plus size={12} className="text-faint opacity-0 group-hover:opacity-100" />
+        )}
       </button>
       <span className="ml-auto" />
       <MoreMenu host={host} ws={ws} />
