@@ -38,11 +38,13 @@ Every JSON message is an object with a `t` tag:
 Method names and parameter structs are in `crates/jaunt-proto/src/methods.rs`; result types are in `types.rs`. Groups:
 
 - `daemon.*`: info, shutdown, upgrade.
-- `session.*`: create, list, attach, detach, resize, kill, write, search.
+- `terminal.*`: create, list, attach, detach, resize, kill, write, search.
 - `agent.report`: state reports from agent hooks (`jaunt hook …`).
-- `repo.*` and `workspace.*`: repos, worktree workspaces, scripts.
-- `git.*` and `gh.*`: status, diffs, staging, commit, log, PRs.
-- `fs.*`: list, read, write, watch.
+- `workspace.*`, `project.*` and `session.*`: workspaces, projects, worktree sessions, scripts.
+- `chat.*`: state, send, permission, interrupt, settings for structured agents (X6). Events: `chat.item`, `chat.state`.
+- `git.*` and `gh.*`: status, diffs, staging, commit, log, PRs, issues.
+- `fs.*`: list, files, read, write, watch.
+- `shell.history`: the login shell's history for input suggestions.
 
 ## Versioning
 

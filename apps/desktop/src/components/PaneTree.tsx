@@ -3,6 +3,8 @@ import { type PaneNode, setSizes } from "../lib/layout";
 import { getLayout, setLayout } from "../lib/store";
 import { Splitter } from "./Splitter";
 import { TerminalPane } from "./TerminalPane";
+import { AgentView } from "./AgentView";
+import { useStore } from "../lib/store";
 
 interface Props {
   host: string;
@@ -16,7 +18,9 @@ interface Props {
 
 export function PaneTree({ host, wsId, tabId, node, path, focused, visible }: Props) {
   const box = useRef<HTMLDivElement>(null);
+  const chat = useStore((s) => (node.type === "leaf" ? !!s.terminals[host]?.[node.session]?.chat : false));
   if (node.type === "leaf") {
+    if (chat) return <AgentView host={host} id={node.session} wsId={wsId} focused={focused === node.session} visible={visible} />;
     return <TerminalPane host={host} session={node.session} wsId={wsId} focused={focused === node.session} visible={visible} />;
   }
   const row = node.dir === "row";

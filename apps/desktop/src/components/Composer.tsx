@@ -6,20 +6,8 @@ import { M, type IssueRef, type Project, type ProjectConfig, type Session } from
 import { errorToast, selectSession, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, cx } from "./ui";
+import { CLAUDE_MODELS, EFFORTS } from "../lib/agents";
 
-const CLAUDE_MODELS = [
-  { id: "fable", label: "Fable 5.1" },
-  { id: "opus", label: "Opus 5.5" },
-  { id: "sonnet", label: "Sonnet 5.5" },
-  { id: "haiku", label: "Haiku 4.5" },
-];
-const EFFORTS = [
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-  { id: "xhigh", label: "Extra high" },
-  { id: "max", label: "Max" },
-];
 
 interface Choice {
   agent: string;

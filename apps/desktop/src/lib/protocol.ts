@@ -27,8 +27,57 @@ export interface TerminalInfo {
   /** At a shell prompt (OSC 133); undefined until the shell reports marks. */
   prompt?: boolean;
   alt_screen?: boolean;
+  /** Structured agent (X6): render the chat view, not a terminal. */
+  chat?: boolean;
   created_at: number;
   last_output_at: number;
+}
+
+export type ChatKind = "user" | "assistant" | "thinking" | "tool" | "system" | "error";
+export type ToolStatus = "running" | "ok" | "error" | "denied";
+export type ChatStatus = "idle" | "working" | "blocked" | "done" | "error";
+
+export interface ToolCall {
+  name: string;
+  summary: string;
+  input: unknown;
+  output?: string | null;
+  status: ToolStatus;
+  diff?: string | null;
+}
+
+export interface ChatItem {
+  id: string;
+  kind: ChatKind;
+  text: string;
+  tool?: ToolCall | null;
+  ts: number;
+  partial?: boolean;
+}
+
+export interface PermissionAsk {
+  id: string;
+  tool: string;
+  summary: string;
+  input: unknown;
+  reason?: string | null;
+  can_always: boolean;
+  diff?: string | null;
+}
+
+export interface ChatState {
+  items: ChatItem[];
+  pending: PermissionAsk[];
+  status: ChatStatus;
+  model?: string | null;
+  effort?: string | null;
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  turn_started_at?: number | null;
+  agent_session?: string | null;
+  slash_commands: string[];
+  queued: string[];
 }
 
 export interface Project {
@@ -243,10 +292,16 @@ export const M = {
   workspaceAddProject: "workspace.add_project",
   prStatus: "gh.pr_status",
   fsList: "fs.list",
+  fsFiles: "fs.files",
   fsRead: "fs.read",
   fsWrite: "fs.write",
   fsWatch: "fs.watch",
   fsUnwatch: "fs.unwatch",
+  chatState: "chat.state",
+  chatSend: "chat.send",
+  chatPermission: "chat.permission",
+  chatInterrupt: "chat.interrupt",
+  chatSettings: "chat.settings",
 } as const;
 
 export const EV = {
@@ -259,4 +314,6 @@ export const EV = {
   sessionsChanged: "sessions.changed",
   workspacesChanged: "workspaces.changed",
   fsChanged: "fs.changed",
+  chatItem: "chat.item",
+  chatState: "chat.state",
 } as const;
