@@ -85,6 +85,26 @@ textarea,
 .jaunt-block-mark.failed {
   background: var(--color-error);
 }
+/* Warp-mode command blocks (T7). */
+.jaunt-block-sep {
+  border-top: 1px solid #262626;
+  pointer-events: none;
+}
+.jaunt-block-chip {
+  color: var(--color-faint);
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+  pointer-events: none;
+  padding-right: 6px;
+  background: var(--color-bg);
+}
+.jaunt-block-chip.failed {
+  color: var(--color-error);
+}
+.jaunt-block-chip.running {
+  color: var(--color-accent);
+}
 
 @keyframes jaunt-spin {
   to {

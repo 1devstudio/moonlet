@@ -29,6 +29,8 @@ export interface TerminalInfo {
   alt_screen?: boolean;
   /** Structured agent (X6): render the chat view, not a terminal. */
   chat?: boolean;
+  /** Shell keeps its own prompt; no Warp editor (T7). */
+  classic?: boolean;
   created_at: number;
   last_output_at: number;
 }
@@ -259,6 +261,7 @@ export const M = {
   terminalKill: "terminal.kill",
   terminalWrite: "terminal.write",
   terminalSearch: "terminal.search",
+  terminalSetClassic: "terminal.set_classic",
   hooksStatus: "hooks.status",
   hooksInstall: "hooks.install",
   projectAdd: "project.add",

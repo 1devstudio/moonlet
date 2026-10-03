@@ -4,6 +4,7 @@ import { rpc, sendInput } from "../lib/daemon";
 import { M, type DirEntry } from "../lib/protocol";
 import { commonPrefix, firstWord, historyFor, rememberCommand, suggest } from "../lib/suggest";
 import { findEntry, getEntry } from "../lib/terminals";
+import { setClassic } from "../lib/actions";
 
 function shortPath(p: string, home: string | null): string {
   if (home && (p === home || p.startsWith(home + "/"))) return "~" + p.slice(home.length);
@@ -179,6 +180,13 @@ export function InputEditor({
           </span>
         )}
         <span className="ml-auto shrink-0 whitespace-nowrap text-faint">{ghost ? "→ accept" : "⇧↵ new line"}</span>
+        <button
+          className="shrink-0 rounded px-1.5 text-faint hover:bg-hover hover:text-fg"
+          title="Show the shell's own prompt and type into the terminal"
+          onClick={() => void setClassic(host, terminal, true)}
+        >
+          Classic
+        </button>
       </div>
       <div className="relative font-mono text-[13.5px] leading-[20px]">
         {/* Mirror of the text with the ghost suggestion after it. */}

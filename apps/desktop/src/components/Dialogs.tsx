@@ -407,6 +407,9 @@ function TerminalSection() {
           <input type="checkbox" checked={t.allowOsc52} onChange={(e) => setTerm({ allowOsc52: e.target.checked })} /> Let programs write to the clipboard (OSC 52)
         </label>
         <label className="flex items-center gap-2">
+          <input type="checkbox" checked={t.classicPrompt} onChange={(e) => setTerm({ classicPrompt: e.target.checked })} /> New shells keep their own prompt (classic, no input editor)
+        </label>
+        <label className="flex items-center gap-2">
           <input type="checkbox" checked={settings.notifyWhenFocused} onChange={(e) => updateSettings({ notifyWhenFocused: e.target.checked })} /> Notify even while jaunt is focused
         </label>
       </div>
