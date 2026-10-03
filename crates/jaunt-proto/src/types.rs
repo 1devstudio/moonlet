@@ -53,7 +53,7 @@ pub struct TerminalInfo {
     pub cwd: String,
     pub command: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_id: Option<String>,
+    pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     pub agent_state: AgentState,
@@ -72,7 +72,7 @@ pub struct TerminalInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Repo {
+pub struct Project {
     pub id: String,
     pub name: String,
     pub path: String,
@@ -81,7 +81,7 @@ pub struct Repo {
 
 /// Per-repo settings, read from `<repo>/.jaunt/config.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct RepoConfig {
+pub struct ProjectConfig {
     #[serde(default)]
     pub setup: Option<String>,
     #[serde(default)]
@@ -99,9 +99,10 @@ pub struct RepoConfig {
 
 /// One task: a git worktree on its own branch, with its terminals.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Workspace {
+pub struct Session {
     pub id: String,
-    pub repo_id: String,
+    #[serde(alias = "repo_id")]
+    pub project_id: String,
     pub name: String,
     pub branch: String,
     pub base: String,
@@ -109,7 +110,15 @@ pub struct Workspace {
     pub agent: Option<String>,
     pub archived: bool,
     pub created_at: u64,
+    /// Section (within a workspace) the user moved this session into.
     #[serde(default)]
+    pub section: Option<String>,
+    /// Last agent model and effort chosen for this session.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default, alias = "sessions")]
     pub terminals: Vec<TerminalId>,
     /// Opaque UI layout (tabs, splits), owned by the client.
     #[serde(default)]
@@ -117,6 +126,71 @@ pub struct Workspace {
     /// Commands to restart after a daemon restart (S4).
     #[serde(default)]
     pub restore: Vec<RestoreEntry>,
+}
+
+/// A named set of projects shown as one block in the sidebar (X5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub project_ids: Vec<String>,
+    #[serde(default)]
+    pub sections: Vec<Section>,
+    #[serde(default)]
+    pub view: WorkspaceView,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Section {
+    pub id: String,
+    pub name: String,
+}
+
+/// Sidebar presentation of a workspace, persisted with it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceView {
+    /// `project` (default), `status` or `none`.
+    #[serde(default = "default_group")]
+    pub group_by: String,
+    /// `recent` (default), `created` or `name`.
+    #[serde(default = "default_sort")]
+    pub sort_by: String,
+    /// Project ids to show; empty means all.
+    #[serde(default)]
+    pub filter: Vec<String>,
+}
+
+impl Default for WorkspaceView {
+    fn default() -> Self {
+        Self {
+            group_by: default_group(),
+            sort_by: default_sort(),
+            filter: Vec::new(),
+        }
+    }
+}
+
+fn default_group() -> String {
+    "project".into()
+}
+
+fn default_sort() -> String {
+    "recent".into()
+}
+
+/// An issue or pull request a session can start from (composer source picker).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IssueRef {
+    pub number: u64,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    pub url: String,
+    /// Set for pull requests.
+    #[serde(default)]
+    pub head_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -127,7 +201,7 @@ pub struct RestoreEntry {
     pub command: Vec<String>,
     pub agent: Option<String>,
     /// Live terminal this entry describes; reassigned on restore.
-    #[serde(default)]
+    #[serde(default, alias = "session")]
     pub terminal: Option<TerminalId>,
 }
 

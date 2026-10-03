@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use jaunt_core::fs::Watchers;
 use jaunt_core::hooks::{self, HookPaths};
 use jaunt_core::paths::{hostname, now_ms};
+use jaunt_core::session::SessionManager;
 use jaunt_core::terminal::TerminalManager;
-use jaunt_core::workspace::WorkspaceManager;
 use jaunt_core::{fs, git};
 use jaunt_proto::methods::{self as m, AttachResult};
 use jaunt_proto::types::DaemonInfo;
@@ -23,7 +23,7 @@ use crate::server::Conn;
 
 pub struct Daemon {
     pub terminals: Arc<TerminalManager>,
-    pub workspaces: Arc<WorkspaceManager>,
+    pub sessions: Arc<SessionManager>,
     watchers: Arc<Watchers>,
     started_at: u64,
     shutdown: watch::Sender<bool>,
@@ -48,7 +48,7 @@ impl Daemon {
     pub fn new(socket: PathBuf, base_env: BTreeMap<String, String>) -> Arc<Self> {
         let (shutdown, _) = watch::channel(false);
         let terminals = TerminalManager::new(socket.clone(), base_env);
-        let workspaces = WorkspaceManager::load(
+        let sessions = SessionManager::load(
             jaunt_core::paths::state_file(),
             jaunt_core::paths::home().join("worktrees"),
             terminals.clone(),
@@ -57,7 +57,7 @@ impl Daemon {
         let watchers = Watchers::new(Arc::new(move |m| emitter.emit(m)));
         Arc::new(Self {
             terminals,
-            workspaces,
+            sessions,
             watchers,
             started_at: now_ms(),
             shutdown,
@@ -125,10 +125,10 @@ impl Daemon {
             }
             m::TERMINAL_CREATE => {
                 let req: m::TerminalCreate = params(p)?;
-                match req.workspace_id.clone() {
+                match req.session_id.clone() {
                     Some(id) => {
-                        let ws = self.workspaces.workspace(&id).map_err(internal)?;
-                        ok(self.workspaces.spawn_in(&ws, req).map_err(internal)?)
+                        let ws = self.sessions.session(&id).map_err(internal)?;
+                        ok(self.sessions.spawn_in(&ws, req).map_err(internal)?)
                     }
                     None => ok(s.create(req).map_err(internal)?),
                 }
@@ -192,37 +192,59 @@ impl Daemon {
         }
     }
 
-    /// Repos, workspaces, git and files.
+    /// Workspaces, projects, sessions, git and files.
     async fn handle_project(&self, conn: &Conn, method: &str, p: Value) -> HandlerResult {
-        let w = &self.workspaces;
+        let w = &self.sessions;
         match method {
-            m::REPO_ADD => {
-                let r: m::RepoAdd = params(p)?;
-                ok(w.add_repo(&r.path).await.map_err(internal)?)
+            m::WORKSPACE_LIST => ok(w.list_workspaces()),
+            m::WORKSPACE_CREATE => {
+                let r: m::WorkspaceCreate = params(p)?;
+                ok(w.create_workspace(&r.name).map_err(internal)?)
             }
-            m::REPO_LIST => ok(w.list_repos()),
-            m::REPO_REMOVE => {
+            m::WORKSPACE_UPDATE => ok(w.update_workspace(params(p)?).map_err(internal)?),
+            m::WORKSPACE_DELETE => {
                 let r: m::IdRef = params(p)?;
-                w.remove_repo(&r.id).map_err(internal)?;
+                w.delete_workspace(&r.id).map_err(internal)?;
                 ok(true)
             }
-            m::REPO_CONFIG => {
-                let r: m::IdRef = params(p)?;
-                ok(w.repo_config(&r.id).map_err(internal)?)
+            m::WORKSPACE_ADD_PROJECT => {
+                let r: m::WorkspaceAddProject = params(p)?;
+                ok(w.workspace_add_project(&r.id, &r.path)
+                    .await
+                    .map_err(internal)?)
             }
-            m::WORKSPACE_CREATE => ok(w.create_workspace(params(p)?).await.map_err(internal)?),
-            m::WORKSPACE_LIST => ok(w.list_workspaces()),
-            m::WORKSPACE_ARCHIVE => {
+            m::GH_ISSUES | m::GH_PRS => {
+                let r: m::GitPath = params(p)?;
+                let kind = if method == m::GH_PRS { "pr" } else { "issue" };
+                ok(git::gh_list(&path(&r.path), kind).await.map_err(internal)?)
+            }
+            m::PROJECT_ADD => {
+                let r: m::ProjectAdd = params(p)?;
+                ok(w.add_project(&r.path).await.map_err(internal)?)
+            }
+            m::PROJECT_LIST => ok(w.list_projects()),
+            m::PROJECT_REMOVE => {
+                let r: m::IdRef = params(p)?;
+                w.remove_project(&r.id).map_err(internal)?;
+                ok(true)
+            }
+            m::PROJECT_CONFIG => {
+                let r: m::IdRef = params(p)?;
+                ok(w.project_config(&r.id).map_err(internal)?)
+            }
+            m::SESSION_CREATE => ok(w.create_session(params(p)?).await.map_err(internal)?),
+            m::SESSION_LIST => ok(w.list_sessions()),
+            m::SESSION_ARCHIVE => {
                 w.archive(params(p)?).await.map_err(internal)?;
                 ok(true)
             }
-            m::WORKSPACE_UNARCHIVE => {
+            m::SESSION_UNARCHIVE => {
                 let r: m::IdRef = params(p)?;
                 ok(w.unarchive(&r.id).await.map_err(internal)?)
             }
-            m::WORKSPACE_UPDATE => ok(w.update(params(p)?).map_err(internal)?),
-            m::WORKSPACE_RUN => {
-                let r: m::WorkspaceRun = params(p)?;
+            m::SESSION_UPDATE => ok(w.update(params(p)?).map_err(internal)?),
+            m::SESSION_RUN => {
+                let r: m::SessionRun = params(p)?;
                 ok(w.run_script(&r.id, &r.script, r.cols, r.rows)
                     .await
                     .map_err(internal)?)

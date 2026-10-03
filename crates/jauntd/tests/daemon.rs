@@ -198,7 +198,7 @@ async fn unknown_method_is_an_error_not_a_disconnect() {
 
 #[tokio::test]
 async fn workspace_lifecycle_over_rpc() {
-    use jaunt_proto::types::{GitStatus, Repo, Workspace};
+    use jaunt_proto::types::{GitStatus, Project, Session};
     let d = TestDaemon::start().await;
     let repo = d.home.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
@@ -228,14 +228,14 @@ async fn workspace_lifecycle_over_rpc() {
     ]);
 
     let mut c = d.client().await;
-    let r: Repo = c
-        .request(methods::REPO_ADD, serde_json::json!({"path": repo}))
+    let r: Project = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
         .await
         .unwrap();
-    let ws: Workspace = c
+    let ws: Session = c
         .request(
-            methods::WORKSPACE_CREATE,
-            serde_json::json!({"repo_id": r.id, "name": "Add docs"}),
+            methods::SESSION_CREATE,
+            serde_json::json!({"project_id": r.id, "name": "Add docs"}),
         )
         .await
         .unwrap();
@@ -252,13 +252,13 @@ async fn workspace_lifecycle_over_rpc() {
     let shell: TerminalInfo = c
         .request(
             methods::TERMINAL_CREATE,
-            serde_json::json!({"cwd": "", "workspace_id": ws.id}),
+            serde_json::json!({"cwd": "", "session_id": ws.id}),
         )
         .await
         .unwrap();
     assert_eq!(shell.cwd, ws.path);
     let _: bool = c
-        .request(methods::WORKSPACE_ARCHIVE, serde_json::json!({"id": ws.id}))
+        .request(methods::SESSION_ARCHIVE, serde_json::json!({"id": ws.id}))
         .await
         .unwrap();
     assert!(!std::path::Path::new(&ws.path).exists());

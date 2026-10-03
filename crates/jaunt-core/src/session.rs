@@ -1,6 +1,7 @@
-//! Repos and workspaces (A4, S4). A workspace is one task: a git worktree
-//! on its own branch plus the terminals running in it. State is persisted
-//! to `~/.jaunt/state.json` so it survives daemon restarts.
+//! Workspaces, projects and sessions (X5, A4, S4). A workspace is a named
+//! set of projects; a project is a repo folder; a session is one task: a git
+//! worktree on its own branch plus the terminals running in it. State is
+//! persisted to `~/.jaunt/state.json` so it survives daemon restarts.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -8,9 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use jaunt_proto::methods::{
-    self, TerminalCreate, WorkspaceArchive, WorkspaceCreate, WorkspaceUpdate,
+    self, SessionArchive, SessionCreate, SessionUpdate, TerminalCreate, WorkspaceUpdate,
 };
-use jaunt_proto::types::{Repo, RepoConfig, RestoreEntry, TerminalInfo, TerminalKind, Workspace};
+use jaunt_proto::types::{
+    Project, ProjectConfig, RestoreEntry, Session, TerminalInfo, TerminalKind, Workspace,
+    WorkspaceView,
+};
 use jaunt_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 
@@ -19,15 +23,71 @@ use crate::paths::now_ms;
 use crate::pty::user_shell;
 use crate::terminal::{TerminalManager, expand_home};
 
+const STATE_VERSION: u32 = 2;
+pub const DEFAULT_WORKSPACE: &str = "My workspaces";
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct State {
     #[serde(default)]
-    pub repos: Vec<Repo>,
+    pub version: u32,
     #[serde(default)]
     pub workspaces: Vec<Workspace>,
+    #[serde(default)]
+    pub projects: Vec<Project>,
+    #[serde(default)]
+    pub sessions: Vec<Session>,
 }
 
-pub struct WorkspaceManager {
+impl State {
+    /// Reads `state.json`, migrating the pre-ADR-0005 layout where `repos`
+    /// were projects and `workspaces` were what are now sessions.
+    pub fn parse(text: &str) -> State {
+        let Ok(mut v) = serde_json::from_str::<serde_json::Value>(text) else {
+            return State::default();
+        };
+        if v.get("version").and_then(|x| x.as_u64()).unwrap_or(0) < 2
+            && let Some(obj) = v.as_object_mut()
+        {
+            let repos = obj.remove("repos").unwrap_or(serde_json::json!([]));
+            let tasks = obj.remove("workspaces").unwrap_or(serde_json::json!([]));
+            obj.insert("projects".into(), repos);
+            obj.insert("sessions".into(), tasks);
+        }
+        let mut st: State = serde_json::from_value(v).unwrap_or_default();
+        st.version = STATE_VERSION;
+        st.ensure_workspace();
+        st
+    }
+
+    /// There is always at least one workspace; projects nobody groups land
+    /// in the first one so nothing disappears from the sidebar.
+    fn ensure_workspace(&mut self) {
+        if self.workspaces.is_empty() {
+            self.workspaces.push(Workspace {
+                id: new_id(),
+                name: DEFAULT_WORKSPACE.into(),
+                project_ids: Vec::new(),
+                sections: Vec::new(),
+                view: WorkspaceView::default(),
+                created_at: now_ms(),
+            });
+        }
+        let orphans: Vec<String> = self
+            .projects
+            .iter()
+            .filter(|p| {
+                !self
+                    .workspaces
+                    .iter()
+                    .any(|w| w.project_ids.contains(&p.id))
+            })
+            .map(|p| p.id.clone())
+            .collect();
+        self.workspaces[0].project_ids.extend(orphans);
+    }
+}
+
+pub struct SessionManager {
     state: Mutex<State>,
     file: PathBuf,
     worktrees_root: PathBuf,
@@ -36,6 +96,56 @@ pub struct WorkspaceManager {
 
 fn new_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..12].to_string()
+}
+
+/// Session name: the given one, else the prompt's first line (≤ 48 chars).
+pub fn derive_name(name: Option<&str>, prompt: Option<&str>) -> String {
+    if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
+        return n.to_string();
+    }
+    let line = prompt
+        .and_then(|p| p.lines().map(str::trim).find(|l| !l.is_empty()))
+        .unwrap_or("");
+    if line.is_empty() {
+        return "Untitled".into();
+    }
+    let mut out: String = line.chars().take(48).collect();
+    if line.chars().count() > 48 {
+        if let Some(i) = out.rfind(' ').filter(|i| *i > 24) {
+            out.truncate(i);
+        }
+        out.push('…');
+    }
+    out
+}
+
+/// Model, effort and name flags for the agents that understand them.
+fn agent_flags(cmd: &str, s: &Session) -> String {
+    let mut out = String::new();
+    match crate::agent::detect_agent(cmd) {
+        Some("claude") => {
+            if let Some(m) = &s.model {
+                out.push_str(&format!(" --model {}", shell_quote(m)));
+            }
+            if let Some(e) = &s.effort {
+                out.push_str(&format!(" --effort {}", shell_quote(e)));
+            }
+            out.push_str(&format!(" -n {}", shell_quote(&s.name)));
+        }
+        Some("codex") => {
+            if let Some(m) = &s.model {
+                out.push_str(&format!(" -m {}", shell_quote(m)));
+            }
+            if let Some(e) = &s.effort {
+                out.push_str(&format!(
+                    " -c {}",
+                    shell_quote(&format!("model_reasoning_effort={e}"))
+                ));
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 /// Built-in agent commands; `.jaunt/config.toml` `[agents]` adds more.
@@ -53,16 +163,22 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-impl WorkspaceManager {
+impl SessionManager {
     pub fn load(
         file: PathBuf,
         worktrees_root: PathBuf,
         terminals: Arc<TerminalManager>,
     ) -> Arc<Self> {
         let state = std::fs::read_to_string(&file)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+            .map(|s| State::parse(&s))
+            .unwrap_or_else(|_| {
+                let mut st = State {
+                    version: STATE_VERSION,
+                    ..Default::default()
+                };
+                st.ensure_workspace();
+                st
+            });
         let mgr = Arc::new(Self {
             state: Mutex::new(state),
             file,
@@ -90,6 +206,49 @@ impl WorkspaceManager {
         Ok(out)
     }
 
+    fn emit_sessions(&self) {
+        self.terminals.emit(Message::event(
+            methods::EV_SESSIONS_CHANGED,
+            self.list_sessions(),
+        ));
+    }
+
+    pub fn list_projects(&self) -> Vec<Project> {
+        self.state.lock().unwrap().projects.clone()
+    }
+
+    pub fn list_sessions(&self) -> Vec<Session> {
+        let live: std::collections::HashSet<TerminalId> =
+            self.terminals.list().into_iter().map(|s| s.id).collect();
+        let mut list = self.state.lock().unwrap().sessions.clone();
+        for w in &mut list {
+            w.terminals.retain(|id| live.contains(id));
+        }
+        list
+    }
+
+    pub fn session(&self, id: &str) -> Result<Session> {
+        self.state
+            .lock()
+            .unwrap()
+            .sessions
+            .iter()
+            .find(|w| w.id == id)
+            .cloned()
+            .context("no such session")
+    }
+
+    fn project(&self, id: &str) -> Result<Project> {
+        self.state
+            .lock()
+            .unwrap()
+            .projects
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
+            .context("no such project")
+    }
+
     fn emit_workspaces(&self) {
         self.terminals.emit(Message::event(
             methods::EV_WORKSPACES_CHANGED,
@@ -97,46 +256,109 @@ impl WorkspaceManager {
         ));
     }
 
-    pub fn list_repos(&self) -> Vec<Repo> {
-        self.state.lock().unwrap().repos.clone()
-    }
-
     pub fn list_workspaces(&self) -> Vec<Workspace> {
-        let live: std::collections::HashSet<TerminalId> =
-            self.terminals.list().into_iter().map(|s| s.id).collect();
-        let mut list = self.state.lock().unwrap().workspaces.clone();
-        for w in &mut list {
-            w.terminals.retain(|id| live.contains(id));
+        self.state.lock().unwrap().workspaces.clone()
+    }
+
+    pub fn create_workspace(&self, name: &str) -> Result<Workspace> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("workspace name is empty");
         }
-        list
+        let ws = Workspace {
+            id: new_id(),
+            name: name.to_string(),
+            project_ids: Vec::new(),
+            sections: Vec::new(),
+            view: WorkspaceView::default(),
+            created_at: now_ms(),
+        };
+        let out = ws.clone();
+        self.mutate(|st| {
+            st.workspaces.push(ws);
+            Ok(())
+        })?;
+        self.emit_workspaces();
+        Ok(out)
     }
 
-    pub fn workspace(&self, id: &str) -> Result<Workspace> {
-        self.state
-            .lock()
-            .unwrap()
-            .workspaces
-            .iter()
-            .find(|w| w.id == id)
-            .cloned()
-            .context("no such workspace")
+    pub fn update_workspace(&self, req: WorkspaceUpdate) -> Result<Workspace> {
+        let out = self.mutate(|st| {
+            let known: Vec<String> = st.projects.iter().map(|p| p.id.clone()).collect();
+            let w = st
+                .workspaces
+                .iter_mut()
+                .find(|w| w.id == req.id)
+                .context("no such workspace")?;
+            if let Some(n) = req.name.filter(|n| !n.trim().is_empty()) {
+                w.name = n.trim().to_string();
+            }
+            if let Some(ids) = req.project_ids {
+                w.project_ids = ids.into_iter().filter(|id| known.contains(id)).collect();
+            }
+            if let Some(sections) = req.sections {
+                let ids: Vec<String> = sections.iter().map(|s| s.id.clone()).collect();
+                w.sections = sections;
+                // Sessions in a removed section fall back to their project.
+                for s in &mut st.sessions {
+                    if s.section.as_ref().is_some_and(|sec| {
+                        sec.starts_with(&format!("{}:", req.id)) && !ids.contains(sec)
+                    }) {
+                        s.section = None;
+                    }
+                }
+            }
+            if let Some(view) = req.view {
+                w.view = view;
+            }
+            Ok(st
+                .workspaces
+                .iter()
+                .find(|w| w.id == req.id)
+                .cloned()
+                .unwrap())
+        })?;
+        self.emit_workspaces();
+        self.emit_sessions();
+        Ok(out)
     }
 
-    fn repo(&self, id: &str) -> Result<Repo> {
-        self.state
-            .lock()
-            .unwrap()
-            .repos
-            .iter()
-            .find(|r| r.id == id)
-            .cloned()
-            .context("no such repo")
+    /// Deletes the grouping only; projects and sessions stay.
+    pub fn delete_workspace(&self, id: &str) -> Result<()> {
+        self.mutate(|st| {
+            if st.workspaces.len() == 1 {
+                bail!("the last workspace cannot be deleted");
+            }
+            st.workspaces.retain(|w| w.id != id);
+            st.ensure_workspace();
+            Ok(())
+        })?;
+        self.emit_workspaces();
+        Ok(())
     }
 
-    pub async fn add_repo(&self, path: &str) -> Result<Repo> {
+    /// Adds a project (or finds it) and attaches it to a workspace.
+    pub async fn workspace_add_project(&self, id: &str, path: &str) -> Result<Project> {
+        let project = self.add_project(path).await?;
+        self.mutate(|st| {
+            let w = st
+                .workspaces
+                .iter_mut()
+                .find(|w| w.id == id)
+                .context("no such workspace")?;
+            if !w.project_ids.contains(&project.id) {
+                w.project_ids.push(project.id.clone());
+            }
+            Ok(())
+        })?;
+        self.emit_workspaces();
+        Ok(project)
+    }
+
+    pub async fn add_project(&self, path: &str) -> Result<Project> {
         let root = git::toplevel(&expand_home(path)).await?;
         let root_s = root.display().to_string();
-        if let Some(r) = self.list_repos().into_iter().find(|r| r.path == root_s) {
+        if let Some(r) = self.list_projects().into_iter().find(|r| r.path == root_s) {
             return Ok(r);
         }
         let config = read_config(&root);
@@ -144,7 +366,7 @@ impl WorkspaceManager {
             Some(b) => b,
             None => git::default_branch(&root).await,
         };
-        let repo = Repo {
+        let repo = Project {
             id: new_id(),
             name: root
                 .file_name()
@@ -155,38 +377,52 @@ impl WorkspaceManager {
         };
         let r = repo.clone();
         self.mutate(|st| {
-            st.repos.push(r);
+            st.projects.push(r);
+            st.ensure_workspace();
             Ok(())
         })?;
-        self.terminals
-            .emit(Message::event(methods::EV_REPOS_CHANGED, self.list_repos()));
+        self.emit_workspaces();
+        self.terminals.emit(Message::event(
+            methods::EV_PROJECTS_CHANGED,
+            self.list_projects(),
+        ));
         Ok(repo)
     }
 
-    pub fn remove_repo(&self, id: &str) -> Result<()> {
+    pub fn remove_project(&self, id: &str) -> Result<()> {
         self.mutate(|st| {
-            if st.workspaces.iter().any(|w| w.repo_id == id && !w.archived) {
-                bail!("archive this repo's workspaces first");
+            if st
+                .sessions
+                .iter()
+                .any(|w| w.project_id == id && !w.archived)
+            {
+                bail!("archive this project's sessions first");
             }
-            st.repos.retain(|r| r.id != id);
-            st.workspaces.retain(|w| w.repo_id != id);
+            st.projects.retain(|r| r.id != id);
+            st.sessions.retain(|w| w.project_id != id);
+            for w in &mut st.workspaces {
+                w.project_ids.retain(|p| p != id);
+            }
             Ok(())
         })?;
-        self.terminals
-            .emit(Message::event(methods::EV_REPOS_CHANGED, self.list_repos()));
+        self.terminals.emit(Message::event(
+            methods::EV_PROJECTS_CHANGED,
+            self.list_projects(),
+        ));
         Ok(())
     }
 
-    pub fn repo_config(&self, id: &str) -> Result<RepoConfig> {
-        Ok(read_config(Path::new(&self.repo(id)?.path)))
+    pub fn project_config(&self, id: &str) -> Result<ProjectConfig> {
+        Ok(read_config(Path::new(&self.project(id)?.path)))
     }
 
     fn agent_command(
         &self,
-        repo: &Repo,
+        repo: &Project,
         agent: &str,
         prompt: Option<&str>,
         resume: bool,
+        session: Option<&Session>,
     ) -> String {
         let config = read_config(Path::new(&repo.path));
         let mut cmd = config
@@ -195,6 +431,9 @@ impl WorkspaceManager {
             .cloned()
             .or_else(|| builtin_agent(agent, resume).map(String::from))
             .unwrap_or_else(|| agent.to_string());
+        if let Some(s) = session {
+            cmd.push_str(&agent_flags(&cmd, s));
+        }
         if let Some(p) = prompt.filter(|p| !p.trim().is_empty())
             && !resume
         {
@@ -204,18 +443,18 @@ impl WorkspaceManager {
         cmd
     }
 
-    fn script_env(&self, ws: &Workspace, repo: &Repo) -> BTreeMap<String, String> {
+    fn script_env(&self, ws: &Session, repo: &Project) -> BTreeMap<String, String> {
         BTreeMap::from([
             ("JAUNT_ROOT_PATH".into(), repo.path.clone()),
-            ("JAUNT_WORKSPACE_PATH".into(), ws.path.clone()),
-            ("JAUNT_WORKSPACE_NAME".into(), ws.name.clone()),
+            ("JAUNT_SESSION_PATH".into(), ws.path.clone()),
+            ("JAUNT_SESSION_NAME".into(), ws.name.clone()),
             ("JAUNT_BRANCH".into(), ws.branch.clone()),
         ])
     }
 
     /// Starts a session inside a workspace and remembers how to restart it.
-    pub fn spawn_in(&self, ws: &Workspace, mut req: TerminalCreate) -> Result<TerminalInfo> {
-        let repo = self.repo(&ws.repo_id)?;
+    pub fn spawn_in(&self, ws: &Session, mut req: TerminalCreate) -> Result<TerminalInfo> {
+        let repo = self.project(&ws.project_id)?;
         // "New agent tab": an agent session without a command runs that agent.
         if req.kind == TerminalKind::Agent
             && req.command.is_empty()
@@ -225,7 +464,7 @@ impl WorkspaceManager {
             req.command = base.command;
             req.title.get_or_insert(agent);
         }
-        req.workspace_id = Some(ws.id.clone());
+        req.session_id = Some(ws.id.clone());
         if req.cwd.is_empty() {
             req.cwd = ws.path.clone();
         }
@@ -243,7 +482,7 @@ impl WorkspaceManager {
                 terminal: Some(info.id),
             };
             self.mutate(|st| {
-                if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == ws.id) {
+                if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
                     w.terminals.push(info.id);
                     w.restore.push(entry);
                 }
@@ -251,21 +490,21 @@ impl WorkspaceManager {
             })?;
         } else {
             self.mutate(|st| {
-                if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == ws.id) {
+                if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
                     w.terminals.push(info.id);
                 }
                 Ok(())
             })?;
         }
-        self.emit_workspaces();
+        self.emit_sessions();
         Ok(info)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn agent_session(
         &self,
-        ws: &Workspace,
-        repo: &Repo,
+        ws: &Session,
+        repo: &Project,
         agent: &str,
         prompt: Option<&str>,
         resume: bool,
@@ -277,7 +516,7 @@ impl WorkspaceManager {
             command: vec![
                 user_shell(),
                 "-lic".into(),
-                self.agent_command(repo, agent, prompt, resume),
+                self.agent_command(repo, agent, prompt, resume, Some(ws)),
             ],
             cols,
             rows,
@@ -288,10 +527,18 @@ impl WorkspaceManager {
         }
     }
 
-    pub async fn create_workspace(&self, req: WorkspaceCreate) -> Result<Workspace> {
-        let repo = self.repo(&req.repo_id)?;
+    pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
+        let mut req = req;
+        let repo = self.project(&req.project_id)?;
         let repo_path = PathBuf::from(&repo.path);
-        let slug = git::slug(&req.name);
+        let name = derive_name(req.name.as_deref(), req.prompt.as_deref());
+        if let Some(pr) = req.pr {
+            // Work on the pull request's own branch.
+            let head = git::pr_head_branch(&repo_path, pr).await?;
+            req.branch = Some(head);
+            req.existing_branch = true;
+        }
+        let slug = git::slug(&name);
         let existing_branches = git::branches(&repo_path).await.unwrap_or_default();
         let branch = if req.existing_branch {
             let b = req
@@ -321,10 +568,10 @@ impl WorkspaceManager {
             Some("") | Some("none") => None,
             Some(a) => Some(a.to_string()),
         };
-        let ws = Workspace {
+        let ws = Session {
             id: new_id(),
-            repo_id: repo.id.clone(),
-            name: req.name.clone(),
+            project_id: repo.id.clone(),
+            name,
             branch,
             base: if req.existing_branch {
                 repo.base_branch.clone()
@@ -335,13 +582,16 @@ impl WorkspaceManager {
             agent: agent.clone(),
             archived: false,
             created_at: now_ms(),
+            section: None,
+            model: req.model.clone().filter(|m| !m.is_empty()),
+            effort: req.effort.clone().filter(|e| !e.is_empty()),
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
         };
         let w = ws.clone();
         self.mutate(|st| {
-            st.workspaces.push(w);
+            st.sessions.push(w);
             Ok(())
         })?;
 
@@ -381,7 +631,7 @@ impl WorkspaceManager {
                 },
             )?;
         }
-        self.workspace(&ws.id)
+        self.session(&ws.id)
     }
 
     pub async fn run_script(
@@ -391,8 +641,8 @@ impl WorkspaceManager {
         cols: u16,
         rows: u16,
     ) -> Result<TerminalInfo> {
-        let ws = self.workspace(id)?;
-        let config = read_config(Path::new(&self.repo(&ws.repo_id)?.path));
+        let ws = self.session(id)?;
+        let config = read_config(Path::new(&self.project(&ws.project_id)?.path));
         let (cmd, kind) = match script {
             "run" => (config.run, TerminalKind::Run),
             "setup" => (config.setup, TerminalKind::Setup),
@@ -404,7 +654,7 @@ impl WorkspaceManager {
             .with_context(|| format!("no `{script}` script in .jaunt/config.toml"))?;
         // Restart instead of piling up run panes.
         for s in self.terminals.list() {
-            if s.workspace_id.as_deref() == Some(id) && s.kind == kind && s.title == script {
+            if s.session_id.as_deref() == Some(id) && s.kind == kind && s.title == script {
                 let _ = self.terminals.kill(s.id, true);
             }
         }
@@ -421,9 +671,9 @@ impl WorkspaceManager {
         )
     }
 
-    pub async fn archive(&self, req: WorkspaceArchive) -> Result<()> {
-        let ws = self.workspace(&req.id)?;
-        let repo = self.repo(&ws.repo_id)?;
+    pub async fn archive(&self, req: SessionArchive) -> Result<()> {
+        let ws = self.session(&req.id)?;
+        let repo = self.project(&ws.project_id)?;
         let config = read_config(Path::new(&repo.path));
         if let Some(script) = config.archive.filter(|s| !s.trim().is_empty())
             && Path::new(&ws.path).exists()
@@ -436,7 +686,7 @@ impl WorkspaceManager {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.status()).await;
         }
         for s in self.terminals.list() {
-            if s.workspace_id.as_deref() == Some(ws.id.as_str()) {
+            if s.session_id.as_deref() == Some(ws.id.as_str()) {
                 let _ = self.terminals.kill(s.id, true);
             }
         }
@@ -447,21 +697,21 @@ impl WorkspaceManager {
             git::delete_branch(Path::new(&repo.path), &ws.branch).await?;
         }
         self.mutate(|st| {
-            if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == ws.id) {
+            if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
                 w.archived = true;
                 w.terminals.clear();
                 w.restore.clear();
             }
             Ok(())
         })?;
-        self.emit_workspaces();
+        self.emit_sessions();
         Ok(())
     }
 
     /// Brings an archived workspace back (recreating the worktree if needed).
-    pub async fn unarchive(&self, id: &str) -> Result<Workspace> {
-        let ws = self.workspace(id)?;
-        let repo = self.repo(&ws.repo_id)?;
+    pub async fn unarchive(&self, id: &str) -> Result<Session> {
+        let ws = self.session(id)?;
+        let repo = self.project(&ws.project_id)?;
         if !Path::new(&ws.path).exists() {
             git::worktree_add(
                 Path::new(&repo.path),
@@ -473,33 +723,40 @@ impl WorkspaceManager {
             .await?;
         }
         self.mutate(|st| {
-            if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == id) {
+            if let Some(w) = st.sessions.iter_mut().find(|w| w.id == id) {
                 w.archived = false;
             }
             Ok(())
         })?;
-        let ws = self.workspace(id)?;
+        let ws = self.session(id)?;
         self.spawn_in(&ws, TerminalCreate::default())?;
-        self.workspace(id)
+        self.session(id)
     }
 
-    pub fn update(&self, req: WorkspaceUpdate) -> Result<Workspace> {
+    pub fn update(&self, req: SessionUpdate) -> Result<Session> {
         self.mutate(|st| {
             let w = st
-                .workspaces
+                .sessions
                 .iter_mut()
                 .find(|w| w.id == req.id)
-                .context("no such workspace")?;
-            if let Some(n) = req.name {
+                .context("no such session")?;
+            if let Some(n) = req
+                .name
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+            {
                 w.name = n;
             }
             if let Some(l) = req.layout {
                 w.layout = l;
             }
+            if let Some(sec) = req.section {
+                w.section = (!sec.is_empty()).then_some(sec);
+            }
             Ok(())
         })?;
-        self.emit_workspaces();
-        self.workspace(&req.id)
+        self.emit_sessions();
+        self.session(&req.id)
     }
 
     /// After a daemon restart, terminals are gone: restart each workspace's
@@ -507,18 +764,18 @@ impl WorkspaceManager {
     pub fn restore_after_restart(&self) -> usize {
         let live: std::collections::HashSet<TerminalId> =
             self.terminals.list().into_iter().map(|s| s.id).collect();
-        let pending: Vec<Workspace> = self
+        let pending: Vec<Session> = self
             .state
             .lock()
             .unwrap()
-            .workspaces
+            .sessions
             .iter()
             .filter(|w| !w.archived && Path::new(&w.path).is_dir())
             .cloned()
             .collect();
         let mut restored = 0;
         for ws in pending {
-            let Ok(repo) = self.repo(&ws.repo_id) else {
+            let Ok(repo) = self.project(&ws.project_id) else {
                 continue;
             };
             let dead: Vec<RestoreEntry> = ws
@@ -531,7 +788,7 @@ impl WorkspaceManager {
                 continue;
             }
             let _ = self.mutate(|st| {
-                if let Some(w) = st.workspaces.iter_mut().find(|w| w.id == ws.id) {
+                if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
                     w.restore
                         .retain(|e| e.terminal.is_some_and(|id| live.contains(&id)));
                     w.terminals.retain(|id| live.contains(id));
@@ -573,7 +830,7 @@ impl WorkspaceManager {
         let changed = self
             .mutate(|st| {
                 let mut changed = false;
-                for w in &mut st.workspaces {
+                for w in &mut st.sessions {
                     let before = (w.terminals.len(), w.restore.len());
                     if removed {
                         w.terminals.retain(|s| *s != id);
@@ -585,13 +842,13 @@ impl WorkspaceManager {
             })
             .unwrap_or(false);
         if changed {
-            self.emit_workspaces();
+            self.emit_sessions();
         }
     }
 }
 
 /// Closed tabs and processes that exited on their own are not restored.
-async fn track_removed_sessions(mgr: std::sync::Weak<WorkspaceManager>) {
+async fn track_removed_sessions(mgr: std::sync::Weak<SessionManager>) {
     let Some(m) = mgr.upgrade() else { return };
     let mut rx = m.terminals.subscribe_events();
     drop(m);
@@ -623,14 +880,14 @@ fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
 }
 
 /// Reads `<repo>/.jaunt/config.toml`; missing or invalid files give defaults.
-pub fn read_config(repo: &Path) -> RepoConfig {
+pub fn read_config(repo: &Path) -> ProjectConfig {
     let path = repo.join(".jaunt").join("config.toml");
     match std::fs::read_to_string(&path) {
         Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
             tracing::warn!("{}: {e}", path.display());
-            RepoConfig::default()
+            ProjectConfig::default()
         }),
-        Err(_) => RepoConfig::default(),
+        Err(_) => ProjectConfig::default(),
     }
 }
 
@@ -639,12 +896,12 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    async fn setup() -> (tempfile::TempDir, tempfile::TempDir, Arc<WorkspaceManager>) {
+    async fn setup() -> (tempfile::TempDir, tempfile::TempDir, Arc<SessionManager>) {
         let repo = crate::git::tests::repo().await;
         std::fs::create_dir(repo.path().join(".jaunt")).unwrap();
         std::fs::write(
             repo.path().join(".jaunt/config.toml"),
-            "setup = \"echo setting-up\"\nrun = \"echo running\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'echo agent:$JAUNT_WORKSPACE_NAME; sleep 30'\"\n",
+            "setup = \"echo setting-up\"\nrun = \"echo running\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'echo agent:$JAUNT_SESSION_NAME; sleep 30'\"\n",
         )
         .unwrap();
         crate::git::git(repo.path(), &["add", "-A"]).await.unwrap();
@@ -654,7 +911,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let env: BTreeMap<String, String> = std::env::vars().collect();
         let terminals = TerminalManager::new(home.path().join("s.sock"), env);
-        let mgr = WorkspaceManager::load(
+        let mgr = SessionManager::load(
             home.path().join("state.json"),
             home.path().join("worktrees"),
             terminals,
@@ -666,12 +923,12 @@ mod tests {
     async fn create_run_archive_workspace() {
         let (repo, home, mgr) = setup().await;
         let r = mgr
-            .add_repo(&repo.path().display().to_string())
+            .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
         assert_eq!(r.base_branch, "main");
         assert_eq!(
-            mgr.add_repo(
+            mgr.add_project(
                 &repo
                     .path()
                     .join("subdir-does-not-matter")
@@ -687,9 +944,9 @@ mod tests {
         );
 
         let ws = mgr
-            .create_workspace(WorkspaceCreate {
-                repo_id: r.id.clone(),
-                name: "Fix login".into(),
+            .create_session(SessionCreate {
+                project_id: r.id.clone(),
+                name: Some("Fix login".into()),
                 branch: None,
                 from: None,
                 existing_branch: false,
@@ -697,6 +954,9 @@ mod tests {
                 prompt: Some("it's broken".into()),
                 cols: 80,
                 rows: 24,
+                model: None,
+                effort: None,
+                pr: None,
             })
             .await
             .unwrap();
@@ -714,9 +974,9 @@ mod tests {
 
         // Second workspace with the same name gets unique branch and dir.
         let ws2 = mgr
-            .create_workspace(WorkspaceCreate {
-                repo_id: r.id.clone(),
-                name: "Fix login".into(),
+            .create_session(SessionCreate {
+                project_id: r.id.clone(),
+                name: Some("Fix login".into()),
                 branch: None,
                 from: None,
                 existing_branch: false,
@@ -724,6 +984,9 @@ mod tests {
                 prompt: None,
                 cols: 80,
                 rows: 24,
+                model: None,
+                effort: None,
+                pr: None,
             })
             .await
             .unwrap();
@@ -737,9 +1000,9 @@ mod tests {
         let saved: State =
             serde_json::from_str(&std::fs::read_to_string(home.path().join("state.json")).unwrap())
                 .unwrap();
-        assert_eq!(saved.workspaces.len(), 2);
+        assert_eq!(saved.sessions.len(), 2);
 
-        mgr.archive(WorkspaceArchive {
+        mgr.archive(SessionArchive {
             id: ws.id.clone(),
             remove_worktree: true,
             delete_branch: true,
@@ -747,28 +1010,28 @@ mod tests {
         .await
         .unwrap();
         assert!(!Path::new(&ws.path).exists());
-        assert!(mgr.workspace(&ws.id).unwrap().archived);
+        assert!(mgr.session(&ws.id).unwrap().archived);
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(
             mgr.terminals
                 .list()
                 .iter()
-                .all(|s| s.workspace_id.as_deref() != Some(ws.id.as_str()))
+                .all(|s| s.session_id.as_deref() != Some(ws.id.as_str()))
         );
-        assert!(mgr.remove_repo(&r.id).is_err(), "ws2 still active");
+        assert!(mgr.remove_project(&r.id).is_err(), "ws2 still active");
     }
 
     #[tokio::test]
     async fn restores_agents_after_restart() {
         let (repo, home, mgr) = setup().await;
         let r = mgr
-            .add_repo(&repo.path().display().to_string())
+            .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
         let ws = mgr
-            .create_workspace(WorkspaceCreate {
-                repo_id: r.id.clone(),
-                name: "t".into(),
+            .create_session(SessionCreate {
+                project_id: r.id.clone(),
+                name: Some("t".into()),
                 branch: None,
                 from: None,
                 existing_branch: false,
@@ -776,6 +1039,9 @@ mod tests {
                 prompt: Some("hi".into()),
                 cols: 80,
                 rows: 24,
+                model: None,
+                effort: None,
+                pr: None,
             })
             .await
             .unwrap();
@@ -784,7 +1050,7 @@ mod tests {
         // Simulate a daemon restart: a fresh session manager with no terminals.
         let env: BTreeMap<String, String> = std::env::vars().collect();
         let terminals = TerminalManager::new(home.path().join("s2.sock"), env);
-        let mgr2 = WorkspaceManager::load(
+        let mgr2 = SessionManager::load(
             home.path().join("state.json"),
             home.path().join("worktrees"),
             terminals,
@@ -801,7 +1067,7 @@ mod tests {
             !s[0].command.last().unwrap().contains("'hi'"),
             "the first prompt is not replayed"
         );
-        assert_eq!(mgr2.workspace(&ws.id).unwrap().restore.len(), 1);
+        assert_eq!(mgr2.session(&ws.id).unwrap().restore.len(), 1);
         assert_eq!(
             mgr2.restore_after_restart(),
             0,
@@ -813,13 +1079,13 @@ mod tests {
     async fn closing_a_tab_stops_restoring_it() {
         let (repo, _home, mgr) = setup().await;
         let r = mgr
-            .add_repo(&repo.path().display().to_string())
+            .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
         let ws = mgr
-            .create_workspace(WorkspaceCreate {
-                repo_id: r.id.clone(),
-                name: "t".into(),
+            .create_session(SessionCreate {
+                project_id: r.id.clone(),
+                name: Some("t".into()),
                 branch: None,
                 from: None,
                 existing_branch: false,
@@ -827,13 +1093,16 @@ mod tests {
                 prompt: None,
                 cols: 80,
                 rows: 24,
+                model: None,
+                effort: None,
+                pr: None,
             })
             .await
             .unwrap();
         let id = ws.restore[0].terminal.unwrap();
         mgr.terminals.kill(id, true).unwrap();
         for _ in 0..100 {
-            if mgr.workspace(&ws.id).unwrap().restore.is_empty() {
+            if mgr.session(&ws.id).unwrap().restore.is_empty() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(30)).await;
@@ -845,23 +1114,23 @@ mod tests {
     async fn agent_commands_resume_where_supported() {
         let (repo, _home, mgr) = setup().await;
         let r = mgr
-            .add_repo(&repo.path().display().to_string())
+            .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
         assert_eq!(
-            mgr.agent_command(&r, "claude", Some("fix it"), false),
+            mgr.agent_command(&r, "claude", Some("fix it"), false, None),
             "claude 'fix it'"
         );
         assert_eq!(
-            mgr.agent_command(&r, "claude", Some("fix it"), true),
+            mgr.agent_command(&r, "claude", Some("fix it"), true, None),
             "claude --continue"
         );
         assert_eq!(
-            mgr.agent_command(&r, "codex", None, true),
+            mgr.agent_command(&r, "codex", None, true, None),
             "codex resume --last"
         );
         assert!(
-            mgr.agent_command(&r, "fake", None, false)
+            mgr.agent_command(&r, "fake", None, false, None)
                 .starts_with("sh -c")
         );
     }
@@ -870,13 +1139,13 @@ mod tests {
     async fn exited_sessions_are_not_restored() {
         let (repo, _home, mgr) = setup().await;
         let r = mgr
-            .add_repo(&repo.path().display().to_string())
+            .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
         let ws = mgr
-            .create_workspace(WorkspaceCreate {
-                repo_id: r.id.clone(),
-                name: "t".into(),
+            .create_session(SessionCreate {
+                project_id: r.id.clone(),
+                name: Some("t".into()),
                 branch: None,
                 from: None,
                 existing_branch: false,
@@ -884,6 +1153,9 @@ mod tests {
                 prompt: None,
                 cols: 80,
                 rows: 24,
+                model: None,
+                effort: None,
+                pr: None,
             })
             .await
             .unwrap();
@@ -891,7 +1163,7 @@ mod tests {
         let id = ws.restore[0].terminal.unwrap();
         mgr.terminals.write(id, b"exit\n".to_vec()).unwrap();
         for _ in 0..200 {
-            if mgr.workspace(&ws.id).unwrap().restore.is_empty() {
+            if mgr.session(&ws.id).unwrap().restore.is_empty() {
                 assert!(
                     mgr.terminals.get(id).is_some(),
                     "exited session stays visible"
@@ -904,9 +1176,149 @@ mod tests {
     }
 
     #[test]
+    fn migrates_pre_rename_state() {
+        let old = r#"{"repos":[{"id":"p1","name":"api","path":"/r/api","base_branch":"main"}],
+            "workspaces":[{"id":"s1","repo_id":"p1","name":"Fix","branch":"jaunt/fix","base":"main","path":"/w/fix",
+            "agent":"claude","archived":false,"created_at":1,"sessions":[3],"layout":null,
+            "restore":[{"kind":"agent","title":"claude","cwd":"/w/fix","command":["zsh"],"agent":"claude","session":3}]}]}"#;
+        let st = State::parse(old);
+        assert_eq!(st.version, STATE_VERSION);
+        assert_eq!(st.projects.len(), 1);
+        assert_eq!(st.sessions[0].project_id, "p1");
+        assert_eq!(st.sessions[0].terminals, vec![3]);
+        assert_eq!(st.sessions[0].restore[0].terminal, Some(3));
+        assert_eq!(st.workspaces.len(), 1);
+        assert_eq!(st.workspaces[0].name, DEFAULT_WORKSPACE);
+        assert_eq!(st.workspaces[0].project_ids, vec!["p1".to_string()]);
+        // Already-migrated files are read as they are.
+        let again = State::parse(&serde_json::to_string(&st).unwrap());
+        assert_eq!(again.workspaces.len(), 1);
+        assert_eq!(again.workspaces[0].id, st.workspaces[0].id);
+    }
+
+    #[tokio::test]
+    async fn workspaces_share_projects_and_sections() {
+        let (repo, _home, mgr) = setup().await;
+        let first = mgr.list_workspaces()[0].clone();
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        assert!(
+            mgr.list_workspaces()[0].project_ids.contains(&r.id),
+            "new projects land in the first workspace"
+        );
+        let work = mgr.create_workspace("Work").unwrap();
+        mgr.workspace_add_project(&work.id, &repo.path().display().to_string())
+            .await
+            .unwrap();
+        let all = mgr.list_workspaces();
+        assert!(
+            all.iter().all(|w| w.project_ids.contains(&r.id)),
+            "shared by both"
+        );
+
+        let sec = jaunt_proto::types::Section {
+            id: format!("{}:a", work.id),
+            name: "Today".into(),
+        };
+        mgr.update_workspace(WorkspaceUpdate {
+            id: work.id.clone(),
+            name: None,
+            project_ids: None,
+            sections: Some(vec![sec.clone()]),
+            view: None,
+        })
+        .unwrap();
+        let s = mgr
+            .create_session(SessionCreate {
+                project_id: r.id.clone(),
+                name: None,
+                branch: None,
+                from: None,
+                existing_branch: false,
+                agent: Some("none".into()),
+                prompt: Some("Make the login page faster\nand more".into()),
+                model: None,
+                effort: None,
+                pr: None,
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+        assert_eq!(s.name, "Make the login page faster");
+        assert_eq!(s.branch, "jaunt/make-the-login-page-faster");
+        let moved = mgr
+            .update(SessionUpdate {
+                id: s.id.clone(),
+                name: None,
+                layout: None,
+                section: Some(sec.id.clone()),
+            })
+            .unwrap();
+        assert_eq!(moved.section.as_deref(), Some(sec.id.as_str()));
+        // Removing the section returns the session to its project.
+        mgr.update_workspace(WorkspaceUpdate {
+            id: work.id.clone(),
+            name: None,
+            project_ids: None,
+            sections: Some(vec![]),
+            view: None,
+        })
+        .unwrap();
+        assert_eq!(mgr.session(&s.id).unwrap().section, None);
+
+        mgr.delete_workspace(&work.id).unwrap();
+        assert!(
+            mgr.delete_workspace(&first.id).is_err(),
+            "the last workspace stays"
+        );
+        assert!(
+            !mgr.list_projects().is_empty(),
+            "deleting a workspace keeps projects"
+        );
+    }
+
+    #[test]
+    fn names_and_agent_flags() {
+        assert_eq!(derive_name(None, None), "Untitled");
+        assert_eq!(derive_name(Some("  Mine "), Some("x")), "Mine");
+        let long = "Refactor the authentication flow so that sessions survive token refresh";
+        let n = derive_name(None, Some(long));
+        assert!(n.ends_with('…') && n.chars().count() <= 49, "{n}");
+        let s = Session {
+            id: "s".into(),
+            project_id: "p".into(),
+            name: "it's fine".into(),
+            branch: "b".into(),
+            base: "main".into(),
+            path: "/w".into(),
+            agent: Some("claude".into()),
+            archived: false,
+            created_at: 0,
+            section: None,
+            model: Some("sonnet".into()),
+            effort: Some("high".into()),
+            terminals: vec![],
+            layout: serde_json::Value::Null,
+            restore: vec![],
+        };
+        assert_eq!(
+            agent_flags("claude", &s),
+            " --model 'sonnet' --effort 'high' -n 'it'\\''s fine'"
+        );
+        assert_eq!(
+            agent_flags("codex", &s),
+            " -m 'sonnet' -c 'model_reasoning_effort=high'"
+        );
+        assert_eq!(agent_flags("my-agent --x", &s), "");
+    }
+
+    #[test]
     fn config_parsing() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read_config(dir.path()), RepoConfig::default());
+        assert_eq!(read_config(dir.path()), ProjectConfig::default());
         std::fs::create_dir(dir.path().join(".jaunt")).unwrap();
         std::fs::write(
             dir.path().join(".jaunt/config.toml"),

@@ -140,8 +140,8 @@ impl TerminalManager {
         env.entry("SHELL".into()).or_insert(shell);
         env.entry("LANG".into())
             .or_insert_with(|| "en_US.UTF-8".into());
-        if let Some(ws) = &req.workspace_id {
-            env.insert("JAUNT_WORKSPACE_ID".into(), ws.clone());
+        if let Some(ws) = &req.session_id {
+            env.insert("JAUNT_SESSION".into(), ws.clone());
         }
         env.extend(req.env.clone());
 
@@ -177,7 +177,7 @@ impl TerminalManager {
             title: req.title.clone().unwrap_or_else(|| default_title(&command)),
             cwd: cwd.display().to_string(),
             command,
-            workspace_id: req.workspace_id.clone(),
+            session_id: req.session_id.clone(),
             agent,
             agent_state: AgentState::Idle,
             agent_message: None,
@@ -372,7 +372,7 @@ impl TerminalManager {
                 methods::EV_AGENT_ATTENTION,
                 Attention {
                     terminal: st.info.id,
-                    workspace_id: st.info.workspace_id.clone(),
+                    session_id: st.info.session_id.clone(),
                     state: st.agent.state,
                     title: st.info.title.clone(),
                     message: st.agent.message.clone(),

@@ -678,6 +678,79 @@ pub async fn pr_create(
         .context("pull request was created but cannot be read back")
 }
 
+/// Head branch of a pull request, fetched locally so a worktree can use it.
+pub async fn pr_head_branch(repo: &Path, number: u64) -> Result<String> {
+    let n = number.to_string();
+    let out = gh(
+        repo,
+        &[
+            "pr",
+            "view",
+            &n,
+            "--json",
+            "headRefName",
+            "-q",
+            ".headRefName",
+        ],
+    )
+    .await?;
+    let branch = String::from_utf8_lossy(&out).trim().to_string();
+    if branch.is_empty() {
+        bail!("pull request #{number} has no head branch");
+    }
+    if git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .await
+    .is_err()
+    {
+        git(
+            repo,
+            &["fetch", "origin", &format!("pull/{number}/head:{branch}")],
+        )
+        .await?;
+    }
+    Ok(branch)
+}
+
+/// Open issues (`kind = "issue"`) or pull requests (`"pr"`) for the composer.
+pub async fn gh_list(repo: &Path, kind: &str) -> Result<Vec<jaunt_proto::types::IssueRef>> {
+    let fields = if kind == "pr" {
+        "number,title,body,url,headRefName"
+    } else {
+        "number,title,body,url"
+    };
+    let sub = if kind == "pr" { "pr" } else { "issue" };
+    let out = gh(
+        repo,
+        &[
+            sub, "list", "--state", "open", "--limit", "50", "--json", fields,
+        ],
+    )
+    .await?;
+    let v: Vec<serde_json::Value> = serde_json::from_slice(&out)?;
+    Ok(v.into_iter()
+        .map(|x| jaunt_proto::types::IssueRef {
+            number: x["number"].as_u64().unwrap_or(0),
+            title: x["title"].as_str().unwrap_or("").into(),
+            body: x["body"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(4000)
+                .collect(),
+            url: x["url"].as_str().unwrap_or("").into(),
+            head_branch: x["headRefName"].as_str().map(String::from),
+        })
+        .collect())
+}
+
 pub async fn pr_status(path: &Path) -> Result<Option<PullRequest>> {
     let root = toplevel(path).await?;
     let out = run_raw(
