@@ -85,6 +85,9 @@ export class TermEntry {
   cwd = "";
   onTitle?: (title: string) => void;
   onFileLink?: FileLinkHandler;
+  /** Set while the input editor is shown: printable keys typed into the
+   * terminal go there instead (T6). */
+  redirect?: (ch: string) => void;
 
   constructor(
     readonly host: string,
@@ -117,7 +120,15 @@ export class TermEntry {
 
     // Cmd shortcuts belong to the app; xterm never sees them, so they can
     // never leak into an agent's input (T2). Native copy/paste still work.
-    this.term.attachCustomKeyEventHandler((e) => !e.metaKey);
+    this.term.attachCustomKeyEventHandler((e) => {
+      if (e.metaKey) return false;
+      if (this.redirect && e.type === "keydown" && e.key.length === 1 && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        this.redirect(e.key);
+        return false;
+      }
+      return true;
+    });
 
     this.disposables.push(
       this.term.onData((d) => void sendInput(host, session, d)),

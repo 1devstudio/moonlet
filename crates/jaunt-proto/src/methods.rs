@@ -60,6 +60,7 @@ pub const GIT_LOG: &str = "git.log";
 pub const GIT_BRANCHES: &str = "git.branches";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
 pub const GH_ISSUES: &str = "gh.issues";
+pub const SHELL_HISTORY: &str = "shell.history";
 pub const GH_PRS: &str = "gh.prs";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
 
@@ -417,4 +418,11 @@ pub struct HooksInstall {
     pub claude: bool,
     #[serde(default = "yes")]
     pub codex: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShellHistory {
+    /// `zsh`, `bash` or `fish`; the login shell when absent.
+    #[serde(default)]
+    pub shell: Option<String>,
 }

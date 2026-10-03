@@ -43,3 +43,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X3 | Signed, notarized app with auto-update | P1 | 3 | partial | [X3-distribution.md](X3-distribution.md) |
 | X4 | Visual design (Superset look and feel) | P1 | 3 | implemented | [X4-visual-design.md](X4-visual-design.md) |
 | X5 | Workspaces, projects and sessions (Conductor model) | P1 | 3 | implemented | [X5-workspaces-projects-sessions.md](X5-workspaces-projects-sessions.md) |
+| T6 | Warp-style input editor with suggestions | P1 | 3 | implemented | [T6-input-editor.md](T6-input-editor.md) |
