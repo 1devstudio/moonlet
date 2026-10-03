@@ -107,11 +107,11 @@ impl Host {
                 params,
             });
             let bytes = encode_frame(&frame).map_err(|e| {
-                self.pending.lock().unwrap().remove(&id);
+                self.forget_request(id);
                 RpcError::new("too_large", e.to_string())
             })?;
             if link.tx.send(bytes).is_err() {
-                self.pending.lock().unwrap().remove(&id);
+                self.forget_request(id);
                 return Err(RpcError::new("disconnected", "connection closed"));
             }
         }
@@ -122,15 +122,25 @@ impl Host {
         };
         match tokio::time::timeout(Duration::from_secs(timeout), rx).await {
             Ok(Ok(r)) => r,
-            Ok(Err(_)) => Err(RpcError::new(
-                "disconnected",
-                "connection lost before reply",
-            )),
+            Ok(Err(_)) => {
+                self.forget_request(id);
+                Err(RpcError::new(
+                    "disconnected",
+                    "connection lost before reply",
+                ))
+            }
             Err(_) => {
-                self.pending.lock().unwrap().remove(&id);
+                self.forget_request(id);
                 Err(RpcError::new("timeout", format!("{method} timed out")))
             }
         }
+    }
+
+    /// Drops a request that will get no reply, including an attach's
+    /// pending snapshot routing.
+    fn forget_request(&self, id: u64) {
+        self.pending.lock().unwrap().remove(&id);
+        self.attaching.lock().unwrap().remove(&id);
     }
 
     pub fn input(&self, session: TerminalId, data: Vec<u8>) -> Result<(), RpcError> {

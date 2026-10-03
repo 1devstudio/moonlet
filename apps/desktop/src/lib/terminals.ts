@@ -102,6 +102,7 @@ export class TermEntry {
   /** The shell draws no prompt; the app's editor is the input (T7). */
   warp = false;
   private replaying = false;
+  private disposed = false;
   onTitle?: (title: string) => void;
   onFileLink?: FileLinkHandler;
   /** Set while the input editor is shown: printable keys typed into the
@@ -189,9 +190,11 @@ export class TermEntry {
       await rpc(this.host, M.terminalAttach, { id: this.session, cols, rows });
     } catch (e) {
       // No snapshot is coming: keep showing live output rather than freezing,
-      // and try again shortly (reconnects re-attach everything anyway).
+      // and try again shortly (reconnects re-attach everything anyway). A
+      // terminal that no longer exists, or a closed entry, is not retried.
       this.ready = true;
-      window.setTimeout(() => void this.attach().catch(() => {}), 2000);
+      const gone = e instanceof Error && /no such terminal/i.test(e.message);
+      if (!gone && !this.disposed) window.setTimeout(() => !this.disposed && void this.attach().catch(() => {}), 2000);
       throw e;
     }
     this.lastSize = `${cols}x${rows}`;
@@ -405,6 +408,7 @@ export class TermEntry {
   }
 
   dispose() {
+    this.disposed = true;
     this.unmount();
     this.unregister();
     this.disposables.forEach((d) => d.dispose());

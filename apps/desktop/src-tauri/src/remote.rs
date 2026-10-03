@@ -149,7 +149,10 @@ fn sha256_hex(data: &[u8]) -> String {
         .collect()
 }
 
-async fn upload(alias: &str, local: &Path, remote_name: &str) -> Result<()> {
+/// Uploads to `<name>.new`, verifies the checksum (and, with
+/// `expect_version`, the version it reports), then replaces the installed
+/// binary. A rejected build never replaces a working one.
+async fn upload(alias: &str, local: &Path, remote_name: &str, expect_version: Option<&str>) -> Result<()> {
     let data = std::fs::read(local).with_context(|| format!("read {}", local.display()))?;
     let want = sha256_hex(&data);
     let tmp = format!("~/.jaunt/bin/{remote_name}.new");
@@ -164,6 +167,16 @@ async fn upload(alias: &str, local: &Path, remote_name: &str) -> Result<()> {
     if out.trim() != want {
         let _ = ssh(alias, &format!("rm -f {tmp}"), None).await;
         bail!("checksum mismatch for {remote_name} (expected {want}, got {out})");
+    }
+    if let Some(expected) = expect_version {
+        let (_, out, _) = ssh(alias, &format!("{tmp} --version"), None).await?;
+        let got = out.split_whitespace().nth(1).unwrap_or("").to_string();
+        if got != expected {
+            let _ = ssh(alias, &format!("rm -f {tmp}"), None).await;
+            bail!(
+                "the {remote_name} build reports version {got:?}, but this app expects {expected}; rebuild the helpers (scripts/build-remote.sh)"
+            );
+        }
     }
     let (code, _, err) = ssh(
         alias,
@@ -195,14 +208,14 @@ pub async fn install(alias: &str, resource_dir: Option<PathBuf>) -> Result<Insta
     let jauntd = find_helper(&dirs, "jauntd", triple).with_context(|| {
         format!("no jauntd build for {triple}; build it with `scripts/build-remote.sh {triple}`")
     })?;
-    upload(alias, &jauntd, "jauntd").await?;
+    let want = env!("CARGO_PKG_VERSION");
+    upload(alias, &jauntd, "jauntd", Some(want)).await?;
     if let Some(cli) = find_helper(&dirs, "jaunt", triple) {
-        upload(alias, &cli, "jaunt").await?;
+        upload(alias, &cli, "jaunt", None).await?;
     }
     let version = remote_version(alias)
         .await?
         .context("helper installed but does not run")?;
-    let want = env!("CARGO_PKG_VERSION");
     if version != want {
         bail!("installed helper reports {version}, but this app expects {want}; rebuild the helpers (scripts/build-remote.sh)");
     }
