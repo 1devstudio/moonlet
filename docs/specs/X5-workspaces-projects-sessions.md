@@ -23,7 +23,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
   - **Add project…:** a folder picker or an existing project.
   - Rename and Delete workspace (deleting only removes the grouping; projects and sessions remain).
 - A "New workspace" entry at the bottom of the workspace list.
-- **Session row:** a branch icon (purple when the branch has an open PR, otherwise muted), the title, and the diffstat (`+5.5k −41`, using k for thousands). The agent state still shows as a dot when an agent is working, blocked, done or failed. Double-click renames; the context menu has Rename, Move to section, Archive.
+- **Session row:** a branch icon (purple when the branch has an open PR, otherwise muted), the title, and the diffstat (`+5.5k −41`, using k for thousands). The agent state still shows as a dot when an agent is working, blocked, done or failed. Double-click renames; the context menu has Move to section and Archive. Rows can be dragged onto a section to file them, or back onto their own project (or a status/flat group) to unfile them. Drop targets highlight; Tauri's window file-drop is disabled so HTML drag and drop works.
 
 ## Composer (new session)
 
@@ -35,7 +35,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
   - The session name is the prompt's first line, trimmed to 48 characters, or "Untitled".
   - The branch is `jaunt/<slug>`, made unique.
   - The worktree is created and the setup script runs.
-  - The agent starts with the chosen model and effort: Claude `--model <alias> --effort <level> -n <name>`; Codex `-m <model> -c model_reasoning_effort=<level>` (unverified here, no Codex install).
+  - The agent starts with the chosen model and effort: Claude `--model <alias> --effort <level> -n <name>`; Codex `-m <model> -c model_reasoning_effort=<level>`, checked against the Codex source (`utils/cli` shared options and config overrides).
   - The prompt becomes the agent's first message.
 - The last used agent, model and effort are remembered per project.
 
@@ -59,7 +59,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 - [x] An existing `state.json` from before the rename loads with all projects and sessions under "My workspaces". Unit test `migrates_pre_rename_state`; also exercised live, where a running protocol-1 daemon was upgraded in place, its state migrated, and terminals re-linked to sessions.
 - [x] Two workspaces can share a project. Collapse state is per workspace and per group. Test: `workspaces_share_projects_and_sections`.
 - [x] Group, sort and filter work and are persisted in the workspace `view`. Tests: `sidebar.test.ts`.
-- [x] Sections: create one, move a session into it, see it under that section. Deleting a section returns its sessions to their project.
+- [x] Sections: create one, move a session into it (context menu or drag), see it under that section in every group-by mode. Deleting a section returns its sessions to their project. Drag verified in the app with synthesized mouse events, both into a section and back out.
 - [x] The composer creates a session from a prompt: name and branch derived, agent started with the selected model and effort (`names_and_agent_flags`), the prompt delivered. Verified in the app with "Terminal only".
 - [x] Starting from a GitHub issue prefills the prompt. Starting from a PR fetches `pull/N/head` into its branch and uses it. These need `gh`; not exercised against a live repo here.
 - [x] No real agent is started by tests.

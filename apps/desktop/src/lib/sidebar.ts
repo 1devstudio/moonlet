@@ -69,3 +69,27 @@ export function compact(n: number): string {
   const k = n / 1000;
   return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`;
 }
+
+export interface Dragged {
+  sessionId: string;
+  projectId: string;
+  section: string | null | undefined;
+}
+
+/**
+ * What dropping a session on a group does: `{ section }` to send to
+ * `session.update` (`""` removes it from its section), or `null` when the
+ * drop is not allowed or changes nothing.
+ */
+export function dropResult(d: Dragged, target: Group): { section: string } | null {
+  const inSection = !!d.section;
+  switch (target.kind) {
+    case "section":
+      return target.sectionId && target.sectionId !== d.section ? { section: target.sectionId } : null;
+    case "project":
+      // A session can only go back to its own project.
+      return inSection && target.projectId === d.projectId ? { section: "" } : null;
+    default:
+      return inSection ? { section: "" } : null;
+  }
+}

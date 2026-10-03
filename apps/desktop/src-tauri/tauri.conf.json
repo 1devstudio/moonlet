@@ -24,7 +24,8 @@
           "x": 16,
           "y": 20
         },
-        "backgroundColor": "#0b0c0e"
+        "backgroundColor": "#0b0c0e",
+        "dragDropEnabled": false
       }
     ],
     "macOSPrivateApi": false,
