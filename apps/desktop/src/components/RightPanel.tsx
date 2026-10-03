@@ -2,9 +2,9 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowRight, ChevronDown, ChevronRight, MoreHorizontal, Play, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type FileChange, type PullRequest, type RepoConfig, type Workspace } from "../lib/protocol";
-import { errorToast, repoOf, type RightTab, useStore, wsKey } from "../lib/store";
-import { archiveWorkspace, runScript } from "../lib/actions";
+import { M, type FileChange, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
+import { errorToast, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
+import { archiveSession, runScript } from "../lib/actions";
 import { ChecksPanel } from "./ChecksPanel";
 import { FilesPanel } from "./FilesPanel";
 import { PreviewPanel } from "./PreviewPanel";
@@ -18,7 +18,7 @@ const TABS: { id: RightTab; label: string }[] = [
   { id: "review", label: "Review" },
 ];
 
-function MoreMenu({ host, ws }: { host: string; ws: Workspace }) {
+function MoreMenu({ host, ws }: { host: string; ws: Session }) {
   const [open, setOpen] = useState(false);
   const [targets, setTargets] = useState<{ id: string; label: string }[]>([]);
   useEffect(() => {
@@ -53,7 +53,7 @@ function MoreMenu({ host, ws }: { host: string; ws: Workspace }) {
             {item("Re-run setup script", () => void runScript("setup"))}
             {item("Toggle sidebar  ⌘B", () => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen })))}
             <div className="my-1 border-t border-border" />
-            {item("Archive workspace…", () => void archiveWorkspace(), true)}
+            {item("Archive session…", () => void archiveSession(), true)}
           </div>
         </>
       )}
@@ -61,16 +61,23 @@ function MoreMenu({ host, ws }: { host: string; ws: Workspace }) {
   );
 }
 
-function TopActions({ host, ws }: { host: string; ws: Workspace }) {
-  const repo = useStore((s) => repoOf(s, host, ws));
-  const [config, setConfig] = useState<RepoConfig | null>(null);
+function TopActions({ host, ws }: { host: string; ws: Session }) {
+  const repo = useStore((s) => projectOf(s, host, ws));
+  const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [pr, setPr] = useState<PullRequest | null>(null);
   useEffect(() => {
-    if (repo) void rpc<RepoConfig>(host, M.repoConfig, { id: repo.id }).then(setConfig).catch(() => setConfig(null));
+    if (repo) void rpc<ProjectConfig>(host, M.projectConfig, { id: repo.id }).then(setConfig).catch(() => setConfig(null));
   }, [host, repo]);
   useEffect(() => {
     let live = true;
-    const load = () => void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path }).then((p) => live && setPr(p)).catch(() => live && setPr(null));
+    const load = () =>
+      void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path })
+        .then((p) => {
+          if (!live) return;
+          setPr(p);
+          useStore.setState((s) => ({ prs: { ...s.prs, [sesKey(host, ws.id)]: p } }));
+        })
+        .catch(() => live && setPr(null));
     load();
     const t = setInterval(load, 60_000);
     return () => {
@@ -115,8 +122,8 @@ function StatusBox({ status }: { status: FileChange["status"] }) {
 }
 
 /** Changed files grouped by directory, as in the reference design. */
-function ChangedFiles({ host, ws }: { host: string; ws: Workspace }) {
-  const git = useStore((s) => s.git[wsKey(host, ws.id)]);
+function ChangedFiles({ host, ws }: { host: string; ws: Session }) {
+  const git = useStore((s) => s.git[sesKey(host, ws.id)]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const groups = useMemo(() => {
     const m = new Map<string, FileChange[]>();
@@ -169,8 +176,8 @@ function ChangedFiles({ host, ws }: { host: string; ws: Workspace }) {
   );
 }
 
-function SummaryLine({ host, ws }: { host: string; ws: Workspace }) {
-  const git = useStore((s) => s.git[wsKey(host, ws.id)]);
+function SummaryLine({ host, ws }: { host: string; ws: Session }) {
+  const git = useStore((s) => s.git[sesKey(host, ws.id)]);
   return (
     <div className="flex items-center gap-2 px-5 pb-1 pt-4 font-mono text-[12.5px] text-muted">
       {git ? (
@@ -192,7 +199,7 @@ function SummaryLine({ host, ws }: { host: string; ws: Workspace }) {
   );
 }
 
-export function RightPanel({ host, ws }: { host: string; ws: Workspace }) {
+export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const tab = useStore((s) => s.rightTab);
   const preview = useStore((s) => s.preview);
   const [allFiles, setAllFiles] = useState(false);

@@ -4,22 +4,22 @@
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc, sendInput } from "./daemon";
 import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
-import { M, type TerminalInfo, type Workspace } from "./protocol";
-import { errorToast, getLayout, selectedWorkspace, setLayout, toast, useStore, workspaceSessions } from "./store";
+import { M, type TerminalInfo, type Session } from "./protocol";
+import { errorToast, getLayout, selectedSession, setLayout, toast, useStore, sessionTerminals } from "./store";
 import { findEntry } from "./terminals";
 
-function current(): { host: string; ws: Workspace } | null {
+function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
-  const ws = selectedWorkspace(s);
+  const ws = selectedSession(s);
   return s.selected && ws ? { host: s.selected.host, ws } : null;
 }
 
-async function spawnShell(host: string, ws: Workspace, cwd?: string): Promise<TerminalInfo> {
+async function spawnShell(host: string, ws: Session, cwd?: string): Promise<TerminalInfo> {
   const focused = getLayout(host, ws.id).focused;
   const entry = focused !== null ? findEntry(host, focused) : undefined;
   return rpc<TerminalInfo>(host, M.terminalCreate, {
     cwd: cwd ?? entry?.cwd ?? ws.path,
-    workspace_id: ws.id,
+    session_id: ws.id,
     cols: entry?.term.cols ?? 100,
     rows: entry?.term.rows ?? 30,
   });
@@ -44,7 +44,7 @@ export async function newAgentTab(agent: string) {
   const c = current();
   if (!c) return;
   try {
-    const info = await rpc<TerminalInfo>(c.host, M.terminalCreate, { cwd: c.ws.path, workspace_id: c.ws.id, kind: "agent", agent, cols: 120, rows: 32 });
+    const info = await rpc<TerminalInfo>(c.host, M.terminalCreate, { cwd: c.ws.path, session_id: c.ws.id, kind: "agent", agent, cols: 120, rows: 32 });
     const layout = getLayout(c.host, c.ws.id);
     const existing = tabOf(layout, info.id);
     setLayout(c.host, c.ws.id, existing ? { ...layout, active: existing.id, focused: info.id } : addTab(layout, info.id));
@@ -78,7 +78,7 @@ export async function closeFocused() {
   if (!c) return;
   const focused = getLayout(c.host, c.ws.id).focused;
   if (focused === null) return;
-  const info = useStore.getState().sessions[c.host]?.[focused];
+  const info = useStore.getState().terminals[c.host]?.[focused];
   if (info?.kind === "agent" && !info.exit) {
     const ok = await confirm(`Stop the ${info.agent ?? "agent"} running in this tab?`, { title: "Close agent", kind: "warning" });
     if (!ok) return;
@@ -109,7 +109,7 @@ export function agentSession(): { host: string; session: TerminalInfo } | null {
   const c = current();
   if (!c) return null;
   const s = useStore.getState();
-  const list = workspaceSessions(s, c.host, c.ws.id).filter((x) => x.kind === "agent" && !x.exit);
+  const list = sessionTerminals(s, c.host, c.ws.id).filter((x) => x.kind === "agent" && !x.exit);
   const focused = getLayout(c.host, c.ws.id).focused;
   const pick = list.find((x) => x.id === focused) ?? list[0];
   return pick ? { host: c.host, session: pick } : null;
@@ -122,7 +122,7 @@ export function agentSession(): { host: string; session: TerminalInfo } | null {
 export async function sendToAgent(text: string): Promise<boolean> {
   const a = agentSession();
   if (!a) {
-    toast("No running agent in this workspace", "error");
+    toast("No running agent in this session", "error");
     return false;
   }
   await sendInput(a.host, a.session.id, `\x1b[200~${text}\x1b[201~`);
@@ -134,7 +134,7 @@ export async function runScript(script: "run" | "setup") {
   const c = current();
   if (!c) return;
   try {
-    const info = await rpc<TerminalInfo>(c.host, M.wsRun, { id: c.ws.id, script, cols: 120, rows: 30 });
+    const info = await rpc<TerminalInfo>(c.host, M.sessionRun, { id: c.ws.id, script, cols: 120, rows: 30 });
     const layout = getLayout(c.host, c.ws.id);
     const tab = tabOf(layout, info.id);
     setLayout(c.host, c.ws.id, tab ? { ...layout, active: tab.id, focused: info.id } : addTab(layout, info.id));
@@ -143,16 +143,16 @@ export async function runScript(script: "run" | "setup") {
   }
 }
 
-export async function archiveWorkspace(deleteBranch = false) {
+export async function archiveSession(deleteBranch = false) {
   const c = current();
   if (!c) return;
   const ok = await confirm(
     `Archive "${c.ws.name}"? Its terminals stop and the worktree folder is removed.${deleteBranch ? " The branch is deleted too." : " The branch is kept."}`,
-    { title: "Archive workspace", kind: "warning" },
+    { title: "Archive session", kind: "warning" },
   );
   if (!ok) return;
   try {
-    await rpc(c.host, M.wsArchive, { id: c.ws.id, remove_worktree: true, delete_branch: deleteBranch });
+    await rpc(c.host, M.sessionArchive, { id: c.ws.id, remove_worktree: true, delete_branch: deleteBranch });
     useStore.setState({ selected: null });
     toast(`Archived ${c.ws.name}`);
   } catch (e) {
@@ -160,18 +160,18 @@ export async function archiveWorkspace(deleteBranch = false) {
   }
 }
 
-export function selectWorkspaceByIndex(i: number) {
+export function selectSessionByIndex(i: number) {
   const s = useStore.getState();
   const hosts = Object.values(s.hosts).sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id));
   const flat: { host: string; id: string }[] = [];
   for (const h of hosts) {
-    for (const r of s.repos[h.id] ?? []) {
-      const list = (s.workspaces[h.id] ?? []).filter((w) => !w.archived && w.repo_id === r.id).sort((a, b) => b.created_at - a.created_at);
+    for (const r of s.projects[h.id] ?? []) {
+      const list = (s.sessions[h.id] ?? []).filter((w) => !w.archived && w.project_id === r.id).sort((a, b) => b.created_at - a.created_at);
       flat.push(...list.map((w) => ({ host: h.id, id: w.id })));
     }
   }
   const t = flat[i];
-  if (t) useStore.setState({ selected: { host: t.host, workspace: t.id } });
+  if (t) useStore.setState({ selected: { host: t.host, session: t.id } });
 }
 
 export function terminalSearch(query: string, backwards = false) {

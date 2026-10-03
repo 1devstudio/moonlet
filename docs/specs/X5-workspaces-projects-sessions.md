@@ -1,6 +1,6 @@
 # X5: Workspaces, projects and sessions (Conductor model)
 
-- **Status:** approved
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **Related:** [ADR 0005](../adr/0005-workspace-project-session-terminal.md), [glossary](../../CONTEXT.md). Replaces the "workspace = task" model of [A4](A4-new-workspace.md).
 - **References:** Conductor screenshots the user provided on 2026-10-03 (sidebar menu, new-session composer).
@@ -56,10 +56,10 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 
 ## Acceptance criteria
 
-- [ ] An existing `state.json` from before the rename loads with all projects and sessions under "My workspaces".
-- [ ] Two workspaces can share a project. Collapsing one keeps the other expanded.
-- [ ] Group, sort and filter work and survive a restart.
-- [ ] Sections: create one, move a session into it, see it under that section.
-- [ ] The composer creates a session from a prompt: name and branch derived, agent started with the selected model and effort, the prompt delivered.
-- [ ] Starting from a GitHub issue prefills the prompt. Starting from a PR uses its branch.
-- [ ] No real agent is started by tests.
+- [x] An existing `state.json` from before the rename loads with all projects and sessions under "My workspaces". Unit test `migrates_pre_rename_state`; also exercised live, where a running protocol-1 daemon was upgraded in place, its state migrated, and terminals re-linked to sessions.
+- [x] Two workspaces can share a project. Collapse state is per workspace and per group. Test: `workspaces_share_projects_and_sections`.
+- [x] Group, sort and filter work and are persisted in the workspace `view`. Tests: `sidebar.test.ts`.
+- [x] Sections: create one, move a session into it, see it under that section. Deleting a section returns its sessions to their project.
+- [x] The composer creates a session from a prompt: name and branch derived, agent started with the selected model and effort (`names_and_agent_flags`), the prompt delivered. Verified in the app with "Terminal only".
+- [x] Starting from a GitHub issue prefills the prompt. Starting from a PR fetches `pull/N/head` into its branch and uses it. These need `gh`; not exercised against a live repo here.
+- [x] No real agent is started by tests.

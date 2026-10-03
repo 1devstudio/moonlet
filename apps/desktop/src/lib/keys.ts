@@ -1,14 +1,14 @@
 // App shortcuts. All use ⌘ so they never collide with keys an agent's TUI
 // needs; the terminal is told to ignore every ⌘ combination (T2).
 
-import { closeFocused, focusPane, focusedEntry, newTab, runScript, selectWorkspaceByIndex, split, switchTab } from "./actions";
+import { closeFocused, focusPane, focusedEntry, newTab, runScript, selectSessionByIndex, split, switchTab } from "./actions";
 import { useStore } from "./store";
 
 type Handler = () => void;
 
 /** Key: modifiers in fixed order + lower-case key, e.g. "shift+cmd+n". */
 const bindings: Record<string, Handler> = {
-  "shift+cmd+n": () => useStore.setState({ dialog: { kind: "new-workspace" } }),
+  "shift+cmd+n": () => useStore.setState({ dialog: { kind: "new-session" } }),
   "cmd+k": () => useStore.setState({ dialog: { kind: "palette" } }),
   "shift+cmd+p": () => useStore.setState({ dialog: { kind: "create-pr" } }),
   "cmd+,": () => useStore.setState({ dialog: { kind: "settings" } }),
@@ -58,7 +58,7 @@ export function installShortcuts() {
     if (dialog && id !== "cmd+k") return;
     if (/^cmd\+[1-9]$/.test(id)) {
       e.preventDefault();
-      selectWorkspaceByIndex(Number(id.slice(-1)) - 1);
+      selectSessionByIndex(Number(id.slice(-1)) - 1);
       return;
     }
     // Inside Monaco or text fields, leave editing shortcuts alone.

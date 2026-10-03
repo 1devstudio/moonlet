@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { archiveWorkspace, closeFocused, focusedEntry, newTab, runScript, split } from "../lib/actions";
-import { focusSession, selectWorkspace, toast, useStore } from "../lib/store";
+import { archiveSession, closeFocused, focusedEntry, newTab, runScript, split } from "../lib/actions";
+import { focusTerminal, selectSession, toast, useStore } from "../lib/store";
 import { Kbd, StateGlyph, cx } from "./ui";
 import type { AgentState } from "../lib/protocol";
 
@@ -23,7 +23,7 @@ function score(q: string, text: string): number {
   return i === query.length ? 10 : 0;
 }
 
-/** ⌘K: commands, workspaces and blocked agents in one list (T5, A5). */
+/** ⌘K: commands, sessions and blocked agents in one list (T5, A5). */
 export function CommandPalette() {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
@@ -35,22 +35,23 @@ export function CommandPalette() {
   const items = useMemo<Item[]>(() => {
     const list: Item[] = [];
     // Approval inbox first: every blocked agent across hosts.
-    for (const [host, sessions] of Object.entries(s.sessions)) {
+    for (const [host, sessions] of Object.entries(s.terminals)) {
       for (const x of Object.values(sessions)) {
         if (x.kind !== "agent" || x.exit || (x.agent_state !== "blocked" && x.agent_state !== "error")) continue;
-        const ws = s.workspaces[host]?.find((w) => w.id === x.workspace_id);
+        const ws = s.sessions[host]?.find((w) => w.id === x.session_id);
         list.push({
           id: `agent-${host}-${x.id}`,
           label: `${ws?.name ?? x.title}: ${x.agent_message ?? (x.agent_state === "blocked" ? "needs input" : "failed")}`,
           hint: host === "local" ? x.agent : `${x.agent} · ${host}`,
           state: x.agent_state,
-          run: () => focusSession(host, x.id),
+          run: () => focusTerminal(host, x.id),
         });
       }
     }
     list.push(
-      { id: "new-ws", label: "New workspace…", keys: "⇧⌘N", run: () => useStore.setState({ dialog: { kind: "new-workspace" } }) },
-      { id: "add-repo", label: "Add repository…", run: () => useStore.setState({ dialog: { kind: "add-repo" } }) },
+      { id: "new-session", label: "New session…", keys: "⇧⌘N", run: () => useStore.setState({ dialog: { kind: "new-session" } }) },
+      { id: "new-ws", label: "New workspace…", run: () => useStore.setState({ dialog: { kind: "new-workspace" } }) },
+      { id: "add-project", label: "Add project…", run: () => useStore.setState({ dialog: { kind: "add-project" } }) },
       { id: "new-tab", label: "New terminal tab", keys: "⌘T", run: () => void newTab() },
       { id: "split-r", label: "Split pane right", keys: "⌘D", run: () => void split("row") },
       { id: "split-d", label: "Split pane down", keys: "⌥⌘D", run: () => void split("col") },
@@ -62,7 +63,7 @@ export function CommandPalette() {
       { id: "checks", label: "Show review (PR, checks, commits)", run: () => useStore.setState({ rightTab: "review", rightOpen: true }) },
       { id: "commit", label: "Commit…", run: () => useStore.setState({ dialog: { kind: "commit" } }) },
       { id: "pr", label: "Create pull request…", keys: "⇧⌘P", run: () => useStore.setState({ dialog: { kind: "create-pr" } }) },
-      { id: "archive", label: "Archive workspace…", run: () => void archiveWorkspace() },
+      { id: "archive", label: "Archive session…", run: () => void archiveSession() },
       { id: "find", label: "Find in terminal", keys: "⌘F", run: () => window.dispatchEvent(new CustomEvent("jaunt:find")) },
       { id: "prev-cmd", label: "Jump to previous command", keys: "⌘↑", run: () => focusedEntry()?.jumpBlock(-1) },
       { id: "next-cmd", label: "Jump to next command", keys: "⌘↓", run: () => focusedEntry()?.jumpBlock(1) },
@@ -77,18 +78,18 @@ export function CommandPalette() {
         },
       },
       { id: "rerun", label: "Re-run last command", run: () => focusedEntry()?.rerunLast() },
-      { id: "history", label: "Show archived workspaces", run: () => useStore.setState({ showHistory: true }) },
+      { id: "history", label: "Show archived sessions", run: () => useStore.setState({ showHistory: true }) },
       { id: "settings", label: "Settings…", keys: "⌘,", run: () => useStore.setState({ dialog: { kind: "settings" } }) },
     );
-    for (const [host, wss] of Object.entries(s.workspaces)) {
+    for (const [host, wss] of Object.entries(s.sessions)) {
       for (const w of wss) {
         if (w.archived) continue;
-        const repo = s.repos[host]?.find((r) => r.id === w.repo_id);
-        list.push({ id: `ws-${host}-${w.id}`, label: `Go to ${w.name}`, hint: `${repo?.name ?? ""} · ${w.branch}${host !== "local" ? ` · ${host}` : ""}`, run: () => selectWorkspace(host, w.id) });
+        const repo = s.projects[host]?.find((r) => r.id === w.project_id);
+        list.push({ id: `ws-${host}-${w.id}`, label: `Go to ${w.name}`, hint: `${repo?.name ?? ""} · ${w.branch}${host !== "local" ? ` · ${host}` : ""}`, run: () => selectSession(host, w.id) });
       }
     }
     return list;
-  }, [s.sessions, s.workspaces, s.repos]);
+  }, [s.terminals, s.sessions, s.projects]);
 
   const filtered = items
     .map((it) => ({ it, sc: score(q, `${it.label} ${it.hint ?? ""}`) }))
@@ -125,7 +126,7 @@ export function CommandPalette() {
               close();
             }
           }}
-          placeholder="Search commands, workspaces and agents…"
+          placeholder="Search commands, sessions and agents…"
           className="w-full border-b border-border bg-transparent px-4 py-3 text-[14px] outline-none placeholder:text-faint"
         />
         <div className="max-h-[50vh] overflow-y-auto py-1">

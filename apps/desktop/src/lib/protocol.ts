@@ -15,7 +15,7 @@ export interface TerminalInfo {
   title: string;
   cwd: string;
   command: string[];
-  workspace_id?: string;
+  session_id?: string;
   agent?: string;
   agent_state: AgentState;
   agent_message?: string;
@@ -28,14 +28,14 @@ export interface TerminalInfo {
   last_output_at: number;
 }
 
-export interface Repo {
+export interface Project {
   id: string;
   name: string;
   path: string;
   base_branch: string;
 }
 
-export interface RepoConfig {
+export interface ProjectConfig {
   setup?: string | null;
   run?: string | null;
   archive?: string | null;
@@ -44,9 +44,9 @@ export interface RepoConfig {
   agents: Record<string, string>;
 }
 
-export interface Workspace {
+export interface Session {
   id: string;
-  repo_id: string;
+  project_id: string;
   name: string;
   branch: string;
   base: string;
@@ -54,8 +54,40 @@ export interface Workspace {
   agent: string | null;
   archived: boolean;
   created_at: number;
+  section?: string | null;
+  model?: string | null;
+  effort?: string | null;
   terminals: number[];
   layout: unknown;
+}
+
+/** A named set of projects shown as one sidebar block (X5). */
+export interface Workspace {
+  id: string;
+  name: string;
+  project_ids: string[];
+  sections: Section[];
+  view: WorkspaceView;
+  created_at: number;
+}
+
+export interface Section {
+  id: string;
+  name: string;
+}
+
+export interface WorkspaceView {
+  group_by: "project" | "status" | "none";
+  sort_by: "recent" | "created" | "name";
+  filter: string[];
+}
+
+export interface IssueRef {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  head_branch?: string | null;
 }
 
 export interface FileChange {
@@ -128,7 +160,7 @@ export interface PullRequest {
 
 export interface Attention {
   terminal: number;
-  workspace_id: string | null;
+  session_id: string | null;
   state: AgentState;
   title: string;
   message: string | null;
@@ -177,16 +209,16 @@ export const M = {
   terminalSearch: "terminal.search",
   hooksStatus: "hooks.status",
   hooksInstall: "hooks.install",
-  repoAdd: "repo.add",
-  repoList: "repo.list",
-  repoRemove: "repo.remove",
-  repoConfig: "repo.config",
-  wsCreate: "workspace.create",
-  wsList: "workspace.list",
-  wsArchive: "workspace.archive",
-  wsUnarchive: "workspace.unarchive",
-  wsUpdate: "workspace.update",
-  wsRun: "workspace.run",
+  projectAdd: "project.add",
+  projectList: "project.list",
+  projectRemove: "project.remove",
+  projectConfig: "project.config",
+  sessionCreate: "session.create",
+  sessionList: "session.list",
+  sessionArchive: "session.archive",
+  sessionUnarchive: "session.unarchive",
+  sessionUpdate: "session.update",
+  sessionRun: "session.run",
   gitStatus: "git.status",
   gitFileVersions: "git.file_versions",
   gitDiff: "git.diff",
@@ -198,6 +230,13 @@ export const M = {
   gitLog: "git.log",
   gitBranches: "git.branches",
   prCreate: "gh.pr_create",
+  ghIssues: "gh.issues",
+  ghPrs: "gh.prs",
+  workspaceList: "workspace.list",
+  workspaceCreate: "workspace.create",
+  workspaceUpdate: "workspace.update",
+  workspaceDelete: "workspace.delete",
+  workspaceAddProject: "workspace.add_project",
   prStatus: "gh.pr_status",
   fsList: "fs.list",
   fsRead: "fs.read",
@@ -212,7 +251,8 @@ export const EV = {
   terminalExited: "terminal.exited",
   terminalRemoved: "terminal.removed",
   attention: "agent.attention",
-  reposChanged: "repos.changed",
+  projectsChanged: "projects.changed",
+  sessionsChanged: "sessions.changed",
   workspacesChanged: "workspaces.changed",
   fsChanged: "fs.changed",
 } as const;

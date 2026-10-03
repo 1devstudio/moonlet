@@ -1,4 +1,4 @@
-// App state. Daemons own the truth (sessions, repos, workspaces); this store
+// App state. Daemons own the truth (projects, sessions, terminals); this store
 // mirrors it per host from RPCs and events, plus UI-only state.
 
 import { create } from "zustand";
@@ -14,8 +14,10 @@ import {
   type GitStatus,
   type HostInfo,
   M,
-  type Repo,
+  type Project,
+  type PullRequest,
   type TerminalInfo,
+  type Session,
   type Workspace,
 } from "./protocol";
 import { sanitize } from "./sanitize";
@@ -25,7 +27,7 @@ export type RightTab = "files" | "changes" | "review";
 
 export interface Selection {
   host: string;
-  workspace: string;
+  session: string;
 }
 
 export interface OpenFile {
@@ -39,8 +41,8 @@ export interface Settings {
   notifyWhenFocused: boolean;
 }
 
-export const wsKey = (host: string, id: string) => `${host}/${id}`;
-export const sessKey = (host: string, id: number) => `${host}:${id}`;
+export const sesKey = (host: string, id: string) => `${host}/${id}`;
+export const termKey = (host: string, id: number) => `${host}:${id}`;
 
 const SETTINGS_KEY = "jaunt.settings";
 const UI_KEY = "jaunt.ui";
@@ -93,8 +95,8 @@ const uiDefaults: UiPersist = {
 /** In-app card when an agent in the open workspace finishes or needs input. */
 export interface AgentCard {
   host: string;
-  session: number;
-  workspace: string;
+  terminal: number;
+  session: string;
   agent: string | null;
   state: AgentState;
   message: string;
@@ -110,9 +112,13 @@ export interface Toast {
 
 interface State extends UiPersist {
   hosts: Record<string, HostInfo>;
-  repos: Record<string, Repo[]>;
+  projects: Record<string, Project[]>;
+  sessions: Record<string, Session[]>;
+  /** Workspaces (sets of projects) per host. */
   workspaces: Record<string, Workspace[]>;
-  sessions: Record<string, Record<number, TerminalInfo>>;
+  /** Pull request per session (`sesKey`), when known. */
+  prs: Record<string, PullRequest | null>;
+  terminals: Record<string, Record<number, TerminalInfo>>;
   layouts: Record<string, Layout>;
   git: Record<string, GitStatus | undefined>;
   /** Sessions that need attention and have not been looked at. */
@@ -121,7 +127,15 @@ interface State extends UiPersist {
   openFile: OpenFile | null;
   preview: OpenFile | null;
   showHistory: boolean;
-  dialog: null | { kind: "new-workspace"; host?: string; repo?: string } | { kind: "add-repo" } | { kind: "create-pr" } | { kind: "settings" } | { kind: "palette" } | { kind: "commit" };
+  dialog:
+    | null
+    | { kind: "new-session"; host?: string; project?: string; workspace?: string }
+    | { kind: "add-project"; host?: string; workspace?: string }
+    | { kind: "new-workspace" }
+    | { kind: "create-pr" }
+    | { kind: "settings" }
+    | { kind: "palette" }
+    | { kind: "commit" };
   settings: Settings;
   toasts: Toast[];
   lastAttention: { host: string; session: number; at: number } | null;
@@ -139,9 +153,11 @@ function makeStore() {
   return create<State>(() => ({
   ...loadJson(UI_KEY, uiDefaults),
   hosts: {},
-  repos: {},
-  workspaces: {},
+  projects: {},
   sessions: {},
+  terminals: {},
+  workspaces: {},
+  prs: {},
   layouts: {},
   git: {},
   unread: {},
@@ -196,37 +212,37 @@ export function errorToast(e: unknown) {
 
 // ---------------------------------------------------------------- selectors
 
-export function selectedWorkspace(s: State = get()): Workspace | undefined {
+export function selectedSession(s: State = get()): Session | undefined {
   if (!s.selected) return undefined;
-  return s.workspaces[s.selected.host]?.find((w) => w.id === s.selected!.workspace);
+  return s.sessions[s.selected.host]?.find((w) => w.id === s.selected!.session);
 }
 
-export function workspaceSessions(s: State, host: string, wsId: string): TerminalInfo[] {
-  return Object.values(s.sessions[host] ?? {})
-    .filter((x) => x.workspace_id === wsId)
+export function sessionTerminals(s: State, host: string, wsId: string): TerminalInfo[] {
+  return Object.values(s.terminals[host] ?? {})
+    .filter((x) => x.session_id === wsId)
     .sort((a, b) => a.id - b.id);
 }
 
 const RANK: Record<AgentState, number> = { blocked: 5, error: 4, working: 3, done: 2, idle: 1 };
 
 /** The most urgent agent state among a workspace's sessions. */
-export function workspaceState(s: State, host: string, wsId: string): AgentState | null {
+export function sessionState(s: State, host: string, wsId: string): AgentState | null {
   let best: AgentState | null = null;
-  for (const x of workspaceSessions(s, host, wsId)) {
+  for (const x of sessionTerminals(s, host, wsId)) {
     if (x.kind !== "agent") continue;
     if (!best || RANK[x.agent_state] > RANK[best]) best = x.agent_state;
   }
   return best;
 }
 
-export function repoOf(s: State, host: string, ws: Workspace): Repo | undefined {
-  return s.repos[host]?.find((r) => r.id === ws.repo_id);
+export function projectOf(s: State, host: string, ws: Session): Project | undefined {
+  return s.projects[host]?.find((r) => r.id === ws.project_id);
 }
 
 // ------------------------------------------------------------------ actions
 
 /**
- * Loads a host's repos, workspaces and sessions. The output channel and the
+ * Loads a host's projects, sessions and terminals. The output channel and the
  * data are independent, so one failing never blanks the other; failures are
  * logged and retried with backoff.
  */
@@ -237,19 +253,21 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     console.warn(`output channel for ${host} failed`, e);
   }
   try {
-    const [repos, workspaces, sessions] = await Promise.all([
-      rpc<Repo[]>(host, M.repoList),
-      rpc<Workspace[]>(host, M.wsList),
+    const [workspaces, projects, sessions, terminals] = await Promise.all([
+      rpc<Workspace[]>(host, M.workspaceList),
+      rpc<Project[]>(host, M.projectList),
+      rpc<Session[]>(host, M.sessionList),
       rpc<TerminalInfo[]>(host, M.terminalList),
     ]);
     set((s) => ({
-      repos: { ...s.repos, [host]: repos },
       workspaces: { ...s.workspaces, [host]: workspaces },
-      sessions: { ...s.sessions, [host]: Object.fromEntries(sessions.map((x) => [x.id, x])) },
+      projects: { ...s.projects, [host]: projects },
+      sessions: { ...s.sessions, [host]: sessions },
+      terminals: { ...s.terminals, [host]: Object.fromEntries(terminals.map((x) => [x.id, x])) },
     }));
-    for (const w of workspaces) syncLayout(host, w);
+    for (const w of sessions) syncLayout(host, w);
     reattachHost(host);
-    void refreshAllGit(host);
+    void refreshAllGit(host).then(() => refreshPrs(host));
   } catch (e) {
     console.warn(`loading ${host} failed (attempt ${attempt + 1})`, e);
     if (attempt < 8 && get().hosts[host]?.status === "connected") {
@@ -258,10 +276,10 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
   }
 }
 
-export function syncLayout(host: string, w: Workspace) {
-  const key = wsKey(host, w.id);
+export function syncLayout(host: string, w: Session) {
+  const key = sesKey(host, w.id);
   const s = get();
-  const live = workspaceSessions(s, host, w.id).map((x) => x.id);
+  const live = sessionTerminals(s, host, w.id).map((x) => x.id);
   const base = s.layouts[key] ?? parseLayout(w.layout);
   const next = reconcile(base, live);
   if (JSON.stringify(next) !== JSON.stringify(s.layouts[key])) {
@@ -272,44 +290,44 @@ export function syncLayout(host: string, w: Workspace) {
 
 const layoutTimers: Record<string, number> = {};
 function persistLayout(host: string, id: string, layout: Layout) {
-  const key = wsKey(host, id);
+  const key = sesKey(host, id);
   window.clearTimeout(layoutTimers[key]);
   layoutTimers[key] = window.setTimeout(() => {
-    void rpc(host, M.wsUpdate, { id, layout }).catch(() => {});
+    void rpc(host, M.sessionUpdate, { id, layout }).catch(() => {});
   }, 600);
 }
 
 export function setLayout(host: string, id: string, layout: Layout) {
-  set((s) => ({ layouts: { ...s.layouts, [wsKey(host, id)]: layout } }));
+  set((s) => ({ layouts: { ...s.layouts, [sesKey(host, id)]: layout } }));
   persistLayout(host, id, layout);
 }
 
 export function getLayout(host: string, id: string): Layout {
-  return get().layouts[wsKey(host, id)] ?? emptyLayout();
+  return get().layouts[sesKey(host, id)] ?? emptyLayout();
 }
 
-export function focusSession(host: string, session: number) {
-  const info = get().sessions[host]?.[session];
-  if (!info?.workspace_id) return;
-  const ws = info.workspace_id;
+export function focusTerminal(host: string, session: number) {
+  const info = get().terminals[host]?.[session];
+  if (!info?.session_id) return;
+  const ws = info.session_id;
   const layout = getLayout(host, ws);
   const tab = tabOf(layout, session);
   set((s) => {
     const unread = { ...s.unread };
-    delete unread[sessKey(host, session)];
-    return { selected: { host, workspace: ws }, unread, showHistory: false };
+    delete unread[termKey(host, session)];
+    return { selected: { host, session: ws }, unread, showHistory: false };
   });
   if (tab) setLayout(host, ws, { ...layout, active: tab.id, focused: session });
   updateBadge();
 }
 
-export function selectWorkspace(host: string, id: string) {
-  set({ selected: { host, workspace: id }, diffFile: null, preview: null });
+export function selectSession(host: string, id: string) {
+  set({ selected: { host, session: id }, diffFile: null, preview: null });
   const layout = getLayout(host, id);
   if (layout.focused !== null) {
     set((s) => {
       const unread = { ...s.unread };
-      delete unread[sessKey(host, layout.focused!)];
+      delete unread[termKey(host, layout.focused!)];
       return { unread };
     });
   }
@@ -319,8 +337,8 @@ export function selectWorkspace(host: string, id: string) {
 
 const gitInflight: Record<string, boolean> = {};
 export async function refreshGit(host: string, id: string) {
-  const key = wsKey(host, id);
-  const w = get().workspaces[host]?.find((x) => x.id === id);
+  const key = sesKey(host, id);
+  const w = get().sessions[host]?.find((x) => x.id === id);
   if (!w || w.archived || gitInflight[key]) return;
   gitInflight[key] = true;
   try {
@@ -333,8 +351,21 @@ export async function refreshGit(host: string, id: string) {
   }
 }
 
+/** PR state per session (purple branch icon); slow-moving, so polled rarely. */
+export async function refreshPrs(host: string) {
+  for (const w of get().sessions[host] ?? []) {
+    if (w.archived) continue;
+    try {
+      const pr = await rpc<PullRequest | null>(host, M.prStatus, { path: w.path });
+      set((s) => ({ prs: { ...s.prs, [sesKey(host, w.id)]: pr } }));
+    } catch {
+      /* no gh, no remote, or not a GitHub repo */
+    }
+  }
+}
+
 export async function refreshAllGit(host: string) {
-  for (const w of get().workspaces[host] ?? []) if (!w.archived) await refreshGit(host, w.id);
+  for (const w of get().sessions[host] ?? []) if (!w.archived) await refreshGit(host, w.id);
 }
 
 function updateBadge() {
@@ -356,23 +387,23 @@ async function notify(title: string, body: string) {
 
 function isVisible(host: string, session: number): boolean {
   const s = get();
-  const info = s.sessions[host]?.[session];
-  if (!info?.workspace_id || !s.selected) return false;
-  if (s.selected.host !== host || s.selected.workspace !== info.workspace_id) return false;
-  const layout = s.layouts[wsKey(host, info.workspace_id)];
+  const info = s.terminals[host]?.[session];
+  if (!info?.session_id || !s.selected) return false;
+  if (s.selected.host !== host || s.selected.session !== info.session_id) return false;
+  const layout = s.layouts[sesKey(host, info.session_id)];
   return !!layout && tabOf(layout, session)?.id === layout.active;
 }
 
 async function onAttention(host: string, a: Attention) {
   const s = get();
-  if (a.workspace_id && s.selected?.host === host && s.selected.workspace === a.workspace_id) {
-    const since = s.workingSince[sessKey(host, a.terminal)];
-    const info = s.sessions[host]?.[a.terminal];
+  if (a.session_id && s.selected?.host === host && s.selected.session === a.session_id) {
+    const since = s.workingSince[termKey(host, a.terminal)];
+    const info = s.terminals[host]?.[a.terminal];
     set({
       card: {
         host,
-        session: a.terminal,
-        workspace: a.workspace_id,
+        terminal: a.terminal,
+        session: a.session_id,
         agent: info?.agent ?? null,
         state: a.state,
         message: sanitize(a.message, 240),
@@ -380,16 +411,16 @@ async function onAttention(host: string, a: Attention) {
         at: Date.now(),
       },
     });
-    void refreshGit(host, a.workspace_id);
+    void refreshGit(host, a.session_id);
   }
   const focused = document.hasFocus();
   const visible = focused && isVisible(host, a.terminal);
   if (!visible) {
-    set((st) => ({ unread: { ...st.unread, [sessKey(host, a.terminal)]: a.state } }));
+    set((st) => ({ unread: { ...st.unread, [termKey(host, a.terminal)]: a.state } }));
     updateBadge();
   }
   if (!focused || (s.settings.notifyWhenFocused && !visible)) {
-    const ws = a.workspace_id ? s.workspaces[host]?.find((w) => w.id === a.workspace_id) : undefined;
+    const ws = a.session_id ? s.sessions[host]?.find((w) => w.id === a.session_id) : undefined;
     const verb = a.state === "blocked" ? "needs you" : a.state === "error" ? "failed" : "is done";
     const where = ws ? ws.name : sanitize(a.title, 60);
     const hostLabel = host === "local" ? "" : ` · ${host}`;
@@ -400,11 +431,11 @@ async function onAttention(host: string, a: Attention) {
 
 function upsertSession(host: string, info: TerminalInfo) {
   set((s) => {
-    const prev = s.sessions[host]?.[info.id];
-    const key = sessKey(host, info.id);
+    const prev = s.terminals[host]?.[info.id];
+    const key = termKey(host, info.id);
     let workingSince = s.workingSince;
     if (info.agent_state === "working" && prev?.agent_state !== "working") workingSince = { ...workingSince, [key]: Date.now() };
-    return { sessions: { ...s.sessions, [host]: { ...(s.sessions[host] ?? {}), [info.id]: info } }, workingSince };
+    return { terminals: { ...s.terminals, [host]: { ...(s.terminals[host] ?? {}), [info.id]: info } }, workingSince };
   });
 }
 
@@ -415,28 +446,28 @@ function handleEvent(e: DaemonEvent) {
     case EV.terminalUpdated:
     case EV.terminalExited: {
       const info = data as TerminalInfo;
-      const isNew = !get().sessions[host]?.[info.id];
+      const isNew = !get().terminals[host]?.[info.id];
       upsertSession(host, info);
-      if (info.workspace_id && isNew) {
-        const w = get().workspaces[host]?.find((x) => x.id === info.workspace_id);
+      if (info.session_id && isNew) {
+        const w = get().sessions[host]?.find((x) => x.id === info.session_id);
         if (w) syncLayout(host, w);
       }
       break;
     }
     case EV.terminalRemoved: {
       const id = (data as { id: number }).id;
-      const info = get().sessions[host]?.[id];
+      const info = get().terminals[host]?.[id];
       set((s) => {
-        const hs = { ...(s.sessions[host] ?? {}) };
+        const hs = { ...(s.terminals[host] ?? {}) };
         delete hs[id];
         const unread = { ...s.unread };
-        delete unread[sessKey(host, id)];
-        return { sessions: { ...s.sessions, [host]: hs }, unread };
+        delete unread[termKey(host, id)];
+        return { terminals: { ...s.terminals, [host]: hs }, unread };
       });
       disposeEntry(host, id);
-      if (info?.workspace_id) {
-        const layout = getLayout(host, info.workspace_id);
-        setLayout(host, info.workspace_id, removeSession(layout, id));
+      if (info?.session_id) {
+        const layout = getLayout(host, info.session_id);
+        setLayout(host, info.session_id, removeSession(layout, id));
       }
       updateBadge();
       break;
@@ -444,19 +475,22 @@ function handleEvent(e: DaemonEvent) {
     case EV.attention:
       void onAttention(host, data as Attention);
       break;
-    case EV.reposChanged:
-      set((s) => ({ repos: { ...s.repos, [host]: data as Repo[] } }));
+    case EV.projectsChanged:
+      set((s) => ({ projects: { ...s.projects, [host]: data as Project[] } }));
       break;
-    case EV.workspacesChanged: {
-      const list = data as Workspace[];
-      set((s) => ({ workspaces: { ...s.workspaces, [host]: list } }));
+    case EV.workspacesChanged:
+      set((s) => ({ workspaces: { ...s.workspaces, [host]: data as Workspace[] } }));
+      break;
+    case EV.sessionsChanged: {
+      const list = data as Session[];
+      set((s) => ({ sessions: { ...s.sessions, [host]: list } }));
       for (const w of list) if (!w.archived) syncLayout(host, w);
       break;
     }
     case EV.fsChanged: {
       const ch = data as FsChanged;
       set((s) => ({ fsVersion: { ...s.fsVersion, [`${host}|${ch.root}`]: (s.fsVersion[`${host}|${ch.root}`] ?? 0) + 1 } }));
-      for (const w of get().workspaces[host] ?? []) {
+      for (const w of get().sessions[host] ?? []) {
         if (ch.root === w.path || ch.root.startsWith(w.path + "/") || w.path.startsWith(ch.root)) scheduleGit(host, w.id);
       }
       break;
@@ -466,7 +500,7 @@ function handleEvent(e: DaemonEvent) {
 
 const gitTimers: Record<string, number> = {};
 function scheduleGit(host: string, id: string) {
-  const key = wsKey(host, id);
+  const key = sesKey(host, id);
   window.clearTimeout(gitTimers[key]);
   gitTimers[key] = window.setTimeout(() => void refreshGit(host, id), 400);
 }
@@ -490,12 +524,15 @@ export async function startStore() {
     const la = get().lastAttention;
     if (la && Date.now() - la.at < 120_000) {
       set({ lastAttention: null });
-      focusSession(la.host, la.session);
+      focusTerminal(la.host, la.session);
     }
   });
-  // Diffstats for background workspaces.
   setInterval(() => {
-    for (const h of Object.keys(get().workspaces)) void refreshAllGit(h);
+    for (const h of Object.keys(get().sessions)) void refreshPrs(h);
+  }, 300_000);
+  // Diffstats for background sessions.
+  setInterval(() => {
+    for (const h of Object.keys(get().sessions)) void refreshAllGit(h);
   }, 20_000);
 }
 

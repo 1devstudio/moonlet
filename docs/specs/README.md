@@ -16,7 +16,7 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | A1 | Agent state per pane | P0 | 1 | implemented | [A1-agent-state.md](A1-agent-state.md) |
 | A2 | One-click hook install | P0 | 1 | implemented | [A2-hook-install.md](A2-hook-install.md) |
 | A6 | Local CLI and socket API | P1 | 3 | implemented (slice) | [A6-cli-and-socket-api.md](A6-cli-and-socket-api.md) |
-| A4 | New workspace (agent task) | P0 | 1 | implemented | [A4-new-workspace.md](A4-new-workspace.md) |
+| A4 | New workspace (agent task), superseded by X5 | P0 | 1 | superseded | [A4-new-workspace.md](A4-new-workspace.md) |
 | S4 | Workspace restore after daemon restart | P1 | 3 | implemented (daemon) | [S4-restore-after-restart.md](S4-restore-after-restart.md) |
 | D1 | Changes panel | P0 | 1 | implemented | [D1-changes-panel.md](D1-changes-panel.md) |
 | D2 | Stage, unstage, revert, commit | P1 | 3 | implemented | [D2-stage-revert-commit.md](D2-stage-revert-commit.md) |
@@ -42,4 +42,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | S1b | Run the daemon under launchd | P0 | 2 | implemented | [S1b-launchd.md](S1b-launchd.md) |
 | X3 | Signed, notarized app with auto-update | P1 | 3 | partial | [X3-distribution.md](X3-distribution.md) |
 | X4 | Visual design (Superset look and feel) | P1 | 3 | implemented | [X4-visual-design.md](X4-visual-design.md) |
-| X5 | Workspaces, projects and sessions (Conductor model) | P1 | 3 | approved | [X5-workspaces-projects-sessions.md](X5-workspaces-projects-sessions.md) |
+| X5 | Workspaces, projects and sessions (Conductor model) | P1 | 3 | implemented | [X5-workspaces-projects-sessions.md](X5-workspaces-projects-sessions.md) |
