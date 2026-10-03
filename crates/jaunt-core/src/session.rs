@@ -965,10 +965,21 @@ fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
 pub fn read_config(repo: &Path) -> ProjectConfig {
     let path = repo.join(".jaunt").join("config.toml");
     match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-            tracing::warn!("{}: {e}", path.display());
-            ProjectConfig::default()
-        }),
+        Ok(text) => {
+            let mut config: ProjectConfig = toml::from_str(&text).unwrap_or_else(|e| {
+                tracing::warn!("{}: {e}", path.display());
+                ProjectConfig::default()
+            });
+            // A blank command would start an empty shell instead of the agent.
+            config.agents.retain(|name, cmd| {
+                let keep = !cmd.trim().is_empty();
+                if !keep {
+                    tracing::warn!("{}: agent `{name}` has an empty command", path.display());
+                }
+                keep
+            });
+            config
+        }
         Err(_) => ProjectConfig::default(),
     }
 }

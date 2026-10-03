@@ -60,10 +60,43 @@ pub fn bin_dir() -> PathBuf {
     home().join("bin")
 }
 
-/// Creates `dir` (and parents) and restricts it to the current user.
+/// Creates `dir` (parents as needed) at mode 0700, or checks an existing
+/// one: it must be a real directory (not a symlink) owned by this user.
+/// Matters for the socket fallback under world-writable `/tmp`, where
+/// another user could pre-create the path.
 pub fn ensure_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let meta = match std::fs::symlink_metadata(dir) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = dir.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e),
+            }
+            std::fs::symlink_metadata(dir)?
+        }
+        Err(e) => return Err(e),
+    };
+    let refuse = |why: &str| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{}: {why}", dir.display()),
+        ))
+    };
+    if !meta.file_type().is_dir() {
+        return refuse("not a directory (or a symlink)");
+    }
+    if meta.uid() != nix::unistd::getuid().as_raw() {
+        return refuse("owned by another user");
+    }
+    if meta.mode() & 0o077 != 0 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 pub fn now_ms() -> u64 {
@@ -82,6 +115,21 @@ pub fn hostname() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn private_dirs_refuse_symlinks_and_tighten_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("a/b");
+        super::ensure_private_dir(&d).unwrap();
+        assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        super::ensure_private_dir(&d).unwrap();
+        assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
+        let link = t.path().join("link");
+        std::os::unix::fs::symlink(&d, &link).unwrap();
+        assert!(super::ensure_private_dir(&link).is_err());
+    }
+
     #[test]
     fn long_homes_get_a_short_socket_path() {
         // SAFETY: test-only env mutation, no concurrent env readers in this test binary's case.

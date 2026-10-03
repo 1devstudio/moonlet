@@ -72,20 +72,26 @@ impl Link {
         )
         .await
         .unwrap();
-        loop {
-            match read_frame(&mut self.stdout).await.unwrap() {
-                Some(Frame::Json(Message::Response {
-                    id: rid,
-                    result,
-                    error,
-                })) if rid == id => {
-                    assert!(error.is_none(), "{error:?}");
-                    return serde_json::from_value(result.unwrap()).unwrap();
+        // One deadline for the whole wait, so unrelated frames cannot extend it.
+        let wait = async {
+            loop {
+                match read_frame(&mut self.stdout).await.unwrap() {
+                    Some(Frame::Json(Message::Response {
+                        id: rid,
+                        result,
+                        error,
+                    })) if rid == id => {
+                        assert!(error.is_none(), "{error:?}");
+                        return serde_json::from_value(result.unwrap()).unwrap();
+                    }
+                    Some(_) => {}
+                    None => panic!("proxy closed"),
                 }
-                Some(_) => {}
-                None => panic!("proxy closed"),
             }
-        }
+        };
+        tokio::time::timeout(Duration::from_secs(20), wait)
+            .await
+            .unwrap_or_else(|_| panic!("no reply to {method} within 20 s"))
     }
 
     async fn output_until(&mut self, needle: &str) {
