@@ -105,6 +105,9 @@ pub struct SessionManager {
     terminals: Arc<TerminalManager>,
     /// Structured agents (X6); absent in tests that do not need them.
     chats: std::sync::OnceLock<Arc<crate::chat::runtime::ChatManager>>,
+    /// Set when an unreadable state file could not be backed up: saving
+    /// would destroy the only copy, so it is refused.
+    save_blocked: bool,
 }
 
 fn new_id() -> String {
@@ -182,35 +185,43 @@ impl SessionManager {
         worktrees_root: PathBuf,
         terminals: Arc<TerminalManager>,
     ) -> Arc<Self> {
-        let state = std::fs::read_to_string(&file)
-            .map(|s| match State::try_parse(&s) {
-                Ok(st) => st,
-                Err(e) => {
-                    // Keep the damaged file: the next save would overwrite it.
-                    let backup = file.with_extension(format!("json.corrupt-{}", now_ms()));
-                    let _ = std::fs::copy(&file, &backup);
-                    tracing::warn!(
+        let mut save_blocked = false;
+        let parsed = std::fs::read(&file).map(|bytes| {
+            String::from_utf8(bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|s| State::try_parse(&s).map_err(|e| e.to_string()))
+        });
+        let state = match parsed {
+            Ok(Ok(st)) => st,
+            Ok(Err(e)) => {
+                // Keep the damaged file: the next save would overwrite it.
+                let backup = file.with_extension(format!("json.corrupt-{}", now_ms()));
+                match std::fs::copy(&file, &backup) {
+                    Ok(_) => tracing::warn!(
                         "{} is unreadable ({e}); starting empty, kept a copy at {}",
                         file.display(),
                         backup.display()
-                    );
-                    State::parse("")
+                    ),
+                    Err(ce) => {
+                        save_blocked = true;
+                        tracing::error!(
+                            "{} is unreadable ({e}) and could not be backed up ({ce}); not saving over it",
+                            file.display()
+                        );
+                    }
                 }
-            })
-            .unwrap_or_else(|_| {
-                let mut st = State {
-                    version: STATE_VERSION,
-                    ..Default::default()
-                };
-                st.ensure_workspace();
-                st
-            });
+                State::parse("")
+            }
+            // Missing (first start) or unreadable: start empty.
+            Err(_) => State::parse(""),
+        };
         let mgr = Arc::new(Self {
             state: Mutex::new(state),
             file,
             worktrees_root,
             terminals,
             chats: std::sync::OnceLock::new(),
+            save_blocked,
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
@@ -226,6 +237,12 @@ impl SessionManager {
     }
 
     fn save(&self, state: &State) -> Result<()> {
+        if self.save_blocked {
+            bail!(
+                "{} could not be backed up after a read error; move it aside to continue",
+                self.file.display()
+            );
+        }
         if let Some(dir) = self.file.parent() {
             crate::paths::ensure_private_dir(dir)?;
         }
@@ -1291,6 +1308,21 @@ mod tests {
             .collect();
         assert_eq!(kept.len(), 1);
         assert_eq!(std::fs::read_to_string(kept[0].path()).unwrap(), "{ not json");
+    }
+
+    #[tokio::test]
+    async fn a_state_file_with_invalid_utf8_is_kept_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state.json");
+        std::fs::write(&file, b"{\"projects\": [\xff]}").unwrap();
+        let terms = TerminalManager::new(dir.path().join("s.sock"), BTreeMap::new());
+        let _mgr = SessionManager::load(file.clone(), dir.path().join("wt"), terms);
+        let kept = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
+            .count();
+        assert_eq!(kept, 1);
     }
 
     #[test]

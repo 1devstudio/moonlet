@@ -91,7 +91,7 @@ pub fn install() -> Result<()> {
     // A loaded agent may be the daemon serving every session right now:
     // booting it out would end them. The rewritten plist applies at the
     // next login; binary updates go through the live upgrade instead.
-    if is_loaded() {
+    if is_loaded()? {
         return Ok(());
     }
     let out = launchctl(&["bootstrap", &domain(), &plist.display().to_string()])?;
@@ -104,17 +104,27 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
-fn is_loaded() -> bool {
-    launchctl(&["print", &format!("{}/{LABEL}", domain())]).is_ok_and(|o| o.status.success())
+/// Whether launchd has the agent loaded. A failure that does not clearly
+/// mean "not loaded" is an error, never a "no".
+fn is_loaded() -> Result<bool> {
+    let out = launchctl(&["print", &format!("{}/{LABEL}", domain())])?;
+    if out.status.success() {
+        return Ok(true);
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    if err.contains("Could not find service") || err.contains("not find") || out.status.code() == Some(113) {
+        return Ok(false);
+    }
+    bail!("launchctl print failed: {}", err.trim())
 }
 
 /// Stops the agent (and the daemon it runs, ending its sessions; the app
 /// asks first) and removes the plist.
 pub fn uninstall() -> Result<()> {
-    if is_loaded() {
+    if is_loaded()? {
         let out = launchctl(&["bootout", &format!("{}/{LABEL}", domain())])?;
         // Gone in between is fine; anything else must not be reported as removed.
-        if !out.status.success() && is_loaded() {
+        if !out.status.success() && is_loaded()? {
             bail!(
                 "launchctl bootout failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
@@ -137,7 +147,7 @@ pub struct Status {
 
 pub fn status() -> Result<Status> {
     let plist = plist_path()?;
-    let loaded = is_loaded();
+    let loaded = is_loaded()?;
     Ok(Status {
         installed: plist.exists(),
         loaded,
