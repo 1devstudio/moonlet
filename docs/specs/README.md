@@ -44,4 +44,5 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X4 | Visual design (Superset look and feel) | P1 | 3 | implemented | [X4-visual-design.md](X4-visual-design.md) |
 | X5 | Workspaces, projects and sessions (Conductor model) | P1 | 3 | implemented | [X5-workspaces-projects-sessions.md](X5-workspaces-projects-sessions.md) |
 | T6 | Warp-style input editor with suggestions | P1 | 3 | implemented | [T6-input-editor.md](T6-input-editor.md) |
+| T7 | Warp-style shell model (one input, command blocks) | P1 | 3 | implemented | [T7-warp-shell-model.md](T7-warp-shell-model.md) |
 | X6 | Structured agent view (Claude Code, Codex) | P1 | 3 | implemented (Codex untested live) | [X6-structured-agent-view.md](X6-structured-agent-view.md) |
