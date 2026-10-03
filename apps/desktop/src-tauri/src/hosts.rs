@@ -106,7 +106,11 @@ impl Host {
                 method: method.into(),
                 params,
             });
-            if link.tx.send(encode_frame(&frame)).is_err() {
+            let bytes = encode_frame(&frame).map_err(|e| {
+                self.pending.lock().unwrap().remove(&id);
+                RpcError::new("too_large", e.to_string())
+            })?;
+            if link.tx.send(bytes).is_err() {
                 self.pending.lock().unwrap().remove(&id);
                 return Err(RpcError::new("disconnected", "connection closed"));
             }
@@ -134,11 +138,13 @@ impl Host {
         let link = link
             .as_ref()
             .ok_or_else(|| RpcError::new("disconnected", "not connected"))?;
+        let bytes = encode_frame(&Frame::Input {
+            terminal: session,
+            data,
+        })
+        .map_err(|e| RpcError::new("too_large", e.to_string()))?;
         link.tx
-            .send(encode_frame(&Frame::Input {
-                terminal: session,
-                data,
-            }))
+            .send(bytes)
             .map_err(|_| RpcError::new("disconnected", "connection closed"))
     }
 
@@ -517,7 +523,7 @@ async fn run_link(
         .write_all(&encode_frame(&Frame::Json(Message::Hello {
             protocol: PROTOCOL_VERSION,
             client: "jaunt-app".into(),
-        })))
+        }))?)
         .await?;
     writer.flush().await?;
 

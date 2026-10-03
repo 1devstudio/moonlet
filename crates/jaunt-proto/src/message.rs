@@ -53,11 +53,16 @@ impl RpcError {
 }
 
 impl Message {
+    /// A success response; a result that fails to serialise becomes an
+    /// `internal` error instead of a silent `null`.
     pub fn ok(id: u64, result: impl Serialize) -> Self {
-        Message::Response {
-            id,
-            result: Some(serde_json::to_value(result).unwrap_or(Value::Null)),
-            error: None,
+        match serde_json::to_value(result) {
+            Ok(v) => Message::Response {
+                id,
+                result: Some(v),
+                error: None,
+            },
+            Err(e) => Message::err(id, RpcError::new("internal", e.to_string())),
         }
     }
 

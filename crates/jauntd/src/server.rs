@@ -172,16 +172,35 @@ where
     result
 }
 
+/// Encodes a frame. A reply too large for one frame becomes an error reply,
+/// so the client is not disconnected; other oversized frames are dropped.
+fn push_frame(buf: &mut Vec<u8>, frame: Frame) {
+    match encode_frame(&frame) {
+        Ok(bytes) => buf.extend_from_slice(&bytes),
+        Err(e) => {
+            tracing::warn!("dropping frame: {e}");
+            if let Frame::Json(Message::Response { id, .. }) = frame
+                && let Ok(bytes) = encode_frame(&Frame::Json(Message::err(
+                    id,
+                    RpcError::new("too_large", e.to_string()),
+                )))
+            {
+                buf.extend_from_slice(&bytes);
+            }
+        }
+    }
+}
+
 /// Writes queued frames, coalescing whatever is already queued into one
 /// syscall so bursts of PTY output cost one write.
 async fn write_loop<W: AsyncWrite + Unpin>(mut writer: W, mut rx: mpsc::UnboundedReceiver<Frame>) {
     let mut buf = Vec::with_capacity(64 * 1024);
     while let Some(frame) = rx.recv().await {
         buf.clear();
-        buf.extend_from_slice(&encode_frame(&frame));
+        push_frame(&mut buf, frame);
         while buf.len() < 256 * 1024 {
             match rx.try_recv() {
-                Ok(f) => buf.extend_from_slice(&encode_frame(&f)),
+                Ok(f) => push_frame(&mut buf, f),
                 Err(_) => break,
             }
         }

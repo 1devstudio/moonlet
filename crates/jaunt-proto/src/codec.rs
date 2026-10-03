@@ -14,18 +14,26 @@ pub enum ProtoError {
     Io(#[from] std::io::Error),
 }
 
-/// Serialises a frame into a fresh buffer.
-pub fn encode_frame(frame: &Frame) -> Vec<u8> {
+/// Serialises a frame into a fresh buffer. Frames the peer would reject
+/// (over [`MAX_FRAME_LEN`]) fail here, before any byte is written.
+pub fn encode_frame(frame: &Frame) -> Result<Vec<u8>, ProtoError> {
     let mut out = Vec::new();
-    encode_into(frame, &mut out);
-    out
+    encode_into(frame, &mut out)?;
+    Ok(out)
 }
 
-pub(crate) fn encode_into(frame: &Frame, out: &mut Vec<u8>) {
+pub(crate) fn encode_into(frame: &Frame, out: &mut Vec<u8>) -> Result<(), ProtoError> {
+    let check = |len: usize| {
+        if len > MAX_FRAME_LEN {
+            Err(ProtoError::TooLarge(len))
+        } else {
+            Ok(len as u32)
+        }
+    };
     match frame {
         Frame::Json(message) => {
-            let body = serde_json::to_vec(message).expect("messages always serialise");
-            out.extend_from_slice(&((body.len() + 1) as u32).to_be_bytes());
+            let body = serde_json::to_vec(message)?;
+            out.extend_from_slice(&check(body.len() + 1)?.to_be_bytes());
             out.push(KIND_JSON);
             out.extend_from_slice(&body);
         }
@@ -35,12 +43,13 @@ pub(crate) fn encode_into(frame: &Frame, out: &mut Vec<u8>) {
             } else {
                 KIND_INPUT
             };
-            out.extend_from_slice(&((data.len() + 5) as u32).to_be_bytes());
+            out.extend_from_slice(&check(data.len() + 5)?.to_be_bytes());
             out.push(kind);
             out.extend_from_slice(&terminal.to_be_bytes());
             out.extend_from_slice(data);
         }
     }
+    Ok(())
 }
 
 fn decode_body(kind: u8, body: &[u8]) -> Result<Frame, ProtoError> {
@@ -107,10 +116,14 @@ where
 {
     use tokio::io::AsyncReadExt;
     let mut len_buf = [0u8; 4];
-    match reader.read_exact(&mut len_buf).await {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e.into()),
+    // EOF before a frame starts is a clean close; EOF inside one is not.
+    let mut got = 0;
+    while got < 4 {
+        match reader.read(&mut len_buf[got..]).await? {
+            0 if got == 0 => return Ok(None),
+            0 => return Err(ProtoError::Truncated),
+            n => got += n,
+        }
     }
     let len = u32::from_be_bytes(len_buf) as usize;
     if len > MAX_FRAME_LEN {
@@ -130,7 +143,7 @@ where
     W: tokio::io::AsyncWrite + Unpin,
 {
     use tokio::io::AsyncWriteExt;
-    writer.write_all(&encode_frame(frame)).await?;
+    writer.write_all(&encode_frame(frame)?).await?;
     Ok(())
 }
 
@@ -163,7 +176,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_byte_at_a_time_decoder() {
-        let bytes: Vec<u8> = sample().iter().flat_map(encode_frame).collect();
+        let bytes: Vec<u8> = sample().iter().flat_map(|f| encode_frame(f).unwrap()).collect();
         let mut decoder = FrameDecoder::new();
         let mut out = Vec::new();
         for b in bytes {
@@ -208,5 +221,22 @@ mod tests {
         }
         writer.await.unwrap();
         assert_eq!(got, frames);
+    }
+
+    #[test]
+    fn encoder_refuses_frames_the_peer_would_reject() {
+        let big = Frame::Output {
+            terminal: 1,
+            data: vec![0; MAX_FRAME_LEN],
+        };
+        assert!(matches!(encode_frame(&big), Err(ProtoError::TooLarge(_))));
+    }
+
+    #[tokio::test]
+    async fn eof_inside_a_header_is_an_error() {
+        let mut clean: &[u8] = &[];
+        assert!(read_frame(&mut clean).await.unwrap().is_none());
+        let mut partial: &[u8] = &[0, 0];
+        assert!(matches!(read_frame(&mut partial).await, Err(ProtoError::Truncated)));
     }
 }
