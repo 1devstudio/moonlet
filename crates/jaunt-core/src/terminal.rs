@@ -51,9 +51,7 @@ impl ClientTx {
 
     /// Queues a frame; false once the connection is gone.
     pub fn send(&self, frame: Frame) -> bool {
-        if let Frame::Output { data, .. } = &frame {
-            self.queued.fetch_add(data.len(), Ordering::Relaxed);
-        }
+        self.queued.fetch_add(counted_len(&frame), Ordering::Relaxed);
         self.tx.send(frame).is_ok()
     }
 }
@@ -66,8 +64,19 @@ impl From<mpsc::UnboundedSender<Frame>> for ClientTx {
 
 /// Call after taking a frame off a [`ClientTx`] queue.
 pub fn dequeued(counter: &AtomicUsize, frame: &Frame) {
-    if let Frame::Output { data, .. } = frame {
-        counter.fetch_sub(data.len(), Ordering::Relaxed);
+    counter.fetch_sub(counted_len(frame), Ordering::Relaxed);
+}
+
+/// Bytes a frame counts against [`MAX_QUEUED_OUTPUT`]: terminal output,
+/// and replies whose payload carries a snapshot (attach). Small control
+/// messages are not counted.
+fn counted_len(frame: &Frame) -> usize {
+    match frame {
+        Frame::Output { data, .. } => data.len(),
+        Frame::Json(Message::Response { result: Some(v), .. }) => {
+            v.get("snapshot").and_then(|s| s.as_str()).map_or(0, str::len)
+        }
+        _ => 0,
     }
 }
 

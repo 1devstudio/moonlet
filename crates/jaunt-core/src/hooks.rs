@@ -120,11 +120,31 @@ impl HookPaths {
 /// Exactly a jaunt hook command: a program named `jaunt` (optionally
 /// quoted, any directory) followed by `hook claude` or `hook codex`.
 fn is_ours(command: &str) -> bool {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r#"^\s*['"]?(?:[^'"]*/)?jaunt['"]?\s+hook\s+(?:claude|codex)\s*$"#).unwrap()
-    })
-    .is_match(command)
+    let s = command.trim();
+    // The program, as `quote` writes it: bare, or single-quoted with `'\''`
+    // standing for an apostrophe.
+    let (program, rest) = if let Some(body) = s.strip_prefix('\'') {
+        let mut prog = String::new();
+        let mut rest = body;
+        loop {
+            let Some(end) = rest.find('\'') else { return false };
+            prog.push_str(&rest[..end]);
+            rest = &rest[end + 1..];
+            if let Some(after) = rest.strip_prefix("\\''") {
+                prog.push('\'');
+                rest = after;
+            } else {
+                break;
+            }
+        }
+        (prog, rest)
+    } else {
+        let end = s.find(char::is_whitespace).unwrap_or(s.len());
+        (s[..end].to_string(), &s[end..])
+    };
+    let basename = program.rsplit('/').next().unwrap_or("");
+    let args: Vec<&str> = rest.split_whitespace().collect();
+    basename == "jaunt" && matches!(args.as_slice(), ["hook", "claude" | "codex"])
 }
 
 fn quote(path: &Path) -> String {
@@ -507,6 +527,7 @@ mod tests {
         assert!(is_ours("/usr/local/bin/jaunt hook claude"));
         assert!(is_ours("'/Users/a b/.jaunt/bin/jaunt' hook codex"));
         assert!(is_ours("jaunt hook claude"));
+        assert!(is_ours(&format!("{} hook claude", quote(Path::new("/Users/O'Brien/bin/jaunt")))));
         assert!(!is_ours("~/scripts/jaunty-notify hook x"));
         assert!(!is_ours("/bin/jaunt-helper hook claude"));
         assert!(!is_ours("jaunt hook claude && rm -rf ~"));

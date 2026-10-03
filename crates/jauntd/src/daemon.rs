@@ -139,12 +139,13 @@ impl Daemon {
                     binary: PathBuf,
                 }
                 let r: Req = params(p)?;
-                if self.upgrading.load(Ordering::SeqCst) {
+                // Claim the upgrade here, so a refused request is reported.
+                if !self.begin_upgrade() {
                     return Err(RpcError::new("busy", "an upgrade is already in progress"));
                 }
                 let me = self.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = crate::upgrade::hand_off(me, Some(r.binary)).await {
+                    if let Err(e) = crate::upgrade::hand_off_claimed(me, Some(r.binary)).await {
                         tracing::error!("upgrade failed, still serving: {e:#}");
                     }
                 });

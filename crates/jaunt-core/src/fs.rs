@@ -88,19 +88,24 @@ pub fn files(root: &str, limit: usize) -> Result<Vec<String>> {
 }
 
 pub fn read(path: &str, max_bytes: Option<u64>) -> Result<FileContent> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
     let p = expand_home(path);
-    let meta = std::fs::metadata(&p).with_context(|| format!("cannot open {}", p.display()))?;
-    // FIFOs block on open and devices never end: only regular files.
+    // Open without blocking (a FIFO would wait for a writer), then check the
+    // type on the handle itself, so nothing can be swapped in between.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&p)
+        .with_context(|| format!("cannot open {}", p.display()))?;
+    let meta = file.metadata()?;
     if !meta.is_file() {
         bail!("{} is not a regular file", p.display());
     }
     let size = meta.len();
     let max = max_bytes.unwrap_or(DEFAULT_MAX_READ).min(MAX_READ);
     let mut data = Vec::new();
-    {
-        use std::io::Read;
-        std::fs::File::open(&p)?.take(max).read_to_end(&mut data)?;
-    }
+    file.take(max).read_to_end(&mut data)?;
     let binary = crate::git::is_binary(&data);
     Ok(FileContent {
         path: p.display().to_string(),

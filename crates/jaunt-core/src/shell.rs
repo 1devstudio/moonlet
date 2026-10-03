@@ -125,12 +125,19 @@ __jaunt_prev_trap=$(trap -p DEBUG)
 [ -n "$__jaunt_prev_trap" ] && eval "__jaunt_capture_trap ${__jaunt_prev_trap#trap -- }"
 unset __jaunt_prev_trap
 __jaunt_debug() {
-  [ -n "$__jaunt_user_debug" ] && eval "$__jaunt_user_debug"
-  [ -n "$__jaunt_armed" ] || return 0
+  local ret=$? user=0
+  if [ -n "$__jaunt_user_debug" ]; then
+    # The user's trap sees the real $? and its result is kept (extdebug).
+    (exit $ret)
+    eval "$__jaunt_user_debug"
+    user=$?
+  fi
+  [ -n "$__jaunt_armed" ] || return $user
   case "$BASH_COMMAND" in __jaunt_*) return 0 ;; esac
   __jaunt_armed=
   __jaunt_ran=1
   printf '\e]133;C\a'
+  return $user
 }
 trap '__jaunt_debug' DEBUG
 PROMPT_COMMAND="__jaunt_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}; __jaunt_blank"

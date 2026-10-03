@@ -79,6 +79,11 @@ pub async fn hand_off(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<()
     if !daemon.begin_upgrade() {
         bail!("an upgrade is already in progress");
     }
+    hand_off_claimed(daemon, binary).await
+}
+
+/// [`hand_off`] for a caller that already claimed the upgrade.
+pub async fn hand_off_claimed(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<()> {
     let result = hand_off_once(daemon.clone(), binary).await;
     if result.is_err() {
         // Terminal I/O may have been stopped for the export: keep serving.
