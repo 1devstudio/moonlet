@@ -241,13 +241,16 @@ async fn proxy(socket: PathBuf) -> Result<()> {
     }
     let stream = tokio::net::UnixStream::connect(&socket).await?;
     let (mut sr, mut sw) = stream.into_split();
-    let mut stdin = tokio::io::stdin();
+    // Stdin EOF only half-closes the socket: replies still in flight reach
+    // stdout, and the proxy exits when the daemon closes the stream.
+    let up = tokio::spawn(async move {
+        let mut stdin = tokio::io::stdin();
+        let _ = tokio::io::copy(&mut stdin, &mut sw).await;
+        let _ = tokio::io::AsyncWriteExt::shutdown(&mut sw).await;
+    });
     let mut stdout = tokio::io::stdout();
-    tokio::select! {
-        _ = tokio::io::copy(&mut stdin, &mut sw) => {}
-        _ = async {
-            let _ = tokio::io::copy(&mut sr, &mut stdout).await;
-        } => {}
-    }
+    let _ = tokio::io::copy(&mut sr, &mut stdout).await;
+    let _ = tokio::io::AsyncWriteExt::flush(&mut stdout).await;
+    up.abort();
     Ok(())
 }

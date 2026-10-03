@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -23,8 +23,53 @@ use crate::term::{Signal, TermState};
 
 pub type ClientId = u64;
 
-/// Outbound queue of one client connection.
-pub type ClientTx = mpsc::UnboundedSender<Frame>;
+/// Output a client may have queued before it is detached (a frozen app or
+/// a stuck SSH proxy must not grow the daemon's memory without bound).
+pub const MAX_QUEUED_OUTPUT: usize = 32 * 1024 * 1024;
+
+/// Outbound queue of one client connection. Terminal output is counted in
+/// bytes; the connection's writer subtracts what it takes off the queue.
+#[derive(Clone)]
+pub struct ClientTx {
+    tx: mpsc::UnboundedSender<Frame>,
+    queued: Arc<AtomicUsize>,
+}
+
+impl ClientTx {
+    pub fn new(tx: mpsc::UnboundedSender<Frame>) -> Self {
+        Self { tx, queued: Arc::new(AtomicUsize::new(0)) }
+    }
+
+    /// Counter the writer decrements as it dequeues output frames.
+    pub fn counter(&self) -> Arc<AtomicUsize> {
+        self.queued.clone()
+    }
+
+    pub fn queued(&self) -> usize {
+        self.queued.load(Ordering::Relaxed)
+    }
+
+    /// Queues a frame; false once the connection is gone.
+    pub fn send(&self, frame: Frame) -> bool {
+        if let Frame::Output { data, .. } = &frame {
+            self.queued.fetch_add(data.len(), Ordering::Relaxed);
+        }
+        self.tx.send(frame).is_ok()
+    }
+}
+
+impl From<mpsc::UnboundedSender<Frame>> for ClientTx {
+    fn from(tx: mpsc::UnboundedSender<Frame>) -> Self {
+        Self::new(tx)
+    }
+}
+
+/// Call after taking a frame off a [`ClientTx`] queue.
+pub fn dequeued(counter: &AtomicUsize, frame: &Frame) {
+    if let Frame::Output { data, .. } = frame {
+        counter.fetch_sub(data.len(), Ordering::Relaxed);
+    }
+}
 
 struct TerminalState {
     info: TerminalInfo,
@@ -39,7 +84,8 @@ struct TerminalState {
 pub struct Terminal {
     pub id: TerminalId,
     state: Mutex<TerminalState>,
-    input: mpsc::UnboundedSender<Vec<u8>>,
+    /// Replaced when I/O restarts after a failed handoff.
+    input: Mutex<mpsc::UnboundedSender<Vec<u8>>>,
     /// Reader/writer tasks; aborted before a handoff so this process stops
     /// consuming PTY output the next daemon must see.
     tasks: Mutex<Vec<tokio::task::AbortHandle>>,
@@ -112,6 +158,7 @@ impl TerminalManager {
         self.next_id.fetch_max(info.id + 1, Ordering::Relaxed);
         info.chat = true;
         let (input, _) = mpsc::unbounded_channel();
+        let input = Mutex::new(input);
         // A restored chat keeps its state without announcing it again.
         let mut agent = AgentTracker::default();
         agent.report(info.agent_state, StateSource::Hook, info.agent_message.clone());
@@ -229,7 +276,13 @@ impl TerminalManager {
         command.extend(args);
         let agent = req.agent.clone().or_else(|| {
             if req.kind == TerminalKind::Agent {
-                detect_agent(command.last().map(String::as_str).unwrap_or("")).map(String::from)
+                // The program itself (`claude --continue`), else the last
+                // argument (`zsh -lic "claude --continue"`).
+                command
+                    .first()
+                    .and_then(|p| detect_agent(p))
+                    .or_else(|| command.last().and_then(|l| detect_agent(l)))
+                    .map(String::from)
             } else {
                 None
             }
@@ -266,12 +319,10 @@ impl TerminalManager {
     pub fn install(self: &Arc<Self>, info: TerminalInfo, term: TermState, pty: Pty) -> Result<()> {
         let id = info.id;
         self.next_id.fetch_max(id + 1, Ordering::Relaxed);
-        let reader_fd = pty.clone_master()?;
-        let writer_fd = pty.clone_master()?;
-        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let (input_tx, _) = mpsc::unbounded_channel();
         let terminal = Arc::new(Terminal {
             id,
-            input: input_tx,
+            input: Mutex::new(input_tx),
             tasks: Mutex::new(Vec::new()),
             state: Mutex::new(TerminalState {
                 info,
@@ -283,12 +334,43 @@ impl TerminalManager {
                 remove_on_exit: false,
             }),
         });
+        self.start_io(&terminal)?;
         self.terminals.lock().unwrap().insert(id, terminal.clone());
+        Ok(())
+    }
+
+    /// Starts the PTY reader and writer tasks of a terminal.
+    fn start_io(self: &Arc<Self>, terminal: &Arc<Terminal>) -> Result<()> {
+        let (reader_fd, writer_fd) = {
+            let st = terminal.state.lock().unwrap();
+            let pty = st.pty.as_ref().context("terminal has no pty")?;
+            (pty.clone_master()?, pty.clone_master()?)
+        };
+        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        *terminal.input.lock().unwrap() = input_tx;
         let w = tokio::spawn(write_loop(writer_fd, input_rx)).abort_handle();
         let r = tokio::spawn(read_loop(Arc::downgrade(self), terminal.clone(), reader_fd))
             .abort_handle();
         terminal.tasks.lock().unwrap().extend([w, r]);
         Ok(())
+    }
+
+    /// Restarts I/O for terminals whose tasks were stopped by [`export`]
+    /// when the handoff to a new daemon then failed.
+    ///
+    /// [`export`]: Self::export
+    pub fn resume_io(self: &Arc<Self>) {
+        let terminals: Vec<_> = self.terminals.lock().unwrap().values().cloned().collect();
+        for t in terminals {
+            let idle = t.tasks.lock().unwrap().is_empty();
+            let live = {
+                let st = t.state.lock().unwrap();
+                st.pty.is_some() && st.info.exit.is_none()
+            };
+            if idle && live && let Err(e) = self.start_io(&t) {
+                tracing::warn!(terminal = t.id, "restarting terminal I/O failed: {e:#}");
+            }
+        }
     }
 
     /// Installs a PTY received from a previous daemon (S3): the terminal
@@ -322,17 +404,39 @@ impl TerminalManager {
         &self,
         id: TerminalId,
         client: ClientId,
-        tx: ClientTx,
+        tx: impl Into<ClientTx>,
         size: Option<(u16, u16)>,
     ) -> Result<(TerminalInfo, Vec<u8>)> {
+        let mut out = None;
+        self.attach_with(id, client, tx.into(), size, |info, snapshot| {
+            out = Some((info, snapshot));
+            None
+        })?;
+        Ok(out.expect("attach_with calls back"))
+    }
+
+    /// Attaches and lets `reply` build the response frame, which is queued
+    /// before the client is subscribed, both under the terminal's lock. Live
+    /// output therefore always reaches the client after its snapshot.
+    pub fn attach_with(
+        &self,
+        id: TerminalId,
+        client: ClientId,
+        tx: ClientTx,
+        size: Option<(u16, u16)>,
+        reply: impl FnOnce(TerminalInfo, Vec<u8>) -> Option<Frame>,
+    ) -> Result<()> {
         let terminal = self.get(id).context("no such terminal")?;
         let mut st = terminal.state.lock().unwrap();
         if let Some((cols, rows)) = size {
             resize_locked(&mut st, cols, rows);
         }
         let snapshot = st.term.snapshot();
+        if let Some(frame) = reply(st.info.clone(), snapshot) {
+            let _ = tx.send(frame);
+        }
         st.subscribers.insert(client, tx);
-        Ok((st.info.clone(), snapshot))
+        Ok(())
     }
 
     pub fn detach(&self, id: TerminalId, client: ClientId) {
@@ -349,7 +453,7 @@ impl TerminalManager {
 
     pub fn write(&self, id: TerminalId, data: Vec<u8>) -> Result<()> {
         let s = self.get(id).context("no such terminal")?;
-        s.input.send(data).ok().context("terminal input closed")
+        s.input.lock().unwrap().send(data).ok().context("terminal input closed")
     }
 
     pub fn resize(&self, id: TerminalId, cols: u16, rows: u16) -> Result<()> {
@@ -374,12 +478,18 @@ impl TerminalManager {
             }
             return Ok(());
         }
+        // Decide and set `remove_on_exit` under one lock, so the read loop
+        // cannot record the exit in between and miss the flag.
         let exited = {
-            let st = s.state.lock().unwrap();
+            let mut st = s.state.lock().unwrap();
             if let Some(pty) = &st.pty {
                 let _ = pty.signal(nix::sys::signal::Signal::SIGHUP);
             }
-            st.info.exit.is_some()
+            let exited = st.info.exit.is_some();
+            if remove && !exited {
+                st.remove_on_exit = true;
+            }
+            exited
         };
         if !exited {
             // Some programs (agents included) ignore SIGHUP: escalate.
@@ -401,13 +511,9 @@ impl TerminalManager {
                 }
             });
         }
-        if remove {
-            if exited {
-                self.remove(id);
-            } else {
-                // Removed by the read loop once the process is gone.
-                s.state.lock().unwrap().remove_on_exit = true;
-            }
+        // Otherwise the read loop removes it once the process is gone.
+        if remove && exited {
+            self.remove(id);
         }
         Ok(())
     }
@@ -455,12 +561,16 @@ impl TerminalManager {
     ) -> Result<()> {
         let s = self.get(id).context("no such terminal")?;
         let mut st = s.state.lock().unwrap();
-        if st.info.agent.is_none() {
+        let promoted = st.info.agent.is_none();
+        if promoted {
             st.info.agent = agent.or(Some("agent".into()));
             st.info.kind = TerminalKind::Agent;
         }
         if st.agent.report(state, source, message) {
             self.publish_agent(&mut st);
+        } else if promoted {
+            // The first hook made it an agent terminal even if the state held.
+            self.emit(Message::event(methods::EV_TERMINAL_UPDATED, &st.info));
         }
         Ok(())
     }
@@ -727,11 +837,18 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
     let alt_changed = alt != st.info.alt_screen;
     st.info.alt_screen = alt;
     st.subscribers.retain(|_, tx| {
+        if tx.queued() > MAX_QUEUED_OUTPUT {
+            // The client stopped reading: detach it and ask it to re-attach.
+            let _ = tx.send(Frame::Json(Message::event(
+                methods::EV_TERMINAL_RESYNC,
+                methods::TerminalRef { id: terminal.id },
+            )));
+            return false;
+        }
         tx.send(Frame::Output {
             terminal: terminal.id,
             data: data.to_vec(),
         })
-        .is_ok()
     });
 
     let mut info_changed = alt_changed;

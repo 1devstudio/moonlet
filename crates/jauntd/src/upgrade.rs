@@ -2,7 +2,7 @@
 //! Unix socket with `SCM_RIGHTS`, then exit without touching the terminals.
 
 use std::io::{IoSlice, IoSliceMut, Read, Write};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
@@ -73,7 +73,22 @@ pub async fn request_upgrade(socket: &Path, binary: PathBuf) -> Result<()> {
 }
 
 /// Old-daemon side, triggered by SIGUSR2 or `daemon.upgrade`.
+/// One upgrade at a time: two concurrent handoffs would export the same PTY
+/// fds to two new daemons.
 pub async fn hand_off(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<()> {
+    if !daemon.begin_upgrade() {
+        bail!("an upgrade is already in progress");
+    }
+    let result = hand_off_once(daemon.clone(), binary).await;
+    if result.is_err() {
+        // Terminal I/O may have been stopped for the export: keep serving.
+        daemon.terminals.resume_io();
+        daemon.end_upgrade();
+    }
+    result
+}
+
+async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<()> {
     let binary = match binary {
         Some(b) => b,
         None => {
@@ -221,7 +236,8 @@ pub struct Incoming {
     stream: UnixStream,
     pub env: std::collections::BTreeMap<String, String>,
     exported: Vec<ExportedTerminal>,
-    fds: Vec<RawFd>,
+    /// Owned, so fds that are not adopted get closed.
+    fds: Vec<OwnedFd>,
 }
 
 /// New-daemon side, step 1: read the header and the PTY fds.
@@ -238,7 +254,7 @@ pub fn receive(path: &Path) -> Result<Incoming> {
         env,
         terminals: exported,
     } = serde_json::from_slice(&header)?;
-    let mut fds: Vec<RawFd> = Vec::with_capacity(exported.len());
+    let mut fds: Vec<OwnedFd> = Vec::with_capacity(exported.len());
     while fds.len() < exported.len() {
         let mut n = [0u8; 1];
         let mut iov = [IoSliceMut::new(&mut n)];
@@ -253,7 +269,8 @@ pub fn receive(path: &Path) -> Result<Incoming> {
         for c in msg.cmsgs()? {
             if let ControlMessageOwned::ScmRights(v) = c {
                 got += v.len();
-                fds.extend(v);
+                // SAFETY: SCM_RIGHTS hands us fresh descriptors we now own.
+                fds.extend(v.into_iter().map(|fd| unsafe { OwnedFd::from_raw_fd(fd) }));
             }
         }
         if got == 0 {
@@ -277,7 +294,8 @@ pub fn adopt(incoming: Incoming, terminals: &Arc<TerminalManager>) -> Result<()>
         ..
     } = incoming;
     for (e, fd) in exported.iter().zip(fds) {
-        if let Err(err) = terminals.adopt(e.info.clone(), e.rows, e.cols, e.snapshot.as_bytes(), fd)
+        if let Err(err) =
+            terminals.adopt(e.info.clone(), e.rows, e.cols, e.snapshot.as_bytes(), fd.into_raw_fd())
         {
             tracing::error!(session = e.info.id, "could not adopt session: {err:#}");
         }

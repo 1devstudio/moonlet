@@ -85,6 +85,9 @@ pub const EV_TERMINAL_CREATED: &str = "terminal.created";
 pub const EV_TERMINAL_UPDATED: &str = "terminal.updated";
 pub const EV_TERMINAL_EXITED: &str = "terminal.exited";
 pub const EV_TERMINAL_REMOVED: &str = "terminal.removed";
+/// Sent to one client whose output queue overflowed: it was detached from
+/// the terminal and must attach again for a fresh snapshot.
+pub const EV_TERMINAL_RESYNC: &str = "terminal.resync";
 pub const EV_AGENT_ATTENTION: &str = "agent.attention";
 pub const EV_PROJECTS_CHANGED: &str = "projects.changed";
 pub const EV_SESSIONS_CHANGED: &str = "sessions.changed";
