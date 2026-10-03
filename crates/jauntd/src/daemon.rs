@@ -153,6 +153,7 @@ impl Daemon {
             }
             m::TERMINAL_CREATE => {
                 let req: m::TerminalCreate = params(p)?;
+                jaunt_core::chat::check_mode(req.mode.as_deref()).map_err(internal)?;
                 match req.session_id.clone() {
                     Some(id) => {
                         let ws = self.sessions.session(&id).map_err(internal)?;
@@ -165,6 +166,7 @@ impl Daemon {
                             agent: req.agent.unwrap_or_default(),
                             model: req.model,
                             effort: req.effort,
+                            mode: req.mode,
                             name: req.title.clone().unwrap_or_default(),
                             title: req.title,
                             session_id: None,
@@ -197,7 +199,7 @@ impl Daemon {
             }
             m::CHAT_SETTINGS => {
                 let r: m::ChatSettings = params(p)?;
-                ok(self.chats.settings(r.id, r.model, r.effort).map_err(internal)?)
+                ok(self.chats.settings(r.id, r.model, r.effort, r.mode).map_err(internal)?)
             }
             m::TERMINAL_LIST => ok(s.list()),
             m::TERMINAL_DETACH => {

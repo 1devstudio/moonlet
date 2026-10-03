@@ -6,7 +6,8 @@ import { M, type IssueRef, type Project, type ProjectConfig, type Session } from
 import { errorToast, selectSession, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, cx } from "./ui";
-import { CLAUDE_MODELS, EFFORTS } from "../lib/agents";
+import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
+import { ModeMenu, useModeMenu } from "./ModeMenu";
 
 
 interface Choice {
@@ -223,6 +224,9 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
 
   const [prompt, setPrompt] = useState("");
+  // Starts at the Settings default every time; not remembered per project (X7).
+  const [mode, setMode] = useState(() => resolveMode(useStore.getState().settings.defaultMode));
+  const modeMenu = useModeMenu(mode, setMode);
   const [choice, setChoice] = useState<Choice>(() => (initial ? loadChoice(initial.project.id) : defaultChoice));
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [from, setFrom] = useState<{ ref: string; existing: boolean } | null>(null);
@@ -298,6 +302,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
         agent: choice.agent,
         model: choice.agent === "none" ? null : choice.model,
         effort: choice.agent === "none" ? null : choice.effort,
+        mode: choice.agent === "claude" ? mode : null,
         from: from && !from.existing ? from.ref : null,
         existing_branch: !!from?.existing,
         branch: from?.existing ? from.ref : null,
@@ -444,6 +449,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
         />
         <div className="flex items-center gap-2 px-5 pb-4">
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
+          {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 text-[15px]" iconSize={15} align="left" />}
           <span className="ml-auto" />
           <button title="Attach files" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg" onClick={() => void attach()}>
             <Plus size={16} />
