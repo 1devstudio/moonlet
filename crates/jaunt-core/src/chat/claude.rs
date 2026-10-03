@@ -72,6 +72,9 @@ impl Adapter for Claude {
         if let Some(e) = &cfg.effort {
             args.extend(["--effort".into(), e.clone()]);
         }
+        if let Some(m) = &cfg.mode {
+            args.extend(["--permission-mode".into(), m.clone()]);
+        }
         match &cfg.resume {
             Some(id) => args.extend(["--resume".into(), id.clone()]),
             None => args.extend(["--session-id".into(), uuid::Uuid::new_v4().to_string()]),
@@ -85,6 +88,7 @@ impl Adapter for Claude {
     fn start(&mut self, cfg: &ChatConfig, st: &mut ChatState) -> Vec<Out> {
         st.model = cfg.model.clone().or(st.model.take());
         st.effort = cfg.effort.clone().or(st.effort.take());
+        st.mode = cfg.mode.clone().or(st.mode.take());
         if st.status.is_empty() {
             st.status = "idle".into();
         }
@@ -346,11 +350,11 @@ mod tests {
     #[test]
     fn command_line() {
         let a = Claude::default();
-        let (prog, args) = a.command(&ChatConfig { agent: "claude".into(), model: Some("haiku".into()), effort: Some("high".into()), resume: Some("abc".into()), name: "Fix it".into(), cwd: "/r".into() });
+        let (prog, args) = a.command(&ChatConfig { agent: "claude".into(), model: Some("haiku".into()), effort: Some("high".into()), mode: Some("plan".into()), resume: Some("abc".into()), name: "Fix it".into(), cwd: "/r".into() });
         assert_eq!(prog, "claude");
         let joined = args.join(" ");
         assert!(joined.contains("--input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio"));
-        assert!(joined.contains("--model haiku --effort high --resume abc -n Fix it"));
+        assert!(joined.contains("--model haiku --effort high --permission-mode plan --resume abc -n Fix it"));
     }
 
     #[test]

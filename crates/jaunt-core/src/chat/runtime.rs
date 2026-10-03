@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
-use super::{Adapter, ChatConfig, Out, adapter_for, item, upsert};
+use super::{Adapter, ChatConfig, Out, adapter_for, check_mode, item, upsert};
 use crate::paths::now_ms;
 use crate::terminal::TerminalManager;
 
@@ -26,6 +26,7 @@ pub struct ChatCreate {
     pub agent: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub mode: Option<String>,
     pub name: String,
     pub title: Option<String>,
     pub session_id: Option<String>,
@@ -116,11 +117,14 @@ impl ChatManager {
 
     pub fn create(&self, req: ChatCreate) -> Result<TerminalInfo> {
         let adapter = adapter_for(&req.agent).with_context(|| format!("{} has no structured mode", req.agent))?;
+        check_mode(req.mode.as_deref())?;
         let cwd = crate::terminal::expand_home(&req.cwd);
         if !cwd.is_dir() {
             bail!("working directory does not exist: {}", cwd.display());
         }
-        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, resume: None, name: req.name, cwd: cwd.display().to_string() };
+        // Only Claude has a permission mode.
+        let mode = req.mode.filter(|_| req.agent == "claude");
+        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string() };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
         command.extend(args);
@@ -217,8 +221,9 @@ impl ChatManager {
         Ok(())
     }
 
-    /// New model or effort, used from the next message on.
-    pub fn settings(&self, id: TerminalId, model: Option<String>, effort: Option<String>) -> Result<ChatState> {
+    /// New model, effort or permission mode, used from the next message on.
+    pub fn settings(&self, id: TerminalId, model: Option<String>, effort: Option<String>, mode: Option<String>) -> Result<ChatState> {
+        check_mode(mode.as_deref())?;
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
         if model.is_some() {
@@ -228,6 +233,11 @@ impl ChatManager {
         if effort.is_some() {
             inner.cfg.effort = effort.clone();
             inner.state.effort = effort;
+        }
+        // Only Claude has a permission mode.
+        if mode.is_some() && inner.cfg.agent == "claude" {
+            inner.cfg.mode = mode.clone();
+            inner.state.mode = mode;
         }
         inner.restart = true;
         self.apply(&chat, &mut inner, vec![Out::State]);
@@ -631,6 +641,36 @@ done
         terms.kill(info.id, true).unwrap();
         assert!(!chats.is_chat(info.id));
         assert!(!dir.path().join("chats").join(format!("{}.json", info.id)).exists());
+    }
+
+    #[tokio::test]
+    async fn permission_mode_is_validated_stored_and_restored() {
+        let (dir, _terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        assert!(chats.settings(info.id, None, None, Some("yolo".into())).is_err());
+        assert_eq!(chats.state(info.id).unwrap().mode, None);
+        let st = chats.settings(info.id, None, None, Some("plan".into())).unwrap();
+        assert_eq!(st.mode.as_deref(), Some("plan"));
+        let chat = chats.get(info.id).unwrap();
+        assert_eq!(chat.inner.lock().unwrap().cfg.mode.as_deref(), Some("plan"));
+        assert!(chat.inner.lock().unwrap().restart);
+        chats.save_all();
+        let saved = std::fs::read_to_string(dir.path().join("chats").join(format!("{}.json", info.id))).unwrap();
+        assert!(saved.contains("\"mode\":\"plan\""));
+        chats.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_new_chat_starts_in_the_requested_mode() {
+        let (dir, _terms, chats) = setup().await;
+        let cwd = dir.path().display().to_string();
+        let bad = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), mode: Some("yolo".into()), ..Default::default() });
+        assert!(bad.is_err());
+        let info = chats.create(ChatCreate { cwd, agent: "claude".into(), mode: Some("acceptEdits".into()), ..Default::default() }).unwrap();
+        assert!(info.command.join(" ").contains("--permission-mode acceptEdits"), "{:?}", info.command);
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        assert_eq!(chats.state(info.id).unwrap().mode.as_deref(), Some("acceptEdits"));
+        chats.shutdown();
     }
 
     #[tokio::test]

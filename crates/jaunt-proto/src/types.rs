@@ -135,6 +135,9 @@ pub struct Session {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Claude permission mode chosen when the session was created (X7).
+    #[serde(default)]
+    pub mode: Option<String>,
     #[serde(default, alias = "sessions")]
     pub terminals: Vec<TerminalId>,
     /// Opaque UI layout (tabs, splits), owned by the client.
@@ -385,6 +388,9 @@ pub struct ChatState {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Claude permission mode (`auto`, `manual`, `acceptEdits`, `plan`, `bypassPermissions`); `None` means the agent default.
+    #[serde(default)]
+    pub mode: Option<String>,
     #[serde(default)]
     pub cost_usd: f64,
     #[serde(default)]

@@ -41,7 +41,7 @@ Method names and parameter structs are in `crates/jaunt-proto/src/methods.rs`; r
 - `terminal.*`: create, list, attach, detach, resize, kill, write, search.
 - `agent.report`: state reports from agent hooks (`jaunt hook …`).
 - `workspace.*`, `project.*` and `session.*`: workspaces, projects, worktree sessions, scripts.
-- `chat.*`: state, send, permission, interrupt, settings for structured agents (X6). Events: `chat.item`, `chat.state`.
+- `chat.*`: state, send, permission, interrupt, settings (model, effort, permission mode) for structured agents (X6, X7). Events: `chat.item`, `chat.state`.
 - `git.*` and `gh.*`: status, diffs, staging, commit, log, PRs, issues.
 - `fs.*`: list, files, read, write, watch.
 - `shell.history`: the login shell's history for input suggestions.
