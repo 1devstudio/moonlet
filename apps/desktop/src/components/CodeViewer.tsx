@@ -22,7 +22,10 @@ export default function CodeViewer({ host, path, line, onClose }: { host: string
       .catch((e) => setError(String(e.message ?? e)));
   }, [host, path]);
 
+  // The ⌘S command is registered once; it reads the current mode from here.
+  const writable = useRef(false);
   const save = async () => {
+    if (!writable.current) return;
     const value = editor.current?.getValue();
     if (value === undefined) return;
     try {
@@ -44,6 +47,7 @@ export default function CodeViewer({ host, path, line, onClose }: { host: string
   };
 
   const readOnly = !editing || !!file?.truncated;
+  writable.current = !readOnly;
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 text-[11.5px]">

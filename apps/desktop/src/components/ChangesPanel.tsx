@@ -103,6 +103,16 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
 export default function ChangesPanel({ host, ws }: { host: string; ws: Session }) {
   const status = useStore((s) => s.git[sesKey(host, ws.id)]);
   const [mode, setMode] = useState<Mode>("base");
+  // Diff models are kept per file while the panel is open, then released.
+  useEffect(() => {
+    const prefix = `jaunt-diff://${ws.id}/`;
+    return () => {
+      // After the editor itself has unmounted.
+      setTimeout(() => {
+        for (const m of monaco.editor.getModels()) if (m.uri.toString().startsWith(prefix)) m.dispose();
+      }, 0);
+    };
+  }, [ws.id]);
   const selected = useStore((s) => s.diffFile);
   const setSelected = (f: string | null) => useStore.setState({ diffFile: f });
   const [versions, setVersions] = useState<FileVersions | null>(null);
@@ -246,7 +256,8 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
           {current && (
             <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 text-[11.5px] text-muted">
               <span className="truncate font-mono text-fg">{current.path}</span>
-              {diff && diff.hunks.length > 0 && (
+              {/* Hunk staging works on uncommitted changes only. */}
+              {mode !== "base" && diff && diff.hunks.length > 0 && (
                 <span className="flex items-center gap-1">
                   {diff.hunks.map((h, i) => (
                     <span key={i} className="flex items-center rounded border border-border-strong">
@@ -284,6 +295,10 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
                 original={versions.original ?? ""}
                 modified={versions.modified ?? ""}
                 onMount={onMount}
+                // One model pair per file, reused across modes and disposed
+                // when the panel closes (see the cleanup effect).
+                originalModelPath={`jaunt-diff://${ws.id}/original/${selected}`}
+                modifiedModelPath={`jaunt-diff://${ws.id}/modified/${selected}`}
                 keepCurrentOriginalModel
                 keepCurrentModifiedModel
                 options={{ ...editorOptions, readOnly: true, renderIndicators: false, renderMarginRevertIcon: false, renderSideBySide: sideBySide, originalEditable: false, renderOverviewRuler: false, hideUnchangedRegions: { enabled: true } }}

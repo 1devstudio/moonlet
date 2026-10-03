@@ -5,7 +5,8 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc, sendInput } from "./daemon";
 import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
 import { M, type TerminalInfo, type Session } from "./protocol";
-import { errorToast, getLayout, selectedSession, setLayout, toast, useStore, sessionTerminals } from "./store";
+import { errorToast, getLayout, selectedSession, sessionState, setLayout, toast, useStore, sessionTerminals } from "./store";
+import { arrange, lastActive } from "./sidebar";
 import { findEntry } from "./terminals";
 import { isStructured } from "./agents";
 
@@ -88,6 +89,17 @@ export async function closeFocused() {
   void rpc(c.host, M.terminalKill, { id: focused, remove: true }).catch(errorToast);
 }
 
+/** Closes a tab's terminals, asking first if an agent is still running. */
+export async function closeTab(host: string, ids: number[]) {
+  const terms = useStore.getState().terminals[host] ?? {};
+  const agents = ids.map((id) => terms[id]).filter((t) => t?.kind === "agent" && !t.exit);
+  if (agents.length) {
+    const ok = await confirm(`Stop the ${agents[0]?.agent ?? "agent"} running in this tab?`, { title: "Close agent", kind: "warning" });
+    if (!ok) return;
+  }
+  for (const id of ids) void rpc(host, M.terminalKill, { id, remove: true }).catch(errorToast);
+}
+
 export function focusPane(delta: number) {
   const c = current();
   if (!c) return;
@@ -166,8 +178,9 @@ export async function runScript(script: "run" | "setup") {
   }
 }
 
-export async function archiveSession(deleteBranch = false) {
-  const c = current();
+/** Archives `target`, or the selected session. */
+export async function archiveSession(deleteBranch = false, target?: { host: string; ws: Session }) {
+  const c = target ?? current();
   if (!c) return;
   const ok = await confirm(
     `Archive "${c.ws.name}"? Its terminals stop and the worktree folder is removed.${deleteBranch ? " The branch is deleted too." : " The branch is kept."}`,
@@ -176,24 +189,41 @@ export async function archiveSession(deleteBranch = false) {
   if (!ok) return;
   try {
     await rpc(c.host, M.sessionArchive, { id: c.ws.id, remove_worktree: true, delete_branch: deleteBranch });
-    useStore.setState({ selected: null });
+    const sel = useStore.getState().selected;
+    if (sel?.host === c.host && sel.session === c.ws.id) useStore.setState({ selected: null });
     toast(`Archived ${c.ws.name}`);
   } catch (e) {
     errorToast(e);
   }
 }
 
-export function selectSessionByIndex(i: number) {
+/** Sessions in the order the sidebar shows them, skipping collapsed blocks. */
+export function visibleSessionOrder(): { host: string; id: string }[] {
   const s = useStore.getState();
   const hosts = Object.values(s.hosts).sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id));
   const flat: { host: string; id: string }[] = [];
+  const seen = new Set<string>();
   for (const h of hosts) {
-    for (const r of s.projects[h.id] ?? []) {
-      const list = (s.sessions[h.id] ?? []).filter((w) => !w.archived && w.project_id === r.id).sort((a, b) => b.created_at - a.created_at);
-      flat.push(...list.map((w) => ({ host: h.id, id: w.id })));
+    const terms = s.terminals[h.id] ?? {};
+    for (const ws of s.workspaces[h.id] ?? []) {
+      if (s.collapsed[`ws:${h.id}/${ws.id}`]) continue;
+      const groups = arrange(ws, s.projects[h.id] ?? [], s.sessions[h.id] ?? [], (x) => sessionState(s, h.id, x.id), (x) => lastActive(terms, x));
+      for (const g of groups) {
+        if (s.collapsed[`${h.id}/${ws.id}/${g.key}`]) continue;
+        for (const x of g.sessions) {
+          const key = `${h.id}/${x.id}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          flat.push({ host: h.id, id: x.id });
+        }
+      }
     }
   }
-  const t = flat[i];
+  return flat;
+}
+
+export function selectSessionByIndex(i: number) {
+  const t = visibleSessionOrder()[i];
   if (t) useStore.setState({ selected: { host: t.host, session: t.id } });
 }
 

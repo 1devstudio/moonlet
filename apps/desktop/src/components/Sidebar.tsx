@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, ChevronDown, ChevronRight, Folder, FolderPlus, History, MoreHorizontal, Plus, RotateCcw, Settings } from "lucide-react";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
-import { arrange, compact, dropResult, type Dragged, type Group } from "../lib/sidebar";
+import { arrange, compact, dropResult, lastActive, type Dragged, type Group } from "../lib/sidebar";
 import { errorToast, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { archiveSession } from "../lib/actions";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
@@ -14,12 +15,24 @@ function updateWorkspace(host: string, id: string, patch: Partial<Pick<Workspace
   return rpc<Workspace>(host, M.workspaceUpdate, { id, ...patch }).catch(errorToast);
 }
 
-function activeAt(host: string, s: Session): number {
-  const terms = useStore.getState().terminals[host] ?? {};
-  return Object.values(terms)
-    .filter((t) => t.session_id === s.id)
-    .reduce((m, t) => Math.max(m, t.last_output_at), s.created_at);
+/** Deletes a section after confirming, and moves its sessions out of it. */
+async function deleteSection(host: string, ws: Workspace, id: string, sessions: Session[]) {
+  if (sessions.length) {
+    const ok = await confirm(`Delete this section? Its ${sessions.length} session${sessions.length === 1 ? "" : "s"} move back to their projects.`, {
+      title: "Delete section",
+      kind: "warning",
+    });
+    if (!ok) return;
+  }
+  try {
+    await Promise.all(sessions.map((s) => rpc(host, M.sessionUpdate, { id: s.id, section: "" })));
+    await updateWorkspace(host, ws.id, { sections: ws.sections.filter((x) => x.id !== id) });
+  } catch (e) {
+    errorToast(e);
+  }
 }
+
+const activeAt = (host: string, s: Session) => lastActive(useStore.getState().terminals[host] ?? {}, s);
 
 /** Small project mark (Conductor uses a dotted glyph). */
 function ProjectMark() {
@@ -223,7 +236,7 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
             <IconButton
               title="Delete section"
               className="opacity-0 group-hover:opacity-100"
-              onClick={() => void updateWorkspace(host, ws.id, { sections: ws.sections.filter((x) => x.id !== g.sectionId) })}
+              onClick={() => void deleteSection(host, ws, g.sectionId!, g.sessions)}
             >
               <span className="text-[13px]">×</span>
             </IconButton>
@@ -386,14 +399,13 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
     ws.sections.length
       ? { kind: "submenu", label: "Move to section", items: ws.sections.map((sec) => ({ label: sec.name, checked: s.section === sec.id, onSelect: () => moveTo(sec.id) })) }
       : { label: "Move to section…", hint: "none yet", onSelect: () => toast("Create one first: workspace ⋯ › New section…") },
-    ...(s.section ? [{ label: "Remove from section", onSelect: () => moveTo("") }] : []),
+    ...(s.section && ws.sections.some((x) => x.id === s.section) ? [{ label: "Remove from section", onSelect: () => moveTo("") }] : []),
     { kind: "divider" },
     {
       label: "Archive",
       icon: <Archive size={14} className="text-muted" />,
       onSelect: () => {
-        selectSession(host, s.id);
-        void archiveSession();
+        void archiveSession(false, { host, ws: s });
       },
     },
   ];

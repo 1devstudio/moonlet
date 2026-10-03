@@ -240,6 +240,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
     void rpc<string[]>(current.host, M.gitBranches, { path: current.project.path }).then(setBranches).catch(() => setBranches([]));
     setPr(null);
     setFrom(null);
+    setIssue(null);
   }, [current?.host, current?.project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => ta.current?.focus(), []);

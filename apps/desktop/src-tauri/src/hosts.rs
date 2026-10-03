@@ -310,7 +310,9 @@ impl HostManager {
     pub fn reconnect(&self, id: &str) -> Result<(), RpcError> {
         let h = self.get(id)?;
         h.link.lock().unwrap().take();
-        h.retry.notify_one();
+        // Wake a waiting link loop only: a stored permit would drop the next
+        // fresh link right after its handshake.
+        h.retry.notify_waiters();
         Ok(())
     }
 }

@@ -106,6 +106,8 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
                     title: info.title,
                     agent: info.agent,
                     session_id: info.session_id,
+                    cols: info.cols,
+                    rows: info.rows,
                   });
                   await rpc(host, M.terminalKill, { id: session, remove: true });
                 } catch (e) {
