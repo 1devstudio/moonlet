@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { activeToken, diffStat, fuzzyFilter, mergeItem, transcript } from "./chat";
+import { describe, expect, it, vi } from "vitest";
+import { activeToken, chatKey, diffStat, fuzzyFilter, loadChat, mergeItem, onChatItem, onChatState, transcript, useChat } from "./chat";
+
+const rpcReply = vi.hoisted(() => ({ release: (_v: unknown) => {} }));
+vi.mock("./daemon", () => ({ rpc: () => new Promise((r) => (rpcReply.release = r)) }));
 import type { ChatItem } from "./protocol";
 
 const item = (id: string, text: string, kind: ChatItem["kind"] = "assistant"): ChatItem => ({ id, kind, text, ts: 0 });
@@ -32,5 +35,16 @@ describe("chat helpers", () => {
   it("writes a transcript without thinking", () => {
     const t = transcript([item("1", "hi", "user"), item("2", "secret", "thinking"), { ...item("3", "", "tool"), tool: { name: "Bash", summary: "ls", input: {}, status: "denied" } }, item("4", "done")]);
     expect(t).toBe("> hi\n\n[Bash] ls (denied)\n\ndone");
+  });
+
+  it("keeps events that arrive while the state loads", async () => {
+    const p = loadChat("h", 1);
+    onChatItem("h", 1, { id: "a", kind: "assistant", text: "late", ts: 0 });
+    onChatState("h", 1, { items: [], pending: [], status: "done", cost_usd: 1, input_tokens: 0, output_tokens: 0, slash_commands: [], queued: [] });
+    rpcReply.release({ items: [{ id: "a", kind: "assistant", text: "ear", ts: 0 }], pending: [], status: "working", cost_usd: 0, input_tokens: 0, output_tokens: 0, slash_commands: [], queued: [] });
+    await p;
+    const st = useChat.getState().chats[chatKey("h", 1)];
+    expect(st.status).toBe("done");
+    expect(st.items[0].text).toBe("late");
   });
 });

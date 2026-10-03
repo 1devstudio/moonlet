@@ -6,6 +6,8 @@ import { commonPrefix, firstWord, historyFor, rememberCommand, suggest } from ".
 import { findEntry, getEntry } from "../lib/terminals";
 import { setClassic } from "../lib/actions";
 
+const drafts = new Map<string, string>();
+
 function shortPath(p: string, home: string | null): string {
   if (home && (p === home || p.startsWith(home + "/"))) return "~" + p.slice(home.length);
   return p;
@@ -30,7 +32,16 @@ export function InputEditor({
   branch?: string;
   focused: boolean;
 }) {
-  const [text, setText] = useState("");
+  // The draft survives the editor unmounting (Classic mode, a full-screen program).
+  const draftKey = `${host}:${terminal}`;
+  const [text, setTextState] = useState(() => drafts.get(draftKey) ?? "");
+  const setText = (v: string | ((cur: string) => string)) =>
+    setTextState((cur) => {
+      const next = typeof v === "function" ? v(cur) : v;
+      if (next) drafts.set(draftKey, next);
+      else drafts.delete(draftKey);
+      return next;
+    });
   const [history, setHistory] = useState<string[]>([]);
   const [walk, setWalk] = useState<number | null>(null); // index into history while browsing with ↑/↓
   const [hint, setHint] = useState<string | null>(null);
@@ -81,12 +92,14 @@ export function InputEditor({
       rememberCommand(host, cmd.trim());
       setHistory((h) => [...h.filter((x) => x !== cmd.trim()), cmd.trim()]);
     }
-    // One bracketed paste so newlines and special characters arrive intact.
-    const body = cmd.includes("\n") ? `\x1b[200~${cmd}\x1b[201~` : cmd;
+    // One bracketed paste so newlines, tabs and other control characters
+    // arrive as text instead of acting as keys (a tab would complete).
+    const body = /[\x00-\x1f\x7f]/.test(cmd) ? `\x1b[200~${cmd}\x1b[201~` : cmd;
     void sendInput(host, terminal, body + "\r");
   };
 
   const completePath = async () => {
+    const asked = text;
     const m = /(\S*)$/.exec(text);
     const word = m ? m[1] : "";
     const slash = word.lastIndexOf("/");
@@ -99,7 +112,8 @@ export function InputEditor({
       if (!hits.length) return;
       const names = hits.map((e) => e.name + (e.is_dir ? "/" : ""));
       const completion = hits.length === 1 ? names[0] + (hits[0].is_dir ? "" : " ") : commonPrefix(names);
-      if (completion.length > stem.length) setText(text.slice(0, text.length - stem.length) + completion);
+      // The user may have kept typing while the listing loaded.
+      if (completion.length > stem.length) setText((cur) => (cur === asked ? asked.slice(0, asked.length - stem.length) + completion : cur));
       setHint(hits.length > 1 ? names.slice(0, 12).join("  ") + (names.length > 12 ? "  …" : "") : null);
     } catch {
       /* directory unreadable */

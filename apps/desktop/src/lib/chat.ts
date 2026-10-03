@@ -29,11 +29,19 @@ export function mergeItem(items: ChatItem[], item: ChatItem): ChatItem[] {
   return next;
 }
 
+/** Events that arrive while `chat.state` is in flight, applied after it. */
+const buffered = new Map<string, { items: ChatItem[]; state?: ChatState }>();
+
 export function onChatItem(host: string, id: number, item: ChatItem) {
   const key = chatKey(host, id);
+  const buf = buffered.get(key);
+  if (buf) {
+    buf.items.push(item);
+    return;
+  }
   useChat.setState((s) => {
     const cur = s.chats[key];
-    // Not loaded yet: the full state fetch will include it.
+    // Not loaded and not loading: the next load includes it.
     if (!cur) return s;
     return { chats: { ...s.chats, [key]: { ...cur, items: mergeItem(cur.items, item) } } };
   });
@@ -41,6 +49,11 @@ export function onChatItem(host: string, id: number, item: ChatItem) {
 
 export function onChatState(host: string, id: number, state: ChatState) {
   const key = chatKey(host, id);
+  const buf = buffered.get(key);
+  if (buf) {
+    buf.state = state;
+    return;
+  }
   useChat.setState((s) => {
     const cur = s.chats[key];
     if (!cur) return s;
@@ -55,10 +68,17 @@ export async function loadChat(host: string, id: number) {
   const key = chatKey(host, id);
   if (loading.has(key)) return;
   loading.add(key);
+  // Events can overtake the reply: hold them and replay them on top of it.
+  buffered.set(key, { items: [] });
   try {
     const st = await rpc<ChatState>(host, M.chatState, { id });
-    useChat.setState((s) => ({ chats: { ...s.chats, [key]: { ...empty, ...st } } }));
+    const buf = buffered.get(key);
+    let items = st.items;
+    for (const it of buf?.items ?? []) items = mergeItem(items, it);
+    const latest = buf?.state ? { ...buf.state, items } : { ...st, items };
+    useChat.setState((s) => ({ chats: { ...s.chats, [key]: { ...empty, ...latest } } }));
   } finally {
+    buffered.delete(key);
     loading.delete(key);
   }
 }
