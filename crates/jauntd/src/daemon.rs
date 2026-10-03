@@ -213,6 +213,15 @@ impl Daemon {
                     .await
                     .map_err(internal)?)
             }
+            m::SHELL_HISTORY => {
+                let r: m::ShellHistory = params(p)?;
+                let entries = tokio::task::spawn_blocking(move || {
+                    jaunt_core::history::read(r.shell.as_deref())
+                })
+                .await
+                .map_err(internal)?;
+                ok(entries)
+            }
             m::GH_ISSUES | m::GH_PRS => {
                 let r: m::GitPath = params(p)?;
                 let kind = if method == m::GH_PRS { "pr" } else { "issue" };

@@ -3,7 +3,8 @@ import { RotateCw, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
 import { errorToast, getLayout, setLayout, useStore } from "../lib/store";
-import { getEntry } from "../lib/terminals";
+import { findEntry, getEntry } from "../lib/terminals";
+import { InputEditor } from "./InputEditor";
 import { Button } from "./ui";
 
 function resolvePath(base: string, p: string, home: string | null): string {
@@ -40,20 +41,36 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
     return () => entry.unmount();
   }, [host, session, visible, home]);
 
+  // The Warp-style editor takes over input while the shell waits at a prompt (T6).
+  const editing = !!info && info.kind === "shell" && info.prompt === true && !info.alt_screen && !info.exit;
+  const branch = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.branch : undefined));
+
   useEffect(() => {
-    if (focused && visible) getEntry(host, session).focus();
-  }, [focused, visible, host, session]);
+    if (focused && visible && !editing) getEntry(host, session).focus();
+  }, [focused, visible, host, session, editing]);
 
   const exited = info?.exit;
   return (
     <div
-      className="relative h-full w-full overflow-hidden bg-bg"
+      className="relative flex h-full w-full flex-col overflow-hidden bg-bg"
       onMouseDown={() => {
         const l = getLayout(host, wsId);
         if (l.focused !== session) setLayout(host, wsId, { ...l, focused: session });
       }}
     >
-      <div ref={ref} className="absolute inset-0" />
+      <div className="relative min-h-0 flex-1">
+        <div ref={ref} className="absolute inset-0" />
+      </div>
+      {editing && visible && (
+        <InputEditor
+          host={host}
+          terminal={session}
+          cwd={findEntry(host, session)?.cwd || info.reported_cwd || info.cwd}
+          home={home}
+          branch={branch}
+          focused={focused}
+        />
+      )}
       {exited && (
         <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-t border-border bg-panel/95 px-3 py-1.5 text-[12px] text-muted">
           <span>

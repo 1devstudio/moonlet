@@ -24,6 +24,9 @@ export interface TerminalInfo {
   pid: number | null;
   exit?: ExitInfo;
   reported_cwd?: string;
+  /** At a shell prompt (OSC 133); undefined until the shell reports marks. */
+  prompt?: boolean;
+  alt_screen?: boolean;
   created_at: number;
   last_output_at: number;
 }
@@ -231,6 +234,7 @@ export const M = {
   gitBranches: "git.branches",
   prCreate: "gh.pr_create",
   ghIssues: "gh.issues",
+  shellHistory: "shell.history",
   ghPrs: "gh.prs",
   workspaceList: "workspace.list",
   workspaceCreate: "workspace.create",

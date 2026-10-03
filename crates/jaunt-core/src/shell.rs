@@ -217,7 +217,11 @@ mod tests {
                 _ => break,
             }
         }
+        // Let the next prompt's marks reach the terminal state.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let prompt = mgr.get(info.id).map(|t| t.info().prompt);
         let _ = mgr.kill(info.id, true);
+        assert_eq!(prompt, Some(Some(true)), "back at a prompt after `false`");
         Some(out)
     }
 

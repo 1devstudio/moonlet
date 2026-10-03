@@ -5,6 +5,7 @@ pub mod agent;
 pub mod client;
 pub mod fs;
 pub mod git;
+pub mod history;
 pub mod hooks;
 pub mod paths;
 pub mod pty;

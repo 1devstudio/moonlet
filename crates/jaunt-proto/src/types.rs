@@ -71,6 +71,13 @@ pub struct TerminalInfo {
     /// Working directory reported by the shell via OSC 7.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported_cwd: Option<String>,
+    /// Shell is waiting at a prompt (OSC 133 `A`/`D` seen, no `C` since).
+    /// `None` until the shell reports prompt marks at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<bool>,
+    /// A full-screen program (vim, htop, less) holds the alternate screen.
+    #[serde(default)]
+    pub alt_screen: bool,
     pub created_at: u64,
     pub last_output_at: u64,
 }

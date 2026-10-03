@@ -186,6 +186,8 @@ impl TerminalManager {
             pid: Some(pty.pid()),
             exit: None,
             reported_cwd: None,
+            prompt: None,
+            alt_screen: false,
             created_at: now,
             last_output_at: now,
         };
@@ -621,6 +623,9 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
     st.last_output = now;
     st.info.last_output_at = now_ms();
     let signals = st.term.process(data);
+    let alt = st.term.screen().alternate_screen();
+    let alt_changed = alt != st.info.alt_screen;
+    st.info.alt_screen = alt;
     st.subscribers.retain(|_, tx| {
         tx.send(Frame::Output {
             terminal: terminal.id,
@@ -629,7 +634,7 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
         .is_ok()
     });
 
-    let mut info_changed = false;
+    let mut info_changed = alt_changed;
     let mut agent_changed = false;
     for signal in signals {
         match signal {
@@ -640,6 +645,17 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
             Signal::Cwd(cwd) => {
                 st.info.reported_cwd = Some(cwd);
                 info_changed = true;
+            }
+            Signal::Prompt { mark, .. } => {
+                let at_prompt = match mark {
+                    'A' | 'D' => Some(true),
+                    'C' => Some(false),
+                    _ => st.info.prompt,
+                };
+                if at_prompt != st.info.prompt {
+                    st.info.prompt = at_prompt;
+                    info_changed = true;
+                }
             }
             Signal::Notify { title, body } if st.info.kind == TerminalKind::Agent => {
                 let msg = Some(match title {
