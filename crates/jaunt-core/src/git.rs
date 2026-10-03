@@ -718,27 +718,30 @@ pub async fn pr_head_branch(repo: &Path, number: u64) -> Result<String> {
         ],
     )
     .await?;
-    let branch = String::from_utf8_lossy(&out).trim().to_string();
-    if branch.is_empty() {
+    if String::from_utf8_lossy(&out).trim().is_empty() {
         bail!("pull request #{number} has no head branch");
     }
-    if git(
+    // A name jaunt owns: the PR's own headRefName may collide with a local
+    // branch (fork PRs from `main`), or name a stale earlier checkout.
+    let branch = format!("pr/{number}");
+    let fetched = git(
         repo,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ],
+        &["fetch", "origin", &format!("+pull/{number}/head:{branch}")],
     )
-    .await
-    .is_err()
-    {
-        git(
+    .await;
+    if let Err(e) = fetched {
+        // Git refuses to update a branch checked out in a worktree (an open
+        // session of this PR); that session keeps its branch.
+        let exists = git(
             repo,
-            &["fetch", "origin", &format!("pull/{number}/head:{branch}")],
+            &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")],
         )
-        .await?;
+        .await
+        .is_ok();
+        if !exists {
+            return Err(e);
+        }
+        tracing::warn!("could not refresh {branch}: {e:#}");
     }
     Ok(branch)
 }

@@ -88,8 +88,12 @@ pub fn install() -> Result<()> {
     }
     let home = std::env::var("JAUNT_HOME").ok();
     std::fs::write(&plist, render(&binary, &logs, home.as_deref()))?;
-    // Replace any previous registration, then load the new one.
-    let _ = launchctl(&["bootout", &format!("{}/{LABEL}", domain())]);
+    // A loaded agent may be the daemon serving every session right now:
+    // booting it out would end them. The rewritten plist applies at the
+    // next login; binary updates go through the live upgrade instead.
+    if is_loaded() {
+        return Ok(());
+    }
     let out = launchctl(&["bootstrap", &domain(), &plist.display().to_string()])?;
     if !out.status.success() {
         bail!(
@@ -100,8 +104,23 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+fn is_loaded() -> bool {
+    launchctl(&["print", &format!("{}/{LABEL}", domain())]).is_ok_and(|o| o.status.success())
+}
+
+/// Stops the agent (and the daemon it runs, ending its sessions; the app
+/// asks first) and removes the plist.
 pub fn uninstall() -> Result<()> {
-    let _ = launchctl(&["bootout", &format!("{}/{LABEL}", domain())]);
+    if is_loaded() {
+        let out = launchctl(&["bootout", &format!("{}/{LABEL}", domain())])?;
+        // Gone in between is fine; anything else must not be reported as removed.
+        if !out.status.success() && is_loaded() {
+            bail!(
+                "launchctl bootout failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+    }
     let plist = plist_path()?;
     if plist.exists() {
         std::fs::remove_file(plist)?;
@@ -118,9 +137,7 @@ pub struct Status {
 
 pub fn status() -> Result<Status> {
     let plist = plist_path()?;
-    let loaded = launchctl(&["print", &format!("{}/{LABEL}", domain())])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let loaded = is_loaded();
     Ok(Status {
         installed: plist.exists(),
         loaded,

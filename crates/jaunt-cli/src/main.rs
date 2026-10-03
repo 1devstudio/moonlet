@@ -219,6 +219,8 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
             message,
             session,
         } => {
+            // Terminals started before ADR 0005 still carry JAUNT_SESSION_ID.
+            let session = session.or_else(|| std::env::var("JAUNT_SESSION_ID").ok().and_then(|v| v.parse().ok()));
             let Some(session) = session else {
                 bail!("no session: run inside a jaunt pane or pass --session")
             };
