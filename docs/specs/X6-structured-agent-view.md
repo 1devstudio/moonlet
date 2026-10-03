@@ -1,6 +1,6 @@
 # X6: Structured agent view (Claude Code and Codex)
 
-- **Status:** approved (user decision 2026-10-03: option 3 over the TUI-plus-composer alternatives)
+- **Status:** implemented for Claude Code (verified live); Codex adapter implemented and tested against synthetic streams, not yet live (needs `codex login`). Approved by user decision on 2026-10-03: option 3 over the TUI-plus-composer alternatives.
 - **Priority / phase:** P1 (pulled forward from PRD A7 "ACP side channel", P2)
 - **PRD refs:** A1, A3, A5, A7, goal 2; PRD non-goal "chat UI replacing the agent's TUI" is **overridden** by this decision for Claude Code and Codex. The TUI remains available on demand.
 - **Related:** [T6](T6-input-editor.md) (editor), [X5](X5-workspaces-projects-sessions.md) (sessions), [A1](A1-agent-state.md) (agent state)
@@ -33,15 +33,19 @@ Both agents map onto one normalized chat model in `jaunt-proto`.
 - **`PermissionAsk`**: id, tool, summary, input, reason, and whether "always allow" is offered.
 - **`ChatState`**: items, pending asks, status (idle, working, blocked, done, error), model, effort, cost, tokens, turn start time, the agent's own session/thread id, and slash commands.
 
-A structured agent is a **terminal** with `chat: true`. It appears in `terminal.list` and session layouts, drives `agent_state` and `agent.attention` like any agent terminal, and is killed, removed and restored through the same calls.
+A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `terminal.list` and session layouts, drives `agent_state` and `agent.attention` like any agent terminal, and is killed, removed and restored through the same calls.
 
 ## RPCs and events
 
+- `terminal.create {agent, chat: true, model?, effort?}` starts one. `session.create` uses the structured view for Claude Code and Codex unless `tui: true`. The session's first prompt is sent as the first message.
 - `chat.state {id}` returns the `ChatState`.
 - `chat.send {id, text}` sends a message. Queued if a turn is running (Claude accepts queued input; Codex starts the next turn when the current one completes).
 - `chat.permission {id, ask, decision: allow|always|deny, message?}` answers a permission request.
-- `chat.interrupt {id}` stops the current turn.
-- Events: `chat.item {id, item}`, `chat.state {id, state}` (status, pending, cost), and the usual `terminal.*`.
+- `chat.interrupt {id}` stops the current turn. Open permission requests are denied first. The turn ends with an "Interrupted" note and status `idle`, not an error.
+- `chat.settings {id, model?, effort?}` changes the model or effort. The agent restarts with resume before the next message.
+- `fs.files {root}` lists the project's non-ignored files for `@` mentions.
+- Events: `chat.item {id, item}`, `chat.state {id, state}` (everything except the items), and the usual `terminal.*`.
+- Item ids for jaunt's own items (user, system, error) include a timestamp. A resumed agent starts a fresh adapter, and its ids must not clash with the saved transcript.
 
 ## UI
 
@@ -66,6 +70,9 @@ A structured agent is a **terminal** with `chat: true`. It appears in `terminal.
 - The chat state is persisted to `~/.jaunt/chats/<terminal id>.json` (debounced), together with the agent session or thread id.
 - After a daemon restart, a chat terminal is re-created and re-spawned with resume, and its items are restored from the file. A turn in flight at the time is reported as interrupted.
 - A live daemon upgrade hands chats over by restarting them with resume. The transcript is kept, but a running turn is interrupted. Pipe handoff is a possible later improvement.
+- Restored chats keep their terminal id. The agent process is only started by the next message, so a restart costs nothing until the user continues.
+- Permission cards for edits include the diff. Paths inside the session worktree are shown relative to it.
+- The floating agent card is not shown for chat terminals in the open session, because the conversation already shows the outcome or the approval.
 
 ## Security
 
@@ -75,14 +82,14 @@ A structured agent is a **terminal** with `chat: true`. It appears in `terminal.
 
 ## Acceptance criteria
 
-- [ ] **Claude live, Haiku in a scratch repo:**
+- [x] **Claude live, Haiku in a scratch repo** (2026-10-03, $0.11 total):
   - streaming text appears incrementally;
   - a Bash call asks for permission and is allowed or denied from the card;
   - an Edit shows a diff;
   - Stop interrupts;
   - quitting and reopening the app shows the full conversation;
-  - "Open in terminal" continues it in the TUI.
+  - "Open in terminal" continues it in the TUI. The TUI first asks Claude's folder-trust question, which headless mode skips.
 - [ ] **Codex live** (after `codex login`): the same flow.
-- [ ] Agent state, sidebar dots, notifications and the approval inbox work for chat terminals.
-- [ ] A daemon restart restores the conversation and resumes the agent.
-- [ ] Adapter unit tests replay recorded/synthetic protocol streams for both agents.
+- [x] Agent state, sidebar dots and notifications work for chat terminals (verified live). The approval inbox uses the same agent state but was not checked separately.
+- [x] A daemon restart restores the conversation and resumes the agent (verified through two live upgrades).
+- [x] Adapter unit tests replay recorded/synthetic protocol streams for both agents.
