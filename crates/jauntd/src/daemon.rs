@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use jaunt_core::fs::Watchers;
 use jaunt_core::hooks::{self, HookPaths};
 use jaunt_core::paths::{hostname, now_ms};
+use jaunt_core::chat::runtime::{ChatCreate, ChatManager, chats_dir};
 use jaunt_core::session::SessionManager;
 use jaunt_core::terminal::TerminalManager;
 use jaunt_core::{fs, git};
@@ -23,6 +24,7 @@ use crate::server::Conn;
 
 pub struct Daemon {
     pub terminals: Arc<TerminalManager>,
+    pub chats: Arc<ChatManager>,
     pub sessions: Arc<SessionManager>,
     watchers: Arc<Watchers>,
     started_at: u64,
@@ -53,10 +55,13 @@ impl Daemon {
             jaunt_core::paths::home().join("worktrees"),
             terminals.clone(),
         );
+        let chats = ChatManager::new(terminals.clone(), chats_dir(&jaunt_core::paths::home()));
+        sessions.set_chats(chats.clone());
         let emitter = terminals.clone();
         let watchers = Watchers::new(Arc::new(move |m| emitter.emit(m)));
         Arc::new(Self {
             terminals,
+            chats,
             sessions,
             watchers,
             started_at: now_ms(),
@@ -130,8 +135,46 @@ impl Daemon {
                         let ws = self.sessions.session(&id).map_err(internal)?;
                         ok(self.sessions.spawn_in(&ws, req).map_err(internal)?)
                     }
+                    None if req.chat => ok(self
+                        .chats
+                        .create(ChatCreate {
+                            cwd: req.cwd,
+                            agent: req.agent.unwrap_or_default(),
+                            model: req.model,
+                            effort: req.effort,
+                            name: req.title.clone().unwrap_or_default(),
+                            title: req.title,
+                            session_id: None,
+                            env: req.env,
+                        })
+                        .map_err(internal)?),
                     None => ok(s.create(req).map_err(internal)?),
                 }
+            }
+            m::CHAT_STATE => {
+                let r: m::TerminalRef = params(p)?;
+                ok(self.chats.state(r.id).map_err(internal)?)
+            }
+            m::CHAT_SEND => {
+                let r: m::ChatSend = params(p)?;
+                self.chats.send(r.id, &r.text).map_err(internal)?;
+                ok(true)
+            }
+            m::CHAT_PERMISSION => {
+                let r: m::ChatPermission = params(p)?;
+                self.chats
+                    .permission(r.id, &r.ask, &r.decision, r.message.as_deref())
+                    .map_err(internal)?;
+                ok(true)
+            }
+            m::CHAT_INTERRUPT => {
+                let r: m::TerminalRef = params(p)?;
+                self.chats.interrupt(r.id).map_err(internal)?;
+                ok(true)
+            }
+            m::CHAT_SETTINGS => {
+                let r: m::ChatSettings = params(p)?;
+                ok(self.chats.settings(r.id, r.model, r.effort).map_err(internal)?)
             }
             m::TERMINAL_LIST => ok(s.list()),
             m::TERMINAL_ATTACH => {
