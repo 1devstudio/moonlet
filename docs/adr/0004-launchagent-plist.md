@@ -12,5 +12,5 @@ The plan called for `SMAppService.agent(plistName:)`, which registers a LaunchAg
 
 ## Consequences
 
-- The plist holds an absolute path to the binary. If the app moves, reinstalling (from Settings) updates it; the app reinstalls when the stored path no longer exists.
+- The plist holds an absolute path to the binary. If the app moves, turning the Settings toggle off and on again rewrites it. The app does not detect a stale path by itself yet.
 - When signed builds ship, switch to SMAppService so the agent shows in Login Items with the app's name; the daemon side is unchanged.

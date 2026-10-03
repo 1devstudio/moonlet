@@ -20,7 +20,8 @@ On macOS, `jauntd` can run as a per-user LaunchAgent. launchd starts it at login
   - `JAUNT_HOME` when it is set.
 
   It then runs `launchctl bootstrap gui/<uid>`; reinstalling replaces the old registration.
-- [x] `jauntd service uninstall` boots the agent out and removes the plist. Running sessions are not affected if a daemon is still serving.
+- [x] `jauntd service uninstall` boots the agent out and removes the plist. If launchd is running the serving daemon, booting it out stops that daemon, and its terminals and agents may end. The Settings toggle therefore asks for confirmation first; cancelling leaves it on. A failed bootout is reported, not treated as removed.
+- [x] `jauntd service install` on an agent that is already loaded only rewrites the plist (applied at next login). It never boots out the serving daemon; binary updates go through the live upgrade (S3).
 - [x] `jauntd service status` prints whether the plist is installed and whether launchd has it loaded.
 - [x] A second daemon that finds one already listening exits with code 0, so launchd does not loop on it.
 - [x] Settings has a "Start the jaunt daemon at login" toggle that calls the bundled `jauntd service install|uninstall`.

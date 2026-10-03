@@ -1,6 +1,6 @@
 # R2: Version-pinned, checksummed remote helper
 
-- **Status:** implemented (Linux helpers need `scripts/build-remote.sh`; see limits)
+- **Status:** implemented except signing. The helper is target-matched and checksummed but not yet signed, so the NFR's "signed" part is open. Linux helpers need `scripts/build-remote.sh`; see limits.
 - **Priority / phase:** P0 · phase 2
 - **PRD refs:** R2, NFR security ("remote helper is signed and checksummed, version-pinned, installed only with consent")
 
