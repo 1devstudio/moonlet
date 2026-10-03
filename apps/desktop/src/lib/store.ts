@@ -21,6 +21,8 @@ import {
   type Workspace,
 } from "./protocol";
 import { sanitize } from "./sanitize";
+import { forgetChat, loadChat, onChatItem, onChatState } from "./chat";
+import type { ChatItem, ChatState } from "./protocol";
 import { disposeEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
 export type RightTab = "files" | "changes" | "review";
@@ -148,7 +150,7 @@ interface State extends UiPersist {
 
 // One store per page, even when Vite hot-reloads this module: a fresh copy
 // would be empty and never wired to daemon events.
-const g = globalThis as { __jauntStore?: ReturnType<typeof makeStore>; __jauntStarted?: boolean };
+const g = globalThis as { __jauntStore?: ReturnType<typeof makeStore>; __jauntStarted?: boolean; __jauntOnEvent?: (e: DaemonEvent) => void };
 function makeStore() {
   return create<State>(() => ({
   ...loadJson(UI_KEY, uiDefaults),
@@ -267,6 +269,8 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     }));
     for (const w of sessions) syncLayout(host, w);
     reattachHost(host);
+    // Events may have been missed while disconnected: reload open chats.
+    for (const t of terminals) if (t.chat) void loadChat(host, t.id).catch(() => {});
     void refreshAllGit(host).then(() => refreshPrs(host));
   } catch (e) {
     console.warn(`loading ${host} failed (attempt ${attempt + 1})`, e);
@@ -396,7 +400,9 @@ function isVisible(host: string, session: number): boolean {
 
 async function onAttention(host: string, a: Attention) {
   const s = get();
-  if (a.session_id && s.selected?.host === host && s.selected.session === a.session_id) {
+  const chatInView = !!s.terminals[host]?.[a.terminal]?.chat;
+  // A structured agent shows the outcome and approvals inline; no floating card on top.
+  if (a.session_id && s.selected?.host === host && s.selected.session === a.session_id && !chatInView) {
     const since = s.workingSince[termKey(host, a.terminal)];
     const info = s.terminals[host]?.[a.terminal];
     set({
@@ -465,6 +471,7 @@ function handleEvent(e: DaemonEvent) {
         return { terminals: { ...s.terminals, [host]: hs }, unread };
       });
       disposeEntry(host, id);
+      forgetChat(host, id);
       if (info?.session_id) {
         const layout = getLayout(host, info.session_id);
         setLayout(host, info.session_id, removeSession(layout, id));
@@ -475,6 +482,16 @@ function handleEvent(e: DaemonEvent) {
     case EV.attention:
       void onAttention(host, data as Attention);
       break;
+    case EV.chatItem: {
+      const d = data as { id: number; item: ChatItem };
+      onChatItem(host, d.id, d.item);
+      break;
+    }
+    case EV.chatState: {
+      const d = data as { id: number; state: ChatState };
+      onChatState(host, d.id, d.state);
+      break;
+    }
     case EV.projectsChanged:
       set((s) => ({ projects: { ...s.projects, [host]: data as Project[] } }));
       break;
@@ -505,11 +522,15 @@ function scheduleGit(host: string, id: string) {
   gitTimers[key] = window.setTimeout(() => void refreshGit(host, id), 400);
 }
 
+// Set on every module load, so a hot-reloaded module's handler takes over
+// while the one registered listener stays.
+g.__jauntOnEvent = handleEvent;
+
 export async function startStore() {
   if (g.__jauntStarted) return;
   g.__jauntStarted = true;
   setTermSettings(get().settings.term);
-  await onDaemonEvent(handleEvent);
+  await onDaemonEvent((e) => g.__jauntOnEvent?.(e));
   await onHostStatus((h) => {
     const prev = get().hosts[h.id];
     set((s) => ({ hosts: { ...s.hosts, [h.id]: h } }));

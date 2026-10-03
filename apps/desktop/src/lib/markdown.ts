@@ -120,3 +120,31 @@ export function previewDocument(bodyHtml: string): string {
   const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:";
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${CSS}</style></head><body>${bodyHtml}</body></html>`;
 }
+
+// Agent messages (X6): no raw HTML at all, highlighted code, sanitized, and
+// rendered straight into the app (no iframe) because nothing executable
+// survives.
+const chatMd = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: false,
+  highlight(code, lang): string {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        return `<pre class="hljs"><code>${hljs.highlight(code, { language: lang, ignoreIllegals: true }).value}</code></pre>`;
+      } catch {
+        /* fall through */
+      }
+    }
+    return `<pre class="hljs"><code>${escapeHtml(code)}</code></pre>`;
+  },
+});
+
+export function renderChatMarkdown(source: string): string {
+  return DOMPurify.sanitize(chatMd.render(source), {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input", "button", "img", "style"],
+    FORBID_ATTR: ["srcset", "ping", "style"],
+    ALLOW_UNKNOWN_PROTOCOLS: false,
+  });
+}

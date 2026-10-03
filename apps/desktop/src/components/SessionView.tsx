@@ -130,7 +130,12 @@ function PromptLine({ host, ws }: { host: string; ws: Session }) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
   const agent = useStore((s) => Object.values(s.terminals[host] ?? {}).find((x) => x.session_id === ws.id && x.kind === "agent" && !x.exit));
-  if (!agent) return null;
+  // Structured agents have their own editor (X6).
+  const chatOpen = useStore((s) => {
+    const f = getLayout(host, ws.id).focused;
+    return f !== null && !!s.terminals[host]?.[f]?.chat;
+  });
+  if (!agent || agent.chat || chatOpen) return null;
   const submit = async () => {
     if (!text.trim()) return;
     if (await sendToAgent(text.trim())) setText("");

@@ -7,6 +7,7 @@ import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
 import { M, type TerminalInfo, type Session } from "./protocol";
 import { errorToast, getLayout, selectedSession, setLayout, toast, useStore, sessionTerminals } from "./store";
 import { findEntry } from "./terminals";
+import { isStructured } from "./agents";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -44,7 +45,7 @@ export async function newAgentTab(agent: string) {
   const c = current();
   if (!c) return;
   try {
-    const info = await rpc<TerminalInfo>(c.host, M.terminalCreate, { cwd: c.ws.path, session_id: c.ws.id, kind: "agent", agent, cols: 120, rows: 32 });
+    const info = await rpc<TerminalInfo>(c.host, M.terminalCreate, { cwd: c.ws.path, session_id: c.ws.id, kind: "agent", agent, chat: isStructured(agent), cols: 120, rows: 32 });
     const layout = getLayout(c.host, c.ws.id);
     const existing = tabOf(layout, info.id);
     setLayout(c.host, c.ws.id, existing ? { ...layout, active: existing.id, focused: info.id } : addTab(layout, info.id));
@@ -124,6 +125,16 @@ export async function sendToAgent(text: string): Promise<boolean> {
   if (!a) {
     toast("No running agent in this session", "error");
     return false;
+  }
+  if (a.session.chat) {
+    // Structured agents take messages, not keystrokes (X6).
+    try {
+      await rpc(a.host, M.chatSend, { id: a.session.id, text });
+    } catch (e) {
+      errorToast(e);
+      return false;
+    }
+    return true;
   }
   await sendInput(a.host, a.session.id, `\x1b[200~${text}\x1b[201~`);
   setTimeout(() => void sendInput(a.host, a.session.id, "\r"), 60);
