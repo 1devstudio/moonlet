@@ -52,6 +52,14 @@ export const STATE_LABEL: Record<AgentState, string> = {
   idle: "Idle",
 };
 
+/** PR state colour, GitHub's scheme: open green, merged purple, closed red. */
+export function prTone(state: string | null | undefined): string {
+  if (state === "merged") return "text-merged";
+  if (state === "closed") return "text-error";
+  if (state === "open") return "text-done";
+  return "text-muted";
+}
+
 /** Sidebar/tab status: dots in the reference style, a branch for no agent. */
 export function StateGlyph({ state, size = 13 }: { state: AgentState | null; size?: number }) {
   const box = { width: size, height: size };

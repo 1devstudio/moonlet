@@ -8,7 +8,7 @@ import { archiveSession, runScript } from "../lib/actions";
 import { ChecksPanel } from "./ChecksPanel";
 import { FilesPanel } from "./FilesPanel";
 import { PreviewPanel } from "./PreviewPanel";
-import { Empty, cx } from "./ui";
+import { Empty, cx, prTone } from "./ui";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
@@ -100,13 +100,14 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
         title={pr ? `#${pr.number} ${pr.title} · Open in browser` : "Create pull request (⇧⌘P)"}
         onClick={() => (pr ? void openUrl(pr.url) : useStore.setState({ dialog: { kind: "create-pr" } }))}
       >
-        <svg viewBox="0 0 16 16" width="13" height="13" className="text-accent" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <svg viewBox="0 0 16 16" width="13" height="13" className={pr ? prTone(pr.state) : "text-accent"} fill="none" stroke="currentColor" strokeWidth="1.5">
           <circle cx="4" cy="3.5" r="1.6" />
           <circle cx="4" cy="12.5" r="1.6" />
           <circle cx="12" cy="12.5" r="1.6" />
           <path d="M4 5.1v5.8M12 10.9V7a2.5 2.5 0 0 0-2.5-2.5H7m0 0 1.6-1.6M7 4.5l1.6 1.6" />
         </svg>
         PR {pr && <span className="text-muted">#{pr.number}</span>}
+        {pr && pr.state !== "open" && <span className={prTone(pr.state)}>· {pr.state}</span>}
         {pr ? (
           <ExternalLink size={11} className="text-faint opacity-0 group-hover:opacity-100" />
         ) : (
