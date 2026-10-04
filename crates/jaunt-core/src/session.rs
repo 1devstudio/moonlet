@@ -716,19 +716,6 @@ impl SessionManager {
             Ok(())
         })?;
 
-        if let Some(setup) = config.setup.filter(|s| !s.trim().is_empty()) {
-            self.spawn_in(
-                &ws,
-                TerminalCreate {
-                    command: vec![user_shell(), "-lic".into(), setup],
-                    kind: TerminalKind::Setup,
-                    title: Some("setup".into()),
-                    cols: req.cols,
-                    rows: req.rows,
-                    ..Default::default()
-                },
-            )?;
-        }
         if let Some(agent) = &agent
             && !req.tui
             && self.chat_runtime(Some(agent)).is_some()
@@ -770,6 +757,21 @@ impl SessionManager {
             self.spawn_in(
                 &ws,
                 TerminalCreate {
+                    cols: req.cols,
+                    rows: req.rows,
+                    ..Default::default()
+                },
+            )?;
+        }
+        // After the agent: the app opens a new session on its first
+        // terminal, and that should be the agent, not setup.
+        if let Some(setup) = config.setup.filter(|s| !s.trim().is_empty()) {
+            self.spawn_in(
+                &ws,
+                TerminalCreate {
+                    command: vec![user_shell(), "-lic".into(), setup],
+                    kind: TerminalKind::Setup,
+                    title: Some("setup".into()),
                     cols: req.cols,
                     rows: req.rows,
                     ..Default::default()
@@ -1259,6 +1261,51 @@ mod tests {
         again.set_pr(Path::new(&next.path), 41).unwrap();
         assert_eq!(again.session(&next.id).unwrap().pr, Some(41));
         assert_eq!(again.session(&s.id).unwrap().pr, Some(38));
+    }
+
+    // The app opens a new session on its first terminal, so the agent comes
+    // before the setup script.
+    #[tokio::test]
+    async fn a_new_sessions_first_terminal_is_the_agent_not_setup() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        for (name, agent, first) in [
+            ("With agent", None, TerminalKind::Agent),
+            ("Terminal only", Some("none"), TerminalKind::Shell),
+        ] {
+            let ws = mgr
+                .create_session(SessionCreate {
+                    project_id: r.id.clone(),
+                    name: Some(name.into()),
+                    branch: None,
+                    from: None,
+                    existing_branch: false,
+                    agent: agent.map(Into::into),
+                    prompt: None,
+                    cols: 80,
+                    rows: 24,
+                    model: None,
+                    effort: None,
+                    mode: None,
+                    pr: None,
+                    tui: false,
+                })
+                .await
+                .unwrap();
+            let mut kinds: Vec<_> = mgr
+                .terminals
+                .list()
+                .into_iter()
+                .filter(|t| t.session_id.as_deref() == Some(ws.id.as_str()))
+                .map(|t| (t.id, t.kind))
+                .collect();
+            kinds.sort_by_key(|(id, _)| *id);
+            let kinds: Vec<_> = kinds.into_iter().map(|(_, k)| k).collect();
+            assert_eq!(kinds, vec![first, TerminalKind::Setup], "{name}");
+        }
     }
 
     #[tokio::test]
