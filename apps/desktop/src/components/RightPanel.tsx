@@ -2,8 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowRight, ChevronDown, ChevronRight, ExternalLink, Layers, MoreHorizontal, Play, Plus, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type FileChange, type PrStack, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
-import { errorToast, projectOf, type RightTab, recordPr, useStore, sesKey } from "../lib/store";
+import { M, type FileChange, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
+import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
@@ -125,7 +125,8 @@ function StackMenu({ view, current }: { view: StackView; current: number }) {
 function TopActions({ host, ws }: { host: string; ws: Session }) {
   const repo = useStore((s) => projectOf(s, host, ws));
   const [config, setConfig] = useState<ProjectConfig | null>(null);
-  const [pr, setPr] = useState<PullRequest | null>(null);
+  // Shared with the sidebar and Checks tab, so whichever poll sees a change first updates all three.
+  const pr = useStore((s) => s.prs[sesKey(host, ws.id)] ?? null);
   const [stack, setStack] = useState<PrStack | null>(null);
   const view = useMemo(() => stackView(stack, pr?.number), [stack, pr?.number]);
   useEffect(() => {
@@ -137,20 +138,16 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
     const load = () => {
       const isLatest = polls.start();
       const latest = () => live && isLatest();
-      void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path })
+      void pollPr(host, ws.id, ws.path)
         .then((p) => {
           if (!latest()) return;
-          setPr(p);
-          recordPr(host, ws.id, p);
           if (!p) return setStack(null);
           void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number })
             .then((st) => latest() && setStack(st))
             .catch(() => latest() && setStack(null));
         })
         .catch(() => {
-          if (!latest()) return;
-          setPr(null);
-          setStack(null);
+          /* keeps the last known PR and stack, as the sidebar's poll does */
         });
     };
     load();
@@ -159,7 +156,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
       live = false;
       clearInterval(t);
     };
-  }, [host, ws.path]);
+  }, [host, ws.id, ws.path]);
   return (
     <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1 px-4">
       <button
