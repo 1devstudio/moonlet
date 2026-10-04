@@ -4,7 +4,7 @@ import { CircleCheck, CircleDashed, CircleX, ExternalLink, GitPullRequest, Loade
 import { rpc } from "../lib/daemon";
 import { M, type Commit, type PullRequest, type Session } from "../lib/protocol";
 import { useStore, sesKey } from "../lib/store";
-import { Button, Empty, cx } from "./ui";
+import { Button, Empty, prTone } from "./ui";
 
 function CheckIcon({ status, conclusion }: { status: string; conclusion: string | null }) {
   if (status !== "completed" && !conclusion) return <LoaderCircle size={13} className="spin text-working" />;
@@ -76,7 +76,7 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
         {pr && (
           <div className="rounded-lg border border-border bg-panel-2 p-2.5">
             <button className="flex w-full items-center gap-2 text-left hover:text-accent" onClick={() => void openUrl(pr.url)}>
-              <GitPullRequest size={13} className={cx(pr.state === "merged" ? "text-accent-2" : pr.state === "closed" ? "text-error" : "text-done")} />
+              <GitPullRequest size={13} className={prTone(pr.state)} />
               <span className="truncate font-medium">
                 #{pr.number} {pr.title}
               </span>
