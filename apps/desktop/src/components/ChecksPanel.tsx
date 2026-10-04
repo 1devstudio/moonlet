@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { CircleCheck, CircleDashed, CircleX, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Commit, type PullRequest, type Session } from "../lib/protocol";
-import { useStore, sesKey } from "../lib/store";
+import { recordPr, useStore, sesKey } from "../lib/store";
 import { Button, Empty, prTone } from "./ui";
 
 function CheckIcon({ status, conclusion }: { status: string; conclusion: string | null }) {
@@ -16,7 +16,8 @@ function CheckIcon({ status, conclusion }: { status: string; conclusion: string 
 /** Branch state, PR, review and CI at a glance (X2), polled while visible. */
 export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
   const git = useStore((s) => s.git[sesKey(host, ws.id)]);
-  const [pr, setPr] = useState<PullRequest | null | undefined>(undefined);
+  // Undefined until the first poll; shared with the PR button and sidebar.
+  const pr = useStore((s): PullRequest | null | undefined => s.prs[sesKey(host, ws.id)]);
   const [prError, setPrError] = useState<string | null>(null);
   const [log, setLog] = useState<Commit[]>([]);
 
@@ -26,7 +27,7 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
       void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path })
         .then((p) => {
           if (live) {
-            setPr(p);
+            recordPr(host, ws.id, p);
             setPrError(null);
           }
         })
@@ -41,7 +42,7 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
       live = false;
       clearInterval(t);
     };
-  }, [host, ws.path, ws.base]);
+  }, [host, ws.id, ws.path, ws.base]);
 
   return (
     <div className="h-full overflow-y-auto p-3 text-[12.5px]">
