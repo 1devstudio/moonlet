@@ -55,7 +55,7 @@ function rel(text: string, cwd: string): string {
   return cwd.length > 1 ? text.split(cwd + "/").join("") : text;
 }
 
-const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const html = useMemo(() => renderChatMarkdown(text), [text]);
   return (
     <div
@@ -83,14 +83,14 @@ function toolIcon(name: string) {
   return Wrench;
 }
 
-function StatusMark({ status }: { status: ToolCall["status"] }) {
+export function StatusMark({ status }: { status: ToolCall["status"] }) {
   if (status === "running") return <Loader2 size={13} className="spin text-muted" />;
   if (status === "ok") return <Check size={13} className="text-faint" />;
   if (status === "denied") return <Ban size={13} className="text-blocked" />;
   return <X size={13} className="text-error" />;
 }
 
-function DiffBlock({ diff }: { diff: string }) {
+export function DiffBlock({ diff }: { diff: string }) {
   return (
     <pre className="selectable max-h-[340px] overflow-auto rounded-md border border-border bg-[#161616] py-1.5 font-mono text-[12px] leading-[1.55]">
       {diff.replace(/\n$/, "").split("\n").map((l, i) => {
@@ -106,7 +106,7 @@ function DiffBlock({ diff }: { diff: string }) {
   );
 }
 
-function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
+export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
   const [open, setOpen] = useState(false);
   const Icon = toolIcon(tool.name);
   const stat = tool.diff ? diffStat(tool.diff) : null;
@@ -145,7 +145,7 @@ function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
   );
 }
 
-function Thinking({ item }: { item: ChatItem }) {
+export function Thinking({ item }: { item: ChatItem }) {
   const [open, setOpen] = useState(false);
   if (item.partial) return <div className="chat-shimmer px-2 py-1 text-[13px]">Thinking…</div>;
   if (!item.text.trim()) return null;
@@ -159,7 +159,7 @@ function Thinking({ item }: { item: ChatItem }) {
   );
 }
 
-const Item = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) {
+export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) {
   switch (item.kind) {
     case "user":
       return (
@@ -187,7 +187,7 @@ const Item = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) 
 /** An AskUserQuestion with questions we can render; anything else gets the plain card. */
 const isQuestion = (ask: PermissionAsk) => ask.tool === "AskUserQuestion" && askQuestions(ask.input).length > 0;
 
-function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd: string; onAnswer: (decision: "allow" | "always" | "deny") => void }) {
+export function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd: string; onAnswer: (decision: "allow" | "always" | "deny") => void }) {
   const Icon = toolIcon(ask.tool);
   const detail = ask.diff || ["Bash", "Write", "Edit", "MultiEdit", "Read"].includes(ask.tool) ? null : JSON.stringify(ask.input, null, 2);
   return (
@@ -221,7 +221,7 @@ function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd: strin
 }
 
 /** Claude's AskUserQuestion: pick options or type an answer, then Submit. */
-function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: (decision: "allow" | "deny", answers?: Record<string, string>) => void }) {
+export function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: (decision: "allow" | "deny", answers?: Record<string, string>) => void }) {
   const qs = useMemo(() => askQuestions(ask.input), [ask.input]);
   const [picks, setPicks] = useState<QuestionPick[]>(() => qs.map(() => ({ labels: [], other: "" })));
   const answers = questionAnswers(qs, picks);
@@ -608,7 +608,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               <div className="text-[12.5px] text-faint">Describe a change, mention files with @, or run a / command.</div>
             </div>
           ) : (
-            st.items.map((it) => <Item key={it.id} item={it} cwd={info?.cwd ?? ""} />)
+            st.items.map((it) => <ChatItemView key={it.id} item={it} cwd={info?.cwd ?? ""} />)
           )}
           {st?.pending.map((ask) =>
             isQuestion(ask) ? (
