@@ -202,12 +202,15 @@ export async function archiveSession(deleteBranch = false, target?: { host: stri
     { title: "Archive session", kind: "warning" },
   );
   if (!ok) return;
+  // Close its views first: they would reload while the worktree is deleted.
+  const sel = useStore.getState().selected;
+  const wasSelected = sel?.host === c.host && sel.session === c.ws.id;
+  if (wasSelected) useStore.setState({ selected: null });
   try {
     await rpc(c.host, M.sessionArchive, { id: c.ws.id, remove_worktree: true, delete_branch: deleteBranch });
-    const sel = useStore.getState().selected;
-    if (sel?.host === c.host && sel.session === c.ws.id) useStore.setState({ selected: null });
     toast(`Archived ${c.ws.name}`);
   } catch (e) {
+    if (wasSelected && !useStore.getState().selected) useStore.setState({ selected: sel });
     errorToast(e);
   }
 }

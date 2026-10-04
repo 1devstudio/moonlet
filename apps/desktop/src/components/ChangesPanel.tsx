@@ -132,6 +132,14 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
   const base = mode === "base" ? ws.base : undefined;
   const files = (mode === "base" ? status : headStatus)?.files ?? [];
   const fsVersion = useStore((s) => s.fsVersion[`${host}|${ws.path}`] ?? 0);
+  // Loads that finish after the panel closed (session archived, say) stay quiet.
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (mode !== "head") return;
@@ -157,7 +165,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
       setVersions(v);
       setDiff(parseFileDiff(d));
     } catch (e) {
-      errorToast(e);
+      if (live.current) errorToast(e);
     }
   }, [host, ws.path, selected, base]);
 
