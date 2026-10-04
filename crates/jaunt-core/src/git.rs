@@ -598,6 +598,11 @@ pub async fn log(path: &Path, base: Option<&str>) -> Result<Vec<Commit>> {
         .collect())
 }
 
+/// The checked-out branch; fails on a detached HEAD.
+pub async fn current_branch(path: &Path) -> Result<String> {
+    git_text(path, &["symbolic-ref", "--short", "HEAD"]).await
+}
+
 pub async fn branches(path: &Path) -> Result<Vec<String>> {
     let raw = git_text(
         path,
@@ -698,10 +703,19 @@ pub async fn pr_create(
     if draft {
         args.push("--draft");
     }
-    gh(&root, &args).await?;
-    pr_status(&root)
+    let out = gh(&root, &args).await?;
+    // By number: the branch name may also head an older, merged PR.
+    let number = created_pr_number(&out).context("gh pr create printed no PR URL")?;
+    pr_view(&root, Some(number))
         .await?
         .context("pull request was created but cannot be read back")
+}
+
+/// The PR number in the URL `gh pr create` prints last.
+fn created_pr_number(stdout: &[u8]) -> Option<u64> {
+    let out = String::from_utf8_lossy(stdout);
+    let url = out.lines().rev().find(|l| !l.trim().is_empty())?.trim();
+    url.rsplit_once("/pull/")?.1.parse().ok()
 }
 
 /// Head branch of a pull request, fetched locally so a worktree can use it.
@@ -811,35 +825,56 @@ fn check_run(c: &serde_json::Value) -> CheckRun {
     }
 }
 
+/// The PR whose head is the checked-out branch: the newest one with that
+/// branch name, so possibly one from an earlier branch of the same name.
+/// Sessions use [`pr_view`] and [`session_pr`] instead.
 pub async fn pr_status(path: &Path) -> Result<Option<PullRequest>> {
+    pr_view(path, None).await
+}
+
+/// PR `number`, or the checked-out branch's PR when `None`.
+pub async fn pr_view(path: &Path, number: Option<u64>) -> Result<Option<PullRequest>> {
     let root = toplevel(path).await?;
-    let out = run_raw(
-        "gh",
-        &root,
-        &[
-            "pr",
-            "view",
-            "--json",
-            "number,url,state,title,reviewDecision,statusCheckRollup",
-        ],
-        None,
-        Duration::from_secs(60),
-    )
-    .await?;
+    let n = number.map(|n| n.to_string());
+    let mut args = vec!["pr", "view"];
+    args.extend(n.as_deref());
+    args.extend(["--json", PR_FIELDS]);
+    let out = run_raw("gh", &root, &args, None, Duration::from_secs(60)).await?;
     if out.status != 0 {
         if out.stderr.contains("no pull requests found") {
             return Ok(None);
         }
         bail!("gh pr view: {}", out.stderr);
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    Ok(Some(parse_pr(&serde_json::from_slice(&out.stdout)?)))
+}
+
+/// Every PR, in any state, whose head branch is named `branch`.
+pub async fn pr_list_head(path: &Path, branch: &str) -> Result<serde_json::Value> {
+    let root = toplevel(path).await?;
+    let out = gh(
+        &root,
+        &[
+            "pr", "list", "--head", branch, "--state", "all", "--limit", "20", "--json",
+            PR_FIELDS,
+        ],
+    )
+    .await?;
+    Ok(serde_json::from_slice(&out)?)
+}
+
+/// Fields `parse_pr` reads, plus `createdAt` for `session_pr`.
+const PR_FIELDS: &str = "number,url,state,title,reviewDecision,statusCheckRollup,createdAt";
+
+/// Maps one PR object from `gh pr view` or `gh pr list`.
+fn parse_pr(v: &serde_json::Value) -> PullRequest {
     let checks = v["statusCheckRollup"]
         .as_array()
         .into_iter()
         .flatten()
         .map(check_run)
         .collect();
-    Ok(Some(PullRequest {
+    PullRequest {
         number: v["number"].as_u64().unwrap_or(0),
         url: v["url"].as_str().unwrap_or("").into(),
         state: v["state"].as_str().unwrap_or("").to_lowercase(),
@@ -849,7 +884,45 @@ pub async fn pr_status(path: &Path) -> Result<Option<PullRequest>> {
             .as_str()
             .filter(|s| !s.is_empty())
             .map(String::from),
-    }))
+    }
+}
+
+/// Picks a session's PR from [`pr_list_head`] output. Branch names get
+/// reused, so a PR counts only when it is open (a push would update it) or
+/// was created after the session (`since_ms`); an older closed or merged one
+/// belongs to an earlier branch of the same name. Only numbers above `after`
+/// count; the newest wins.
+pub fn session_pr(list: &serde_json::Value, since_ms: u64, after: u64) -> Option<PullRequest> {
+    list.as_array()?
+        .iter()
+        .filter(|v| {
+            v["state"].as_str().is_some_and(|s| s.eq_ignore_ascii_case("open"))
+                || v["createdAt"]
+                    .as_str()
+                    .and_then(utc_ms)
+                    .is_some_and(|t| t >= since_ms)
+        })
+        .map(parse_pr)
+        .filter(|pr| pr.number > after)
+        .max_by_key(|pr| pr.number)
+}
+
+/// Milliseconds since the epoch for a `YYYY-MM-DDTHH:MM:SSZ` timestamp.
+fn utc_ms(s: &str) -> Option<u64> {
+    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    if s.len() != 20 || !s.ends_with('Z') {
+        return None;
+    }
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hh, mm, ss) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    // Days from 1970-01-01 to the civil date (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    u64::try_from(((days * 24 + hh) * 60 + mm) * 60 + ss).ok().map(|t| t * 1000)
 }
 
 /// The GitHub stack PR `number` belongs to, or `None` when it is not stacked.
@@ -1075,6 +1148,70 @@ pub(crate) mod tests {
         // A PR that left the stack between the two API calls.
         assert!(parse_stack(&v, 3).is_none());
         assert!(parse_stack(&serde_json::json!({}), 1).is_none());
+    }
+
+    /// `gh pr list --head jaunt/users-cotampanie-downloads-screenshot
+    /// --state all` after an earlier session's branch of that name was
+    /// merged and deleted (trimmed to the fields read).
+    fn merged_pr_25() -> serde_json::Value {
+        serde_json::json!([{
+            "createdAt": "2026-10-04T07:05:08Z", "number": 25, "state": "MERGED",
+            "title": "fix: answer Claude's AskUserQuestion from a question card",
+            "url": "https://github.com/1devstudio/jaunt/pull/25",
+            "reviewDecision": "", "statusCheckRollup": []
+        }])
+    }
+
+    #[test]
+    fn a_merged_pr_from_before_the_session_is_not_its_pr() {
+        // Session created at 2026-10-04T18:00:00Z.
+        assert_eq!(session_pr(&merged_pr_25(), 1791136800000, 0), None);
+        // A session created at 06:00 that day did open #25.
+        let pr = session_pr(&merged_pr_25(), 1791093600000, 0).unwrap();
+        assert_eq!((pr.number, pr.state.as_str()), (25, "merged"));
+    }
+
+    #[test]
+    fn created_pr_number_comes_from_the_printed_url() {
+        // `gh pr create` stdout when not on a terminal.
+        let out = b"https://github.com/1devstudio/jaunt/pull/38\n";
+        assert_eq!(created_pr_number(out), Some(38));
+        assert_eq!(created_pr_number(b"Warning: 1 uncommitted change\n"), None);
+    }
+
+    #[test]
+    fn a_session_takes_the_newest_pr_opened_on_its_branch() {
+        let list = serde_json::json!([
+            {"createdAt": "2026-10-04T18:20:00Z", "number": 31, "state": "OPEN",
+             "title": "fix: lowercase paths", "url": "https://github.com/1devstudio/jaunt/pull/31"},
+            {"createdAt": "2026-10-04T07:05:08Z", "number": 25, "state": "MERGED",
+             "title": "fix: answer Claude's AskUserQuestion from a question card",
+             "url": "https://github.com/1devstudio/jaunt/pull/25"}
+        ]);
+        let pr = session_pr(&list, 1791136800000, 0).unwrap();
+        assert_eq!((pr.number, pr.state.as_str()), (31, "open"));
+        assert_eq!(pr.url, "https://github.com/1devstudio/jaunt/pull/31");
+    }
+
+    #[test]
+    fn an_open_pr_older_than_the_session_is_still_its_pr() {
+        // A session opened on an existing branch whose PR is still open.
+        let list = serde_json::json!([
+            {"createdAt": "2026-10-01T09:00:00Z", "number": 12, "state": "OPEN",
+             "title": "feat: stacks", "url": "https://github.com/1devstudio/jaunt/pull/12"}
+        ]);
+        assert_eq!(session_pr(&list, 1791136800000, 0).unwrap().number, 12);
+    }
+
+    #[test]
+    fn a_closed_pr_gives_way_only_to_a_newer_one() {
+        let list = serde_json::json!([
+            {"createdAt": "2026-10-04T18:30:00Z", "number": 33, "state": "CLOSED",
+             "title": "fix: first try", "url": "https://github.com/1devstudio/jaunt/pull/33"}
+        ]);
+        // #33 is the closed PR the session already has: nothing newer.
+        assert_eq!(session_pr(&list, 1791136800000, 33), None);
+        assert_eq!(session_pr(&list, 1791136800000, 0).unwrap().number, 33);
     }
 
     #[test]
