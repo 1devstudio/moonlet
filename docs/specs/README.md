@@ -48,4 +48,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X6 | Structured agent view (Claude Code, Codex) | P1 | 3 | implemented (Codex untested live) | [X6-structured-agent-view.md](X6-structured-agent-view.md) |
 | X7 | Permission mode picker (footer, new-session modal, Settings default) | P1 | 3 | implemented (UI unchecked in app) | [X7-agent-permission-mode.md](X7-agent-permission-mode.md) |
 | X8 | Project settings (edit `.jaunt/config.toml` from the app) | P1 | 3 | implemented (dialog unchecked in app) | [X8-project-settings.md](X8-project-settings.md) |
-| X8 | Open and copy links in agent messages | P1 | 3 | implemented (UI unchecked in app) | [X8-chat-links.md](X8-chat-links.md) |
+| X9 | Open and copy links in agent messages | P1 | 3 | implemented (UI unchecked in app) | [X9-chat-links.md](X9-chat-links.md) |
