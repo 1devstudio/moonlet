@@ -12,6 +12,7 @@ From a workspace, the user can push the branch and open a GitHub pull request wi
 - [x] `gh.pr_create {path, title, body, base, draft}` runs `git push -u origin HEAD`, then `gh pr create`, and returns the PR.
 - [x] `gh.pr_status {path}` returns the number, URL, state, title, review decision and checks; it returns `null` when the branch has no PR.
 - [x] UI: a Create PR dialog (Cmd+Shift+P) prefilled from the workspace name and commit log, and a Checks tab that polls every 30 s while visible.
+- [x] PR state uses one colour everywhere (sidebar row, the PR button and the Checks tab): open is green, merged is purple, closed is red. A merged PR is labelled `merged` next to the session and on the PR button.
 
 - [x] The PR button in the right panel's top bar opens the PR in the browser when one exists, and shows an external-link icon on hover. With no PR it opens the Create PR dialog and shows a plus icon on hover.
 
