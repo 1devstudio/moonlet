@@ -12,9 +12,14 @@ import { Button, IconButton, cx } from "./ui";
 
 const close = () => useStore.setState({ dialog: null });
 
-const fieldCls =
-  "w-full rounded-md border border-border-strong bg-panel-2 px-2.5 py-1.5 font-mono text-[12.5px] text-fg outline-none placeholder:text-faint focus:border-accent";
-const errBorder = "border-error focus:border-error";
+/** One width and one border colour per field: two conflicting utilities
+ *  (`w-full` and `w-[150px]`) resolve by CSS order, not by class order. */
+const fieldCls = (error?: unknown, width = "w-full") =>
+  cx(
+    "rounded-md border bg-panel-2 px-2.5 py-1.5 font-mono text-[12.5px] text-fg outline-none placeholder:text-faint",
+    width,
+    error ? "border-error focus:border-error" : "border-border-strong focus:border-accent",
+  );
 
 const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [] };
 
@@ -61,8 +66,15 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
   }, [host, projectId]);
 
   useEffect(() => {
-    void load().then((ok) => ok && focus === "run" && setTimeout(() => runRef.current?.focus(), 0));
-  }, [load, focus]);
+    void load();
+  }, [load]);
+
+  // After the first load has rendered: the fieldset is disabled until then,
+  // and a disabled input can't take focus.
+  const loaded = file !== null;
+  useEffect(() => {
+    if (loaded && focus === "run") runRef.current?.focus();
+  }, [loaded, focus]);
 
   useEffect(() => {
     if (pendingFocus === null) return;
@@ -180,13 +192,13 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
               <section className="mb-5">
                 <h3 className="mb-2 text-[12px] font-semibold">Scripts</h3>
                 <Labeled label="Setup" hint="Runs in a new session's worktree after it is created.">
-                  <input className={fieldCls} spellCheck={false} value={form.setup} onChange={(e) => set({ setup: e.target.value })} placeholder="pnpm install" />
+                  <input className={fieldCls()} spellCheck={false} value={form.setup} onChange={(e) => set({ setup: e.target.value })} placeholder="pnpm install" />
                 </Labeled>
                 <Labeled label="Run" hint="The Run button (⌘R). Running again restarts it.">
-                  <input ref={runRef} className={fieldCls} spellCheck={false} value={form.run} onChange={(e) => set({ run: e.target.value })} placeholder="pnpm dev" />
+                  <input ref={runRef} className={fieldCls()} spellCheck={false} value={form.run} onChange={(e) => set({ run: e.target.value })} placeholder="pnpm dev" />
                 </Labeled>
                 <Labeled label="Archive" hint="Runs before a session is archived.">
-                  <input className={fieldCls} spellCheck={false} value={form.archive} onChange={(e) => set({ archive: e.target.value })} placeholder="docker compose down" />
+                  <input className={fieldCls()} spellCheck={false} value={form.archive} onChange={(e) => set({ archive: e.target.value })} placeholder="docker compose down" />
                 </Labeled>
               </section>
 
@@ -195,7 +207,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
                 <label className="mb-3 block">
                   <span className="mb-1 block text-[11.5px] font-medium text-muted">Default agent</span>
                   <select
-                    className={cx(fieldCls, "font-sans text-[13px]", v.defaultAgent && errBorder)}
+                    className={cx(fieldCls(v.defaultAgent), "font-sans text-[13px]")}
                     value={form.default_agent}
                     onChange={(e) => set({ default_agent: e.target.value })}
                   >
@@ -220,7 +232,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
                               if (el) rowRefs.current.set(a.id, el);
                               else rowRefs.current.delete(a.id);
                             }}
-                            className={cx(fieldCls, "w-[150px] flex-none", e.name && errBorder)}
+                            className={fieldCls(e.name, "w-[150px] flex-none")}
                             spellCheck={false}
                             value={a.name}
                             onChange={(ev) => setAgent(a.id, { name: ev.target.value })}
@@ -228,7 +240,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
                             aria-label="Agent name"
                           />
                           <input
-                            className={cx(fieldCls, "min-w-0 flex-1", e.cmd && errBorder)}
+                            className={fieldCls(e.cmd, "min-w-0 flex-1")}
                             spellCheck={false}
                             value={a.cmd}
                             onChange={(ev) => setAgent(a.id, { cmd: ev.target.value })}
@@ -256,7 +268,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
                 <h3 className="mb-2 text-[12px] font-semibold">Git</h3>
                 <Labeled label="Base branch" hint="New sessions branch from here, and Changes compare against it.">
                   <input
-                    className={fieldCls}
+                    className={fieldCls()}
                     spellCheck={false}
                     value={form.base_branch}
                     onChange={(e) => set({ base_branch: e.target.value })}

@@ -40,6 +40,15 @@ target/debug/jaunt rpc repo.list    # any daemon method
 target/debug/jaunt hooks install    # Claude Code + Codex hooks (also in Settings)
 ```
 
+## End-to-end tests
+
+```sh
+pnpm e2e:build    # the app with an embedded WebDriver server, in target/e2e (a few minutes)
+pnpm e2e          # drives the real app against a scratch daemon and repo
+```
+
+The tests never touch `~/.jaunt` or start a real agent. A failing test saves a screenshot in `apps/desktop/e2e/artifacts/`. See spec X12.
+
 ## Per-repo config
 
 `.jaunt/config.toml` in a repository. Edit it by hand or in Project settings (the gear on a project in the sidebar, or `⋯` › Project settings…):
