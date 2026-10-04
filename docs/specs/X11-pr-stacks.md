@@ -20,7 +20,8 @@ GitHub groups dependent pull requests into a stack (created with `gh stack`). Wh
 - [x] Otherwise it returns the stack number, base branch, the PR's 1-based position (1 = closest to the base), the stack size, and the PRs bottom first with number, title, URL, state, draft flag and head branch.
 - [x] A PR's state is `open`, `merged` or `closed`, the same values as `gh.pr_status`, so `prTone` colours it.
 - [x] The UI fetches the stack whenever it reloads the PR status (every 60 s while the session is open), and only for the selected session.
-- [x] The chip is hidden when the PR has no stack.
+- [x] The chip is hidden when the PR has no stack, or when the loaded stack does not contain the session's current PR (a stale result from a previous PR).
+- [x] When polls overlap, only the most recent one updates the PR and the stack.
 - [x] Clicking a row opens that PR's URL in the browser.
 
 ## UI
@@ -49,4 +50,5 @@ Read-only. `number` is a JSON integer, so it cannot inject arguments into `gh`. 
 ## Test plan
 
 - Unit: `parse_stack` maps the stacks API response (merged, closed, open and draft PRs, position, missing fields).
+- Unit (`apps/desktop/src/lib/prStack.test.ts`): `stackView` lists the stack top first, takes the position from the current PR, and hides a stack that does not contain it. `latestOnly` lets only the most recent poll set state.
 - Manual: a session on a stacked PR shows the chip and the list; a session on an unstacked PR shows no chip.
