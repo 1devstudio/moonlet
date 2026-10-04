@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": "pnpm prepare:bins && pnpm build"
+  },
+  "app": {
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "e2e",
+          "description": "Lets the embedded WebDriver server drive the window. Only in e2e builds (X12).",
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "wdio-webdriver:default",
+            "wdio:default"
+          ]
+        }
+      ]
+    },
+    "withGlobalTauri": true
+  }
+}

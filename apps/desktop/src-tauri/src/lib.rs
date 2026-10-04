@@ -305,7 +305,13 @@ pub fn run() {
                 .unwrap_or_else(|_| "info".into()),
         )
         .try_init();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Only `pnpm e2e:build` turns this on (X12).
+    #[cfg(feature = "e2e")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio_webdriver::init())
+        .plugin(tauri_plugin_wdio::init());
+    builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
