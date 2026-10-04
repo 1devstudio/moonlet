@@ -61,8 +61,15 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
   }, [host, projectId]);
 
   useEffect(() => {
-    void load().then((ok) => ok && focus === "run" && setTimeout(() => runRef.current?.focus(), 0));
-  }, [load, focus]);
+    void load();
+  }, [load]);
+
+  // After the first load has rendered: the fieldset is disabled until then,
+  // and a disabled input can't take focus.
+  const loaded = file !== null;
+  useEffect(() => {
+    if (loaded && focus === "run") runRef.current?.focus();
+  }, [loaded, focus]);
 
   useEffect(() => {
     if (pendingFocus === null) return;
