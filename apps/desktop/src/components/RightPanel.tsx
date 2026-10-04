@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowRight, ChevronDown, ChevronRight, ExternalLink, Layers, MoreHorizontal, Play, Plus, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type FileChange, type PrStack, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
-import { errorToast, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
+import { errorToast, projectOf, type RightTab, recordPr, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
@@ -141,7 +141,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
         .then((p) => {
           if (!latest()) return;
           setPr(p);
-          useStore.setState((s) => ({ prs: { ...s.prs, [sesKey(host, ws.id)]: p } }));
+          recordPr(host, ws.id, p);
           if (!p) return setStack(null);
           void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number })
             .then((st) => latest() && setStack(st))

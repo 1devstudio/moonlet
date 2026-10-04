@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ChevronDown, ChevronRight, Folder, FolderPlus, History, MoreHorizontal, Plus, RotateCcw, Settings } from "lucide-react";
+import { Archive, ArrowDown, ChevronDown, ChevronRight, Folder, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, Settings, ShieldAlert } from "lucide-react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
 import { arrange, compact, dropResult, lastActive, type Dragged, type Group } from "../lib/sidebar";
-import { errorToast, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
+import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
+import { aheadText, baseChip, behindHeadline, fetchedLabel, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
-import { IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
+import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
 // ------------------------------------------------------------------ helpers
 
@@ -103,6 +104,125 @@ function InlineInput({ initial, placeholder, onDone }: { initial: string; placeh
       }}
       className="min-w-0 flex-1 rounded border border-accent bg-panel-2 px-1.5 py-0.5 text-[14px] text-fg outline-none"
     />
+  );
+}
+
+// ------------------------------------------------------- base branch (X13)
+
+const CHIP_TONE: Record<BaseChip["kind"], string> = { behind: "text-accent", pulling: "text-muted", diverged: "text-error" };
+
+/** "main is behind origin" chip on a project row, with the Pull popover. */
+function BasePullChip({ host, projectId }: { host: string; projectId: string }) {
+  const sync = useStore((s) => s.base[projKey(host, projectId)]);
+  const project = useStore((s) => s.projects[host]?.find((p) => p.id === projectId));
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const ref = useRef<HTMLButtonElement>(null);
+  const chip = baseChip(sync?.status, !!sync?.pulling);
+  const openable = chip?.kind === "behind" || chip?.kind === "diverged";
+  useEffect(() => {
+    if (!pos) return;
+    const close = () => setPos(null);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    // The sidebar list scrolled away from the chip.
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [pos]);
+  if (!chip || !sync?.status || !project) return null;
+  const st = sync.status;
+  const toggle = () => {
+    if (pos || !openable || !ref.current) return setPos(null);
+    const r = ref.current.getBoundingClientRect();
+    const side = ref.current.closest("aside")?.getBoundingClientRect().left ?? 0;
+    setPos({ top: Math.round(r.bottom + 6), left: side + 12 });
+  };
+  const mono = (t: string) => <span className="font-mono text-fg">{t}</span>;
+  const command = rebaseCommand(st, project.path);
+  return (
+    <>
+      <button
+        ref={ref}
+        title={chip.title}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={toggle}
+        className={cx("flex h-[22px] shrink-0 items-center gap-1 rounded-md border border-border-strong bg-panel-2 px-1.5 font-mono text-[11.5px] hover:bg-hover", CHIP_TONE[chip.kind])}
+      >
+        {chip.kind === "behind" ? <ArrowDown size={12} strokeWidth={1.75} /> : chip.kind === "pulling" ? <Loader2 size={12} strokeWidth={1.75} className="animate-spin" /> : <ShieldAlert size={12} strokeWidth={1.75} />}
+        <span>{chip.text}</span>
+      </button>
+      {pos && openable && (
+        <div
+          role="dialog"
+          aria-label={`Pull ${st.branch}`}
+          className="fixed z-50 w-[276px] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
+          style={pos}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {chip.kind === "diverged" ? (
+            <div className="px-3 pb-2 pt-2.5">
+              <div className="text-[13px] font-medium text-fg">Can't fast-forward {st.branch}</div>
+              <div className="mt-1 text-[12px] text-muted [text-wrap:pretty]">
+                Your local {mono(st.branch)} has {aheadText(st)} on {mono(st.upstream)}. jaunt only pulls when it can fast-forward, so nothing was changed.
+              </div>
+              <div className="mt-2.5 flex items-center gap-2 rounded-md border border-border bg-panel-2 px-2 py-1.5">
+                <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg" title={command}>
+                  {command}
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => void navigator.clipboard.writeText(command).then(() => toast("Copied command"), errorToast)}>
+                  Copy
+                </Button>
+              </div>
+              <div className="mt-2 text-[11.5px] text-faint">New sessions still branch from your local {st.branch}.</div>
+            </div>
+          ) : (
+            <>
+              <div className="px-3 pb-1.5 pt-2.5">
+                <div className="text-[13px] font-medium text-fg">{behindHeadline(st)}</div>
+                <div className="mt-1 text-[12px] text-muted [text-wrap:pretty]">
+                  New sessions branch from your local {mono(st.branch)}. Pull to start them from the merged changes.
+                </div>
+              </div>
+              <div className="flex flex-col px-1 py-1">
+                {st.commits.map((c) => (
+                  <div key={c.sha} className="flex h-[26px] items-center gap-2 rounded-md px-2">
+                    <span className="shrink-0 font-mono text-[11.5px] text-faint">{c.sha.slice(0, 7)}</span>
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-[#cfcfcf]" title={c.subject}>
+                      {c.subject}
+                    </span>
+                  </div>
+                ))}
+                {st.behind > st.commits.length && <div className="px-2 py-1 text-[11.5px] text-faint">and {st.behind - st.commits.length} more</div>}
+              </div>
+              <div className="flex items-center gap-2 border-t border-border px-2 pb-1 pt-2">
+                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={sync.fetchError ?? undefined}>
+                  {fetchedLabel(sync, Date.now())}
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => setPos(null)}>
+                  Later
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => {
+                    setPos(null);
+                    void pullBase(host, projectId);
+                  }}
+                >
+                  <ArrowDown size={12} strokeWidth={1.75} /> Pull {st.branch}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -240,6 +360,7 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
           </button>
+          {g.kind === "project" && <BasePullChip host={host} projectId={g.projectId!} />}
           {g.kind === "project" && (
             <IconButton title="Project settings" className="h-7 w-7 opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => openProjectSettings({ host, project: g.projectId! })}>
               <Settings size={15} />
