@@ -1,12 +1,12 @@
 # X13: Pull the base branch
 
-- **Status:** implemented
+- **Status:** implemented (daemon)
 - **Priority / phase:** P1 · phase 3 (extends [X5](X5-workspaces-projects-sessions.md))
 - **Design:** "Pull Base Branch" in the Project settings dialog design (Claude Design export, 2026-10-04)
 
 ## Summary
 
-New sessions branch from the project's local base branch (`main` unless `.jaunt/config.toml` sets `base_branch`). After a PR merges on GitHub, the local branch is stale until the user pulls it by hand, so the next session starts without the merged work. The sidebar now shows when the base branch is behind `origin`, lists the incoming commits, and fast-forwards it with one click.
+New sessions branch from the project's local base branch (`main` unless `.jaunt/config.toml` sets `base_branch`). After a PR merges on GitHub, the local branch is stale until the user pulls it by hand, so the next session starts without the merged work. The sidebar shows when the base branch is behind `origin`, lists the incoming commits, and fast-forwards it with one click. The daemon RPCs ship first; the sidebar is not implemented yet.
 
 ## User journey
 
@@ -25,9 +25,9 @@ New sessions branch from the project's local base branch (`main` unless `.jaunt/
 - [x] `git.pull_base {path, branch}` fast-forwards the local branch to `origin/<branch>` without fetching again, so it pulls exactly the commits the popover showed. It returns how many commits it pulled and the new head.
 - [x] When the branch is checked out in a work tree, the pull runs `git merge --ff-only` there, so the files on disk follow. Otherwise it moves the ref with a compare-and-swap `update-ref`.
 - [x] `git.pull_base` refuses a diverged branch and changes nothing.
-- [x] The chip shows the behind count, `pulling` while a pull runs, `diverged` when the branch is both ahead and behind, and nothing when the branch is up to date or only ahead.
-- [x] The app fetches when a host loads, every 5 minutes, when the project list changes (for example a new base branch in Project settings), and when one of the project's session PRs turns merged. A fetch after a merge labels the popover footer "after PR #N merged".
-- [x] The diverged popover's command targets the work tree that has the branch checked out. When none does, it switches to the branch first.
+- [ ] The chip shows the behind count, `pulling` while a pull runs, `diverged` when the branch is both ahead and behind, and nothing when the branch is up to date or only ahead.
+- [ ] The app fetches when a host loads, every 5 minutes, when the project list changes (for example a new base branch in Project settings), and when one of the project's session PRs turns merged. A fetch after a merge labels the popover footer "after PR #N merged".
+- [ ] The diverged popover's command targets the work tree that has the branch checked out. When none does, it switches to the branch first.
 
 ## UI
 
