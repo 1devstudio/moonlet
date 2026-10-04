@@ -1,4 +1,5 @@
 // New session from the composer with the repo's fake agent, then Run.
+// The repo has a setup script too, so the session opens two tabs.
 
 import { $, browser, expect } from "@wdio/globals";
 import { CONFIG, PROJECT, fill, rpc, sel, world, writeConfig } from "../fixtures";
@@ -32,6 +33,9 @@ describe("new session and Run", () => {
     const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Add e2e banner");
     expect(created?.agent).toBe("fake");
     await expect($('//span[normalize-space()="fake"]')).toBeDisplayed();
+    // The project has a setup script; the agent's tab opens, not setup's.
+    await expect($('//*[@role="tab"][.//span[normalize-space()="setup"]]')).toBeDisplayed();
+    await expect($('//*[@role="tab"][.//span[normalize-space()="fake"]]')).toHaveAttribute("aria-selected", "true");
 
     await $('//button[normalize-space()="Run"]').click();
     await expect($('//span[normalize-space()="run"]')).toBeDisplayed();
