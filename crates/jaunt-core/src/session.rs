@@ -12,8 +12,8 @@ use jaunt_proto::methods::{
     self, SessionArchive, SessionCreate, SessionUpdate, TerminalCreate, WorkspaceUpdate,
 };
 use jaunt_proto::types::{
-    Project, ProjectConfig, RestoreEntry, Session, TerminalInfo, TerminalKind, Workspace,
-    WorkspaceView,
+    Project, ProjectConfig, ProjectConfigFile, RestoreEntry, Session, TerminalInfo, TerminalKind,
+    Workspace, WorkspaceView,
 };
 use jaunt_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
@@ -470,6 +470,40 @@ impl SessionManager {
 
     pub fn project_config(&self, id: &str) -> Result<ProjectConfig> {
         Ok(read_config(Path::new(&self.project(id)?.path)))
+    }
+
+    /// The config file as the Project settings dialog edits it (X8).
+    pub async fn project_config_file(&self, id: &str) -> Result<ProjectConfigFile> {
+        let root = PathBuf::from(self.project(id)?.path);
+        let default_branch = git::default_branch(&root).await;
+        load_config_file(root, default_branch).await
+    }
+
+    /// Writes `.jaunt/config.toml` and keeps the project's base branch in
+    /// step with it, then tells clients so they refetch the config.
+    pub async fn set_project_config(
+        &self,
+        id: &str,
+        version: &str,
+        config: &ProjectConfig,
+    ) -> Result<ProjectConfigFile> {
+        let root = PathBuf::from(self.project(id)?.path);
+        let (r, v, c) = (root.clone(), version.to_string(), config.clone());
+        tokio::task::spawn_blocking(move || crate::project_config::save(&r, &v, &c)).await??;
+        let default_branch = git::default_branch(&root).await;
+        let file = load_config_file(root, default_branch.clone()).await?;
+        let base = file.config.base_branch.clone().unwrap_or(default_branch);
+        self.mutate(|st| {
+            if let Some(p) = st.projects.iter_mut().find(|p| p.id == id) {
+                p.base_branch = base;
+            }
+            Ok(())
+        })?;
+        self.terminals.emit(Message::event(
+            methods::EV_PROJECTS_CHANGED,
+            self.list_projects(),
+        ));
+        Ok(file)
     }
 
     fn agent_command(
@@ -992,6 +1026,11 @@ fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
         .unwrap()
 }
 
+/// `project_config::load` off the async runtime: it reads the disk.
+async fn load_config_file(root: PathBuf, default_branch: String) -> Result<ProjectConfigFile> {
+    Ok(tokio::task::spawn_blocking(move || crate::project_config::load(&root, default_branch)).await?)
+}
+
 /// Reads `<repo>/.jaunt/config.toml`; missing or invalid files give defaults.
 pub fn read_config(repo: &Path) -> ProjectConfig {
     let path = repo.join(".jaunt").join("config.toml");
@@ -1041,6 +1080,25 @@ mod tests {
             terminals,
         );
         (repo, home, mgr)
+    }
+
+    #[tokio::test]
+    async fn saving_base_branch_updates_the_project() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let default = r.base_branch.clone();
+        let file = mgr.project_config_file(&r.id).await.unwrap();
+        assert_eq!(file.default_branch, default);
+        let mut config = file.config.clone();
+        config.base_branch = Some("develop".into());
+        let file = mgr.set_project_config(&r.id, &file.version, &config).await.unwrap();
+        assert_eq!(file.config.base_branch.as_deref(), Some("develop"));
+        assert_eq!(mgr.project(&r.id).unwrap().base_branch, "develop");
+        // The rest of the file is kept.
+        assert_eq!(mgr.project_config(&r.id).unwrap().agents.len(), 1);
+        config.base_branch = None;
+        mgr.set_project_config(&r.id, &file.version, &config).await.unwrap();
+        assert_eq!(mgr.project(&r.id).unwrap().base_branch, default);
     }
 
     #[tokio::test]

@@ -47,3 +47,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | T7 | Warp-style shell model (one input, command blocks) | P1 | 3 | implemented | [T7-warp-shell-model.md](T7-warp-shell-model.md) |
 | X6 | Structured agent view (Claude Code, Codex) | P1 | 3 | implemented (Codex untested live) | [X6-structured-agent-view.md](X6-structured-agent-view.md) |
 | X7 | Permission mode picker (footer, new-session modal, Settings default) | P1 | 3 | implemented (UI unchecked in app) | [X7-agent-permission-mode.md](X7-agent-permission-mode.md) |
+| X8 | Project settings (edit `.jaunt/config.toml` from the app) | P1 | 3 | implemented (dialog unchecked in app) | [X8-project-settings.md](X8-project-settings.md) |

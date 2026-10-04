@@ -99,6 +99,16 @@ export interface ProjectConfig {
   agents: Record<string, string>;
 }
 
+/** `.jaunt/config.toml` as the Project settings dialog edits it (X8). */
+export interface ProjectConfigFile {
+  path: string;
+  exists: boolean;
+  version: string;
+  config: ProjectConfig;
+  error?: string | null;
+  default_branch: string;
+}
+
 export interface Session {
   id: string;
   project_id: string;
@@ -271,6 +281,8 @@ export const M = {
   projectList: "project.list",
   projectRemove: "project.remove",
   projectConfig: "project.config",
+  projectConfigFile: "project.config_file",
+  projectSetConfig: "project.set_config",
   sessionCreate: "session.create",
   sessionList: "session.list",
   sessionArchive: "session.archive",

@@ -114,6 +114,22 @@ pub struct ProjectConfig {
     pub agents: BTreeMap<String, String>,
 }
 
+/// A project's `.jaunt/config.toml` as the Project settings dialog sees it (X8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectConfigFile {
+    pub path: String,
+    pub exists: bool,
+    /// Hash of the file's bytes, `""` when it does not exist.
+    pub version: String,
+    /// The default when `error` is set.
+    pub config: ProjectConfig,
+    /// Why the file could not be read; such a file is never overwritten.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// The repo's default branch, used when `base_branch` is not set.
+    pub default_branch: String,
+}
+
 /// One task: a git worktree on its own branch, with its terminals.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {

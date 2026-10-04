@@ -5,7 +5,7 @@ import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
 import { arrange, compact, dropResult, lastActive, type Dragged, type Group } from "../lib/sidebar";
 import { errorToast, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
-import { archiveSession } from "../lib/actions";
+import { archiveSession, openProjectSettings } from "../lib/actions";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
@@ -240,6 +240,11 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
           </button>
+          {g.kind === "project" && (
+            <IconButton title="Project settings" className="h-7 w-7 opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => openProjectSettings({ host, project: g.projectId! })}>
+              <Settings size={15} />
+            </IconButton>
+          )}
           {g.kind === "project" && (
             <IconButton title="New session" className="h-7 w-7" onClick={() => useStore.setState({ dialog: { kind: "new-session", host, project: g.projectId, workspace: ws.id } })}>
               <Plus size={16} />

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::TerminalId;
-use crate::types::{AgentState, StateSource, TerminalKind};
+use crate::types::{AgentState, ProjectConfig, StateSource, TerminalKind};
 
 // Daemon
 pub const DAEMON_INFO: &str = "daemon.info";
@@ -36,6 +36,8 @@ pub const PROJECT_ADD: &str = "project.add";
 pub const PROJECT_LIST: &str = "project.list";
 pub const PROJECT_REMOVE: &str = "project.remove";
 pub const PROJECT_CONFIG: &str = "project.config";
+pub const PROJECT_CONFIG_FILE: &str = "project.config_file";
+pub const PROJECT_SET_CONFIG: &str = "project.set_config";
 pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
@@ -256,6 +258,16 @@ pub struct ProjectAdd {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdRef {
     pub id: String,
+}
+
+/// Writes a project's `.jaunt/config.toml` (X8).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectSetConfig {
+    pub id: String,
+    /// The `version` from `project.config_file`; a mismatch means the file
+    /// changed on disk since, and nothing is written.
+    pub version: String,
+    pub config: ProjectConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
