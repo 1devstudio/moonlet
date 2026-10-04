@@ -318,6 +318,29 @@ pub struct PullRequest {
     pub review_decision: Option<String>,
 }
 
+/// A GitHub stack of dependent pull requests (spec X8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrStack {
+    pub number: u64,
+    pub base: String,
+    /// 1-based position of the asked-for PR; 1 is closest to `base`.
+    pub position: u64,
+    pub size: u64,
+    /// Bottom of the stack first.
+    pub prs: Vec<StackPr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StackPr {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// `open`, `merged` or `closed`, as in [`PullRequest::state`].
+    pub state: String,
+    pub draft: bool,
+    pub branch: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckRun {
     pub name: String,
