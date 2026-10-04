@@ -213,8 +213,8 @@ export type ToolCallView = "collapsed" | "expanded";
 /** One row of the conversation: an item, or a run of tool calls folded into one. */
 export type ChatBlock = { kind: "item"; item: ChatItem } | { kind: "tools"; id: string; tools: ChatItem[] };
 
-/** Items that render nothing: no text yet, or thinking that was redacted. */
-const invisible = (it: ChatItem) => (it.kind === "assistant" && !it.text) || (it.kind === "thinking" && !it.partial && !it.text.trim());
+/** Items that render nothing: no text yet, thinking that was redacted, or a tool item without its call. */
+const invisible = (it: ChatItem) => (it.kind === "assistant" && !it.text) || (it.kind === "thinking" && !it.partial && !it.text.trim()) || (it.kind === "tool" && !it.tool);
 
 /**
  * The conversation's rows. Collapsed, each run of tool calls becomes one
@@ -225,7 +225,7 @@ export function chatBlocks(items: readonly ChatItem[], view: ToolCallView): Chat
   const blocks: ChatBlock[] = [];
   for (const it of items) {
     if (invisible(it)) continue;
-    if (view === "collapsed" && it.kind === "tool" && it.tool) {
+    if (view === "collapsed" && it.kind === "tool") {
       const last = blocks[blocks.length - 1];
       if (last?.kind === "tools") last.tools.push(it);
       // Keyed by its first call, so the group keeps its open state as calls stream in.
