@@ -251,6 +251,7 @@ function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: (decisi
               return (
                 <button
                   key={o.label}
+                  aria-pressed={on}
                   className={cx(
                     "flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors",
                     on ? "border-accent bg-hover" : "border-border-strong bg-[#141414] hover:bg-hover",
@@ -277,6 +278,7 @@ function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: (decisi
               className={inputCls}
               value={picks[i].other}
               placeholder="Other…"
+              aria-label={`Other answer: ${q.question}`}
               onChange={(e) => set(i, q.multiSelect ? { other: e.target.value } : { other: e.target.value, labels: [] })}
               onKeyDown={(e) => e.key === "Enter" && answers && onAnswer("allow", answers)}
             />
