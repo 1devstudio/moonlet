@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -47,6 +47,7 @@ import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo
 import { firstWord, suggest } from "../lib/suggest";
 import { errorToast, getLayout, setLayout, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
+import { chatScale } from "../lib/terminals";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { AgentIcon, Button, cx, inputCls } from "./ui";
@@ -169,7 +170,7 @@ export function StatusMark({ status }: { status: ToolCall["status"] }) {
 
 export function DiffBlock({ diff }: { diff: string }) {
   return (
-    <pre className="selectable max-h-[340px] overflow-auto rounded-md border border-border bg-[#161616] py-1.5 font-mono text-[12px] leading-[1.55]">
+    <pre className="selectable max-h-[340px] overflow-auto rounded-md border border-border bg-[#161616] py-1.5 font-mono chat-text-12 leading-[1.55]">
       {diff.replace(/\n$/, "").split("\n").map((l, i) => {
         if (l.startsWith("---") || l.startsWith("+++")) return null;
         const cls = l.startsWith("+") ? "bg-[#14301d] text-[#9fe0b0]" : l.startsWith("-") ? "bg-[#3a1719] text-[#f2a7a7]" : l.startsWith("@@") ? "text-faint" : "text-muted";
@@ -191,14 +192,14 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
   return (
     <div className="group">
       <button
-        className={cx("flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left text-[13px]", expandable && "hover:bg-hover")}
+        className={cx("flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left chat-text-13", expandable && "hover:bg-hover")}
         onClick={() => expandable && setOpen(!open)}
       >
         <Icon size={14} className="shrink-0 text-muted" />
         <span className="shrink-0 font-medium text-fg">{tool.name}</span>
-        <span className={cx("min-w-0 truncate font-mono text-[12.5px]", tool.status === "denied" ? "text-faint line-through" : "text-muted")}>{rel(tool.summary, cwd)}</span>
+        <span className={cx("min-w-0 truncate font-mono chat-text-12.5", tool.status === "denied" ? "text-faint line-through" : "text-muted")}>{rel(tool.summary, cwd)}</span>
         {stat && (stat.add > 0 || stat.del > 0) && (
-          <span className="shrink-0 font-mono text-[12px]">
+          <span className="shrink-0 font-mono chat-text-12">
             <span className="text-add">+{stat.add}</span> <span className="text-del">−{stat.del}</span>
           </span>
         )}
@@ -212,7 +213,7 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
           {tool.diff ? (
             <DiffBlock diff={tool.diff} />
           ) : (
-            <pre className="selectable max-h-[300px] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-[#161616] px-3 py-2 font-mono text-[12px] leading-[1.5] text-muted">
+            <pre className="selectable max-h-[300px] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-[#161616] px-3 py-2 font-mono chat-text-12 leading-[1.5] text-muted">
               {tool.output?.trim() || "(no output)"}
             </pre>
           )}
@@ -224,14 +225,14 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
 
 export function Thinking({ item }: { item: ChatItem }) {
   const [open, setOpen] = useState(false);
-  if (item.partial) return <div className="chat-shimmer px-2 py-1 text-[13px]">Thinking…</div>;
+  if (item.partial) return <div className="chat-shimmer px-2 py-1 chat-text-13">Thinking…</div>;
   if (!item.text.trim()) return null;
   return (
     <div>
-      <button className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-faint hover:text-muted" onClick={() => setOpen(!open)}>
+      <button className="flex items-center gap-1.5 rounded-md px-2 py-1 chat-text-13 text-faint hover:text-muted" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Thought
       </button>
-      {open && <div className="selectable ml-6 whitespace-pre-wrap border-l border-border pl-3 text-[13px] italic leading-relaxed text-muted">{item.text}</div>}
+      {open && <div className="selectable ml-6 whitespace-pre-wrap border-l border-border pl-3 chat-text-13 italic leading-relaxed text-muted">{item.text}</div>}
     </div>
   );
 }
@@ -241,7 +242,7 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
     case "user":
       return (
         <div className="flex justify-end py-1">
-          <div className="selectable max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2 text-[14px] leading-relaxed">{item.text}</div>
+          <div className="selectable max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2 chat-text-14 leading-relaxed">{item.text}</div>
         </div>
       );
     case "assistant":
@@ -255,9 +256,9 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
     case "tool":
       return item.tool ? <ToolRow tool={item.tool} cwd={cwd} /> : null;
     case "error":
-      return <div className="selectable my-1 whitespace-pre-wrap rounded-md border border-[#5a2a2e] bg-[#2a1416] px-3 py-2 text-[13px] text-[#f2a7a7]">{item.text}</div>;
+      return <div className="selectable my-1 whitespace-pre-wrap rounded-md border border-[#5a2a2e] bg-[#2a1416] px-3 py-2 chat-text-13 text-[#f2a7a7]">{item.text}</div>;
     default:
-      return <div className="py-1 text-center text-[12px] text-faint">{item.text}</div>;
+      return <div className="py-1 text-center chat-text-12 text-faint">{item.text}</div>;
   }
 });
 
@@ -269,21 +270,21 @@ export function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd
   const detail = ask.diff || ["Bash", "Write", "Edit", "MultiEdit", "Read"].includes(ask.tool) ? null : JSON.stringify(ask.input, null, 2);
   return (
     <div className="jaunt-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
-      <div className="mb-2 flex items-center gap-2 text-[13px]">
+      <div className="mb-2 flex items-center gap-2 chat-text-13">
         <ShieldAlert size={15} className="text-blocked" />
         <span className="font-medium">Allow {ask.tool}?</span>
       </div>
       <div className="mb-2 flex min-w-0 items-start gap-2 rounded-md bg-[#141414] px-2.5 py-2">
         <Icon size={14} className="mt-[2px] shrink-0 text-muted" />
-        <code className="selectable min-w-0 whitespace-pre-wrap break-all font-mono text-[12.5px] text-fg">{rel(ask.summary, cwd) || ask.tool}</code>
+        <code className="selectable min-w-0 whitespace-pre-wrap break-all font-mono chat-text-12.5 text-fg">{rel(ask.summary, cwd) || ask.tool}</code>
       </div>
       {ask.diff && (
         <div className="mb-2">
           <DiffBlock diff={ask.diff} />
         </div>
       )}
-      {detail && detail !== "{}" && <pre className="selectable mb-2 max-h-40 overflow-auto rounded-md bg-[#141414] px-2.5 py-2 font-mono text-[11.5px] text-muted">{detail}</pre>}
-      {ask.reason && !ask.summary.endsWith(ask.reason) && <div className="mb-2 text-[12.5px] text-muted">{ask.reason}</div>}
+      {detail && detail !== "{}" && <pre className="selectable mb-2 max-h-40 overflow-auto rounded-md bg-[#141414] px-2.5 py-2 font-mono chat-text-11.5 text-muted">{detail}</pre>}
+      {ask.reason && !ask.summary.endsWith(ask.reason) && <div className="mb-2 chat-text-12.5 text-muted">{ask.reason}</div>}
       <div className="flex gap-1.5">
         <Button variant="primary" onClick={() => onAnswer("allow")}>
           Allow
@@ -312,15 +313,15 @@ export function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: 
   };
   return (
     <div className="jaunt-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
-      <div className="mb-2 flex items-center gap-2 text-[13px]">
+      <div className="mb-2 flex items-center gap-2 chat-text-13">
         <MessageCircleQuestionMark size={15} className="text-blocked" />
         <span className="font-medium">{qs.length > 1 ? `${agentLabel("claude")} has ${qs.length} questions` : `${agentLabel("claude")} has a question`}</span>
       </div>
       {qs.map((q, i) => (
         <div key={i} className="mb-3">
           <div className="mb-1.5 flex items-start gap-2">
-            {q.header && <span className="mt-[1px] shrink-0 rounded bg-[#141414] px-1.5 py-0.5 text-[11px] text-muted">{q.header}</span>}
-            <span className="selectable text-[13px] text-fg">{q.question}</span>
+            {q.header && <span className="mt-[1px] shrink-0 rounded bg-[#141414] px-1.5 py-0.5 chat-text-11 text-muted">{q.header}</span>}
+            <span className="selectable chat-text-13 text-fg">{q.question}</span>
           </div>
           <div className="flex flex-col gap-1">
             {q.options.map((o) => {
@@ -345,8 +346,8 @@ export function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: 
                     {on && q.multiSelect && <Check size={9} className="text-bg" />}
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-[12.5px] text-fg">{o.label}</span>
-                    {o.description && <span className="block text-[12px] text-muted">{o.description}</span>}
+                    <span className="block chat-text-12.5 text-fg">{o.label}</span>
+                    {o.description && <span className="block chat-text-12 text-muted">{o.description}</span>}
                   </span>
                 </button>
               );
@@ -398,6 +399,7 @@ function ChatEditor({
   onSend,
   onStop,
   onCycleMode,
+  scale,
 }: {
   host: string;
   root: string;
@@ -408,6 +410,8 @@ function ChatEditor({
   onStop: () => void;
   /** Shift+Tab; absent for agents without a permission mode. */
   onCycleMode?: () => void;
+  /** Text scale (see chatScale): the height is re-measured when it changes. */
+  scale: number;
 }) {
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -427,7 +431,7 @@ function ChatEditor({
     if (!el) return;
     el.style.height = "0px";
     el.style.height = Math.min(el.scrollHeight, 260) + "px";
-  }, [text]);
+  }, [text, scale]);
 
   const token = activeToken(text, caret);
   useEffect(() => {
@@ -527,7 +531,7 @@ function ChatEditor({
           {options.map((o, i) => (
             <button
               key={o}
-              className={cx("flex w-full items-center gap-2 truncate rounded-md px-2.5 py-1.5 text-left font-mono text-[12.5px]", i === sel ? "bg-hover text-fg" : "text-muted")}
+              className={cx("flex w-full items-center gap-2 truncate rounded-md px-2.5 py-1.5 text-left font-mono chat-text-12.5", i === sel ? "bg-hover text-fg" : "text-muted")}
               onMouseDown={(e) => {
                 e.preventDefault();
                 accept(o);
@@ -540,7 +544,7 @@ function ChatEditor({
         </div>
       )}
       <div className="relative rounded-xl border border-border-strong bg-panel px-3.5 py-2.5 focus-within:border-[#3a3a3a]">
-        <div className="relative text-[14px] leading-[21px]">
+        <div className="relative chat-text-14 leading-[1.5]">
           <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
             {text}
             {ghost && <span className="text-faint">{ghost}</span>}
@@ -614,6 +618,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const st = useChat((s) => s.chats[chatKey(host, id)]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const scale = useStore((s) => chatScale(s.settings.term.fontSize));
 
   useEffect(() => {
     if (!st) void loadChat(host, id).catch(errorToast);
@@ -661,7 +666,8 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
 
   return (
     <div
-      className="flex h-full w-full flex-col overflow-hidden bg-bg"
+      className="flex h-full w-full flex-col overflow-hidden bg-bg chat-text-13.5"
+      style={{ "--chat-scale": scale } as CSSProperties}
       onMouseDown={() => {
         const l = getLayout(host, wsId);
         if (l.focused !== id) setLayout(host, wsId, { ...l, focused: id });
@@ -677,12 +683,12 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       >
         <div className="mx-auto flex max-w-[820px] flex-col gap-0.5 px-6 pb-4 pt-5">
           {!st ? (
-            <div className="py-10 text-center text-[13px] text-faint">Loading conversation…</div>
+            <div className="py-10 text-center chat-text-13 text-faint">Loading conversation…</div>
           ) : st.items.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-16 text-center text-muted">
               <AgentIcon agent={agent} size={22} />
-              <div className="text-[14px]">{agentLabel(agent)} is ready</div>
-              <div className="text-[12.5px] text-faint">Describe a change, mention files with @, or run a / command.</div>
+              <div className="chat-text-14">{agentLabel(agent)} is ready</div>
+              <div className="chat-text-12.5 text-faint">Describe a change, mention files with @, or run a / command.</div>
             </div>
           ) : (
             st.items.map((it) => <ChatItemView key={it.id} item={it} cwd={info?.cwd ?? ""} />)
@@ -712,7 +718,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
         </div>
       </div>
       <div className="mx-auto w-full max-w-[820px] shrink-0 px-6 pb-4">
-        <div className="mb-1.5 flex h-6 items-center gap-2 px-1 text-[12px] text-muted">
+        <div className="mb-1.5 flex h-6 items-center gap-2 px-1 chat-text-12 text-muted">
           {st?.status === "working" ? (
             <>
               <Loader2 size={12} className="spin text-accent" />
@@ -774,6 +780,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           onSend={send}
           onStop={stop}
           onCycleMode={agent === "claude" ? () => modeMenu.pick(nextMode(modeMenu.mode, modeMenu.bypassOn)) : undefined}
+          scale={scale}
         />
       </div>
     </div>
