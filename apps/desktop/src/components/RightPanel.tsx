@@ -5,6 +5,7 @@ import { hostsApi, rpc } from "../lib/daemon";
 import { M, type FileChange, type PrStack, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
+import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { ChecksPanel } from "./ChecksPanel";
 import { FilesPanel } from "./FilesPanel";
@@ -74,29 +75,26 @@ function PrIcon({ className }: { className: string }) {
   );
 }
 
-/** Position in the GitHub stack and its PRs, top of the stack first (spec X8). */
-function StackMenu({ stack, current }: { stack: PrStack; current: number }) {
+/** Position in the GitHub stack and its PRs, top of the stack first (spec X11). */
+function StackMenu({ view, current }: { view: StackView; current: number }) {
   const [open, setOpen] = useState(false);
-  // From `current`, not `stack.position`: the stack may still be the one
-  // loaded for the session's previous PR.
-  const position = stack.prs.findIndex((p) => p.number === current) + 1;
   return (
     <div className="no-drag relative">
       <button
         className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
-        title={`Stack of ${stack.size} pull requests on ${stack.base}`}
+        title={`Stack of ${view.size} pull requests`}
         onClick={() => setOpen(!open)}
       >
         <Layers size={13} className="text-muted" />
         <span className="tabular-nums">
-          {position}/{stack.size}
+          {view.position}/{view.size}
         </span>
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="absolute left-0 z-40 mt-1 max-h-[60vh] w-[360px] overflow-y-auto rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
-            {[...stack.prs].reverse().map((p) => (
+            {view.rows.map((p) => (
               <button
                 key={p.number}
                 title={`${p.title} · Open in browser`}
@@ -129,17 +127,16 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [pr, setPr] = useState<PullRequest | null>(null);
   const [stack, setStack] = useState<PrStack | null>(null);
+  const view = useMemo(() => stackView(stack, pr?.number), [stack, pr?.number]);
   useEffect(() => {
     if (repo) void rpc<ProjectConfig>(host, M.projectConfig, { id: repo.id }).then(setConfig).catch(() => setConfig(null));
   }, [host, repo]);
   useEffect(() => {
     let live = true;
-    // A slow poll can still be running when the next one starts; only the
-    // latest one may set state.
-    let seq = 0;
+    const polls = latestOnly();
     const load = () => {
-      const n = ++seq;
-      const latest = () => live && n === seq;
+      const isLatest = polls.start();
+      const latest = () => live && isLatest();
       void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path })
         .then((p) => {
           if (!latest()) return;
@@ -172,7 +169,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
       >
         <Play size={13} fill="currentColor" strokeWidth={0} /> Run
       </button>
-      {pr && stack?.prs.some((p) => p.number === pr.number) && <StackMenu stack={stack} current={pr.number} />}
+      {pr && view && <StackMenu view={view} current={pr.number} />}
       <button
         className="no-drag group flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
         title={pr ? `#${pr.number} ${pr.title} · Open in browser` : "Create pull request (⇧⌘P)"}
