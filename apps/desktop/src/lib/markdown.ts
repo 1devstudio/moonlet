@@ -140,6 +140,43 @@ const chatMd = new MarkdownIt({
   },
 });
 
+// Linkify skips code, but agents often wrap a URL in backticks: an inline
+// code span that is exactly one URL becomes a link around the code.
+const defaultCodeInline = chatMd.renderer.rules.code_inline!;
+chatMd.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
+  const code = defaultCodeInline(tokens, idx, options, env, self);
+  const url = tokens[idx].content.trim();
+  return /^https?:\/\/\S+$/.test(url) ? `<a href="${escapeHtml(url)}">${code}</a>` : code;
+};
+
+/** The URL a chat link may open in the browser, or null for anything else. */
+export function openableUrl(href: string | null): string | null {
+  if (!href) return null;
+  try {
+    return ["http:", "https:", "mailto:"].includes(new URL(href).protocol) ? href : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The URL a click on a chat link opens. ⌘-click and keyboard activation
+ * (Enter on a focused link) open; a plain mouse click only selects text.
+ */
+export function linkToOpen(href: string | null, click: { metaKey: boolean; keyboard: boolean }): string | null {
+  return click.metaKey || click.keyboard ? openableUrl(href) : null;
+}
+
+/** Fixed position of the link's Open/Copy toolbar: above the link, below it near the window top. */
+export function linkToolbarPosition(
+  link: { left: number; top: number; bottom: number },
+  win: { width: number; height: number },
+  toolbarWidth = 72,
+): { left: number; top?: number; bottom?: number } {
+  const left = Math.max(4, Math.min(link.left, win.width - toolbarWidth));
+  return link.top > 40 ? { left, bottom: win.height - link.top + 2 } : { left, top: link.bottom + 2 };
+}
+
 export function renderChatMarkdown(source: string): string {
   return DOMPurify.sanitize(chatMd.render(source), {
     USE_PROFILES: { html: true },
