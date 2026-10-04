@@ -1,5 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { activeToken, askQuestions, chatKey, diffStat, fuzzyFilter, loadChat, mergeItem, onChatItem, onChatState, questionAnswers, transcript, useChat } from "./chat";
+import {
+  activeToken,
+  askQuestions,
+  chatBlocks,
+  chatKey,
+  diffStat,
+  fuzzyFilter,
+  loadChat,
+  mergeItem,
+  onChatItem,
+  onChatState,
+  questionAnswers,
+  thinkingPreview,
+  toolGroupLabel,
+  toolGroupStatus,
+  transcript,
+  useChat,
+} from "./chat";
 
 const rpcReply = vi.hoisted(() => ({ release: (_v: unknown) => {} }));
 vi.mock("./daemon", () => ({ rpc: () => new Promise((r) => (rpcReply.release = r)) }));
@@ -46,6 +63,28 @@ describe("chat helpers", () => {
     const st = useChat.getState().chats[chatKey("h", 1)];
     expect(st.status).toBe("done");
     expect(st.items[0].text).toBe("late");
+  });
+
+  it("folds runs of tool calls into groups and leaves text and thinking out", () => {
+    const tool = (id: string, status: "running" | "ok" | "error" | "denied" = "ok"): ChatItem => ({ ...item(id, "", "tool"), tool: { name: "Bash", summary: id, input: {}, status } });
+    const items = [item("u", "check it", "user"), item("t1", "The resume URL is session-bound", "thinking"), tool("b1"), item("t2", "", "thinking"), tool("b2"), item("a1", "Found it."), tool("b3"), item("e", "", "assistant")];
+
+    expect(chatBlocks(items, "collapsed").map((b) => (b.kind === "tools" ? `[${b.tools.map((t) => t.id).join(",")}]` : b.item.id))).toEqual(["u", "t1", "[b1,b2]", "a1", "[b3]"]);
+    expect(chatBlocks(items, "expanded").map((b) => (b.kind === "tools" ? "group" : b.item.id))).toEqual(["u", "t1", "b1", "b2", "a1", "b3"]);
+  });
+
+  it("labels a tool group and sums up its status", () => {
+    const tool = (status: "running" | "ok" | "error" | "denied"): ChatItem => ({ ...item(status, "", "tool"), tool: { name: "Bash", summary: "", input: {}, status } });
+    expect(toolGroupLabel(1)).toBe("1 tool call");
+    expect(toolGroupLabel(2)).toBe("2 tool calls");
+    expect(toolGroupStatus([tool("ok"), tool("ok")])).toBe("ok");
+    expect(toolGroupStatus([tool("denied"), tool("error")])).toBe("error");
+    expect(toolGroupStatus([tool("ok"), tool("denied")])).toBe("denied");
+    expect(toolGroupStatus([tool("error"), tool("running")])).toBe("running");
+  });
+
+  it("previews thinking on one line", () => {
+    expect(thinkingPreview("\n  It's odd that the no-connection case\n  jumps straight from /authorize.  ")).toBe("It's odd that the no-connection case jumps straight from /authorize.");
   });
 
   it("reads AskUserQuestion input and builds its answers", () => {

@@ -50,8 +50,8 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 ## UI
 
 - **Conversation:**
-  - User messages are right-aligned bubbles. Assistant text renders as sanitized Markdown with code highlighting. Thinking is collapsed into one line ("Thought for 6s").
-  - Tool calls are compact rows: an icon, a summary (`Bash  git status`, `Edit  src/app.ts  +12 −3`, `Read  README.md`) and a status mark, expandable to show the output or the diff.
+  - User messages are right-aligned bubbles. Assistant text renders as sanitized Markdown with code highlighting. Thinking is a one-line row (`Thinking` and the start of the thought) that expands to the full text, see [X14](X14-collapsed-tool-calls.md).
+  - Tool calls are compact rows: an icon, a summary (`Bash  git status`, `Edit  src/app.ts  +12 −3`, `Read  README.md`) and a status mark, expandable to show the output or the diff. By default, runs of tool calls are folded into one `N tool calls` row ([X14](X14-collapsed-tool-calls.md)).
   - Permission requests are an inline card with the tool and summary, the reason, and **Allow**, **Always allow** and **Deny** buttons.
   - Questions from Claude (`AskUserQuestion`) get a question card instead, see below.
 - **Footer:** a status line (spinner and elapsed time while working; cost and tokens), Stop (⌘.) while running, then the editor.

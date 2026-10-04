@@ -53,3 +53,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X11 | Stacked pull requests | P1 | 3 | implemented (UI unchecked in app) | [X11-pr-stacks.md](X11-pr-stacks.md) |
 | X12 | End-to-end tests of the desktop app (WebdriverIO, embedded driver) | P1 | 3 | implemented (macOS) | [X12-e2e-tests.md](X12-e2e-tests.md) |
 | X13 | Pull the base branch (sidebar chip when `main` is behind origin) | P1 | 3 | implemented | [X13-pull-base-branch.md](X13-pull-base-branch.md) |
+| X14 | Collapsed tool calls and thinking rows in the agent view | P1 | 3 | implemented | [X14-collapsed-tool-calls.md](X14-collapsed-tool-calls.md) |

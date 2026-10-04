@@ -25,7 +25,7 @@ import {
 import { sanitize } from "./sanitize";
 import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, soundFor, type SoundSettings } from "./sounds";
-import { forgetChat, loadChat, onChatItem, onChatState } from "./chat";
+import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import type { ChatItem, ChatState } from "./protocol";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
@@ -50,6 +50,8 @@ export interface Settings {
   defaultMode: string;
   /** Sound per attention event, "" for off (X10). */
   sounds: SoundSettings;
+  /** Runs of tool calls folded into one row, or one row per call (X14). */
+  toolCalls: ToolCallView;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -189,7 +191,7 @@ function makeStore() {
   preview: null,
   showHistory: false,
   dialog: null,
-  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS }),
+  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed" }),
   toasts: [],
   lastAttention: null,
   workingSince: {},
