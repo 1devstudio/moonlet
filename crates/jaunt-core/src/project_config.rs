@@ -80,7 +80,36 @@ pub fn save(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<()> {
         .context(".jaunt/config.toml is not valid TOML")?;
     apply(&mut doc, &config);
     std::fs::create_dir_all(&dir)?;
-    crate::fs::write(&p.display().to_string(), &doc.to_string())
+    write_atomic(&p, &doc.to_string())
+}
+
+/// Writes through a fresh temp file and renames it over `path`. The temp
+/// file is created with `create_new`, so a symlink planted in `.jaunt/`
+/// (it is part of the repo) is never followed.
+fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".config.toml.{}-{nanos}.tmp", std::process::id()));
+    let result = (|| -> Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        if let Ok(m) = std::fs::symlink_metadata(path) {
+            std::fs::set_permissions(&tmp, m.permissions())?;
+        }
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// Checks agent names, commands and the default agent.
@@ -412,6 +441,28 @@ mod tests {
             std::fs::read_to_string(outside.path().join("c.toml")).unwrap(),
             ""
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_planted_in_jaunt_is_never_written_through() {
+        let dir = repo_with(Some("run = \"x\"\n"));
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        // The temp name the generic `fs::write` would have used.
+        std::os::unix::fs::symlink(&victim, dir.path().join(".jaunt/.config.toml.jaunt-tmp"))
+            .unwrap();
+        let v = load(dir.path(), "main".into()).version;
+        save(dir.path(), &v, &cfg(|c| c.run = Some("y".into()))).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        assert_eq!(read(&dir), "run = \"y\"\n");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path().join(".jaunt"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]

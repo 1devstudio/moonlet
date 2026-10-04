@@ -29,7 +29,7 @@ Every project setting lives in `<repo>/.jaunt/config.toml`, and the only way to 
 - [x] The write keeps comments, blank lines, key order and unknown keys and tables. A changed value keeps its trailing comment; an unchanged one is left exactly as written, quotes included (`keeps_comments_order_and_unknown_keys`).
 - [x] An empty or whitespace-only field removes its key. Comment lines right above a removed key go with it. A comment block set apart from it by a blank line (a file header) moves to the next item. The file is never deleted (`blank_fields_remove_keys_and_an_emptied_agents_table_goes`).
 - [x] `[agents]` entries are added, changed and removed one by one. Untouched entries keep their comments. When the last entry goes, the `[agents]` table goes too, unless a comment sits above its header (`an_emptied_agents_table_with_a_comment_stays`).
-- [x] The write is atomic: `fs::write` writes a temp file in `.jaunt/` and renames it. Not tested for crashes.
+- [x] The write is atomic: a uniquely named temp file in `.jaunt/`, created with `create_new` and renamed over the config. A symlink planted in `.jaunt/` is never followed (`a_symlink_planted_in_jaunt_is_never_written_through`). Not tested for crashes.
 - [x] A stale `version` is rejected with `config changed on disk`, and nothing is written. A file created after a "missing" read counts as stale (`a_stale_version_writes_nothing`).
 - [x] A file that does not parse, or parses with a wrong type (`run = 5`), is reported by `project.config_file` and rejected by `project.set_config` (`an_invalid_file_is_reported_and_never_overwritten`).
 - [x] A symlinked `.jaunt` or `config.toml` is refused (`a_symlinked_config_is_refused`).
@@ -40,7 +40,7 @@ Every project setting lives in `<repo>/.jaunt/config.toml`, and the only way to 
   - `default_agent`, when set, is `claude`, `codex` or one of the `[agents]` names in the same request.
 - [x] Saving a `base_branch` updates the stored `Project.base_branch` too. Clearing it sets `Project.base_branch` back to the repo's default branch (`saving_base_branch_updates_the_project`). Before X8 that value was only read when the project was added.
 - [x] After a save, the daemon emits `projects.changed`. That replaces the project objects in the store, so the right panel refetches the config and the Run button updates. Checked live: the event fires; the button update in the app is not checked yet.
-- [ ] The Run button no longer goes grey. With no `run` script, it is dimmed, its tooltip says "Set a run command…", and clicking it opens Project settings with the Run field focused. ⌘R and the palette's "Run script" do the same (`runScript` reads the config first).
+- [ ] The Run button no longer goes grey. With no `run` script, it is dimmed, its tooltip says "Set a run command…", and clicking it opens Project settings with the Run field focused. ⌘R and the palette's "Run script" do the same (`runScript` reads the config first). The decision is `hasRunCommand` (`projectSettings.test.ts`); the button and the dialog opening are not checked in the app.
 - [ ] Remote projects work the same way: the RPCs go to the host's daemon, which reads and writes the file on that host. Reveal in Finder is hidden for them. Not checked on a remote host.
 
 ## UI
@@ -96,7 +96,7 @@ Keyboard: Escape cancels (asks first if there are unsaved changes), ⌘↵ saves
 
 - The scripts are shell commands that jaunt runs: setup runs on its own when a session is created. In the app, only an explicit Save in the dialog changes them. The socket is limited to the local user (mode `0600` plus a peer-credential check, A6). Any process running as that user, an agent included, can call `project.set_config`, but it could already edit the file directly, so the RPC grants nothing new.
 - The daemon writes only the fixed path `<project path>/.jaunt/config.toml`. The project id resolves to a known project; the request carries no path.
-- If `.jaunt` or `config.toml` is a symlink, the save is refused with an error. Following it could write outside the repo.
+- If `.jaunt` or `config.toml` is a symlink, the save is refused with an error. Following it could write outside the repo. `.jaunt/` comes from the repo, so the temp file gets a fresh name and is opened with `create_new` (`O_EXCL`), so it never writes through a link committed there. A link swapped in between the check and the write is not covered.
 - Agent names are restricted to `A-Za-z0-9._-`, because they appear in menus and terminal titles. Commands are stored as typed. They already run through `$SHELL -lic`, so jaunt adds no quoting of its own.
 
 ## Out of scope
