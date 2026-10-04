@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use jaunt_proto::types::{CheckRun, Commit, FileChange, FileVersions, GitStatus, PullRequest};
+use jaunt_proto::types::{
+    CheckRun, Commit, FileChange, FileVersions, GitStatus, PrStack, PullRequest, StackPr,
+};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -850,6 +852,52 @@ pub async fn pr_status(path: &Path) -> Result<Option<PullRequest>> {
     }))
 }
 
+/// The GitHub stack PR `number` belongs to, or `None` when it is not stacked.
+pub async fn pr_stack(path: &Path, number: u64) -> Result<Option<PrStack>> {
+    let root = toplevel(path).await?;
+    let pull = format!("repos/{{owner}}/{{repo}}/pulls/{number}");
+    let out = gh(&root, &["api", &pull, "--jq", ".stack.number // empty"]).await?;
+    let stack = String::from_utf8_lossy(&out).trim().to_string();
+    if stack.is_empty() {
+        return Ok(None);
+    }
+    let stack: u64 = stack.parse().context("stack number")?;
+    let out = gh(
+        &root,
+        &["api", &format!("repos/{{owner}}/{{repo}}/stacks/{stack}")],
+    )
+    .await?;
+    Ok(parse_stack(&serde_json::from_slice(&out)?, number))
+}
+
+/// Maps a `GET /repos/{owner}/{repo}/stacks/{number}` response.
+fn parse_stack(v: &serde_json::Value, current: u64) -> Option<PrStack> {
+    let prs: Vec<StackPr> = v["pull_requests"]
+        .as_array()?
+        .iter()
+        .map(|p| StackPr {
+            number: p["number"].as_u64().unwrap_or(0),
+            title: p["title"].as_str().unwrap_or("").into(),
+            url: p["html_url"].as_str().unwrap_or("").into(),
+            state: if !p["merged_at"].is_null() {
+                "merged".into()
+            } else {
+                p["state"].as_str().unwrap_or("").to_lowercase()
+            },
+            draft: p["draft"].as_bool().unwrap_or(false),
+            branch: p["head"]["ref"].as_str().unwrap_or("").into(),
+        })
+        .collect();
+    let position = prs.iter().position(|p| p.number == current)? as u64 + 1;
+    Some(PrStack {
+        number: v["number"].as_u64().unwrap_or(0),
+        base: v["base"]["ref"].as_str().unwrap_or("").into(),
+        position,
+        size: prs.len() as u64,
+        prs,
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -998,6 +1046,35 @@ pub(crate) mod tests {
         let st = status(dir.path(), Some("main")).await.unwrap();
         assert_eq!(st.files.len(), 1);
         assert_eq!(st.against, EMPTY_TREE);
+    }
+
+    #[test]
+    fn stack_from_api() {
+        let v = serde_json::json!({
+            "number": 17,
+            "base": {"ref": "main"},
+            "pull_requests": [
+                {"number": 1, "title": "one", "html_url": "https://github.com/o/r/pull/1",
+                 "state": "closed", "merged_at": "2026-10-03T14:59:32Z", "draft": false,
+                 "head": {"ref": "a"}},
+                {"number": 2, "title": "two", "html_url": "https://github.com/o/r/pull/2",
+                 "state": "closed", "merged_at": null, "draft": false, "head": {"ref": "b"}},
+                {"number": 4, "title": "four", "state": "open", "draft": true,
+                 "head": {"ref": "c"}}
+            ]
+        });
+        let s = parse_stack(&v, 4).unwrap();
+        assert_eq!((s.number, s.base.as_str()), (17, "main"));
+        assert_eq!((s.position, s.size), (3, 3));
+        let states: Vec<_> = s.prs.iter().map(|p| p.state.as_str()).collect();
+        assert_eq!(states, ["merged", "closed", "open"]);
+        assert_eq!(s.prs[0].url, "https://github.com/o/r/pull/1");
+        assert_eq!(s.prs[1].branch, "b");
+        assert!(s.prs[2].draft && s.prs[2].url.is_empty());
+        assert_eq!(parse_stack(&v, 1).unwrap().position, 1);
+        // A PR that left the stack between the two API calls.
+        assert!(parse_stack(&v, 3).is_none());
+        assert!(parse_stack(&serde_json::json!({}), 1).is_none());
     }
 
     #[test]
