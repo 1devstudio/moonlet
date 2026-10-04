@@ -140,6 +140,7 @@ interface State extends UiPersist {
     | { kind: "new-workspace" }
     | { kind: "create-pr" }
     | { kind: "settings" }
+    | { kind: "project-settings"; host: string; project: string; focus?: "run" }
     | { kind: "palette" }
     | { kind: "commit" };
   settings: Settings;
