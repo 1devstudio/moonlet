@@ -1,4 +1,4 @@
-// Scratch world for the e2e tests (X9): a JAUNT_HOME, a git repo, a daemon
+// Scratch world for the e2e tests (X12): a JAUNT_HOME, a git repo, a daemon
 // that can never start a real agent, and helpers the specs share.
 
 import { execFileSync } from "node:child_process";

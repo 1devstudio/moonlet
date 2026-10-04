@@ -28,7 +28,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
-# Embedded WebDriver server for the e2e tests (X9). Never in normal builds:
+# Embedded WebDriver server for the e2e tests (X12). Never in normal builds:
 # it exposes the window over HTTP.
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tauri-plugin-wdio = { version = "1", optional = true }

@@ -1,4 +1,4 @@
-// Builds the app for the e2e tests (X9): the `e2e` cargo feature (embedded
+// Builds the app for the e2e tests (X12): the `e2e` cargo feature (embedded
 // WebDriver server), the frontend embedded instead of the Vite dev server,
 // and jauntd + jaunt next to it, all in target/e2e so a running `pnpm dev`
 // is left alone.

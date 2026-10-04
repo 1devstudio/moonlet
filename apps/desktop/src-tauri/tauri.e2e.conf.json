@@ -9,7 +9,7 @@
         "default",
         {
           "identifier": "e2e",
-          "description": "Lets the embedded WebDriver server drive the window. Only in e2e builds (X9).",
+          "description": "Lets the embedded WebDriver server drive the window. Only in e2e builds (X12).",
           "windows": [
             "main"
           ],

@@ -11,7 +11,7 @@ Both sides of a change get unit tests: the daemon and core in Rust, and the UI's
 - **Rust:** unit tests go in the file's `#[cfg(test)] mod tests`. Daemon and CLI end-to-end tests go in `crates/<crate>/tests/`.
 - **Desktop:** Vitest files sit beside the logic as `apps/desktop/src/lib/*.test.ts`. React components have no unit tests, so move decision logic into `lib/` and test it there.
 - **Code that calls `git`, `gh` or the network:** split the parsing and decision logic into a pure function, and test it with real captured output.
-- **Crucial features** also get an e2e spec in `apps/desktop/e2e/specs/` that drives the real app (spec X9). A feature is crucial when a user would notice its breakage within minutes: starting a session, running an agent or script, saving settings, reviewing and committing changes. Run `pnpm e2e:build` once, then `pnpm e2e`. Type with `fill()` from `e2e/fixtures.ts`, not `setValue`.
+- **Crucial features** also get an e2e spec in `apps/desktop/e2e/specs/` that drives the real app (spec X12). A feature is crucial when a user would notice its breakage within minutes: starting a session, running an agent or script, saving settings, reviewing and committing changes. Run `pnpm e2e:build` once, then `pnpm e2e`. Type with `fill()` from `e2e/fixtures.ts`, not `setValue`.
 - **Specs:** each acceptance criterion in `docs/specs/` maps to at least one test.
 
 ### How tests are written
