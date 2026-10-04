@@ -273,10 +273,17 @@ async fn play_sound(name: String) -> Result<(), RpcError> {
     let path = sound_path(&name)?;
     if cfg!(target_os = "macos") {
         // Waiting reaps the child so finished players don't linger as zombies.
-        let _ = tokio::process::Command::new("afplay")
+        let status = tokio::process::Command::new("afplay")
             .arg(path)
             .status()
-            .await;
+            .await
+            .map_err(err)?;
+        if !status.success() {
+            return Err(RpcError::new(
+                "failed",
+                format!("afplay exited with {status}"),
+            ));
+        }
     }
     Ok(())
 }
