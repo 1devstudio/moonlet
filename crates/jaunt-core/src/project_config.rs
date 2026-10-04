@@ -2,7 +2,9 @@
 //! settings dialog (X8). Writes edit the file in place with `toml_edit`, so
 //! comments, key order and unknown keys survive.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{Context, Result, bail};
 use jaunt_proto::types::{ProjectConfig, ProjectConfigFile};
@@ -50,6 +52,22 @@ pub fn load(repo: &Path, default_branch: String) -> ProjectConfigFile {
 /// Validates `config` and writes it over the file read at `expected`
 /// version. Keys that are blank in `config` are removed.
 pub fn save(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<()> {
+    // The version check and the write must not interleave with another
+    // save of the same file, or both could pass the check.
+    let lock = lock_for(&path(repo));
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    save_unlocked(repo, expected, config)
+}
+
+/// One lock per config file; saves of different projects stay independent.
+fn lock_for(p: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
+        LazyLock::new(Default::default);
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    locks.entry(p.to_path_buf()).or_default().clone()
+}
+
+fn save_unlocked(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<()> {
     let config = normalize(config);
     validate(&config)?;
     let dir = repo.join(".jaunt");
@@ -463,6 +481,32 @@ mod tests {
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn concurrent_saves_of_one_version_let_exactly_one_through() {
+        for round in 0..20 {
+            let dir = repo_with(Some("run = \"x\"\n"));
+            let v = load(dir.path(), "main".into()).version;
+            let barrier = std::sync::Barrier::new(8);
+            let ok = std::thread::scope(|s| {
+                let handles: Vec<_> = (0..8)
+                    .map(|i| {
+                        let (dir, v, barrier) = (dir.path(), &v, &barrier);
+                        s.spawn(move || {
+                            barrier.wait();
+                            save(dir, v, &cfg(|c| c.run = Some(format!("run {i}")))).is_ok()
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap())
+                    .filter(|ok| *ok)
+                    .count()
+            });
+            assert_eq!(ok, 1, "round {round}");
+        }
     }
 
     #[test]
