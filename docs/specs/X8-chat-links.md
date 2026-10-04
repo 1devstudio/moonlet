@@ -12,7 +12,7 @@ Links in the structured agent view were rendered but dead: the click handler can
 ## User journey
 
 1. The user asks the agent for a URL. The answer shows it as a link (a bare URL, a Markdown link, or a URL in backticks).
-2. ⌘-click on the link opens it in the default browser. A plain click does nothing, so text selection still works.
+2. ⌘-click on the link opens it in the default browser, and so does Enter on a focused link. A plain click does nothing, so text selection still works.
 3. Hovering the link shows a toolbar just above it: Open (opens in the browser) and Copy (copies the URL and shows a "Copied link" toast).
 4. Moving the pointer from the link onto the toolbar keeps it open. Leaving both, or scrolling, hides it.
 
@@ -21,10 +21,11 @@ Links in the structured agent view were rendered but dead: the click handler can
 - [x] Bare URLs and Markdown links render as links (markdown-it `linkify`, unchanged).
 - [x] An inline code span that is exactly one `http(s)` URL renders as a link around the code. Other inline code and fenced blocks are not linked.
 - [x] Only `http:`, `https:` and `mailto:` links can be opened or copied from the toolbar; other links (relative paths, `file:`) stay inert.
-- [x] ⌘-click opens the link via the opener plugin; a plain click never navigates the app window (`linkToOpen`).
+- [x] ⌘-click or Enter on a focused link opens it via the opener plugin; a plain click never navigates the app window (`linkToOpen`).
 - [x] Hover shows the Open/Copy toolbar above the link, or below it near the window top (`linkToolbarPosition`).
 - [ ] The toolbar hides 150 ms after the pointer leaves the link and toolbar, and immediately on scroll or resize (component behaviour, manual check).
-- [ ] Copy writes the URL to the clipboard and shows "Copied link" (component behaviour, manual check).
+- [ ] Copy writes the URL to the clipboard, shows "Copied link" and closes the toolbar. If opening or copying fails, an error toast says so (component behaviour, manual check).
+- [ ] The toolbar closes when the message text changes, so it never acts on a URL that is no longer shown (component behaviour, manual check).
 
 ## UI
 
@@ -46,10 +47,11 @@ Agent output is untrusted. Rendering stays markdown-it with HTML disabled plus D
 
 - Opening file paths from agent messages in the code viewer.
 - Links inside tool output and diffs.
+- Keyboard access to Copy: the toolbar is hover-only, so a keyboard user can open a link (Enter) but not copy it.
 
 ## Test plan
 
-- Unit (`src/lib/markdown.test.ts`): inline-code linking, escaping, `openableUrl` protocol filter, `linkToOpen` (⌘-click only), `linkToolbarPosition`.
+- Unit (`src/lib/markdown.test.ts`): inline-code linking, escaping, `openableUrl` protocol filter, `linkToOpen` (⌘-click or Enter only), `linkToolbarPosition`.
 - Manual: ask the agent for a URL; ⌘-click opens it; hover → Open and Copy work; scrolling hides the toolbar.
 
 ## Open questions

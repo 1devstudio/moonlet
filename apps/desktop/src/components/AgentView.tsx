@@ -79,6 +79,9 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     };
   }, [link]);
   useEffect(() => keep, []);
+  // New text replaces the anchors, so a stored URL may no longer be shown.
+  useEffect(() => setLink(null), [html]);
+  const open = (url: string) => void openUrl(url).catch(errorToast);
   const anchorOf = (e: React.MouseEvent) => (e.target as HTMLElement).closest("a");
   return (
     <>
@@ -89,10 +92,11 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
         onClick={(e) => {
           const a = anchorOf(e);
           if (!a) return;
-          // Links never navigate the app window; ⌘-click opens the browser.
+          // Links never navigate the app window; ⌘-click or Enter (a click
+          // with detail 0) opens the browser.
           e.preventDefault();
-          const url = linkToOpen(a.getAttribute("href"), e.metaKey);
-          if (url) void openUrl(url);
+          const url = linkToOpen(a.getAttribute("href"), { metaKey: e.metaKey, keyboard: e.detail === 0 });
+          if (url) open(url);
         }}
         onMouseOver={(e) => {
           const a = anchorOf(e);
@@ -118,7 +122,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
               title="Open in browser (⌘-click)"
               className="flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
               onClick={() => {
-                void openUrl(link.url);
+                open(link.url);
                 setLink(null);
               }}
             >
@@ -128,8 +132,10 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
               title="Copy link"
               className="flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
               onClick={() => {
-                void navigator.clipboard.writeText(link.url).then(() => toast("Copied link"));
-                setLink(null);
+                navigator.clipboard.writeText(link.url).then(() => {
+                  toast("Copied link");
+                  setLink(null);
+                }, errorToast);
               }}
             >
               <Copy size={13} />
