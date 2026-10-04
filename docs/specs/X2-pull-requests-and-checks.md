@@ -11,6 +11,8 @@ From a workspace, the user can push the branch and open a GitHub pull request wi
 
 - [x] `gh.pr_create {path, title, body, base, draft}` runs `git push -u origin HEAD`, then `gh pr create`, and returns the PR.
 - [x] `gh.pr_status {path}` returns the number, URL, state, title, review decision and checks; it returns `null` when the branch has no PR.
+- [x] A session keeps its PR by number, because branch names and worktree paths get reused after an archive. The number is recorded when `gh.pr_create` succeeds, when the session is opened from a PR, or the first time `gh.pr_status` finds the PR on the session's branch. After that, `gh.pr_status` reads the PR by number, even if the branch is renamed.
+- [x] Before the number is known, `gh.pr_status` takes the newest PR heading the session's branch that is open or was created after the session. A closed or merged PR from an earlier branch of the same name is not the session's PR. If the recorded PR was closed without merging, a newer PR on the branch replaces it.
 - [x] Commit statuses (such as CodeRabbit's) count as checks too: a finished status shows as completed with its state as the conclusion, so it stops spinning.
 - [x] UI: a Create PR dialog (Cmd+Shift+P) prefilled from the workspace name and commit log, and a Checks tab that polls every 30 s while visible.
 - [x] PR state uses one colour everywhere (sidebar row, the PR button and the Checks tab): open is green, merged is purple, closed is red. A merged PR is labelled `merged` next to the session and on the PR button.

@@ -154,6 +154,10 @@ pub struct Session {
     /// Claude permission mode chosen when the session was created (X7).
     #[serde(default)]
     pub mode: Option<String>,
+    /// The session's pull request, kept by number because branch names get
+    /// reused and an old PR may still head a branch of the same name.
+    #[serde(default)]
+    pub pr: Option<u64>,
     #[serde(default, alias = "sessions")]
     pub terminals: Vec<TerminalId>,
     /// Opaque UI layout (tabs, splits), owned by the client.

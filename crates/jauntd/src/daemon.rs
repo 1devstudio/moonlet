@@ -385,19 +385,16 @@ impl Daemon {
             }
             m::GH_PR_CREATE => {
                 let r: m::PrCreate = params(p)?;
-                ok(git::pr_create(
-                    &path(&r.path),
-                    &r.title,
-                    &r.body,
-                    r.base.as_deref(),
-                    r.draft,
-                )
-                .await
-                .map_err(internal)?)
+                let dir = path(&r.path);
+                let pr = git::pr_create(&dir, &r.title, &r.body, r.base.as_deref(), r.draft)
+                    .await
+                    .map_err(internal)?;
+                w.set_pr(&dir, pr.number).map_err(internal)?;
+                ok(pr)
             }
             m::GH_PR_STATUS => {
                 let r: m::GitPath = params(p)?;
-                ok(git::pr_status(&path(&r.path)).await.map_err(internal)?)
+                ok(w.pr_status(&path(&r.path)).await.map_err(internal)?)
             }
             m::GH_PR_STACK => {
                 let r: m::PrStackParams = params(p)?;

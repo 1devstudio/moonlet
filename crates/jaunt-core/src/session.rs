@@ -12,7 +12,7 @@ use jaunt_proto::methods::{
     self, SessionArchive, SessionCreate, SessionUpdate, TerminalCreate, WorkspaceUpdate,
 };
 use jaunt_proto::types::{
-    Project, ProjectConfig, ProjectConfigFile, RestoreEntry, Session, TerminalInfo, TerminalKind,
+    Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Session, TerminalInfo, TerminalKind,
     Workspace, WorkspaceView,
 };
 use jaunt_proto::{Message, TerminalId};
@@ -176,6 +176,12 @@ fn builtin_agent(name: &str, resume: bool) -> Option<&'static str> {
         ("codex", true) => Some("codex resume --last"),
         _ => None,
     }
+}
+
+/// Whether `s` is the unarchived session at `path`. Archived sessions keep
+/// their old path, which a new session of the same name may now use.
+fn live_at(s: &Session, path: &Path) -> bool {
+    !s.archived && Path::new(&s.path) == path
 }
 
 pub fn shell_quote(s: &str) -> String {
@@ -698,6 +704,8 @@ impl SessionManager {
             model: req.model.clone().filter(|m| !m.is_empty()),
             effort: req.effort.clone().filter(|e| !e.is_empty()),
             mode: req.mode.clone(),
+            // A session opened from a PR is that PR's session.
+            pr: req.pr,
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
@@ -894,6 +902,55 @@ impl SessionManager {
         })?;
         self.emit_sessions();
         self.session(&req.id)
+    }
+
+    /// Records PR `number` as the pull request of the session at `path`, if
+    /// a session lives there.
+    pub fn set_pr(&self, path: &Path, number: u64) -> Result<()> {
+        let changed = self.mutate(|st| {
+            Ok(match st.sessions.iter_mut().find(|w| live_at(w, path)) {
+                Some(w) if w.pr != Some(number) => {
+                    w.pr = Some(number);
+                    true
+                }
+                _ => false,
+            })
+        })?;
+        if changed {
+            self.emit_sessions();
+        }
+        Ok(())
+    }
+
+    /// The pull request of the session at `path`. Once known it is read by
+    /// number; until then (or after it was closed unmerged) it is looked for
+    /// among the PRs heading the session's branch, and remembered. A path no
+    /// session owns gets its branch's PR.
+    pub async fn pr_status(&self, path: &Path) -> Result<Option<PullRequest>> {
+        let Some(s) = self.session_at(path) else {
+            return git::pr_status(path).await;
+        };
+        let known = match s.pr {
+            Some(n) => git::pr_view(path, Some(n)).await?,
+            None => None,
+        };
+        if known.as_ref().is_some_and(|pr| pr.state != "closed") {
+            return Ok(known);
+        }
+        let branch = git::current_branch(path).await.unwrap_or(s.branch);
+        let list = git::pr_list_head(path, &branch).await?;
+        match git::session_pr(&list, s.created_at, s.pr.unwrap_or(0)) {
+            Some(pr) => {
+                self.set_pr(path, pr.number)?;
+                Ok(Some(pr))
+            }
+            None => Ok(known),
+        }
+    }
+
+    fn session_at(&self, path: &Path) -> Option<Session> {
+        let st = self.state.lock().unwrap();
+        st.sessions.iter().find(|w| live_at(w, path)).cloned()
     }
 
     /// After a daemon restart, terminals are gone: restart each workspace's
@@ -1131,6 +1188,72 @@ mod tests {
         let s = mgr.create_session(req("plan")).await.unwrap();
         assert_eq!(s.mode.as_deref(), Some("plan"));
         assert_eq!(mgr.session(&s.id).unwrap().mode.as_deref(), Some("plan"));
+    }
+
+    #[tokio::test]
+    async fn a_sessions_pr_survives_a_restart() {
+        let (repo, home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr
+            .create_session(SessionCreate {
+                project_id: r.id.clone(),
+                name: Some("Lowercase paths".into()),
+                branch: None,
+                from: None,
+                existing_branch: false,
+                agent: Some("none".into()),
+                prompt: None,
+                cols: 80,
+                rows: 24,
+                model: None,
+                effort: None,
+                mode: None,
+                pr: None,
+                tui: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(s.pr, None);
+        mgr.set_pr(Path::new(&s.path), 38).unwrap();
+        assert_eq!(mgr.session(&s.id).unwrap().pr, Some(38));
+
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let again = SessionManager::load(
+            home.path().join("state.json"),
+            home.path().join("worktrees"),
+            TerminalManager::new(home.path().join("s2.sock"), env),
+        );
+        assert_eq!(again.session(&s.id).unwrap().pr, Some(38));
+
+        // Archiving frees the worktree path; a new session with the same
+        // name gets it, and the PR is the new session's only.
+        again
+            .archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: true })
+            .await
+            .unwrap();
+        let next = again
+            .create_session(SessionCreate {
+                project_id: r.id.clone(),
+                name: Some("Lowercase paths".into()),
+                branch: None,
+                from: None,
+                existing_branch: false,
+                agent: Some("none".into()),
+                prompt: None,
+                cols: 80,
+                rows: 24,
+                model: None,
+                effort: None,
+                mode: None,
+                pr: None,
+                tui: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(next.path, s.path);
+        again.set_pr(Path::new(&next.path), 41).unwrap();
+        assert_eq!(again.session(&next.id).unwrap().pr, Some(41));
+        assert_eq!(again.session(&s.id).unwrap().pr, Some(38));
     }
 
     #[tokio::test]
@@ -1559,6 +1682,7 @@ mod tests {
             model: Some("sonnet".into()),
             effort: Some("high".into()),
             mode: Some("plan".into()),
+            pr: None,
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
