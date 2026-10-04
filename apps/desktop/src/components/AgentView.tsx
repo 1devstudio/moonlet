@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Ban,
   Bot,
+  Brain,
   Check,
   ChevronDown,
   ChevronRight,
@@ -30,6 +31,7 @@ import {
   type QuestionPick,
   activeToken,
   askQuestions,
+  chatBlocks,
   chatKey,
   diffStat,
   elapsed,
@@ -38,6 +40,9 @@ import {
   promptHistory,
   questionAnswers,
   rememberPrompt,
+  thinkingPreview,
+  toolGroupLabel,
+  toolGroupStatus,
   tokens,
   transcript,
   useChat,
@@ -228,11 +233,40 @@ export function Thinking({ item }: { item: ChatItem }) {
   if (item.partial) return <div className="chat-shimmer px-2 py-1 chat-text-13">Thinking…</div>;
   if (!item.text.trim()) return null;
   return (
-    <div>
-      <button className="flex items-center gap-1.5 rounded-md px-2 py-1 chat-text-13 text-faint hover:text-muted" onClick={() => setOpen(!open)}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Thought
+    <div className="group">
+      <button aria-expanded={open} className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left chat-text-13 hover:bg-hover" onClick={() => setOpen(!open)}>
+        <Brain size={14} className="shrink-0 text-muted" />
+        <span className="shrink-0 font-medium text-fg">Thinking</span>
+        {!open && <span className="min-w-0 truncate text-muted">{thinkingPreview(item.text)}</span>}
+        <span className="ml-auto flex shrink-0 items-center">
+          {open ? <ChevronDown size={13} className="text-faint" /> : <ChevronRight size={13} className="text-faint opacity-0 group-hover:opacity-100" />}
+        </span>
       </button>
-      {open && <div className="selectable ml-6 whitespace-pre-wrap border-l border-border pl-3 chat-text-13 italic leading-relaxed text-muted">{item.text}</div>}
+      {open && <div className="selectable mb-2 ml-6 mt-1 whitespace-pre-wrap border-l border-border pl-3 chat-text-13 italic leading-relaxed text-muted">{item.text}</div>}
+    </div>
+  );
+}
+
+/** A run of tool calls folded into one row (X14); click to show the calls. */
+export function ToolGroup({ tools, cwd }: { tools: ChatItem[]; cwd: string }) {
+  const [open, setOpen] = useState(false);
+  const status = toolGroupStatus(tools);
+  const icons = [...new Set(tools.map((t) => toolIcon(t.tool?.name ?? "")))].slice(0, 4);
+  return (
+    <div>
+      <button aria-expanded={open} className="flex items-center gap-1.5 rounded-md px-2 py-1 chat-text-13 text-muted hover:text-fg" onClick={() => setOpen(!open)}>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <span>{toolGroupLabel(tools.length)}</span>
+        {icons.map((Icon, i) => (
+          <Icon key={i} size={13} className="text-faint" />
+        ))}
+        {status !== "ok" && <StatusMark status={status} />}
+      </button>
+      {open && (
+        <div className="ml-2">
+          {tools.map((t) => t.tool && <ToolRow key={t.id} tool={t.tool} cwd={cwd} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -616,6 +650,8 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
 export function AgentView({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
+  const toolCalls = useStore((s) => s.settings.toolCalls);
+  const blocks = useMemo(() => (st ? chatBlocks(st.items, toolCalls) : []), [st?.items, toolCalls]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const scale = useStore((s) => chatScale(s.settings.term.fontSize));
@@ -691,7 +727,9 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               <div className="chat-text-12.5 text-faint">Describe a change, mention files with @, or run a / command.</div>
             </div>
           ) : (
-            st.items.map((it) => <ChatItemView key={it.id} item={it} cwd={info?.cwd ?? ""} />)
+            blocks.map((b) =>
+              b.kind === "tools" ? <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} /> : <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />,
+            )
           )}
           {st?.pending.map((ask) =>
             isQuestion(ask) ? (
