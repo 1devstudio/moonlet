@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { rpc } from "./daemon";
-import { type ChatItem, type ChatState, M } from "./protocol";
+import { type ChatItem, type ChatState, M, type ToolCall } from "./protocol";
 
 export const chatKey = (host: string, id: number) => `${host}:${id}`;
 
@@ -206,6 +206,47 @@ export function transcript(items: readonly ChatItem[]): string {
     .filter(Boolean)
     .join("\n\n");
 }
+
+/** How tool calls show in the conversation (X14). */
+export type ToolCallView = "collapsed" | "expanded";
+
+/** One row of the conversation: an item, or a run of tool calls folded into one. */
+export type ChatBlock = { kind: "item"; item: ChatItem } | { kind: "tools"; id: string; tools: ChatItem[] };
+
+/** Items that render nothing: no text yet, thinking that was redacted, or a tool item without its call. */
+const invisible = (it: ChatItem) => (it.kind === "assistant" && !it.text) || (it.kind === "thinking" && !it.partial && !it.text.trim()) || (it.kind === "tool" && !it.tool);
+
+/**
+ * The conversation's rows. Collapsed, each run of tool calls becomes one
+ * group; text and thinking are never folded, so they end a run. Items that
+ * render nothing are dropped and do not split a run.
+ */
+export function chatBlocks(items: readonly ChatItem[], view: ToolCallView): ChatBlock[] {
+  const blocks: ChatBlock[] = [];
+  for (const it of items) {
+    if (invisible(it)) continue;
+    if (view === "collapsed" && it.kind === "tool") {
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === "tools") last.tools.push(it);
+      // Keyed by its first call, so the group keeps its open state as calls stream in.
+      else blocks.push({ kind: "tools", id: it.id, tools: [it] });
+      continue;
+    }
+    blocks.push({ kind: "item", item: it });
+  }
+  return blocks;
+}
+
+export const toolGroupLabel = (n: number) => `${n} tool call${n === 1 ? "" : "s"}`;
+
+/** A group's status mark: running while any call runs, then the worst outcome. */
+export function toolGroupStatus(tools: readonly ChatItem[]): ToolCall["status"] {
+  const st = tools.map((t) => t.tool?.status);
+  return st.includes("running") ? "running" : st.includes("error") ? "error" : st.includes("denied") ? "denied" : "ok";
+}
+
+/** Thinking squeezed onto one line for its collapsed row. */
+export const thinkingPreview = (text: string) => text.replace(/\s+/g, " ").trim();
 
 /** One question from Claude's `AskUserQuestion` tool input. */
 export interface Question {
