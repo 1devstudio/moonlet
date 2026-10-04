@@ -10,7 +10,8 @@
     "test": "vitest run",
     "tauri": "tauri",
     "prepare:bins": "node scripts/prepare-bins.mjs",
-    "bundle": "tauri build --config src-tauri/tauri.bundle.json"
+    "bundle": "tauri build --config src-tauri/tauri.bundle.json",
+    "build:ds": "vite build --config vite.ds.config.ts && tsc -p tsconfig.ds.json"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
