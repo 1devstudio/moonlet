@@ -162,6 +162,25 @@ export async function fill(xpath: string, text: string) {
     { timeoutMsg: `no enabled input for ${xpath}` },
   );
 }
+/** Picks `value` in the `<select>` that matches `xpath`, the way `fill`
+ *  types: the native value setter plus a `change` event for React. */
+export async function choose(xpath: string, value: string) {
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        (xp: string, v: string) => {
+          const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLSelectElement | null;
+          if (!el || el.matches(":disabled")) return false;
+          Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(el, v);
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        },
+        xpath,
+        value,
+      ),
+    { timeoutMsg: `no enabled select for ${xpath}` },
+  );
+}
 export const readConfig = (w: World) => readFileSync(configPath(w), "utf8");
 export const writeConfig = (w: World, text: string) => writeFileSync(configPath(w), text);
 

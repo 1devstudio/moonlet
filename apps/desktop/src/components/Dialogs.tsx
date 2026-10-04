@@ -8,6 +8,7 @@ import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, resolveMode } from "../lib/agents";
+import type { ToolCallView } from "../lib/chat";
 import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../lib/sounds";
 
 const close = () => useStore.setState({ dialog: null });
@@ -387,6 +388,7 @@ function HostsSection() {
 function AgentsSection() {
   const mode = useStore((s) => resolveMode(s.settings.defaultMode));
   const sounds = useStore((s) => s.settings.sounds);
+  const toolCalls = useStore((s) => s.settings.toolCalls);
   return (
     <section>
       <h3 className="mb-2 text-[12px] font-semibold">Agents</h3>
@@ -397,6 +399,12 @@ function AgentsSection() {
               {m.label} · {m.description}
             </option>
           ))}
+        </select>
+      </Field>
+      <Field label="Tool calls in the conversation">
+        <select className={inputCls} value={toolCalls} onChange={(e) => updateSettings({ toolCalls: e.target.value as ToolCallView })}>
+          <option value="collapsed">Collapsed · one row per run of calls</option>
+          <option value="expanded">Expanded · one row per call</option>
         </select>
       </Field>
       <h4 className="mt-3 mb-1.5 text-[12px] font-medium text-muted">Sounds when not watching the agent</h4>
