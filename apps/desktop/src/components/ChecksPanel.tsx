@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { CircleCheck, CircleDashed, CircleX, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Commit, type PullRequest, type Session } from "../lib/protocol";
-import { recordPr, useStore, sesKey } from "../lib/store";
+import { pollPr, useStore, sesKey } from "../lib/store";
 import { Button, Empty, prTone } from "./ui";
 
 function CheckIcon({ status, conclusion }: { status: string; conclusion: string | null }) {
@@ -24,13 +24,8 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
   useEffect(() => {
     let live = true;
     const load = () => {
-      void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path })
-        .then((p) => {
-          if (live) {
-            recordPr(host, ws.id, p);
-            setPrError(null);
-          }
-        })
+      void pollPr(host, ws.id, ws.path)
+        .then(() => live && setPrError(null))
         .catch((e) => live && setPrError(String(e?.message ?? e)));
       void rpc<Commit[]>(host, M.gitLog, { path: ws.path, base: ws.base })
         .then((l) => live && setLog(l))

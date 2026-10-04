@@ -27,7 +27,7 @@ import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, soundFor, type SoundSettings } from "./sounds";
 import { forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
-import { focusThrottle, needsPrPoll } from "./prPoll";
+import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState } from "./protocol";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
@@ -385,13 +385,23 @@ export async function refreshPrs(host: string, opts: { openOnly?: boolean } = {}
   const worker = async () => {
     for (let w = queue.shift(); w; w = queue.shift()) {
       try {
-        recordPr(host, w.id, await rpc<PullRequest | null>(host, M.prStatus, { path: w.path }));
+        await pollPr(host, w.id, w.path);
       } catch {
         /* no gh, no remote, or not a GitHub repo */
       }
     }
   };
   await Promise.all(Array.from({ length: 4 }, worker));
+}
+
+const prPolls = latestPerKey();
+/** Reads a session's PR and records it, unless a newer poll for the same
+ *  session started meanwhile; that one records instead. */
+export async function pollPr(host: string, sessionId: string, path: string): Promise<PullRequest | null> {
+  const isLatest = prPolls.start(sesKey(host, sessionId));
+  const pr = await rpc<PullRequest | null>(host, M.prStatus, { path });
+  if (isLatest()) recordPr(host, sessionId, pr);
+  return pr;
 }
 
 /** Records a session's PR. When it has just merged, origin's base branch
