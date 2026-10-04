@@ -73,6 +73,13 @@ describe("chat helpers", () => {
     expect(chatBlocks(items, "expanded").map((b) => (b.kind === "tools" ? "group" : b.item.id))).toEqual(["u", "t1", "b1", "b2", "a1", "b3"]);
   });
 
+  it("does not let a tool item without a call split a group", () => {
+    const tool = (id: string): ChatItem => ({ ...item(id, "", "tool"), tool: { name: "Bash", summary: id, input: {}, status: "ok" } });
+    const items = [tool("b1"), item("x", "", "tool"), tool("b2")];
+    expect(chatBlocks(items, "collapsed").map((b) => (b.kind === "tools" ? `[${b.tools.map((t) => t.id).join(",")}]` : b.item.id))).toEqual(["[b1,b2]"]);
+    expect(chatBlocks(items, "expanded").map((b) => (b.kind === "tools" ? "group" : b.item.id))).toEqual(["b1", "b2"]);
+  });
+
   it("labels a tool group and sums up its status", () => {
     const tool = (status: "running" | "ok" | "error" | "denied"): ChatItem => ({ ...item(status, "", "tool"), tool: { name: "Bash", summary: "", input: {}, status } });
     expect(toolGroupLabel(1)).toBe("1 tool call");
