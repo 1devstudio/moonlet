@@ -29,6 +29,12 @@ export interface Errors {
   any: boolean;
 }
 
+/** Run runs the script when there is one; otherwise it opens Project
+ *  settings so the user can set it (X8). */
+export function hasRunCommand(c: ProjectConfig | null | undefined): boolean {
+  return !!c?.run?.trim();
+}
+
 let uid = 1;
 export const newRowId = () => uid++;
 

@@ -5,6 +5,7 @@ import { hostsApi, rpc } from "../lib/daemon";
 import { M, type FileChange, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
+import { hasRunCommand } from "../lib/projectSettings";
 import { ChecksPanel } from "./ChecksPanel";
 import { FilesPanel } from "./FilesPanel";
 import { PreviewPanel } from "./PreviewPanel";
@@ -89,9 +90,9 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   return (
     <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1 px-4">
       <button
-        className={cx("no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] hover:bg-raised", config?.run ? "text-fg" : "text-faint hover:text-fg")}
-        title={config?.run ? `Run: ${config.run} (⌘R)` : "Set a run command…"}
-        onClick={() => (config?.run ? void runScript("run") : openProjectSettings({ host, project: ws.project_id }, "run"))}
+        className={cx("no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] hover:bg-raised", hasRunCommand(config) ? "text-fg" : "text-faint hover:text-fg")}
+        title={hasRunCommand(config) ? `Run: ${config?.run} (⌘R)` : "Set a run command…"}
+        onClick={() => (hasRunCommand(config) ? void runScript("run") : openProjectSettings({ host, project: ws.project_id }, "run"))}
       >
         <Play size={13} fill="currentColor" strokeWidth={0} /> Run
       </button>

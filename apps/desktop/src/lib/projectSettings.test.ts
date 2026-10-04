@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentOptions, fromForm, isDirty, toForm, validate, type Form } from "./projectSettings";
+import { agentOptions, fromForm, hasRunCommand, isDirty, toForm, validate, type Form } from "./projectSettings";
 
 const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], ...patch });
 
@@ -65,5 +65,14 @@ describe("agentOptions", () => {
   it("lists none, the built-ins, valid custom names and an invalid current value", () => {
     const opts = agentOptions(form({ default_agent: "gone", agents: [{ id: 1, name: "yolo", cmd: "x" }, { id: 2, name: "bad name", cmd: "y" }] }));
     expect(opts.map((o) => o.value)).toEqual(["", "claude", "codex", "yolo", "gone"]);
+  });
+});
+
+describe("hasRunCommand", () => {
+  it("is false for a missing, empty or blank run command, so Run opens Project settings", () => {
+    expect(hasRunCommand(null)).toBe(false);
+    expect(hasRunCommand({ agents: {} })).toBe(false);
+    expect(hasRunCommand({ run: "  ", agents: {} })).toBe(false);
+    expect(hasRunCommand({ run: "pnpm dev", agents: {} })).toBe(true);
   });
 });

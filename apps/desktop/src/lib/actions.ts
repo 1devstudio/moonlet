@@ -9,6 +9,7 @@ import { errorToast, getLayout, selectedSession, sessionState, setLayout, toast,
 import { arrange, lastActive } from "./sidebar";
 import { findEntry } from "./terminals";
 import { isStructured } from "./agents";
+import { hasRunCommand } from "./projectSettings";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -181,7 +182,7 @@ export async function runScript(script: "run" | "setup") {
     // No run command yet: offer to set one instead of failing (X8).
     if (script === "run") {
       const config = await rpc<ProjectConfig>(c.host, M.projectConfig, { id: c.ws.project_id });
-      if (!config.run?.trim()) return openProjectSettings(undefined, "run");
+      if (!hasRunCommand(config)) return openProjectSettings(undefined, "run");
     }
     const info = await rpc<TerminalInfo>(c.host, M.sessionRun, { id: c.ws.id, script, cols: 120, rows: 30 });
     const layout = getLayout(c.host, c.ws.id);
