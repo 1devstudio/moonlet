@@ -140,6 +140,25 @@ const chatMd = new MarkdownIt({
   },
 });
 
+// Linkify skips code, but agents often wrap a URL in backticks: an inline
+// code span that is exactly one URL becomes a link around the code.
+const defaultCodeInline = chatMd.renderer.rules.code_inline!;
+chatMd.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
+  const code = defaultCodeInline(tokens, idx, options, env, self);
+  const url = tokens[idx].content.trim();
+  return /^https?:\/\/\S+$/.test(url) ? `<a href="${escapeHtml(url)}">${code}</a>` : code;
+};
+
+/** The URL a chat link may open in the browser, or null for anything else. */
+export function openableUrl(href: string | null): string | null {
+  if (!href) return null;
+  try {
+    return ["http:", "https:", "mailto:"].includes(new URL(href).protocol) ? href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function renderChatMarkdown(source: string): string {
   return DOMPurify.sanitize(chatMd.render(source), {
     USE_PROFILES: { html: true },

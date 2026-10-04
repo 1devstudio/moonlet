@@ -1,4 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Ban,
   Bot,
@@ -6,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  ExternalLink,
   FilePen,
   FileText,
   Globe,
@@ -39,7 +42,7 @@ import {
   transcript,
   useChat,
 } from "../lib/chat";
-import { renderChatMarkdown } from "../lib/markdown";
+import { openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
 import { errorToast, getLayout, setLayout, toast, useStore } from "../lib/store";
@@ -57,16 +60,84 @@ function rel(text: string, cwd: string): string {
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const html = useMemo(() => renderChatMarkdown(text), [text]);
+  const [link, setLink] = useState<{ url: string; rect: DOMRect } | null>(null);
+  const hideTimer = useRef<number>(undefined);
+  const keep = () => window.clearTimeout(hideTimer.current);
+  const hide = () => {
+    keep();
+    hideTimer.current = window.setTimeout(() => setLink(null), 150);
+  };
+  useEffect(() => {
+    if (!link) return;
+    // The toolbar is fixed; any scroll would leave it behind.
+    const close = () => setLink(null);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [link]);
+  useEffect(() => keep, []);
+  const anchorOf = (e: React.MouseEvent) => (e.target as HTMLElement).closest("a");
   return (
-    <div
-      className="chat-md selectable"
-      // Sanitized: markdown-it with HTML disabled, then DOMPurify.
-      dangerouslySetInnerHTML={{ __html: html }}
-      onClick={(e) => {
-        // Links never navigate the app window.
-        if ((e.target as HTMLElement).closest("a")) e.preventDefault();
-      }}
-    />
+    <>
+      <div
+        className="chat-md selectable"
+        // Sanitized: markdown-it with HTML disabled, then DOMPurify.
+        dangerouslySetInnerHTML={{ __html: html }}
+        onClick={(e) => {
+          const a = anchorOf(e);
+          if (!a) return;
+          // Links never navigate the app window; ⌘-click opens the browser.
+          e.preventDefault();
+          const url = openableUrl(a.getAttribute("href"));
+          if (url && e.metaKey) void openUrl(url);
+        }}
+        onMouseOver={(e) => {
+          const a = anchorOf(e);
+          const url = a && openableUrl(a.getAttribute("href"));
+          if (!a || !url) return;
+          keep();
+          setLink({ url, rect: a.getBoundingClientRect() });
+        }}
+        onMouseOut={(e) => {
+          const a = anchorOf(e);
+          if (a && !a.contains(e.relatedTarget as Node | null)) hide();
+        }}
+      />
+      {link &&
+        createPortal(
+          <div
+            className="fixed z-[60] flex items-center gap-0.5 rounded-lg border border-border-strong bg-[#232323] p-0.5 shadow-2xl"
+            style={{ left: Math.min(link.rect.left, window.innerWidth - 72), ...(link.rect.top > 40 ? { bottom: window.innerHeight - link.rect.top + 2 } : { top: link.rect.bottom + 2 }) }}
+            onMouseEnter={keep}
+            onMouseLeave={hide}
+          >
+            <button
+              title="Open in browser (⌘-click)"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
+              onClick={() => {
+                void openUrl(link.url);
+                setLink(null);
+              }}
+            >
+              <ExternalLink size={13} />
+            </button>
+            <button
+              title="Copy link"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
+              onClick={() => {
+                void navigator.clipboard.writeText(link.url).then(() => toast("Copied link"));
+                setLink(null);
+              }}
+            >
+              <Copy size={13} />
+            </button>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 });
 
