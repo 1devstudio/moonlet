@@ -66,6 +66,17 @@ function makeWorld(root: string): World {
  *  and one session. */
 export function setUp(): World {
   const w = makeWorld(mkdtempSync(join(tmpdir(), "jaunt-e2e-")));
+  try {
+    seed(w);
+  } catch (e) {
+    // A half-built world (a daemon running, a temp dir) is not left behind.
+    tearDown(w);
+    throw e;
+  }
+  return w;
+}
+
+function seed(w: World) {
   mkdirSync(w.home, { recursive: true });
   mkdirSync(w.env.HOME, { recursive: true });
   // If anything ever resolves a real agent, it gets this instead.
@@ -87,7 +98,6 @@ export function setUp(): World {
   execFileSync(join(BIN_DIR, "jauntd"), ["start"], { env: w.env, stdio: "pipe" });
   const project = rpc<{ id: string }>(w, "project.add", { path: w.repo });
   rpc(w, "session.create", { project_id: project.id, name: SESSION, agent: "none" });
-  return w;
 }
 
 export function tearDown(w: World) {
