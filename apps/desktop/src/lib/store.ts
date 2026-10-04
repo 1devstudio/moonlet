@@ -9,6 +9,8 @@ import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf 
 import {
   type AgentState,
   type Attention,
+  type BasePull,
+  type BaseStatus,
   EV,
   type FsChanged,
   type GitStatus,
@@ -24,6 +26,7 @@ import { sanitize } from "./sanitize";
 import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, soundFor, type SoundSettings } from "./sounds";
 import { forgetChat, loadChat, onChatItem, onChatState } from "./chat";
+import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import type { ChatItem, ChatState } from "./protocol";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
@@ -51,6 +54,13 @@ export interface Settings {
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
 export const termKey = (host: string, id: number) => `${host}:${id}`;
+export const projKey = (host: string, id: string) => `${host}/${id}`;
+
+/** A project's base branch against origin, for the sidebar's pull chip (X13). */
+export interface BaseSync extends FetchInfo {
+  status: BaseStatus | null;
+  pulling: boolean;
+}
 
 const SETTINGS_KEY = "jaunt.settings";
 const UI_KEY = "jaunt.ui";
@@ -127,6 +137,8 @@ interface State extends UiPersist {
   workspaces: Record<string, Workspace[]>;
   /** Pull request per session (`sesKey`), when known. */
   prs: Record<string, PullRequest | null>;
+  /** Base branch against origin per project (`projKey`). */
+  base: Record<string, BaseSync>;
   terminals: Record<string, Record<number, TerminalInfo>>;
   layouts: Record<string, Layout>;
   git: Record<string, GitStatus | undefined>;
@@ -168,6 +180,7 @@ function makeStore() {
   terminals: {},
   workspaces: {},
   prs: {},
+  base: {},
   layouts: {},
   git: {},
   unread: {},
@@ -280,6 +293,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     // Events may have been missed while disconnected: reload open chats.
     for (const t of terminals) if (t.chat) void loadChat(host, t.id).catch(() => {});
     void refreshAllGit(host).then(() => refreshPrs(host));
+    void refreshAllBases(host, { fetch: true });
   } catch (e) {
     console.warn(`loading ${host} failed (attempt ${attempt + 1})`, e);
     if (attempt < 8 && get().hosts[host]?.status === "connected") {
@@ -368,12 +382,65 @@ export async function refreshPrs(host: string) {
   for (const w of get().sessions[host] ?? []) {
     if (w.archived) continue;
     try {
-      const pr = await rpc<PullRequest | null>(host, M.prStatus, { path: w.path });
-      set((s) => ({ prs: { ...s.prs, [sesKey(host, w.id)]: pr } }));
+      recordPr(host, w.id, await rpc<PullRequest | null>(host, M.prStatus, { path: w.path }));
     } catch {
       /* no gh, no remote, or not a GitHub repo */
     }
   }
+}
+
+/** Records a session's PR. When it has just merged, origin's base branch
+ *  moved, so the project fetches it (X13). */
+export function recordPr(host: string, sessionId: string, pr: PullRequest | null) {
+  const key = sesKey(host, sessionId);
+  const prev = get().prs[key];
+  set((s) => ({ prs: { ...s.prs, [key]: pr } }));
+  const w = get().sessions[host]?.find((x) => x.id === sessionId);
+  if (w && pr && justMerged(prev, pr)) void refreshBase(host, w.project_id, { fetch: true, reason: `after PR #${pr.number} merged` });
+}
+
+function patchBase(key: string, patch: Partial<BaseSync>) {
+  set((s) => {
+    const prev = s.base[key] ?? { status: null, pulling: false, fetchedAt: null, reason: null, fetchError: null };
+    return { base: { ...s.base, [key]: { ...prev, ...patch } } };
+  });
+}
+
+/** Reloads a project's base branch status; `fetch` updates origin first. */
+export async function refreshBase(host: string, projectId: string, opts: { fetch?: boolean; reason?: string } = {}) {
+  const p = get().projects[host]?.find((x) => x.id === projectId);
+  if (!p) return;
+  try {
+    const status = await rpc<BaseStatus | null>(host, M.gitBaseStatus, { path: p.path, branch: p.base_branch, fetch: !!opts.fetch });
+    const fetched = opts.fetch && !status?.fetch_error;
+    patchBase(projKey(host, p.id), {
+      status,
+      ...(opts.fetch && { fetchError: status?.fetch_error ?? null }),
+      ...(fetched && { fetchedAt: Date.now(), reason: opts.reason ?? null }),
+    });
+  } catch {
+    /* the project folder is gone or the host disconnected */
+  }
+}
+
+export async function refreshAllBases(host: string, opts: { fetch?: boolean } = {}) {
+  for (const p of get().projects[host] ?? []) await refreshBase(host, p.id, opts);
+}
+
+/** Fast-forwards the project's base branch to what was last fetched. */
+export async function pullBase(host: string, projectId: string) {
+  const p = get().projects[host]?.find((x) => x.id === projectId);
+  if (!p) return;
+  const key = projKey(host, p.id);
+  patchBase(key, { pulling: true });
+  try {
+    toast(pullToast(p.base_branch, await rpc<BasePull>(host, M.gitPullBase, { path: p.path, branch: p.base_branch })));
+  } catch (e) {
+    errorToast(e);
+  }
+  // Refresh before clearing `pulling`, so the chip does not flash the old count.
+  await refreshBase(host, p.id);
+  patchBase(key, { pulling: false });
 }
 
 export async function refreshAllGit(host: string) {
@@ -508,6 +575,8 @@ function handleEvent(e: DaemonEvent) {
     }
     case EV.projectsChanged:
       set((s) => ({ projects: { ...s.projects, [host]: data as Project[] } }));
+      // A new project, or a new base branch from Project settings.
+      void refreshAllBases(host, { fetch: true });
       break;
     case EV.workspacesChanged:
       set((s) => ({ workspaces: { ...s.workspaces, [host]: data as Workspace[] } }));
@@ -567,6 +636,7 @@ export async function startStore() {
   });
   setInterval(() => {
     for (const h of Object.keys(get().sessions)) void refreshPrs(h);
+    for (const h of Object.keys(get().projects)) void refreshAllBases(h, { fetch: true });
   }, 300_000);
   // Diffstats for background sessions.
   setInterval(() => {
