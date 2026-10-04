@@ -22,6 +22,7 @@ jaunt's look matches the reference: a neutral near-black UI with Claude's orange
 | `blocked` | `#f2c94c` | Needs the user |
 | `error` | `#ef5f5f` | Failed |
 | `add` / `del` | `#3ecf6e` / `#ef5f5f` | Only in summaries; per-row counts are muted |
+| `merged` | `#a371f7` | A merged pull request (GitHub's purple). Open PRs use `done`, closed PRs use `error` |
 
 ## Layout and components
 
@@ -47,7 +48,7 @@ jaunt's look matches the reference: a neutral near-black UI with Claude's orange
   - **Prompt line:** below the terminal, a hairline then `❯ ▌ Type a task for Claude…` in mono with no box.
   - **Completion card:** bottom-right, floating, when an agent in the open workspace finishes or needs input. It shows the agent icon, the agent name, `finished · worked for 7s` (or `needs input`), the agent's message, and a footer with changed files and diffstat plus a Preview button that opens Changes. It dismisses itself after 12 s or on click.
 - **Right panel:**
-  - **Top row:** `▶ Run`, then `PR #827` (opens the PR) or `PR` (Create PR), then a `⋯` menu (Open in…, Commit…, Archive).
+  - **Top row:** `▶ Run`, then `PR #827` (opens the PR; the icon takes the PR state colour, and a merged or closed PR adds `· merged` / `· closed`) or `PR` (Create PR), then a `⋯` menu (Open in…, Commit…, Archive).
   - **Tabs:** Files, Changes, Review.
     - **Files** shows changed files grouped by directory: an uppercase mono directory header, then rows with a status box icon (⊞ added, ⊡ modified, ⊟ deleted) and a muted count. It has an "All files" toggle for the full tree, and Markdown opens in the preview.
     - **Changes** is the diff viewer.
