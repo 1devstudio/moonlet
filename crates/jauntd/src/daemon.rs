@@ -383,6 +383,18 @@ impl Daemon {
                 let r: m::GitPath = params(p)?;
                 ok(git::branches(&path(&r.path)).await.map_err(internal)?)
             }
+            m::GIT_BASE_STATUS => {
+                let r: m::GitBase = params(p)?;
+                ok(git::base_status(&path(&r.path), &r.branch, r.fetch)
+                    .await
+                    .map_err(internal)?)
+            }
+            m::GIT_PULL_BASE => {
+                let r: m::GitBase = params(p)?;
+                ok(git::pull_base(&path(&r.path), &r.branch)
+                    .await
+                    .map_err(internal)?)
+            }
             m::GH_PR_CREATE => {
                 let r: m::PrCreate = params(p)?;
                 let dir = path(&r.path);

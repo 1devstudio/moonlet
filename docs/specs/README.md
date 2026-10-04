@@ -52,3 +52,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X10 | Sound when an agent finishes or needs you | P1 | 3 | implemented (sound not heard in app) | [X10-attention-sounds.md](X10-attention-sounds.md) |
 | X11 | Stacked pull requests | P1 | 3 | implemented (UI unchecked in app) | [X11-pr-stacks.md](X11-pr-stacks.md) |
 | X12 | End-to-end tests of the desktop app (WebdriverIO, embedded driver) | P1 | 3 | implemented (macOS) | [X12-e2e-tests.md](X12-e2e-tests.md) |
+| X13 | Pull the base branch (sidebar chip when `main` is behind origin) | P1 | 3 | implemented (daemon) | [X13-pull-base-branch.md](X13-pull-base-branch.md) |
