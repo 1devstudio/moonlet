@@ -938,7 +938,12 @@ impl SessionManager {
             return Ok(known);
         }
         let branch = git::current_branch(path).await.unwrap_or(s.branch);
-        let list = git::pr_list_head(path, &branch).await?;
+        let list = match git::pr_list_head(path, &branch).await {
+            Ok(list) => list,
+            // Still show the closed PR when the search fails.
+            Err(_) if known.is_some() => return Ok(known),
+            Err(e) => return Err(e),
+        };
         match git::session_pr(&list, s.created_at, s.pr.unwrap_or(0)) {
             Some(pr) => {
                 self.set_pr(path, pr.number)?;
