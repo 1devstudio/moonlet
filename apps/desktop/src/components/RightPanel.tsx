@@ -217,7 +217,7 @@ function ChangedFiles({ host, ws }: { host: string; ws: Session }) {
       {groups.map(([dir, files]) => (
         <div key={dir} className="mt-3">
           <button
-            className="flex w-full items-center gap-2 px-5 py-1.5 text-left font-mono text-[12px] uppercase tracking-[0.06em] text-muted hover:text-fg"
+            className="flex w-full items-center gap-2 px-5 py-1.5 text-left font-mono text-[12px] tracking-[0.06em] text-muted hover:text-fg"
             onClick={() => setCollapsed((c) => ({ ...c, [dir]: !c[dir] }))}
           >
             {collapsed[dir] ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
