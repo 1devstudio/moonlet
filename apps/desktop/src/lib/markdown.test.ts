@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openableUrl, previewDocument, renderChatMarkdown, renderMarkdown } from "./markdown";
+import { linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown } from "./markdown";
 
 describe("markdown preview", () => {
   it("renders tables, code and highlights", async () => {
@@ -40,5 +40,18 @@ describe("chat links", () => {
     expect(openableUrl("file:///etc/passwd")).toBeNull();
     expect(openableUrl("src/main.rs")).toBeNull();
     expect(openableUrl(null)).toBeNull();
+  });
+
+  it("opens only on ⌘-click, and only web and mail links", () => {
+    expect(linkToOpen("https://example.com", true)).toBe("https://example.com");
+    expect(linkToOpen("https://example.com", false)).toBeNull();
+    expect(linkToOpen("src/main.rs", true)).toBeNull();
+  });
+
+  it("puts the toolbar above the link, or below it near the window top", () => {
+    const win = { width: 800, height: 600 };
+    expect(linkToolbarPosition({ left: 100, top: 300, bottom: 318 }, win)).toEqual({ left: 100, bottom: 302 });
+    expect(linkToolbarPosition({ left: 100, top: 20, bottom: 38 }, win)).toEqual({ left: 100, top: 40 });
+    expect(linkToolbarPosition({ left: 790, top: 300, bottom: 318 }, win).left).toBe(728);
   });
 });
