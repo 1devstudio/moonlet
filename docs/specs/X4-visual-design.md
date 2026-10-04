@@ -26,7 +26,7 @@ jaunt's look matches the reference: a neutral near-black UI with Claude's orange
 
 ## Layout and components
 
-- **Window:** traffic lights over the sidebar; no title bar or header.
+- **Window:** traffic lights over the sidebar; no title bar or header. The 52px top bars (sidebar, tab strip, right panel, home) carry `data-tauri-drag-region`: dragging their empty space moves the window and double-clicking it maximizes or restores the window, like a native title bar.
 - **Sidebar:**
   - **Nav rows** with icons: Workspaces (home), History (archived), + New Workspace.
   - **Groups:** one per repo (remote ones suffixed with the host). Headers are uppercase, letter-spaced, 11.5px, with a chevron and a count on the right.

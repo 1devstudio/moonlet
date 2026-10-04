@@ -110,7 +110,7 @@ function TabStrip({ host, ws }: { host: string; ws: Session }) {
   const layout = useStore((s) => s.layouts[sesKey(host, ws.id)]);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   return (
-    <div className="drag flex h-[52px] shrink-0 items-stretch bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }}>
+    <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-stretch bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }}>
       <div className="flex min-w-0 items-stretch overflow-x-auto">
         {layout?.tabs.map((t) => (
           <Tab key={t.id} host={host} ws={ws} id={t.id} ids={leaves(t.root)} active={t.id === layout.active} />

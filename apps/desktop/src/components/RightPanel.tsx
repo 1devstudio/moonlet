@@ -86,7 +86,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
     };
   }, [host, ws.path]);
   return (
-    <div className="drag flex h-[52px] shrink-0 items-center gap-1 px-4">
+    <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1 px-4">
       <button
         className="no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised disabled:text-faint disabled:hover:bg-transparent"
         disabled={!config?.run}

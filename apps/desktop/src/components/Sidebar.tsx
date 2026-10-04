@@ -508,7 +508,7 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full flex-col bg-panel">
-      <div className="drag h-[52px] shrink-0" />
+      <div data-tauri-drag-region className="drag h-[52px] shrink-0" />
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session" } })} />
         <NavRow icon={<History size={15} strokeWidth={1.75} />} label="History" active={showHistory} onClick={() => useStore.setState({ showHistory: !showHistory })} />
