@@ -476,7 +476,7 @@ impl SessionManager {
     pub async fn project_config_file(&self, id: &str) -> Result<ProjectConfigFile> {
         let root = PathBuf::from(self.project(id)?.path);
         let default_branch = git::default_branch(&root).await;
-        Ok(crate::project_config::load(&root, default_branch))
+        load_config_file(root, default_branch).await
     }
 
     /// Writes `.jaunt/config.toml` and keeps the project's base branch in
@@ -488,9 +488,10 @@ impl SessionManager {
         config: &ProjectConfig,
     ) -> Result<ProjectConfigFile> {
         let root = PathBuf::from(self.project(id)?.path);
-        crate::project_config::save(&root, version, config)?;
+        let (r, v, c) = (root.clone(), version.to_string(), config.clone());
+        tokio::task::spawn_blocking(move || crate::project_config::save(&r, &v, &c)).await??;
         let default_branch = git::default_branch(&root).await;
-        let file = crate::project_config::load(&root, default_branch.clone());
+        let file = load_config_file(root, default_branch.clone()).await?;
         let base = file.config.base_branch.clone().unwrap_or(default_branch);
         self.mutate(|st| {
             if let Some(p) = st.projects.iter_mut().find(|p| p.id == id) {
@@ -1023,6 +1024,11 @@ fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
         .map(|n| format!("{base}-{n}"))
         .find(|c| !taken(c))
         .unwrap()
+}
+
+/// `project_config::load` off the async runtime: it reads the disk.
+async fn load_config_file(root: PathBuf, default_branch: String) -> Result<ProjectConfigFile> {
+    Ok(tokio::task::spawn_blocking(move || crate::project_config::load(&root, default_branch)).await?)
 }
 
 /// Reads `<repo>/.jaunt/config.toml`; missing or invalid files give defaults.
