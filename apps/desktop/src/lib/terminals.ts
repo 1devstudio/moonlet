@@ -44,6 +44,10 @@ const THEME = {
   cursor: "#d0d0d0",
   cursorAccent: "#121212",
   selectionBackground: "#d9775740",
+  // Same quiet slider as the rest of the app's scrollbars (jaunt.css).
+  scrollbarSliderBackground: "#2a2a2a",
+  scrollbarSliderHoverBackground: "#3a3a3a",
+  scrollbarSliderActiveBackground: "#4a4a4a",
   black: "#1c1f26",
   red: "#ef6b73",
   green: "#8fd18e",
