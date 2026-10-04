@@ -9,6 +9,8 @@ pub mod claude;
 pub mod codex;
 pub mod runtime;
 
+use std::collections::BTreeMap;
+
 use jaunt_proto::types::{ChatItem, ChatState, ToolCall};
 
 use crate::paths::now_ms;
@@ -61,7 +63,8 @@ pub trait Adapter: Send {
     /// The user sends a message.
     fn send(&mut self, text: &str, st: &mut ChatState) -> Vec<Out>;
     /// The user answers a permission request: `allow`, `always` or `deny`.
-    fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, st: &mut ChatState) -> Vec<Out>;
+    /// `answers` carries the user's answers to a question tool.
+    fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, st: &mut ChatState) -> Vec<Out>;
     /// Stop the running turn.
     fn interrupt(&mut self, st: &mut ChatState) -> Vec<Out>;
 }
@@ -157,6 +160,7 @@ pub fn summarize(name: &str, input: &serde_json::Value) -> String {
         "Task" | "Agent" => str_field(input, &["description", "prompt"]).map(String::from),
         "TodoWrite" => Some("update todos".into()),
         "Skill" => str_field(input, &["skill", "command", "name"]).map(String::from),
+        "AskUserQuestion" => input["questions"][0]["question"].as_str().map(String::from),
         _ => None,
     };
     s.or_else(|| str_field(input, &["command", "file_path", "path", "description", "query"]).map(String::from))

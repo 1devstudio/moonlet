@@ -1,7 +1,7 @@
 //! Claude Code over `--input-format/--output-format stream-json` with
 //! `--permission-prompt-tool stdio` (the Agent SDK host protocol).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use jaunt_proto::types::{ChatState, PermissionAsk};
 use serde_json::{Value, json};
@@ -295,9 +295,13 @@ impl Adapter for Claude {
         out
     }
 
-    fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, st: &mut ChatState) -> Vec<Out> {
-        let Some((tool_use, suggestions, input)) = self.asks.remove(ask) else { return vec![] };
+    fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, st: &mut ChatState) -> Vec<Out> {
+        let Some((tool_use, suggestions, mut input)) = self.asks.remove(ask) else { return vec![] };
         st.pending.retain(|p| p.id != ask);
+        // AskUserQuestion is answered by allowing it with the answers in its input.
+        if let (Some(a), Some(obj)) = (answers, input.as_object_mut()) {
+            obj.insert("answers".into(), json!(a));
+        }
         let mut out = Vec::new();
         let response = match decision {
             "allow" => json!({"behavior": "allow", "updatedInput": input}),
@@ -392,7 +396,7 @@ mod tests {
             while let Some(ask) = st.pending.first().cloned() {
                 assert_eq!(st.status, "blocked");
                 let decision = if ask.tool == "Write" { "allow" } else { "deny" };
-                for o in a.permission(&ask.id, decision, None, &mut st) {
+                for o in a.permission(&ask.id, decision, None, None, &mut st) {
                     if let Out::Write(w) = o {
                         writes.push(w);
                     }
@@ -421,11 +425,32 @@ mod tests {
         a.on_line(&req.to_string(), &mut st);
         assert!(st.pending[0].can_always);
         assert_eq!(st.pending[0].summary, "npm test");
-        let outs = a.permission("r1", "always", None, &mut st);
+        let outs = a.permission("r1", "always", None, None, &mut st);
         let Out::Write(w) = &outs[0] else { panic!() };
         let v: Value = serde_json::from_str(w).unwrap();
         assert_eq!(v["response"]["response"]["updatedPermissions"][0]["type"], "addRules");
         assert!(st.pending.is_empty());
+    }
+
+    #[test]
+    fn questions_are_answered_through_updated_input() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        let questions = json!([{"question": "Which colours?", "header": "Colours", "multiSelect": false, "options": [{"label": "GitHub", "description": "Green and purple"}, {"label": "Mono", "description": "Greys"}]}]);
+        let req = json!({"type": "control_request", "request_id": "q1", "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "t1", "input": {"questions": questions}}});
+        a.on_line(&req.to_string(), &mut st);
+        assert_eq!(st.status, "blocked");
+        assert_eq!(st.pending[0].summary, "Which colours?");
+        let answers = BTreeMap::from([("Which colours?".to_string(), "GitHub".to_string())]);
+        let outs = a.permission("q1", "allow", None, Some(&answers), &mut st);
+        let Out::Write(w) = &outs[0] else { panic!() };
+        let v: Value = serde_json::from_str(w).unwrap();
+        let r = &v["response"]["response"];
+        assert_eq!(r["behavior"], "allow");
+        assert_eq!(r["updatedInput"]["questions"], questions);
+        assert_eq!(r["updatedInput"]["answers"]["Which colours?"], "GitHub");
+        assert!(st.pending.is_empty());
+        assert_eq!(st.status, "working");
     }
 
     #[test]

@@ -496,6 +496,9 @@ pub struct ChatPermission {
     pub decision: String,
     #[serde(default)]
     pub message: Option<String>,
+    /// Answers to Claude's `AskUserQuestion` (question text → answer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

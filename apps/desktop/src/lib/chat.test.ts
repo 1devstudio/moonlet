@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { activeToken, chatKey, diffStat, fuzzyFilter, loadChat, mergeItem, onChatItem, onChatState, transcript, useChat } from "./chat";
+import { activeToken, askQuestions, chatKey, diffStat, fuzzyFilter, loadChat, mergeItem, onChatItem, onChatState, questionAnswers, transcript, useChat } from "./chat";
 
 const rpcReply = vi.hoisted(() => ({ release: (_v: unknown) => {} }));
 vi.mock("./daemon", () => ({ rpc: () => new Promise((r) => (rpcReply.release = r)) }));
@@ -46,5 +46,22 @@ describe("chat helpers", () => {
     const st = useChat.getState().chats[chatKey("h", 1)];
     expect(st.status).toBe("done");
     expect(st.items[0].text).toBe("late");
+  });
+
+  it("reads AskUserQuestion input and builds its answers", () => {
+    const qs = askQuestions({
+      questions: [
+        { question: "Which colours?", header: "Colours", multiSelect: false, options: [{ label: "GitHub", description: "Green" }, { label: "Mono" }] },
+        { question: "Which checks?", header: "Checks", multiSelect: true, options: [{ label: "Lint", description: "" }, { label: "Tests", description: "" }] },
+        { header: "broken" },
+      ],
+    });
+    expect(qs.map((q) => q.question)).toEqual(["Which colours?", "Which checks?"]);
+    expect(qs[0].options[1]).toEqual({ label: "Mono", description: "" });
+    expect(askQuestions(null)).toEqual([]);
+
+    expect(questionAnswers(qs, [{ labels: ["GitHub"], other: "" }, { labels: [], other: "" }])).toBeNull();
+    expect(questionAnswers(qs, [{ labels: ["GitHub"], other: "" }, { labels: ["Lint", "Tests"], other: "" }])).toEqual({ "Which colours?": "GitHub", "Which checks?": "Lint, Tests" });
+    expect(questionAnswers(qs, [{ labels: ["GitHub"], other: " Solarized " }, { labels: ["Lint"], other: "Types" }])).toEqual({ "Which colours?": "Solarized", "Which checks?": "Lint, Types" });
   });
 });

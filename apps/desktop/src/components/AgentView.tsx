@@ -11,6 +11,7 @@ import {
   Globe,
   ListTodo,
   Loader2,
+  MessageCircleQuestionMark,
   MoreHorizontal,
   Search,
   ShieldAlert,
@@ -23,13 +24,16 @@ import {
 import { rpc } from "../lib/daemon";
 import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, agentLabel, nextMode } from "../lib/agents";
 import {
+  type QuestionPick,
   activeToken,
+  askQuestions,
   chatKey,
   diffStat,
   elapsed,
   fuzzyFilter,
   loadChat,
   promptHistory,
+  questionAnswers,
   rememberPrompt,
   tokens,
   transcript,
@@ -42,7 +46,7 @@ import { errorToast, getLayout, setLayout, toast, useStore } from "../lib/store"
 import { addTab, tabOf } from "../lib/layout";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
-import { AgentIcon, Button, cx } from "./ui";
+import { AgentIcon, Button, cx, inputCls } from "./ui";
 
 // ------------------------------------------------------------ messages
 
@@ -75,6 +79,7 @@ function toolIcon(name: string) {
   if (n.startsWith("web")) return Globe;
   if (n === "task" || n === "agent") return Bot;
   if (n === "todowrite") return ListTodo;
+  if (n === "askuserquestion") return MessageCircleQuestionMark;
   return Wrench;
 }
 
@@ -179,6 +184,9 @@ const Item = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) 
   }
 });
 
+/** An AskUserQuestion with questions we can render; anything else gets the plain card. */
+const isQuestion = (ask: PermissionAsk) => ask.tool === "AskUserQuestion" && askQuestions(ask.input).length > 0;
+
 function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd: string; onAnswer: (decision: "allow" | "always" | "deny") => void }) {
   const Icon = toolIcon(ask.tool);
   const detail = ask.diff || ["Bash", "Write", "Edit", "MultiEdit", "Read"].includes(ask.tool) ? null : JSON.stringify(ask.input, null, 2);
@@ -206,6 +214,81 @@ function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd: strin
         {ask.can_always && <Button onClick={() => onAnswer("always")}>Always allow</Button>}
         <Button variant="ghost" className="ml-auto" onClick={() => onAnswer("deny")}>
           Deny
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Claude's AskUserQuestion: pick options or type an answer, then Submit. */
+function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: (decision: "allow" | "deny", answers?: Record<string, string>) => void }) {
+  const qs = useMemo(() => askQuestions(ask.input), [ask.input]);
+  const [picks, setPicks] = useState<QuestionPick[]>(() => qs.map(() => ({ labels: [], other: "" })));
+  const answers = questionAnswers(qs, picks);
+  const set = (i: number, p: Partial<QuestionPick>) => setPicks((ps) => ps.map((x, j) => (j === i ? { ...x, ...p } : x)));
+  const pick = (i: number, label: string) => {
+    const q = qs[i];
+    const cur = picks[i].labels;
+    if (!q.multiSelect) return set(i, { labels: [label], other: "" });
+    // Keep the options' order.
+    set(i, { labels: q.options.map((o) => o.label).filter((l) => (l === label ? !cur.includes(l) : cur.includes(l))) });
+  };
+  return (
+    <div className="jaunt-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
+      <div className="mb-2 flex items-center gap-2 text-[13px]">
+        <MessageCircleQuestionMark size={15} className="text-blocked" />
+        <span className="font-medium">{qs.length > 1 ? `${agentLabel("claude")} has ${qs.length} questions` : `${agentLabel("claude")} has a question`}</span>
+      </div>
+      {qs.map((q, i) => (
+        <div key={i} className="mb-3">
+          <div className="mb-1.5 flex items-start gap-2">
+            {q.header && <span className="mt-[1px] shrink-0 rounded bg-[#141414] px-1.5 py-0.5 text-[11px] text-muted">{q.header}</span>}
+            <span className="selectable text-[13px] text-fg">{q.question}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            {q.options.map((o) => {
+              const on = picks[i].labels.includes(o.label);
+              return (
+                <button
+                  key={o.label}
+                  className={cx(
+                    "flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors",
+                    on ? "border-accent bg-hover" : "border-border-strong bg-[#141414] hover:bg-hover",
+                  )}
+                  onClick={() => pick(i, o.label)}
+                >
+                  <span
+                    className={cx(
+                      "mt-[3px] flex h-3 w-3 shrink-0 items-center justify-center border",
+                      q.multiSelect ? "rounded-[3px]" : "rounded-full",
+                      on ? "border-accent bg-accent" : "border-border-strong",
+                    )}
+                  >
+                    {on && q.multiSelect && <Check size={9} className="text-bg" />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[12.5px] text-fg">{o.label}</span>
+                    {o.description && <span className="block text-[12px] text-muted">{o.description}</span>}
+                  </span>
+                </button>
+              );
+            })}
+            <input
+              className={inputCls}
+              value={picks[i].other}
+              placeholder="Other…"
+              onChange={(e) => set(i, q.multiSelect ? { other: e.target.value } : { other: e.target.value, labels: [] })}
+              onKeyDown={(e) => e.key === "Enter" && answers && onAnswer("allow", answers)}
+            />
+          </div>
+        </div>
+      ))}
+      <div className="flex gap-1.5">
+        <Button variant="primary" disabled={!answers} onClick={() => answers && onAnswer("allow", answers)}>
+          Submit
+        </Button>
+        <Button variant="ghost" className="ml-auto" onClick={() => onAnswer("deny")}>
+          Skip
         </Button>
       </div>
     </div>
@@ -525,17 +608,28 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           ) : (
             st.items.map((it) => <Item key={it.id} item={it} cwd={info?.cwd ?? ""} />)
           )}
-          {st?.pending.map((ask) => (
-            <PermissionCard
-              key={ask.id}
-              ask={ask}
-              cwd={info?.cwd ?? ""}
-              onAnswer={(decision) => {
-                stick.current = true;
-                void call(M.chatPermission, { ask: ask.id, decision });
-              }}
-            />
-          ))}
+          {st?.pending.map((ask) =>
+            isQuestion(ask) ? (
+              <QuestionCard
+                key={ask.id}
+                ask={ask}
+                onAnswer={(decision, answers) => {
+                  stick.current = true;
+                  void call(M.chatPermission, { ask: ask.id, decision, answers, message: answers ? undefined : "The user declined to answer the questions." });
+                }}
+              />
+            ) : (
+              <PermissionCard
+                key={ask.id}
+                ask={ask}
+                cwd={info?.cwd ?? ""}
+                onAnswer={(decision) => {
+                  stick.current = true;
+                  void call(M.chatPermission, { ask: ask.id, decision });
+                }}
+              />
+            ),
+          )}
         </div>
       </div>
       <div className="mx-auto w-full max-w-[820px] shrink-0 px-6 pb-4">
@@ -550,7 +644,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           ) : st?.status === "blocked" ? (
             <>
               <ShieldAlert size={12} className="text-blocked" />
-              <span>Waiting for your approval</span>
+              <span>{st.pending.length > 0 && st.pending.every(isQuestion) ? "Waiting for your answer" : "Waiting for your approval"}</span>
             </>
           ) : st && (st.cost_usd > 0 || st.input_tokens > 0) ? (
             <span className="text-faint">
