@@ -87,6 +87,9 @@ function seed(w: World) {
     writeFileSync(p, `#!/bin/sh\necho "e2e: real ${name} is blocked" >&2\nexit 1\n`);
     chmodSync(p, 0o755);
   }
+  // jauntd gives terminals and agents the PATH of a login shell (SHELL is
+  // /bin/sh here), not its own, so the fakes must come first there too.
+  writeFileSync(join(w.env.HOME, ".profile"), `PATH="${fakeBin}:$PATH"; export PATH\n`);
   mkdirSync(join(w.repo, ".jaunt"), { recursive: true });
   writeFileSync(join(w.repo, ".jaunt", "config.toml"), CONFIG);
   writeFileSync(join(w.repo, "README.md"), "e2e\n");
