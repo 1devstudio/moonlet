@@ -27,6 +27,7 @@ import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, soundFor, type SoundSettings } from "./sounds";
 import { forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
+import { focusThrottle, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState } from "./protocol";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
@@ -377,16 +378,20 @@ export async function refreshGit(host: string, id: string) {
   }
 }
 
-/** PR state per session (purple branch icon); slow-moving, so polled rarely. */
-export async function refreshPrs(host: string) {
-  for (const w of get().sessions[host] ?? []) {
-    if (w.archived) continue;
-    try {
-      recordPr(host, w.id, await rpc<PullRequest | null>(host, M.prStatus, { path: w.path }));
-    } catch {
-      /* no gh, no remote, or not a GitHub repo */
+/** PR state per session (purple branch icon); slow-moving, so polled rarely.
+ *  A few sessions at a time, so many sessions do not queue up behind one. */
+export async function refreshPrs(host: string, opts: { openOnly?: boolean } = {}) {
+  const queue = (get().sessions[host] ?? []).filter((w) => !w.archived && needsPrPoll(get().prs[sesKey(host, w.id)], opts));
+  const worker = async () => {
+    for (let w = queue.shift(); w; w = queue.shift()) {
+      try {
+        recordPr(host, w.id, await rpc<PullRequest | null>(host, M.prStatus, { path: w.path }));
+      } catch {
+        /* no gh, no remote, or not a GitHub repo */
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
 }
 
 /** Records a session's PR. When it has just merged, origin's base branch
@@ -625,7 +630,9 @@ export async function startStore() {
 
   // Tauri cannot tell a notification click from any other activation, so
   // coming back soon after one offers the jump instead of doing it (A3).
+  const prsDue = focusThrottle(15_000);
   window.addEventListener("focus", () => {
+    if (prsDue(Date.now())) for (const h of Object.keys(get().sessions)) void refreshPrs(h);
     const la = get().lastAttention;
     if (la && Date.now() - la.at < 120_000) {
       set({ lastAttention: null });
@@ -638,6 +645,9 @@ export async function startStore() {
     for (const h of Object.keys(get().sessions)) void refreshPrs(h);
     for (const h of Object.keys(get().projects)) void refreshAllBases(h, { fetch: true });
   }, 300_000);
+  setInterval(() => {
+    for (const h of Object.keys(get().sessions)) void refreshPrs(h, { openOnly: true });
+  }, 60_000);
   // Diffstats for background sessions.
   setInterval(() => {
     for (const h of Object.keys(get().sessions)) void refreshAllGit(h);
