@@ -399,6 +399,7 @@ function ChatEditor({
   onSend,
   onStop,
   onCycleMode,
+  scale,
 }: {
   host: string;
   root: string;
@@ -409,6 +410,8 @@ function ChatEditor({
   onStop: () => void;
   /** Shift+Tab; absent for agents without a permission mode. */
   onCycleMode?: () => void;
+  /** Text scale (see chatScale): the height is re-measured when it changes. */
+  scale: number;
 }) {
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -428,7 +431,7 @@ function ChatEditor({
     if (!el) return;
     el.style.height = "0px";
     el.style.height = Math.min(el.scrollHeight, 260) + "px";
-  }, [text]);
+  }, [text, scale]);
 
   const token = activeToken(text, caret);
   useEffect(() => {
@@ -541,7 +544,7 @@ function ChatEditor({
         </div>
       )}
       <div className="relative rounded-xl border border-border-strong bg-panel px-3.5 py-2.5 focus-within:border-[#3a3a3a]">
-        <div className="relative chat-text-14 leading-[21px]">
+        <div className="relative chat-text-14 leading-[1.5]">
           <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
             {text}
             {ghost && <span className="text-faint">{ghost}</span>}
@@ -777,6 +780,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           onSend={send}
           onStop={stop}
           onCycleMode={agent === "claude" ? () => modeMenu.pick(nextMode(modeMenu.mode, modeMenu.bypassOn)) : undefined}
+          scale={scale}
         />
       </div>
     </div>
