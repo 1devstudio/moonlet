@@ -499,18 +499,48 @@ impl TerminalManager {
         }
         // Decide and set `remove_on_exit` under one lock, so the read loop
         // cannot record the exit in between and miss the flag.
-        let exited = {
+        let (exited, session) = {
             let mut st = s.state.lock().unwrap();
-            if let Some(pty) = &st.pty {
+            let exited = st.info.exit.is_some();
+            // A script owns every process it starts, including jobs a
+            // job-control shell moved to their own process group, which
+            // outlive the shell when they ignore SIGHUP.
+            let script = matches!(st.info.kind, TerminalKind::Run | TerminalKind::Setup);
+            let session = st
+                .pty
+                .as_ref()
+                .filter(|_| script && !exited)
+                .map(|pty| pty.pid());
+            if let Some(sid) = session {
+                crate::pty::signal_session(sid, nix::sys::signal::Signal::SIGHUP, false);
+            } else if let Some(pty) = &st.pty {
                 let _ = pty.signal(nix::sys::signal::Signal::SIGHUP);
             }
-            let exited = st.info.exit.is_some();
             if remove && !exited {
                 st.remove_on_exit = true;
             }
-            exited
+            (exited, session)
         };
-        if !exited {
+        if let Some(sid) = session {
+            // Keep escalating after the shell exits, until the session is empty.
+            let weak = Arc::downgrade(&s);
+            tokio::spawn(async move {
+                for (delay, sig) in [
+                    (1500, nix::sys::signal::Signal::SIGTERM),
+                    (3000, nix::sys::signal::Signal::SIGKILL),
+                ] {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    // The read loop records the exit after reaping the shell,
+                    // and only removes the terminal after that.
+                    let reaped = weak
+                        .upgrade()
+                        .is_none_or(|s| s.state.lock().unwrap().info.exit.is_some());
+                    if !crate::pty::signal_session(sid, sig, reaped) {
+                        return;
+                    }
+                }
+            });
+        } else if !exited {
             // Some programs (agents included) ignore SIGHUP: escalate.
             let weak = Arc::downgrade(&s);
             tokio::spawn(async move {
@@ -1134,6 +1164,51 @@ mod tests {
         }
         assert!(start.elapsed() < Duration::from_secs(6));
         assert!(mgr.get(info.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn closing_a_run_tab_stops_jobs_that_outlive_the_shell() {
+        // A job-control shell puts the job in its own process group, and the
+        // job ignores SIGHUP, so it keeps running after the shell exits.
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("job.pid");
+        let mgr = manager();
+        let info = mgr
+            .create(TerminalCreate {
+                cwd: "/tmp".into(),
+                command: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!(
+                        "set -m; (trap '' HUP; exec sleep 60) & echo $! > {}; sleep 60",
+                        pid_file.display()
+                    ),
+                ],
+                kind: TerminalKind::Run,
+                ..Default::default()
+            })
+            .unwrap();
+        let mut job = None;
+        for _ in 0..100 {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok())
+            {
+                job = Some(nix::unistd::Pid::from_raw(pid));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let job = job.expect("the script never started its job");
+        mgr.kill(info.id, true).unwrap();
+        let start = std::time::Instant::now();
+        while nix::sys::signal::kill(job, None).is_ok() {
+            assert!(
+                start.elapsed() < Duration::from_secs(8),
+                "the run tab's job is still running"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     #[test]
