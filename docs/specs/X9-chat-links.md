@@ -1,4 +1,4 @@
-# X8: Open and copy links in agent messages
+# X9: Open and copy links in agent messages
 
 - **Status:** implemented (2026-10-04): unit tests pass. The hover toolbar and ⌘-click have not been checked in the running app yet.
 - **Priority / phase:** P1 · phase 3
@@ -7,7 +7,7 @@
 
 ## Summary
 
-Links in the structured agent view were rendered but dead: the click handler cancelled every click so the app window never navigated, and nothing opened the URL anywhere else. X8 makes them usable. ⌘-click opens a link in the default browser, and hovering a link shows a small toolbar with **Open** and **Copy** buttons.
+Links in the structured agent view were rendered but dead: the click handler cancelled every click so the app window never navigated, and nothing opened the URL anywhere else. X9 makes them usable. ⌘-click opens a link in the default browser, and hovering a link shows a small toolbar with **Open** and **Copy** buttons.
 
 ## User journey
 
