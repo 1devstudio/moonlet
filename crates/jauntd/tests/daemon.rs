@@ -325,3 +325,105 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+#[tokio::test]
+async fn pulled_base_branch_is_where_new_sessions_start() {
+    use jaunt_proto::types::{BasePull, BaseStatus, Project, Session};
+    let d = TestDaemon::start().await;
+    let root = d.home.path();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let (origin, repo, other) = (
+        root.join("origin.git"),
+        root.join("repo"),
+        root.join("other"),
+    );
+    git(
+        root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(
+        root,
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            repo.to_str().unwrap(),
+        ],
+    );
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    git(
+        root,
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(
+        &other,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "Merge pull request #128",
+        ],
+    );
+    git(&other, &["push", "-q", "origin", "main"]);
+    let merged = git(&other, &["rev-parse", "HEAD"]);
+
+    let mut c = d.client().await;
+    let p: Project = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    let st: BaseStatus = c
+        .request(
+            methods::GIT_BASE_STATUS,
+            serde_json::json!({"path": p.path, "branch": p.base_branch, "fetch": true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!((st.ahead, st.behind), (0, 1));
+    assert_eq!(st.commits[0].subject, "Merge pull request #128");
+
+    let pulled: BasePull = c
+        .request(
+            methods::GIT_PULL_BASE,
+            serde_json::json!({"path": p.path, "branch": p.base_branch}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pulled.pulled, 1);
+    assert_eq!(pulled.head, merged);
+
+    let ws: Session = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({"project_id": p.id, "name": "After merge", "agent": "none"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        git(std::path::Path::new(&ws.path), &["rev-parse", "HEAD"]),
+        merged
+    );
+}
