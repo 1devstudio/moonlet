@@ -53,7 +53,7 @@ function Home() {
   const local = useStore((s) => s.hosts.local);
   return (
     <div className="flex h-full flex-col bg-bg">
-      <div className="drag h-[52px] shrink-0 bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
+      <div data-tauri-drag-region className="drag h-[52px] shrink-0 bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
       <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
         <div className="font-mono text-[22px] tracking-tight">
           <span className="text-accent">❯</span> jaunt
