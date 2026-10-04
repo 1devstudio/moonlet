@@ -1,4 +1,4 @@
-// WebdriverIO config for the e2e tests (X9). Build first: `pnpm e2e:build`.
+// WebdriverIO config for the e2e tests (X12). Build first: `pnpm e2e:build`.
 
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

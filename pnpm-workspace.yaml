@@ -1,7 +1,7 @@
 packages:
   - apps/*
 allowBuilds:
-  # The e2e tests use the embedded WebDriver (X9); no driver downloads.
+  # The e2e tests use the embedded WebDriver (X12); no driver downloads.
   edgedriver: false
   esbuild: true
   geckodriver: false

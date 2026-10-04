@@ -306,7 +306,7 @@ pub fn run() {
         )
         .try_init();
     let builder = tauri::Builder::default();
-    // Only `pnpm e2e:build` turns this on (X9).
+    // Only `pnpm e2e:build` turns this on (X12).
     #[cfg(feature = "e2e")]
     let builder = builder
         .plugin(tauri_plugin_wdio_webdriver::init())

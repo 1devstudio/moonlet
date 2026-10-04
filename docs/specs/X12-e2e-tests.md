@@ -6,7 +6,7 @@
 
 ## Summary
 
-Unit tests cover the daemon and the app's `lib/` logic, but nothing exercises the real window: a React component wired to the wrong RPC, or a dialog that never opens, only shows up when someone clicks through the app. X9 adds end-to-end tests that launch the real jaunt app against a real `jauntd`, drive the WKWebView with WebdriverIO, and check what a user would see.
+Unit tests cover the daemon and the app's `lib/` logic, but nothing exercises the real window: a React component wired to the wrong RPC, or a dialog that never opens, only shows up when someone clicks through the app. X12 adds end-to-end tests that launch the real jaunt app against a real `jauntd`, drive the WKWebView with WebdriverIO, and check what a user would see.
 
 ## Approach
 
