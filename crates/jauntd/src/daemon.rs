@@ -399,6 +399,12 @@ impl Daemon {
                 let r: m::GitPath = params(p)?;
                 ok(git::pr_status(&path(&r.path)).await.map_err(internal)?)
             }
+            m::GH_PR_STACK => {
+                let r: m::PrStackParams = params(p)?;
+                ok(git::pr_stack(&path(&r.path), r.number)
+                    .await
+                    .map_err(internal)?)
+            }
             m::FS_LIST => {
                 let r: m::FsList = params(p)?;
                 ok(blocking(move || fs::list(&r.path, r.show_ignored)).await?)

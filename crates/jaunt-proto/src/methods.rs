@@ -73,6 +73,7 @@ pub const EV_CHAT_ITEM: &str = "chat.item";
 pub const EV_CHAT_STATE: &str = "chat.state";
 pub const GH_PRS: &str = "gh.prs";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
+pub const GH_PR_STACK: &str = "gh.pr_stack";
 
 // Files
 pub const FS_LIST: &str = "fs.list";
@@ -429,6 +430,12 @@ pub struct PrCreate {
     pub base: Option<String>,
     #[serde(default)]
     pub draft: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrStackParams {
+    pub path: String,
+    pub number: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
