@@ -193,6 +193,24 @@ export interface Commit {
   time: number;
 }
 
+/** The project's base branch against `origin` (spec X13). */
+export interface BaseStatus {
+  branch: string;
+  upstream: string;
+  ahead: number;
+  behind: number;
+  /** Incoming commits, newest first, at most 20. */
+  commits: Commit[];
+  /** The work tree that has the branch checked out. */
+  checkout: string | null;
+  fetch_error: string | null;
+}
+
+export interface BasePull {
+  pulled: number;
+  head: string;
+}
+
 export interface DirEntry {
   name: string;
   path: string;
@@ -317,6 +335,8 @@ export const M = {
   gitCommit: "git.commit",
   gitLog: "git.log",
   gitBranches: "git.branches",
+  gitBaseStatus: "git.base_status",
+  gitPullBase: "git.pull_base",
   prCreate: "gh.pr_create",
   ghIssues: "gh.issues",
   shellHistory: "shell.history",
