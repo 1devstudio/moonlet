@@ -33,6 +33,7 @@ Every project setting lives in `<repo>/.jaunt/config.toml`, and the only way to 
 - [x] A stale `version` is rejected with `config changed on disk`, and nothing is written. A file created after a "missing" read counts as stale (`a_stale_version_writes_nothing`).
 - [x] A file that does not parse, or parses with a wrong type (`run = 5`), is reported by `project.config_file` and rejected by `project.set_config` (`an_invalid_file_is_reported_and_never_overwritten`).
 - [x] A symlinked `.jaunt` or `config.toml` is refused (`a_symlinked_config_is_refused`).
+- [x] Saves of the same file are serialized, so two saves of one version cannot both pass the check (`concurrent_saves_of_one_version_let_exactly_one_through`). Saves of different projects do not wait for each other. The daemon runs the file reads and writes on the blocking pool.
 - [x] Validation, checked by the daemon and in the dialog (`validation_rules`, `projectSettings.test.ts`):
   - agent names are non-empty and use only `A-Za-z0-9._-`; the dialog also flags duplicate names (the request is a map, so the daemon cannot see them);
   - agent commands are non-empty;
@@ -73,7 +74,7 @@ Keyboard: Escape cancels (asks first if there are unsaved changes), ⌘↵ saves
 
 - `project.config_file {id}` → `ProjectConfigFile`:
   ```ts
-  { path: string; exists: boolean; version: string; config: ProjectConfig; error?: string }
+  { path: string; exists: boolean; version: string; config: ProjectConfig; error?: string; default_branch: string }
   ```
   `version` is a hash of the file's bytes, or `""` when the file does not exist. When `error` is set, `config` is the default and the dialog must not offer to save.
 - `project.set_config {id, version, config: ProjectConfig}` → `ProjectConfigFile` (the new state). Fails with:
