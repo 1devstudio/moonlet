@@ -77,6 +77,9 @@ function PrIcon({ className }: { className: string }) {
 /** Position in the GitHub stack and its PRs, top of the stack first (spec X8). */
 function StackMenu({ stack, current }: { stack: PrStack; current: number }) {
   const [open, setOpen] = useState(false);
+  // From `current`, not `stack.position`: the stack may still be the one
+  // loaded for the session's previous PR.
+  const position = stack.prs.findIndex((p) => p.number === current) + 1;
   return (
     <div className="no-drag relative">
       <button
@@ -86,7 +89,7 @@ function StackMenu({ stack, current }: { stack: PrStack; current: number }) {
       >
         <Layers size={13} className="text-muted" />
         <span className="tabular-nums">
-          {stack.position}/{stack.size}
+          {position}/{stack.size}
         </span>
       </button>
       {open && (
@@ -131,22 +134,28 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   }, [host, repo]);
   useEffect(() => {
     let live = true;
-    const load = () =>
+    // A slow poll can still be running when the next one starts; only the
+    // latest one may set state.
+    let seq = 0;
+    const load = () => {
+      const n = ++seq;
+      const latest = () => live && n === seq;
       void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path })
         .then((p) => {
-          if (!live) return;
+          if (!latest()) return;
           setPr(p);
           useStore.setState((s) => ({ prs: { ...s.prs, [sesKey(host, ws.id)]: p } }));
           if (!p) return setStack(null);
           void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number })
-            .then((st) => live && setStack(st))
-            .catch(() => live && setStack(null));
+            .then((st) => latest() && setStack(st))
+            .catch(() => latest() && setStack(null));
         })
         .catch(() => {
-          if (!live) return;
+          if (!latest()) return;
           setPr(null);
           setStack(null);
         });
+    };
     load();
     const t = setInterval(load, 60_000);
     return () => {
@@ -163,7 +172,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
       >
         <Play size={13} fill="currentColor" strokeWidth={0} /> Run
       </button>
-      {pr && stack && <StackMenu stack={stack} current={pr.number} />}
+      {pr && stack?.prs.some((p) => p.number === pr.number) && <StackMenu stack={stack} current={pr.number} />}
       <button
         className="no-drag group flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
         title={pr ? `#${pr.number} ${pr.title} · Open in browser` : "Create pull request (⇧⌘P)"}
