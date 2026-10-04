@@ -22,6 +22,7 @@ import {
 } from "./protocol";
 import { sanitize } from "./sanitize";
 import { DEFAULT_MODE } from "./agents";
+import { DEFAULT_SOUNDS, soundFor, type SoundSettings } from "./sounds";
 import { forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import type { ChatItem, ChatState } from "./protocol";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
@@ -44,6 +45,8 @@ export interface Settings {
   notifyWhenFocused: boolean;
   /** Permission mode a new Claude session starts in (X7). */
   defaultMode: string;
+  /** Sound per attention event, "" for off (X10). */
+  sounds: SoundSettings;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -173,7 +176,7 @@ function makeStore() {
   preview: null,
   showHistory: false,
   dialog: null,
-  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE }),
+  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS }),
   toasts: [],
   lastAttention: null,
   workingSince: {},
@@ -429,6 +432,8 @@ async function onAttention(host: string, a: Attention) {
   if (!visible) {
     set((st) => ({ unread: { ...st.unread, [termKey(host, a.terminal)]: a.state } }));
     updateBadge();
+    const sound = soundFor(s.settings.sounds, a.state);
+    if (sound) void hostsApi.playSound(sound).catch(() => {});
   }
   if (!focused || (s.settings.notifyWhenFocused && !visible)) {
     const ws = a.session_id ? s.sessions[host]?.find((w) => w.id === a.session_id) : undefined;

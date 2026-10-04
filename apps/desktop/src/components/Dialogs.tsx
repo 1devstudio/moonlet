@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { open as openDialog, ask, confirm } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, Server, Trash2 } from "lucide-react";
+import { CheckCircle2, Play, Server, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type Commit, type HookStatus, type PullRequest, type Project } from "../lib/protocol";
 import { errorToast, refreshGit, selectedSession, toast, updateSettings, useStore } from "../lib/store";
@@ -8,6 +8,7 @@ import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, resolveMode } from "../lib/agents";
+import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../lib/sounds";
 
 const close = () => useStore.setState({ dialog: null });
 
@@ -385,6 +386,7 @@ function HostsSection() {
 
 function AgentsSection() {
   const mode = useStore((s) => resolveMode(s.settings.defaultMode));
+  const sounds = useStore((s) => s.settings.sounds);
   return (
     <section>
       <h3 className="mb-2 text-[12px] font-semibold">Agents</h3>
@@ -397,6 +399,32 @@ function AgentsSection() {
           ))}
         </select>
       </Field>
+      <h4 className="mt-3 mb-1.5 text-[12px] font-medium text-muted">Sounds when not watching the agent</h4>
+      <div className="grid grid-cols-[90px_1fr_auto] items-center gap-x-2 gap-y-1.5 text-[12.5px]">
+        {SOUND_EVENTS.map((ev) => {
+          const current = soundFor(sounds, ev.id) ?? "";
+          return (
+            <div key={ev.id} className="contents">
+              <span>{ev.label}</span>
+              <select
+                className={inputCls}
+                value={current}
+                onChange={(e) => updateSettings({ sounds: { ...DEFAULT_SOUNDS, ...sounds, [ev.id]: e.target.value } })}
+              >
+                <option value="">Off</option>
+                {SYSTEM_SOUNDS.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <Button size="sm" variant="ghost" disabled={!current} title="Play" onClick={() => void hostsApi.playSound(current).catch(errorToast)}>
+                <Play size={12} />
+              </Button>
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }
