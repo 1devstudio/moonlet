@@ -76,8 +76,7 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: str
   const name = info ? (info.agent ?? info.title) : "…";
   return (
     <div
-      role="tab"
-      aria-selected={active}
+      aria-current={active || undefined}
       className={cx(
         "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 text-[14px]",
         active ? "bg-raised text-fg" : "text-muted hover:text-fg",
@@ -113,7 +112,7 @@ function TabStrip({ host, ws }: { host: string; ws: Session }) {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   return (
     <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-stretch bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }}>
-      <div role="tablist" className="flex min-w-0 items-stretch overflow-x-auto">
+      <div className="flex min-w-0 items-stretch overflow-x-auto">
         {layout?.tabs.map((t) => (
           <Tab key={t.id} host={host} ws={ws} id={t.id} ids={leaves(t.root)} active={t.id === layout.active} />
         ))}

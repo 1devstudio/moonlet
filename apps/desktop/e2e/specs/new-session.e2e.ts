@@ -34,8 +34,8 @@ describe("new session and Run", () => {
     expect(created?.agent).toBe("fake");
     await expect($('//span[normalize-space()="fake"]')).toBeDisplayed();
     // The project has a setup script; the agent's tab opens, not setup's.
-    await expect($('//*[@role="tab"][.//span[normalize-space()="setup"]]')).toBeDisplayed();
-    await expect($('//*[@role="tab"][.//span[normalize-space()="fake"]]')).toHaveAttribute("aria-selected", "true");
+    await expect($('//span[normalize-space()="setup"]')).toBeDisplayed();
+    await expect($('//*[@aria-current="true"][.//span[normalize-space()="fake"]]')).toBeDisplayed();
 
     await $('//button[normalize-space()="Run"]').click();
     await expect($('//span[normalize-space()="run"]')).toBeDisplayed();
