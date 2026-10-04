@@ -7,7 +7,7 @@ import { arrange, compact, dropResult, lastActive, type Dragged, type Group } fr
 import { errorToast, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { archiveSession } from "../lib/actions";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
-import { IconButton, Kbd, StateGlyph, cx } from "./ui";
+import { IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
 // ------------------------------------------------------------------ helpers
 
@@ -53,13 +53,24 @@ function ProjectMark() {
   );
 }
 
-function BranchIcon({ pr }: { pr: boolean }) {
+/** Branch glyph tinted by PR state; a merged PR gets a merge glyph instead. */
+function BranchIcon({ state }: { state?: string }) {
+  const merged = state === "merged";
   return (
-    <svg viewBox="0 0 16 16" width="15" height="15" className={cx("shrink-0", pr ? "text-[#a371f7]" : "text-muted")} fill="none" stroke="currentColor" strokeWidth="1.5">
+    <svg viewBox="0 0 16 16" width="15" height="15" className={cx("shrink-0", prTone(state))} fill="none" stroke="currentColor" strokeWidth="1.5">
       <circle cx="4.5" cy="3.5" r="1.6" />
       <circle cx="4.5" cy="12.5" r="1.6" />
-      <circle cx="11.5" cy="5" r="1.6" />
-      <path d="M4.5 5.1v5.8M11.5 6.6c0 3-4.5 2.4-6.6 4.4" />
+      {merged ? (
+        <>
+          <circle cx="11.5" cy="9" r="1.6" />
+          <path d="M4.5 5.1v5.8M4.5 5.1c0 2.4 2.2 3.9 5.4 3.9" />
+        </>
+      ) : (
+        <>
+          <circle cx="11.5" cy="5" r="1.6" />
+          <path d="M4.5 5.1v5.8M11.5 6.6c0 3-4.5 2.4-6.6 4.4" />
+        </>
+      )}
     </svg>
   );
 }
@@ -145,7 +156,7 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
       )}
     >
       {selected && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
-      {notable ? <StateGlyph state={state} size={15} /> : <BranchIcon pr={!!pr && pr.state !== "closed"} />}
+      {notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
       {renaming ? (
         <InlineInput
           initial={s.name}
@@ -162,6 +173,8 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
           <span className="shrink-0 font-mono text-[12px] text-muted">creating</span>
         ) : state === "blocked" ? (
           <span className="shrink-0 font-mono text-[12px] text-blocked">needs input</span>
+        ) : pr?.state === "merged" ? (
+          <span className="shrink-0 font-mono text-[12px] text-merged">merged</span>
         ) : git && (git.additions || git.deletions) ? (
           <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
             +{compact(git.additions)}
