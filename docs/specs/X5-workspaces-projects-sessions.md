@@ -23,7 +23,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
   - **Add project…:** a folder picker or an existing project.
   - Rename and Delete workspace (deleting only removes the grouping; projects and sessions remain).
 - A "New workspace" entry at the bottom of the workspace list.
-- **Session row:** a branch icon (purple when the branch has an open PR, otherwise muted), the title, and the diffstat (`+5.5k −41`, using k for thousands). The agent state still shows as a dot when an agent is working, blocked, done or failed. Double-click renames; the context menu has Move to section and Archive. Rows can be dragged onto a section to file them, or back onto their own project (or a status/flat group) to unfile them. Drop targets highlight; Tauri's window file-drop is disabled so HTML drag and drop works.
+- **Session row:** a branch icon coloured by the branch's PR state (green when open, red when closed, muted with no PR), the title, and the diffstat (`+5.5k −41`, using k for thousands). A merged PR swaps the icon for a purple merge glyph and shows `merged` in place of the diffstat; `creating` and `needs input` still take priority. The agent state still shows as a dot when an agent is working, blocked, done or failed. Double-click renames; the context menu has Move to section and Archive. Rows can be dragged onto a section to file them, or back onto their own project (or a status/flat group) to unfile them. Drop targets highlight; Tauri's window file-drop is disabled so HTML drag and drop works.
 
 ## Composer (new session)
 
