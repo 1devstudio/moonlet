@@ -40,7 +40,7 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 - `terminal.create {agent, chat: true, model?, effort?}` starts one. `session.create` uses the structured view for Claude Code and Codex unless `tui: true`. The session's first prompt is sent as the first message.
 - `chat.state {id}` returns the `ChatState`.
 - `chat.send {id, text}` sends a message. During a running turn, Claude Code takes it as queued input. Codex steers the running turn with it (`turn/steer`). Before a Codex thread exists, messages wait in the adapter until it is created. If a saved Codex thread cannot be resumed, a new thread is started and the note says so. `ChatState.queued` is reserved and currently always empty.
-- `chat.permission {id, ask, decision: allow|always|deny, message?}` answers a permission request.
+- `chat.permission {id, ask, decision: allow|always|deny, message?, answers?}` answers a permission request. `answers` (question text → answer) is only used for Claude's `AskUserQuestion`, see "Questions" below.
 - `chat.interrupt {id}` stops the current turn. Stopping the process (`terminal.kill` without remove, or a settings restart) also closes a running turn with a "Stopped" note. Open permission requests are denied first. The turn ends with an "Interrupted" note and status `idle`, not an error.
 - `chat.settings {id, model?, effort?, mode?}` changes the model, effort or (Claude only) permission mode, see [X7](X7-agent-permission-mode.md). The agent restarts with resume before the next message.
 - `fs.files {root}` lists the project's non-ignored files for `@` mentions.
@@ -53,6 +53,7 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
   - User messages are right-aligned bubbles. Assistant text renders as sanitized Markdown with code highlighting. Thinking is collapsed into one line ("Thought for 6s").
   - Tool calls are compact rows: an icon, a summary (`Bash  git status`, `Edit  src/app.ts  +12 −3`, `Read  README.md`) and a status mark, expandable to show the output or the diff.
   - Permission requests are an inline card with the tool and summary, the reason, and **Allow**, **Always allow** and **Deny** buttons.
+  - Questions from Claude (`AskUserQuestion`) get a question card instead, see below.
 - **Footer:** a status line (spinner and elapsed time while working; cost and tokens), Stop (⌘.) while running, then the editor.
 - **Editor:**
   - Multi-line with mouse editing.
@@ -64,6 +65,19 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
   - "Open in terminal", which runs `claude --resume <id>` or `codex resume <id>` in a new terminal tab.
   - "Copy transcript".
 - **Composer integration:** a new session's first prompt becomes the first `chat.send`.
+
+## Questions (Claude `AskUserQuestion`)
+
+Claude asks the user multiple-choice questions through the `AskUserQuestion` tool. Headless, it arrives as a `can_use_tool` request like any other tool. The host answers it by allowing the tool with the answers added to the input: `updatedInput = {questions, answers: {"<question text>": "<answer>"}}` (`AskUserQuestionInput.answers` in the Agent SDK types).
+
+- The card shows each question (1–4) with its header chip and text, and its options (2–4) as buttons with label and description.
+  - Single-select questions take one option. `multiSelect` questions toggle any number of options.
+  - Every question also has an "Other" text field. Typing in it replaces the selected option (single-select) or is added to the selected options (multi-select).
+- The answer to a question is the chosen label, the typed text, or for multi-select all chosen labels and the typed text joined with ", ".
+- **Submit** is enabled once every question has an answer. It sends `chat.permission {decision: allow, answers}`.
+- **Skip** sends `deny` with the message "The user declined to answer the questions.", so Claude continues without answers.
+- The footer status reads "Waiting for your answer" while only questions are pending.
+- Option previews and per-question notes (`annotations`) are not shown or sent.
 
 ## Persistence and restore
 
@@ -93,3 +107,5 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 - [x] Agent state, sidebar dots and notifications work for chat terminals (verified live). The approval inbox uses the same agent state but was not checked separately.
 - [x] A daemon restart restores the conversation and resumes the agent (verified through two live upgrades).
 - [x] Adapter unit tests replay recorded/synthetic protocol streams for both agents.
+- [x] **Questions, protocol** (2026-10-04, Haiku, $0.04): answering `AskUserQuestion` with `updatedInput.answers` gives the tool result `Your questions have been answered: "…"="Blue"` and Claude continues with the answer. The adapter round trip is unit-tested.
+- [ ] **Questions, UI:** the question card (options, multi-select, Other, Submit, Skip) has not been checked in the app.
