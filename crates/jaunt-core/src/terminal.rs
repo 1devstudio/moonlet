@@ -512,7 +512,7 @@ impl TerminalManager {
                 .filter(|_| script && !exited)
                 .map(|pty| pty.pid());
             if let Some(sid) = session {
-                crate::pty::signal_session(sid, nix::sys::signal::Signal::SIGHUP);
+                crate::pty::signal_session(sid, nix::sys::signal::Signal::SIGHUP, false);
             } else if let Some(pty) = &st.pty {
                 let _ = pty.signal(nix::sys::signal::Signal::SIGHUP);
             }
@@ -523,13 +523,19 @@ impl TerminalManager {
         };
         if let Some(sid) = session {
             // Keep escalating after the shell exits, until the session is empty.
+            let weak = Arc::downgrade(&s);
             tokio::spawn(async move {
                 for (delay, sig) in [
                     (1500, nix::sys::signal::Signal::SIGTERM),
                     (3000, nix::sys::signal::Signal::SIGKILL),
                 ] {
                     tokio::time::sleep(Duration::from_millis(delay)).await;
-                    if !crate::pty::signal_session(sid, sig) {
+                    // The read loop records the exit after reaping the shell,
+                    // and only removes the terminal after that.
+                    let reaped = weak
+                        .upgrade()
+                        .is_none_or(|s| s.state.lock().unwrap().info.exit.is_some());
+                    if !crate::pty::signal_session(sid, sig, reaped) {
                         return;
                     }
                 }

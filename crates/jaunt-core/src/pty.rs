@@ -175,7 +175,14 @@ impl Pty {
 /// child, which is the session leader). Unlike the leader's process group,
 /// this reaches jobs a shell moved to their own group, even after the leader
 /// has exited. Returns `false` once the session has no processes left.
-pub fn signal_session(sid: u32, signal: Signal) -> bool {
+///
+/// Pass `leader_reaped` once the leader has been waited for: its pid is then
+/// free, and a process holding it leads a new, unrelated session.
+pub fn signal_session(sid: u32, signal: Signal, leader_reaped: bool) -> bool {
+    // SAFETY: getsid only reads the process table.
+    if leader_reaped && unsafe { libc::getsid(sid as i32) } == sid as i32 {
+        return false;
+    }
     let mut any = false;
     for pid in all_pids() {
         // SAFETY: getsid only reads the process table.
@@ -256,5 +263,38 @@ pub fn user_shell() -> String {
         "/bin/zsh".into()
     } else {
         "/bin/sh".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_session_on_the_exited_leaders_pid_is_left_alone() {
+        // A process that called setsid() leads a session whose id is its own
+        // pid, just like a new session that took over a reaped leader's pid.
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg("30");
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let mut other = cmd.spawn().unwrap();
+        let sid = other.id();
+
+        assert!(!signal_session(sid, Signal::SIGKILL, true));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            other.try_wait().unwrap().is_none(),
+            "the other session was killed"
+        );
+
+        // While the leader is still ours, the same call stops it.
+        assert!(signal_session(sid, Signal::SIGKILL, false));
+        other.wait().unwrap();
     }
 }
