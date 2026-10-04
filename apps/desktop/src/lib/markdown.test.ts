@@ -42,10 +42,11 @@ describe("chat links", () => {
     expect(openableUrl(null)).toBeNull();
   });
 
-  it("opens only on ⌘-click, and only web and mail links", () => {
-    expect(linkToOpen("https://example.com", true)).toBe("https://example.com");
-    expect(linkToOpen("https://example.com", false)).toBeNull();
-    expect(linkToOpen("src/main.rs", true)).toBeNull();
+  it("opens on ⌘-click or Enter, not a plain click, and only web and mail links", () => {
+    expect(linkToOpen("https://example.com", { metaKey: true, keyboard: false })).toBe("https://example.com");
+    expect(linkToOpen("https://example.com", { metaKey: false, keyboard: true })).toBe("https://example.com");
+    expect(linkToOpen("https://example.com", { metaKey: false, keyboard: false })).toBeNull();
+    expect(linkToOpen("src/main.rs", { metaKey: true, keyboard: true })).toBeNull();
   });
 
   it("puts the toolbar above the link, or below it near the window top", () => {

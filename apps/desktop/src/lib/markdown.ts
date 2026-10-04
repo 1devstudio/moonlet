@@ -159,9 +159,12 @@ export function openableUrl(href: string | null): string | null {
   }
 }
 
-/** The URL a click on a chat link opens: only ⌘-click opens, plain clicks select text. */
-export function linkToOpen(href: string | null, metaKey: boolean): string | null {
-  return metaKey ? openableUrl(href) : null;
+/**
+ * The URL a click on a chat link opens. ⌘-click and keyboard activation
+ * (Enter on a focused link) open; a plain mouse click only selects text.
+ */
+export function linkToOpen(href: string | null, click: { metaKey: boolean; keyboard: boolean }): string | null {
+  return click.metaKey || click.keyboard ? openableUrl(href) : null;
 }
 
 /** Fixed position of the link's Open/Copy toolbar: above the link, below it near the window top. */
