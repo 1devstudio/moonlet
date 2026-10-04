@@ -1,4 +1,4 @@
-// Sounds played when an agent finishes, fails or needs the user (X8).
+// Sounds played when an agent finishes, fails or needs the user (X10).
 
 /** macOS system sounds. Must match `SOUNDS` in src-tauri/src/lib.rs. */
 export const SYSTEM_SOUNDS = [

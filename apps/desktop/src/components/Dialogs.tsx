@@ -6,6 +6,7 @@ import { M, type Commit, type HookStatus, type PullRequest, type Project } from 
 import { errorToast, refreshGit, selectedSession, toast, updateSettings, useStore } from "../lib/store";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
+import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, resolveMode } from "../lib/agents";
 import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../lib/sounds";
 
@@ -527,6 +528,8 @@ export function Dialogs() {
       return <CreatePrDialog />;
     case "settings":
       return <SettingsDialog />;
+    case "project-settings":
+      return <ProjectSettingsDialog host={dialog.host} project={dialog.project} focus={dialog.focus} />;
     default:
       return null;
   }

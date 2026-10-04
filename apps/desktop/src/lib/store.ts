@@ -45,7 +45,7 @@ export interface Settings {
   notifyWhenFocused: boolean;
   /** Permission mode a new Claude session starts in (X7). */
   defaultMode: string;
-  /** Sound per attention event, "" for off (X8). */
+  /** Sound per attention event, "" for off (X10). */
   sounds: SoundSettings;
 }
 
@@ -143,6 +143,7 @@ interface State extends UiPersist {
     | { kind: "new-workspace" }
     | { kind: "create-pr" }
     | { kind: "settings" }
+    | { kind: "project-settings"; host: string; project: string; focus?: "run" }
     | { kind: "palette" }
     | { kind: "commit" };
   settings: Settings;

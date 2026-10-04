@@ -1,4 +1,4 @@
-# X8 — Sound when an agent finishes or needs you
+# X10 — Sound when an agent finishes or needs you
 
 - **Status:** implemented (2026-10-04). Unit tests pass and `afplay` was checked from the shell; the sound has not been heard from inside the app yet.
 - **Priority / phase:** P1 · phase 3
@@ -7,7 +7,7 @@
 
 ## Summary
 
-A3 notifies through macOS notifications, which only fire when jaunt is not focused and are silent. X8 plays a short system sound whenever an agent finishes, fails or needs the user, unless the user is already looking at that agent. Each of the three events has its own sound, which the user can change or turn off in Settings.
+A3 notifies through macOS notifications, which only fire when jaunt is not focused and are silent. X10 plays a short system sound whenever an agent finishes, fails or needs the user, unless the user is already looking at that agent. Each of the three events has its own sound, which the user can change or turn off in Settings.
 
 ## User journey
 

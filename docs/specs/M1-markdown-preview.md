@@ -14,7 +14,8 @@ The Preview tab renders Markdown with tables, task lists, syntax-highlighted cod
 - [x] The output is sanitised with DOMPurify: no scripts, iframes, forms, event handlers or `javascript:` URLs. It is shown in `<iframe sandbox="">` with the CSP `default-src 'none'; style-src 'unsafe-inline'; img-src data:`.
 - [x] Live reload: any `fs.changed` under the file's watched root re-renders it.
 - [x] M2: `.md` files open in Preview automatically from the file tree and from terminal links.
+- [x] A copy button in the Preview header puts the whole raw Markdown source of the open file on the clipboard and confirms with a "Copied Markdown" toast. It is disabled until the current file has loaded and while the preview shows an error, so it never copies a previously opened file.
 
 ## Test plan
 
-`src/lib/markdown.test.ts`: tables and highlighting, script/handler stripping, CSP document.
+`src/lib/markdown.test.ts`: tables and highlighting, script/handler stripping, CSP document. Manual: open a `.md` file, click the copy button and paste; switch files and check that the button stays disabled until the new file has loaded.

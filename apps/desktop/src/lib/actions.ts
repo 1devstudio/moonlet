@@ -4,11 +4,12 @@
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc, sendInput } from "./daemon";
 import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
-import { M, type TerminalInfo, type Session } from "./protocol";
+import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
 import { errorToast, getLayout, selectedSession, sessionState, setLayout, toast, useStore, sessionTerminals } from "./store";
 import { arrange, lastActive } from "./sidebar";
 import { findEntry } from "./terminals";
 import { isStructured } from "./agents";
+import { hasRunCommand } from "./projectSettings";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -167,10 +168,22 @@ export async function setClassic(host: string, id: number, classic: boolean) {
   }
 }
 
+/** Opens Project settings for `target`, or the selected session's project. */
+export function openProjectSettings(target?: { host: string; project: string }, focus?: "run") {
+  const c = current();
+  const t = target ?? (c && { host: c.host, project: c.ws.project_id });
+  if (t) useStore.setState({ dialog: { kind: "project-settings", ...t, focus } });
+}
+
 export async function runScript(script: "run" | "setup") {
   const c = current();
   if (!c) return;
   try {
+    // No run command yet: offer to set one instead of failing (X8).
+    if (script === "run") {
+      const config = await rpc<ProjectConfig>(c.host, M.projectConfig, { id: c.ws.project_id });
+      if (!hasRunCommand(config)) return openProjectSettings(undefined, "run");
+    }
     const info = await rpc<TerminalInfo>(c.host, M.sessionRun, { id: c.ws.id, script, cols: 120, rows: 30 });
     const layout = getLayout(c.host, c.ws.id);
     const tab = tabOf(layout, info.id);
@@ -189,12 +202,15 @@ export async function archiveSession(deleteBranch = false, target?: { host: stri
     { title: "Archive session", kind: "warning" },
   );
   if (!ok) return;
+  // Close its views first: they would reload while the worktree is deleted.
+  const sel = useStore.getState().selected;
+  const wasSelected = sel?.host === c.host && sel.session === c.ws.id;
+  if (wasSelected) useStore.setState({ selected: null });
   try {
     await rpc(c.host, M.sessionArchive, { id: c.ws.id, remove_worktree: true, delete_branch: deleteBranch });
-    const sel = useStore.getState().selected;
-    if (sel?.host === c.host && sel.session === c.ws.id) useStore.setState({ selected: null });
     toast(`Archived ${c.ws.name}`);
   } catch (e) {
+    if (wasSelected && !useStore.getState().selected) useStore.setState({ selected: sel });
     errorToast(e);
   }
 }

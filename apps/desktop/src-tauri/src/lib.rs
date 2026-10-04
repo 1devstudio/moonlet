@@ -267,7 +267,7 @@ fn sound_path(name: &str) -> Result<String, RpcError> {
     Ok(format!("/System/Library/Sounds/{name}.aiff"))
 }
 
-/// Plays an alert sound when an agent finishes or needs the user (X8).
+/// Plays an alert sound when an agent finishes or needs the user (X10).
 #[tauri::command]
 async fn play_sound(name: String) -> Result<(), RpcError> {
     let path = sound_path(&name)?;

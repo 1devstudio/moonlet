@@ -180,6 +180,7 @@ body:not(.kbd-nav) button:focus {
 .chat-md h2 { font-size: 1.15em; }
 .chat-md h3, .chat-md h4 { font-size: 1em; }
 .chat-md a { color: var(--color-accent-2); }
+.chat-md a:hover { text-decoration: underline; }
 .chat-md strong { font-weight: 600; color: #f2f2f2; }
 .chat-md code { font: 12.5px var(--font-mono); background: var(--color-raised); padding: 0.1em 0.35em; border-radius: 4px; }
 .chat-md pre { background: #181818; border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; overflow: auto; }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { archiveSession, closeFocused, focusedEntry, newTab, runScript, split } from "../lib/actions";
+import { archiveSession, closeFocused, focusedEntry, newTab, openProjectSettings, runScript, split } from "../lib/actions";
 import { focusTerminal, selectSession, toast, useStore } from "../lib/store";
 import { Kbd, StateGlyph, cx } from "./ui";
 import type { AgentState } from "../lib/protocol";
@@ -58,6 +58,7 @@ export function CommandPalette() {
       { id: "close", label: "Close pane", keys: "⌘W", run: () => void closeFocused() },
       { id: "run", label: "Run script", keys: "⌘R", run: () => void runScript("run") },
       { id: "setup", label: "Re-run setup script", run: () => void runScript("setup") },
+      { id: "project-settings", label: "Project settings…", run: () => openProjectSettings() },
       { id: "changes", label: "Show changes", keys: "⇧⌘D", run: () => useStore.setState({ rightTab: "changes", rightOpen: true }) },
       { id: "files", label: "Show files", keys: "⇧⌘E", run: () => useStore.setState({ rightTab: "files", rightOpen: true }) },
       { id: "checks", label: "Show review (PR, checks, commits)", run: () => useStore.setState({ rightTab: "review", rightOpen: true }) },

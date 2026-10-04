@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
-import { FileText, X } from "lucide-react";
+import { Copy, FileText, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { previewDocument, renderMarkdown } from "../lib/markdown";
 import { M, type FileContent } from "../lib/protocol";
-import { useStore } from "../lib/store";
+import { errorToast, toast, useStore } from "../lib/store";
 import { Empty, IconButton } from "./ui";
 
 /** Rendered Markdown with live reload on file changes (M1, M2). */
 export function PreviewPanel() {
   const preview = useStore((s) => s.preview);
   const [doc, setDoc] = useState<string | null>(null);
+  // Raw Markdown for "Copy", tagged with the preview it was read for so a file switch never copies the old file.
+  const [source, setSource] = useState<{ of: typeof preview; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Any change under a watched root bumps its version; a cheap re-read is fine.
   const version = useStore((s) => (preview ? Object.entries(s.fsVersion).reduce((n, [k, v]) => (k.startsWith(preview.host + "|") && preview.path.startsWith(k.split("|")[1]) ? n + v : n), 0) : 0));
@@ -24,6 +26,7 @@ export function PreviewPanel() {
         const html = await renderMarkdown(f.content);
         if (live) {
           setDoc(previewDocument(html));
+          setSource({ of: preview, text: f.content });
           setError(null);
         }
       })
@@ -47,7 +50,15 @@ export function PreviewPanel() {
         <span className="truncate font-mono text-fg" title={preview.path}>
           {preview.path.split("/").slice(-2).join("/")}
         </span>
-        <IconButton title="Close preview" className="ml-auto" onClick={() => useStore.setState({ preview: null })}>
+        <IconButton
+          title="Copy Markdown"
+          className="ml-auto"
+          disabled={source?.of !== preview || error !== null}
+          onClick={() => source && void navigator.clipboard.writeText(source.text).then(() => toast("Copied Markdown"), errorToast)}
+        >
+          <Copy size={12} />
+        </IconButton>
+        <IconButton title="Close preview" onClick={() => useStore.setState({ preview: null })}>
           <X size={12} />
         </IconButton>
       </div>
