@@ -2,8 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowRight, ChevronDown, ChevronRight, ExternalLink, Layers, MoreHorizontal, Play, Plus, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type FileChange, type PrStack, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
-import { errorToast, projectOf, type RightTab, recordPr, useStore, sesKey } from "../lib/store";
+import { M, type FileChange, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
+import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
@@ -138,10 +138,9 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
     const load = () => {
       const isLatest = polls.start();
       const latest = () => live && isLatest();
-      void rpc<PullRequest | null>(host, M.prStatus, { path: ws.path })
+      void pollPr(host, ws.id, ws.path)
         .then((p) => {
           if (!latest()) return;
-          recordPr(host, ws.id, p);
           if (!p) return setStack(null);
           void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number })
             .then((st) => latest() && setStack(st))

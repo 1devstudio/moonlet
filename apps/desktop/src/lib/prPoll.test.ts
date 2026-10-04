@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { focusThrottle, needsPrPoll } from "./prPoll";
+import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 
 describe("needsPrPoll", () => {
   it("stops polling a session once its PR is merged", () => {
@@ -30,5 +30,22 @@ describe("focusThrottle", () => {
     expect(due(114_999)).toBe(false);
     expect(due(115_000)).toBe(true);
     expect(due(120_000)).toBe(false);
+  });
+});
+
+describe("latestPerKey", () => {
+  it("drops a slower, older answer for the same session once a newer poll started", () => {
+    const polls = latestPerKey();
+    const sidebar = polls.start("local/s1");
+    const button = polls.start("local/s1");
+    expect(button()).toBe(true);
+    expect(sidebar()).toBe(false);
+  });
+
+  it("keeps sessions independent", () => {
+    const polls = latestPerKey();
+    const s1 = polls.start("local/s1");
+    polls.start("local/s2");
+    expect(s1()).toBe(true);
   });
 });
