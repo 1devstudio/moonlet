@@ -42,7 +42,7 @@ import {
   transcript,
   useChat,
 } from "../lib/chat";
-import { openableUrl, renderChatMarkdown } from "../lib/markdown";
+import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
 import { errorToast, getLayout, setLayout, toast, useStore } from "../lib/store";
@@ -91,8 +91,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           if (!a) return;
           // Links never navigate the app window; ⌘-click opens the browser.
           e.preventDefault();
-          const url = openableUrl(a.getAttribute("href"));
-          if (url && e.metaKey) void openUrl(url);
+          const url = linkToOpen(a.getAttribute("href"), e.metaKey);
+          if (url) void openUrl(url);
         }}
         onMouseOver={(e) => {
           const a = anchorOf(e);
@@ -110,7 +110,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
         createPortal(
           <div
             className="fixed z-[60] flex items-center gap-0.5 rounded-lg border border-border-strong bg-[#232323] p-0.5 shadow-2xl"
-            style={{ left: Math.min(link.rect.left, window.innerWidth - 72), ...(link.rect.top > 40 ? { bottom: window.innerHeight - link.rect.top + 2 } : { top: link.rect.bottom + 2 }) }}
+            style={linkToolbarPosition(link.rect, { width: window.innerWidth, height: window.innerHeight })}
             onMouseEnter={keep}
             onMouseLeave={hide}
           >

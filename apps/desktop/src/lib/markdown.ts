@@ -159,6 +159,21 @@ export function openableUrl(href: string | null): string | null {
   }
 }
 
+/** The URL a click on a chat link opens: only ⌘-click opens, plain clicks select text. */
+export function linkToOpen(href: string | null, metaKey: boolean): string | null {
+  return metaKey ? openableUrl(href) : null;
+}
+
+/** Fixed position of the link's Open/Copy toolbar: above the link, below it near the window top. */
+export function linkToolbarPosition(
+  link: { left: number; top: number; bottom: number },
+  win: { width: number; height: number },
+  toolbarWidth = 72,
+): { left: number; top?: number; bottom?: number } {
+  const left = Math.max(4, Math.min(link.left, win.width - toolbarWidth));
+  return link.top > 40 ? { left, bottom: win.height - link.top + 2 } : { left, top: link.bottom + 2 };
+}
+
 export function renderChatMarkdown(source: string): string {
   return DOMPurify.sanitize(chatMd.render(source), {
     USE_PROFILES: { html: true },
