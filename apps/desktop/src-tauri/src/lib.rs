@@ -239,6 +239,55 @@ fn log_js(level: String, message: String) {
     }
 }
 
+/// macOS system sounds the app may play. Must match `SYSTEM_SOUNDS` in
+/// src/lib/sounds.ts.
+const SOUNDS: &[&str] = &[
+    "Basso",
+    "Blow",
+    "Bottle",
+    "Frog",
+    "Funk",
+    "Glass",
+    "Hero",
+    "Morse",
+    "Ping",
+    "Pop",
+    "Purr",
+    "Sosumi",
+    "Submarine",
+    "Tink",
+];
+
+/// The file for an allowlisted sound name. The name comes from the webview,
+/// so anything else is rejected rather than joined into a path.
+fn sound_path(name: &str) -> Result<String, RpcError> {
+    if !SOUNDS.contains(&name) {
+        return Err(RpcError::new("invalid_params", "unknown sound"));
+    }
+    Ok(format!("/System/Library/Sounds/{name}.aiff"))
+}
+
+/// Plays an alert sound when an agent finishes or needs the user (X10).
+#[tauri::command]
+async fn play_sound(name: String) -> Result<(), RpcError> {
+    let path = sound_path(&name)?;
+    if cfg!(target_os = "macos") {
+        // Waiting reaps the child so finished players don't linger as zombies.
+        let status = tokio::process::Command::new("afplay")
+            .arg(path)
+            .status()
+            .await
+            .map_err(err)?;
+        if !status.success() {
+            return Err(RpcError::new(
+                "failed",
+                format!("afplay exited with {status}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn app_info() -> Value {
     serde_json::json!({
@@ -279,8 +328,37 @@ pub fn run() {
             open_in,
             daemon_service,
             log_js,
+            play_sound,
             app_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running jaunt");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sound_path_accepts_only_allowlisted_names() {
+        assert_eq!(
+            sound_path("Glass").unwrap(),
+            "/System/Library/Sounds/Glass.aiff"
+        );
+        assert!(sound_path("../../tmp/x").is_err());
+        assert!(sound_path("glass").is_err());
+        assert!(sound_path("").is_err());
+    }
+
+    #[test]
+    fn every_allowlisted_sound_exists() {
+        if cfg!(target_os = "macos") {
+            for name in SOUNDS {
+                assert!(
+                    std::path::Path::new(&sound_path(name).unwrap()).exists(),
+                    "{name}"
+                );
+            }
+        }
+    }
 }
