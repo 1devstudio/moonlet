@@ -1,0 +1,73 @@
+{
+  "projectId": "dee41f1e-ea0e-48c1-9bcc-ee637ca14d36",
+  "shape": "package",
+  "pkg": "@jaunt/ds",
+  "globalName": "Jaunt",
+  "buildCmd": "pnpm --filter @jaunt/desktop build:ds",
+  "srcDir": "../src",
+  "cssEntry": "dist/styles.css",
+  "extraFonts": [
+    "../../../.design-sync/fonts/fonts.css"
+  ],
+  "docsDir": "../../../.design-sync/docs",
+  "componentSrcMap": {
+    "MenuItems": null
+  },
+  "dtsPropsFor": {
+    "Button": "variant?: \"primary\" | \"ghost\" | \"subtle\" | \"danger\"; size?: \"sm\" | \"md\"; type?: \"button\" | \"submit\"; disabled?: boolean; title?: string; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void; className?: string; children?: React.ReactNode",
+    "IconButton": "title: string; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void; disabled?: boolean; className?: string; children?: React.ReactNode",
+    "ToolRow": "tool: { name: string; summary: string; input: unknown; output?: string | null; status: \"running\" | \"ok\" | \"error\" | \"denied\"; diff?: string | null }; cwd: string",
+    "ChatItemView": "item: { id: string; kind: \"user\" | \"assistant\" | \"thinking\" | \"tool\" | \"system\" | \"error\"; text: string; tool?: { name: string; summary: string; input: unknown; output?: string | null; status: \"running\" | \"ok\" | \"error\" | \"denied\"; diff?: string | null } | null; ts: number; partial?: boolean }; cwd: string",
+    "Thinking": "item: { id: string; kind: \"user\" | \"assistant\" | \"thinking\" | \"tool\" | \"system\" | \"error\"; text: string; tool?: { name: string; summary: string; input: unknown; output?: string | null; status: \"running\" | \"ok\" | \"error\" | \"denied\"; diff?: string | null } | null; ts: number; partial?: boolean }",
+    "PermissionCard": "ask: { id: string; tool: string; summary: string; input: unknown; reason?: string | null; can_always: boolean; diff?: string | null }; cwd: string; onAnswer: (decision: \"allow\" | \"always\" | \"deny\") => void",
+    "QuestionCard": "ask: { id: string; tool: string; summary: string; input: unknown; reason?: string | null; can_always: boolean; diff?: string | null }; onAnswer: (decision: \"allow\" | \"deny\", answers?: Record<string, string>) => void",
+    "Menu": "trigger: (open: () => void) => React.ReactNode; items: Array<{ kind?: \"item\"; label: string; icon?: React.ReactNode; checked?: boolean; danger?: boolean; hint?: string; description?: string; onSelect: () => void } | { kind: \"submenu\"; label: string; icon?: React.ReactNode; items: unknown[] } | { kind: \"divider\" } | { kind: \"label\"; label: string }>; align?: \"left\" | \"right\"; side?: \"bottom\" | \"top\"; width?: number",
+    "Sidebar": "",
+    "JauntPreview": "selected?: string | null; chats?: Record<number, { status?: \"idle\" | \"working\" | \"blocked\" | \"done\" | \"error\"; items?: unknown[]; pending?: unknown[]; model?: string; cost_usd?: number }>; children: React.ReactNode"
+  },
+  "overrides": {
+    "Button": {
+      "cardMode": "column"
+    },
+    "Markdown": {
+      "cardMode": "column"
+    },
+    "ToolRow": {
+      "cardMode": "column"
+    },
+    "Dialog": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "Menu": {
+      "cardMode": "single",
+      "viewport": "320x340"
+    },
+    "AgentView": {
+      "cardMode": "column"
+    },
+    "Composer": {
+      "cardMode": "single",
+      "viewport": "860x460"
+    },
+    "ChatItemView": {
+      "cardMode": "column"
+    },
+    "DiffBlock": {
+      "cardMode": "column"
+    },
+    "PermissionCard": {
+      "cardMode": "column"
+    },
+    "QuestionCard": {
+      "cardMode": "column"
+    },
+    "Thinking": {
+      "cardMode": "column"
+    },
+    "Empty": {
+      "cardMode": "column"
+    }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

@@ -1,0 +1,12 @@
+/* jaunt design-system stylesheet: Tailwind v4 utilities used by jaunt's
+   components, the theme tokens, and the component classes. */
+@import "tailwindcss" source("../");
+@import "../styles/jaunt.css";
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  -webkit-font-smoothing: antialiased;
+}
