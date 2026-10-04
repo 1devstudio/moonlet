@@ -50,3 +50,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X8 | Project settings (edit `.jaunt/config.toml` from the app) | P1 | 3 | implemented (dialog unchecked in app) | [X8-project-settings.md](X8-project-settings.md) |
 | X9 | Open and copy links in agent messages | P1 | 3 | implemented (UI unchecked in app) | [X9-chat-links.md](X9-chat-links.md) |
 | X10 | Sound when an agent finishes or needs you | P1 | 3 | implemented (sound not heard in app) | [X10-attention-sounds.md](X10-attention-sounds.md) |
+| X11 | Stacked pull requests | P1 | 3 | implemented (UI unchecked in app) | [X11-pr-stacks.md](X11-pr-stacks.md) |

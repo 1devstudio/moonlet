@@ -225,6 +225,24 @@ export interface PullRequest {
   review_decision: string | null;
 }
 
+/** A GitHub stack of dependent PRs (spec X11); `prs` is bottom first. */
+export interface PrStack {
+  number: number;
+  base: string;
+  position: number;
+  size: number;
+  prs: StackPr[];
+}
+
+export interface StackPr {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  draft: boolean;
+  branch: string;
+}
+
 export interface Attention {
   terminal: number;
   session_id: string | null;
@@ -309,6 +327,7 @@ export const M = {
   workspaceDelete: "workspace.delete",
   workspaceAddProject: "workspace.add_project",
   prStatus: "gh.pr_status",
+  prStack: "gh.pr_stack",
   fsList: "fs.list",
   fsFiles: "fs.files",
   fsRead: "fs.read",
