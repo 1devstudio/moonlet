@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentOptions, fromForm, hasRunCommand, isDirty, toForm, validate, type Form } from "./projectSettings";
+import { agentOptions, fromForm, hasRunCommand, isDirty, loadFailure, toForm, validate, type Form } from "./projectSettings";
 
 const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], ...patch });
 
@@ -74,5 +74,18 @@ describe("hasRunCommand", () => {
     expect(hasRunCommand({ agents: {} })).toBe(false);
     expect(hasRunCommand({ run: "  ", agents: {} })).toBe(false);
     expect(hasRunCommand({ run: "pnpm dev", agents: {} })).toBe(true);
+  });
+});
+
+describe("loadFailure", () => {
+  it("closes the dialog when the first load fails", () => {
+    expect(loadFailure(false, "no such project")).toEqual({ close: true });
+  });
+
+  it("keeps the dialog open with the error and Reload when a reload fails", () => {
+    expect(loadFailure(true, "connection lost")).toEqual({
+      close: false,
+      saveErr: { message: "Could not reload .jaunt/config.toml: connection lost", stale: true },
+    });
   });
 });

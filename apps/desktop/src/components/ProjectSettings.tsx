@@ -7,7 +7,7 @@ import { FileWarning, FolderOpen, Plus, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ProjectConfigFile } from "../lib/protocol";
 import { errorToast, toast, useStore } from "../lib/store";
-import { agentOptions, fromForm, isDirty, newRowId, toForm, validate, type AgentRow, type Form } from "../lib/projectSettings";
+import { agentOptions, fromForm, isDirty, loadFailure, newRowId, toForm, validate, type AgentRow, type Form, type SaveError } from "../lib/projectSettings";
 import { Button, IconButton, cx } from "./ui";
 
 const close = () => useStore.setState({ dialog: null });
@@ -35,13 +35,13 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
   const [form, setForm] = useState<Form>(EMPTY);
   const [orig, setOrig] = useState<Form>(EMPTY);
   const [confirming, setConfirming] = useState(false);
-  const [saveErr, setSaveErr] = useState<{ message: string; stale: boolean } | null>(null);
+  const [saveErr, setSaveErr] = useState<SaveError | null>(null);
   const [saving, setSaving] = useState(false);
   const runRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef(new Map<number, HTMLInputElement>());
   const [pendingFocus, setPendingFocus] = useState<number | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (reload = false) => {
     try {
       const f = await rpc<ProjectConfigFile>(host, M.projectConfigFile, { id: projectId });
       const next = toForm(f.config);
@@ -51,8 +51,11 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
       setSaveErr(null);
       return true;
     } catch (e) {
-      errorToast(e);
-      close();
+      const failure = loadFailure(reload, e instanceof Error ? e.message : String(e));
+      if (failure.close) {
+        errorToast(e);
+        close();
+      } else setSaveErr(failure.saveErr);
       return false;
     }
   }, [host, projectId]);
@@ -269,7 +272,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
           <div className="flex items-center gap-2 border-t border-[#5a2a2e] bg-[#2a1416] px-4 py-2 text-[12px] text-error">
             <span className="min-w-0 flex-1">{saveErr.message}</span>
             {saveErr.stale && (
-              <Button size="sm" onClick={() => void load().then((ok) => ok && toast("Reloaded .jaunt/config.toml"))}>
+              <Button size="sm" onClick={() => void load(true).then((ok) => ok && toast("Reloaded .jaunt/config.toml"))}>
                 Reload
               </Button>
             )}

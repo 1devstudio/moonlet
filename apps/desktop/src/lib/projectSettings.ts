@@ -35,6 +35,19 @@ export function hasRunCommand(c: ProjectConfig | null | undefined): boolean {
   return !!c?.run?.trim();
 }
 
+export interface SaveError {
+  message: string;
+  /** Offer Reload: the file on disk is not what the form was loaded from. */
+  stale: boolean;
+}
+
+/** A failed read: the first load closes the dialog (there is nothing to
+ *  edit), a failed Reload keeps the user's edits and shows the error with
+ *  Reload to try again. */
+export function loadFailure(reload: boolean, message: string): { close: true } | { close: false; saveErr: SaveError } {
+  return reload ? { close: false, saveErr: { message: `Could not reload .jaunt/config.toml: ${message}`, stale: true } } : { close: true };
+}
+
 let uid = 1;
 export const newRowId = () => uid++;
 
