@@ -42,7 +42,7 @@ target/debug/jaunt hooks install    # Claude Code + Codex hooks (also in Setting
 
 ## Per-repo config
 
-`.jaunt/config.toml` in a repository:
+`.jaunt/config.toml` in a repository. Edit it by hand or in Project settings (the gear on a project in the sidebar, or `⋯` › Project settings…):
 
 ```toml
 setup = "pnpm install"        # runs when a workspace is created

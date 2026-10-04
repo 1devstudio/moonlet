@@ -4,7 +4,8 @@ import { ArrowRight, ChevronDown, ChevronRight, ExternalLink, MoreHorizontal, Pl
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type FileChange, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
-import { archiveSession, runScript } from "../lib/actions";
+import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
+import { hasRunCommand } from "../lib/projectSettings";
 import { ChecksPanel } from "./ChecksPanel";
 import { FilesPanel } from "./FilesPanel";
 import { PreviewPanel } from "./PreviewPanel";
@@ -51,6 +52,7 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
             <div className="my-1 border-t border-border" />
             {item("Commit…", () => useStore.setState({ dialog: { kind: "commit" } }))}
             {item("Re-run setup script", () => void runScript("setup"))}
+            {item("Project settings…", () => openProjectSettings({ host, project: ws.project_id }))}
             {item("Toggle sidebar  ⌘B", () => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen })))}
             <div className="my-1 border-t border-border" />
             {item("Archive session…", () => void archiveSession(), true)}
@@ -88,10 +90,9 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   return (
     <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1 px-4">
       <button
-        className="no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised disabled:text-faint disabled:hover:bg-transparent"
-        disabled={!config?.run}
-        title={config?.run ? `Run: ${config.run} (⌘R)` : 'Add run = "…" to .jaunt/config.toml'}
-        onClick={() => void runScript("run")}
+        className={cx("no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] hover:bg-raised", hasRunCommand(config) ? "text-fg" : "text-faint hover:text-fg")}
+        title={hasRunCommand(config) ? `Run: ${config?.run} (⌘R)` : "Set a run command…"}
+        onClick={() => (hasRunCommand(config) ? void runScript("run") : openProjectSettings({ host, project: ws.project_id }, "run"))}
       >
         <Play size={13} fill="currentColor" strokeWidth={0} /> Run
       </button>

@@ -12,4 +12,4 @@ Each repo can declare `setup`, `run` and `archive` commands in `.jaunt/config.to
 - [x] `workspace.run {id, script}` starts `run` or `setup` in a tab titled after the script. Running it again replaces the previous tab, so run panes don't pile up.
 - [x] Scripts run through `$SHELL -lic` with the workspace env vars from [A4](A4-new-workspace.md).
 - [x] A missing script is a clear error: "no `run` script in .jaunt/config.toml".
-- [x] UI: a Run ▶ button (disabled with a tooltip when no script is configured) and a Stop control.
+- [x] UI: a Run ▶ button and a Stop control. With no `run` script the button opens Project settings with the Run field focused ([X8](X8-project-settings.md)); before X8 it was disabled with a tooltip.
