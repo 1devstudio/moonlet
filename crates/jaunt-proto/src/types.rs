@@ -318,7 +318,7 @@ pub struct PullRequest {
     pub review_decision: Option<String>,
 }
 
-/// A GitHub stack of dependent pull requests (spec X8).
+/// A GitHub stack of dependent pull requests (spec X11).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrStack {
     pub number: u64,

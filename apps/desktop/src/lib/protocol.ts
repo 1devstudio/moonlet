@@ -225,7 +225,7 @@ export interface PullRequest {
   review_decision: string | null;
 }
 
-/** A GitHub stack of dependent PRs (spec X8); `prs` is bottom first. */
+/** A GitHub stack of dependent PRs (spec X11); `prs` is bottom first. */
 export interface PrStack {
   number: number;
   base: string;
