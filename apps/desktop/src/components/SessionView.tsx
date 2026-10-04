@@ -76,6 +76,7 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: str
   const name = info ? (info.agent ?? info.title) : "…";
   return (
     <div
+      aria-current={active || undefined}
       className={cx(
         "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 text-[14px]",
         active ? "bg-raised text-fg" : "text-muted hover:text-fg",
