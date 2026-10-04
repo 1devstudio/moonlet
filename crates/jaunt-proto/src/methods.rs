@@ -61,6 +61,8 @@ pub const GIT_APPLY_PATCH: &str = "git.apply_patch";
 pub const GIT_COMMIT: &str = "git.commit";
 pub const GIT_LOG: &str = "git.log";
 pub const GIT_BRANCHES: &str = "git.branches";
+pub const GIT_BASE_STATUS: &str = "git.base_status";
+pub const GIT_PULL_BASE: &str = "git.pull_base";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
 pub const GH_ISSUES: &str = "gh.issues";
 pub const SHELL_HISTORY: &str = "shell.history";
@@ -381,6 +383,16 @@ pub struct GitPath {
     /// Diff base: a ref, or absent for HEAD.
     #[serde(default)]
     pub base: Option<String>,
+}
+
+/// `git.base_status` and `git.pull_base` (spec X13).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitBase {
+    pub path: String,
+    pub branch: String,
+    /// `git.base_status` only: fetch `origin/<branch>` first.
+    #[serde(default)]
+    pub fetch: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

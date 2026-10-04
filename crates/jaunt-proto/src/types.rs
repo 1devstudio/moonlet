@@ -288,6 +288,33 @@ pub struct Commit {
     pub time: u64,
 }
 
+/// A project's base branch against `origin` (spec X13).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BaseStatus {
+    pub branch: String,
+    /// `origin/<branch>`.
+    pub upstream: String,
+    /// Local commits that are not on the upstream.
+    pub ahead: u32,
+    /// Upstream commits that are not local.
+    pub behind: u32,
+    /// The incoming commits, newest first, at most 20.
+    pub commits: Vec<Commit>,
+    /// The work tree that has the branch checked out, if any.
+    pub checkout: Option<String>,
+    /// Why the fetch asked for failed; the counts then come from the refs
+    /// already there.
+    pub fetch_error: Option<String>,
+}
+
+/// What `git.pull_base` did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BasePull {
+    pub pulled: u32,
+    /// The branch's new head.
+    pub head: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DirEntry {
     pub name: String,

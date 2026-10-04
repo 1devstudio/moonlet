@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use jaunt_proto::types::{
-    CheckRun, Commit, FileChange, FileVersions, GitStatus, PrStack, PullRequest, StackPr,
+    BasePull, BaseStatus, CheckRun, Commit, FileChange, FileVersions, GitStatus, PrStack,
+    PullRequest, StackPr,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -584,18 +585,7 @@ pub async fn log(path: &Path, base: Option<&str>) -> Result<Vec<Commit>> {
         ],
     )
     .await?;
-    Ok(raw
-        .lines()
-        .filter_map(|l| {
-            let mut p = l.split('\x1f');
-            Some(Commit {
-                sha: p.next()?.into(),
-                subject: p.next()?.into(),
-                author: p.next()?.into(),
-                time: p.next()?.parse().ok()?,
-            })
-        })
-        .collect())
+    Ok(parse_commits(&raw))
 }
 
 pub async fn branches(path: &Path) -> Result<Vec<String>> {
@@ -615,6 +605,158 @@ pub async fn branches(path: &Path) -> Result<Vec<String>> {
         .filter(|l| !l.ends_with("/HEAD") && !l.is_empty())
         .map(String::from)
         .collect())
+}
+
+/// Commit lines as `log --format=%H%x1f%s%x1f%an%x1f%ct` prints them.
+fn parse_commits(raw: &str) -> Vec<Commit> {
+    raw.lines()
+        .filter_map(|l| {
+            let mut p = l.split('\x1f');
+            Some(Commit {
+                sha: p.next()?.into(),
+                subject: p.next()?.into(),
+                author: p.next()?.into(),
+                time: p.next()?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// The work tree that has `branch` checked out, from
+/// `git worktree list --porcelain`. Prunable entries (directory gone) do
+/// not count.
+fn checkout_of(porcelain: &str, branch: &str) -> Option<String> {
+    let want = format!("branch refs/heads/{branch}");
+    porcelain.split("\n\n").find_map(|entry| {
+        let lines: Vec<&str> = entry.lines().collect();
+        if !lines.contains(&want.as_str()) || lines.iter().any(|l| l.starts_with("prunable")) {
+            return None;
+        }
+        lines
+            .iter()
+            .find_map(|l| l.strip_prefix("worktree "))
+            .map(String::from)
+    })
+}
+
+/// Rejects branch names git could read as an option or that are not
+/// branch names at all.
+async fn check_branch(root: &Path, branch: &str) -> Result<()> {
+    if branch.starts_with('-')
+        || git(root, &["check-ref-format", "--branch", branch])
+            .await
+            .is_err()
+    {
+        bail!("invalid branch name: {branch}");
+    }
+    Ok(())
+}
+
+/// The project's base branch against `origin/<branch>` (spec X13), or
+/// `None` when either ref is missing. `fetch` updates the remote-tracking
+/// branch first; a failed fetch is reported, not fatal.
+pub async fn base_status(repo: &Path, branch: &str, fetch: bool) -> Result<Option<BaseStatus>> {
+    let root = toplevel(repo).await?;
+    check_branch(&root, branch).await?;
+    let fetch_error = if fetch {
+        git(&root, &["fetch", "--quiet", "--no-tags", "origin", branch])
+            .await
+            .err()
+            .map(|e| e.to_string())
+    } else {
+        None
+    };
+    let (local, upstream) = (
+        format!("refs/heads/{branch}"),
+        format!("refs/remotes/origin/{branch}"),
+    );
+    for r in [&local, &upstream] {
+        if git(&root, &["rev-parse", "--verify", "--quiet", r])
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
+    }
+    let counts = git_text(
+        &root,
+        &[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{local}...{upstream}"),
+        ],
+    )
+    .await?;
+    let mut n = counts.split_whitespace().map(|x| x.parse().unwrap_or(0));
+    let (ahead, behind) = (n.next().unwrap_or(0), n.next().unwrap_or(0));
+    let commits = parse_commits(
+        &git_text(
+            &root,
+            &[
+                "log",
+                "--format=%H%x1f%s%x1f%an%x1f%ct",
+                "-n",
+                "20",
+                &format!("{local}..{upstream}"),
+            ],
+        )
+        .await?,
+    );
+    Ok(Some(BaseStatus {
+        branch: branch.into(),
+        upstream: format!("origin/{branch}"),
+        ahead,
+        behind,
+        commits,
+        checkout: checkout_of(
+            &git_text(&root, &["worktree", "list", "--porcelain"]).await?,
+            branch,
+        ),
+        fetch_error,
+    }))
+}
+
+/// Fast-forwards the base branch to the `origin/<branch>` already fetched
+/// (spec X13). Where the branch is checked out, the merge runs in that work
+/// tree so its files follow; elsewhere only the ref moves. A diverged
+/// branch is left alone.
+pub async fn pull_base(repo: &Path, branch: &str) -> Result<BasePull> {
+    let root = toplevel(repo).await?;
+    let st = base_status(&root, branch, false)
+        .await?
+        .with_context(|| format!("{branch} has no origin/{branch} to pull from"))?;
+    let local = format!("refs/heads/{branch}");
+    let old = git_text(&root, &["rev-parse", &local]).await?;
+    if st.behind == 0 {
+        return Ok(BasePull {
+            pulled: 0,
+            head: old,
+        });
+    }
+    if st.ahead > 0 {
+        bail!(
+            "cannot fast-forward {branch}: it has {} commit(s) that are not on {}",
+            st.ahead,
+            st.upstream
+        );
+    }
+    let upstream = format!("refs/remotes/origin/{branch}");
+    let new = git_text(&root, &["rev-parse", &upstream]).await?;
+    match &st.checkout {
+        Some(dir) => {
+            git(Path::new(dir), &["merge", "--ff-only", "--quiet", &new]).await?;
+        }
+        None => {
+            // Compare-and-swap: fails if the branch moved since `old`.
+            let msg = format!("jaunt: fast-forward {branch} to {}", st.upstream);
+            git(&root, &["update-ref", "-m", &msg, &local, &new, &old]).await?;
+        }
+    }
+    Ok(BasePull {
+        pulled: st.behind,
+        head: new,
+    })
 }
 
 pub async fn worktree_add(
@@ -1046,6 +1188,224 @@ pub(crate) mod tests {
         let st = status(dir.path(), Some("main")).await.unwrap();
         assert_eq!(st.files.len(), 1);
         assert_eq!(st.against, EMPTY_TREE);
+    }
+
+    /// A bare `origin`, a clone of it (the project) and a second clone
+    /// standing in for GitHub merges.
+    struct Remote {
+        _dir: tempfile::TempDir,
+        local: PathBuf,
+        other: PathBuf,
+    }
+
+    async fn remote() -> Remote {
+        let seed = repo().await;
+        let dir = tempfile::tempdir().unwrap();
+        let origin = dir.path().join("origin.git");
+        let (local, other) = (dir.path().join("local"), dir.path().join("other"));
+        let s = |p: &Path| p.display().to_string();
+        git(
+            dir.path(),
+            &["clone", "-q", "--bare", &s(seed.path()), &s(&origin)],
+        )
+        .await
+        .unwrap();
+        for clone in [&local, &other] {
+            git(dir.path(), &["clone", "-q", &s(&origin), &s(clone)])
+                .await
+                .unwrap();
+            for args in [
+                ["config", "user.email", "t@example.com"],
+                ["config", "user.name", "Test"],
+                ["config", "commit.gpgsign", "false"],
+            ] {
+                git(clone, &args).await.unwrap();
+            }
+        }
+        Remote {
+            _dir: dir,
+            local,
+            other,
+        }
+    }
+
+    async fn commit_file(repo: &Path, file: &str, subject: &str) {
+        std::fs::write(repo.join(file), subject).unwrap();
+        git(repo, &["add", "-A"]).await.unwrap();
+        git(repo, &["commit", "-qm", subject]).await.unwrap();
+    }
+
+    /// "Merges on GitHub": commits pushed to origin from the other clone.
+    async fn merge_upstream(r: &Remote, subjects: &[&str]) {
+        for (i, subject) in subjects.iter().enumerate() {
+            commit_file(&r.other, &format!("up{i}.txt"), subject).await;
+        }
+        git(&r.other, &["push", "-q", "origin", "main"])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn base_behind_origin_lists_incoming_commits_after_fetch() {
+        let r = remote().await;
+        merge_upstream(&r, &["Open sessions from PRs", "Show PR state"]).await;
+
+        let before = base_status(&r.local, "main", false).await.unwrap().unwrap();
+        assert_eq!((before.ahead, before.behind), (0, 0));
+
+        let st = base_status(&r.local, "main", true).await.unwrap().unwrap();
+        assert_eq!(st.branch, "main");
+        assert_eq!(st.upstream, "origin/main");
+        assert_eq!((st.ahead, st.behind), (0, 2));
+        let subjects: Vec<_> = st.commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, ["Show PR state", "Open sessions from PRs"]);
+        assert_eq!(st.commits[0].sha.len(), 40);
+        assert_eq!(st.fetch_error, None);
+    }
+
+    #[tokio::test]
+    async fn base_without_origin_branch_is_none_and_failed_fetch_is_reported() {
+        let alone = repo().await;
+        assert_eq!(base_status(alone.path(), "main", true).await.unwrap(), None);
+
+        let r = remote().await;
+        assert_eq!(base_status(&r.local, "develop", false).await.unwrap(), None);
+
+        git(
+            &r.local,
+            &["remote", "set-url", "origin", "/nonexistent/origin.git"],
+        )
+        .await
+        .unwrap();
+        let st = base_status(&r.local, "main", true).await.unwrap().unwrap();
+        assert_eq!((st.ahead, st.behind), (0, 0));
+        assert!(st.fetch_error.unwrap().contains("/nonexistent/origin.git"));
+    }
+
+    #[tokio::test]
+    async fn base_reports_divergence_checkout_and_rejects_option_like_names() {
+        let r = remote().await;
+        merge_upstream(&r, &["upstream one", "upstream two"]).await;
+        commit_file(&r.local, "mine.txt", "local only").await;
+
+        let st = base_status(&r.local, "main", true).await.unwrap().unwrap();
+        assert_eq!((st.ahead, st.behind), (1, 2));
+        let root = toplevel(&r.local).await.unwrap().display().to_string();
+        assert_eq!(st.checkout.as_deref(), Some(root.as_str()));
+
+        git(&r.local, &["checkout", "-q", "-b", "feature"])
+            .await
+            .unwrap();
+        let st = base_status(&r.local, "main", false).await.unwrap().unwrap();
+        assert_eq!(st.checkout, None);
+
+        assert!(
+            base_status(&r.local, "--upload-pack=touch x", false)
+                .await
+                .is_err()
+        );
+        assert!(base_status(&r.local, "a..b", false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn pull_fast_forwards_the_checked_out_base_and_its_files() {
+        let r = remote().await;
+        merge_upstream(&r, &["upstream one", "upstream two"]).await;
+        base_status(&r.local, "main", true).await.unwrap();
+        let tip = git_text(&r.other, &["rev-parse", "HEAD"]).await.unwrap();
+
+        let pulled = pull_base(&r.local, "main").await.unwrap();
+        assert_eq!(
+            pulled,
+            BasePull {
+                pulled: 2,
+                head: tip.clone()
+            }
+        );
+        assert_eq!(
+            git_text(&r.local, &["rev-parse", "main"]).await.unwrap(),
+            tip
+        );
+        assert!(r.local.join("up1.txt").exists());
+        let st = base_status(&r.local, "main", false).await.unwrap().unwrap();
+        assert_eq!((st.ahead, st.behind), (0, 0));
+
+        let again = pull_base(&r.local, "main").await.unwrap();
+        assert_eq!(
+            again,
+            BasePull {
+                pulled: 0,
+                head: tip
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn pull_moves_a_base_branch_nobody_has_checked_out() {
+        let r = remote().await;
+        git(&r.local, &["checkout", "-q", "-b", "feature"])
+            .await
+            .unwrap();
+        merge_upstream(&r, &["upstream one"]).await;
+        base_status(&r.local, "main", true).await.unwrap();
+        let tip = git_text(&r.other, &["rev-parse", "HEAD"]).await.unwrap();
+
+        assert_eq!(pull_base(&r.local, "main").await.unwrap().pulled, 1);
+        assert_eq!(
+            git_text(&r.local, &["rev-parse", "main"]).await.unwrap(),
+            tip
+        );
+        assert_eq!(
+            git_text(&r.local, &["branch", "--show-current"])
+                .await
+                .unwrap(),
+            "feature"
+        );
+        assert!(!r.local.join("up0.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn pull_refuses_a_diverged_base_and_changes_nothing() {
+        let r = remote().await;
+        merge_upstream(&r, &["upstream one"]).await;
+        commit_file(&r.local, "mine.txt", "local only").await;
+        base_status(&r.local, "main", true).await.unwrap();
+        let mine = git_text(&r.local, &["rev-parse", "main"]).await.unwrap();
+
+        let err = pull_base(&r.local, "main").await.unwrap_err().to_string();
+        assert!(err.contains("cannot fast-forward"), "{err}");
+        assert_eq!(
+            git_text(&r.local, &["rev-parse", "main"]).await.unwrap(),
+            mine
+        );
+    }
+
+    #[test]
+    fn worktree_with_branch_from_porcelain() {
+        // `git worktree list --porcelain` from a jaunt checkout, 2026-10-04.
+        let raw = "worktree /Users/me/Workspace/1devstudio/jaunt\n\
+                   HEAD d2cbd2fff7abb00070689f3f1d54b872935ff77b\n\
+                   branch refs/heads/main\n\
+                   \n\
+                   worktree /private/tmp/jaunt-vcheck/home/worktrees/jaunt/test\n\
+                   HEAD 449191af3cf6b19bc796d73c10ad8d3f23248210\n\
+                   branch refs/heads/jaunt/test\n\
+                   prunable gitdir file points to non-existent location\n\
+                   \n\
+                   worktree /Users/me/.jaunt/worktrees/jaunt/analyze-the-design\n\
+                   HEAD d2cbd2fff7abb00070689f3f1d54b872935ff77b\n\
+                   branch refs/heads/jaunt/analyze-the-design\n";
+        assert_eq!(
+            checkout_of(raw, "main").as_deref(),
+            Some("/Users/me/Workspace/1devstudio/jaunt")
+        );
+        assert_eq!(
+            checkout_of(raw, "jaunt/analyze-the-design").as_deref(),
+            Some("/Users/me/.jaunt/worktrees/jaunt/analyze-the-design")
+        );
+        // Its directory is gone, so nothing can be merged there.
+        assert_eq!(checkout_of(raw, "jaunt/test"), None);
+        assert_eq!(checkout_of(raw, "develop"), None);
     }
 
     #[test]
