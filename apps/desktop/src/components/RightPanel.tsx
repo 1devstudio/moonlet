@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowRight, ChevronDown, ChevronRight, ExternalLink, MoreHorizontal, Play, Plus, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronRight, ExternalLink, Layers, MoreHorizontal, Play, Plus, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type FileChange, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
+import { M, type FileChange, type PrStack, type PullRequest, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { hasRunCommand } from "../lib/projectSettings";
@@ -63,10 +63,69 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
   );
 }
 
+function PrIcon({ className }: { className: string }) {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" className={className} fill="none" stroke="currentColor" strokeWidth="1.5">
+      <circle cx="4" cy="3.5" r="1.6" />
+      <circle cx="4" cy="12.5" r="1.6" />
+      <circle cx="12" cy="12.5" r="1.6" />
+      <path d="M4 5.1v5.8M12 10.9V7a2.5 2.5 0 0 0-2.5-2.5H7m0 0 1.6-1.6M7 4.5l1.6 1.6" />
+    </svg>
+  );
+}
+
+/** Position in the GitHub stack and its PRs, top of the stack first (spec X8). */
+function StackMenu({ stack, current }: { stack: PrStack; current: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="no-drag relative">
+      <button
+        className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
+        title={`Stack of ${stack.size} pull requests on ${stack.base}`}
+        onClick={() => setOpen(!open)}
+      >
+        <Layers size={13} className="text-muted" />
+        <span className="tabular-nums">
+          {stack.position}/{stack.size}
+        </span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 z-40 mt-1 max-h-[60vh] w-[360px] overflow-y-auto rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
+            {[...stack.prs].reverse().map((p) => (
+              <button
+                key={p.number}
+                title={`${p.title} · Open in browser`}
+                className={cx("flex w-full items-start gap-2.5 px-3 py-1.5 text-left hover:bg-hover", p.number === current && "bg-raised")}
+                onClick={() => {
+                  setOpen(false);
+                  void openUrl(p.url);
+                }}
+              >
+                <PrIcon className={cx("mt-1 shrink-0", prTone(p.state))} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] text-fg">{p.title}</span>
+                  <span className="block truncate text-[12px] text-muted">
+                    #{p.number} · {p.branch}
+                    {p.draft && " · draft"}
+                  </span>
+                </span>
+                {p.number === current && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-fg" title="This session's pull request" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TopActions({ host, ws }: { host: string; ws: Session }) {
   const repo = useStore((s) => projectOf(s, host, ws));
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [pr, setPr] = useState<PullRequest | null>(null);
+  const [stack, setStack] = useState<PrStack | null>(null);
   useEffect(() => {
     if (repo) void rpc<ProjectConfig>(host, M.projectConfig, { id: repo.id }).then(setConfig).catch(() => setConfig(null));
   }, [host, repo]);
@@ -78,8 +137,16 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
           if (!live) return;
           setPr(p);
           useStore.setState((s) => ({ prs: { ...s.prs, [sesKey(host, ws.id)]: p } }));
+          if (!p) return setStack(null);
+          void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number })
+            .then((st) => live && setStack(st))
+            .catch(() => live && setStack(null));
         })
-        .catch(() => live && setPr(null));
+        .catch(() => {
+          if (!live) return;
+          setPr(null);
+          setStack(null);
+        });
     load();
     const t = setInterval(load, 60_000);
     return () => {
@@ -96,17 +163,13 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
       >
         <Play size={13} fill="currentColor" strokeWidth={0} /> Run
       </button>
+      {pr && stack && <StackMenu stack={stack} current={pr.number} />}
       <button
         className="no-drag group flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
         title={pr ? `#${pr.number} ${pr.title} · Open in browser` : "Create pull request (⇧⌘P)"}
         onClick={() => (pr ? void openUrl(pr.url) : useStore.setState({ dialog: { kind: "create-pr" } }))}
       >
-        <svg viewBox="0 0 16 16" width="13" height="13" className={pr ? prTone(pr.state) : "text-accent"} fill="none" stroke="currentColor" strokeWidth="1.5">
-          <circle cx="4" cy="3.5" r="1.6" />
-          <circle cx="4" cy="12.5" r="1.6" />
-          <circle cx="12" cy="12.5" r="1.6" />
-          <path d="M4 5.1v5.8M12 10.9V7a2.5 2.5 0 0 0-2.5-2.5H7m0 0 1.6-1.6M7 4.5l1.6 1.6" />
-        </svg>
+        <PrIcon className={pr ? prTone(pr.state) : "text-accent"} />
         PR {pr && <span className="text-muted">#{pr.number}</span>}
         {pr && pr.state !== "open" && <span className={prTone(pr.state)}>· {pr.state}</span>}
         {pr ? (
