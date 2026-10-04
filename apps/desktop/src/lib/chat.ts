@@ -206,3 +206,50 @@ export function transcript(items: readonly ChatItem[]): string {
     .filter(Boolean)
     .join("\n\n");
 }
+
+/** One question from Claude's `AskUserQuestion` tool input. */
+export interface Question {
+  question: string;
+  header: string;
+  options: { label: string; description: string }[];
+  multiSelect: boolean;
+}
+
+/** The questions in an `AskUserQuestion` input; malformed entries are dropped. */
+export function askQuestions(input: unknown): Question[] {
+  const qs = (input as { questions?: unknown } | null)?.questions;
+  if (!Array.isArray(qs)) return [];
+  return qs
+    .filter((q) => q && typeof q.question === "string")
+    .map((q) => ({
+      question: q.question,
+      header: typeof q.header === "string" ? q.header : "",
+      options: (Array.isArray(q.options) ? q.options : [])
+        .filter((o: { label?: unknown }) => o && typeof o.label === "string")
+        .map((o: { label: string; description?: unknown }) => ({ label: o.label, description: typeof o.description === "string" ? o.description : "" })),
+      multiSelect: q.multiSelect === true,
+    }));
+}
+
+/** What the user picked for one question: option labels and "Other" text. */
+export interface QuestionPick {
+  labels: string[];
+  other: string;
+}
+
+/**
+ * Answers keyed by question text, as `AskUserQuestion` expects them, or null
+ * while a question is unanswered. Typed text replaces a single choice and is
+ * added to multiple ones; multi-select answers are joined with ", ".
+ */
+export function questionAnswers(qs: readonly Question[], picks: readonly QuestionPick[]): Record<string, string> | null {
+  const answers: Record<string, string> = {};
+  for (const [i, q] of qs.entries()) {
+    const p = picks[i] ?? { labels: [], other: "" };
+    const other = p.other.trim();
+    const answer = q.multiSelect ? [...p.labels, other].filter(Boolean).join(", ") : other || p.labels[0] || "";
+    if (!answer) return null;
+    answers[q.question] = answer;
+  }
+  return answers;
+}

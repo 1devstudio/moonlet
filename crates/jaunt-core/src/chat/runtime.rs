@@ -202,11 +202,11 @@ impl ChatManager {
         Ok(())
     }
 
-    pub fn permission(&self, id: TerminalId, ask: &str, decision: &str, message: Option<&str>) -> Result<()> {
+    pub fn permission(&self, id: TerminalId, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>) -> Result<()> {
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
         let Inner { adapter, state, .. } = &mut *inner;
-        let outs = adapter.as_mut().context("agent not running")?.permission(ask, decision, message, state);
+        let outs = adapter.as_mut().context("agent not running")?.permission(ask, decision, message, answers, state);
         self.apply(&chat, &mut inner, outs);
         Ok(())
     }
