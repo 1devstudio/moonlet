@@ -302,6 +302,14 @@ impl Daemon {
                 let r: m::IdRef = params(p)?;
                 ok(w.project_config(&r.id).map_err(internal)?)
             }
+            m::PROJECT_CONFIG_FILE => {
+                let r: m::IdRef = params(p)?;
+                ok(w.project_config_file(&r.id).await.map_err(internal)?)
+            }
+            m::PROJECT_SET_CONFIG => {
+                let r: m::ProjectSetConfig = params(p)?;
+                ok(w.set_project_config(&r.id, &r.version, &r.config).await.map_err(internal)?)
+            }
             m::SESSION_CREATE => ok(w.create_session(params(p)?).await.map_err(internal)?),
             m::SESSION_LIST => ok(w.list_sessions()),
             m::SESSION_ARCHIVE => {
