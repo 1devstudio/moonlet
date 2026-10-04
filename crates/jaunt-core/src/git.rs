@@ -775,6 +775,40 @@ pub async fn gh_list(repo: &Path, kind: &str) -> Result<Vec<jaunt_proto::types::
         .collect())
 }
 
+/// One `statusCheckRollup` entry as a check run. GitHub Actions report a
+/// `CheckRun` (`status` + `conclusion`); bots like CodeRabbit post a commit
+/// status (`StatusContext`) with only a `state`, so a finished state maps to
+/// `completed` plus that state as the conclusion.
+fn check_run(c: &serde_json::Value) -> CheckRun {
+    let lower = |key: &str| {
+        c[key]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase())
+    };
+    let (status, conclusion) = match lower("state") {
+        Some(state) if c["status"].is_null() => match state.as_str() {
+            "pending" | "expected" => (state, None),
+            _ => ("completed".to_string(), Some(state)),
+        },
+        _ => (lower("status").unwrap_or_default(), lower("conclusion")),
+    };
+    CheckRun {
+        name: c["name"]
+            .as_str()
+            .or(c["context"].as_str())
+            .unwrap_or("check")
+            .into(),
+        status,
+        conclusion,
+        url: c["detailsUrl"]
+            .as_str()
+            .or(c["targetUrl"].as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+    }
+}
+
 pub async fn pr_status(path: &Path) -> Result<Option<PullRequest>> {
     let root = toplevel(path).await?;
     let out = run_raw(
@@ -801,26 +835,7 @@ pub async fn pr_status(path: &Path) -> Result<Option<PullRequest>> {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|c| CheckRun {
-            name: c["name"]
-                .as_str()
-                .or(c["context"].as_str())
-                .unwrap_or("check")
-                .into(),
-            status: c["status"]
-                .as_str()
-                .or(c["state"].as_str())
-                .unwrap_or("")
-                .to_lowercase(),
-            conclusion: c["conclusion"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_lowercase()),
-            url: c["detailsUrl"]
-                .as_str()
-                .or(c["targetUrl"].as_str())
-                .map(String::from),
-        })
+        .map(check_run)
         .collect();
     Ok(Some(PullRequest {
         number: v["number"].as_u64().unwrap_or(0),
@@ -989,5 +1004,37 @@ pub(crate) mod tests {
     fn slugs() {
         assert_eq!(slug("Fix the Login bug!"), "fix-the-login-bug");
         assert_eq!(slug("***"), "task");
+    }
+
+    #[test]
+    fn check_runs_and_commit_statuses() {
+        let action = check_run(&serde_json::json!({
+            "__typename": "CheckRun", "name": "Analyze", "status": "COMPLETED",
+            "conclusion": "SUCCESS", "detailsUrl": "https://example.com/run"
+        }));
+        assert_eq!(action.status, "completed");
+        assert_eq!(action.conclusion.as_deref(), Some("success"));
+        assert_eq!(action.url.as_deref(), Some("https://example.com/run"));
+
+        let running = check_run(&serde_json::json!({
+            "__typename": "CheckRun", "name": "Build", "status": "IN_PROGRESS", "conclusion": ""
+        }));
+        assert_eq!(running.status, "in_progress");
+        assert_eq!(running.conclusion, None);
+
+        let status = |state: &str| {
+            check_run(&serde_json::json!({
+                "__typename": "StatusContext", "context": "CodeRabbit",
+                "state": state, "targetUrl": ""
+            }))
+        };
+        let done = status("SUCCESS");
+        assert_eq!(done.name, "CodeRabbit");
+        assert_eq!(done.status, "completed");
+        assert_eq!(done.conclusion.as_deref(), Some("success"));
+        assert_eq!(done.url, None);
+        assert_eq!(status("FAILURE").conclusion.as_deref(), Some("failure"));
+        assert_eq!(status("PENDING").status, "pending");
+        assert_eq!(status("PENDING").conclusion, None);
     }
 }
