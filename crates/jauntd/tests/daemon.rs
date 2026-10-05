@@ -427,3 +427,44 @@ async fn pulled_base_branch_is_where_new_sessions_start() {
         merged
     );
 }
+
+#[tokio::test]
+async fn origin_url_over_rpc() {
+    let d = TestDaemon::start().await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .unwrap()
+                .success(),
+            "git {args:?}"
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+
+    let mut c = d.client().await;
+    let none: Option<String> = c
+        .request(methods::GIT_ORIGIN_URL, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    assert_eq!(none, None);
+
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/1devstudio/jaunt.git",
+    ]);
+    let url: Option<String> = c
+        .request(methods::GIT_ORIGIN_URL, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    assert_eq!(
+        url.as_deref(),
+        Some("https://github.com/1devstudio/jaunt.git")
+    );
+}

@@ -35,8 +35,13 @@ async function deleteSection(host: string, ws: Workspace, id: string, sessions: 
 
 const activeAt = (host: string, s: Session) => lastActive(useStore.getState().terminals[host] ?? {}, s);
 
-/** Small project mark (Conductor uses a dotted glyph). */
-function ProjectMark() {
+/** Project mark: the GitHub owner's avatar (X15), else a dotted glyph like Conductor's. */
+function ProjectMark({ host, projectId }: { host: string; projectId: string }) {
+  const src = useStore((s) => s.avatars[projKey(host, projectId)]);
+  const [failed, setFailed] = useState<string | null>(null);
+  if (src && failed !== src) {
+    return <img src={src} alt="" width={15} height={15} draggable={false} onError={() => setFailed(src)} className="h-[15px] w-[15px] shrink-0 rounded-[3px]" />;
+  }
   return (
     <svg viewBox="0 0 16 16" width="15" height="15" className="shrink-0 text-[#4fd1c5]" fill="currentColor">
       {[
@@ -341,7 +346,7 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
   const header =
     g.kind === "project" ? (
       <>
-        <ProjectMark />
+        <ProjectMark host={host} projectId={g.projectId!} />
         <span className="truncate text-[14px] font-semibold text-[#d6d6d6]">{g.label}</span>
       </>
     ) : g.kind === "section" ? (
