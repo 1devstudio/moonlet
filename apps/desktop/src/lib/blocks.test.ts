@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, commandFromRows, inlineHeader, outputToCopy, pickBlockForAgent, replayedPromptLine, selectStep } from "./terminals";
+import { blockActions, blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, commandFromRows, inlineHeader, outputToCopy, pickBlockForAgent, replayedPromptLine, selectStep } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -263,5 +263,17 @@ describe("which block ⌘↵ sends (T8)", () => {
   it("leaves ⌘↵ to a typed command", () => {
     expect(pickBlockForAgent(null, "newest", "git status")).toBeNull();
     expect(pickBlockForAgent(null, null, "")).toBeNull();
+  });
+});
+
+describe("block hover actions (T8)", () => {
+  it("offers Copy to agent, Copy and Re-run on a finished block with a header row", () => {
+    expect(blockActions({ end: {}, command: "ls" }, false)).toEqual(["agent", "copy", "rerun"]);
+  });
+
+  it("offers nothing on a running block, a block without a command, or an inline header", () => {
+    expect(blockActions({ command: "sleep 9" }, false)).toEqual([]);
+    expect(blockActions({ end: {} }, false)).toEqual([]);
+    expect(blockActions({ end: {}, command: "ls" }, true)).toEqual([]);
   });
 });
