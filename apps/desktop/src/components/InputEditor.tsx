@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Diff, File, Folder, FolderOpen, GitBranch, Hexagon, SquareTerminal } from "lucide-react";
+import { File, FileDiff, Folder, FolderOpen, GitBranch, Hexagon, SquareTerminal } from "lucide-react";
 import { type CandidateKind, type Completion, completionInsert, completionModel, moveHighlight } from "../lib/completion";
 import { type Chip, chipModel } from "../lib/chips";
 import { rpc, sendInput } from "../lib/daemon";
@@ -52,6 +52,9 @@ export function InputEditor({
   const [popup, setPopup] = useState<{ all: { name: string; kind: CandidateKind }[]; head: string; dir: string; highlight: number } | null>(null);
   /** Command of the selected block, for the send-to-agent hint (T8). */
   const [selectedCmd, setSelectedCmd] = useState<string | null>(null);
+  /** Command of the newest finished block, which ⌘↵ sends with nothing typed. */
+  const [newestCmd, setNewestCmd] = useState<string | null>(null);
+  const sendCmd = selectedCmd ?? (text.trim() ? null : newestCmd);
   const ta = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
   const draft = useRef("");
@@ -80,10 +83,13 @@ export function InputEditor({
     entry.focusEditor = () => ta.current?.focus();
     entry.onSelect = (b) => setSelectedCmd(b?.command ?? null);
     setSelectedCmd(entry.selected?.command ?? null);
+    entry.onBlockFinished = (b) => setNewestCmd(b.command ?? null);
+    setNewestCmd(entry.newestFinished()?.command ?? null);
     return () => {
       entry.redirect = undefined;
       entry.focusEditor = undefined;
       entry.onSelect = undefined;
+      entry.onBlockFinished = undefined;
     };
   }, [host, terminal]);
 
@@ -244,13 +250,16 @@ export function InputEditor({
   return (
     <div className="relative shrink-0 border-t border-border bg-bg px-7 pb-3 pt-2.5" onMouseDown={(e) => e.stopPropagation()}>
       {rows.length > 0 && popup && <CompletionPopup rows={rows} highlight={highlight} dir={popup.dir} home={home} onPick={accept} />}
-      {/* Wraps in a narrow pane, so Classic stays reachable. */}
-      <div className="mb-2 flex flex-wrap items-center gap-1.5 font-mono text-[11.5px] text-muted">
-        {chipModel({ cwd, home, nodeVersion, branch, files }).map((c) => (
-          <ChipBox key={c.kind} chip={c} />
-        ))}
+      {/* One row, as in Warp: the directory chip gives way first, and Classic
+          sits outside the chips so a narrow pane never hides it. */}
+      <div className="mb-2 flex items-center gap-1.5 font-mono text-[11.5px] text-muted">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+          {chipModel({ cwd, home, nodeVersion, branch, files }).map((c) => (
+            <ChipBox key={c.kind} chip={c} />
+          ))}
+        </div>
         <button
-          className="ml-auto shrink-0 rounded p-1 text-faint hover:bg-hover hover:text-fg"
+          className="shrink-0 rounded p-1 text-faint hover:bg-hover hover:text-fg"
           title="Classic: show the shell's own prompt and type into the terminal"
           onClick={() => void setClassic(host, terminal, true)}
         >
@@ -294,9 +303,9 @@ export function InputEditor({
           className="relative block w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent text-transparent caret-accent outline-none placeholder:text-faint selection:bg-accent/30"
         />
       </div>
-      {selectedCmd && (
+      {sendCmd && (
         <div className="mt-1.5 truncate font-mono text-[11px] text-faint">
-          ⌘↵ send <span className="text-muted">`{selectedCmd}`</span> to the agent · ⇧⌘↵ new agent tab
+          ⌘↵ send <span className="text-muted">`{sendCmd}`</span> to the agent · ⇧⌘↵ new agent tab
         </div>
       )}
     </div>
@@ -371,7 +380,7 @@ function CompletionPopup({ rows, highlight, dir, home, onPick }: { rows: Complet
 
 /** One boxed chip above the input (T8). */
 function ChipBox({ chip }: { chip: Chip }) {
-  const icon = { node: <Hexagon size={11} />, dir: <FolderOpen size={11} />, branch: <GitBranch size={11} />, changes: <Diff size={11} /> }[chip.kind];
+  const icon = { node: <Hexagon size={11} />, dir: <FolderOpen size={11} />, branch: <GitBranch size={11} />, changes: <FileDiff size={11} /> }[chip.kind];
   const title = { node: "Node.js on PATH", dir: "Current directory", branch: "Session branch", changes: "Files with uncommitted changes" }[chip.kind];
   return (
     <span
@@ -379,7 +388,19 @@ function ChipBox({ chip }: { chip: Chip }) {
       className={`flex min-w-0 items-center gap-1 rounded border border-border bg-raised px-1.5 py-0.5 ${chip.kind === "dir" ? "shrink" : "shrink-0"} ${chip.kind === "branch" ? "max-w-[40%] text-done" : ""}`}
     >
       <span className="shrink-0 opacity-80">{icon}</span>
-      <span className="truncate">{chip.text}</span>
+      {chip.kind === "changes" ? (
+        // Warp's `5 • +113 -30`, the line counts in green and red.
+        <span className="whitespace-nowrap">
+          {chip.files} • <span className="text-done">+{chip.additions}</span> <span className="text-error">-{chip.deletions}</span>
+        </span>
+      ) : chip.kind === "dir" ? (
+        // Cut from the left, as Warp does, so the end of the path stays.
+        <span className="truncate [direction:rtl]">
+          <bdi>{chip.text}</bdi>
+        </span>
+      ) : (
+        <span className="truncate">{chip.text}</span>
+      )}
     </span>
   );
 }
