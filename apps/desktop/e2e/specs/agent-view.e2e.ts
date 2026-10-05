@@ -1,6 +1,8 @@
-// Collapsed tool calls and thinking rows in the agent view (X14), with a
-// fake `claude` that replays one recorded-style turn.
+// Collapsed tool calls and thinking rows in the agent view (X14) and the
+// footer under the final message (X15), with a fake `claude` that replays
+// one recorded-style turn.
 
+import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
@@ -83,6 +85,15 @@ describe("agent view", () => {
   it("shows the whole thought when its row is opened", async () => {
     await $('//button[.//span[normalize-space()="Thinking"]]').click();
     await expect($(`//div[not(ancestor::button)][normalize-space()=${JSON.stringify(THOUGHT)}]`)).toBeDisplayed();
+  });
+
+  it("shows the response time under the answer and copies it", async () => {
+    const footer = $(`//div[contains(@class, "chat-md")][normalize-space()=${JSON.stringify(ANSWER)}]/following-sibling::div[button[@title="Copy final message"]]`);
+    // The fake turn is instant; the end time follows the system's locale.
+    await expect(footer).toHaveText(/^\d+s · \S/);
+    await $('button[title="Copy final message"]').click();
+    await expect($(sel.text("Copied message"))).toBeDisplayed();
+    expect(execFileSync("pbpaste", { encoding: "utf8" })).toBe(ANSWER);
   });
 
   it("shows one row per call when Settings says Expanded", async () => {

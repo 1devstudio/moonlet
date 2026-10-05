@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { rpc } from "./daemon";
-import { type ChatItem, type ChatState, M, type ToolCall } from "./protocol";
+import { type ChatItem, type ChatState, M, type ToolCall, type TurnTime } from "./protocol";
 
 export const chatKey = (host: string, id: number) => `${host}:${id}`;
 
@@ -186,6 +186,27 @@ export function elapsed(ms: number): string {
 
 export function tokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
+}
+
+const DAY = 86_400_000;
+
+/**
+ * The footer under a turn's final message (X15): `14s · 4:00 PM`. The end
+ * time gains the weekday after today, and the date after the last 6 days.
+ */
+export function turnFooter(turn: TurnTime, now: number, locale?: string): string {
+  const end = new Date(turn.ended_at);
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((midnight(new Date(now)) - midnight(end)) / DAY);
+  const time = { hour: "numeric", minute: "2-digit" } as const;
+  const opts: Intl.DateTimeFormatOptions =
+    days === 0
+      ? time
+      : days > 0 && days < 7
+        ? { weekday: "short", ...time }
+        : { year: end.getFullYear() === new Date(now).getFullYear() ? undefined : "numeric", month: "short", day: "numeric", ...time };
+  // Newer ICU puts a narrow no-break space before AM/PM.
+  return `${elapsed(turn.ended_at - turn.started_at)} · ${end.toLocaleString(locale, opts).replace(/\u202f/g, " ")}`;
 }
 
 /** Plain-text transcript for "Copy transcript". */
