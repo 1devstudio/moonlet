@@ -21,6 +21,11 @@ __jaunt_precmd() {
   # Where `node` is, for the editor's chips (T8), only when that changes.
   # Never run it: PATH may point into an untrusted checkout. The daemon
   # reads the version from the install. A relative entry is skipped.
+  # The shell's PATH, for the commands the editor colours as known (T8).
+  if [[ $PATH != ${__jaunt_path-} ]]; then
+    __jaunt_path=$PATH
+    printf '\e]1337;JauntPath=%s\a' "$PATH"
+  fi
   local node=${commands[node]-}
   [[ $node == /* ]] || node=
   if [[ $node != ${__jaunt_node-} ]]; then
@@ -111,6 +116,11 @@ __jaunt_prompt() {
   # Where `node` is, for the editor's chips (T8), only when that changes.
   # Never run it: PATH may point into an untrusted checkout. The daemon
   # reads the version from the install. A relative entry is skipped.
+  # The shell's PATH, for the commands the editor colours as known (T8).
+  if [ "$PATH" != "${__jaunt_path-}" ]; then
+    __jaunt_path=$PATH
+    printf '\e]1337;JauntPath=%s\a' "$PATH"
+  fi
   local node
   node=$(type -P node 2>/dev/null)
   case $node in /*) ;; *) node= ;; esac
@@ -185,6 +195,12 @@ if status is-interactive
     # Where `node` is, for the editor's chips (T8), only when that changes.
     # Never run it: PATH may point into an untrusted checkout. The daemon
     # reads the version from the install. A relative entry is skipped.
+    # The shell's PATH, for the commands the editor colours as known (T8).
+    set -l path (string join : $PATH)
+    if test "$path" != "$__jaunt_path"
+      set -g __jaunt_path $path
+      printf '\e]1337;JauntPath=%s\a' "$path"
+    end
     set -l node (command -s node)
     string match -q '/*' -- "$node"; or set node ''
     if test "$node" != "$__jaunt_node"
@@ -635,6 +651,54 @@ mod tests {
     #[tokio::test]
     async fn bash_never_runs_a_node_found_through_a_relative_path() {
         ignores_relative_node("/bin/bash").await;
+    }
+
+    /// The prompt hook reports the shell's PATH when it changes (T8), so the
+    /// input editor colours the commands this shell can run, including ones
+    /// its rc files or a later `PATH=` added.
+    async fn reports_path(shell: &str) {
+        if !Path::new(shell).exists() {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let extra = home.path().join("tools");
+        let root = home.path().join("shell");
+        let mut env: BTreeMap<String, String> = BTreeMap::from([
+            ("HOME".into(), home.path().display().to_string()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+            ("SHELL".into(), shell.into()),
+        ]);
+        let args = apply(&root, shell, vec![], &mut env);
+        let mgr = TerminalManager::new(home.path().join("s.sock"), env);
+        let mut command = vec![shell.to_string()];
+        command.extend(args);
+        let info = mgr
+            .create(TerminalCreate { cwd: home.path().display().to_string(), command, ..Default::default() })
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        mgr.attach(info.id, 1, tx, None).unwrap();
+        let first = read_until(&mut rx, "133;A").await;
+        // bash's login startup runs macOS's path_helper, so only the presence is fixed here.
+        assert!(first.contains("\x1b]1337;JauntPath=/"), "{shell} first prompt: {first:?}");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        mgr.write(info.id, format!("PATH={}:$PATH\n", extra.display()).into_bytes()).unwrap();
+        read_until(&mut rx, "JauntPath=").await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let path = mgr.shell_path(info.id);
+        let _ = mgr.kill(info.id, true);
+        let path = path.unwrap_or_default();
+        assert!(path.starts_with(&format!("{}:", extra.display())), "{shell}: {path}");
+        assert!(path.contains("/usr/bin"), "{shell}: {path}");
+    }
+
+    #[tokio::test]
+    async fn zsh_reports_its_path() {
+        reports_path("/bin/zsh").await;
+    }
+
+    #[tokio::test]
+    async fn bash_reports_its_path() {
+        reports_path("/bin/bash").await;
     }
 
     #[tokio::test]

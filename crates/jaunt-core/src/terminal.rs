@@ -88,6 +88,8 @@ struct TerminalState {
     agent: AgentTracker,
     last_output: Instant,
     remove_on_exit: bool,
+    /// The shell's PATH as its prompt hook last reported it (T8).
+    shell_path: Option<String>,
 }
 
 pub struct Terminal {
@@ -183,12 +185,18 @@ impl TerminalManager {
                 agent,
                 last_output: Instant::now(),
                 remove_on_exit: false,
+                shell_path: None,
             }),
         });
         terminals.insert(info.id, terminal);
         drop(terminals);
         self.emit(Message::event(methods::EV_TERMINAL_CREATED, &info));
         info
+    }
+
+    /// The PATH a shell terminal's prompt hook last reported (T8), if any.
+    pub fn shell_path(&self, id: TerminalId) -> Option<String> {
+        self.get(id)?.state.lock().unwrap().shell_path.clone()
     }
 
     /// Changes a terminal's info and tells clients.
@@ -352,6 +360,7 @@ impl TerminalManager {
                 agent: AgentTracker::default(),
                 last_output: Instant::now(),
                 remove_on_exit: false,
+                shell_path: None,
             }),
         });
         self.start_io(&terminal)?;
@@ -913,6 +922,7 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
                 st.info.reported_cwd = Some(cwd);
                 info_changed = true;
             }
+            Signal::Path(path) => st.shell_path = Some(path),
             Signal::NodePath(path) => {
                 // Read from the install, never by running it (T8).
                 st.info.node_version = (!path.is_empty())

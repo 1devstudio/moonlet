@@ -291,8 +291,13 @@ impl Daemon {
             }
             m::SHELL_COMMANDS => {
                 let r: m::ShellCommands = params(p)?;
-                // The PATH terminals get: the login shell's, not the daemon's.
-                let path = self.terminals.base_env().get("PATH").cloned().unwrap_or_default();
+                // The terminal's own PATH when its shell reported one, which
+                // includes what rc files added; else the login shell's.
+                let path = r
+                    .terminal
+                    .and_then(|id| self.terminals.shell_path(id))
+                    .or_else(|| self.terminals.base_env().get("PATH").cloned())
+                    .unwrap_or_default();
                 let shell = r.shell.unwrap_or_else(|| {
                     let login = jaunt_core::pty::user_shell();
                     login.rsplit('/').next().unwrap_or("zsh").to_string()

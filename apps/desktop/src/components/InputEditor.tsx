@@ -50,6 +50,7 @@ export function InputEditor({
   /** Command of the selected block, for the send-to-agent hint (T8). */
   const [selectedCmd, setSelectedCmd] = useState<string | null>(null);
   const ta = useRef<HTMLTextAreaElement>(null);
+  const mirror = useRef<HTMLDivElement>(null);
   const draft = useRef("");
 
   useEffect(() => {
@@ -57,8 +58,13 @@ export function InputEditor({
   }, [host]);
   const [known, setKnown] = useState<Set<string>>(() => new Set());
   useEffect(() => {
-    void knownCommands(host).then(setKnown);
-  }, [host]);
+    // A slower answer for a previous terminal never replaces this one's.
+    let live = true;
+    void knownCommands(host, terminal).then((names) => live && setKnown(names));
+    return () => {
+      live = false;
+    };
+  }, [host, terminal]);
 
   // Typing into the terminal while the editor is up lands here instead.
   useEffect(() => {
@@ -216,7 +222,7 @@ export function InputEditor({
         {/* Mirror of the text, coloured (T8), with the ghost suggestion after
             it. The textarea above it has transparent text and shows the caret
             and the selection. */}
-        <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-fg">
+        <div ref={mirror} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-fg">
           {tokenize(text).map((t, i) => (
             <span key={i} className={tokenClass(t.kind, t.kind === "command" && known.has(t.text))}>
               {t.text}
@@ -231,6 +237,8 @@ export function InputEditor({
         </div>
         <textarea
           ref={ta}
+          // Past its height cap the textarea scrolls; the coloured mirror follows.
+          onScroll={(e) => mirror.current && (mirror.current.scrollTop = e.currentTarget.scrollTop)}
           rows={1}
           spellCheck={false}
           autoCorrect="off"
