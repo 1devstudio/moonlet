@@ -24,6 +24,8 @@ export interface TerminalInfo {
   pid: number | null;
   exit?: ExitInfo;
   reported_cwd?: string;
+  /** `node --version` on the shell's PATH (T8 chips). */
+  node_version?: string;
   /** At a shell prompt (OSC 133); undefined until the shell reports marks. */
   prompt?: boolean;
   alt_screen?: boolean;

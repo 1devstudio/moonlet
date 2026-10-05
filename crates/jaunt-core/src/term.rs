@@ -25,6 +25,9 @@ pub enum Signal {
         title: Option<String>,
         body: String,
     },
+    /// `OSC 1337 ; JauntNode=<version>` from jaunt's prompt hook (T8); empty
+    /// when no `node` is on PATH any more.
+    Node(String),
 }
 
 #[derive(Default)]
@@ -81,6 +84,10 @@ fn parse_osc(params: &[&[u8]]) -> Option<Signal> {
                 return None;
             }
             Some(Signal::Notify { title: None, body })
+        }
+        "1337" => {
+            let rest = text(&params[1..].join(&b';'));
+            Some(Signal::Node(rest.strip_prefix("JauntNode=")?.to_string()))
         }
         "777" if params.get(1).map(|p| *p == b"notify").unwrap_or(false) => Some(Signal::Notify {
             title: params.get(2).map(|p| text(p)),
