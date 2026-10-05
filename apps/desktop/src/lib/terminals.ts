@@ -194,6 +194,14 @@ export function outputToCopy(selected: string | null, last: string): { text: str
   return last ? { text: last, toast: "Copied output" } : { text: null, toast: null };
 }
 
+/** A block as text for an agent's input (T8): the command line and its
+ * output in a code fence longer than any fence inside the output. */
+export function blockForAgent(b: { command: string; output: string }): string {
+  const longest = Math.max(2, ...(b.output.match(/`{3,}/g) ?? []).map((f) => f.length));
+  const fence = "`".repeat(longest + 1);
+  return `${fence}\n${blockCopy(b, "all")}\n${fence}\n`;
+}
+
 export interface FileLinkHandler {
   (path: string, line?: number): void;
 }
@@ -230,6 +238,8 @@ export class TermEntry {
   context: BlockContext = { home: null };
   /** The block selected with a click or ⌘↑ / ⌘↓ (T8). */
   selected: CommandBlock | null = null;
+  /** Told when the selection changes (the input editor's hint). */
+  onSelect?: (block: CommandBlock | null) => void;
   /** Block backgrounds drawn over the grid (T8); xterm decorations vanish
    * once their first row leaves the viewport. */
   private backdrop = document.createElement("div");
@@ -558,6 +568,7 @@ export class TermEntry {
 
   /** Selects a block (or none) and scrolls it into view (T8). */
   select(block: CommandBlock | null) {
+    if (this.selected !== block) this.onSelect?.(block);
     this.selected = block;
     if (block?.end) {
       const top = this.term.buffer.active.viewportY;
@@ -576,6 +587,12 @@ export class TermEntry {
     this.select(next === null ? null : this.blocks[next]);
     if (next === null) this.focusEditor?.();
     else this.focus();
+  }
+
+  /** The selected block as text for an agent, if one is selected (T8). */
+  selectedForAgent(): string | null {
+    const b = this.selected;
+    return b?.command ? blockForAgent({ command: b.command, output: this.outputOf(b) }) : null;
   }
 
   /** Text of the selected block for the clipboard, if one is selected. */

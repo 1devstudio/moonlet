@@ -1,6 +1,6 @@
 # T8: Warp-style block styling and input editor
 
-- **Status:** in progress (block header, bold command and block selection implemented)
+- **Status:** in progress (block header, bold command, block selection and send to agent implemented)
 - **Priority / phase:** P1 · phase 3 (requested 2026-10-05, with Warp screenshots)
 - **PRD refs:** T1, T3, T4; "fast, modern terminal feel (in the spirit of Warp)"
 - **Related:** [T4](T4-command-blocks.md), [T6](T6-input-editor.md), [T7](T7-warp-shell-model.md), [X4](X4-visual-design.md) (tokens), [T9](T9-real-command-blocks.md) (real blocks, which reuse this spec's header and selection logic)
@@ -43,7 +43,7 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 - [x] **Highlight:** the selected block's rows get an orange tint (`accent` at low alpha) and a 2px `accent` bar on the left edge, like the selected sidebar row (X4).
 - [x] **Copy:** with a block selected, the terminal focused and no text selection, ⌘C copies `$ <command>` and the output, ⇧⌘C copies the output, ⌥⌘C copies the command, each with a toast. A text selection always wins over the block. With no block selected, ⇧⌘C keeps copying the last finished output (T4).
 - [x] **Re-run:** the palette's "Re-run last command" re-runs the selected block's command when one is selected.
-- [ ] **Send to agent:** ⌘↵ with a block selected pastes the block as text (`$ <command>` then the output, in a fenced block) into the input of the session's running agent and focuses that agent's tab; nothing is submitted. In a structured chat (X6) it goes into the composer draft. ⇧⌘↵, or ⌘↵ when the session has no running agent, opens a new agent tab with the block as its draft. A hint under the editor reads `⌘↵ send <command> to <agent>` while a block is selected.
+- [x] **Send to agent:** ⌘↵ with a block selected pastes the block as text (`$ <command>` then the output, in a code fence longer than any fence in the output) into the input of the session's running agent (the focused one, else the first) and focuses that agent's tab; nothing is submitted. In a structured chat (X6) it goes into the composer, after anything already typed. ⇧⌘↵, or ⌘↵ when the session has no running agent, opens a new tab of the session's agent (Claude when the session has none) with the block as its draft; a TUI agent gets it once it has drawn its first screen. The selection clears. While a block is selected, a hint under the editor reads ``⌘↵ send `<command>` to the agent · ⇧⌘↵ new agent tab``. Outside a selected block, ⌘↵ keeps its usual meaning.
 
 ### Context chips
 

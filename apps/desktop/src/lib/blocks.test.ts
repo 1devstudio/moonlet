@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockAt, blockCopy, blockHeader, blockRects, commandFromRows, outputToCopy, replayedHeaderLine, selectStep } from "./terminals";
+import { blockAt, blockCopy, blockForAgent, blockHeader, blockRects, commandFromRows, outputToCopy, replayedHeaderLine, selectStep } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -159,5 +159,17 @@ describe("⇧⌘C (T8)", () => {
   it("copies the last output when no block is selected, and does nothing without one", () => {
     expect(outputToCopy(null, "older")).toEqual({ text: "older", toast: "Copied output" });
     expect(outputToCopy(null, "")).toEqual({ text: null, toast: null });
+  });
+});
+
+describe("sending a block to an agent (T8)", () => {
+  it("fences the command line and its output", () => {
+    expect(blockForAgent({ command: "npm test", output: "1 failed\n  expected 2, got 3" })).toBe(
+      "```\n$ npm test\n1 failed\n  expected 2, got 3\n```\n",
+    );
+  });
+
+  it("uses a longer fence when the output contains one", () => {
+    expect(blockForAgent({ command: "cat README.md", output: "```sh\nls\n```" })).toBe("````\n$ cat README.md\n```sh\nls\n```\n````\n");
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   activeToken,
+  joinDraft,
   askQuestions,
   chatBlocks,
   chatKey,
@@ -121,5 +122,15 @@ describe("chat helpers", () => {
     expect(questionAnswers(qs, [{ labels: ["GitHub"], other: "" }, { labels: [], other: "" }])).toBeNull();
     expect(questionAnswers(qs, [{ labels: ["GitHub"], other: "" }, { labels: ["Lint", "Tests"], other: "" }])).toEqual({ "Which colours?": "GitHub", "Which checks?": "Lint, Tests" });
     expect(questionAnswers(qs, [{ labels: ["GitHub"], other: " Solarized " }, { labels: ["Lint"], other: "Types" }])).toEqual({ "Which colours?": "Solarized", "Which checks?": "Lint, Types" });
+  });
+});
+
+describe("text sent to the composer (T8)", () => {
+  it("fills an empty composer", () => {
+    expect(joinDraft("  ", "```\n$ ls\n```\n")).toBe("```\n$ ls\n```\n");
+  });
+
+  it("follows what is already typed, after a blank line", () => {
+    expect(joinDraft("Why does this fail?\n", "```\n$ false\n```\n")).toBe("Why does this fail?\n\n```\n$ false\n```\n");
   });
 });
