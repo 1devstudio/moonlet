@@ -1,4 +1,4 @@
-// Warp-mode block headers (T8): each command gets a grey header line above
+// Block headers in Blocks mode (T8): each command gets a grey header line above
 // it with its directory and duration, plus `exit N` when it fails.
 
 import { execFileSync } from "node:child_process";

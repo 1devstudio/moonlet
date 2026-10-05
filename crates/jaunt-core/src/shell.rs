@@ -2,7 +2,7 @@
 //! marks and OSC 7 working-directory updates, after the user's own startup
 //! files have run unchanged.
 //!
-//! Warp mode (T7): when `$JAUNT_CLASSIC_FILE` is set and that file does not
+//! Blocks mode (T7): when `$JAUNT_CLASSIC_FILE` is set and that file does not
 //! exist, the shell draws an empty prompt because the app's editor is the
 //! input. The user's prompt is kept and comes back in classic mode.
 
@@ -48,16 +48,16 @@ __jaunt_urlpath() {
   done
   REPLY=$out
 }
-# Warp mode's prompt is two empty rows, where the app draws the block's
+# Blocks mode's prompt is two empty rows, where the app draws the block's
 # separator and header (T8); the command line is drawn bold.
-__jaunt_warp_ps1=$'\n\n'
+__jaunt_blocks_ps1=$'\n\n'
 __jaunt_blank() {
   if [[ -n $JAUNT_CLASSIC_FILE && ! -e $JAUNT_CLASSIC_FILE ]]; then
-    [[ $PROMPT != "$__jaunt_warp_ps1" ]] && __jaunt_ps1=$PROMPT
+    [[ $PROMPT != "$__jaunt_blocks_ps1" ]] && __jaunt_ps1=$PROMPT
     [[ -n $RPROMPT ]] && __jaunt_rps1=$RPROMPT
     [[ -n $PS2 ]] && __jaunt_ps2=$PS2
     [[ -z $__jaunt_blanked ]] && __jaunt_zlehl=("${zle_highlight[@]}")
-    PROMPT=$__jaunt_warp_ps1 RPROMPT='' PS2=''
+    PROMPT=$__jaunt_blocks_ps1 RPROMPT='' PS2=''
     zle_highlight=("${(@)__jaunt_zlehl:#default:*}" default:bold)
     __jaunt_blanked=1
   elif [[ -n $__jaunt_blanked ]]; then
@@ -107,7 +107,7 @@ fi
 case "$-" in *i*) [ -z "$__jaunt_bashrc_done" ] && [ -f "$HOME/.bashrc" ] && ! grep -q bashrc "$HOME/.bash_profile" 2>/dev/null && . "$HOME/.bashrc" ;; esac
 __jaunt_prompt() {
   local ret=$?
-  # Bold left on by an empty command line in Warp mode.
+  # Bold left on by an empty command line in Blocks mode.
   printf '\e[0m'
   if [ -n "$__jaunt_ran" ]; then printf '\e]133;D;%s\a' "$ret"; fi
   __jaunt_ran=
@@ -130,15 +130,15 @@ __jaunt_prompt() {
   fi
   printf '\e]133;A\a'
 }
-# Warp mode's prompt is two empty rows, where the app draws the block's
+# Blocks mode's prompt is two empty rows, where the app draws the block's
 # separator and header (T8), and leaves bold on for the command line; the
 # DEBUG trap resets it before the command's output.
-__jaunt_warp_ps1='\n\n\[\e[1m\]'
+__jaunt_blocks_ps1='\n\n\[\e[1m\]'
 __jaunt_blank() {
   if [ -n "$JAUNT_CLASSIC_FILE" ] && [ ! -e "$JAUNT_CLASSIC_FILE" ]; then
-    [ "$PS1" != "$__jaunt_warp_ps1" ] && __jaunt_ps1=$PS1
+    [ "$PS1" != "$__jaunt_blocks_ps1" ] && __jaunt_ps1=$PS1
     [ -n "$PS2" ] && __jaunt_ps2=$PS2
-    PS1=$__jaunt_warp_ps1 PS2=''
+    PS1=$__jaunt_blocks_ps1 PS2=''
     __jaunt_blanked=1
   elif [ -n "$__jaunt_blanked" ]; then
     PS1=$__jaunt_ps1 PS2=$__jaunt_ps2
@@ -208,7 +208,7 @@ if status is-interactive
       printf '\e]1337;JauntNodePath=%s\a' "$node"
     end
     printf '\e]133;A\a'
-    # Wrap the user's prompt once, so Warp mode can blank it (T7).
+    # Wrap the user's prompt once, so Blocks mode can blank it (T7).
     if not functions -q __jaunt_user_fish_prompt
       functions -q fish_prompt; and functions -c fish_prompt __jaunt_user_fish_prompt
       functions -q fish_right_prompt; and functions -c fish_right_prompt __jaunt_user_fish_right_prompt
@@ -429,7 +429,7 @@ mod tests {
         out
     }
 
-    /// Warp mode hides the user's prompt; the classic marker brings it back.
+    /// Blocks mode hides the user's prompt; the classic marker brings it back.
     async fn blanks_and_restores(shell: &str, rc: &str, rc_body: &str) {
         if !Path::new(shell).exists() {
             return;
@@ -459,10 +459,10 @@ mod tests {
         mgr.attach(info.id, 1, tx, None).unwrap();
         tokio::time::sleep(Duration::from_millis(800)).await;
         mgr.write(info.id, b"echo hi\n".to_vec()).unwrap();
-        let warp = read_until(&mut rx, "133;D;0").await;
-        let warp = warp + &read_until(&mut rx, "133;A").await;
-        assert!(warp.contains("hi"), "{shell}: {warp:?}");
-        assert!(!warp.contains("USERPROMPT"), "{shell} blanked: {warp:?}");
+        let blocks = read_until(&mut rx, "133;D;0").await;
+        let blocks = blocks + &read_until(&mut rx, "133;A").await;
+        assert!(blocks.contains("hi"), "{shell}: {blocks:?}");
+        assert!(!blocks.contains("USERPROMPT"), "{shell} blanked: {blocks:?}");
 
         std::fs::write(&marker, b"").unwrap();
         mgr.write(info.id, b"\n".to_vec()).unwrap();
@@ -472,18 +472,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zsh_warp_mode_blanks_the_prompt() {
+    async fn zsh_blocks_mode_blanks_the_prompt() {
         blanks_and_restores("/bin/zsh", ".zshrc", "PROMPT='USERPROMPT> '\n").await;
     }
 
     #[tokio::test]
-    async fn bash_warp_mode_blanks_the_prompt() {
+    async fn bash_blocks_mode_blanks_the_prompt() {
         blanks_and_restores("/bin/bash", ".bash_profile", "PS1='USERPROMPT> '\n").await;
     }
 
-    /// Warp mode (T8): each command gets two empty rows above it (separator
+    /// Blocks mode (T8): each command gets two empty rows above it (separator
     /// and header), and the command line is bold while its output is not.
-    async fn warp_screen(shell: &str) -> Option<crate::term::TermState> {
+    async fn blocks_screen(shell: &str) -> Option<crate::term::TermState> {
         if !Path::new(shell).exists() {
             return None;
         }
@@ -525,7 +525,7 @@ mod tests {
         Some(term)
     }
 
-    fn assert_warp_blocks(shell: &str, term: &crate::term::TermState) {
+    fn assert_blocks(shell: &str, term: &crate::term::TermState) {
         let text = term.contents();
         // A spacer row (the separator) and a header row above each command.
         assert!(text.contains("echo one\none\n\n\necho two\ntwo"), "{shell} header rows: {text:?}");
@@ -540,16 +540,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zsh_warp_mode_gives_each_command_a_header_row_and_bold_command() {
-        if let Some(term) = warp_screen("/bin/zsh").await {
-            assert_warp_blocks("zsh", &term);
+    async fn zsh_blocks_mode_gives_each_command_a_header_row_and_bold_command() {
+        if let Some(term) = blocks_screen("/bin/zsh").await {
+            assert_blocks("zsh", &term);
         }
     }
 
     #[tokio::test]
-    async fn bash_warp_mode_gives_each_command_a_header_row_and_bold_command() {
-        if let Some(term) = warp_screen("/bin/bash").await {
-            assert_warp_blocks("bash", &term);
+    async fn bash_blocks_mode_gives_each_command_a_header_row_and_bold_command() {
+        if let Some(term) = blocks_screen("/bin/bash").await {
+            assert_blocks("bash", &term);
         }
     }
 

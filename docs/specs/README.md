@@ -43,9 +43,9 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X3 | Signed, notarized app with auto-update | P1 | 3 | partial | [X3-distribution.md](X3-distribution.md) |
 | X4 | Visual design (Superset look and feel) | P1 | 3 | implemented | [X4-visual-design.md](X4-visual-design.md) |
 | X5 | Workspaces, projects and sessions (Conductor model) | P1 | 3 | implemented | [X5-workspaces-projects-sessions.md](X5-workspaces-projects-sessions.md) |
-| T6 | Warp-style input editor with suggestions | P1 | 3 | implemented | [T6-input-editor.md](T6-input-editor.md) |
-| T7 | Warp-style shell model (one input, command blocks) | P1 | 3 | implemented | [T7-warp-shell-model.md](T7-warp-shell-model.md) |
-| T8 | Warp-style block styling and input editor | P1 | 3 | implemented (fish bold command open) | [T8-warp-block-styling.md](T8-warp-block-styling.md) |
+| T6 | Input editor with suggestions | P1 | 3 | implemented | [T6-input-editor.md](T6-input-editor.md) |
+| T7 | Blocks shell model (one input, command blocks) | P1 | 3 | implemented | [T7-blocks-shell-model.md](T7-blocks-shell-model.md) |
+| T8 | Block styling and input editor | P1 | 3 | implemented (fish bold command open) | [T8-block-styling.md](T8-block-styling.md) |
 | T9 | Real command blocks (daemon-owned, on libghostty-vt) | P1 | 3 | draft | [T9-real-command-blocks.md](T9-real-command-blocks.md) |
 | X6 | Structured agent view (Claude Code, Codex) | P1 | 3 | implemented (Codex untested live) | [X6-structured-agent-view.md](X6-structured-agent-view.md) |
 | X7 | Permission mode picker (footer, new-session modal, Settings default) | P1 | 3 | implemented (UI unchecked in app) | [X7-agent-permission-mode.md](X7-agent-permission-mode.md) |

@@ -3,16 +3,16 @@
 - **Status:** draft
 - **Priority / phase:** P1 · phase 3 (requested 2026-10-05)
 - **PRD refs:** T1, T3, T4, S2, S3; PRD open question "per-block grid rendering vs decorations"
-- **Related:** [T4](T4-command-blocks.md), [T7](T7-warp-shell-model.md), [T8](T8-warp-block-styling.md) (styling that ships first), [S2](S2-reattach-replay.md), [S3](S3-live-upgrade.md), [R1](R1-ssh-hosts.md)–[R4](R4-unified-hosts-sidebar.md)
+- **Related:** [T4](T4-command-blocks.md), [T7](T7-blocks-shell-model.md), [T8](T8-block-styling.md) (styling that ships first), [S2](S2-reattach-replay.md), [S3](S3-live-upgrade.md), [R1](R1-ssh-hosts.md)–[R4](R4-unified-hosts-sidebar.md)
 - **Related ADRs:** [0006](../adr/0006-daemon-owned-command-blocks.md) (decision and future direction), [0003](../adr/0003-vt100-terminal-state.md) (superseded)
 
 ## Summary
 
-In shell terminals in Warp mode, each command becomes a real [Block](../../CONTEXT.md) with its own content, owned by the daemon. A running command can no longer disturb earlier blocks, blocks can be collapsed and searched, their headers stick while scrolling, and they survive reconnects, app restarts and live upgrades. The daemon's terminal emulator moves from `vt100` to libghostty-vt for every terminal. The app draws finished blocks as static HTML and the active block as a live xterm, behind a "Block view (beta)" setting.
+In shell terminals in Blocks mode, each command becomes a real [Block](../../CONTEXT.md) with its own content, owned by the daemon. A running command can no longer disturb earlier blocks, blocks can be collapsed and searched, their headers stick while scrolling, and they survive reconnects, app restarts and live upgrades. The daemon's terminal emulator moves from `vt100` to libghostty-vt for every terminal. The app draws finished blocks as static HTML and the active block as a live xterm, behind a "Block view (beta)" setting.
 
 ## User journey
 
-1. The user turns on Settings → Terminal → "Block view (beta)". Shell terminals in Warp mode switch to the block list; nothing else changes.
+1. The user turns on Settings → Terminal → "Block view (beta)". Shell terminals in Blocks mode switch to the block list; nothing else changes.
 2. They run `cargo build`. The active block grows as output arrives; its progress bar redraws in place without touching the blocks above.
 3. They run `seq 1 20000`, scroll through it with its header pinned at the top, then click the header to collapse it to one line.
 4. They resize the window. Every block, including one still running, rewraps to the new width.
@@ -24,7 +24,7 @@ In shell terminals in Warp mode, each command becomes a real [Block](../../CONTE
 
 ### Scope
 
-- [ ] Blocks exist only in shell terminals with shell integration in Warp mode. Classic mode, shells without integration, and agent, run and setup terminals keep a single screen, drawn as today.
+- [ ] Blocks exist only in shell terminals with shell integration in Blocks mode. Classic mode, shells without integration, and agent, run and setup terminals keep a single screen, drawn as today.
 - [ ] Remote hosts behave the same, because their `jauntd` owns the shell.
 
 ### Emulator
@@ -81,7 +81,7 @@ In shell terminals in Warp mode, each command becomes a real [Block](../../CONTE
 `PROTOCOL_VERSION` goes up by one.
 
 - `BlockInfo { id, command, cwd, started_at, ended_at?, exit?, lines, dropped }`, where `lines` is the stored line count and `dropped` the number of lines cut by the limit.
-- `terminal.attach` adds `blocks: BlockInfo[]` (finished, oldest first) and `active?: BlockInfo` for Warp-mode shells. When the terminal has a preamble, it is `blocks[0]` with `id: 0`, an empty command and no timing; its lines come from `terminal.block_lines` like any finished block. The snapshot that follows is the active block's live screen only.
+- `terminal.attach` adds `blocks: BlockInfo[]` (finished, oldest first) and `active?: BlockInfo` for Blocks-mode shells. When the terminal has a preamble, it is `blocks[0]` with `id: 0`, an empty command and no timing; its lines come from `terminal.block_lines` like any finished block. The snapshot that follows is the active block's live screen only.
 - `terminal.block_lines {id, block, from, count}` returns styled lines for one finished block: `Line = Run[]`, `Run = { t, fg?, bg?, bold?, italic?, underline?, inverse?, dim?, strike? }`, colours as palette indices (`0`–`255`) or `#rrggbb`. The app fetches lines for blocks near the viewport and caches them.
 - Events, sent on the same stream as output so their order with output frames is exact:
   - `terminal.block_started {id, block: BlockInfo}`; the app resets the live xterm.
@@ -101,7 +101,7 @@ In shell terminals in Warp mode, each command becomes a real [Block](../../CONTE
 
 ## Out of scope
 
-- Option C (libghostty-vt in the app with jaunt's own renderer) and warpifying a plain `ssh`: see ADR 0006, "Future direction".
+- Option C (libghostty-vt in the app with jaunt's own renderer) and turning a plain `ssh` into blocks: see ADR 0006, "Future direction".
 - Per-block output filter (show only matching lines): a later PR.
 - Saving blocks to disk across daemon restarts.
 - Nested blocks.

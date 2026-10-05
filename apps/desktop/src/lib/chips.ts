@@ -16,7 +16,7 @@ export function uncommitted(files: readonly StatusFile[]): { files: number; addi
   return { files: open.length, additions: open.reduce((n, f) => n + f.additions, 0), deletions: open.reduce((n, f) => n + f.deletions, 0) };
 }
 
-/** `5 • +113 -30`, as Warp writes uncommitted changes. */
+/** `5 • +113 -30`: files with uncommitted changes, then added and removed lines. */
 export const changesText = (c: { files: number; additions: number; deletions: number }) => `${c.files} • +${c.additions} -${c.deletions}`;
 
 export function chipModel(c: {
