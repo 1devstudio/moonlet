@@ -3,6 +3,7 @@
 
 import { closeFocused, focusPane, focusedEntry, newTab, runScript, selectSessionByIndex, split, switchTab } from "./actions";
 import { errorToast, toast, useStore } from "./store";
+import { outputToCopy } from "./terminals";
 
 type Handler = () => void;
 
@@ -30,8 +31,10 @@ const bindings: Record<string, Handler> = {
   "cmd+arrowdown": () => focusedEntry()?.jumpBlock(1),
   "shift+cmd+c": () => {
     const e = focusedEntry();
-    const out = e?.copySelected("output") ?? e?.lastOutput();
-    if (out) void navigator.clipboard.writeText(out).then(() => toast("Copied output"), errorToast);
+    if (!e) return;
+    const { text, toast: message } = outputToCopy(e.copySelected("output"), e.lastOutput());
+    if (text) void navigator.clipboard.writeText(text).then(() => toast(message ?? "Copied output"), errorToast);
+    else if (message) toast(message);
   },
   "alt+cmd+c": () => {
     const cmd = focusedEntry()?.copySelected("command");

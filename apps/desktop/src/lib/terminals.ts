@@ -186,6 +186,14 @@ export function blockCopy(b: { command: string; output: string }, part: "all" | 
   return b.output ? `$ ${b.command}\n${b.output}` : `$ ${b.command}`;
 }
 
+/** What ⇧⌘C copies (T8): the selected block's output, or with no block
+ * selected the last command's output. A selected block that printed
+ * nothing says so rather than copying another block. */
+export function outputToCopy(selected: string | null, last: string): { text: string | null; toast: string | null } {
+  if (selected !== null) return selected ? { text: selected, toast: "Copied output" } : { text: null, toast: "No output" };
+  return last ? { text: last, toast: "Copied output" } : { text: null, toast: null };
+}
+
 export interface FileLinkHandler {
   (path: string, line?: number): void;
 }

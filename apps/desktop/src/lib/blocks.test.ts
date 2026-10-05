@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockAt, blockCopy, blockHeader, blockRects, commandFromRows, replayedHeaderLine, selectStep } from "./terminals";
+import { blockAt, blockCopy, blockHeader, blockRects, commandFromRows, outputToCopy, replayedHeaderLine, selectStep } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -144,5 +144,20 @@ describe("copying a block (T8)", () => {
 
   it("copies only the command line when there was no output", () => {
     expect(blockCopy({ command: "true", output: "" }, "all")).toBe("$ true");
+  });
+});
+
+describe("⇧⌘C (T8)", () => {
+  it("copies the selected block's output", () => {
+    expect(outputToCopy("README.md", "older")).toEqual({ text: "README.md", toast: "Copied output" });
+  });
+
+  it("says so when the selected block printed nothing, instead of copying another block", () => {
+    expect(outputToCopy("", "older")).toEqual({ text: null, toast: "No output" });
+  });
+
+  it("copies the last output when no block is selected, and does nothing without one", () => {
+    expect(outputToCopy(null, "older")).toEqual({ text: "older", toast: "Copied output" });
+    expect(outputToCopy(null, "")).toEqual({ text: null, toast: null });
   });
 });
