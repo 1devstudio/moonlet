@@ -123,6 +123,11 @@ textarea,
 .jaunt-block-bg.failed {
   background: color-mix(in srgb, var(--color-error) 6%, transparent);
 }
+/* The selected block (T8), like the selected sidebar row (X4). */
+.jaunt-block-bg.selected {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  box-shadow: inset 2px 0 var(--color-accent);
+}
 
 @keyframes jaunt-spin {
   to {

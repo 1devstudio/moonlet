@@ -119,18 +119,19 @@ export function blockHeader(
 }
 
 /** Background rectangles, in viewport rows, for the blocks on screen (T8).
- * A block spans from its header row up to the row of its end mark. */
+ * A block spans from its header row up to the row of its end mark. The
+ * selected block is highlighted; other failed blocks are tinted red. */
 export function blockRects(
-  blocks: readonly { start: number; end?: number; exit?: number }[],
+  blocks: readonly { start: number; end?: number; exit?: number; selected?: boolean }[],
   top: number,
   rows: number,
-): { top: number; height: number; kind: "failed" }[] {
-  const out: { top: number; height: number; kind: "failed" }[] = [];
+): { top: number; height: number; kind: "failed" | "selected" }[] {
+  const out: { top: number; height: number; kind: "failed" | "selected" }[] = [];
   for (const b of blocks) {
-    if (b.end === undefined || !b.exit) continue;
+    if (b.end === undefined || (!b.exit && !b.selected)) continue;
     const from = Math.max(b.start, top);
     const to = Math.min(b.end, top + rows);
-    if (to > from) out.push({ top: from - top, height: to - from, kind: "failed" });
+    if (to > from) out.push({ top: from - top, height: to - from, kind: b.selected ? "selected" : "failed" });
   }
   return out;
 }
@@ -157,6 +158,40 @@ export function commandFromRows(rows: readonly { text: string; wrapped: boolean 
     .map((l) => l.trimEnd())
     .join("\n")
     .trim();
+}
+
+/** Index of the finished block that contains buffer row `line` (T8). */
+export function blockAt(blocks: readonly { start: number; end?: number }[], line: number): number | null {
+  const i = blocks.findIndex((b) => b.end !== undefined && b.start <= line && line < b.end);
+  return i < 0 ? null : i;
+}
+
+/** The block selected after ⌘↑ (`-1`) or ⌘↓ (`1`) from `current`, where
+ * `null` is the input editor. Only finished blocks can be selected; going
+ * down past the newest one returns to the input. */
+export function selectStep(blocks: readonly { start: number; end?: number }[], current: number | null, delta: -1 | 1): number | null {
+  const done = blocks.flatMap((b, i) => (b.end !== undefined ? [i] : []));
+  if (!done.length) return null;
+  if (current === null) return delta < 0 ? done[done.length - 1] : null;
+  const at = done.indexOf(current);
+  if (delta < 0) return done[Math.max(0, at - 1)];
+  return at + 1 < done.length ? done[at + 1] : null;
+}
+
+/** What ⌘C (`all`), ⇧⌘C (`output`) and ⌥⌘C (`command`) copy from the
+ * selected block (T8). */
+export function blockCopy(b: { command: string; output: string }, part: "all" | "output" | "command"): string {
+  if (part === "output") return b.output;
+  if (part === "command") return b.command;
+  return b.output ? `$ ${b.command}\n${b.output}` : `$ ${b.command}`;
+}
+
+/** What ⇧⌘C copies (T8): the selected block's output, or with no block
+ * selected the last command's output. A selected block that printed
+ * nothing says so rather than copying another block. */
+export function outputToCopy(selected: string | null, last: string): { text: string | null; toast: string | null } {
+  if (selected !== null) return selected ? { text: selected, toast: "Copied output" } : { text: null, toast: "No output" };
+  return last ? { text: last, toast: "Copied output" } : { text: null, toast: null };
 }
 
 export interface FileLinkHandler {
@@ -189,8 +224,12 @@ export class TermEntry {
   /** Set while the input editor is shown: printable keys typed into the
    * terminal go there instead (T6). */
   redirect?: (ch: string) => void;
+  /** Set while the input editor is shown; moves focus to it (T8). */
+  focusEditor?: () => void;
   /** Home and session for block headers (T8). */
   context: BlockContext = { home: null };
+  /** The block selected with a click or ⌘↑ / ⌘↓ (T8). */
+  selected: CommandBlock | null = null;
   /** Block backgrounds drawn over the grid (T8); xterm decorations vanish
    * once their first row leaves the viewport. */
   private backdrop = document.createElement("div");
@@ -230,12 +269,32 @@ export class TermEntry {
     // never leak into an agent's input (T2). Native copy/paste still work.
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.metaKey) return false;
+      if (this.selected && e.type === "keydown" && e.key === "Escape") {
+        this.select(null);
+        return false;
+      }
       if (this.redirect && e.type === "keydown" && e.key.length === 1 && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
+        this.select(null);
         this.redirect(e.key);
         return false;
       }
       return true;
+    });
+
+    // A click on a block, without dragging out a text selection, selects it (T8).
+    let down: { x: number; y: number } | null = null;
+    this.el.addEventListener("mousedown", (e) => (down = { x: e.clientX, y: e.clientY }));
+    this.el.addEventListener("mouseup", (e) => {
+      const click = down && Math.abs(e.clientX - down.x) < 4 && Math.abs(e.clientY - down.y) < 4;
+      down = null;
+      if (!click || !this.warp || e.button !== 0 || this.term.hasSelection() || this.term.buffer.active.type === "alternate") return;
+      const screen = this.backdrop.parentElement;
+      if (!screen) return;
+      const rect = screen.getBoundingClientRect();
+      const row = Math.floor(((e.clientY - rect.top) / rect.height) * this.term.rows);
+      const i = blockAt(this.spans(), this.term.buffer.active.viewportY + row);
+      this.select(i === null ? null : this.blocks[i]);
     });
 
     this.disposables.push(
@@ -259,6 +318,8 @@ export class TermEntry {
 
     this.unregister = registerSink(host, session, {
       reset: (data) => {
+        // The old blocks are gone, so is a selection among them.
+        this.select(null);
         this.blocks = [];
         this.term.reset();
         // Marks replayed from the snapshot carry no timing.
@@ -379,6 +440,7 @@ export class TermEntry {
             this.blocks.push(last);
           }
         }
+        if (this.selected) this.select(null);
         if (last) {
           last.output = marker;
           last.cwd = this.cwd;
@@ -456,10 +518,7 @@ export class TermEntry {
       return;
     }
     const cell = screen.clientHeight / this.term.rows;
-    const spans = this.blocks
-      .filter((b) => b.prompt.line >= 0)
-      .map((b) => ({ start: b.prompt.line, end: b.end && b.end.line >= 0 ? b.end.line : undefined, exit: b.exit }));
-    const rects = blockRects(spans, this.term.buffer.active.viewportY, this.term.rows);
+    const rects = blockRects(this.spans(), this.term.buffer.active.viewportY, this.term.rows);
     this.backdrop.replaceChildren(
       ...rects.map((r) => {
         const el = document.createElement("div");
@@ -486,6 +545,48 @@ export class TermEntry {
     if (changed) this.term.refresh(0, this.term.rows - 1);
   }
 
+  /** Blocks as buffer rows; a block whose rows were trimmed from the
+   * scrollback never ends, so it cannot be selected. */
+  private spans() {
+    return this.blocks.map((b) => ({
+      start: b.prompt.line,
+      end: b.end && b.end.line >= 0 && b.prompt.line >= 0 ? b.end.line : undefined,
+      exit: b.exit,
+      selected: b === this.selected,
+    }));
+  }
+
+  /** Selects a block (or none) and scrolls it into view (T8). */
+  select(block: CommandBlock | null) {
+    this.selected = block;
+    if (block?.end) {
+      const top = this.term.buffer.active.viewportY;
+      if (block.prompt.line < top || block.end.line > top + this.term.rows) this.term.scrollToLine(block.prompt.line);
+    }
+    this.paintBackdrop();
+  }
+
+  /** ⌘↑ / ⌘↓ in Warp mode: the previous or next block, and past the newest
+   * one back to the input editor (T8). */
+  stepSelection(delta: -1 | 1) {
+    // A full-screen program owns the screen; its rows are not blocks.
+    if (this.term.buffer.active.type === "alternate") return;
+    const at = this.selected ? this.blocks.indexOf(this.selected) : -1;
+    const next = selectStep(this.spans(), at < 0 ? null : at, delta);
+    this.select(next === null ? null : this.blocks[next]);
+    if (next === null) this.focusEditor?.();
+    else this.focus();
+  }
+
+  /** Text of the selected block for the clipboard, if one is selected. */
+  copySelected(part: "all" | "output" | "command"): string | null {
+    // Selected text wins over a selected block (T8).
+    if (this.term.hasSelection()) return null;
+    const b = this.selected;
+    if (!b?.command && part !== "output") return null;
+    return b ? blockCopy({ command: b.command ?? "", output: this.outputOf(b) }, part) : null;
+  }
+
   /** Warp mode hides the terminal's cursor while the editor has the input. */
   setEditorActive(active: boolean) {
     this.term.options.cursorInactiveStyle = active ? "none" : "outline";
@@ -508,8 +609,10 @@ export class TermEntry {
     return this.term.buffer.active.getLine(y)?.translateToString(true) ?? "";
   }
 
-  /** Jumps to the previous/next command prompt (T4). */
+  /** Jumps to the previous/next command prompt (T4); in Warp mode it
+   * selects the previous/next block instead (T8). */
   jumpBlock(delta: -1 | 1) {
+    if (this.warp) return this.stepSelection(delta);
     const buf = this.term.buffer.active;
     const top = buf.viewportY;
     const lines = this.blocks.map((b) => b.prompt.line).filter((l) => l >= 0);
@@ -520,14 +623,19 @@ export class TermEntry {
   /** Output of the most recent finished command. */
   lastOutput(): string {
     const b = [...this.blocks].reverse().find((x) => x.output && x.end);
-    if (!b?.output || !b.end) return "";
+    return b ? this.outputOf(b) : "";
+  }
+
+  private outputOf(b: CommandBlock): string {
+    if (!b.output || !b.end) return "";
     const out: string[] = [];
     for (let y = b.output.line; y < b.end.line; y++) out.push(this.lineText(y));
     return out.join("\n").trimEnd();
   }
 
+  /** Re-runs the selected block's command, or the last one. */
   rerunLast() {
-    const b = [...this.blocks].reverse().find((x) => x.command);
+    const b = this.selected?.command ? this.selected : [...this.blocks].reverse().find((x) => x.command);
     if (b?.command) void sendInput(this.host, this.session, b.command + "\r");
   }
 

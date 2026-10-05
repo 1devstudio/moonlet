@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockHeader, blockRects, commandFromRows, replayedHeaderLine } from "./terminals";
+import { blockAt, blockCopy, blockHeader, blockRects, commandFromRows, outputToCopy, replayedHeaderLine, selectStep } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -61,6 +61,13 @@ describe("block backgrounds (T8)", () => {
     expect(blockRects([failed], 12, 24)).toEqual([{ top: 0, height: 3, kind: "failed" }]);
   });
 
+  it("highlights the selected block, even a failed one", () => {
+    expect(blockRects([{ start: 0, end: 4, exit: 0, selected: true }, { ...failed, selected: true }], 0, 24)).toEqual([
+      { top: 0, height: 4, kind: "selected" },
+      { top: 10, height: 5, kind: "selected" },
+    ]);
+  });
+
   it("skips successful, running and off-screen blocks", () => {
     expect(blockRects([{ start: 0, end: 4, exit: 0 }, { start: 4 }, { start: 40, end: 45, exit: 1 }], 0, 24)).toEqual([]);
   });
@@ -89,5 +96,68 @@ describe("command text from the screen (T8)", () => {
 
   it("keeps the line breaks of a multi-line command", () => {
     expect(commandFromRows([{ text: "for f in *; do  ", wrapped: false }, { text: "  echo $f; done", wrapped: false }])).toBe("for f in *; do\n  echo $f; done");
+  });
+});
+
+describe("block selection (T8)", () => {
+  // Two finished blocks (rows 0-3 and 4-9) and one still running from row 10.
+  const blocks = [{ start: 0, end: 4 }, { start: 4, end: 10 }, { start: 10 }];
+
+  it("finds the finished block under a row", () => {
+    expect(blockAt(blocks, 0)).toBe(0);
+    expect(blockAt(blocks, 9)).toBe(1);
+  });
+
+  it("finds nothing on a running block or below the blocks", () => {
+    expect(blockAt(blocks, 12)).toBeNull();
+    expect(blockAt([{ start: 3, end: 5 }], 1)).toBeNull();
+  });
+
+  it("steps up from the input to the newest finished block, then older ones", () => {
+    expect(selectStep(blocks, null, -1)).toBe(1);
+    expect(selectStep(blocks, 1, -1)).toBe(0);
+    expect(selectStep(blocks, 0, -1)).toBe(0);
+  });
+
+  it("steps down to newer blocks, then back to the input", () => {
+    expect(selectStep(blocks, 0, 1)).toBe(1);
+    expect(selectStep(blocks, 1, 1)).toBeNull();
+    expect(selectStep(blocks, null, 1)).toBeNull();
+  });
+
+  it("has nothing to select without finished blocks", () => {
+    expect(selectStep([{ start: 0 }], null, -1)).toBeNull();
+  });
+});
+
+describe("copying a block (T8)", () => {
+  const ls = { command: "ls", output: "README.md\nsrc" };
+
+  it("copies the command line and its output", () => {
+    expect(blockCopy(ls, "all")).toBe("$ ls\nREADME.md\nsrc");
+  });
+
+  it("copies just the output or just the command", () => {
+    expect(blockCopy(ls, "output")).toBe("README.md\nsrc");
+    expect(blockCopy(ls, "command")).toBe("ls");
+  });
+
+  it("copies only the command line when there was no output", () => {
+    expect(blockCopy({ command: "true", output: "" }, "all")).toBe("$ true");
+  });
+});
+
+describe("⇧⌘C (T8)", () => {
+  it("copies the selected block's output", () => {
+    expect(outputToCopy("README.md", "older")).toEqual({ text: "README.md", toast: "Copied output" });
+  });
+
+  it("says so when the selected block printed nothing, instead of copying another block", () => {
+    expect(outputToCopy("", "older")).toEqual({ text: null, toast: "No output" });
+  });
+
+  it("copies the last output when no block is selected, and does nothing without one", () => {
+    expect(outputToCopy(null, "older")).toEqual({ text: "older", toast: "Copied output" });
+    expect(outputToCopy(null, "")).toEqual({ text: null, toast: null });
   });
 });
