@@ -55,6 +55,14 @@ export interface ChatItem {
   tool?: ToolCall | null;
   ts: number;
   partial?: boolean;
+  /** On the final assistant message of a completed turn (X16). */
+  turn?: TurnTime | null;
+}
+
+/** When a turn started and ended, in ms since the epoch. */
+export interface TurnTime {
+  started_at: number;
+  ended_at: number;
 }
 
 export interface PermissionAsk {

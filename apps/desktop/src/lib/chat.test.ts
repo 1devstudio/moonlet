@@ -15,6 +15,7 @@ import {
   toolGroupLabel,
   toolGroupStatus,
   transcript,
+  turnFooter,
   useChat,
 } from "./chat";
 
@@ -88,6 +89,17 @@ describe("chat helpers", () => {
     expect(toolGroupStatus([tool("denied"), tool("error")])).toBe("error");
     expect(toolGroupStatus([tool("ok"), tool("denied")])).toBe("denied");
     expect(toolGroupStatus([tool("error"), tool("running")])).toBe("running");
+  });
+
+  it("shows a turn's response time and when it ended", () => {
+    // Monday 5 October 2026, 4:30 PM.
+    const now = new Date(2026, 9, 5, 16, 30).getTime();
+    const turn = (end: Date, secs: number) => ({ started_at: end.getTime() - secs * 1000, ended_at: end.getTime() });
+    expect(turnFooter(turn(new Date(2026, 9, 5, 16, 0), 14), now, "en-US")).toBe("14s · 4:00 PM");
+    expect(turnFooter(turn(new Date(2026, 9, 4, 23, 59), 14), now, "en-US")).toBe("14s · Sun 11:59 PM");
+    expect(turnFooter(turn(new Date(2026, 8, 29, 16, 0), 65), now, "en-US")).toBe("1m 05s · Tue 4:00 PM");
+    expect(turnFooter(turn(new Date(2026, 8, 28, 16, 0), 14), now, "en-US")).toBe("14s · Sep 28, 4:00 PM");
+    expect(turnFooter(turn(new Date(2025, 11, 30, 9, 5), 14), now, "en-US")).toBe("14s · Dec 30, 2025, 9:05 AM");
   });
 
   it("previews thinking on one line", () => {
