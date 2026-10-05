@@ -4,7 +4,7 @@ members = ["crates/*", "apps/desktop/src-tauri"]
 default-members = ["crates/*", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 license = "UNLICENSED"
 repository = "https://github.com/1devstudio/jaunt"
