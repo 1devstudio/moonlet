@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockAt, blockCopy, blockForAgent, blockHeader, blockRects, commandFromRows, outputToCopy, replayedHeaderLine, selectStep } from "./terminals";
+import { blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, commandFromRows, outputToCopy, replayedHeaderLine, selectStep } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -175,5 +175,23 @@ describe("sending a block to an agent (T8)", () => {
 
   it("uses a longer fence when the output contains one", () => {
     expect(blockForAgent({ command: "cat README.md", output: "```sh\nls\n```" })).toBe("````\n$ cat README.md\n```sh\nls\n```\n````\n");
+  });
+});
+
+describe("where a block's header goes (T8)", () => {
+  const empty = (rows: number[]) => (y: number) => rows.includes(y);
+
+  it("puts the separator in the spacer row and the header below it", () => {
+    // Prompt mark on row 10; rows 10 and 11 are the shell's empty prompt; the command is on 12, output from 13.
+    expect(blockLayout(10, 13, empty([10, 11]))).toEqual({ separator: 10, header: 11, commandFrom: 12 });
+  });
+
+  it("shares one row between separator and header when the prompt has one empty row", () => {
+    expect(blockLayout(10, 12, empty([10]))).toEqual({ separator: 10, header: 10, commandFrom: 11 });
+  });
+
+  it("puts the header at the end of the command line when the shell left no empty row", () => {
+    // An older shell integration: the command sits on the prompt mark's row.
+    expect(blockLayout(10, 11, empty([]))).toEqual({ separator: 10, header: null, commandFrom: 10 });
   });
 });
