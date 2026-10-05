@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Diff, File, Folder, FolderOpen, GitBranch, Hexagon, SquareTerminal } from "lucide-react";
-import { type CandidateKind, type Completion, completionModel, moveHighlight } from "../lib/completion";
+import { type CandidateKind, type Completion, completionInsert, completionModel, moveHighlight } from "../lib/completion";
 import { type Chip, chipModel } from "../lib/chips";
 import { rpc, sendInput } from "../lib/daemon";
 import { M, type DirEntry, type FileChange } from "../lib/protocol";
-import { commonPrefix, firstWord, historyFor, knownCommands, rememberCommand, suggest } from "../lib/suggest";
+import { firstWord, historyFor, knownCommands, rememberCommand, suggest } from "../lib/suggest";
 import { type TokenKind, tokenize } from "../lib/shellTokens";
 import { findEntry, getEntry, shortPath } from "../lib/terminals";
 import { setClassic } from "../lib/actions";
@@ -105,7 +105,14 @@ export function InputEditor({
     return !!el && el.selectionStart === el.selectionEnd && el.selectionEnd === text.length;
   };
 
+  // The latest text, and a counter that makes slower completion requests
+  // stale once another starts or the command runs.
+  const textNow = useRef(text);
+  textNow.current = text;
+  const request = useRef(0);
+
   const run = () => {
+    request.current++;
     const cmd = text;
     setText("");
     setWalk(null);
@@ -136,6 +143,7 @@ export function InputEditor({
    * completed in place; several extend to their common prefix and open the
    * popup. */
   const complete = async () => {
+    const id = ++request.current;
     const asked = text;
     const m = /(\S*)$/.exec(text);
     const word = m ? m[1] : "";
@@ -152,12 +160,13 @@ export function InputEditor({
     } catch {
       return; // directory unreadable
     }
+    // The user may have kept typing, or run the command, while it loaded.
+    if (request.current !== id || textNow.current !== asked) return;
     const hits = completionModel(all, stem);
     if (!hits.length) return;
     const head = asked.slice(0, asked.length - stem.length);
-    const prefix = hits.length === 1 ? hits[0].insert : commonPrefix(hits.map((h) => h.name));
-    // The user may have kept typing while the listing loaded.
-    setText((cur) => (cur === asked && prefix.length > stem.length ? head + prefix : cur));
+    const insert = completionInsert(all, stem);
+    if (insert.length > stem.length) setText(head + insert);
     setPopup(hits.length > 1 ? { all, head, dir: isCommand ? "" : base.replace(/\/+$/, ""), highlight: 0 } : null);
   };
 
@@ -183,7 +192,8 @@ export function InputEditor({
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const el = e.currentTarget;
     if (e.nativeEvent.isComposing) return;
-    if (rows.length && !e.metaKey && !e.ctrlKey && !e.altKey && ["ArrowDown", "ArrowUp", "Tab", "Enter", "Escape"].includes(e.key)) {
+    // Shift-modified keys keep their editing meaning (new line, selection).
+    if (rows.length && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && ["ArrowDown", "ArrowUp", "Tab", "Enter", "Escape"].includes(e.key)) {
       e.preventDefault();
       if (e.key === "ArrowDown" || e.key === "ArrowUp") setPopup((p) => p && { ...p, highlight: moveHighlight(rows.length, highlight, e.key === "ArrowDown" ? 1 : -1) });
       else if (e.key === "Escape") setPopup(null);
@@ -327,6 +337,7 @@ function CompletionPopup({ rows, highlight, dir, home, onPick }: { rows: Complet
         {rows.map((r, i) => (
           <div
             key={r.kind + r.name}
+            id={`jaunt-completion-${i}`}
             role="option"
             aria-selected={i === highlight}
             className={`flex cursor-default items-center gap-2 px-2.5 py-1 ${i === highlight ? "bg-accent/20 text-fg" : "text-muted hover:bg-hover"}`}
@@ -341,6 +352,10 @@ function CompletionPopup({ rows, highlight, dir, home, onPick }: { rows: Complet
             <span className="ml-auto shrink-0 font-sans text-[11px] text-faint">{r.label}</span>
           </div>
         ))}
+      </div>
+      {/* Focus stays in the textarea; the highlighted row is announced here. */}
+      <div aria-live="polite" className="sr-only">
+        {current ? `${current.name}, ${current.label}, ${highlight + 1} of ${rows.length}` : ""}
       </div>
       {current && (
         <div className="max-w-[320px] rounded-md border border-border-strong bg-panel px-3 py-2 shadow-lg">

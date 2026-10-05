@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completionModel, moveHighlight } from "./completion";
+import { completionInsert, completionModel, moveHighlight } from "./completion";
 
 const dir = (name: string) => ({ name, kind: "dir" as const });
 const file = (name: string) => ({ name, kind: "file" as const });
@@ -34,5 +34,22 @@ describe("completion popup (T8)", () => {
     expect(moveHighlight(3, 2, 1)).toBe(0);
     expect(moveHighlight(3, 0, -1)).toBe(2);
     expect(moveHighlight(3, 1, 1)).toBe(2);
+  });
+});
+
+describe("text a completion inserts (T8)", () => {
+  it("escapes characters the shell would split or expand", () => {
+    expect(completionModel([file("my notes (1).txt")], "my")[0].insert).toBe("my\\ notes\\ \\(1\\).txt ");
+    expect(completionModel([dir("it's")], "it")[0].insert).toBe("it\\'s/");
+  });
+
+  it("extends to the prefix common to every match, not only the rows shown", () => {
+    const many = [...Array.from({ length: 200 }, (_, i) => file(`aa${String(i).padStart(3, "0")}`)), file("ab000")];
+    expect(completionInsert(many, "a")).toBe("a");
+  });
+
+  it("completes a single match whole, and the shared prefix of several escaped", () => {
+    expect(completionInsert([dir("src")], "s")).toBe("src/");
+    expect(completionInsert([file("my file a"), file("my file b")], "m")).toBe("my\\ file\\ ");
   });
 });
