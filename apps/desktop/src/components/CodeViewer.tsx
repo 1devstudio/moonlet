@@ -5,7 +5,8 @@ import "../lib/monaco";
 import { editorOptions, languageFor, monaco } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
 import { M, type FileContent } from "../lib/protocol";
-import { errorToast, toast } from "../lib/store";
+import { errorToast, toast, useStore } from "../lib/store";
+import { editorFont } from "../lib/uiScale";
 import { Empty, IconButton, cx } from "./ui";
 
 /** Read-mostly viewer with light editing (F2): editing is an explicit toggle. */
@@ -15,6 +16,7 @@ export default function CodeViewer({ host, path, line, onClose }: { host: string
   const [editing, setEditing] = useState(false);
   const [dirty, setDirty] = useState(false);
   const editor = useRef<Parameters<OnMount>[0] | null>(null);
+  const fontSize = useStore((s) => s.settings.term.fontSize);
 
   useEffect(() => {
     void rpc<FileContent>(host, M.fsRead, { path })
@@ -50,7 +52,7 @@ export default function CodeViewer({ host, path, line, onClose }: { host: string
   writable.current = !readOnly;
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 text-[11.5px]">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 ui-text-11.5">
         <span className="truncate font-mono text-fg" title={path}>
           {path.split("/").pop()}
           {dirty && " •"}
@@ -87,7 +89,7 @@ export default function CodeViewer({ host, path, line, onClose }: { host: string
             defaultValue={file.content}
             onMount={onMount}
             onChange={() => setDirty(true)}
-            options={{ ...editorOptions, readOnly, domReadOnly: readOnly }}
+            options={{ ...editorOptions, ...editorFont(fontSize), readOnly, domReadOnly: readOnly }}
           />
         ) : null}
       </div>

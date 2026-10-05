@@ -107,7 +107,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
       )}
       {info?.classic && info.kind === "shell" && !exited && visible && (
         <button
-          className="absolute bottom-3 right-4 z-20 rounded-full border border-border-strong bg-panel/95 px-3 py-1 text-[12px] text-muted shadow-lg hover:text-fg"
+          className="absolute bottom-3 right-4 z-20 rounded-full border border-border-strong bg-panel/95 px-3 py-1 ui-text-12 text-muted shadow-lg hover:text-fg"
           title="Use jaunt's input editor and hide the shell prompt"
           onClick={() => void setClassic(host, session, false)}
         >
@@ -115,7 +115,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
         </button>
       )}
       {exited && (
-        <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-t border-border bg-panel/95 px-3 py-1.5 text-[12px] text-muted">
+        <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-t border-border bg-panel/95 px-3 py-1.5 ui-text-12 text-muted">
           <span>
             Process exited
             {exited.code !== null ? ` with code ${exited.code}` : exited.signal !== null ? ` (signal ${exited.signal})` : ""}.

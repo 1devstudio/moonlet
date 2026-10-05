@@ -14,7 +14,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
       ref={ref}
       className={cx(
         "no-drag inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-        size === "sm" ? "h-6 px-2 text-[12px]" : "h-7 px-2.5 text-[12.5px]",
+        size === "sm" ? "h-6 px-2 ui-text-12" : "h-7 px-2.5 ui-text-12.5",
         variant === "primary" && "bg-fg text-bg hover:bg-white",
         variant === "subtle" && "border border-border-strong bg-raised text-fg hover:bg-hover",
         variant === "ghost" && "text-muted hover:bg-hover hover:text-fg",
@@ -41,7 +41,7 @@ export function IconButton({ title, className, ...rest }: ButtonHTMLAttributes<H
 }
 
 export function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="rounded border border-border-strong bg-panel-2 px-1 font-sans text-[10.5px] text-faint">{children}</kbd>;
+  return <kbd className="rounded border border-border-strong bg-panel-2 px-1 font-sans ui-text-10.5 text-faint">{children}</kbd>;
 }
 
 export const STATE_LABEL: Record<AgentState, string> = {
@@ -138,7 +138,7 @@ export function AgentIcon({ agent, size = 14 }: { agent?: string | null; size?: 
 export function DiffStat({ add, del, className }: { add: number; del: number; className?: string }) {
   if (!add && !del) return null;
   return (
-    <span className={cx("font-mono text-[11px] tabular-nums", className)}>
+    <span className={cx("font-mono ui-text-11 tabular-nums", className)}>
       <span className="text-add">+{add}</span> <span className="text-del">−{del}</span>
     </span>
   );
@@ -165,7 +165,7 @@ export function Dialog({ title, onClose, children, width = 480, footer }: { titl
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-          <h2 className="text-[13px] font-semibold">{title}</h2>
+          <h2 className="ui-text-13 font-semibold">{title}</h2>
           <IconButton title="Close" onClick={onClose}>
             <X size={14} />
           </IconButton>
@@ -180,22 +180,22 @@ export function Dialog({ title, onClose, children, width = 480, footer }: { titl
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="mb-3 block">
-      <span className="mb-1 block text-[11.5px] font-medium text-muted">{label}</span>
+      <span className="mb-1 block ui-text-11.5 font-medium text-muted">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-[11px] text-faint">{hint}</span>}
+      {hint && <span className="mt-1 block ui-text-11 text-faint">{hint}</span>}
     </label>
   );
 }
 
 export const inputCls =
-  "w-full rounded-md border border-border-strong bg-panel-2 px-2.5 py-1.5 text-[13px] text-fg outline-none placeholder:text-faint focus:border-accent";
+  "w-full rounded-md border border-border-strong bg-panel-2 px-2.5 py-1.5 ui-text-13 text-fg outline-none placeholder:text-faint focus:border-accent";
 
 export function Empty({ icon, title, children }: { icon?: ReactNode; title: string; children?: ReactNode }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-muted">
       {icon}
-      <div className="text-[13px] font-medium text-fg">{title}</div>
-      {children && <div className="max-w-sm text-[12px]">{children}</div>}
+      <div className="ui-text-13 font-medium text-fg">{title}</div>
+      {children && <div className="max-w-sm ui-text-12">{children}</div>}
     </div>
   );
 }

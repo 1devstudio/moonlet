@@ -31,7 +31,7 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
   const item = (label: string, run: () => void, danger = false) => (
     <button
       key={label}
-      className={cx("block w-full px-3 py-1.5 text-left text-[13px] hover:bg-hover", danger && "text-error")}
+      className={cx("block w-full px-3 py-1.5 text-left ui-text-13 hover:bg-hover", danger && "text-error")}
       onClick={() => {
         setOpen(false);
         run();
@@ -81,7 +81,7 @@ function StackMenu({ view, current }: { view: StackView; current: number }) {
   return (
     <div className="no-drag relative">
       <button
-        className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
+        className="flex h-8 items-center gap-1.5 rounded-md px-2.5 ui-text-14 text-fg hover:bg-raised"
         title={`Stack of ${view.size} pull requests`}
         onClick={() => setOpen(!open)}
       >
@@ -106,8 +106,8 @@ function StackMenu({ view, current }: { view: StackView; current: number }) {
               >
                 <PrIcon className={cx("mt-1 shrink-0", prTone(p.state))} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] text-fg">{p.title}</span>
-                  <span className="block truncate text-[12px] text-muted">
+                  <span className="block truncate ui-text-13 text-fg">{p.title}</span>
+                  <span className="block truncate ui-text-12 text-muted">
                     #{p.number} · {p.branch}
                     {p.draft && " · draft"}
                   </span>
@@ -160,7 +160,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   return (
     <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1 px-4">
       <button
-        className={cx("no-drag flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] hover:bg-raised", hasRunCommand(config) ? "text-fg" : "text-faint hover:text-fg")}
+        className={cx("no-drag flex h-8 items-center gap-2 rounded-md px-2.5 ui-text-14 hover:bg-raised", hasRunCommand(config) ? "text-fg" : "text-faint hover:text-fg")}
         title={hasRunCommand(config) ? `Run: ${config?.run} (⌘R)` : "Set a run command…"}
         onClick={() => (hasRunCommand(config) ? void runScript("run") : openProjectSettings({ host, project: ws.project_id }, "run"))}
       >
@@ -168,7 +168,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
       </button>
       {pr && view && <StackMenu view={view} current={pr.number} />}
       <button
-        className="no-drag group flex h-8 items-center gap-2 rounded-md px-2.5 text-[14px] text-fg hover:bg-raised"
+        className="no-drag group flex h-8 items-center gap-2 rounded-md px-2.5 ui-text-14 text-fg hover:bg-raised"
         title={pr ? `#${pr.number} ${pr.title} · Open in browser` : "Create pull request (⇧⌘P)"}
         onClick={() => (pr ? void openUrl(pr.url) : useStore.setState({ dialog: { kind: "create-pr" } }))}
       >
@@ -214,7 +214,7 @@ function ChangedFiles({ host, ws }: { host: string; ws: Session }) {
       {groups.map(([dir, files]) => (
         <div key={dir} className="mt-3">
           <button
-            className="flex w-full items-center gap-2 px-5 py-1.5 text-left font-mono text-[12px] tracking-[0.06em] text-muted hover:text-fg"
+            className="flex w-full items-center gap-2 px-5 py-1.5 text-left font-mono ui-text-12 tracking-[0.06em] text-muted hover:text-fg"
             onClick={() => setCollapsed((c) => ({ ...c, [dir]: !c[dir] }))}
           >
             {collapsed[dir] ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
@@ -238,8 +238,8 @@ function ChangedFiles({ host, ws }: { host: string; ws: Session }) {
                   }}
                 >
                   <StatusBox status={f.status} />
-                  <span className={cx("min-w-0 flex-1 truncate text-[14px]", f.status === "deleted" ? "text-muted line-through" : "text-fg")}>{name}</span>
-                  <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">{count}</span>
+                  <span className={cx("min-w-0 flex-1 truncate ui-text-14", f.status === "deleted" ? "text-muted line-through" : "text-fg")}>{name}</span>
+                  <span className="shrink-0 font-mono ui-text-12 tabular-nums text-muted">{count}</span>
                 </button>
               );
             })}
@@ -252,7 +252,7 @@ function ChangedFiles({ host, ws }: { host: string; ws: Session }) {
 function SummaryLine({ host, ws }: { host: string; ws: Session }) {
   const git = useStore((s) => s.git[sesKey(host, ws.id)]);
   return (
-    <div className="flex items-center gap-2 px-5 pb-1 pt-4 font-mono text-[12.5px] text-muted">
+    <div className="flex items-center gap-2 px-5 pb-1 pt-4 font-mono ui-text-12.5 text-muted">
       {git ? (
         <>
           <span className="text-add">+{git.additions}</span>
@@ -297,7 +297,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             key={t.id}
             onClick={() => useStore.setState({ rightTab: t.id, preview: null })}
             className={cx(
-              "flex-1 rounded-t-md text-[14px] transition-colors",
+              "flex-1 rounded-t-md ui-text-14 transition-colors",
               tab === t.id && !preview ? "bg-bg font-semibold text-fg" : "text-muted hover:text-fg",
             )}
           >
@@ -314,7 +314,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
               <div className="flex items-center">
                 <SummaryLine host={host} ws={ws} />
                 <button
-                  className="ml-auto mr-4 mt-3 rounded px-2 py-0.5 font-mono text-[11.5px] text-faint hover:bg-raised hover:text-fg"
+                  className="ml-auto mr-4 mt-3 rounded px-2 py-0.5 font-mono ui-text-11.5 text-faint hover:bg-raised hover:text-fg"
                   onClick={() => setAllFiles(!allFiles)}
                   title={allFiles ? "Show changed files" : "Browse all files"}
                 >

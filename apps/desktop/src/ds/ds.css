@@ -7,6 +7,6 @@ body {
   background: var(--color-bg);
   color: var(--color-fg);
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--ui-scale, 1));
   -webkit-font-smoothing: antialiased;
 }

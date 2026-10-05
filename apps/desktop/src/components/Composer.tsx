@@ -73,15 +73,15 @@ function SourcePicker({ host, project, onIssue, onPr }: { host: string; project:
           <div className="absolute right-0 z-50 mt-1 w-[420px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] shadow-2xl">
             <div className="flex items-center gap-1 border-b border-border p-2">
               {(["issue", "pr"] as const).map((t) => (
-                <button key={t} className={cx("rounded-md px-2.5 py-1 text-[13px]", tab === t ? "bg-hover text-fg" : "text-muted hover:text-fg")} onClick={() => setTab(t)}>
+                <button key={t} className={cx("rounded-md px-2.5 py-1 ui-text-13", tab === t ? "bg-hover text-fg" : "text-muted hover:text-fg")} onClick={() => setTab(t)}>
                   {t === "issue" ? "Issues" : "Pull requests"}
                 </button>
               ))}
-              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="ml-auto w-40 rounded-md bg-panel-2 px-2 py-1 text-[13px] outline-none placeholder:text-faint" />
+              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="ml-auto w-40 rounded-md bg-panel-2 px-2 py-1 ui-text-13 outline-none placeholder:text-faint" />
             </div>
             <div className="max-h-[320px] overflow-y-auto p-1">
-              {error && <div className="p-3 text-[13px] text-muted">GitHub unavailable: {error}</div>}
-              {!error && items === null && <div className="p-3 text-[13px] text-faint">Loading…</div>}
+              {error && <div className="p-3 ui-text-13 text-muted">GitHub unavailable: {error}</div>}
+              {!error && items === null && <div className="p-3 ui-text-13 text-faint">Loading…</div>}
               {shown.map((i) => (
                 <button
                   key={i.number}
@@ -92,14 +92,14 @@ function SourcePicker({ host, project, onIssue, onPr }: { host: string; project:
                     else onPr(i);
                   }}
                 >
-                  <span className="shrink-0 font-mono text-[12.5px] text-muted">#{i.number}</span>
+                  <span className="shrink-0 font-mono ui-text-12.5 text-muted">#{i.number}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13.5px]">{i.title}</span>
-                    {i.head_branch && <span className="block truncate font-mono text-[11.5px] text-faint">{i.head_branch}</span>}
+                    <span className="block truncate ui-text-13.5">{i.title}</span>
+                    {i.head_branch && <span className="block truncate font-mono ui-text-11.5 text-faint">{i.head_branch}</span>}
                   </span>
                 </button>
               ))}
-              {items && shown.length === 0 && <div className="p-3 text-[13px] text-faint">Nothing open.</div>}
+              {items && shown.length === 0 && <div className="p-3 ui-text-13 text-faint">Nothing open.</div>}
             </div>
           </div>
         </>
@@ -111,7 +111,7 @@ function SourcePicker({ host, project, onIssue, onPr }: { host: string; project:
 function Column({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="min-w-[150px] p-1">
-      <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-faint">{title}</div>
+      <div className="px-2.5 pb-1 pt-1.5 ui-text-11 font-medium uppercase tracking-[0.08em] text-faint">{title}</div>
       {children}
     </div>
   );
@@ -119,7 +119,7 @@ function Column({ title, children }: { title: string; children: React.ReactNode 
 
 function Opt({ checked, onClick, children }: { checked: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-[6px] text-left text-[14px] hover:bg-hover", checked && "bg-[#2c2c2c]")} onClick={onClick}>
+    <button className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-[6px] text-left ui-text-14 hover:bg-hover", checked && "bg-[#2c2c2c]")} onClick={onClick}>
       <span className="flex flex-1 items-center gap-2">{children}</span>
       {checked && <Check size={13} />}
     </button>
@@ -139,7 +139,7 @@ function ModelPicker({ agents, choice, onChange, label, effortLabel }: { agents:
   const efforts = EFFORTS.filter((e) => choice.agent === "claude" || ["low", "medium", "high"].includes(e.id));
   return (
     <div ref={ref} className="relative">
-      <button className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[14px] hover:bg-hover" onClick={() => setOpen(!open)}>
+      <button className="flex items-center gap-2 rounded-lg px-2 py-1.5 ui-text-14 hover:bg-hover" onClick={() => setOpen(!open)}>
         {choice.agent !== "claude" && choice.agent !== "none" && <AgentIcon agent={choice.agent} size={14} />}
         <span className="text-fg">{label}</span>
         {effortLabel && <span className="text-muted">{effortLabel}</span>}
@@ -323,9 +323,9 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
     return (
       <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[14vh]" onMouseDown={close}>
         <div className="w-[560px] rounded-2xl border border-border-strong bg-[#1f1f1f] p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="mb-2 text-[14px] font-semibold">Add a project first</div>
-          <p className="mb-4 text-[14px] text-muted">A project is a git repository folder on disk. Sessions are created as worktrees of it.</p>
-          <button className="rounded-lg bg-fg px-3 py-1.5 text-[14px] font-medium text-bg" onClick={() => useStore.setState({ dialog: { kind: "add-project", workspace: presetWorkspace } })}>
+          <div className="mb-2 ui-text-14 font-semibold">Add a project first</div>
+          <p className="mb-4 ui-text-14 text-muted">A project is a git repository folder on disk. Sessions are created as worktrees of it.</p>
+          <button className="rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg" onClick={() => useStore.setState({ dialog: { kind: "add-project", workspace: presetWorkspace } })}>
             Add project…
           </button>
         </div>
@@ -347,9 +347,9 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
             items={projectItems}
             width={300}
             trigger={(open) => (
-              <button className="flex items-center gap-2 rounded-md px-1 py-1 text-[14px] font-medium hover:bg-hover" onClick={open}>
+              <button className="flex items-center gap-2 rounded-md px-1 py-1 ui-text-14 font-medium hover:bg-hover" onClick={open}>
                 {current.project.name}
-                {current.host !== "local" && <span className="font-mono text-[12px] text-faint">@{current.host}</span>}
+                {current.host !== "local" && <span className="font-mono ui-text-12 text-faint">@{current.host}</span>}
                 <ChevronDown size={14} className="text-muted" />
               </button>
             )}
@@ -366,7 +366,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
           {(from || pr || issue) && (
             <div className="flex min-w-0 items-center gap-1.5">
               {from && (
-                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono text-[12px] text-muted">
+                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
                   <GitBranch size={12} /> {from.existing ? from.ref : `from ${from.ref}`}
                   <button onClick={() => setFrom(null)} className="hover:text-fg">
                     <X size={11} />
@@ -374,7 +374,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
                 </span>
               )}
               {pr && (
-                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono text-[12px] text-muted">
+                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
                   PR #{pr.number} · {pr.head_branch}
                   <button onClick={() => setPr(null)} className="hover:text-fg">
                     <X size={11} />
@@ -382,7 +382,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
                 </span>
               )}
               {issue && (
-                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono text-[12px] text-muted">
+                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
                   #{issue.number}
                   <button onClick={() => setIssue(null)} className="hover:text-fg">
                     <X size={11} />
@@ -414,7 +414,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
               autoFocus
               list="jaunt-composer-branches"
               placeholder={editingFrom === "existing" ? "Existing branch, e.g. feature/login" : `Branch, tag or commit (default ${current.project.base_branch})`}
-              className="flex-1 bg-transparent font-mono text-[13.5px] outline-none placeholder:text-faint"
+              className="flex-1 bg-transparent font-mono ui-text-13.5 outline-none placeholder:text-faint"
               onKeyDown={(e) => {
                 e.stopPropagation();
                 const v = (e.target as HTMLInputElement).value.trim();
@@ -445,18 +445,18 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
             }
           }}
           placeholder="What do you want to work on?"
-          className="block h-[200px] w-full resize-none bg-transparent px-6 py-5 text-[14px] leading-relaxed text-fg outline-none placeholder:text-faint"
+          className="block h-[200px] w-full resize-none bg-transparent px-6 py-5 ui-text-14 leading-relaxed text-fg outline-none placeholder:text-faint"
         />
         <div className="flex items-center gap-2 px-5 pb-4">
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
-          {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 text-[14px]" iconSize={14} align="left" />}
+          {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 ui-text-14" iconSize={14} align="left" />}
           <span className="ml-auto" />
           <button title="Attach files" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg" onClick={() => void attach()}>
             <Plus size={16} />
           </button>
           <button
             disabled={busy}
-            className="flex items-center gap-2 rounded-lg bg-fg px-3 py-1.5 text-[14px] font-medium text-bg hover:bg-white disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg hover:bg-white disabled:opacity-50"
             onClick={() => void create()}
           >
             {busy ? "Creating…" : "Create"} <CornerDownLeft size={14} />

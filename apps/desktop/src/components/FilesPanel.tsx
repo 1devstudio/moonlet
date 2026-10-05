@@ -23,14 +23,14 @@ function Dir({ host, path, depth, showIgnored, version, onOpen, selected }: { ho
       live = false;
     };
   }, [host, path, showIgnored, version]);
-  if (!entries) return <div className="py-0.5 text-[11px] text-faint" style={{ paddingLeft: 14 + depth * 12 }}>…</div>;
+  if (!entries) return <div className="py-0.5 ui-text-11 text-faint" style={{ paddingLeft: 14 + depth * 12 }}>…</div>;
   return (
     <>
       {entries.map((e) => (
         <div key={e.path}>
           <div
             className={cx(
-              "flex cursor-default items-center gap-1 py-[2px] pr-2 text-[12.5px]",
+              "flex cursor-default items-center gap-1 py-[2px] pr-2 ui-text-12.5",
               selected === e.path ? "bg-raised text-fg" : "hover:bg-panel-2",
               e.ignored ? "text-faint" : "text-[#c5c9d1]",
             )}
@@ -73,8 +73,8 @@ export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
   );
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] text-muted">
-        <span className="truncate font-mono text-[11px]" title={ws.path}>
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 ui-text-12 text-muted">
+        <span className="truncate font-mono ui-text-11" title={ws.path}>
           {ws.path.split("/").slice(-2).join("/")}
         </span>
         <IconButton title={showIgnored ? "Hide ignored files" : "Show ignored files"} className="ml-auto" onClick={() => setShowIgnored(!showIgnored)}>

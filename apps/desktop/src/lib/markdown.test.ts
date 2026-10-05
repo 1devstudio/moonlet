@@ -18,6 +18,13 @@ describe("markdown preview", () => {
     expect(doc).toContain("default-src 'none'");
     expect(doc).not.toContain("script-src");
   });
+
+  it("sizes its text with the app's text scale", () => {
+    expect(previewDocument("<p>x</p>")).toContain("font:14px/1.65");
+    const doc = previewDocument("<p>x</p>", 1.5);
+    expect(doc).toContain("font:21px/1.65");
+    expect(doc).toContain("code{font:18.75px");
+  });
 });
 
 describe("chat links", () => {

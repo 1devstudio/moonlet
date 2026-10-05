@@ -12,6 +12,7 @@ import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } 
 import { M, type FileChange, type FileVersions, type Session } from "../lib/protocol";
 import { errorToast, refreshGit, toast, useStore, sesKey } from "../lib/store";
 import { sendToAgent } from "../lib/actions";
+import { editorFont } from "../lib/uiScale";
 import { Button, DiffStat, Empty, IconButton, Kbd, cx } from "./ui";
 
 const STATUS_LETTER: Record<FileChange["status"], [string, string]> = {
@@ -31,11 +32,11 @@ function FileRow({ f, active, onSelect, onAction }: { f: FileChange; active: boo
   const dir = f.path.slice(0, f.path.length - (name?.length ?? 0));
   return (
     <div
-      className={cx("group flex cursor-default items-center gap-2 px-3 py-[3px] text-[12.5px]", active ? "bg-raised" : "hover:bg-panel-2")}
+      className={cx("group flex cursor-default items-center gap-2 px-3 py-[3px] ui-text-12.5", active ? "bg-raised" : "hover:bg-panel-2")}
       onClick={onSelect}
       title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
     >
-      <span className={cx("w-3 shrink-0 text-center font-mono text-[11px] font-semibold", color)}>{letter}</span>
+      <span className={cx("w-3 shrink-0 text-center font-mono ui-text-11 font-semibold", color)}>{letter}</span>
       <span className="min-w-0 flex-1 truncate">
         <span className="text-fg">{name}</span> <span className="text-faint">{dir}</span>
       </span>
@@ -55,7 +56,7 @@ function FileRow({ f, active, onSelect, onAction }: { f: FileChange; active: boo
           <Undo2 size={12} />
         </IconButton>
       </span>
-      {f.binary ? <span className="text-[10.5px] text-faint">bin</span> : <DiffStat add={f.additions} del={f.deletions} className="shrink-0 group-hover:hidden" />}
+      {f.binary ? <span className="ui-text-10.5 text-faint">bin</span> : <DiffStat add={f.additions} del={f.deletions} className="shrink-0 group-hover:hidden" />}
     </div>
   );
 }
@@ -73,7 +74,7 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
   };
   return (
     <div className="border-t border-border bg-panel-2 p-2">
-      <div className="mb-1 text-[11px] text-muted">
+      <div className="mb-1 ui-text-11 text-muted">
         Comment on <span className="font-mono text-fg">{file}:{line}</span> — sent to the agent as a prompt
       </div>
       <textarea
@@ -88,7 +89,7 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
           }
           if (e.key === "Escape") onDone();
         }}
-        className="w-full resize-none rounded-md border border-border-strong bg-panel px-2 py-1 text-[12.5px] outline-none focus:border-accent"
+        className="w-full resize-none rounded-md border border-border-strong bg-panel px-2 py-1 ui-text-12.5 outline-none focus:border-accent"
         placeholder="What should change here?"
       />
       <div className="mt-1 flex justify-end gap-1.5">
@@ -105,6 +106,7 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
 
 export default function ChangesPanel({ host, ws }: { host: string; ws: Session }) {
   const status = useStore((s) => s.git[sesKey(host, ws.id)]);
+  const fontSize = useStore((s) => s.settings.term.fontSize);
   const [mode, setMode] = useState<Mode>("base");
   // Diff models are kept per file while the panel is open, then released.
   useEffect(() => {
@@ -236,7 +238,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 text-[12px]">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 ui-text-12">
         <div className="flex rounded-md border border-border-strong p-0.5">
           {(["base", "head"] as Mode[]).map((m) => (
             <button
@@ -271,14 +273,14 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
             ))}
           </div>
           {current && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 text-[11.5px] text-muted">
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 ui-text-11.5 text-muted">
               <span className="truncate font-mono text-fg">{current.path}</span>
               {/* Hunk staging works on uncommitted changes only. */}
               {mode !== "base" && diff && diff.hunks.length > 0 && (
                 <span className="flex items-center gap-1">
                   {diff.hunks.map((h, i) => (
                     <span key={i} className="flex items-center rounded border border-border-strong">
-                      <span className="px-1 font-mono text-[10.5px] text-faint" title={h.header}>
+                      <span className="px-1 font-mono ui-text-10.5 text-faint" title={h.header}>
                         @{h.newStart}
                       </span>
                       <button className="px-1 hover:text-add" title="Stage hunk" onClick={() => void hunkAction(i, "stage")}>
@@ -318,14 +320,14 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
                 modifiedModelPath={`jaunt-diff://${ws.id}/modified/${selected}`}
                 keepCurrentOriginalModel
                 keepCurrentModifiedModel
-                options={{ ...editorOptions, readOnly: true, renderIndicators: false, renderMarginRevertIcon: false, renderSideBySide: sideBySide, originalEditable: false, renderOverviewRuler: false, hideUnchangedRegions: { enabled: true } }}
+                options={{ ...editorOptions, ...editorFont(fontSize), readOnly: true, renderIndicators: false, renderMarginRevertIcon: false, renderSideBySide: sideBySide, originalEditable: false, renderOverviewRuler: false, hideUnchangedRegions: { enabled: true } }}
               />
             ) : null}
           </div>
           {comment && selected && <CommentBar file={selected} line={comment.line} snippet={comment.snippet} onDone={() => setComment(null)} />}
         </>
       )}
-      <div className="shrink-0 border-t border-border px-3 py-1 text-[10.5px] text-faint">
+      <div className="shrink-0 border-t border-border px-3 py-1 ui-text-10.5 text-faint">
         Click the gutter or press <Kbd>⇧⌘M</Kbd> to comment a line to the agent.
       </div>
     </div>

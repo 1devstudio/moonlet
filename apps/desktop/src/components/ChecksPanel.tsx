@@ -40,9 +40,9 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
   }, [host, ws.id, ws.path, ws.base]);
 
   return (
-    <div className="h-full overflow-y-auto p-3 text-[12.5px]">
+    <div className="h-full overflow-y-auto p-3 ui-text-12.5">
       <section className="mb-4">
-        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-faint">Branch</h3>
+        <h3 className="mb-2 ui-text-11 font-semibold uppercase tracking-wider text-faint">Branch</h3>
         <div className="space-y-1 text-muted">
           <div>
             <span className="font-mono text-fg">{ws.branch}</span> → <span className="font-mono">{ws.base}</span>
@@ -58,7 +58,7 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
       </section>
 
       <section className="mb-4">
-        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-faint">Pull request</h3>
+        <h3 className="mb-2 ui-text-11 font-semibold uppercase tracking-wider text-faint">Pull request</h3>
         {pr === undefined && !prError && <div className="text-faint">Loading…</div>}
         {prError && <div className="text-faint">GitHub status unavailable: {prError}</div>}
         {pr === null && (
@@ -78,7 +78,7 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
               </span>
               <ExternalLink size={11} className="ml-auto shrink-0 text-faint" />
             </button>
-            <div className="mt-1 text-[11.5px] text-muted">
+            <div className="mt-1 ui-text-11.5 text-muted">
               {pr.state}
               {pr.review_decision ? ` · ${pr.review_decision.toLowerCase().replace(/_/g, " ")}` : ""}
             </div>
@@ -97,14 +97,14 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
       </section>
 
       <section>
-        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-faint">Commits on this branch</h3>
+        <h3 className="mb-2 ui-text-11 font-semibold uppercase tracking-wider text-faint">Commits on this branch</h3>
         {log.length === 0 ? (
           <Empty title="No commits yet" />
         ) : (
           <div className="space-y-1">
             {log.map((c) => (
               <div key={c.sha} className="flex gap-2">
-                <span className="shrink-0 font-mono text-[11px] text-faint">{c.sha.slice(0, 7)}</span>
+                <span className="shrink-0 font-mono ui-text-11 text-faint">{c.sha.slice(0, 7)}</span>
                 <span className="selectable truncate text-[#c5c9d1]">{c.subject}</span>
               </div>
             ))}

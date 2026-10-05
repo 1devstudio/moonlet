@@ -107,7 +107,7 @@ function InlineInput({ initial, placeholder, onDone }: { initial: string; placeh
         if (e.key === "Enter") finish(v.trim() || null);
         if (e.key === "Escape") finish(null);
       }}
-      className="min-w-0 flex-1 rounded border border-accent bg-panel-2 px-1.5 py-0.5 text-[14px] text-fg outline-none"
+      className="min-w-0 flex-1 rounded border border-accent bg-panel-2 px-1.5 py-0.5 ui-text-14 text-fg outline-none"
     />
   );
 }
@@ -183,7 +183,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
         onMouseEnter={open}
         onMouseLeave={leave}
         onClick={click}
-        className={cx("flex h-[22px] shrink-0 items-center gap-1 rounded-md border border-border-strong bg-panel-2 px-1.5 font-mono text-[11.5px] hover:bg-hover", CHIP_TONE[chip.kind])}
+        className={cx("flex h-[22px] shrink-0 items-center gap-1 rounded-md border border-border-strong bg-panel-2 px-1.5 font-mono ui-text-11.5 hover:bg-hover", CHIP_TONE[chip.kind])}
       >
         {chip.kind === "behind" ? <ArrowDown size={12} strokeWidth={1.75} /> : chip.kind === "pulling" ? <Loader2 size={12} strokeWidth={1.75} className="animate-spin" /> : <ShieldAlert size={12} strokeWidth={1.75} />}
         <span>{chip.text}</span>
@@ -200,41 +200,41 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
         >
           {chip.kind === "diverged" ? (
             <div className="px-3 pb-2 pt-2.5">
-              <div className="text-[13px] font-medium text-fg">Can't fast-forward {st.branch}</div>
-              <div className="mt-1 text-[12px] text-muted [text-wrap:pretty]">
+              <div className="ui-text-13 font-medium text-fg">Can't fast-forward {st.branch}</div>
+              <div className="mt-1 ui-text-12 text-muted [text-wrap:pretty]">
                 Your local {mono(st.branch)} has {aheadText(st)} on {mono(st.upstream)}. jaunt only pulls when it can fast-forward, so nothing was changed.
               </div>
               <div className="mt-2.5 flex items-center gap-2 rounded-md border border-border bg-panel-2 px-2 py-1.5">
-                <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg" title={command}>
+                <span className="min-w-0 flex-1 truncate font-mono ui-text-11.5 text-fg" title={command}>
                   {command}
                 </span>
                 <Button size="sm" variant="ghost" onClick={() => void navigator.clipboard.writeText(command).then(() => toast("Copied command"), errorToast)}>
                   Copy
                 </Button>
               </div>
-              <div className="mt-2 text-[11.5px] text-faint">New sessions still branch from your local {st.branch}.</div>
+              <div className="mt-2 ui-text-11.5 text-faint">New sessions still branch from your local {st.branch}.</div>
             </div>
           ) : (
             <>
               <div className="px-3 pb-1.5 pt-2.5">
-                <div className="text-[13px] font-medium text-fg">{behindHeadline(st)}</div>
-                <div className="mt-1 text-[12px] text-muted [text-wrap:pretty]">
+                <div className="ui-text-13 font-medium text-fg">{behindHeadline(st)}</div>
+                <div className="mt-1 ui-text-12 text-muted [text-wrap:pretty]">
                   New sessions branch from your local {mono(st.branch)}. Pull to start them from the merged changes.
                 </div>
               </div>
               <div className="flex flex-col px-1 py-1">
                 {st.commits.map((c) => (
                   <div key={c.sha} className="flex h-[26px] items-center gap-2 rounded-md px-2">
-                    <span className="shrink-0 font-mono text-[11.5px] text-faint">{c.sha.slice(0, 7)}</span>
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-[#cfcfcf]" title={c.subject}>
+                    <span className="shrink-0 font-mono ui-text-11.5 text-faint">{c.sha.slice(0, 7)}</span>
+                    <span className="min-w-0 flex-1 truncate ui-text-12.5 text-[#cfcfcf]" title={c.subject}>
                       {c.subject}
                     </span>
                   </div>
                 ))}
-                {st.behind > st.commits.length && <div className="px-2 py-1 text-[11.5px] text-faint">and {st.behind - st.commits.length} more</div>}
+                {st.behind > st.commits.length && <div className="px-2 py-1 ui-text-11.5 text-faint">and {st.behind - st.commits.length} more</div>}
               </div>
               <div className="flex items-center gap-2 border-t border-border px-2 pb-1 pt-2">
-                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={sync.fetchError ?? undefined}>
+                <span className="min-w-0 flex-1 truncate font-mono ui-text-11 text-faint" title={sync.fetchError ?? undefined}>
                   {fetchedLabel(sync, Date.now())}
                 </span>
                 <Button size="sm" variant="ghost" onClick={() => setPos(null)}>
@@ -321,17 +321,17 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
           }}
         />
       ) : (
-        <span className={cx("min-w-0 flex-1 truncate text-[14px]", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+        <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
       )}
       {!renaming &&
         (creating ? (
-          <span className="shrink-0 font-mono text-[12px] text-muted">creating</span>
+          <span className="shrink-0 font-mono ui-text-12 text-muted">creating</span>
         ) : state === "blocked" ? (
-          <span className="shrink-0 font-mono text-[12px] text-blocked">needs input</span>
+          <span className="shrink-0 font-mono ui-text-12 text-blocked">needs input</span>
         ) : pr?.state === "merged" ? (
-          <span className="shrink-0 font-mono text-[12px] text-merged">merged</span>
+          <span className="shrink-0 font-mono ui-text-12 text-merged">merged</span>
         ) : git && (git.additions || git.deletions) ? (
-          <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
+          <span className="shrink-0 font-mono ui-text-12 tabular-nums text-muted">
             +{compact(git.additions)}
             {git.deletions ? ` -${compact(git.deletions)}` : ""}
           </span>
@@ -377,15 +377,15 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
     g.kind === "project" ? (
       <>
         <ProjectMark host={host} projectId={g.projectId!} />
-        <span className="truncate text-[14px] font-semibold text-[#d6d6d6]">{g.label}</span>
+        <span className="truncate ui-text-14 font-semibold text-[#d6d6d6]">{g.label}</span>
       </>
     ) : g.kind === "section" ? (
       <>
         <Folder size={14} className="shrink-0 text-muted" />
-        <span className="truncate text-[14px] font-semibold text-[#d6d6d6]">{g.label}</span>
+        <span className="truncate ui-text-14 font-semibold text-[#d6d6d6]">{g.label}</span>
       </>
     ) : g.kind === "status" ? (
-      <span className="truncate text-[11.5px] font-medium uppercase tracking-[0.1em] text-muted">{g.label}</span>
+      <span className="truncate ui-text-11.5 font-medium uppercase tracking-[0.1em] text-muted">{g.label}</span>
     ) : null;
   return (
     <div {...dropProps} className={cx("mb-1 rounded-md transition-colors", over && "bg-selected outline outline-1 outline-accent/60")}>
@@ -425,14 +425,14 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
               className="opacity-0 group-hover:opacity-100"
               onClick={() => void deleteSection(host, ws, g.sectionId!, g.sessions)}
             >
-              <span className="text-[13px]">×</span>
+              <span className="ui-text-13">×</span>
             </IconButton>
           )}
         </div>
       )}
       {!collapsed && g.sessions.map((s) => <SessionRow key={s.id} host={host} s={s} onMenu={(e) => onRowMenu({ session: s }, e)} />)}
       {!collapsed && g.kind === "section" && g.sessions.length === 0 && (
-        <div className="pb-1.5 pl-[30px] text-[12.5px] text-faint">Drag sessions here</div>
+        <div className="pb-1.5 pl-[30px] ui-text-12.5 text-faint">Drag sessions here</div>
       )}
     </div>
   );
@@ -523,8 +523,8 @@ function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; 
           />
         ) : (
           <button className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }))}>
-            <span className="truncate text-[14px] font-semibold text-muted group-hover:text-fg">{ws.name}</span>
-            {multiHost && host !== "local" && <span className="truncate font-mono text-[11px] text-faint">@{host}</span>}
+            <span className="truncate ui-text-14 font-semibold text-muted group-hover:text-fg">{ws.name}</span>
+            {multiHost && host !== "local" && <span className="truncate font-mono ui-text-11 text-faint">@{host}</span>}
             {collapsed ? <ChevronRight size={13} className="text-faint" /> : <ChevronDown size={13} className="text-faint opacity-0 group-hover:opacity-100" />}
           </button>
         )}
@@ -557,7 +557,7 @@ function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; 
           ))}
           {wsProjects.length === 0 && (
             <button
-              className="ml-4 mt-1 flex items-center gap-2 text-[13px] text-faint hover:text-accent"
+              className="ml-4 mt-1 flex items-center gap-2 ui-text-13 text-faint hover:text-accent"
               onClick={() => useStore.setState({ dialog: { kind: "add-project", host, workspace: ws.id } })}
             >
               <FolderPlus size={14} /> Add a project to this workspace
@@ -588,7 +588,7 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
       onMouseDown={(e) => e.stopPropagation()}
     >
       <MenuItems items={items} onClose={onClose} />
-      {s && <div className="px-3 pb-1 pt-1.5 text-[11.5px] text-faint">Double-click a session to rename it</div>}
+      {s && <div className="px-3 pb-1 pt-1.5 ui-text-11.5 text-faint">Double-click a session to rename it</div>}
     </div>
   );
 }
@@ -642,12 +642,12 @@ function HistoryList() {
   archived.sort((a, b) => b.w.created_at - a.w.created_at);
   return (
     <div>
-      <div className="flex h-[34px] items-center pl-4 text-[12px] font-medium uppercase tracking-[0.12em] text-muted">Archived sessions</div>
-      {archived.length === 0 && <div className="px-[22px] py-1 text-[13px] text-faint">Nothing archived yet.</div>}
+      <div className="flex h-[34px] items-center pl-4 ui-text-12 font-medium uppercase tracking-[0.12em] text-muted">Archived sessions</div>
+      {archived.length === 0 && <div className="px-[22px] py-1 ui-text-13 text-faint">Nothing archived yet.</div>}
       {archived.map(({ host, w }) => (
         <div key={host + w.id} className="group flex h-[38px] items-center gap-3 pl-[22px] pr-4 hover:bg-panel-2">
           <Archive size={13} className="text-faint" />
-          <span className="min-w-0 flex-1 truncate text-[14px] text-[#cfcfcf]">{w.name}</span>
+          <span className="min-w-0 flex-1 truncate ui-text-14 text-[#cfcfcf]">{w.name}</span>
           <IconButton
             title="Restore session"
             className="opacity-0 group-hover:opacity-100"
@@ -674,7 +674,7 @@ function HostNotice({ host }: { host: HostInfo }) {
   if (host.status === "connected") return null;
   const text = host.status === "needs_install" ? "helper not installed" : host.status === "error" ? (host.message ?? "connection failed") : "reconnecting…";
   return (
-    <div className="mx-3 mb-2 flex items-center gap-2 rounded-md bg-panel-2 px-2.5 py-1.5 text-[12px]">
+    <div className="mx-3 mb-2 flex items-center gap-2 rounded-md bg-panel-2 px-2.5 py-1.5 ui-text-12">
       <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", host.status === "reconnecting" || host.status === "connecting" ? "bg-blocked" : "bg-error")} />
       <span className="truncate text-muted">
         {host.label}: {text}
@@ -688,7 +688,7 @@ function NavRow({ icon, label, active, onClick, hint }: { icon: ReactNode; label
     <button
       onClick={onClick}
       className={cx(
-        "no-drag flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left text-[14px] transition-colors",
+        "no-drag flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14 transition-colors",
         active ? "bg-raised text-fg" : "text-muted hover:bg-panel-2 hover:text-fg",
       )}
     >
@@ -746,7 +746,7 @@ export function Sidebar() {
                 />
               </div>
             ) : (
-              <button className="flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left text-[13.5px] text-faint hover:bg-panel-2 hover:text-fg" onClick={() => setCreating(true)}>
+              <button className="flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-13.5 text-faint hover:bg-panel-2 hover:text-fg" onClick={() => setCreating(true)}>
                 <Plus size={14} /> New workspace
               </button>
             )}
