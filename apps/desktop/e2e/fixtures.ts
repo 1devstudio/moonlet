@@ -53,7 +53,8 @@ function makeWorld(root: string): World {
       USER: process.env.USER ?? "",
       TMPDIR: process.env.TMPDIR ?? tmpdir(),
       LANG: "en_US.UTF-8",
-      SHELL: "/bin/sh",
+      // zsh, as on a stock Mac, so shells get the integration (T3, T8).
+      SHELL: "/bin/zsh",
       PATH: `${fakeBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
       JAUNT_HOME: home,
       JAUNT_BIN_DIR: BIN_DIR,
@@ -88,8 +89,11 @@ function seed(w: World) {
     chmodSync(p, 0o755);
   }
   // jauntd gives terminals and agents the PATH of a login shell (SHELL is
-  // /bin/sh here), not its own, so the fakes must come first there too.
-  writeFileSync(join(w.env.HOME, ".profile"), `PATH="${fakeBin}:$PATH"; export PATH\n`);
+  // zsh here), not its own, so the fakes must come first there too. Each
+  // zsh startup file sets it again: /etc/zprofile's path_helper reorders
+  // PATH after .zshenv.
+  const fakeFirst = `PATH="${fakeBin}:$PATH"; export PATH\n`;
+  for (const rc of [".profile", ".zshenv", ".zprofile", ".zshrc"]) writeFileSync(join(w.env.HOME, rc), fakeFirst);
   mkdirSync(join(w.repo, ".jaunt"), { recursive: true });
   writeFileSync(join(w.repo, ".jaunt", "config.toml"), CONFIG);
   writeFileSync(join(w.repo, "README.md"), "e2e\n");
