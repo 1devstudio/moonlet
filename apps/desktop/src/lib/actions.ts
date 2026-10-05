@@ -200,7 +200,7 @@ function waitForAgent(host: string, id: number): Promise<boolean> {
   });
 }
 
-/** Switches a shell between Warp mode and its own prompt (T7). */
+/** Switches a shell between Blocks mode and its own prompt (T7). */
 export async function setClassic(host: string, id: number, classic: boolean) {
   try {
     const info = await rpc<TerminalInfo>(host, M.terminalSetClassic, { id, classic });

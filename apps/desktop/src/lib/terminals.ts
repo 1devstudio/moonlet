@@ -19,7 +19,7 @@ export interface TermSettings {
   optionIsMeta: boolean;
   allowOsc52: boolean;
   webgl: boolean;
-  /** New shells keep their own prompt instead of Warp mode (T7). */
+  /** New shells keep their own prompt instead of Blocks mode (T7). */
   classicPrompt: boolean;
 }
 
@@ -92,7 +92,7 @@ export interface BlockContext {
   home: string | null;
   worktree?: string;
   branch?: string;
-  /** Recorded on each block when its command starts, as Warp shows them. */
+  /** Recorded on each block when its command starts, for its header. */
   nodeVersion?: string;
   changes?: { files: number; additions: number; deletions: number };
 }
@@ -131,7 +131,7 @@ export function blockHeader(
   return {
     node: b.node ?? null,
     place,
-    // Warp's `5 • +113 -30`: the session's uncommitted changes, only inside it.
+    // `5 • +113 -30`: the session's uncommitted changes, only inside it.
     changes: inside && c ? `${c.files} • +${c.additions} -${c.deletions}` : null,
     exit: b.end && b.exit ? `exit ${b.exit}` : null,
     duration: timed ? `(${duration(b.endedAt! - b.startedAt!)})` : null,
@@ -227,7 +227,7 @@ export function blockForAgent(b: { command: string; output: string }): string {
   return `${fence}\n${blockCopy(b, "all")}\n${fence}\n`;
 }
 
-/** Rows of a Warp-mode block (T8), from its prompt mark's row and the row
+/** Rows of a Blocks-mode block (T8), from its prompt mark's row and the row
  * its output starts on. The shell's prompt is empty rows: with two, the
  * first holds the separator and the second the header; with one, they
  * share it. A shell that left no empty row (an older integration) gets no
@@ -260,7 +260,7 @@ export function inlineHeader(h: ReturnType<typeof blockHeader>, free: number) {
 }
 
 /** The block ⌘↵ sends to the agent (T8): the selected one, else the newest
- * finished one while the input is empty, as Warp attaches the last block.
+ * finished one while the input is empty.
  * With a typed command, ⌘↵ is about that command. */
 export function pickBlockForAgent<T>(selected: T | null, newest: T | null, input: string): T | null {
   if (selected) return selected;
@@ -268,8 +268,8 @@ export function pickBlockForAgent<T>(selected: T | null, newest: T | null, input
 }
 
 const LINE_HEIGHT = 1.15;
-/** Shells in Warp mode get Warp's roomier rows (T8); agent TUIs keep 1.15. */
-const WARP_LINE_HEIGHT = 1.3;
+/** Shells in Blocks mode get roomier rows (T8); agent TUIs keep 1.15. */
+const BLOCK_LINE_HEIGHT = 1.3;
 
 export interface FileLinkHandler {
   (path: string, line?: number): void;
@@ -293,7 +293,7 @@ export class TermEntry {
   blocks: CommandBlock[] = [];
   cwd = "";
   /** The shell draws no prompt; the app's editor is the input (T7). */
-  warp = false;
+  blockMode = false;
   /** Told when a block finishes (the input editor's send hint, T8). */
   onBlockFinished?: (block: CommandBlock) => void;
   private replaying = false;
@@ -371,7 +371,7 @@ export class TermEntry {
     this.el.addEventListener("mouseup", (e) => {
       const click = down && Math.abs(e.clientX - down.x) < 4 && Math.abs(e.clientY - down.y) < 4;
       down = null;
-      if (!click || !this.warp || e.button !== 0 || this.term.hasSelection() || this.term.buffer.active.type === "alternate") return;
+      if (!click || !this.blockMode || e.button !== 0 || this.term.hasSelection() || this.term.buffer.active.type === "alternate") return;
       const screen = this.backdrop.parentElement;
       if (!screen) return;
       const rect = screen.getBoundingClientRect();
@@ -514,11 +514,11 @@ export class TermEntry {
         // carry no marks): the command is on the line above the cursor.
         let last = this.blocks[this.blocks.length - 1];
         if (!last || last.output) {
-          // In Warp mode the header row sits above the command (T8).
+          // In Blocks mode the header row sits above the command (T8).
           const buf = this.term.buffer.active;
           const here = buf.baseY + buf.cursorY;
           // The spacer row above the header (T8).
-          const line = this.warp ? replayedPromptLine(here, (y) => !!buf.getLine(y)?.isWrapped, (y) => y >= 0 && !this.lineText(y).trim()) : here - 1;
+          const line = this.blockMode ? replayedPromptLine(here, (y) => !!buf.getLine(y)?.isWrapped, (y) => y >= 0 && !this.lineText(y).trim()) : here - 1;
           const prompt = this.term.registerMarker(line - here);
           if (prompt) {
             last = { prompt };
@@ -531,7 +531,7 @@ export class TermEntry {
           last.cwd = this.cwd;
           last.node = this.context.nodeVersion;
           last.changes = this.context.changes;
-          if (this.warp) {
+          if (this.blockMode) {
             // The prompt is empty rows for the separator and header (T8).
             const layout = blockLayout(last.prompt.line, marker.line, (y) => !this.lineText(y).trim());
             if (layout.header !== null) last.headerAt = this.term.registerMarker(layout.header - marker.line);
@@ -543,7 +543,7 @@ export class TermEntry {
             last.command = commandFromRows(rows);
           } else last.command = this.lineText(last.prompt.line).replace(/^.*?[$%#❯>]\s/, "").trim();
           if (!this.replaying) last.startedAt = Date.now();
-          if (this.warp) this.header(last);
+          if (this.blockMode) this.header(last);
         }
         break;
       }
@@ -554,7 +554,7 @@ export class TermEntry {
           last.exit = Number.isFinite(code) ? code : undefined;
           if (!this.replaying && last.startedAt !== undefined) last.endedAt = Date.now();
           this.decorate(last);
-          if (this.warp) this.header(last);
+          if (this.blockMode) this.header(last);
           this.onBlockFinished?.(last);
         }
         break;
@@ -565,8 +565,8 @@ export class TermEntry {
   private decorate(block: CommandBlock) {
     const d = this.term.registerDecoration({ marker: block.prompt, x: 0, width: 1, overviewRulerOptions: { color: block.exit ? "#ef5f5f" : "#333333" } });
     d?.onRender((el) => {
-      // Warp mode shows the status in the block header instead (T8).
-      if (this.warp) return;
+      // Blocks mode shows the status in the block header instead (T8).
+      if (this.blockMode) return;
       el.classList.add("jaunt-block-mark");
       el.classList.toggle("failed", !!block.exit);
       el.title = block.exit ? `exit ${block.exit}` : "ok";
@@ -616,7 +616,7 @@ export class TermEntry {
       const span = (cls: string, text: string) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
       // xterm sets the element's `display`, so the layout lives in a row inside.
       const row = Object.assign(document.createElement("div"), { className: "row" });
-      // `5 • +113 -30`, with the line counts in green and red as in Warp.
+      // `5 • +113 -30`, with the line counts in green and red.
       const changes = (text: string) => {
         const el = span("changes", "");
         for (const part of text.split(/([+-]\d+)/)) el.append(part.startsWith("+") ? span("add", part) : /^-\d/.test(part) ? span("del", part) : part);
@@ -638,7 +638,7 @@ export class TermEntry {
 
   private paintBackdrop() {
     const screen = this.backdrop.parentElement;
-    if (!screen || !this.warp || this.term.buffer.active.type === "alternate") {
+    if (!screen || !this.blockMode || this.term.buffer.active.type === "alternate") {
       this.backdrop.replaceChildren();
       return;
     }
@@ -693,7 +693,7 @@ export class TermEntry {
     this.paintBackdrop();
   }
 
-  /** ⌘↑ / ⌘↓ in Warp mode: the previous or next block, and past the newest
+  /** ⌘↑ / ⌘↓ in Blocks mode: the previous or next block, and past the newest
    * one back to the input editor (T8). */
   stepSelection(delta: -1 | 1) {
     // A full-screen program owns the screen; its rows are not blocks.
@@ -730,15 +730,15 @@ export class TermEntry {
     return b ? blockCopy({ command: b.command ?? "", output: this.outputOf(b) }, part) : null;
   }
 
-  /** Warp mode (T7): no shell prompt, and roomier rows as in Warp (T8). */
-  setWarp(warp: boolean) {
-    if (this.warp === warp) return;
-    this.warp = warp;
-    this.term.options.lineHeight = warp ? WARP_LINE_HEIGHT : LINE_HEIGHT;
+  /** Blocks mode (T7): no shell prompt, and roomier rows (T8). */
+  setBlockMode(on: boolean) {
+    if (this.blockMode === on) return;
+    this.blockMode = on;
+    this.term.options.lineHeight = on ? BLOCK_LINE_HEIGHT : LINE_HEIGHT;
     this.refit();
   }
 
-  /** Warp mode hides the terminal's cursor while the editor has the input. */
+  /** Blocks mode hides the terminal's cursor while the editor has the input. */
   setEditorActive(active: boolean) {
     this.term.options.cursorInactiveStyle = active ? "none" : "outline";
     this.term.options.cursorBlink = !active;
@@ -760,10 +760,10 @@ export class TermEntry {
     return this.term.buffer.active.getLine(y)?.translateToString(true) ?? "";
   }
 
-  /** Jumps to the previous/next command prompt (T4); in Warp mode it
+  /** Jumps to the previous/next command prompt (T4); in Blocks mode it
    * selects the previous/next block instead (T8). */
   jumpBlock(delta: -1 | 1) {
-    if (this.warp) return this.stepSelection(delta);
+    if (this.blockMode) return this.stepSelection(delta);
     const buf = this.term.buffer.active;
     const top = buf.viewportY;
     const lines = this.blocks.map((b) => b.prompt.line).filter((l) => l >= 0);

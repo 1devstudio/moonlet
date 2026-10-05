@@ -43,15 +43,15 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
     return () => entry.unmount();
   }, [host, session, visible, home]);
 
-  // The Warp-style editor takes over input while the shell waits at a prompt
+  // In Blocks mode the editor takes over input while the shell waits at a prompt
   // (T6), unless the tab is in classic mode (T7).
-  const warp = !!info && info.kind === "shell" && info.prompt !== undefined && !info.classic && !info.exit;
-  const editing = warp && info.prompt === true && !info.alt_screen;
+  const blockMode = !!info && info.kind === "shell" && info.prompt !== undefined && !info.classic && !info.exit;
+  const editing = blockMode && info.prompt === true && !info.alt_screen;
   useEffect(() => {
     const entry = getEntry(host, session);
-    entry.setWarp(warp);
+    entry.setBlockMode(blockMode);
     entry.setEditorActive(editing);
-  }, [host, session, warp, editing]);
+  }, [host, session, blockMode, editing]);
   const branch = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.branch : undefined));
   const worktree = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.path : undefined));
   const files = useStore((s) => (info?.session_id ? s.git[sesKey(host, info.session_id)]?.files : undefined));
@@ -102,7 +102,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
           title="Use jaunt's input editor and hide the shell prompt"
           onClick={() => void setClassic(host, session, false)}
         >
-          Warp input
+          Blocks
         </button>
       )}
       {exited && (

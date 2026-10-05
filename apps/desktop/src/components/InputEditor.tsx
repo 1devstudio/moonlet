@@ -12,7 +12,7 @@ import { setClassic } from "../lib/actions";
 const drafts = new Map<string, string>();
 
 /**
- * Warp-style command input (T6): a real text editor at the shell prompt with
+ * Command input for Blocks mode (T6): a real text editor at the shell prompt with
  * mouse placement, selection, multi-line editing and history ghost text.
  */
 export function InputEditor({
@@ -250,7 +250,7 @@ export function InputEditor({
   return (
     <div className="relative shrink-0 border-t border-border bg-bg px-7 pb-3 pt-2.5" onMouseDown={(e) => e.stopPropagation()}>
       {rows.length > 0 && popup && <CompletionPopup rows={rows} highlight={highlight} dir={popup.dir} home={home} onPick={accept} />}
-      {/* One row, as in Warp: the directory chip gives way first, and Classic
+      {/* One row: the directory chip gives way first, and Classic
           sits outside the chips so a narrow pane never hides it. */}
       <div className="mb-2 flex items-center gap-1.5 font-mono text-[11.5px] text-muted">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
@@ -389,12 +389,12 @@ function ChipBox({ chip }: { chip: Chip }) {
     >
       <span className="shrink-0 opacity-80">{icon}</span>
       {chip.kind === "changes" ? (
-        // Warp's `5 • +113 -30`, the line counts in green and red.
+        // `5 • +113 -30`: changed files, then added and removed lines in green and red.
         <span className="whitespace-nowrap">
           {chip.files} • <span className="text-done">+{chip.additions}</span> <span className="text-error">-{chip.deletions}</span>
         </span>
       ) : chip.kind === "dir" ? (
-        // Cut from the left, as Warp does, so the end of the path stays.
+        // Cut from the left, so the end of the path stays.
         <span className="truncate [direction:rtl]">
           <bdi>{chip.text}</bdi>
         </span>

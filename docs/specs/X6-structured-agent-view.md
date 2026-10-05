@@ -7,7 +7,7 @@
 
 ## Summary
 
-Agent tabs show a native conversation view instead of the agent's terminal UI: messages, thinking, tool calls with their output and diffs, permission requests as buttons, and a Warp-style editor as the only input. The agent runs headless under the daemon, so the view survives app restarts like terminals do. "Open in terminal" opens the same conversation in the agent's own TUI.
+Agent tabs show a native conversation view instead of the agent's terminal UI: messages, thinking, tool calls with their output and diffs, permission requests as buttons, and an input editor as the only input. The agent runs headless under the daemon, so the view survives app restarts like terminals do. "Open in terminal" opens the same conversation in the agent's own TUI.
 
 ## How the agents run
 
