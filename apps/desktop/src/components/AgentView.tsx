@@ -36,6 +36,7 @@ import {
   diffStat,
   elapsed,
   fuzzyFilter,
+  joinDraft,
   loadChat,
   promptHistory,
   questionAnswers,
@@ -51,7 +52,7 @@ import {
 import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
-import { errorToast, getLayout, setLayout, toast, useStore } from "../lib/store";
+import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
 import { chatScale } from "../lib/terminals";
 import { Menu, type MenuItem } from "./Menu";
@@ -445,6 +446,7 @@ function projectFiles(host: string, root: string): Promise<string[]> {
 
 function ChatEditor({
   host,
+  draftKey,
   root,
   commands,
   working,
@@ -455,6 +457,8 @@ function ChatEditor({
   scale,
 }: {
   host: string;
+  /** Where text sent from elsewhere waits (`agentDrafts`, T8). */
+  draftKey: string;
   root: string;
   commands: string[];
   working: boolean;
@@ -478,6 +482,19 @@ function ChatEditor({
   useEffect(() => {
     if (focused) ta.current?.focus();
   }, [focused]);
+
+  // A command block sent from a shell (T8) joins whatever is being typed.
+  const draft = useStore((s) => s.agentDrafts[draftKey]);
+  useEffect(() => {
+    if (!draft) return;
+    setText((cur) => joinDraft(cur, draft));
+    useStore.setState((s) => {
+      const agentDrafts = { ...s.agentDrafts };
+      delete agentDrafts[draftKey];
+      return { agentDrafts };
+    });
+    ta.current?.focus();
+  }, [draft, draftKey]);
 
   useLayoutEffect(() => {
     const el = ta.current;
@@ -830,6 +847,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
         </div>
         <ChatEditor
           host={host}
+          draftKey={termKey(host, id)}
           root={info?.cwd ?? "/"}
           commands={st?.slash_commands ?? []}
           working={working}

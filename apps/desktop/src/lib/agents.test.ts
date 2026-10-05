@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextMode, resolveMode } from "./agents";
+import { agentReadiness, nextMode, resolveMode } from "./agents";
 
 describe("nextMode", () => {
   it("cycles manual, accept edits, plan, auto", () => {
@@ -23,5 +23,19 @@ describe("resolveMode", () => {
 
   it("falls back to manual for missing, unknown and bypass values", () => {
     for (const v of [undefined, null, "", "yolo", 3, "bypassPermissions"]) expect(resolveMode(v)).toBe("manual");
+  });
+});
+
+describe("agentReadiness (T8)", () => {
+  const started = { created_at: 1000, last_output_at: 1000 };
+
+  it("waits until a new agent has printed something", () => {
+    expect(agentReadiness(started)).toBe("waiting");
+    expect(agentReadiness({ ...started, last_output_at: 1500 })).toBe("ready");
+  });
+
+  it("gives up on an agent that exited or is gone", () => {
+    expect(agentReadiness({ ...started, exit: { code: 1, signal: null } })).toBe("gone");
+    expect(agentReadiness(undefined)).toBe("gone");
   });
 });
