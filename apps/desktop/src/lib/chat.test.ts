@@ -13,6 +13,7 @@ import {
   onChatState,
   questionAnswers,
   thinkingPreview,
+  toolCommand,
   toolGroupLabel,
   toolGroupStatus,
   transcript,
@@ -105,6 +106,19 @@ describe("chat helpers", () => {
 
   it("previews thinking on one line", () => {
     expect(thinkingPreview("\n  It's odd that the no-connection case\n  jumps straight from /authorize.  ")).toBe("It's odd that the no-connection case jumps straight from /authorize.");
+  });
+
+  it("gives the whole command of a shell call for its opened row", () => {
+    const bash = (input: unknown, name = "Bash") => ({ name, summary: "", input, status: "ok" as const });
+    expect(toolCommand(bash({ command: "git tag --list 'v*' --sort=-creatordate | head -5; exe/release prod --draft-notes --skip-build --tag v0.1.9 2>&1 | tail -40", description: "List tags and dry-run the release" }))).toBe(
+      "git tag --list 'v*' --sort=-creatordate | head -5; exe/release prod --draft-notes --skip-build --tag v0.1.9 2>&1 | tail -40",
+    );
+    expect(toolCommand(bash({ command: "cd /tmp &&\\\n  curl -s https://example.com\n" }))).toBe("cd /tmp &&\\\n  curl -s https://example.com");
+    expect(toolCommand(bash({ command: "ls -la", cwd: "/repo" }, "shell"))).toBe("ls -la");
+    expect(toolCommand(bash({ cmd: "pnpm test" }, "command"))).toBe("pnpm test");
+    expect(toolCommand(bash({ file_path: "/repo/README.md" }, "Read"))).toBeNull();
+    expect(toolCommand(bash({ command: null }))).toBeNull();
+    expect(toolCommand(bash(null))).toBeNull();
   });
 
   it("reads AskUserQuestion input and builds its answers", () => {

@@ -23,7 +23,7 @@ while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) out '{"type":"system","subtype":"init","session_id":"e2e-1","model":"e2e-model","slash_commands":[]}' ;;
     *'"type":"user"'*)
-      out '{"type":"assistant","message":{"id":"m1","content":[{"type":"thinking","thinking":"The resume URL is session-bound so I cannot fetch it.\nTry the probe with cookies kept."},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"echo first"}}]}}'
+      out '{"type":"assistant","message":{"id":"m1","content":[{"type":"thinking","thinking":"The resume URL is session-bound so I cannot fetch it.\nTry the probe with cookies kept."},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"echo first\necho the-tail-the-row-cuts-off"}}]}}'
       out '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","content":"first-output"}]}}'
       out '{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"b2","name":"Bash","input":{"command":"echo second"}}]}}'
       out '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b2","content":"second-output"}]}}'
@@ -80,6 +80,13 @@ describe("agent view", () => {
     await expect(bashRows()).toBeElementsArrayOfSize(2);
     await bashRows()[0].click();
     await expect($(sel.text("first-output"))).toBeDisplayed();
+  });
+
+  it("shows the whole command when a Bash row is opened", async () => {
+    // The row shows only the command's first line; the opened row shows all of it.
+    await expect(bashRows()[0]).toHaveText(/echo first/);
+    await expect(bashRows()[0]).not.toHaveText(/the-tail-the-row-cuts-off/);
+    await expect($(`//pre[normalize-space()=${JSON.stringify("$ echo first echo the-tail-the-row-cuts-off")}]`)).toBeDisplayed();
   });
 
   it("shows the whole thought when its row is opened", async () => {
