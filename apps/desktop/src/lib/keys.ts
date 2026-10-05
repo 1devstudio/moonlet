@@ -1,7 +1,7 @@
 // App shortcuts. All use ⌘ so they never collide with keys an agent's TUI
 // needs; the terminal is told to ignore every ⌘ combination (T2).
 
-import { closeFocused, focusPane, focusedEntry, newTab, runScript, selectSessionByIndex, split, switchTab } from "./actions";
+import { closeFocused, draftToAgent, focusPane, focusedEntry, newTab, runScript, selectSessionByIndex, split, switchTab } from "./actions";
 import { errorToast, toast, useStore } from "./store";
 import { outputToCopy } from "./terminals";
 
@@ -41,6 +41,17 @@ const bindings: Record<string, Handler> = {
     if (cmd) void navigator.clipboard.writeText(cmd).then(() => toast("Copied command"), errorToast);
   },
 };
+
+/** ⌘↵ on a selected block sends it to the session's agent as a draft;
+ * ⇧⌘↵ to a new agent tab (T8). Elsewhere ⌘↵ keeps its own meaning. */
+function sendBlock(newTab: boolean): boolean {
+  const e = focusedEntry();
+  const text = e?.selected && e.el.closest("[data-terminal-pane]")?.contains(document.activeElement) ? e.selectedForAgent() : null;
+  if (!text || !e) return false;
+  e.select(null);
+  void draftToAgent(text, newTab);
+  return true;
+}
 
 /** ⌘C on a selected block, while the terminal has focus and no text is
  * selected, copies the block's command and output (T8). Otherwise ⌘C is
@@ -82,6 +93,13 @@ export function installShortcuts() {
     // Text selected in the terminal wins over the block shortcuts (T8): they
     // neither copy nor swallow the key.
     if ((id === "shift+cmd+c" || id === "alt+cmd+c") && focusedEntry()?.term.hasSelection()) return;
+    if (id === "cmd+enter" || id === "shift+cmd+enter") {
+      if (sendBlock(id === "shift+cmd+enter")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
     if (/^cmd\+[1-9]$/.test(id)) {
       e.preventDefault();
       selectSessionByIndex(Number(id.slice(-1)) - 1);

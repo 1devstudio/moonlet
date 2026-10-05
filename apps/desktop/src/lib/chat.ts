@@ -21,6 +21,12 @@ export const useChat = (g.__jauntChat ??= makeStore());
 const empty: ChatState = { items: [], pending: [], status: "idle", cost_usd: 0, input_tokens: 0, output_tokens: 0, slash_commands: [], queued: [] };
 
 /** Inserts or replaces an item by id, keeping order. */
+/** The composer's text after text sent from elsewhere arrives, such as a
+ * command block from a shell (T8): it follows what is typed. */
+export function joinDraft(current: string, sent: string): string {
+  return current.trim() ? `${current.trimEnd()}\n\n${sent}` : sent;
+}
+
 export function mergeItem(items: ChatItem[], item: ChatItem): ChatItem[] {
   const i = items.findIndex((x) => x.id === item.id);
   if (i < 0) return [...items, item];

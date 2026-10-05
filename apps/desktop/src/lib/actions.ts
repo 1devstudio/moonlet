@@ -5,7 +5,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc, sendInput } from "./daemon";
 import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
-import { errorToast, getLayout, selectedSession, sessionState, setLayout, toast, useStore, sessionTerminals } from "./store";
+import { errorToast, focusTerminal, getLayout, selectedSession, sessionState, setLayout, termKey, toast, useStore, sessionTerminals } from "./store";
 import { arrange, lastActive } from "./sidebar";
 import { findEntry } from "./terminals";
 import { isStructured } from "./agents";
@@ -44,16 +44,18 @@ export async function newTab() {
 }
 
 /** Opens another agent (or a shell) as a new tab in the selected workspace. */
-export async function newAgentTab(agent: string) {
+export async function newAgentTab(agent: string): Promise<TerminalInfo | null> {
   const c = current();
-  if (!c) return;
+  if (!c) return null;
   try {
     const info = await rpc<TerminalInfo>(c.host, M.terminalCreate, { cwd: c.ws.path, session_id: c.ws.id, kind: "agent", agent, chat: isStructured(agent), cols: 120, rows: 32 });
     const layout = getLayout(c.host, c.ws.id);
     const existing = tabOf(layout, info.id);
     setLayout(c.host, c.ws.id, existing ? { ...layout, active: existing.id, focused: info.id } : addTab(layout, info.id));
+    return info;
   } catch (e) {
     errorToast(e);
+    return null;
   }
 }
 
@@ -153,6 +155,39 @@ export async function sendToAgent(text: string): Promise<boolean> {
   await sendInput(a.host, a.session.id, `\x1b[200~${text}\x1b[201~`);
   setTimeout(() => void sendInput(a.host, a.session.id, "\r"), 60);
   return true;
+}
+
+/**
+ * Puts `text` into an agent's input without submitting it (T8): the
+ * session's running agent, or a new agent tab when there is none or
+ * `newTab` is set. Structured agents get it in their composer; TUI agents
+ * as a bracketed paste. Focus moves to the agent.
+ */
+export async function draftToAgent(text: string, newTab = false) {
+  const c = current();
+  if (!c) return;
+  let target = newTab ? null : agentSession()?.session ?? null;
+  if (!target) {
+    target = await newAgentTab(c.ws.agent ?? "claude");
+    if (!target) return;
+    // A TUI agent reads its input once it has drawn its first screen.
+    if (!target.chat) await waitForOutput(c.host, target.id);
+  }
+  if (target.chat) useStore.setState((s) => ({ agentDrafts: { ...s.agentDrafts, [termKey(c.host, target.id)]: text } }));
+  else await sendInput(c.host, target.id, `\x1b[200~${text}\x1b[201~`);
+  focusTerminal(c.host, target.id);
+}
+
+function waitForOutput(host: string, id: number, timeout = 10_000): Promise<void> {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      const t = useStore.getState().terminals[host]?.[id];
+      if ((t && t.last_output_at > t.created_at) || Date.now() - started > timeout) resolve();
+      else setTimeout(tick, 100);
+    };
+    tick();
+  });
 }
 
 /** Switches a shell between Warp mode and its own prompt (T7). */

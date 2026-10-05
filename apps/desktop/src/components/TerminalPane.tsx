@@ -70,6 +70,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
   const exited = info?.exit;
   return (
     <div
+      data-terminal-pane
       className="relative flex h-full w-full flex-col overflow-hidden bg-bg"
       onMouseDown={() => {
         const l = getLayout(host, wsId);
