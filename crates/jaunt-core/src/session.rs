@@ -401,26 +401,33 @@ impl SessionManager {
 
     /// Adds a project (or finds it) and attaches it to a workspace.
     pub async fn workspace_add_project(&self, id: &str, path: &str) -> Result<Project> {
-        let project = self.add_project(path).await?;
-        self.mutate(|st| {
-            let w = st
-                .workspaces
-                .iter_mut()
-                .find(|w| w.id == id)
-                .context("no such workspace")?;
-            if !w.project_ids.contains(&project.id) {
-                w.project_ids.push(project.id.clone());
-            }
-            Ok(())
-        })?;
-        self.emit_workspaces();
-        Ok(project)
+        self.add_project_to(path, Some(id)).await
     }
 
     pub async fn add_project(&self, path: &str) -> Result<Project> {
+        self.add_project_to(path, None).await
+    }
+
+    /// A new project joins `workspace` in the same update, so the orphan
+    /// sweep in `ensure_workspace` does not also file it under the first one.
+    async fn add_project_to(&self, path: &str, workspace: Option<&str>) -> Result<Project> {
         let root = git::toplevel(&expand_home(path)).await?;
         let root_s = root.display().to_string();
         if let Some(r) = self.list_projects().into_iter().find(|r| r.path == root_s) {
+            if let Some(id) = workspace {
+                self.mutate(|st| {
+                    let w = st
+                        .workspaces
+                        .iter_mut()
+                        .find(|w| w.id == id)
+                        .context("no such workspace")?;
+                    if !w.project_ids.contains(&r.id) {
+                        w.project_ids.push(r.id.clone());
+                    }
+                    Ok(())
+                })?;
+                self.emit_workspaces();
+            }
             return Ok(r);
         }
         let config = read_config(&root);
@@ -439,6 +446,14 @@ impl SessionManager {
         };
         let r = repo.clone();
         self.mutate(|st| {
+            if let Some(id) = workspace {
+                st.workspaces
+                    .iter_mut()
+                    .find(|w| w.id == id)
+                    .context("no such workspace")?
+                    .project_ids
+                    .push(r.id.clone());
+            }
             st.projects.push(r);
             st.ensure_workspace();
             Ok(())
@@ -1625,6 +1640,31 @@ mod tests {
         let again = State::parse(&serde_json::to_string(&st).unwrap());
         assert_eq!(again.workspaces.len(), 1);
         assert_eq!(again.workspaces[0].id, st.workspaces[0].id);
+    }
+
+    #[tokio::test]
+    async fn new_project_added_to_a_workspace_lands_only_there() {
+        let (repo, _home, mgr) = setup().await;
+        let first = mgr.list_workspaces()[0].clone();
+        let work = mgr.create_workspace("CipherHealth").unwrap();
+        let r = mgr
+            .workspace_add_project(&work.id, &repo.path().display().to_string())
+            .await
+            .unwrap();
+        let all = mgr.list_workspaces();
+        let names: Vec<&str> = all
+            .iter()
+            .filter(|w| w.project_ids.contains(&r.id))
+            .map(|w| w.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["CipherHealth"]);
+        assert!(
+            !all.iter()
+                .find(|w| w.id == first.id)
+                .unwrap()
+                .project_ids
+                .contains(&r.id)
+        );
     }
 
     #[tokio::test]
