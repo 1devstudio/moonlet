@@ -43,36 +43,41 @@ export type DiffRow = { kind: "add" | "del" | "context" | "hunk"; html: string }
 
 type Row = { kind: DiffRow["kind"]; code: string };
 
+type DiffFile = { from: string; to: string; rows: Row[]; inHunk: boolean };
+
 /**
- * A unified diff's lines with the code coloured by the language of each
- * file's `+++` name (`---` for a deletion). Removed and added lines are
- * highlighted as the old and new file, so neither side's open comment or
- * string bleeds into the other.
+ * A unified diff's lines with the code coloured by each file's language.
+ * Removed lines are highlighted as the old file (its `---` name) and added
+ * lines as the new one (`+++`), so neither side's open comment or string
+ * bleeds into the other.
  */
 export function diffRows(diff: string): DiffRow[] {
   const lines = diff.replace(/\n$/, "").split("\n");
-  const files: { path: string; rows: Row[] }[] = [];
-  let file: { path: string; rows: Row[] } | undefined;
+  const files: DiffFile[] = [];
+  let file: DiffFile | undefined;
+  const open = () => files.push((file = { from: "", to: "", rows: [], inHunk: false }));
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (l.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ")) {
-      // A header pair names the file; it opens a new one unless `diff --git` just did.
-      if (!file || file.path) files.push((file = { path: "", rows: [] }));
+    // A `---`/`+++` pair names the file only before its first hunk; inside
+    // one it is a removed `-- ` line and an added `++ ` line.
+    if (!file?.inHunk && l.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ")) {
+      if (!file || file.from) open();
       const [from, to] = [l.slice(4).trim(), lines[++i].slice(4).trim()];
-      file.path = to !== "/dev/null" ? to : from;
+      file!.from = from !== "/dev/null" ? from : to;
+      file!.to = to !== "/dev/null" ? to : from;
       continue;
     }
-    if (l.startsWith("diff --git ") || !file) files.push((file = { path: "", rows: [] }));
+    if (l.startsWith("diff ") || !file) open();
     const kind = l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : l.startsWith(" ") ? "context" : "hunk";
-    file.rows.push({ kind, code: kind === "hunk" ? l : l.slice(1) });
+    if (l.startsWith("@@")) file!.inHunk = true;
+    file!.rows.push({ kind, code: kind === "hunk" ? l : l.slice(1) });
   }
   const html = new Map<Row, string>();
   for (const f of files) {
-    const lang = languageFor(f.path);
     for (const kind of ["del", "add"] as const) {
       const mine = f.rows.filter((r) => r.kind === kind || r.kind === "context");
       // Context lines are on both sides; the new side, last, wins.
-      highlightLines(mine.map((r) => r.code), lang).forEach((h, i) => html.set(mine[i], h));
+      highlightLines(mine.map((r) => r.code), languageFor(kind === "del" ? f.from : f.to)).forEach((h, i) => html.set(mine[i], h));
     }
   }
   return files.flatMap((f) => f.rows.map((r) => ({ kind: r.kind, html: r.kind === "hunk" ? escapeHtml(r.code) : html.get(r)! })));

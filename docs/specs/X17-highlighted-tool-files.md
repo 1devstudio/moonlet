@@ -23,7 +23,9 @@ When the user expands a Read, Edit or Write call in the agent view, the file's c
 - [x] A Read output that is not numbered lines (an error, an image) shows as plain text, as before. (`codeHighlight.test.ts`)
 - [x] Constructs that span lines, such as a block comment, are coloured on every line they cover. (`codeHighlight.test.ts`)
 - [x] An Edit, MultiEdit or Write diff keeps its added, removed and hunk lines, and colours the code by the language of the `+++` file (the `---` file for a deletion). (`codeHighlight.test.ts`)
-- [x] Removed lines are coloured as the old file and added lines as the new one, so an edit that opens a comment on one side does not colour the other. (`codeHighlight.test.ts`)
+- [x] Removed lines are coloured as the old file and added lines as the new one, so an edit that opens a comment on one side does not colour the other. A renamed file's removed lines use the old name's language. (`codeHighlight.test.ts`)
+- [x] Inside a hunk, a removed `-- ` line followed by an added `++ ` line stays a removed and an added line, not a file header. (`codeHighlight.test.ts`)
+- [x] A Read's language comes from the `file_path` in its input; the summary, cut to 200 characters by the daemon, is only a fallback. (`toolOutput.test.ts`)
 - [x] File text is escaped: `<script>` in a file shows as text. (`codeHighlight.test.ts`)
 - [x] The permission prompt's diff gets the same colours, since it is the same diff view.
 

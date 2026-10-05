@@ -28,7 +28,7 @@ Forcing colour on (`FORCE_COLOR`, `CLICOLOR_FORCE`) is not an option: the agent 
 - [x] `error`, `ERROR`, `fatal`, `FAIL`, `FAILED`, `failed`, `panicked` and `×` are red; `warning`, `WARN` and `WARNING` amber; `ok`, `passed`, `PASS` and `✓` green. Only the word is coloured, whole words only, so `errorToast` and `TypeError` are not. (`toolOutput.test.ts`)
 - [x] A zero count, `0 failed`, `0 errors`, `0 warnings`, is not coloured. (`toolOutput.test.ts`)
 - [x] Output with none of these shapes shows plain, as before. (`toolOutput.test.ts`)
-- [x] The rules apply to shell calls (Claude's Bash, Codex's shell commands) and to Grep; other tools' output is unchanged.
+- [x] The rules apply to shell calls (Claude's Bash, Codex's shell commands), even one whose input has no readable command, and to Grep; other tools' output is unchanged. (`toolOutput.test.ts`)
 
 ## UI
 

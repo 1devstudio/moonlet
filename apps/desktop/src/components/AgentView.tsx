@@ -50,8 +50,8 @@ import {
   turnFooter,
   useChat,
 } from "../lib/chat";
-import { diffRows, readRows } from "../lib/codeHighlight";
-import { type Tone, outputView } from "../lib/toolOutput";
+import { diffRows } from "../lib/codeHighlight";
+import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
 import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
@@ -207,8 +207,7 @@ export function DiffBlock({ diff }: { diff: string }) {
 const TONE: Record<Tone, string> = { add: "text-add", del: "text-del", dim: "text-faint", error: "text-error", warn: "text-blocked", ok: "text-add" };
 
 /** A shell or Grep call's output, coloured by its shape (X18). */
-function CommandOutput({ output }: { output: string }) {
-  const view = useMemo(() => outputView(output), [output]);
+function CommandOutput({ output, view }: { output: string; view: OutputView }) {
   if (!view) return output.trim() || "(no output)";
   if (view.kind === "diff") return <div className="-mx-3"><DiffLines diff={view.diff} /></div>;
   if (view.kind === "code") {
@@ -244,7 +243,7 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
   const stat = tool.diff ? diffStat(tool.diff) : null;
   const command = toolCommand(tool);
   const expandable = !!(tool.diff || tool.output || command);
-  const readLines = useMemo(() => (open && tool.name === "Read" && tool.output ? readRows(tool.output, tool.summary) : null), [open, tool.name, tool.output, tool.summary]);
+  const view = useMemo(() => (open ? toolOutputView(tool) : null), [open, tool]);
   return (
     <div className="group">
       <button
@@ -268,8 +267,8 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
         <div className="mb-2 ml-6 mt-1">
           {tool.diff ? (
             <DiffBlock diff={tool.diff} />
-          ) : readLines ? (
-            <ReadBlock rows={readLines} />
+          ) : view?.kind === "read" ? (
+            <ReadBlock rows={view.rows} />
           ) : (
             <div className="overflow-hidden rounded-md border border-border bg-[#161616] font-mono ui-text-12 leading-[1.5]">
               {command && (
@@ -280,7 +279,7 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
               )}
               {(tool.output || tool.status !== "running") && (
                 <pre className="code-hl selectable max-h-[300px] overflow-auto whitespace-pre-wrap break-all px-3 py-2 text-muted">
-                  {(command || tool.name === "Grep") && tool.output ? <CommandOutput output={tool.output} /> : tool.output?.trim() || "(no output)"}
+                  <CommandOutput output={tool.output ?? ""} view={view} />
                 </pre>
               )}
             </div>

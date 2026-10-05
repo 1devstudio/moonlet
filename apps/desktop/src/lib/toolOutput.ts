@@ -1,7 +1,8 @@
 // Colours for command output in agent tool calls (X18). The agent's commands
 // run without a terminal, so colour comes from recognising common shapes.
 
-import { highlightLines } from "./codeHighlight";
+import { highlightLines, readRows } from "./codeHighlight";
+import type { ToolCall } from "./protocol";
 
 export type Tone = "add" | "del" | "dim" | "error" | "warn" | "ok";
 export type Segment = { text: string; tone?: Tone };
@@ -56,4 +57,21 @@ export function outputView(output: string): OutputView {
   if (isJson(text)) return { kind: "code", html: highlightLines(text.split("\n"), "json") };
   const lines = output.replace(/^\n+|\n+$/g, "").split("\n").map(lineSegments);
   return lines.some((l) => l.some((s) => s.tone)) ? { kind: "lines", lines } : null;
+}
+
+const SHELL = ["bash", "shell", "command"];
+
+/**
+ * How an opened tool call's output is shown: a Read's numbered lines (X17),
+ * a shell or Grep call's output by its shape (X18); null for plain text.
+ */
+export function toolOutputView(tool: ToolCall): OutputView | { kind: "read"; rows: { n: number; html: string }[] } {
+  if (!tool.output) return null;
+  if (tool.name === "Read") {
+    // The summary is cut to 200 characters, which can drop the extension.
+    const input = tool.input as { file_path?: unknown } | null;
+    const rows = readRows(tool.output, typeof input?.file_path === "string" ? input.file_path : tool.summary);
+    return rows && { kind: "read", rows };
+  }
+  return SHELL.includes(tool.name.toLowerCase()) || tool.name === "Grep" ? outputView(tool.output) : null;
 }
