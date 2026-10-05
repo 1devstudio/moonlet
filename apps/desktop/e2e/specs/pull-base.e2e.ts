@@ -1,11 +1,11 @@
 // Pull the base branch (X13): the sidebar shows what origin has that the
-// local main lacks, and Pull fast-forwards main.
+// local main lacks on hover, and a click fast-forwards main.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { CONFIG, resetConfig, rpc, sel, world } from "../fixtures";
+import { CONFIG, hover, resetConfig, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const origin = join(w.root, "origin.git");
@@ -18,8 +18,8 @@ let secondId = "";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.email=e2e@jaunt.test", "-c", "user.name=e2e", ...args], { cwd, env: w.env, stdio: "pipe" }).toString().trim();
 
-const chip = () => $('button[title="main is 2 commits behind origin/main"]');
-const secondChip = () => $('button[title="main is 1 commit behind origin/main"]');
+const chip = () => $('button[aria-label="main is 2 commits behind origin/main"]');
+const secondChip = () => $('button[aria-label="main is 1 commit behind origin/main"]');
 const popover = () => $('[role="dialog"][aria-label="Pull main"]');
 
 describe("Pull base branch", () => {
@@ -57,7 +57,7 @@ describe("Pull base branch", () => {
     resetConfig(w, CONFIG);
     await expect(chip()).toBeDisplayed({ wait: 30_000 });
     await expect(chip()).toHaveText("2");
-    await chip().click();
+    await hover(chip());
     await expect(popover()).toBeDisplayed();
     await expect($(sel.text("main is 2 commits behind origin"))).toBeDisplayed();
     await expect($(sel.text("Merge pull request #128 from 1devstudio/github-pr-sessions"))).toBeDisplayed();
@@ -68,17 +68,17 @@ describe("Pull base branch", () => {
     await browser.keys("Escape");
     await expect(popover()).not.toBeExisting();
     await expect(secondChip()).toBeDisplayed({ wait: 30_000 });
-    await secondChip().click();
+    await hover(secondChip());
     await expect($(sel.text("Tidy the second project"))).toBeDisplayed();
-    await chip().click();
+    await hover(chip());
     await expect($$('[role="dialog"][aria-label="Pull main"]')).toBeElementsArrayOfSize(1);
     await expect($(sel.text("Open sessions from GitHub PRs"))).toBeDisplayed();
     await expect($(sel.text("Tidy the second project"))).not.toBeExisting();
   });
 
-  it("pulls main to origin's head and hides the chip", async () => {
+  it("pulls main to origin's head when the chip is clicked, and hides the chip", async () => {
     const tip = git(other, "rev-parse", "HEAD");
-    await $(sel.button("Pull main")).click();
+    await chip().click();
     await expect($(sel.text(`Pulled 2 commits into main. New sessions start from ${tip.slice(0, 7)}.`))).toBeDisplayed();
     await expect(chip()).not.toBeExisting();
     expect(git(w.repo, "rev-parse", "main")).toBe(tip);

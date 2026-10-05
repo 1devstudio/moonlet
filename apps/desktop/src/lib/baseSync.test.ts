@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aheadText, baseChip, behindHeadline, fetchedLabel, justMerged, pullToast, rebaseCommand } from "./baseSync";
+import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, justMerged, pullToast, rebaseCommand } from "./baseSync";
 import type { BaseStatus } from "./protocol";
 
 const status = (ahead: number, behind: number): BaseStatus => ({
@@ -31,6 +31,20 @@ describe("baseChip", () => {
     expect(baseChip(status(2, 0), false)).toBeNull();
     expect(baseChip(null, false)).toBeNull();
     expect(baseChip(undefined, false)).toBeNull();
+  });
+});
+
+describe("chipClick", () => {
+  it("pulls straight away when main is only behind", () => {
+    expect(chipClick(baseChip(status(0, 3), false))).toBe("pull");
+  });
+
+  it("opens the details for a diverged branch, which jaunt can't pull", () => {
+    expect(chipClick(baseChip(status(1, 3), false))).toBe("details");
+  });
+
+  it("does nothing while a pull runs", () => {
+    expect(chipClick(baseChip(status(0, 3), true))).toBeNull();
   });
 });
 
