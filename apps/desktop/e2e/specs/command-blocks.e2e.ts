@@ -44,6 +44,11 @@ describe("command blocks", () => {
   before(async () => {
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     sessionId = rpc<{ id: string }>(w, "session.create", { project_id: project.id, name: SESSION, agent: "none" }).id;
+    // Open it only once its shell sits at a prompt, so the shell's directory
+    // report comes before the app attaches.
+    await browser.waitUntil(() =>
+      rpc<{ session_id?: string; kind: string; prompt?: boolean }[]>(w, "terminal.list", {}).some((t) => t.session_id === sessionId && t.kind === "shell" && t.prompt),
+    );
     await $(sel.sessionRow(SESSION)).click();
   });
 
@@ -56,6 +61,9 @@ describe("command blocks", () => {
 
     await run("false");
     await expect($(".jaunt-block-head .exit")).toHaveText("· exit 1", { wait: 15_000 });
+    // The shell reported its directory before the app attached; the header
+    // still names the session's worktree.
+    await expect($(".jaunt-block-head .place")).toHaveText(/\/worktrees\/e2e-repo\/check-block-headers/);
 
     await run("echo e2e-ok");
     // The newest header: no exit code, a duration in seconds.
