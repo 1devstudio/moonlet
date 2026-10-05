@@ -155,7 +155,7 @@ export function InputEditor({
     let all: { name: string; kind: CandidateKind }[];
     try {
       all = isCommand
-        ? [...(await knownCommands(host))].map((name) => ({ name, kind: "command" as const }))
+        ? [...(await knownCommands(host, terminal))].map((name) => ({ name, kind: "command" as const }))
         : (await rpc<DirEntry[]>(host, M.fsList, { path: base || cwd, show_ignored: true })).map((e) => ({ name: e.name, kind: e.is_dir ? ("dir" as const) : ("file" as const) }));
     } catch {
       return; // directory unreadable
