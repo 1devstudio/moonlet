@@ -275,6 +275,15 @@ export function toolGroupStatus(tools: readonly ChatItem[]): ToolCall["status"] 
 /** Thinking squeezed onto one line for its collapsed row. */
 export const thinkingPreview = (text: string) => text.replace(/\s+/g, " ").trim();
 
+/** The whole command of a shell call, for its opened row: the row itself shows
+ *  only the summary's first line. Null for other tools. */
+export function toolCommand(tool: ToolCall): string | null {
+  if (!["bash", "shell", "command"].includes(tool.name.toLowerCase())) return null;
+  const input = tool.input as { command?: unknown; cmd?: unknown } | null;
+  const cmd = typeof input?.command === "string" ? input.command : typeof input?.cmd === "string" ? input.cmd : null;
+  return cmd?.trimEnd() || null;
+}
+
 /** One question from Claude's `AskUserQuestion` tool input. */
 export interface Question {
   question: string;

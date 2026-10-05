@@ -42,6 +42,7 @@ import {
   questionAnswers,
   rememberPrompt,
   thinkingPreview,
+  toolCommand,
   toolGroupLabel,
   toolGroupStatus,
   tokens,
@@ -195,7 +196,8 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
   const [open, setOpen] = useState(false);
   const Icon = toolIcon(tool.name);
   const stat = tool.diff ? diffStat(tool.diff) : null;
-  const expandable = !!(tool.diff || tool.output);
+  const command = toolCommand(tool);
+  const expandable = !!(tool.diff || tool.output || command);
   return (
     <div className="group">
       <button
@@ -220,9 +222,17 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
           {tool.diff ? (
             <DiffBlock diff={tool.diff} />
           ) : (
-            <pre className="selectable max-h-[300px] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-[#161616] px-3 py-2 font-mono chat-text-12 leading-[1.5] text-muted">
-              {tool.output?.trim() || "(no output)"}
-            </pre>
+            <div className="overflow-hidden rounded-md border border-border bg-[#161616] font-mono chat-text-12 leading-[1.5]">
+              {command && (
+                <pre className={cx("selectable max-h-[200px] overflow-auto whitespace-pre-wrap break-all px-3 py-2 text-fg", (tool.output || tool.status !== "running") && "border-b border-border")}>
+                  <span className="select-none text-faint">$ </span>
+                  {command}
+                </pre>
+              )}
+              {(tool.output || tool.status !== "running") && (
+                <pre className="selectable max-h-[300px] overflow-auto whitespace-pre-wrap break-all px-3 py-2 text-muted">{tool.output?.trim() || "(no output)"}</pre>
+              )}
+            </div>
           )}
         </div>
       )}

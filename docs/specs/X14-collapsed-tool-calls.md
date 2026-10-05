@@ -24,6 +24,7 @@ A long agent turn is mostly tool calls, which push the agent's answers off scree
 - [x] A group starts closed. Clicking it shows the tool rows, which work as in X6 (expand for output or diff). The group stays open while more calls stream into it. (`agent-view.e2e.ts`)
 - [x] The group row shows the distinct icons of its tools (up to 4) and a status mark: a spinner while any call runs, otherwise the red mark of an error or a denial. No mark when every call succeeded. (`chat.test.ts` for the status)
 - [x] Thinking is a row like a tool call: a brain icon, `Thinking`, and the thought on one line (whitespace collapsed, truncated to the width). Clicking it shows the full thought. While streaming it shows the `Thinking…` shimmer, as before. (`chat.test.ts` for the preview, `agent-view.e2e.ts`)
+- [x] A shell call's row shows only the first line of its command, truncated to the width. Opening the row shows the whole command, every line wrapped, as `$ <command>` above the output. A running call with no output yet can be opened too. (`chat.test.ts` for `toolCommand`, `agent-view.e2e.ts`)
 - [x] With **Expanded**, every tool call has its own row as in X6. Thinking keeps its row in both modes. (`chat.test.ts`, `agent-view.e2e.ts`)
 - [x] The setting defaults to Collapsed, also for users with settings saved by an older version. It applies to open conversations immediately.
 
@@ -60,8 +61,8 @@ None new. Tool output and thinking are still rendered as plain text, as in X6.
 
 ## Test plan
 
-- Unit (`apps/desktop/src/lib/chat.test.ts`): `chatBlocks` for both views, `toolGroupLabel`, `toolGroupStatus`, `thinkingPreview`.
-- E2E (`apps/desktop/e2e/specs/agent-view.e2e.ts`): a fake `claude` replays a turn with thinking, two `Bash` calls and an answer. The spec checks the collapsed group, opening it, the thinking row, and the Expanded setting.
+- Unit (`apps/desktop/src/lib/chat.test.ts`): `chatBlocks` for both views, `toolGroupLabel`, `toolGroupStatus`, `thinkingPreview`, `toolCommand`.
+- E2E (`apps/desktop/e2e/specs/agent-view.e2e.ts`): a fake `claude` replays a turn with thinking, two `Bash` calls and an answer. The first command has two lines. The spec checks the collapsed group, opening it, the whole command in an opened row, the thinking row, and the Expanded setting.
 
 ## Open questions
 
