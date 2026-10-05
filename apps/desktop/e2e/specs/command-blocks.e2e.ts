@@ -1,6 +1,7 @@
 // Warp-mode block headers (T8): each command gets a grey header line above
 // it with its directory and duration, plus `exit N` when it fails.
 
+import { execFileSync } from "node:child_process";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { PROJECT, fill, rpc, sel, world } from "../fixtures";
 
@@ -37,6 +38,15 @@ async function run(command: string) {
   }, input);
 }
 
+/** Sends a key to whatever has focus, as the app's shortcuts see it. */
+async function press(key: string, mods: { metaKey?: boolean; shiftKey?: boolean; altKey?: boolean } = {}) {
+  await browser.execute(
+    (k: string, m: object) => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...m })),
+    key,
+    mods,
+  );
+}
+
 describe("command blocks", () => {
   let sessionId = "";
 
@@ -71,5 +81,22 @@ describe("command blocks", () => {
     const heads = await $$(".jaunt-block-head");
     await expect(heads[1].$(".exit")).not.toExist();
     await expect(heads[1].$(".duration")).toHaveText(/^\(\d+\.\d{3}s\)$/);
+  });
+
+  it("selects the newest block with ⌘↑ and copies its command and output with ⌘C", async () => {
+    await run("echo e2e-copied");
+    await browser.waitUntil(async () => (await $$(".jaunt-block-head").length) === 3, { timeout: 15_000 });
+    await expect($(".jaunt-block-bg.selected")).not.toExist();
+
+    // From the input editor: ⌘↑ selects the newest block and focuses the terminal.
+    await press("ArrowUp", { metaKey: true });
+    await expect($(".jaunt-block-bg.selected")).toExist();
+    await press("c", { metaKey: true });
+    await expect($(sel.text("Copied command and output"))).toBeDisplayed();
+    expect(execFileSync("pbpaste", { encoding: "utf8" })).toBe("$ echo e2e-copied\ne2e-copied");
+
+    // Esc clears the selection.
+    await press("Escape");
+    await expect($(".jaunt-block-bg.selected")).not.toExist();
   });
 });

@@ -2,7 +2,7 @@
 // needs; the terminal is told to ignore every ⌘ combination (T2).
 
 import { closeFocused, focusPane, focusedEntry, newTab, runScript, selectSessionByIndex, split, switchTab } from "./actions";
-import { useStore } from "./store";
+import { errorToast, toast, useStore } from "./store";
 
 type Handler = () => void;
 
@@ -29,10 +29,26 @@ const bindings: Record<string, Handler> = {
   "cmd+arrowup": () => focusedEntry()?.jumpBlock(-1),
   "cmd+arrowdown": () => focusedEntry()?.jumpBlock(1),
   "shift+cmd+c": () => {
-    const out = focusedEntry()?.lastOutput();
-    if (out) void navigator.clipboard.writeText(out);
+    const e = focusedEntry();
+    const out = e?.copySelected("output") ?? e?.lastOutput();
+    if (out) void navigator.clipboard.writeText(out).then(() => toast("Copied output"), errorToast);
+  },
+  "alt+cmd+c": () => {
+    const cmd = focusedEntry()?.copySelected("command");
+    if (cmd) void navigator.clipboard.writeText(cmd).then(() => toast("Copied command"), errorToast);
   },
 };
+
+/** ⌘C on a selected block, while the terminal has focus and no text is
+ * selected, copies the block's command and output (T8). Otherwise ⌘C is
+ * the usual copy. */
+function copyBlock(): boolean {
+  const e = focusedEntry();
+  if (!e?.selected || e.term.hasSelection() || !e.el.contains(document.activeElement)) return false;
+  const text = e.copySelected("all");
+  if (text) void navigator.clipboard.writeText(text).then(() => toast("Copied command and output"), errorToast);
+  return !!text;
+}
 
 export function keyId(e: KeyboardEvent): string {
   const parts = [];
@@ -56,6 +72,10 @@ export function installShortcuts() {
     const dialog = useStore.getState().dialog;
     const id = keyId(e);
     if (dialog && id !== "cmd+k") return;
+    if (id === "cmd+c") {
+      if (copyBlock()) e.preventDefault();
+      return;
+    }
     if (/^cmd\+[1-9]$/.test(id)) {
       e.preventDefault();
       selectSessionByIndex(Number(id.slice(-1)) - 1);
