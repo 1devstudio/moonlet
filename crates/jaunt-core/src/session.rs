@@ -72,6 +72,23 @@ impl State {
 
     /// There is always at least one workspace; projects nobody groups land
     /// in the first one so nothing disappears from the sidebar.
+    /// Forgets a project, its archived sessions and its workspace entries.
+    fn drop_project(&mut self, id: &str) -> Result<()> {
+        if self
+            .sessions
+            .iter()
+            .any(|w| w.project_id == id && !w.archived)
+        {
+            bail!("archive this project's sessions first");
+        }
+        self.projects.retain(|r| r.id != id);
+        self.sessions.retain(|w| w.project_id != id);
+        for w in &mut self.workspaces {
+            w.project_ids.retain(|p| p != id);
+        }
+        Ok(())
+    }
+
     fn ensure_workspace(&mut self) {
         if self.workspaces.is_empty() {
             self.workspaces.push(Workspace {
@@ -404,6 +421,36 @@ impl SessionManager {
         self.add_project_to(path, Some(id)).await
     }
 
+    /// Detaches a project from a workspace. A project no other workspace
+    /// holds is removed from jaunt, which needs its sessions archived first.
+    pub fn workspace_remove_project(&self, id: &str, project_id: &str) -> Result<()> {
+        let dropped = self.mutate(|st| {
+            let i = st
+                .workspaces
+                .iter()
+                .position(|w| w.id == id)
+                .context("no such workspace")?;
+            let elsewhere = st
+                .workspaces
+                .iter()
+                .any(|w| w.id != id && w.project_ids.iter().any(|p| p == project_id));
+            if elsewhere {
+                st.workspaces[i].project_ids.retain(|p| p != project_id);
+            } else {
+                st.drop_project(project_id)?;
+            }
+            Ok(!elsewhere)
+        })?;
+        self.emit_workspaces();
+        if dropped {
+            self.terminals.emit(Message::event(
+                methods::EV_PROJECTS_CHANGED,
+                self.list_projects(),
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn add_project(&self, path: &str) -> Result<Project> {
         self.add_project_to(path, None).await
     }
@@ -467,21 +514,7 @@ impl SessionManager {
     }
 
     pub fn remove_project(&self, id: &str) -> Result<()> {
-        self.mutate(|st| {
-            if st
-                .sessions
-                .iter()
-                .any(|w| w.project_id == id && !w.archived)
-            {
-                bail!("archive this project's sessions first");
-            }
-            st.projects.retain(|r| r.id != id);
-            st.sessions.retain(|w| w.project_id != id);
-            for w in &mut st.workspaces {
-                w.project_ids.retain(|p| p != id);
-            }
-            Ok(())
-        })?;
+        self.mutate(|st| st.drop_project(id))?;
         self.terminals.emit(Message::event(
             methods::EV_PROJECTS_CHANGED,
             self.list_projects(),
@@ -1665,6 +1698,74 @@ mod tests {
                 .project_ids
                 .contains(&r.id)
         );
+    }
+
+    #[tokio::test]
+    async fn removing_a_shared_project_detaches_it_from_one_workspace() {
+        let (repo, _home, mgr) = setup().await;
+        let first = mgr.list_workspaces()[0].clone();
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        let work = mgr.create_workspace("CipherHealth").unwrap();
+        mgr.workspace_add_project(&work.id, &repo.path().display().to_string())
+            .await
+            .unwrap();
+        mgr.workspace_remove_project(&first.id, &r.id).unwrap();
+        let names: Vec<String> = mgr
+            .list_workspaces()
+            .into_iter()
+            .filter(|w| w.project_ids.contains(&r.id))
+            .map(|w| w.name)
+            .collect();
+        assert_eq!(names, vec!["CipherHealth".to_string()]);
+        assert_eq!(mgr.list_projects().len(), 1, "the project is kept");
+    }
+
+    #[tokio::test]
+    async fn removing_a_project_from_its_last_workspace_drops_it() {
+        let (repo, _home, mgr) = setup().await;
+        let first = mgr.list_workspaces()[0].clone();
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        mgr.workspace_remove_project(&first.id, &r.id).unwrap();
+        assert!(mgr.list_projects().is_empty());
+        assert!(mgr.list_workspaces()[0].project_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_project_with_live_sessions_stays_in_its_last_workspace() {
+        let (repo, _home, mgr) = setup().await;
+        let first = mgr.list_workspaces()[0].clone();
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        mgr.create_session(SessionCreate {
+            project_id: r.id.clone(),
+            name: None,
+            branch: None,
+            from: None,
+            existing_branch: false,
+            agent: Some("none".into()),
+            prompt: Some("Keep me".into()),
+            model: None,
+            effort: None,
+            mode: None,
+            pr: None,
+            tui: false,
+            cols: 80,
+            rows: 24,
+        })
+        .await
+        .unwrap();
+        let err = mgr.workspace_remove_project(&first.id, &r.id).unwrap_err();
+        assert_eq!(err.to_string(), "archive this project's sessions first");
+        assert_eq!(mgr.list_workspaces()[0].project_ids, vec![r.id.clone()]);
+        assert_eq!(mgr.list_projects().len(), 1);
     }
 
     #[tokio::test]
