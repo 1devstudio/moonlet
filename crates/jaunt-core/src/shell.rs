@@ -18,14 +18,14 @@ __jaunt_precmd() {
   unset __jaunt_ran
   __jaunt_urlpath "$PWD"
   printf '\e]7;file://%s%s\a' "${HOST}" "$REPLY"
-  # The node version for the editor's chips (T8), only when `node` changes.
-  # Only an absolute path: a relative PATH entry points into whatever
-  # directory the shell is in, which may be an untrusted checkout.
+  # Where `node` is, for the editor's chips (T8), only when that changes.
+  # Never run it: PATH may point into an untrusted checkout. The daemon
+  # reads the version from the install. A relative entry is skipped.
   local node=${commands[node]-}
   [[ $node == /* ]] || node=
   if [[ $node != ${__jaunt_node-} ]]; then
     __jaunt_node=$node
-    printf '\e]1337;JauntNode=%s\a' "${node:+$("$node" --version 2>/dev/null)}"
+    printf '\e]1337;JauntNodePath=%s\a' "$node"
   fi
   printf '\e]133;A\a'
 }
@@ -108,15 +108,15 @@ __jaunt_prompt() {
   __jaunt_ran=
   __jaunt_urlpath "$PWD"
   printf '\e]7;file://%s%s\a' "$HOSTNAME" "$__jaunt_url"
-  # The node version for the editor's chips (T8), only when `node` changes.
-  # Only an absolute path: a relative PATH entry points into whatever
-  # directory the shell is in, which may be an untrusted checkout.
+  # Where `node` is, for the editor's chips (T8), only when that changes.
+  # Never run it: PATH may point into an untrusted checkout. The daemon
+  # reads the version from the install. A relative entry is skipped.
   local node
   node=$(type -P node 2>/dev/null)
   case $node in /*) ;; *) node= ;; esac
   if [ "$node" != "${__jaunt_node-}" ]; then
     __jaunt_node=$node
-    printf '\e]1337;JauntNode=%s\a' "${node:+$("$node" --version 2>/dev/null)}"
+    printf '\e]1337;JauntNodePath=%s\a' "$node"
   fi
   printf '\e]133;A\a'
 }
@@ -182,16 +182,14 @@ if status is-interactive
       set -e __jaunt_ran
     end
     printf '\e]7;file://%s%s\a' (hostname) (string escape --style=url -- $PWD)
-    # The node version for the editor's chips (T8), only when `node` changes.
-    # Only an absolute path: a relative PATH entry points into whatever
-    # directory the shell is in, which may be an untrusted checkout.
+    # Where `node` is, for the editor's chips (T8), only when that changes.
+    # Never run it: PATH may point into an untrusted checkout. The daemon
+    # reads the version from the install. A relative entry is skipped.
     set -l node (command -s node)
     string match -q '/*' -- "$node"; or set node ''
     if test "$node" != "$__jaunt_node"
       set -g __jaunt_node $node
-      set -l version
-      test -n "$node"; and set version ($node --version 2>/dev/null)
-      printf '\e]1337;JauntNode=%s\a' "$version"
+      printf '\e]1337;JauntNodePath=%s\a' "$node"
     end
     printf '\e]133;A\a'
     # Wrap the user's prompt once, so Warp mode can blank it (T7).
@@ -538,24 +536,32 @@ mod tests {
         }
     }
 
-    /// The prompt hook reports the node version (T8 chips) when the `node`
-    /// on PATH changes, not on every prompt; the daemon keeps it on the
-    /// terminal's info.
+    /// The prompt hook reports where `node` is (T8 chips) when that changes,
+    /// not on every prompt, and never runs it; the daemon reads the version
+    /// from the install and keeps it on the terminal's info.
     async fn reports_node_version(shell: &str) {
         if !Path::new(shell).exists() {
             return;
         }
         let home = tempfile::tempdir().unwrap();
-        for (dir, version) in [("n1", "v1.0.0"), ("n2", "v2.0.0")] {
-            let bin = home.path().join(dir);
+        let ran = home.path().join("ran");
+        for (dir, minor) in [("n1", 1), ("n2", 2)] {
+            let bin = home.path().join(dir).join("bin");
             std::fs::create_dir_all(&bin).unwrap();
             let node = bin.join("node");
-            std::fs::write(&node, format!("#!/bin/sh\necho {version}\n")).unwrap();
+            std::fs::write(&node, format!("#!/bin/sh\ntouch {}\necho v6.6.6\n", ran.display())).unwrap();
             std::fs::set_permissions(&node, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            let include = home.path().join(dir).join("include").join("node");
+            std::fs::create_dir_all(&include).unwrap();
+            std::fs::write(
+                include.join("node_version.h"),
+                format!("#define NODE_MAJOR_VERSION {minor}\n#define NODE_MINOR_VERSION 0\n#define NODE_PATCH_VERSION 0\n"),
+            )
+            .unwrap();
         }
         let root = home.path().join("shell");
-        let n1 = home.path().join("n1").display().to_string();
-        let n2 = home.path().join("n2").display().to_string();
+        let n1 = home.path().join("n1").join("bin").display().to_string();
+        let n2 = home.path().join("n2").join("bin").display().to_string();
         let mut env: BTreeMap<String, String> = BTreeMap::from([
             ("HOME".into(), home.path().display().to_string()),
             ("PATH".into(), format!("{n1}:/usr/bin:/bin")),
@@ -571,19 +577,20 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         mgr.attach(info.id, 1, tx, None).unwrap();
         let first = read_until(&mut rx, "133;A").await;
-        assert!(first.contains("\x1b]1337;JauntNode=v1.0.0\x07"), "{shell} first prompt: {first:?}");
+        assert!(first.contains(&format!("\x1b]1337;JauntNodePath={n1}/node\x07")), "{shell} first prompt: {first:?}");
         tokio::time::sleep(Duration::from_millis(300)).await;
         mgr.write(info.id, b"true\n".to_vec()).unwrap();
         let same = read_until(&mut rx, "133;A").await;
         assert!(!same.contains("JauntNode"), "{shell} reported again without a change: {same:?}");
         tokio::time::sleep(Duration::from_millis(300)).await;
         mgr.write(info.id, format!("PATH={n2}:$PATH\n").into_bytes()).unwrap();
-        let changed = read_until(&mut rx, "JauntNode=v2.0.0").await;
-        assert!(changed.contains("\x1b]1337;JauntNode=v2.0.0\x07"), "{shell} after PATH change: {changed:?}");
+        let changed = read_until(&mut rx, &format!("JauntNodePath={n2}/node")).await;
+        assert!(changed.contains(&format!("\x1b]1337;JauntNodePath={n2}/node\x07")), "{shell} after PATH change: {changed:?}");
         tokio::time::sleep(Duration::from_millis(200)).await;
         let version = mgr.get(info.id).map(|t| t.info().node_version);
         let _ = mgr.kill(info.id, true);
         assert_eq!(version, Some(Some("v2.0.0".to_string())), "{shell}");
+        assert!(!ran.exists(), "{shell} ran node");
     }
 
     /// A `node` reached through a relative PATH entry belongs to whatever

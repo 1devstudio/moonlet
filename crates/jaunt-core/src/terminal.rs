@@ -913,8 +913,11 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
                 st.info.reported_cwd = Some(cwd);
                 info_changed = true;
             }
-            Signal::Node(version) => {
-                st.info.node_version = (!version.is_empty()).then_some(version);
+            Signal::NodePath(path) => {
+                // Read from the install, never by running it (T8).
+                st.info.node_version = (!path.is_empty())
+                    .then(|| crate::node::version_of(std::path::Path::new(&path)))
+                    .flatten();
                 info_changed = true;
             }
             Signal::Prompt { mark, .. } => {
