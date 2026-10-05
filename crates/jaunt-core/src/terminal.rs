@@ -322,6 +322,7 @@ impl TerminalManager {
             pid: Some(pty.pid()),
             exit: None,
             reported_cwd: None,
+            node_version: None,
             prompt: None,
             alt_screen: false,
             chat: false,
@@ -910,6 +911,13 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
             }
             Signal::Cwd(cwd) => {
                 st.info.reported_cwd = Some(cwd);
+                info_changed = true;
+            }
+            Signal::NodePath(path) => {
+                // Read from the install, never by running it (T8).
+                st.info.node_version = (!path.is_empty())
+                    .then(|| crate::node::version_of(std::path::Path::new(&path)))
+                    .flatten();
                 info_changed = true;
             }
             Signal::Prompt { mark, .. } => {

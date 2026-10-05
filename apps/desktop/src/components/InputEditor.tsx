@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FolderOpen, GitBranch } from "lucide-react";
+import { Diff, FolderOpen, GitBranch, Hexagon, SquareTerminal } from "lucide-react";
+import { type Chip, chipModel } from "../lib/chips";
 import { rpc, sendInput } from "../lib/daemon";
-import { M, type DirEntry } from "../lib/protocol";
+import { M, type DirEntry, type FileChange } from "../lib/protocol";
 import { commonPrefix, firstWord, historyFor, rememberCommand, suggest } from "../lib/suggest";
-import { findEntry, getEntry, shortPath } from "../lib/terminals";
+import { findEntry, getEntry } from "../lib/terminals";
 import { setClassic } from "../lib/actions";
 
 const drafts = new Map<string, string>();
@@ -18,6 +19,8 @@ export function InputEditor({
   cwd,
   home,
   branch,
+  nodeVersion,
+  files,
   focused,
 }: {
   host: string;
@@ -25,6 +28,9 @@ export function InputEditor({
   cwd: string;
   home: string | null;
   branch?: string;
+  nodeVersion?: string;
+  /** The session's git status, for the uncommitted-changes chip. */
+  files?: FileChange[];
   focused: boolean;
 }) {
   // The draft survives the editor unmounting (Classic mode, a full-screen program).
@@ -188,31 +194,29 @@ export function InputEditor({
 
   return (
     <div className="shrink-0 border-t border-border bg-bg px-7 pb-3 pt-2.5" onMouseDown={(e) => e.stopPropagation()}>
-      <div className="mb-1.5 flex items-center gap-3 font-mono text-[11.5px] text-muted">
-        <span className="flex min-w-0 shrink items-center gap-1.5">
-          <FolderOpen size={12} className="shrink-0 text-faint" />
-          <span className="truncate">{shortPath(cwd, home)}</span>
-        </span>
-        {branch && (
-          <span className="flex min-w-0 max-w-[45%] shrink-0 items-center gap-1.5">
-            <GitBranch size={12} className="shrink-0 text-faint" />
-            <span className="truncate">{branch}</span>
-          </span>
-        )}
-        <span className="ml-auto shrink-0 whitespace-nowrap text-faint">{ghost ? "→ accept" : "⇧↵ new line"}</span>
+      {/* Wraps in a narrow pane, so Classic stays reachable. */}
+      <div className="mb-2 flex flex-wrap items-center gap-1.5 font-mono text-[11.5px] text-muted">
+        {chipModel({ cwd, home, nodeVersion, branch, files }).map((c) => (
+          <ChipBox key={c.kind} chip={c} />
+        ))}
         <button
-          className="shrink-0 rounded px-1.5 text-faint hover:bg-hover hover:text-fg"
-          title="Show the shell's own prompt and type into the terminal"
+          className="ml-auto shrink-0 rounded p-1 text-faint hover:bg-hover hover:text-fg"
+          title="Classic: show the shell's own prompt and type into the terminal"
           onClick={() => void setClassic(host, terminal, true)}
         >
-          Classic
+          <SquareTerminal size={13} />
         </button>
       </div>
       <div className="relative font-mono text-[13.5px] leading-[20px]">
         {/* Mirror of the text with the ghost suggestion after it. */}
         <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
           {text}
-          {ghost && <span className="text-faint">{ghost}</span>}
+          {ghost && (
+            <>
+              <span className="text-faint">{ghost}</span>
+              <kbd className="ml-1.5 rounded border border-border-strong px-1 align-[1px] font-mono text-[10px] text-faint">→</kbd>
+            </>
+          )}
         </div>
         <textarea
           ref={ta}
@@ -240,5 +244,20 @@ export function InputEditor({
         </div>
       )}
     </div>
+  );
+}
+
+/** One boxed chip above the input (T8). */
+function ChipBox({ chip }: { chip: Chip }) {
+  const icon = { node: <Hexagon size={11} />, dir: <FolderOpen size={11} />, branch: <GitBranch size={11} />, changes: <Diff size={11} /> }[chip.kind];
+  const title = { node: "Node.js on PATH", dir: "Current directory", branch: "Session branch", changes: "Files with uncommitted changes" }[chip.kind];
+  return (
+    <span
+      title={title}
+      className={`flex min-w-0 items-center gap-1 rounded border border-border bg-raised px-1.5 py-0.5 ${chip.kind === "dir" ? "shrink" : "shrink-0"} ${chip.kind === "branch" ? "max-w-[40%] text-done" : ""}`}
+    >
+      <span className="shrink-0 opacity-80">{icon}</span>
+      <span className="truncate">{chip.text}</span>
+    </span>
   );
 }

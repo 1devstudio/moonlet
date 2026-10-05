@@ -84,6 +84,10 @@ pub struct TerminalInfo {
     /// Shell shows its own prompt instead of the app's editor (T7).
     #[serde(default)]
     pub classic: bool,
+    /// `node --version` of the `node` on the shell's PATH, reported by the
+    /// prompt hook when that `node` changes (T8 context chips).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_version: Option<String>,
     pub created_at: u64,
     pub last_output_at: u64,
 }
