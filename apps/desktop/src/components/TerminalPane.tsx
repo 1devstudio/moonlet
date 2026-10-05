@@ -52,6 +52,16 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
     entry.setEditorActive(editing);
   }, [host, session, warp, editing]);
   const branch = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.branch : undefined));
+  const worktree = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.path : undefined));
+  useEffect(() => {
+    getEntry(host, session).context = { home, worktree, branch };
+  }, [host, session, home, worktree, branch]);
+  // Snapshots carry no OSC 7, so a shell that reported its directory before
+  // the app attached starts from the daemon's record (T8 block headers).
+  const reportedCwd = info?.reported_cwd;
+  useEffect(() => {
+    if (reportedCwd) getEntry(host, session).seedCwd(reportedCwd);
+  }, [host, session, reportedCwd]);
 
   useEffect(() => {
     if (focused && visible && !editing) getEntry(host, session).focus();

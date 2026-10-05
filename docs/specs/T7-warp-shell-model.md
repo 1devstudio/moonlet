@@ -23,7 +23,7 @@ In shell tabs, the input editor (T6) is the only input. The shell's own prompt i
   - The choice is not kept when a daemon restart re-creates the shell (it starts in the default mode). A live upgrade keeps it.
 - [x] **Command blocks:**
   - A thin separator above each command.
-  - A chip at the right end of the command line: `✓ 1.2s`, or `✗ 1 · 300ms` for a failing exit code, or a spinner while running.
+  - A chip at the right end of the command line: `✓ 1.2s`, or `✗ 1 · 300ms` for a failing exit code, or a spinner while running. *Replaced by the block header in [T8](T8-warp-block-styling.md).*
   - Duration is measured in the app from the `C` mark to the `D` mark.
   - Screen snapshots carry no prompt marks, so output from before the app attached has no blocks. The first command after attaching opens its block at the `C` mark, on the line above the cursor.
 - [x] **Cursor:** the terminal cursor is hidden while the editor is active.

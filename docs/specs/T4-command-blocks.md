@@ -14,7 +14,7 @@ With shell integration ([T3](T3-shell-integration.md)), each command is a block:
 - [x] ⌘↑ / ⌘↓ jump to the previous or next prompt.
 - [x] ⇧⌘C copies the output of the last finished command.
 - [x] The palette's "Re-run last command" retypes the last command line and presses Enter.
-- [x] Decorations colour the gutter and the overview ruler by exit status.
+- [x] Decorations colour the gutter and the overview ruler by exit status. In Warp mode the gutter mark is left out; the block header shows the status ([T8](T8-warp-block-styling.md)).
 
 ## Out of scope
 
