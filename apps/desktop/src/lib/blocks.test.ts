@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockHeader, blockRects, replayedHeaderLine } from "./terminals";
+import { blockHeader, blockRects, commandFromRows, replayedHeaderLine } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -74,5 +74,20 @@ describe("header row of a block whose prompt came before the app attached (T8)",
   it("is the row above every row of a wrapped command", () => {
     // Output starts on row 12; the command fills rows 9-11 (10 and 11 wrapped).
     expect(replayedHeaderLine(12, (y) => y === 10 || y === 11)).toBe(8);
+  });
+});
+
+describe("command text from the screen (T8)", () => {
+  it("joins a wrapped command without inserting newlines", () => {
+    // An 10-column terminal: `echo abcdefghij klm` wraps after `echo abcde`.
+    expect(commandFromRows([{ text: "echo abcde", wrapped: false }, { text: "fghij klm ", wrapped: true }])).toBe("echo abcdefghij klm");
+  });
+
+  it("keeps a space that fell at the wrap", () => {
+    expect(commandFromRows([{ text: "ls -la    ", wrapped: false }, { text: "src", wrapped: true }])).toBe("ls -la    src");
+  });
+
+  it("keeps the line breaks of a multi-line command", () => {
+    expect(commandFromRows([{ text: "for f in *; do  ", wrapped: false }, { text: "  echo $f; done", wrapped: false }])).toBe("for f in *; do\n  echo $f; done");
   });
 });

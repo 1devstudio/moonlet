@@ -144,6 +144,21 @@ export function replayedHeaderLine(outputLine: number, wrapped: (y: number) => b
   return y - 1;
 }
 
+/** The command a user typed, from its screen rows (T8): rows the terminal
+ * wrapped join their previous row as is, real line breaks stay. Row texts
+ * are untrimmed, so a space at the wrap survives. */
+export function commandFromRows(rows: readonly { text: string; wrapped: boolean }[]): string {
+  const lines: string[] = [];
+  for (const r of rows) {
+    if (r.wrapped && lines.length) lines[lines.length - 1] += r.text;
+    else lines.push(r.text);
+  }
+  return lines
+    .map((l) => l.trimEnd())
+    .join("\n")
+    .trim();
+}
+
 export interface FileLinkHandler {
   (path: string, line?: number): void;
 }
@@ -369,9 +384,12 @@ export class TermEntry {
           last.cwd = this.cwd;
           if (this.warp) {
             // The prompt is one empty header row; the command follows it.
-            const rows: string[] = [];
-            for (let y = last.prompt.line + 1; y < marker.line; y++) rows.push(this.lineText(y));
-            last.command = rows.join("\n").trim();
+            const rows = [];
+            for (let y = last.prompt.line + 1; y < marker.line; y++) {
+              const row = this.term.buffer.active.getLine(y);
+              rows.push({ text: row?.translateToString(false) ?? "", wrapped: !!row?.isWrapped });
+            }
+            last.command = commandFromRows(rows);
           } else last.command = this.lineText(last.prompt.line).replace(/^.*?[$%#❯>]\s/, "").trim();
           if (!this.replaying) last.startedAt = Date.now();
           if (this.warp) this.header(last);
@@ -451,6 +469,21 @@ export class TermEntry {
         return el;
       }),
     );
+  }
+
+  /** A directory known only after blocks started (the daemon's record
+   * arrives after attaching): it becomes the shell's directory and fills in
+   * blocks that have none, whose headers then redraw. */
+  seedCwd(cwd: string) {
+    if (!this.cwd) this.cwd = cwd;
+    let changed = false;
+    for (const b of this.blocks) {
+      if (b.output && !b.cwd) {
+        b.cwd = cwd;
+        changed = true;
+      }
+    }
+    if (changed) this.term.refresh(0, this.term.rows - 1);
   }
 
   /** Warp mode hides the terminal's cursor while the editor has the input. */
