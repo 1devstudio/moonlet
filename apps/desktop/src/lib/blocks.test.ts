@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockHeader, blockRects } from "./terminals";
+import { blockHeader, blockRects, replayedHeaderLine } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -63,5 +63,16 @@ describe("block backgrounds (T8)", () => {
 
   it("skips successful, running and off-screen blocks", () => {
     expect(blockRects([{ start: 0, end: 4, exit: 0 }, { start: 4 }, { start: 40, end: 45, exit: 1 }], 0, 24)).toEqual([]);
+  });
+});
+
+describe("header row of a block whose prompt came before the app attached (T8)", () => {
+  it("is the row above a one-row command", () => {
+    expect(replayedHeaderLine(12, () => false)).toBe(10);
+  });
+
+  it("is the row above every row of a wrapped command", () => {
+    // Output starts on row 12; the command fills rows 9-11 (10 and 11 wrapped).
+    expect(replayedHeaderLine(12, (y) => y === 10 || y === 11)).toBe(8);
   });
 });
