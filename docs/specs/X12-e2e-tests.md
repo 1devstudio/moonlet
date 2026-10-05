@@ -21,7 +21,7 @@ Unit tests cover the daemon and the app's `lib/` logic, but nothing exercises th
 - [x] `pnpm e2e:build` builds the app with the `e2e` feature, plus `jauntd` and `jaunt`, into `target/e2e/debug`.
 - [x] `pnpm e2e` runs every spec in `apps/desktop/e2e/specs` against that build and exits non-zero on a failure. A failing test leaves a window screenshot in `apps/desktop/e2e/artifacts/`.
 - [x] Release and dev builds do not contain the WebDriver plugins (`cargo tree -p jaunt-app` lists them only with `--features e2e`).
-- [x] A run never touches `~/.jaunt` or a real repository, and leaves no daemon or temp dir behind. The daemon runs with a scratch `HOME`, `SHELL=/bin/sh`, and a `PATH` whose `claude` and `codex` are stubs that fail.
+- [x] A run never touches `~/.jaunt` or a real repository, and leaves no daemon or temp dir behind. The daemon runs with a scratch `HOME`, `SHELL=/bin/zsh` (so shells get the integration, T3), and a `PATH` whose `claude` and `codex` are stubs that fail; every zsh startup file and `.profile` put the stubs first.
 - [x] **Smoke** (`smoke.e2e.ts`): the app starts, connects to the scratch daemon, and the sidebar shows the seeded project and session.
 - [x] **Project settings** (`project-settings.e2e.ts`, X8 and M10):
   - with no `run` command, clicking Run opens the dialog with the Run field focused;
