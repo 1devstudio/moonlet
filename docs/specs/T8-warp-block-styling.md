@@ -1,6 +1,6 @@
 # T8: Warp-style block styling and input editor
 
-- **Status:** in progress (steps 1 to 3 implemented: block header, selection, send to agent, context chips)
+- **Status:** in progress (steps 1 to 4 implemented: block header, selection, send to agent, context chips, input colouring)
 - **Priority / phase:** P1 · phase 3 (requested 2026-10-05, with Warp screenshots)
 - **PRD refs:** T1, T3, T4; "fast, modern terminal feel (in the spirit of Warp)"
 - **Related:** [T4](T4-command-blocks.md), [T6](T6-input-editor.md), [T7](T7-warp-shell-model.md), [X4](X4-visual-design.md) (tokens), [T9](T9-real-command-blocks.md) (real blocks, which reuse this spec's header and selection logic)
@@ -58,10 +58,10 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ### Input colouring
 
-- [ ] A pure `tokenize()` in `lib/shellTokens.ts` labels each token: `env` (`VAR=x` before the command), `command`, `subcommand` (the first bare word after the command: letters, digits, `-`, `_`, `:`), `flag` (`-x`, `--x`), `string` (quoted), `path` (contains `/` or starts with `~` or `.`), `operator` (`|`, `||`, `&&`, `;`, `>`, `>>`, `<`, `&`), `argument`. After an operator the next word is a command again. Unclosed quotes run to the end.
-- [ ] Colours: `command` green when the command is known, otherwise plain text (aliases and functions are invisible to the daemon, so unknown is never shown as an error); `subcommand` blue; `flag` muted; `string` yellow; `operator` faint; others plain.
-- [ ] **Known commands:** executables on the shell's `PATH` plus the shell's builtins and keywords, from `shell.commands` (cached per host, refreshed when the editor mounts and at most once a minute).
-- [ ] The coloured text is drawn in the existing mirror layer; the textarea text is transparent and its caret stays visible. Selection still shows.
+- [x] A pure `tokenize()` in `lib/shellTokens.ts` labels each token: `env` (`VAR=x` before the command), `command`, `subcommand` (the first bare word after the command: letters, digits, `-`, `_`, `:`), `flag` (`-x`, `--x`), `string` (quoted), `path` (contains `/` or starts with `~` or `.`), `operator` (`|`, `||`, `&&`, `;`, `>`, `>>`, `<`, `&`), `argument`. After an operator the next word is a command again, except after a redirection (`>`, `>>`, `<`), whose target is an argument or path. A newline also starts a new command. Unclosed quotes run to the end.
+- [x] Colours: `command` green when the command is known, otherwise plain text (aliases and functions are invisible to the daemon, so unknown is never shown as an error); `subcommand` blue; `flag` muted; `string` yellow; `operator` faint; others plain.
+- [x] **Known commands:** executables on the shell's `PATH` plus the shell's builtins and keywords, from `shell.commands` (cached per host, refreshed when the editor mounts and at most once a minute).
+- [x] The coloured text is drawn in the existing mirror layer; the textarea text is transparent and its caret stays visible. Selection still shows.
 
 ### Completion popup
 
@@ -83,7 +83,7 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ## Protocol and RPCs
 
-- `shell.commands {shell?}` returns `string[]`: executable file names on the login shell's `PATH`, plus the shell's builtins and reserved words, de-duplicated and sorted.
+- `shell.commands {shell?, terminal?}` returns `string[]`: executable file names in the absolute directories of a PATH, plus the shell's builtins and reserved words, de-duplicated and sorted. The PATH is the terminal's own, as its prompt hook last reported it with `OSC 1337;JauntPath=<PATH>` (sent only when it changes, so it includes what rc files and later `PATH=` added); without one, the login shell's. The app caches the answer per terminal for a minute.
 - **Node version:** the prompt hook reports where `node` is with `OSC 1337;JauntNodePath=<path>`, only when the `node` found on PATH (zsh `$commands[node]`, bash `type -P`, fish `command -s`) is a different absolute path than last time; an empty value means none. It never runs `node`. The daemon reads the version from the `include/node/node_version.h` installed beside its `bin/`, or else from a version directory in the resolved path (such as Homebrew's `Cellar/node/22.1.0`), stores it on `TerminalInfo.node_version` and emits `terminal.updated`.
 
 ## Data and config
@@ -125,5 +125,6 @@ None.
 ## Verification
 
 - 2026-10-05: zsh keeps `zle_highlight` bold on the line after the command is accepted (checked in a PTY: each character is drawn with `\e[1m` and the reset comes after Enter).
+- 2026-10-05, input colouring: in the e2e app, `FOO=1 git commit -m "fix it" && ls -la ~/src | wc -l > out.txt; nosuchcmd x` showed the known commands green, `commit` blue, flags muted, the string yellow, operators faint and `nosuchcmd` plain; a selection lined up with the coloured text.
 - 2026-10-05, block selection: in the e2e app, a click on a block's output row highlighted the block in orange with the left bar.
 - 2026-10-05, block header: in the e2e app, `ls -la`, `false`, `printf` and `sleep 3` showed headers with the directory and duration, `· exit 1` in red with a red-tinted block, a spinner while `sleep 3` ran, and bold commands.

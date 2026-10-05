@@ -289,6 +289,24 @@ impl Daemon {
                 .map_err(internal)?;
                 ok(entries)
             }
+            m::SHELL_COMMANDS => {
+                let r: m::ShellCommands = params(p)?;
+                // The terminal's own PATH when its shell reported one, which
+                // includes what rc files added; else the login shell's.
+                let path = r
+                    .terminal
+                    .and_then(|id| self.terminals.shell_path(id))
+                    .or_else(|| self.terminals.base_env().get("PATH").cloned())
+                    .unwrap_or_default();
+                let shell = r.shell.unwrap_or_else(|| {
+                    let login = jaunt_core::pty::user_shell();
+                    login.rsplit('/').next().unwrap_or("zsh").to_string()
+                });
+                let names = tokio::task::spawn_blocking(move || jaunt_core::commands::list(&path, &shell))
+                    .await
+                    .map_err(internal)?;
+                ok(names)
+            }
             m::GH_ISSUES | m::GH_PRS => {
                 let r: m::GitPath = params(p)?;
                 let kind = if method == m::GH_PRS { "pr" } else { "issue" };
