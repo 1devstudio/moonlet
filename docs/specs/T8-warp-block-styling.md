@@ -1,6 +1,6 @@
 # T8: Warp-style block styling and input editor
 
-- **Status:** draft
+- **Status:** in progress (block header and bold command implemented)
 - **Priority / phase:** P1 · phase 3 (requested 2026-10-05, with Warp screenshots)
 - **PRD refs:** T1, T3, T4; "fast, modern terminal feel (in the spirit of Warp)"
 - **Related:** [T4](T4-command-blocks.md), [T6](T6-input-editor.md), [T7](T7-warp-shell-model.md), [X4](X4-visual-design.md) (tokens), [T9](T9-real-command-blocks.md) (real blocks, which reuse this spec's header and selection logic)
@@ -22,20 +22,20 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ### Block header and command
 
-- [ ] **Header row:** in Warp mode the blank prompt is one empty line (zsh `PROMPT=$'\n'`, bash `PS1='\n'`, fish a `fish_prompt` that prints a newline). The header is drawn on that row. Classic mode is unchanged.
-- [ ] **Header text** comes from a pure `blockHeader()` in `lib/`:
+- [x] **Header row:** in Warp mode the blank prompt is one empty line (zsh `PROMPT=$'\n'`, bash `PS1='\n'`, fish a `fish_prompt` that prints a newline). The header is drawn on that row. Classic mode is unchanged.
+- [x] **Header text** comes from a pure `blockHeader()` in `lib/`:
   - `<cwd> git:(<branch>) (<duration>)`, for example `~/src/app git:(main) (0.053s)`.
   - `cwd` is the directory at the `C` mark (OSC 7), `~`-shortened.
   - `git:(<branch>)` appears only when that directory is inside the session's worktree; the branch is the session's.
-  - Duration uses the T7 formats (`300ms`, `1.2s`, `2m 5s`), written as seconds with three decimals under 10 s to match Warp (`0.032s`), otherwise as today.
+  - Duration: seconds with three decimals under 10 s, as in Warp (`0.032s`); one decimal under a minute (`12.3s`); then minutes and seconds (`2m 5s`).
   - A failed block adds a red `exit <code>` before the duration: `~ · exit 1 (0.300s)`.
   - A running block shows the cwd and branch with a spinner in place of the duration.
   - A block replayed from before the app attached has no duration and no parentheses.
-- [ ] **Bold command:** the command line is drawn bold by the shell in Warp mode (zsh `zle_highlight=(default:bold)`, bash a bold PS1 tail reset by `PS0`, fish `fish_color_command`/`fish_color_param` with `--bold`). Output is not bold.
-- [ ] **Separator:** a hairline on the top edge of the header row, spanning the whole pane width including its padding.
-- [ ] **Failed block:** the block's rows get a faint red background; the red gutter mark stays.
-- [ ] The T7 right-hand chip (`✓ 1.2s`) is removed; its information is in the header.
-- [ ] **Spacing:** one header row per block. Two rows are tried in a throwaway prototype first; the spec is updated if two look better.
+- [x] **Bold command:** the command line is drawn bold by the shell in Warp mode. zsh adds `default:bold` to `zle_highlight` (the user's other entries are kept and restored in classic mode). bash ends the prompt with bold and resets it in the DEBUG trap before the command runs (`PS0` does not exist in macOS's bash 3.2). Output is not bold. fish is not bold yet: it colours every token itself, and fish is not installed to test with.
+- [x] **Separator:** a hairline on the top edge of the header row, spanning the whole pane width including its padding.
+- [x] **Failed block:** the block's rows get a faint red background, drawn in a layer of its own over the grid (an xterm decoration disappears once its first row scrolls out of view). In Warp mode the T4 gutter mark is left out; the overview ruler keeps its colours.
+- [x] The T7 right-hand chip (`✓ 1.2s`) is removed; its information is in the header.
+- [x] **Spacing:** one header row per block (checked in the app on 2026-10-05).
 
 ### Block selection
 
@@ -119,4 +119,9 @@ None.
 
 ## Open questions
 
-- Does zsh keep `zle_highlight` bold on the line after the command is accepted? If not, fall back to a bold PS1 tail reset in `preexec`.
+- fish: making the command line bold.
+
+## Verification
+
+- 2026-10-05: zsh keeps `zle_highlight` bold on the line after the command is accepted (checked in a PTY: each character is drawn with `\e[1m` and the reset comes after Enter).
+- 2026-10-05, block header: in the e2e app, `ls -la`, `false`, `printf` and `sleep 3` showed headers with the directory and duration, `· exit 1` in red with a red-tinted block, a spinner while `sleep 3` ran, and bold commands.

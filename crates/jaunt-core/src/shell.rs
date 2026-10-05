@@ -34,15 +34,21 @@ __jaunt_urlpath() {
   done
   REPLY=$out
 }
+# Warp mode's prompt is one empty row, where the app draws the block
+# header (T8); the command line is drawn bold.
+__jaunt_warp_ps1=$'\n'
 __jaunt_blank() {
   if [[ -n $JAUNT_CLASSIC_FILE && ! -e $JAUNT_CLASSIC_FILE ]]; then
-    [[ -n $PROMPT ]] && __jaunt_ps1=$PROMPT
+    [[ $PROMPT != "$__jaunt_warp_ps1" ]] && __jaunt_ps1=$PROMPT
     [[ -n $RPROMPT ]] && __jaunt_rps1=$RPROMPT
     [[ -n $PS2 ]] && __jaunt_ps2=$PS2
-    PROMPT='' RPROMPT='' PS2=''
+    [[ -z $__jaunt_blanked ]] && __jaunt_zlehl=("${zle_highlight[@]}")
+    PROMPT=$__jaunt_warp_ps1 RPROMPT='' PS2=''
+    zle_highlight=("${(@)__jaunt_zlehl:#default:*}" default:bold)
     __jaunt_blanked=1
   elif [[ -n $__jaunt_blanked ]]; then
     PROMPT=$__jaunt_ps1 RPROMPT=$__jaunt_rps1 PS2=$__jaunt_ps2
+    zle_highlight=("${__jaunt_zlehl[@]}")
     unset __jaunt_blanked
   fi
   # Stay last, after hooks that themes add later.
@@ -87,17 +93,23 @@ fi
 case "$-" in *i*) [ -z "$__jaunt_bashrc_done" ] && [ -f "$HOME/.bashrc" ] && ! grep -q bashrc "$HOME/.bash_profile" 2>/dev/null && . "$HOME/.bashrc" ;; esac
 __jaunt_prompt() {
   local ret=$?
+  # Bold left on by an empty command line in Warp mode.
+  printf '\e[0m'
   if [ -n "$__jaunt_ran" ]; then printf '\e]133;D;%s\a' "$ret"; fi
   __jaunt_ran=
   __jaunt_urlpath "$PWD"
   printf '\e]7;file://%s%s\a' "$HOSTNAME" "$__jaunt_url"
   printf '\e]133;A\a'
 }
+# Warp mode's prompt is one empty row, where the app draws the block
+# header (T8), and leaves bold on for the command line; the DEBUG trap
+# resets it before the command's output.
+__jaunt_warp_ps1='\n\[\e[1m\]'
 __jaunt_blank() {
   if [ -n "$JAUNT_CLASSIC_FILE" ] && [ ! -e "$JAUNT_CLASSIC_FILE" ]; then
-    [ -n "$PS1" ] && __jaunt_ps1=$PS1
+    [ "$PS1" != "$__jaunt_warp_ps1" ] && __jaunt_ps1=$PS1
     [ -n "$PS2" ] && __jaunt_ps2=$PS2
-    PS1='' PS2=''
+    PS1=$__jaunt_warp_ps1 PS2=''
     __jaunt_blanked=1
   elif [ -n "$__jaunt_blanked" ]; then
     PS1=$__jaunt_ps1 PS2=$__jaunt_ps2
@@ -136,7 +148,7 @@ __jaunt_debug() {
   case "$BASH_COMMAND" in __jaunt_*) return 0 ;; esac
   __jaunt_armed=
   __jaunt_ran=1
-  printf '\e]133;C\a'
+  printf '\e[0m\e]133;C\a'
   return $user
 }
 trap '__jaunt_debug' DEBUG
@@ -160,7 +172,10 @@ if status is-interactive
       # Each wrapper hands the user's prompt the last command's $status.
       function fish_prompt
         set -l s $status
-        if __jaunt_classic; and functions -q __jaunt_user_fish_prompt
+        if not __jaunt_classic
+          # One empty row, where the app draws the block header (T8).
+          printf '\n'
+        else if functions -q __jaunt_user_fish_prompt
           __jaunt_status $s; __jaunt_user_fish_prompt
         end
       end
@@ -420,6 +435,77 @@ mod tests {
     #[tokio::test]
     async fn bash_warp_mode_blanks_the_prompt() {
         blanks_and_restores("/bin/bash", ".bash_profile", "PS1='USERPROMPT> '\n").await;
+    }
+
+    /// Warp mode (T8): each command gets an empty header row above it, and
+    /// the command line is bold while its output is not.
+    async fn warp_screen(shell: &str) -> Option<crate::term::TermState> {
+        if !Path::new(shell).exists() {
+            return None;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("shell");
+        let mut env: BTreeMap<String, String> = BTreeMap::from([
+            ("HOME".into(), home.path().display().to_string()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+            ("SHELL".into(), shell.into()),
+            ("JAUNT_CLASSIC_FILE".into(), home.path().join("classic").display().to_string()),
+        ]);
+        let args = apply(&root, shell, vec!["-l".into()], &mut env);
+        let mgr = TerminalManager::new(home.path().join("s.sock"), env);
+        let mut command = vec![shell.to_string()];
+        command.extend(args);
+        let info = mgr
+            .create(TerminalCreate {
+                cwd: home.path().display().to_string(),
+                command,
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            })
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        mgr.attach(info.id, 1, tx, None).unwrap();
+        let mut out = read_until(&mut rx, "133;A").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        mgr.write(info.id, b"echo one\n".to_vec()).unwrap();
+        out += &read_until(&mut rx, "133;D;0").await;
+        out += &read_until(&mut rx, "133;A").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        mgr.write(info.id, b"echo two\n".to_vec()).unwrap();
+        out += &read_until(&mut rx, "133;D;0").await;
+        out += &read_until(&mut rx, "133;A").await;
+        let _ = mgr.kill(info.id, true);
+        let mut term = crate::term::TermState::new(24, 80);
+        term.process(out.as_bytes());
+        Some(term)
+    }
+
+    fn assert_warp_blocks(shell: &str, term: &crate::term::TermState) {
+        let text = term.contents();
+        assert!(text.contains("echo one\none\n\necho two\ntwo"), "{shell} header rows: {text:?}");
+        let screen = term.screen();
+        let row = |needle: &str| {
+            (0..24u16)
+                .find(|&r| screen.contents_between(r, 0, r, 80).trim_end() == needle)
+                .unwrap_or_else(|| panic!("{shell}: no row {needle:?} in {text:?}"))
+        };
+        assert!(screen.cell(row("echo two"), 0).unwrap().bold(), "{shell}: command is bold");
+        assert!(!screen.cell(row("two"), 0).unwrap().bold(), "{shell}: output is not bold");
+    }
+
+    #[tokio::test]
+    async fn zsh_warp_mode_gives_each_command_a_header_row_and_bold_command() {
+        if let Some(term) = warp_screen("/bin/zsh").await {
+            assert_warp_blocks("zsh", &term);
+        }
+    }
+
+    #[tokio::test]
+    async fn bash_warp_mode_gives_each_command_a_header_row_and_bold_command() {
+        if let Some(term) = warp_screen("/bin/bash").await {
+            assert_warp_blocks("bash", &term);
+        }
     }
 
     /// Runs `commands` in an integrated shell whose rc file holds `rc_body`.

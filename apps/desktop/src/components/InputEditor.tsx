@@ -3,15 +3,10 @@ import { FolderOpen, GitBranch } from "lucide-react";
 import { rpc, sendInput } from "../lib/daemon";
 import { M, type DirEntry } from "../lib/protocol";
 import { commonPrefix, firstWord, historyFor, rememberCommand, suggest } from "../lib/suggest";
-import { findEntry, getEntry } from "../lib/terminals";
+import { findEntry, getEntry, shortPath } from "../lib/terminals";
 import { setClassic } from "../lib/actions";
 
 const drafts = new Map<string, string>();
-
-function shortPath(p: string, home: string | null): string {
-  if (home && (p === home || p.startsWith(home + "/"))) return "~" + p.slice(home.length);
-  return p;
-}
 
 /**
  * Warp-style command input (T6): a real text editor at the shell prompt with
