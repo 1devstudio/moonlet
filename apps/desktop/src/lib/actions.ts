@@ -8,7 +8,7 @@ import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protoc
 import { errorToast, focusTerminal, getLayout, selectedSession, sessionState, setLayout, termKey, toast, useStore, sessionTerminals } from "./store";
 import { arrange, lastActive } from "./sidebar";
 import { findEntry } from "./terminals";
-import { isStructured } from "./agents";
+import { agentReadiness, isStructured } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 
 function current(): { host: string; ws: Session } | null {
@@ -171,20 +171,30 @@ export async function draftToAgent(text: string, newTab = false) {
     target = await newAgentTab(c.ws.agent ?? "claude");
     if (!target) return;
     // A TUI agent reads its input once it has drawn its first screen.
-    if (!target.chat) await waitForOutput(c.host, target.id);
+    if (!target.chat && !(await waitForAgent(c.host, target.id))) {
+      toast("The agent exited before the block could be sent", "error");
+      return;
+    }
   }
   if (target.chat) useStore.setState((s) => ({ agentDrafts: { ...s.agentDrafts, [termKey(c.host, target.id)]: text } }));
   else await sendInput(c.host, target.id, `\x1b[200~${text}\x1b[201~`);
   focusTerminal(c.host, target.id);
 }
 
-function waitForOutput(host: string, id: number, timeout = 10_000): Promise<void> {
+/** Resolves true once a new TUI agent has drawn its first screen, or false
+ * if it exits or is removed first. There is no timeout: a slow agent still
+ * gets the draft once it is ready. */
+function waitForAgent(host: string, id: number): Promise<boolean> {
   const started = Date.now();
+  let seen = false;
   return new Promise((resolve) => {
     const tick = () => {
       const t = useStore.getState().terminals[host]?.[id];
-      if ((t && t.last_output_at > t.created_at) || Date.now() - started > timeout) resolve();
-      else setTimeout(tick, 100);
+      // The terminal.created event may not have reached the store yet.
+      seen ||= !!t;
+      const state = !seen && Date.now() - started < 30_000 ? "waiting" : agentReadiness(t);
+      if (state === "waiting") setTimeout(tick, 100);
+      else resolve(state === "ready");
     };
     tick();
   });

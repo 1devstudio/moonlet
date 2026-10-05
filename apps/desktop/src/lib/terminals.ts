@@ -195,9 +195,9 @@ export function outputToCopy(selected: string | null, last: string): { text: str
 }
 
 /** A block as text for an agent's input (T8): the command line and its
- * output in a code fence longer than any fence inside the output. */
+ * output in a code fence longer than any fence inside either. */
 export function blockForAgent(b: { command: string; output: string }): string {
-  const longest = Math.max(2, ...(b.output.match(/`{3,}/g) ?? []).map((f) => f.length));
+  const longest = Math.max(2, ...(`${b.command}\n${b.output}`.match(/`{3,}/g) ?? []).map((f) => f.length));
   const fence = "`".repeat(longest + 1);
   return `${fence}\n${blockCopy(b, "all")}\n${fence}\n`;
 }

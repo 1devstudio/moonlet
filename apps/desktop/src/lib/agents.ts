@@ -45,3 +45,10 @@ export function nextMode(current: string | null | undefined, bypassEnabled: bool
 
 /** Agents jaunt can run with the structured view (X6). */
 export const isStructured = (agent?: string | null) => agent === "claude" || agent === "codex";
+
+/** Whether a new TUI agent can take pasted text (T8): once it has printed
+ * its first screen. An agent that exited or was removed never will. */
+export function agentReadiness(t?: { created_at: number; last_output_at: number; exit?: unknown }): "waiting" | "ready" | "gone" {
+  if (!t || t.exit) return "gone";
+  return t.last_output_at > t.created_at ? "ready" : "waiting";
+}
