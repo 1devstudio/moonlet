@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, inlineHeader, commandFromRows, outputToCopy, replayedPromptLine, selectStep } from "./terminals";
+import { blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, commandFromRows, inlineHeader, outputToCopy, pickBlockForAgent, replayedPromptLine, selectStep } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
 describe("block headers (T8)", () => {
   it("shows the directory, the session branch and the duration", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app", end: {}, exit: 0, startedAt: 0, endedAt: 53 }, ctx)).toEqual({
+      node: null,
       place: "~/src/app git:(main)",
+      changes: null,
       exit: null,
       duration: "(0.053s)",
       running: false,
@@ -15,7 +17,9 @@ describe("block headers (T8)", () => {
 
   it("adds a failing exit code before the duration", () => {
     expect(blockHeader({ cwd: "/Users/me", end: {}, exit: 1, startedAt: 0, endedAt: 300 }, ctx)).toEqual({
+      node: null,
       place: "~",
+      changes: null,
       exit: "exit 1",
       duration: "(0.300s)",
       running: false,
@@ -33,7 +37,9 @@ describe("block headers (T8)", () => {
 
   it("marks a running block and has no duration yet", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app/lib", startedAt: 0 }, ctx)).toEqual({
+      node: null,
       place: "~/src/app/lib git:(main)",
+      changes: null,
       exit: null,
       duration: null,
       running: true,
@@ -46,6 +52,25 @@ describe("block headers (T8)", () => {
 
   it("does not treat a sibling directory as inside the worktree", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app-old", end: {} }, ctx).place).toBe("~/src/app-old");
+  });
+});
+
+describe("block header with node and changes, as in Warp (T8)", () => {
+  const changes = { files: 5, additions: 113, deletions: 30 };
+
+  it("adds the node version and the uncommitted changes recorded when the command started", () => {
+    expect(blockHeader({ cwd: "/Users/me/src/app", node: "v24.19.0", changes, end: {}, exit: 0, startedAt: 0, endedAt: 53 }, ctx)).toEqual({
+      node: "v24.19.0",
+      place: "~/src/app git:(main)",
+      changes: "5 • +113 -30",
+      exit: null,
+      duration: "(0.053s)",
+      running: false,
+    });
+  });
+
+  it("leaves the changes out outside the session's worktree", () => {
+    expect(blockHeader({ cwd: "/tmp", node: "v24.19.0", changes, end: {} }, ctx).changes).toBeNull();
   });
 });
 
@@ -209,18 +234,34 @@ describe("where a block's header goes (T8)", () => {
 });
 
 describe("header at the end of the command line (T8)", () => {
-  const h = { place: "~/src/app git:(main)", exit: "exit 1", duration: "(0.300s)", running: false };
+  const h = { node: "v24.19.0", place: "~/src/app git:(main)", changes: "5 • +113 -30", exit: "exit 1", duration: "(0.300s)", running: false };
+  const status = { node: null, place: null, changes: null, running: false };
 
   it("shows everything when the row has room", () => {
-    expect(inlineHeader(h, 60)).toEqual({ place: "~/src/app git:(main)", exit: "exit 1", duration: "(0.300s)", running: false });
+    expect(inlineHeader(h, 80)).toEqual(h);
   });
 
-  it("drops the directory, then the duration, to stay clear of the command", () => {
-    expect(inlineHeader(h, 20)).toEqual({ place: null, exit: "exit 1", duration: "(0.300s)", running: false });
-    expect(inlineHeader(h, 11)).toEqual({ place: null, exit: "exit 1", duration: null, running: false });
+  it("drops the node version, directory and changes, then the duration, to stay clear of the command", () => {
+    expect(inlineHeader(h, 40)).toEqual({ ...status, exit: "exit 1", duration: "(0.300s)" });
+    expect(inlineHeader(h, 11)).toEqual({ ...status, exit: "exit 1", duration: null });
   });
 
   it("shows nothing when even the status does not fit", () => {
     expect(inlineHeader(h, 5)).toBeNull();
+  });
+});
+
+describe("which block ⌘↵ sends (T8)", () => {
+  it("sends the selected block", () => {
+    expect(pickBlockForAgent("selected", "newest", "git status")).toBe("selected");
+  });
+
+  it("sends the newest block when nothing is selected and the input is empty", () => {
+    expect(pickBlockForAgent(null, "newest", "  ")).toBe("newest");
+  });
+
+  it("leaves ⌘↵ to a typed command", () => {
+    expect(pickBlockForAgent(null, "newest", "git status")).toBeNull();
+    expect(pickBlockForAgent(null, null, "")).toBeNull();
   });
 });

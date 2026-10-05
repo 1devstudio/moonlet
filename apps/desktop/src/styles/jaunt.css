@@ -118,6 +118,12 @@ textarea,
 .jaunt-block-head .row > :not(.place) {
   flex-shrink: 0;
 }
+.jaunt-block-head .add {
+  color: var(--color-done);
+}
+.jaunt-block-head .del {
+  color: var(--color-error);
+}
 .jaunt-block-head .exit {
   color: var(--color-error);
 }

@@ -78,6 +78,9 @@ export interface CommandBlock {
   /** App clock at the `C` and `D` marks; absent for replayed blocks. */
   startedAt?: number;
   endedAt?: number;
+  /** Node version and uncommitted changes when the command started (T8). */
+  node?: string;
+  changes?: { files: number; additions: number; deletions: number };
   /** The header's own row (T8); absent when the shell left no empty row,
    * and the header sits at the end of the command line instead. */
   headerAt?: IMarker;
@@ -89,6 +92,9 @@ export interface BlockContext {
   home: string | null;
   worktree?: string;
   branch?: string;
+  /** Recorded on each block when its command starts, as Warp shows them. */
+  nodeVersion?: string;
+  changes?: { files: number; additions: number; deletions: number };
 }
 
 /** `~`-shortens a path under `home`. */
@@ -106,15 +112,27 @@ function duration(ms: number): string {
 /** The grey line above a command (T8): `~/src/app git:(main) (0.053s)`,
  * with `exit 1` before the duration when the command failed. */
 export function blockHeader(
-  b: { cwd?: string; exit?: number; startedAt?: number; endedAt?: number; end?: unknown },
+  b: {
+    cwd?: string;
+    node?: string;
+    changes?: { files: number; additions: number; deletions: number };
+    exit?: number;
+    startedAt?: number;
+    endedAt?: number;
+    end?: unknown;
+  },
   ctx: BlockContext,
-): { place: string; exit: string | null; duration: string | null; running: boolean } {
+): { node: string | null; place: string; changes: string | null; exit: string | null; duration: string | null; running: boolean } {
   const cwd = b.cwd ?? "";
   const inside = !!ctx.worktree && (cwd === ctx.worktree || cwd.startsWith(ctx.worktree + "/"));
   const place = shortPath(cwd, ctx.home) + (inside && ctx.branch ? ` git:(${ctx.branch})` : "");
   const timed = !!b.end && b.startedAt !== undefined && b.endedAt !== undefined;
+  const c = b.changes;
   return {
+    node: b.node ?? null,
     place,
+    // Warp's `5 • +113 -30`: the session's uncommitted changes, only inside it.
+    changes: inside && c ? `${c.files} • +${c.additions} -${c.deletions}` : null,
     exit: b.end && b.exit ? `exit ${b.exit}` : null,
     duration: timed ? `(${duration(b.endedAt! - b.startedAt!)})` : null,
     running: !b.end,
@@ -224,15 +242,34 @@ export function blockLayout(prompt: number, output: number, empty: (y: number) =
  * shell left no row for it (T8), in `free` columns: the directory goes
  * first, then the duration; with not even room for the status, nothing. */
 export function inlineHeader(h: ReturnType<typeof blockHeader>, free: number) {
-  const width = (p: { place: string | null; exit: string | null; duration: string | null; running: boolean }) =>
-    2 + (p.place?.length ?? 0) + (p.exit ? p.exit.length + (p.place ? 3 : 0) : 0) + (p.duration ? p.duration.length + 1 : 0) + (p.running ? 2 : 0);
-  const options = [
+  type Parts = { node: string | null; place: string | null; changes: string | null; exit: string | null; duration: string | null; running: boolean };
+  const width = (p: Parts) =>
+    2 +
+    (p.node ? p.node.length + 1 : 0) +
+    (p.place?.length ?? 0) +
+    (p.changes ? p.changes.length + 1 : 0) +
+    (p.exit ? p.exit.length + (p.place ? 3 : 0) : 0) +
+    (p.duration ? p.duration.length + 1 : 0) +
+    (p.running ? 2 : 0);
+  const options: Parts[] = [
     { ...h },
-    { ...h, place: null },
-    { ...h, place: null, duration: null },
+    { ...h, node: null, changes: null, place: null },
+    { ...h, node: null, changes: null, place: null, duration: null },
   ];
   return options.find((p) => (p.exit || p.duration || p.running || p.place) && width(p) <= free) ?? null;
 }
+
+/** The block ⌘↵ sends to the agent (T8): the selected one, else the newest
+ * finished one while the input is empty, as Warp attaches the last block.
+ * With a typed command, ⌘↵ is about that command. */
+export function pickBlockForAgent<T>(selected: T | null, newest: T | null, input: string): T | null {
+  if (selected) return selected;
+  return input.trim() ? null : newest;
+}
+
+const LINE_HEIGHT = 1.15;
+/** Shells in Warp mode get Warp's roomier rows (T8); agent TUIs keep 1.15. */
+const WARP_LINE_HEIGHT = 1.3;
 
 export interface FileLinkHandler {
   (path: string, line?: number): void;
@@ -257,6 +294,8 @@ export class TermEntry {
   cwd = "";
   /** The shell draws no prompt; the app's editor is the input (T7). */
   warp = false;
+  /** Told when a block finishes (the input editor's send hint, T8). */
+  onBlockFinished?: (block: CommandBlock) => void;
   private replaying = false;
   private disposed = false;
   onTitle?: (title: string) => void;
@@ -289,7 +328,7 @@ export class TermEntry {
       allowProposedApi: true,
       fontFamily: settings.fontFamily,
       fontSize: settings.fontSize,
-      lineHeight: 1.15,
+      lineHeight: LINE_HEIGHT,
       cursorBlink: true,
       macOptionIsMeta: settings.optionIsMeta,
       macOptionClickForcesSelection: true,
@@ -490,6 +529,8 @@ export class TermEntry {
         if (last) {
           last.output = marker;
           last.cwd = this.cwd;
+          last.node = this.context.nodeVersion;
+          last.changes = this.context.changes;
           if (this.warp) {
             // The prompt is empty rows for the separator and header (T8).
             const layout = blockLayout(last.prompt.line, marker.line, (y) => !this.lineText(y).trim());
@@ -514,6 +555,7 @@ export class TermEntry {
           if (!this.replaying && last.startedAt !== undefined) last.endedAt = Date.now();
           this.decorate(last);
           if (this.warp) this.header(last);
+          this.onBlockFinished?.(last);
         }
         break;
     }
@@ -574,8 +616,16 @@ export class TermEntry {
       const span = (cls: string, text: string) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
       // xterm sets the element's `display`, so the layout lives in a row inside.
       const row = Object.assign(document.createElement("div"), { className: "row" });
+      // `5 • +113 -30`, with the line counts in green and red as in Warp.
+      const changes = (text: string) => {
+        const el = span("changes", "");
+        for (const part of text.split(/([+-]\d+)/)) el.append(part.startsWith("+") ? span("add", part) : /^-\d/.test(part) ? span("del", part) : part);
+        return el;
+      };
       row.append(
+        ...(h.node ? [span("node", `${h.node} `)] : []),
         ...(h.place ? [span("place", h.place)] : []),
+        ...(h.changes ? [span("gap", " "), changes(h.changes)] : []),
         ...(h.exit ? [span("exit", h.place ? ` · ${h.exit}` : h.exit)] : []),
         ...(h.duration ? [span("duration", ` ${h.duration}`)] : []),
         ...(h.running ? [span("running", "")] : []),
@@ -657,8 +707,18 @@ export class TermEntry {
 
   /** The selected block as text for an agent, if one is selected (T8). */
   selectedForAgent(): string | null {
-    const b = this.selected;
+    return this.forAgent(this.selected);
+  }
+
+  /** A block as text for an agent (T8). */
+  forAgent(b: CommandBlock | null): string | null {
     return b?.command ? blockForAgent({ command: b.command, output: this.outputOf(b) }) : null;
+  }
+
+  /** The newest block whose command has finished, if any (T8). */
+  newestFinished(): CommandBlock | null {
+    for (let i = this.blocks.length - 1; i >= 0; i--) if (this.blocks[i].end && this.blocks[i].command) return this.blocks[i];
+    return null;
   }
 
   /** Text of the selected block for the clipboard, if one is selected. */
@@ -668,6 +728,14 @@ export class TermEntry {
     const b = this.selected;
     if (!b?.command && part !== "output") return null;
     return b ? blockCopy({ command: b.command ?? "", output: this.outputOf(b) }, part) : null;
+  }
+
+  /** Warp mode (T7): no shell prompt, and roomier rows as in Warp (T8). */
+  setWarp(warp: boolean) {
+    if (this.warp === warp) return;
+    this.warp = warp;
+    this.term.options.lineHeight = warp ? WARP_LINE_HEIGHT : LINE_HEIGHT;
+    this.refit();
   }
 
   /** Warp mode hides the terminal's cursor while the editor has the input. */
