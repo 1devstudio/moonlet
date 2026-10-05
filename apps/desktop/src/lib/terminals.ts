@@ -48,6 +48,8 @@ const THEME = {
   scrollbarSliderBackground: "#2a2a2a",
   scrollbarSliderHoverBackground: "#3a3a3a",
   scrollbarSliderActiveBackground: "#4a4a4a",
+  // The ruler's 1px edge, black by default; matches the background instead.
+  overviewRulerBorder: "#121212",
   black: "#1c1f26",
   red: "#ef6b73",
   green: "#8fd18e",
@@ -335,6 +337,9 @@ export class TermEntry {
       // Same depth as the daemon, so in-view search finds what it keeps.
       scrollback: 10_000,
       theme: THEME,
+      // xterm sizes its scrollbar from the ruler (14px when unset): thin, like
+      // the agent view's. The ruler also shows block exit status and matches.
+      overviewRuler: { width: 6 },
       drawBoldTextInBrightColors: false,
       minimumContrastRatio: 1,
     });
