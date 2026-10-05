@@ -135,6 +135,15 @@ export function blockRects(
   return out;
 }
 
+/** Buffer row of the header of a block whose prompt mark came before the
+ * app attached (snapshots carry no marks), from the row its output starts
+ * on: above the command, which may wrap over several rows (T8). */
+export function replayedHeaderLine(outputLine: number, wrapped: (y: number) => boolean): number {
+  let y = outputLine - 1;
+  while (y > 0 && wrapped(y)) y--;
+  return y - 1;
+}
+
 export interface FileLinkHandler {
   (path: string, line?: number): void;
 }
@@ -346,7 +355,10 @@ export class TermEntry {
         let last = this.blocks[this.blocks.length - 1];
         if (!last || last.output) {
           // In Warp mode the header row sits above the command (T8).
-          const prompt = this.term.registerMarker(this.warp ? -2 : -1);
+          const buf = this.term.buffer.active;
+          const here = buf.baseY + buf.cursorY;
+          const line = this.warp ? replayedHeaderLine(here, (y) => !!buf.getLine(y)?.isWrapped) : here - 1;
+          const prompt = this.term.registerMarker(line - here);
           if (prompt) {
             last = { prompt };
             this.blocks.push(last);
