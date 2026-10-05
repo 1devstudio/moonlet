@@ -14,6 +14,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 - Each workspace block has:
   - a header (name, chevron to collapse, `⋯` menu);
   - its projects, each with a `+` and its sessions below;
+  - a context menu on each project header: **Project settings…** and **Remove from <workspace>**. Removing a project that another workspace also holds only detaches it here. Removing it from its last workspace asks first, then removes it from jaunt (the folder on disk stays). This is refused while the project has unarchived sessions;
   - collapse state remembered per workspace.
 - The workspace `⋯` menu:
   - **Group by:** Project (default), Status, or None.
@@ -46,7 +47,8 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
   - `workspace.list`
   - `workspace.update {id, name?, project_ids?, sections?, view?}`
   - `workspace.delete {id}`
-  - `workspace.add_project {id, path}`, which adds the project if it is new and attaches it.
+  - `workspace.add_project {id, path}`, which adds the project if it is new and attaches it. A new project goes into that workspace only.
+  - `workspace.remove_project {id, project_id}`, which detaches the project, and removes it from jaunt when no other workspace holds it (refused while it has unarchived sessions).
   - `view` holds group/sort/filter and is persisted.
 - **Projects** (`project.*`): `add`, `list`, `remove`, `config`.
 - **Sessions** (`session.*`): `create`, `list`, `archive`, `unarchive`, `update {name?, section?, layout?}`, `run`.
@@ -58,6 +60,8 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 
 - [x] An existing `state.json` from before the rename loads with all projects and sessions under "My workspaces". Unit test `migrates_pre_rename_state`; also exercised live, where a running protocol-1 daemon was upgraded in place, its state migrated, and terminals re-linked to sessions.
 - [x] Two workspaces can share a project. Collapse state is per workspace and per group. Test: `workspaces_share_projects_and_sections`.
+- [x] A new project added to a workspace appears only in that workspace. Test: `new_project_added_to_a_workspace_lands_only_there`.
+- [x] A project can be removed from a workspace from its header's context menu. A shared project is only detached; a project in its last workspace is removed from jaunt after a confirm, and stays while it has unarchived sessions. Tests: `removing_a_shared_project_detaches_it_from_one_workspace`, `removing_a_project_from_its_last_workspace_drops_it`, `a_project_with_live_sessions_stays_in_its_last_workspace`, `a_project_can_be_removed_from_a_workspace_over_rpc`, `projectRemoval` in `sidebar.test.ts`, and `workspace-projects.e2e.ts`.
 - [x] Group, sort and filter work and are persisted in the workspace `view`. Tests: `sidebar.test.ts`.
 - [x] Sections: create one, move a session into it (context menu or drag), see it under that section in every group-by mode. Deleting a section returns its sessions to their project. Drag verified in the app with synthesized mouse events, both into a section and back out.
 - [x] The composer creates a session from a prompt: name and branch derived, agent started with the selected model and effort (`names_and_agent_flags`), the prompt delivered. Verified in the app with "Terminal only".
