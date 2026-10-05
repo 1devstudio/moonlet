@@ -152,5 +152,9 @@ describe("command blocks", () => {
     await browser.waitUntil(() => rpc<unknown[]>(w, "terminal.search", { id: agentId, query: "$ echo e2e-hover" }).length > 0, {
       timeoutMsg: "the block never reached the agent",
     });
+    // The whole draft: the command line, its output and the fences around them.
+    const lines = (query: string) => rpc<{ text: string }[]>(w, "terminal.search", { id: agentId, query }).map((m) => m.text.trim());
+    expect(lines("e2e-hover").filter((t) => t.endsWith("e2e-hover") && !t.includes("$ echo")).length).toBeGreaterThan(0);
+    expect(lines("```").filter((t) => t.endsWith("```")).length).toBeGreaterThanOrEqual(2);
   });
 });
