@@ -6,15 +6,15 @@
 
 ## Summary
 
-New sessions branch from the project's local base branch (`main` unless `.jaunt/config.toml` sets `base_branch`). After a PR merges on GitHub, the local branch is stale until the user pulls it by hand, so the next session starts without the merged work. The sidebar shows when the base branch is behind `origin`, lists the incoming commits, and fast-forwards it with one click.
+New sessions branch from the project's local base branch (`main` unless `.jaunt/config.toml` sets `base_branch`). After a PR merges on GitHub, the local branch is stale until the user pulls it by hand, so the next session starts without the merged work. The sidebar shows when the base branch is behind `origin`, lists the incoming commits on hover, and fast-forwards it with one click.
 
 ## User journey
 
 1. A session's PR merges on GitHub. jaunt fetches `origin/<base>` for that project.
-2. The project row in the sidebar shows a chip: an arrow and the number of commits `main` is behind, for example `↓ 3`.
-3. Clicking the chip opens a popover: "main is 3 commits behind origin", the incoming commits (short sha and subject, newest first), when jaunt last fetched, and **Later** / **Pull main**.
-4. **Pull main** fast-forwards the local branch. The chip shows `pulling` meanwhile, then disappears, and a toast says "Pulled 3 commits into main. New sessions start from 9c41e2a."
-5. When the local branch has commits that are not on `origin`, the chip reads `diverged`. The popover explains that jaunt only fast-forwards, changed nothing, and offers a `git pull --rebase` command to copy.
+2. The project row in the sidebar shows a chip next to the project name: an arrow and the number of commits `main` is behind, for example `↓ 3`.
+3. Hovering the chip opens a popover: "main is 3 commits behind origin", the incoming commits (short sha and subject, newest first), when jaunt last fetched, and **Later** / **Pull main**.
+4. Clicking the chip, or **Pull main** in the popover, fast-forwards the local branch. The chip shows `pulling` meanwhile, then disappears, and a toast says "Pulled 3 commits into main. New sessions start from 9c41e2a."
+5. When the local branch has commits that are not on `origin`, the chip reads `diverged`. Hovering or clicking it opens a popover that explains that jaunt only fast-forwards, changed nothing, and offers a `git pull --rebase` command to copy.
 
 ## Behaviour and acceptance criteria
 
@@ -27,18 +27,19 @@ New sessions branch from the project's local base branch (`main` unless `.jaunt/
 - [x] `git.pull_base` refuses a diverged branch and changes nothing.
 - [x] The chip shows the behind count, `pulling` while a pull runs, `diverged` when the branch is both ahead and behind, and nothing when the branch is up to date or only ahead.
 - [x] The app fetches when a host loads, every 5 minutes, when the project list changes (for example a new base branch in Project settings), and when one of the project's session PRs turns merged. A fetch after a merge labels the popover footer "after PR #N merged".
+- [x] Hovering the chip shows the popover. Clicking a behind chip pulls straight away; clicking a diverged chip opens the popover, and clicking while a pull runs does nothing.
 - [x] Only one pull popover is open at a time. Opening another project's popover closes the first, so a Pull click cannot land on the wrong project's popover.
 - [x] The diverged popover's command targets the work tree that has the branch checked out. When none does, it switches to the branch first.
 
 ## UI
 
-`Sidebar.tsx`, the project header row: the chip sits between the project name and the settings button. It is 22 px high, mono 11.5 px, `bg-panel-2` with a strong border.
+`Sidebar.tsx`, the project header row: the chip sits right after the project name, on the left. It is 22 px high, mono 11.5 px, `bg-panel-2` with a strong border.
 
-- Behind: `ArrowDown` icon and the count, accent colour. Title "main is 3 commits behind origin/main".
+- Behind: `ArrowDown` icon and the count, accent colour. Accessible label "main is 3 commits behind origin/main" (no native tooltip, which would cover the popover).
 - Pulling: spinning `Loader2` and "pulling", muted.
 - Diverged: `ShieldAlert` and "diverged", error colour.
 
-The popover is fixed below the chip, 276 px wide, like the row context menu. A mousedown outside or Escape closes it. Only one pull popover is open at a time: opening another project's closes the first. The pure logic (chip, texts, command) lives in `lib/baseSync.ts`.
+The popover is fixed below the chip, 276 px wide, like the row context menu. It opens when the pointer enters the chip and closes 150 ms after the pointer leaves both the chip and the popover, so the pointer can cross the gap. A mousedown outside or Escape closes it too. Only one pull popover is open at a time: opening another project's closes the first. The pure logic (chip, texts, command) lives in `lib/baseSync.ts`.
 
 ## Protocol and RPCs
 
@@ -61,5 +62,5 @@ Both run on the host that owns the project, so remote projects work the same way
 ## Test plan
 
 - Integration (`crates/jaunt-core/src/git.rs`): a clone of a bare origin that is behind, up to date, diverged, and missing the remote branch; a failed fetch; pulling with the branch checked out (work tree updated) and not checked out (ref moved); a refused diverged pull.
-- Unit (`apps/desktop/src/lib/baseSync.test.ts`): chip states, popover texts, fetched label, pull toast, the diverged command, and the newly merged PR detection that triggers a fetch.
-- e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, the popover lists the commits, and Pull moves the local branch. With a second project behind, opening its popover and then the first project's leaves one popover open.
+- Unit (`apps/desktop/src/lib/baseSync.test.ts`): chip states, what a chip click does, popover texts, fetched label, pull toast, the diverged command, and the newly merged PR detection that triggers a fetch.
+- e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, hovering it lists the commits, and clicking it moves the local branch. With a second project behind, hovering its chip and then the first project's leaves one popover open.

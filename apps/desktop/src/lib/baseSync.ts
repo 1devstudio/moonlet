@@ -20,6 +20,14 @@ export function baseChip(st: BaseStatus | null | undefined, pulling: boolean): B
   return { kind: "behind", text: String(st.behind), title: `${st.branch} is ${commits(st.behind)} behind ${st.upstream}` };
 }
 
+/** What clicking the chip does. Hovering shows the details; a click pulls,
+ *  unless the branch diverged and there is nothing to fast-forward. */
+export function chipClick(chip: BaseChip | null): "pull" | "details" | null {
+  if (chip?.kind === "behind") return "pull";
+  if (chip?.kind === "diverged") return "details";
+  return null;
+}
+
 /** "main is 3 commits behind origin" */
 export function behindHeadline(st: BaseStatus): string {
   return `${st.branch} is ${commits(st.behind)} behind origin`;

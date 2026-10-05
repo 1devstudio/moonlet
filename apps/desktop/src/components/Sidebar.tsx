@@ -5,7 +5,7 @@ import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
 import { arrange, compact, dropResult, lastActive, projectRemoval, type Dragged, type Group } from "../lib/sidebar";
 import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
-import { aheadText, baseChip, behindHeadline, fetchedLabel, rebaseCommand, type BaseChip } from "../lib/baseSync";
+import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
@@ -120,14 +120,17 @@ const CHIP_TONE: Record<BaseChip["kind"], string> = { behind: "text-accent", pul
  *  window, so opening another popover closes this one through here. */
 let closeBasePopover: (() => void) | null = null;
 
-/** "main is behind origin" chip on a project row, with the Pull popover. */
+/** "main is behind origin" chip beside the project name. Hovering shows the
+ *  details popover; clicking pulls. */
 function BasePullChip({ host, projectId }: { host: string; projectId: string }) {
   const sync = useStore((s) => s.base[projKey(host, projectId)]);
   const project = useStore((s) => s.projects[host]?.find((p) => p.id === projectId));
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
+  const leaveTimer = useRef<number | undefined>(undefined);
   const chip = baseChip(sync?.status, !!sync?.pulling);
   const openable = chip?.kind === "behind" || chip?.kind === "diverged";
+  useEffect(() => () => window.clearTimeout(leaveTimer.current), []);
   useEffect(() => {
     if (!pos) return;
     const close = () => setPos(null);
@@ -149,11 +152,25 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
   }, [pos]);
   if (!chip || !sync?.status || !project) return null;
   const st = sync.status;
-  const toggle = () => {
-    if (pos || !openable || !ref.current) return setPos(null);
+  const open = () => {
+    window.clearTimeout(leaveTimer.current);
+    if (pos || !openable || !ref.current) return;
     const r = ref.current.getBoundingClientRect();
     const side = ref.current.closest("aside")?.getBoundingClientRect().left ?? 0;
     setPos({ top: Math.round(r.bottom + 6), left: side + 12 });
+  };
+  // A short grace period lets the pointer cross the gap into the popover.
+  const leave = () => {
+    window.clearTimeout(leaveTimer.current);
+    leaveTimer.current = window.setTimeout(() => setPos(null), 150);
+  };
+  const click = () => {
+    const action = chipClick(chip);
+    if (action === "details") return open();
+    if (action !== "pull") return;
+    window.clearTimeout(leaveTimer.current);
+    setPos(null);
+    void pullBase(host, projectId);
   };
   const mono = (t: string) => <span className="font-mono text-fg">{t}</span>;
   const command = rebaseCommand(st, project.path);
@@ -161,9 +178,11 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
     <>
       <button
         ref={ref}
-        title={chip.title}
+        aria-label={chip.title}
         onMouseDown={(e) => e.stopPropagation()}
-        onClick={toggle}
+        onMouseEnter={open}
+        onMouseLeave={leave}
+        onClick={click}
         className={cx("flex h-[22px] shrink-0 items-center gap-1 rounded-md border border-border-strong bg-panel-2 px-1.5 font-mono text-[11.5px] hover:bg-hover", CHIP_TONE[chip.kind])}
       >
         {chip.kind === "behind" ? <ArrowDown size={12} strokeWidth={1.75} /> : chip.kind === "pulling" ? <Loader2 size={12} strokeWidth={1.75} className="animate-spin" /> : <ShieldAlert size={12} strokeWidth={1.75} />}
@@ -176,6 +195,8 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
           className="fixed z-50 w-[276px] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
           style={pos}
           onMouseDown={(e) => e.stopPropagation()}
+          onMouseEnter={open}
+          onMouseLeave={leave}
         >
           {chip.kind === "diverged" ? (
             <div className="px-3 pb-2 pt-2.5">
@@ -377,11 +398,17 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
             onRowMenu({ projectId: g.projectId }, e);
           }}
         >
-          <button onClick={toggle} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+          <button onClick={toggle} className={cx("flex min-w-0 items-center gap-2.5 text-left", g.kind !== "project" && "flex-1")}>
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
           </button>
-          {g.kind === "project" && <BasePullChip host={host} projectId={g.projectId!} />}
+          {g.kind === "project" && (
+            <>
+              <BasePullChip host={host} projectId={g.projectId!} />
+              {/* The rest of the row still collapses the project. */}
+              <div aria-hidden className="h-full min-w-0 flex-1" onClick={toggle} />
+            </>
+          )}
           {g.kind === "project" && (
             <IconButton title="Project settings" className="h-7 w-7 opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => openProjectSettings({ host, project: g.projectId! })}>
               <Settings size={15} />
