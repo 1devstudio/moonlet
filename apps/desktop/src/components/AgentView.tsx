@@ -736,7 +736,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        <div className="mx-auto flex max-w-[820px] flex-col gap-0.5 px-6 pb-4 pt-5">
+        <div className="flex flex-col gap-0.5 px-6 pb-4 pt-5">
           {!st ? (
             <div className="py-10 text-center chat-text-13 text-faint">Loading conversation…</div>
           ) : st.items.length === 0 ? (
@@ -774,7 +774,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           )}
         </div>
       </div>
-      <div className="mx-auto w-full max-w-[820px] shrink-0 px-6 pb-4">
+      <div className="w-full shrink-0 px-6 pb-4">
         <div className="mb-1.5 flex h-6 items-center gap-2 px-1 chat-text-12 text-muted">
           {st?.status === "working" ? (
             <>
