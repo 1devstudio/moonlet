@@ -1,6 +1,6 @@
 # T8: Warp-style block styling and input editor
 
-- **Status:** in progress (block header, bold command, block selection and send to agent implemented)
+- **Status:** in progress (steps 1 to 3 implemented: block header, selection, send to agent, context chips)
 - **Priority / phase:** P1 · phase 3 (requested 2026-10-05, with Warp screenshots)
 - **PRD refs:** T1, T3, T4; "fast, modern terminal feel (in the spirit of Warp)"
 - **Related:** [T4](T4-command-blocks.md), [T6](T6-input-editor.md), [T7](T7-warp-shell-model.md), [X4](X4-visual-design.md) (tokens), [T9](T9-real-command-blocks.md) (real blocks, which reuse this spec's header and selection logic)
@@ -47,14 +47,14 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ### Context chips
 
-- [ ] Chips above the input are boxed (rounded, `border` hairline, mono 11.5px, an icon each), in this order:
+- [x] Chips above the input are boxed (rounded, `border` hairline, mono 11.5px, an icon each), in this order, wrapping in a narrow pane:
   - **Node version** (`v24.19.0`) when the shell reports one (see Protocol).
   - **Directory**, `~`-shortened.
   - **Branch** in the `done` green, when the session has a branch.
   - **`± N`**: the number of files with uncommitted changes (staged, unstaged or untracked) in the session's worktree, from the git status jaunt already polls.
-- [ ] Which chips show is decided by a pure `chipModel()` in `lib/`.
-- [ ] "Classic" moves to a small icon button at the right end of the chip row, with the same tooltip.
-- [ ] The `→ accept` / `⇧↵ new line` text leaves the chip row. Ghost text is followed by an inline `→` key badge.
+- [x] Which chips show is decided by a pure `chipModel()` in `lib/`.
+- [x] "Classic" moves to a small icon button at the right end of the chip row, with the same tooltip.
+- [x] The `→ accept` / `⇧↵ new line` text leaves the chip row. Ghost text is followed by an inline `→` key badge.
 
 ### Input colouring
 
@@ -84,7 +84,7 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 ## Protocol and RPCs
 
 - `shell.commands {shell?}` returns `string[]`: executable file names on the login shell's `PATH`, plus the shell's builtins and reserved words, de-duplicated and sorted.
-- **Node version:** the shell integration reports it with `OSC 1337;JauntNode=<version>` in the prompt hook, only when `command -v node` resolves to a different path than last time (so `node --version` runs only after the `PATH` changes, for example on `nvm use` or a directory change with an auto-switcher). An empty value means no node. The daemon stores it on `TerminalInfo.node_version` and emits `terminal.updated`.
+- **Node version:** the prompt hook reports where `node` is with `OSC 1337;JauntNodePath=<path>`, only when the `node` found on PATH (zsh `$commands[node]`, bash `type -P`, fish `command -s`) is a different absolute path than last time; an empty value means none. It never runs `node`. The daemon reads the version from the `include/node/node_version.h` installed beside its `bin/`, or else from a version directory in the resolved path (such as Homebrew's `Cellar/node/22.1.0`), stores it on `TerminalInfo.node_version` and emits `terminal.updated`.
 
 ## Data and config
 
@@ -93,6 +93,7 @@ None.
 ## Security considerations
 
 - `shell.commands` lists file names only and runs nothing.
+- The node version is read from files, never by running `node`: any PATH entry, relative or absolute (`$PWD/node_modules/.bin`), can point into an untrusted checkout, and the prompt hook would otherwise run that checkout's `node` without a command from the user.
 - Text sent to an agent is pasted as a bracketed paste and never submitted; the user presses Enter.
 
 ## Out of scope

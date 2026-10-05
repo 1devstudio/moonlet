@@ -3,7 +3,7 @@ import { RotateCw, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
 import { setClassic } from "../lib/actions";
-import { errorToast, getLayout, setLayout, useStore } from "../lib/store";
+import { errorToast, getLayout, sesKey, setLayout, useStore } from "../lib/store";
 import { findEntry, getEntry } from "../lib/terminals";
 import { InputEditor } from "./InputEditor";
 import { Button } from "./ui";
@@ -53,6 +53,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
   }, [host, session, warp, editing]);
   const branch = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.branch : undefined));
   const worktree = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.path : undefined));
+  const files = useStore((s) => (info?.session_id ? s.git[sesKey(host, info.session_id)]?.files : undefined));
   useEffect(() => {
     getEntry(host, session).context = { home, worktree, branch };
   }, [host, session, home, worktree, branch]);
@@ -87,6 +88,8 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
           cwd={findEntry(host, session)?.cwd || info.reported_cwd || info.cwd}
           home={home}
           branch={branch}
+          nodeVersion={info.node_version}
+          files={files}
           focused={focused}
         />
       )}

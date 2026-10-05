@@ -8,6 +8,7 @@ pub mod fs;
 pub mod git;
 pub mod history;
 pub mod hooks;
+pub mod node;
 pub mod paths;
 pub mod project_config;
 pub mod pty;
