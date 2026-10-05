@@ -200,6 +200,8 @@ function demoRpc(method: string): unknown {
       return ["src/components/Checkout.tsx", "src/styles/checkout.css", "README.md"];
     case "shell.history":
       return ["git status", "pnpm test", "pnpm dev"];
+    case "shell.commands":
+      return ["cd", "git", "ls", "pnpm"];
     default:
       return null;
   }
