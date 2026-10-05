@@ -93,6 +93,7 @@ None.
 ## Security considerations
 
 - `shell.commands` lists file names only and runs nothing.
+- The prompt hook runs `node --version` only for a `node` found at an absolute path. A relative `PATH` entry (such as `node_modules/.bin`) resolves inside whatever directory the shell is in, which may be an untrusted checkout, so it is never run.
 - Text sent to an agent is pasted as a bracketed paste and never submitted; the user presses Enter.
 
 ## Out of scope
