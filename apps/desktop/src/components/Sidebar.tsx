@@ -116,6 +116,10 @@ function InlineInput({ initial, placeholder, onDone }: { initial: string; placeh
 
 const CHIP_TONE: Record<BaseChip["kind"], string> = { behind: "text-accent", pulling: "text-muted", diverged: "text-error" };
 
+/** Closes the open pull popover. A chip's mousedown does not reach the
+ *  window, so opening another popover closes this one through here. */
+let closeBasePopover: (() => void) | null = null;
+
 /** "main is behind origin" chip on a project row, with the Pull popover. */
 function BasePullChip({ host, projectId }: { host: string; projectId: string }) {
   const sync = useStore((s) => s.base[projKey(host, projectId)]);
@@ -127,6 +131,8 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
   useEffect(() => {
     if (!pos) return;
     const close = () => setPos(null);
+    closeBasePopover?.();
+    closeBasePopover = close;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("mousedown", close);
     window.addEventListener("keydown", onKey);
@@ -134,6 +140,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
     // The sidebar list scrolled away from the chip.
     window.addEventListener("scroll", close, true);
     return () => {
+      if (closeBasePopover === close) closeBasePopover = null;
       window.removeEventListener("mousedown", close);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", close);
