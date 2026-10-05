@@ -36,7 +36,7 @@ Nothing is persisted. The avatar URLs live in the app's store, keyed by project.
 
 ## Security considerations
 
-The webview loads the image straight from GitHub, so the CSP `img-src` allows `https://github.com` (which redirects) and `https://avatars.githubusercontent.com`. Only the owner name goes into the URL, and only when it matches GitHub's account name rules (letters, digits, hyphens), so a crafted remote cannot inject a path or query. Credentials in the remote URL never leave the daemon's answer.
+The webview loads the image straight from GitHub, so the CSP `img-src` allows `https://github.com` (which redirects) and `https://avatars.githubusercontent.com`. Only the owner name goes into the URL, and only when it matches GitHub's account name rules (at most 39 letters, digits and hyphens, no hyphen at either end), so a crafted remote cannot inject a path or query. Credentials in the remote URL never leave the daemon's answer.
 
 ## Out of scope
 

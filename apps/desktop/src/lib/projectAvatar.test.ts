@@ -23,4 +23,11 @@ describe("avatarUrl", () => {
     expect(avatarUrl("https://github.example.com/acme/api.git")).toBeNull();
     expect(avatarUrl("/Users/me/src/origin.git")).toBeNull();
   });
+
+  it("rejects owners GitHub would not allow", () => {
+    expect(avatarUrl("https://github.com/acme-/api.git")).toBeNull();
+    expect(avatarUrl("https://github.com/-acme/api.git")).toBeNull();
+    expect(avatarUrl(`https://github.com/${"a".repeat(40)}/api.git`)).toBeNull();
+    expect(avatarUrl(`https://github.com/${"a".repeat(39)}/api.git`)).toBe(`https://github.com/${"a".repeat(39)}.png?size=64`);
+  });
 });
