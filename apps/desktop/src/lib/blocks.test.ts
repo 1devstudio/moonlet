@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, commandFromRows, outputToCopy, replayedHeaderLine, selectStep } from "./terminals";
+import { blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, inlineHeader, commandFromRows, outputToCopy, replayedPromptLine, selectStep } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -73,14 +73,26 @@ describe("block backgrounds (T8)", () => {
   });
 });
 
-describe("header row of a block whose prompt came before the app attached (T8)", () => {
-  it("is the row above a one-row command", () => {
-    expect(replayedHeaderLine(12, () => false)).toBe(10);
+describe("prompt row of a block whose prompt came before the app attached (T8)", () => {
+  // Output starts on row 12. `empty` lists the empty rows; `wrapped` the rows that continue the one above.
+  const rows = (empty: number[], wrapped: number[] = []) => [(y: number) => wrapped.includes(y), (y: number) => empty.includes(y)] as const;
+
+  it("is the spacer row of a two-row prompt", () => {
+    expect(replayedPromptLine(12, ...rows([9, 10]))).toBe(9);
   });
 
-  it("is the row above every row of a wrapped command", () => {
-    // Output starts on row 12; the command fills rows 9-11 (10 and 11 wrapped).
-    expect(replayedHeaderLine(12, (y) => y === 10 || y === 11)).toBe(8);
+  it("skips every row of a wrapped command", () => {
+    // The command fills rows 9-11 (10 and 11 wrapped); the prompt rows are 7 and 8.
+    expect(replayedPromptLine(12, ...rows([7, 8], [10, 11]))).toBe(7);
+  });
+
+  it("is the single empty row of a one-row prompt", () => {
+    expect(replayedPromptLine(12, ...rows([10]))).toBe(10);
+  });
+
+  it("is the command's own row when the shell left no empty row", () => {
+    // Row 10 is the previous block's output, not part of this block.
+    expect(replayedPromptLine(12, ...rows([]))).toBe(11);
   });
 });
 
@@ -193,5 +205,22 @@ describe("where a block's header goes (T8)", () => {
   it("puts the header at the end of the command line when the shell left no empty row", () => {
     // An older shell integration: the command sits on the prompt mark's row.
     expect(blockLayout(10, 11, empty([]))).toEqual({ separator: 10, header: null, commandFrom: 10 });
+  });
+});
+
+describe("header at the end of the command line (T8)", () => {
+  const h = { place: "~/src/app git:(main)", exit: "exit 1", duration: "(0.300s)", running: false };
+
+  it("shows everything when the row has room", () => {
+    expect(inlineHeader(h, 60)).toEqual({ place: "~/src/app git:(main)", exit: "exit 1", duration: "(0.300s)", running: false });
+  });
+
+  it("drops the directory, then the duration, to stay clear of the command", () => {
+    expect(inlineHeader(h, 20)).toEqual({ place: null, exit: "exit 1", duration: "(0.300s)", running: false });
+    expect(inlineHeader(h, 11)).toEqual({ place: null, exit: "exit 1", duration: null, running: false });
+  });
+
+  it("shows nothing when even the status does not fit", () => {
+    expect(inlineHeader(h, 5)).toBeNull();
   });
 });

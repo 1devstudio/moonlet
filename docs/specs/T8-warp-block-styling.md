@@ -23,7 +23,7 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 ### Block header and command
 
 - [x] **Header row:** in Warp mode the blank prompt is two empty lines (zsh `PROMPT=$'\n\n'`, bash `PS1='\n\n…'`, fish a `fish_prompt` that prints two newlines). The first is the gap between blocks, with the separator through its middle; the header is drawn on the second. Classic mode is unchanged.
-- [x] **No empty row:** when the shell left no empty row above the command (an older shell integration, for example a daemon from before this change), the header goes at the end of the command line instead of over it. With one empty row, separator and header share it. `blockLayout()` in `lib/` decides.
+- [x] **No empty row:** when the shell left no empty row above the command (an older shell integration, for example a daemon from before this change), the header goes at the end of the command line instead of over it, with only what fits after the command's last row: the directory goes first, then the duration, and with no room for the status nothing is shown (`inlineHeader()`). With one empty row, separator and header share it. `blockLayout()` in `lib/` decides. A block whose prompt came before the app attached finds its prompt rows the same way, two, one or none (`replayedPromptLine()`), so earlier output is never read as its command.
 - [x] **Header text** comes from a pure `blockHeader()` in `lib/`:
   - `<cwd> git:(<branch>) (<duration>)`, for example `~/src/app git:(main) (0.053s)`.
   - `cwd` is the directory at the `C` mark (OSC 7), `~`-shortened.
