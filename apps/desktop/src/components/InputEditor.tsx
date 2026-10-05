@@ -3,7 +3,8 @@ import { Diff, FolderOpen, GitBranch, Hexagon, SquareTerminal } from "lucide-rea
 import { type Chip, chipModel } from "../lib/chips";
 import { rpc, sendInput } from "../lib/daemon";
 import { M, type DirEntry, type FileChange } from "../lib/protocol";
-import { commonPrefix, firstWord, historyFor, rememberCommand, suggest } from "../lib/suggest";
+import { commonPrefix, firstWord, historyFor, knownCommands, rememberCommand, suggest } from "../lib/suggest";
+import { type TokenKind, tokenize } from "../lib/shellTokens";
 import { findEntry, getEntry } from "../lib/terminals";
 import { setClassic } from "../lib/actions";
 
@@ -49,11 +50,21 @@ export function InputEditor({
   /** Command of the selected block, for the send-to-agent hint (T8). */
   const [selectedCmd, setSelectedCmd] = useState<string | null>(null);
   const ta = useRef<HTMLTextAreaElement>(null);
+  const mirror = useRef<HTMLDivElement>(null);
   const draft = useRef("");
 
   useEffect(() => {
     void historyFor(host).then(setHistory);
   }, [host]);
+  const [known, setKnown] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    // A slower answer for a previous terminal never replaces this one's.
+    let live = true;
+    void knownCommands(host, terminal).then((names) => live && setKnown(names));
+    return () => {
+      live = false;
+    };
+  }, [host, terminal]);
 
   // Typing into the terminal while the editor is up lands here instead.
   useEffect(() => {
@@ -208,9 +219,15 @@ export function InputEditor({
         </button>
       </div>
       <div className="relative font-mono text-[13.5px] leading-[20px]">
-        {/* Mirror of the text with the ghost suggestion after it. */}
-        <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
-          {text}
+        {/* Mirror of the text, coloured (T8), with the ghost suggestion after
+            it. The textarea above it has transparent text and shows the caret
+            and the selection. */}
+        <div ref={mirror} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-fg">
+          {tokenize(text).map((t, i) => (
+            <span key={i} className={tokenClass(t.kind, t.kind === "command" && known.has(t.text))}>
+              {t.text}
+            </span>
+          ))}
           {ghost && (
             <>
               <span className="text-faint">{ghost}</span>
@@ -220,6 +237,8 @@ export function InputEditor({
         </div>
         <textarea
           ref={ta}
+          // Past its height cap the textarea scrolls; the coloured mirror follows.
+          onScroll={(e) => mirror.current && (mirror.current.scrollTop = e.currentTarget.scrollTop)}
           rows={1}
           spellCheck={false}
           autoCorrect="off"
@@ -234,7 +253,7 @@ export function InputEditor({
             if (entry?.selected) entry.select(null);
           }}
           onKeyDown={onKeyDown}
-          className="relative block w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
+          className="relative block w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent text-transparent caret-accent outline-none placeholder:text-faint selection:bg-accent/30"
         />
       </div>
       {hint && <div className="mt-1.5 truncate font-mono text-[12px] text-muted">{hint}</div>}
@@ -245,6 +264,25 @@ export function InputEditor({
       )}
     </div>
   );
+}
+
+/** Colours of the command line (T8), from the terminal palette. An unknown
+ * command stays plain: aliases and functions are invisible to the daemon. */
+function tokenClass(kind: TokenKind, known: boolean): string {
+  switch (kind) {
+    case "command":
+      return known ? "text-[#8fd18e]" : "";
+    case "subcommand":
+      return "text-[#7aa7ff]";
+    case "flag":
+      return "text-muted";
+    case "string":
+      return "text-[#e8c46b]";
+    case "operator":
+      return "text-faint";
+    default:
+      return "";
+  }
 }
 
 /** One boxed chip above the input (T8). */

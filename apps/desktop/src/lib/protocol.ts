@@ -351,6 +351,7 @@ export const M = {
   prCreate: "gh.pr_create",
   ghIssues: "gh.issues",
   shellHistory: "shell.history",
+  shellCommands: "shell.commands",
   ghPrs: "gh.prs",
   workspaceList: "workspace.list",
   workspaceCreate: "workspace.create",

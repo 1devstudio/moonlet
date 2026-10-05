@@ -64,3 +64,20 @@ export function rememberCommand(host: string, cmd: string) {
   h.push(cmd);
   cache.set(host, h);
 }
+
+const commands = new Map<string, { names: Set<string>; at: number }>();
+
+/** Command names the editor colours as known in a shell terminal (T8),
+ * from that shell's own PATH, fetched at most once a minute. */
+export async function knownCommands(host: string, terminal: number): Promise<Set<string>> {
+  const key = `${host}:${terminal}`;
+  const hit = commands.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return hit.names;
+  try {
+    const names = new Set(await rpc<string[]>(host, M.shellCommands, { terminal }));
+    commands.set(key, { names, at: Date.now() });
+    return names;
+  } catch {
+    return hit?.names ?? new Set();
+  }
+}

@@ -68,6 +68,7 @@ pub const GIT_ORIGIN_URL: &str = "git.origin_url";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
 pub const GH_ISSUES: &str = "gh.issues";
 pub const SHELL_HISTORY: &str = "shell.history";
+pub const SHELL_COMMANDS: &str = "shell.commands";
 pub const CHAT_STATE: &str = "chat.state";
 pub const CHAT_SEND: &str = "chat.send";
 pub const CHAT_PERMISSION: &str = "chat.permission";
@@ -513,6 +514,18 @@ pub struct ShellHistory {
     /// `zsh`, `bash` or `fish`; the login shell when absent.
     #[serde(default)]
     pub shell: Option<String>,
+}
+
+/// `shell.commands`: names the input editor colours as known commands (T8).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShellCommands {
+    /// `zsh`, `bash` or `fish`; the login shell when absent.
+    #[serde(default)]
+    pub shell: Option<String>,
+    /// A shell terminal whose own PATH (as its prompt hook reported it) to
+    /// use instead of the login shell's.
+    #[serde(default)]
+    pub terminal: Option<TerminalId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

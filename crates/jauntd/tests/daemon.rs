@@ -509,3 +509,18 @@ async fn origin_url_over_rpc() {
         Some("https://github.com/1devstudio/jaunt.git")
     );
 }
+
+/// `shell.commands` (T8): the input editor's known commands, from the PATH
+/// terminals get plus the shell's builtins.
+#[tokio::test]
+async fn lists_known_shell_commands() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let names: Vec<String> = c
+        .request(methods::SHELL_COMMANDS, serde_json::json!({ "shell": "zsh" }))
+        .await
+        .unwrap();
+    for name in ["ls", "cd", "setopt"] {
+        assert!(names.iter().any(|n| n == name), "{name} missing");
+    }
+}
