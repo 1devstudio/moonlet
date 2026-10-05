@@ -45,6 +45,7 @@ Make shell terminals in Blocks mode look and feel like a block-based terminal, o
 - [x] **Copy:** with a block selected, the terminal focused and no text selection, ⌘C copies `$ <command>` and the output, ⇧⌘C copies the output, ⌥⌘C copies the command, each with a toast. A text selection always wins over the block. With no block selected, ⇧⌘C keeps copying the last finished output (T4).
 - [x] **Re-run:** the palette's "Re-run last command" re-runs the selected block's command when one is selected.
 - [x] **Send to agent:** ⌘↵ with a block selected pastes the block as text (`$ <command>` then the output, in a code fence longer than any fence in the output) into the input of the session's running agent (the focused one, else the first) and focuses that agent's tab; nothing is submitted. In a structured chat (X6) it goes into the composer, after anything already typed. ⇧⌘↵, or ⌘↵ when the session has no running agent, opens a new tab of the session's agent (Claude when the session has none) with the block as its draft; a TUI agent gets it once it has drawn its first screen. The selection clears. With no block selected and nothing typed, ⌘↵ sends the newest finished block. A hint under the editor always names the block ⌘↵ would send: ``⌘↵ send `<command>` to the agent · ⇧⌘↵ new agent tab``. Outside a selected block, ⌘↵ keeps its usual meaning.
+- [x] **Hover actions:** while a finished block is under the mouse or selected, the right end of its header shows **Copy to agent** (the same as ⌘↵: the block as a draft in the session's agent, or a new agent tab), **Copy** (command and output, as ⌘C) and **Re-run**. Blocks whose header sits at the end of the command line (no header row) show none. `blockActions()` in `lib/` decides.
 
 ### Context chips
 
@@ -96,6 +97,7 @@ None.
 - `shell.commands` lists file names only and runs nothing.
 - The node version is read from files, never by running `node`: any PATH entry, relative or absolute (`$PWD/node_modules/.bin`), can point into an untrusted checkout, and the prompt hook would otherwise run that checkout's `node` without a command from the user.
 - Text sent to an agent is pasted as a bracketed paste and never submitted; the user presses Enter.
+- Re-run (the header action and the palette) types a command read back from the screen, which a program could have printed, including forged prompt marks (until T9's per-terminal token). Control characters are dropped, so the text cannot act as keys or end a paste, and a multi-line command goes as one bracketed paste, so no line runs before Enter (`rerunInput()`). The command is shown in the block before the user clicks.
 
 ## Out of scope
 
@@ -126,6 +128,7 @@ None.
 ## Verification
 
 - 2026-10-05: zsh keeps `zle_highlight` bold on the line after the command is accepted (checked in a PTY: each character is drawn with `\e[1m` and the reset comes after Enter).
+- 2026-10-05, hover actions: in the e2e app, the mouse over a block showed Copy to agent, Copy and Re-run at the end of its header, and Copy to agent put the block into the session's agent.
 - 2026-10-05, block layout: the user's app ran this branch's UI against the installed 0.1.7 daemon, whose shell integration has no header row, and the header covered the command. Now a gap row and a header row per block, the header scaled to the terminal font, and a fallback to the end of the command line; checked in the e2e app.
 - 2026-10-05, completion popup: in the e2e app, `cd ci` + Tab with `acmeco-paas/` and `acmeco-sdd/` present completed to `cd acmeco-`, showed both directories with the side panel, ↓ and Enter gave `cd acmeco-sdd/`; `gi` + Tab listed commands from PATH.
 - 2026-10-05, input colouring: in the e2e app, `FOO=1 git commit -m "fix it" && ls -la ~/src | wc -l > out.txt; nosuchcmd x` showed the known commands green, `commit` blue, flags muted, the string yellow, operators faint and `nosuchcmd` plain; a selection lined up with the coloured text.

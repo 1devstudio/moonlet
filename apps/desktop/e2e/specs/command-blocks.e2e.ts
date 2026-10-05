@@ -49,6 +49,7 @@ async function press(key: string, mods: { metaKey?: boolean; shiftKey?: boolean;
 
 describe("command blocks", () => {
   let sessionId = "";
+  let agentId = 0;
 
   // A session of its own: its first tab is a shell in the world's zsh.
   before(async () => {
@@ -111,6 +112,7 @@ describe("command blocks", () => {
     // The repo's `fake` agent: a TUI that echoes what it is sent.
     const session = rpc<{ id: string; path: string }[]>(w, "session.list", {}).find((x) => x.id === sessionId)!;
     const agent = rpc<{ id: number }>(w, "terminal.create", { cwd: session.path, session_id: sessionId, kind: "agent", agent: "fake", cols: 100, rows: 30 });
+    agentId = agent.id;
     await run("echo e2e-sent");
     await browser.waitUntil(async () => (await $$(".jaunt-block-head").length) === 4, { timeout: 15_000 });
 
@@ -122,5 +124,37 @@ describe("command blocks", () => {
     await browser.waitUntil(() => rpc<unknown[]>(w, "terminal.search", { id: agent.id, query: "$ echo e2e-sent" }).length > 0, {
       timeoutMsg: "the block never reached the agent",
     });
+  });
+
+  it("copies a block to the agent from its header's Copy to agent button", async () => {
+    // Back to the shell's tab (tabs switch on mousedown).
+    await browser.execute(() => {
+      const tab = document.evaluate('//span[normalize-space()="zsh"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+      tab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    await run("echo e2e-hover");
+    await browser.waitUntil(async () => (await $$(".jaunt-block-head").length) === 5, { timeout: 15_000 });
+
+    // The mouse over the newest block shows its actions.
+    await browser.execute(() => {
+      const heads = document.querySelectorAll(".jaunt-block-head");
+      const r = heads[heads.length - 1].getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      document.elementFromPoint(x, y)?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: x, clientY: y }));
+    });
+    const button = $(".jaunt-block-head.hover .action.agent");
+    await expect(button).toBeDisplayed();
+    await expect(button).toHaveText("Copy to agent");
+    await button.click();
+
+    await expect($('//*[@aria-current="true"][.//span[normalize-space()="fake"]]')).toBeDisplayed();
+    await browser.waitUntil(() => rpc<unknown[]>(w, "terminal.search", { id: agentId, query: "$ echo e2e-hover" }).length > 0, {
+      timeoutMsg: "the block never reached the agent",
+    });
+    // The whole draft: the command line, its output and the fences around them.
+    const lines = (query: string) => rpc<{ text: string }[]>(w, "terminal.search", { id: agentId, query }).map((m) => m.text.trim());
+    expect(lines("e2e-hover").filter((t) => t.endsWith("e2e-hover") && !t.includes("$ echo")).length).toBeGreaterThan(0);
+    expect(lines("```").filter((t) => t.endsWith("```")).length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef } from "react";
 import { RotateCw, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
-import { setClassic } from "../lib/actions";
-import { errorToast, getLayout, sesKey, setLayout, useStore } from "../lib/store";
+import { draftToAgent, setClassic } from "../lib/actions";
+import { errorToast, getLayout, sesKey, setLayout, toast, useStore } from "../lib/store";
 import { findEntry, getEntry } from "../lib/terminals";
 import { InputEditor } from "./InputEditor";
 import { uncommitted } from "../lib/chips";
@@ -32,6 +32,15 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
     if (!el || !visible) return;
     const entry = getEntry(host, session);
     entry.mount(el);
+    // A block header's hover actions (T8).
+    entry.onBlockAction = (action, block) => {
+      if (action === "agent") {
+        const text = entry.forAgent(block);
+        if (text) void draftToAgent(text);
+      } else if (action === "copy") {
+        void navigator.clipboard.writeText(entry.copyText(block)).then(() => toast("Copied command and output"), errorToast);
+      } else entry.rerun(block);
+    };
     entry.onFileLink = (p, line) => {
       const cur = useStore.getState().terminals[host]?.[session];
       const base = entry.cwd || cur?.reported_cwd || cur?.cwd || "/";
