@@ -45,10 +45,11 @@ import {
   toolGroupStatus,
   tokens,
   transcript,
+  turnFooter,
   useChat,
 } from "../lib/chat";
 import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
-import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall } from "../lib/protocol";
+import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
 import { errorToast, getLayout, setLayout, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
@@ -271,6 +272,23 @@ export function ToolGroup({ tools, cwd }: { tools: ChatItem[]; cwd: string }) {
   );
 }
 
+/** Response time, end time and copy under a turn's final message (X16). */
+function TurnFooter({ turn, text }: { turn: TurnTime; text: string }) {
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5 chat-text-12 text-faint">
+      <span>{turnFooter(turn, Date.now())}</span>
+      <button
+        title="Copy final message"
+        aria-label="Copy final message"
+        className="flex h-5 w-5 items-center justify-center rounded-md hover:bg-hover hover:text-fg"
+        onClick={() => void navigator.clipboard.writeText(text).then(() => toast("Copied message"), errorToast)}
+      >
+        <Copy size={12} />
+      </button>
+    </div>
+  );
+}
+
 export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) {
   switch (item.kind) {
     case "user":
@@ -283,6 +301,7 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
       return item.text ? (
         <div className="px-2 py-1">
           <Markdown text={item.text} />
+          {item.turn && <TurnFooter turn={item.turn} text={item.text} />}
         </div>
       ) : null;
     case "thinking":

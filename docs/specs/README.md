@@ -55,3 +55,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X13 | Pull the base branch (sidebar chip when `main` is behind origin) | P1 | 3 | implemented | [X13-pull-base-branch.md](X13-pull-base-branch.md) |
 | X14 | Collapsed tool calls and thinking rows in the agent view | P1 | 3 | implemented | [X14-collapsed-tool-calls.md](X14-collapsed-tool-calls.md) |
 | X15 | GitHub owner avatar as the project icon | P1 | 3 | implemented (UI unchecked in app) | [X15-project-avatar.md](X15-project-avatar.md) |
+| X16 | Response time and copy under the agent's final message | P1 | 3 | implemented | [X16-turn-footer.md](X16-turn-footer.md) |

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use jaunt_proto::types::{ChatState, PermissionAsk};
 use serde_json::{Value, json};
 
-use super::{Adapter, ChatConfig, Out, clip, item, summarize, tool_item, update, upsert};
+use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, summarize, tool_item, update, upsert};
 use crate::paths::now_ms;
 
 #[derive(Default)]
@@ -253,7 +253,7 @@ impl Adapter for Claude {
                     + v["usage"]["cache_creation_input_tokens"].as_u64().unwrap_or(0)
                     + v["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0);
                 st.output_tokens += v["usage"]["output_tokens"].as_u64().unwrap_or(0);
-                st.turn_started_at = None;
+                let started_at = st.turn_started_at.take();
                 st.pending.clear();
                 if std::mem::take(&mut self.interrupted) {
                     let id = super::local_id("system");
@@ -276,6 +276,9 @@ impl Adapter for Claude {
                         t.status = if failed { "error".into() } else { "ok".into() };
                     }
                     out.push(Out::Item(Box::new(it.clone())));
+                }
+                if st.status == "done" {
+                    out.extend(finish_turn(st, started_at));
                 }
                 out.push(Out::State);
             }
@@ -379,6 +382,62 @@ mod tests {
         let last = st.items.iter().rev().find(|i| i.kind == "assistant").unwrap();
         assert!(last.text.to_lowercase().contains("done"), "{}", last.text);
         assert!(st.items.iter().all(|i| !i.partial), "nothing left streaming");
+    }
+
+    #[test]
+    fn a_completed_turn_stamps_its_final_message() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        a.send("Run ls", &mut st);
+        st.turn_started_at = Some(1_000);
+        replay(include_str!("fixtures/claude-stream.jsonl"), &mut a, &mut st);
+        let stamped: Vec<_> = st.items.iter().filter(|i| i.turn.is_some()).collect();
+        assert_eq!(stamped.len(), 1, "{stamped:?}");
+        assert_eq!(stamped[0].id, st.items.iter().rev().find(|i| i.kind == "assistant").unwrap().id);
+        let t = stamped[0].turn.unwrap();
+        assert_eq!(t.started_at, 1_000);
+        assert!(t.ended_at >= now_ms() - 60_000, "{t:?}");
+    }
+
+    #[test]
+    fn a_turn_without_an_answer_leaves_the_previous_answer_alone() {
+        let done = r#"{"type":"result","subtype":"success","is_error":false}"#;
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.send("first", &mut st);
+        st.turn_started_at = Some(1_000);
+        a.on_line(r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"First answer"}]}}"#, &mut st);
+        a.on_line(done, &mut st);
+        let first = st.items.iter().find(|i| i.kind == "assistant").unwrap().turn;
+        assert_eq!(first.map(|t| t.started_at), Some(1_000));
+        // The next turn starts in the same millisecond and ends without text.
+        a.send("second", &mut st);
+        st.turn_started_at = Some(st.items.iter().find(|i| i.kind == "assistant").unwrap().ts);
+        a.on_line(done, &mut st);
+        assert_eq!(st.status, "done");
+        assert_eq!(st.items.iter().find(|i| i.kind == "assistant").unwrap().turn, first);
+    }
+
+    #[test]
+    fn interrupted_and_failed_turns_stamp_nothing() {
+        let answer = r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Partly done"}]}}"#;
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.send("go", &mut st);
+        a.on_line(answer, &mut st);
+        a.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true}"#, &mut st);
+        assert_eq!(st.status, "error");
+        assert!(st.items.iter().all(|i| i.turn.is_none()));
+
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.send("go", &mut st);
+        a.on_line(answer, &mut st);
+        a.interrupt(&mut st);
+        a.on_line(r#"{"type":"result","subtype":"success","is_error":false}"#, &mut st);
+        assert_eq!(st.status, "idle");
+        assert!(st.items.iter().all(|i| i.turn.is_none()));
     }
 
     #[test]

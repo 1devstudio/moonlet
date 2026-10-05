@@ -11,7 +11,7 @@ pub mod runtime;
 
 use std::collections::BTreeMap;
 
-use jaunt_proto::types::{ChatItem, ChatState, ToolCall};
+use jaunt_proto::types::{ChatItem, ChatState, ToolCall, TurnTime};
 
 use crate::paths::now_ms;
 
@@ -93,7 +93,7 @@ pub(crate) fn local_id(prefix: &str) -> String {
 }
 
 pub(crate) fn item(id: impl Into<String>, kind: &str, text: impl Into<String>) -> ChatItem {
-    ChatItem { id: id.into(), kind: kind.into(), text: text.into(), tool: None, ts: now_ms(), partial: false }
+    ChatItem { id: id.into(), kind: kind.into(), text: text.into(), tool: None, ts: now_ms(), partial: false, turn: None }
 }
 
 /// Inserts or replaces by id and returns the stored copy.
@@ -109,6 +109,16 @@ pub(crate) fn upsert(st: &mut ChatState, it: ChatItem) -> Out {
             Out::Item(Box::new(it))
         }
     }
+}
+
+/// Stamps a completed turn's final assistant message with when the turn
+/// started and ended (X16); `None` without a start or an answer.
+pub(crate) fn finish_turn(st: &mut ChatState, started_at: Option<u64>) -> Option<Out> {
+    let started_at = started_at?;
+    // The user's message bounds the turn; timestamps alone can tie across turns.
+    let it = st.items.iter_mut().rev().take_while(|i| i.kind != "user" && i.ts >= started_at).find(|i| i.kind == "assistant" && !i.text.is_empty())?;
+    it.turn = Some(TurnTime { started_at, ended_at: now_ms() });
+    Some(Out::Item(Box::new(it.clone())))
 }
 
 /// Mutates an existing item; `None` if it is unknown.
