@@ -139,13 +139,17 @@ export function blockRects(
   return out;
 }
 
-/** Buffer row of the header of a block whose prompt mark came before the
+/** Buffer row of the prompt of a block whose prompt mark came before the
  * app attached (snapshots carry no marks), from the row its output starts
- * on: above the command, which may wrap over several rows (T8). */
-export function replayedHeaderLine(outputLine: number, wrapped: (y: number) => boolean): number {
-  let y = outputLine - 1;
-  while (y > 0 && wrapped(y)) y--;
-  return y - 1;
+ * on (T8): above the command, which may wrap over several rows, the
+ * shell's empty prompt rows (two, one or none). With none, the prompt row
+ * is the command's own row, so earlier output is never taken for it. */
+export function replayedPromptLine(outputLine: number, wrapped: (y: number) => boolean, empty: (y: number) => boolean): number {
+  let start = outputLine - 1;
+  while (start > 0 && wrapped(start)) start--;
+  if (empty(start - 1) && empty(start - 2)) return start - 2;
+  if (empty(start - 1)) return start - 1;
+  return start;
 }
 
 /** The command a user typed, from its screen rows (T8): rows the terminal
@@ -214,6 +218,20 @@ export function blockLayout(prompt: number, output: number, empty: (y: number) =
   if (!empty(prompt)) return { separator: prompt, header: null, commandFrom: prompt };
   if (empty(prompt + 1) && prompt + 2 < output) return { separator: prompt, header: prompt + 1, commandFrom: prompt + 2 };
   return { separator: prompt, header: prompt, commandFrom: prompt + 1 };
+}
+
+/** The parts of a header that fit at the end of the command line when the
+ * shell left no row for it (T8), in `free` columns: the directory goes
+ * first, then the duration; with not even room for the status, nothing. */
+export function inlineHeader(h: ReturnType<typeof blockHeader>, free: number) {
+  const width = (p: { place: string | null; exit: string | null; duration: string | null; running: boolean }) =>
+    2 + (p.place?.length ?? 0) + (p.exit ? p.exit.length + (p.place ? 3 : 0) : 0) + (p.duration ? p.duration.length + 1 : 0) + (p.running ? 2 : 0);
+  const options = [
+    { ...h },
+    { ...h, place: null },
+    { ...h, place: null, duration: null },
+  ];
+  return options.find((p) => (p.exit || p.duration || p.running || p.place) && width(p) <= free) ?? null;
 }
 
 export interface FileLinkHandler {
@@ -461,7 +479,7 @@ export class TermEntry {
           const buf = this.term.buffer.active;
           const here = buf.baseY + buf.cursorY;
           // The spacer row above the header (T8).
-          const line = this.warp ? replayedHeaderLine(here, (y) => !!buf.getLine(y)?.isWrapped) - 1 : here - 1;
+          const line = this.warp ? replayedPromptLine(here, (y) => !!buf.getLine(y)?.isWrapped, (y) => y >= 0 && !this.lineText(y).trim()) : here - 1;
           const prompt = this.term.registerMarker(line - here);
           if (prompt) {
             last = { prompt };
@@ -534,23 +552,31 @@ export class TermEntry {
       el.classList.add("jaunt-block-head");
       el.classList.toggle("inline", inline);
       if (inline) {
-        // xterm only sets `right` for a non-zero offset.
+        // xterm only sets `right` for a non-zero offset; the width follows the text.
         el.style.left = "auto";
         el.style.right = "0px";
+        el.style.width = "auto";
       } else {
         el.style.left = "-28px";
         el.style.width = "calc(100% + 40px)";
       }
-      const h = blockHeader(block, this.context);
+      const full = blockHeader(block, this.context);
+      // Inline, only what fits after the command's last row, never over it.
+      const lastRow = block.output ? this.lineText(block.output.line - 1).trimEnd().length : this.term.cols;
+      const h = inline ? inlineHeader(full, this.term.cols - lastRow - 1) : full;
       const key = JSON.stringify(h);
       if (el.dataset.key === key) return;
       el.dataset.key = key;
+      if (!h) {
+        el.replaceChildren();
+        return;
+      }
       const span = (cls: string, text: string) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
       // xterm sets the element's `display`, so the layout lives in a row inside.
       const row = Object.assign(document.createElement("div"), { className: "row" });
       row.append(
-        span("place", h.place),
-        ...(h.exit ? [span("exit", ` · ${h.exit}`)] : []),
+        ...(h.place ? [span("place", h.place)] : []),
+        ...(h.exit ? [span("exit", h.place ? ` · ${h.exit}` : h.exit)] : []),
         ...(h.duration ? [span("duration", ` ${h.duration}`)] : []),
         ...(h.running ? [span("running", "")] : []),
       );
