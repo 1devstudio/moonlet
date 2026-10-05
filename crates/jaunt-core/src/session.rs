@@ -430,6 +430,9 @@ impl SessionManager {
                 .iter()
                 .position(|w| w.id == id)
                 .context("no such workspace")?;
+            if !st.workspaces[i].project_ids.iter().any(|p| p == project_id) {
+                bail!("the project is not in this workspace");
+            }
             let elsewhere = st
                 .workspaces
                 .iter()
@@ -1734,6 +1737,20 @@ mod tests {
         mgr.workspace_remove_project(&first.id, &r.id).unwrap();
         assert!(mgr.list_projects().is_empty());
         assert!(mgr.list_workspaces()[0].project_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn removing_a_project_a_workspace_does_not_hold_changes_nothing() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        let empty = mgr.create_workspace("Acme").unwrap();
+        let err = mgr.workspace_remove_project(&empty.id, &r.id).unwrap_err();
+        assert_eq!(err.to_string(), "the project is not in this workspace");
+        assert_eq!(mgr.list_projects().len(), 1);
+        assert_eq!(mgr.list_workspaces()[0].project_ids, vec![r.id.clone()]);
     }
 
     #[tokio::test]
