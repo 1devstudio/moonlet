@@ -16,7 +16,7 @@ const close = () => useStore.setState({ dialog: null });
  *  (`w-full` and `w-[150px]`) resolve by CSS order, not by class order. */
 const fieldCls = (error?: unknown, width = "w-full") =>
   cx(
-    "rounded-md border bg-panel-2 px-2.5 py-1.5 font-mono text-[12.5px] text-fg outline-none placeholder:text-faint",
+    "rounded-md border bg-panel-2 px-2.5 py-1.5 font-mono ui-text-12.5 text-fg outline-none placeholder:text-faint",
     width,
     error ? "border-error focus:border-error" : "border-border-strong focus:border-accent",
   );
@@ -26,9 +26,9 @@ const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_b
 function Labeled({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="mb-3 block last:mb-0">
-      <span className="mb-1 block text-[11.5px] font-medium text-muted">{label}</span>
+      <span className="mb-1 block ui-text-11.5 font-medium text-muted">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-[11px] text-faint">{hint}</span>}
+      {hint && <span className="mt-1 block ui-text-11 text-faint">{hint}</span>}
     </label>
   );
 }
@@ -154,8 +154,8 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
           <div className="flex min-w-0 items-baseline gap-2">
-            <h2 className="text-[13px] font-semibold">Project settings</h2>
-            <span className="truncate text-[12px] text-muted">{subtitle}</span>
+            <h2 className="ui-text-13 font-semibold">Project settings</h2>
+            <span className="truncate ui-text-12 text-muted">{subtitle}</span>
           </div>
           <IconButton title="Close" onClick={requestClose}>
             <X size={14} />
@@ -166,10 +166,10 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
           <div className="overflow-auto p-4">
             <div className="flex flex-col items-center gap-2 px-4 py-5 text-center">
               <FileWarning size={22} className="text-error" />
-              <div className="text-[13px] font-medium text-fg">.jaunt/config.toml is not valid TOML</div>
-              <div className="max-w-sm text-[12px] text-muted">Fix the file by hand, then open Project settings again. jaunt won't overwrite a file it can't read.</div>
+              <div className="ui-text-13 font-medium text-fg">.jaunt/config.toml is not valid TOML</div>
+              <div className="max-w-sm ui-text-12 text-muted">Fix the file by hand, then open Project settings again. jaunt won't overwrite a file it can't read.</div>
             </div>
-            <div className="rounded-md border border-border bg-panel-2 px-3 py-2.5 font-mono text-[12px]">
+            <div className="rounded-md border border-border bg-panel-2 px-3 py-2.5 font-mono ui-text-12">
               <div className="whitespace-pre-wrap text-error">{parseError}</div>
               <div className="mt-1 break-all text-faint">{path}</div>
             </div>
@@ -184,13 +184,13 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
         ) : (
           <div className="min-h-0 flex-1 overflow-auto p-4">
             {file && !file.exists && (
-              <p className="mb-4 rounded-md border border-border bg-panel-2 px-2 py-1.5 text-[12px] text-muted">
+              <p className="mb-4 rounded-md border border-border bg-panel-2 px-2 py-1.5 ui-text-12 text-muted">
                 No <span className="font-mono text-fg">.jaunt/config.toml</span> yet. Saving creates it.
               </p>
             )}
             <fieldset disabled={loading} className={cx("m-0 min-w-0 border-0 p-0", loading && "opacity-50")}>
               <section className="mb-5">
-                <h3 className="mb-2 text-[12px] font-semibold">Scripts</h3>
+                <h3 className="mb-2 ui-text-12 font-semibold">Scripts</h3>
                 <Labeled label="Setup" hint="Runs in a new session's worktree after it is created.">
                   <input className={fieldCls()} spellCheck={false} value={form.setup} onChange={(e) => set({ setup: e.target.value })} placeholder="pnpm install" />
                 </Labeled>
@@ -203,11 +203,11 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
               </section>
 
               <section className="mb-5">
-                <h3 className="mb-2 text-[12px] font-semibold">Agents</h3>
+                <h3 className="mb-2 ui-text-12 font-semibold">Agents</h3>
                 <label className="mb-3 block">
-                  <span className="mb-1 block text-[11.5px] font-medium text-muted">Default agent</span>
+                  <span className="mb-1 block ui-text-11.5 font-medium text-muted">Default agent</span>
                   <select
-                    className={cx(fieldCls(v.defaultAgent), "font-sans text-[13px]")}
+                    className={cx(fieldCls(v.defaultAgent), "font-sans ui-text-13")}
                     value={form.default_agent}
                     onChange={(e) => set({ default_agent: e.target.value })}
                   >
@@ -217,9 +217,9 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
                       </option>
                     ))}
                   </select>
-                  {v.defaultAgent && <span className="mt-1 block text-[11px] text-error">{v.defaultAgent}</span>}
+                  {v.defaultAgent && <span className="mt-1 block ui-text-11 text-error">{v.defaultAgent}</span>}
                 </label>
-                <div className="mb-1 text-[11.5px] font-medium text-muted">Custom agents</div>
+                <div className="mb-1 ui-text-11.5 font-medium text-muted">Custom agents</div>
                 <div className="flex flex-col gap-1.5">
                   {form.agents.map((a) => {
                     const e = v.agents[a.id] ?? {};
@@ -251,12 +251,12 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
                             <X size={14} />
                           </IconButton>
                         </div>
-                        {msg && <span className="text-[11px] text-error">{msg}</span>}
+                        {msg && <span className="ui-text-11 text-error">{msg}</span>}
                       </div>
                     );
                   })}
                 </div>
-                {form.agents.length === 0 && <div className="text-[12px] text-faint">None. Claude and Codex are always available.</div>}
+                {form.agents.length === 0 && <div className="ui-text-12 text-faint">None. Claude and Codex are always available.</div>}
                 <div className="mt-2">
                   <Button size="sm" onClick={addAgent}>
                     <Plus size={12} /> Add agent
@@ -265,7 +265,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
               </section>
 
               <section>
-                <h3 className="mb-2 text-[12px] font-semibold">Git</h3>
+                <h3 className="mb-2 ui-text-12 font-semibold">Git</h3>
                 <Labeled label="Base branch" hint="New sessions branch from here, and Changes compare against it.">
                   <input
                     className={fieldCls()}
@@ -281,7 +281,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
         )}
 
         {saveErr && (
-          <div className="flex items-center gap-2 border-t border-[#5a2a2e] bg-[#2a1416] px-4 py-2 text-[12px] text-error">
+          <div className="flex items-center gap-2 border-t border-[#5a2a2e] bg-[#2a1416] px-4 py-2 ui-text-12 text-error">
             <span className="min-w-0 flex-1">{saveErr.message}</span>
             {saveErr.stale && (
               <Button size="sm" onClick={() => void load(true).then((ok) => ok && toast("Reloaded .jaunt/config.toml"))}>
@@ -294,19 +294,19 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">
           <div className="mr-auto flex min-w-0 flex-col">
             <button
-              className="truncate text-left font-mono text-[11px] text-faint hover:text-muted"
+              className="truncate text-left font-mono ui-text-11 text-faint hover:text-muted"
               title="Copy path"
               onClick={() => path && void navigator.clipboard.writeText(path).then(() => toast("Copied path"))}
             >
               {path}
             </button>
-            <span className="text-[11px] text-faint">This file is part of the repository.</span>
+            <span className="ui-text-11 text-faint">This file is part of the repository.</span>
           </div>
           {parseError ? (
             <Button onClick={close}>Close</Button>
           ) : confirming ? (
             <>
-              <span className="text-[12px] text-muted">Discard unsaved changes?</span>
+              <span className="ui-text-12 text-muted">Discard unsaved changes?</span>
               <Button variant="ghost" onClick={() => setConfirming(false)}>
                 Keep editing
               </Button>
@@ -320,7 +320,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
                 Cancel
               </Button>
               <Button variant="primary" disabled={!canSave} onClick={() => void save()}>
-                Save <span className="rounded border border-current px-1 font-sans text-[10.5px] opacity-60">⌘↵</span>
+                Save <span className="rounded border border-current px-1 font-sans ui-text-10.5 opacity-60">⌘↵</span>
               </Button>
             </>
           )}

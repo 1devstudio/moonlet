@@ -23,7 +23,7 @@ function AddMenu({ host, ws }: { host: string; ws: Session }) {
   const item = (key: string, content: ReactNode, run: () => void, kbd?: string) => (
     <button
       key={key}
-      className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-hover"
+      className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left ui-text-13 hover:bg-hover"
       onClick={() => {
         setOpen(false);
         run();
@@ -78,14 +78,14 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: str
     <div
       aria-current={active || undefined}
       className={cx(
-        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 text-[14px]",
+        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
         active ? "bg-raised text-fg" : "text-muted hover:text-fg",
       )}
       onMouseDown={() => setLayout(host, ws.id, { ...getLayout(host, ws.id), active: id, focused: ids[0] })}
     >
       <AgentIcon agent={info?.kind === "agent" ? info.agent : null} size={15} />
       <span className={cx("truncate", unread && "font-semibold text-fg")}>{name}</span>
-      {ids.length > 1 && <span className="font-mono text-[11px] text-faint">+{ids.length - 1}</span>}
+      {ids.length > 1 && <span className="font-mono ui-text-11 text-faint">+{ids.length - 1}</span>}
       {state === "blocked" && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blocked" title="needs input" />}
       {state === "working" && (
         <span className="jaunt-dots shrink-0" title="working">
@@ -94,7 +94,7 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: str
           <i />
         </span>
       )}
-      {info?.exit && <span className="font-mono text-[11px] text-faint">exited</span>}
+      {info?.exit && <span className="font-mono ui-text-11 text-faint">exited</span>}
       <button
         className="ml-auto rounded p-0.5 text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
         title="Close tab"
@@ -140,14 +140,14 @@ function PromptLine({ host, ws }: { host: string; ws: Session }) {
     if (await sendToAgent(text.trim())) setText("");
   };
   return (
-    <div className="mx-7 flex shrink-0 items-start gap-3 border-t border-border py-4 font-mono text-[13px]" onClick={() => ref.current?.focus()}>
+    <div className="mx-7 flex shrink-0 items-start gap-3 border-t border-border py-4 font-mono ui-text-13" onClick={() => ref.current?.focus()}>
       <span className="select-none text-faint">❯</span>
       <textarea
         ref={ref}
         rows={1}
         value={text}
         placeholder={`Type a task for ${agentLabel(agent.agent)}…`}
-        className="max-h-32 min-h-[20px] flex-1 resize-none bg-transparent leading-[20px] text-fg caret-accent outline-none placeholder:text-faint"
+        className="max-h-32 min-h-[calc(20px*var(--ui-scale,1))] flex-1 resize-none bg-transparent leading-[calc(20px*var(--ui-scale,1))] text-fg caret-accent outline-none placeholder:text-faint"
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -182,10 +182,10 @@ function AgentCard({ host, ws }: { host: string; ws: Session }) {
   return (
     <div className="jaunt-card-in absolute bottom-5 right-7 z-20 w-[440px] overflow-hidden rounded-xl border border-border-strong bg-[#171717] shadow-2xl">
       <div role="button" className="block w-full cursor-default px-5 pb-4 pt-4 text-left" onClick={() => focusTerminal(host, card.terminal)}>
-        <div className="mb-2 flex items-center gap-2.5 text-[14px]">
+        <div className="mb-2 flex items-center gap-2.5 ui-text-14">
           <AgentIcon agent={card.agent} size={15} />
           <span className="font-semibold">{card.agent ?? "agent"}</span>
-          <span className={cx("text-[13px]", card.state === "blocked" ? "text-blocked" : card.state === "error" ? "text-error" : "text-muted")}>{status}</span>
+          <span className={cx("ui-text-13", card.state === "blocked" ? "text-blocked" : card.state === "error" ? "text-error" : "text-muted")}>{status}</span>
           <button
             title="Dismiss"
             className="ml-auto rounded p-0.5 text-faint hover:bg-hover hover:text-fg"
@@ -197,16 +197,16 @@ function AgentCard({ host, ws }: { host: string; ws: Session }) {
             <X size={13} />
           </button>
         </div>
-        {card.message && <div className="line-clamp-3 text-[14px] leading-snug text-[#dcdcdc]">{card.message}</div>}
+        {card.message && <div className="line-clamp-3 ui-text-14 leading-snug text-[#dcdcdc]">{card.message}</div>}
       </div>
       {git && git.files.length > 0 && (
-        <div className="flex items-center gap-2 border-t border-border px-5 py-3 font-mono text-[12.5px] text-muted">
+        <div className="flex items-center gap-2 border-t border-border px-5 py-3 font-mono ui-text-12.5 text-muted">
           <GitPullRequest size={13} strokeWidth={1.75} />
           {git.files.length} file{git.files.length === 1 ? "" : "s"}
           <span className="text-add">+{git.additions}</span>
           <span className="text-del">−{git.deletions}</span>
           <button
-            className="ml-auto rounded-full border border-border-strong px-3.5 py-1 font-sans text-[13px] text-fg hover:bg-hover"
+            className="ml-auto rounded-full border border-border-strong px-3.5 py-1 font-sans ui-text-13 text-fg hover:bg-hover"
             onClick={() => useStore.setState({ card: null, rightTab: "changes", rightOpen: true })}
           >
             Preview
@@ -224,7 +224,7 @@ export function SessionView({ host, ws }: { host: string; ws: Session }) {
     <div className="flex h-full min-w-0 flex-col bg-bg">
       <TabStrip host={host} ws={ws} />
       {hostInfo && hostInfo.status !== "connected" && (
-        <div className="shrink-0 bg-[#221d12] px-7 py-1.5 font-mono text-[12px] text-blocked">
+        <div className="shrink-0 bg-[#221d12] px-7 py-1.5 font-mono ui-text-12 text-blocked">
           {hostInfo.status === "reconnecting" || hostInfo.status === "connecting"
             ? `reconnecting to ${hostInfo.label}… agents keep running`
             : `${hostInfo.label}: ${hostInfo.message ?? hostInfo.status}`}
@@ -238,8 +238,8 @@ export function SessionView({ host, ws }: { host: string; ws: Session }) {
         ))}
         {(!layout || layout.tabs.length === 0) && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
-            <div className="text-[14px]">No terminals in this session.</div>
-            <button className="rounded-md border border-border-strong px-3 py-1.5 text-[13px] text-fg hover:bg-hover" onClick={() => void newTab()}>
+            <div className="ui-text-14">No terminals in this session.</div>
+            <button className="rounded-md border border-border-strong px-3 py-1.5 ui-text-13 text-fg hover:bg-hover" onClick={() => void newTab()}>
               New terminal <Kbd>⌘T</Kbd>
             </button>
           </div>

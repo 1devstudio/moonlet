@@ -252,7 +252,7 @@ export function InputEditor({
       {rows.length > 0 && popup && <CompletionPopup rows={rows} highlight={highlight} dir={popup.dir} home={home} onPick={accept} />}
       {/* One row: the directory chip gives way first, and Classic
           sits outside the chips so a narrow pane never hides it. */}
-      <div className="mb-2 flex items-center gap-1.5 font-mono text-[11.5px] text-muted">
+      <div className="mb-2 flex items-center gap-1.5 font-mono ui-text-11.5 text-muted">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {chipModel({ cwd, home, nodeVersion, branch, files }).map((c) => (
             <ChipBox key={c.kind} chip={c} />
@@ -266,7 +266,7 @@ export function InputEditor({
           <SquareTerminal size={13} />
         </button>
       </div>
-      <div className="relative font-mono text-[13.5px] leading-[20px]">
+      <div className="relative font-mono ui-text-13.5 leading-[calc(20px*var(--ui-scale,1))]">
         {/* Mirror of the text, coloured (T8), with the ghost suggestion after
             it. The textarea above it has transparent text and shows the caret
             and the selection. */}
@@ -279,7 +279,7 @@ export function InputEditor({
           {ghost && (
             <>
               <span className="text-faint">{ghost}</span>
-              <kbd className="ml-1.5 rounded border border-border-strong px-1 align-[1px] font-mono text-[10px] text-faint">→</kbd>
+              <kbd className="ml-1.5 rounded border border-border-strong px-1 align-[1px] font-mono ui-text-10 text-faint">→</kbd>
             </>
           )}
         </div>
@@ -304,7 +304,7 @@ export function InputEditor({
         />
       </div>
       {sendCmd && (
-        <div className="mt-1.5 truncate font-mono text-[11px] text-faint">
+        <div className="mt-1.5 truncate font-mono ui-text-11 text-faint">
           ⌘↵ send <span className="text-muted">`{sendCmd}`</span> to the agent · ⇧⌘↵ new agent tab
         </div>
       )}
@@ -341,7 +341,7 @@ function CompletionPopup({ rows, highlight, dir, home, onPick }: { rows: Complet
   const current = rows[highlight];
   const icon = (kind: CandidateKind) => (kind === "dir" ? <Folder size={13} /> : kind === "file" ? <File size={13} /> : <SquareTerminal size={13} />);
   return (
-    <div className="absolute bottom-full left-7 z-30 mb-1.5 flex items-start gap-2 font-mono text-[12.5px]" onMouseDown={(e) => e.preventDefault()}>
+    <div className="absolute bottom-full left-7 z-30 mb-1.5 flex items-start gap-2 font-mono ui-text-12.5" onMouseDown={(e) => e.preventDefault()}>
       <div ref={list} role="listbox" className="max-h-[220px] w-[320px] overflow-y-auto rounded-md border border-border-strong bg-panel py-1 shadow-lg">
         {rows.map((r, i) => (
           <div
@@ -358,7 +358,7 @@ function CompletionPopup({ rows, highlight, dir, home, onPick }: { rows: Complet
               {r.name.slice(r.match)}
               {r.kind === "dir" ? "/" : ""}
             </span>
-            <span className="ml-auto shrink-0 font-sans text-[11px] text-faint">{r.label}</span>
+            <span className="ml-auto shrink-0 font-sans ui-text-11 text-faint">{r.label}</span>
           </div>
         ))}
       </div>
@@ -371,7 +371,7 @@ function CompletionPopup({ rows, highlight, dir, home, onPick }: { rows: Complet
           <div className="break-all font-semibold text-fg">
             {current.kind === "command" ? current.name : shortPath(`${dir}/${current.name}`, home) + (current.kind === "dir" ? "/" : "")}
           </div>
-          <div className="mt-0.5 font-sans text-[11px] text-faint">{current.label}</div>
+          <div className="mt-0.5 font-sans ui-text-11 text-faint">{current.label}</div>
         </div>
       )}
     </div>

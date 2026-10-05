@@ -17,14 +17,14 @@ export function MenuItems({ items, onClose }: { items: MenuItem[]; onClose: () =
         if (it.kind === "divider") return <div key={i} className="my-1 border-t border-border" />;
         if (it.kind === "label")
           return (
-            <div key={i} className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-[0.08em] text-faint">
+            <div key={i} className="px-3 pb-1 pt-2 ui-text-11 font-medium uppercase tracking-[0.08em] text-faint">
               {it.label}
             </div>
           );
         if (it.kind === "submenu")
           return (
             <div key={i} className="relative" onMouseEnter={() => setOpen(i)} onMouseLeave={() => setOpen((o) => (o === i ? null : o))}>
-              <div className={cx("flex cursor-default items-center gap-2.5 rounded-md px-3 py-[7px] text-[14px]", open === i && "bg-hover")}>
+              <div className={cx("flex cursor-default items-center gap-2.5 rounded-md px-3 py-[7px] ui-text-14", open === i && "bg-hover")}>
                 {it.icon}
                 <span className="flex-1">{it.label}</span>
                 <ChevronRight size={14} className="text-muted" />
@@ -39,7 +39,7 @@ export function MenuItems({ items, onClose }: { items: MenuItem[]; onClose: () =
         return (
           <button
             key={i}
-            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left text-[14px] hover:bg-hover", it.danger && "text-error")}
+            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14 hover:bg-hover", it.danger && "text-error")}
             onClick={() => {
               onClose();
               it.onSelect();
@@ -49,12 +49,12 @@ export function MenuItems({ items, onClose }: { items: MenuItem[]; onClose: () =
             {it.description ? (
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate">{it.label}</span>
-                <span className="truncate text-[12.5px] text-muted">{it.description}</span>
+                <span className="truncate ui-text-12.5 text-muted">{it.description}</span>
               </span>
             ) : (
               <span className="flex-1 truncate">{it.label}</span>
             )}
-            {it.hint && <span className="font-mono text-[11.5px] text-faint">{it.hint}</span>}
+            {it.hint && <span className="font-mono ui-text-11.5 text-faint">{it.hint}</span>}
             {it.checked && <Check size={14} className="text-fg" />}
           </button>
         );
