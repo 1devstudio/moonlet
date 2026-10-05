@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { RotateCw, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
@@ -6,6 +6,7 @@ import { setClassic } from "../lib/actions";
 import { errorToast, getLayout, sesKey, setLayout, useStore } from "../lib/store";
 import { findEntry, getEntry } from "../lib/terminals";
 import { InputEditor } from "./InputEditor";
+import { uncommitted } from "../lib/chips";
 import { Button } from "./ui";
 
 function resolvePath(base: string, p: string, home: string | null): string {
@@ -48,15 +49,17 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
   const editing = warp && info.prompt === true && !info.alt_screen;
   useEffect(() => {
     const entry = getEntry(host, session);
-    entry.warp = warp;
+    entry.setWarp(warp);
     entry.setEditorActive(editing);
   }, [host, session, warp, editing]);
   const branch = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.branch : undefined));
   const worktree = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.path : undefined));
   const files = useStore((s) => (info?.session_id ? s.git[sesKey(host, info.session_id)]?.files : undefined));
+  const nodeVersion = info?.node_version;
+  const changes = useMemo(() => (files ? uncommitted(files) : undefined), [files]);
   useEffect(() => {
-    getEntry(host, session).context = { home, worktree, branch };
-  }, [host, session, home, worktree, branch]);
+    getEntry(host, session).context = { home, worktree, branch, nodeVersion, changes };
+  }, [host, session, home, worktree, branch, nodeVersion, changes]);
   // Snapshots carry no OSC 7, so a shell that reported its directory before
   // the app attached starts from the daemon's record (T8 block headers).
   const reportedCwd = info?.reported_cwd;

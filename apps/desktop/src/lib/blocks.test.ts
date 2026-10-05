@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { blockAt, blockCopy, blockForAgent, blockHeader, blockRects, commandFromRows, outputToCopy, replayedHeaderLine, selectStep } from "./terminals";
+import { blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, commandFromRows, inlineHeader, outputToCopy, pickBlockForAgent, replayedPromptLine, selectStep } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
 describe("block headers (T8)", () => {
   it("shows the directory, the session branch and the duration", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app", end: {}, exit: 0, startedAt: 0, endedAt: 53 }, ctx)).toEqual({
+      node: null,
       place: "~/src/app git:(main)",
+      changes: null,
       exit: null,
       duration: "(0.053s)",
       running: false,
@@ -15,7 +17,9 @@ describe("block headers (T8)", () => {
 
   it("adds a failing exit code before the duration", () => {
     expect(blockHeader({ cwd: "/Users/me", end: {}, exit: 1, startedAt: 0, endedAt: 300 }, ctx)).toEqual({
+      node: null,
       place: "~",
+      changes: null,
       exit: "exit 1",
       duration: "(0.300s)",
       running: false,
@@ -33,7 +37,9 @@ describe("block headers (T8)", () => {
 
   it("marks a running block and has no duration yet", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app/lib", startedAt: 0 }, ctx)).toEqual({
+      node: null,
       place: "~/src/app/lib git:(main)",
+      changes: null,
       exit: null,
       duration: null,
       running: true,
@@ -46,6 +52,25 @@ describe("block headers (T8)", () => {
 
   it("does not treat a sibling directory as inside the worktree", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app-old", end: {} }, ctx).place).toBe("~/src/app-old");
+  });
+});
+
+describe("block header with node and changes, as in Warp (T8)", () => {
+  const changes = { files: 5, additions: 113, deletions: 30 };
+
+  it("adds the node version and the uncommitted changes recorded when the command started", () => {
+    expect(blockHeader({ cwd: "/Users/me/src/app", node: "v24.19.0", changes, end: {}, exit: 0, startedAt: 0, endedAt: 53 }, ctx)).toEqual({
+      node: "v24.19.0",
+      place: "~/src/app git:(main)",
+      changes: "5 • +113 -30",
+      exit: null,
+      duration: "(0.053s)",
+      running: false,
+    });
+  });
+
+  it("leaves the changes out outside the session's worktree", () => {
+    expect(blockHeader({ cwd: "/tmp", node: "v24.19.0", changes, end: {} }, ctx).changes).toBeNull();
   });
 });
 
@@ -73,14 +98,26 @@ describe("block backgrounds (T8)", () => {
   });
 });
 
-describe("header row of a block whose prompt came before the app attached (T8)", () => {
-  it("is the row above a one-row command", () => {
-    expect(replayedHeaderLine(12, () => false)).toBe(10);
+describe("prompt row of a block whose prompt came before the app attached (T8)", () => {
+  // Output starts on row 12. `empty` lists the empty rows; `wrapped` the rows that continue the one above.
+  const rows = (empty: number[], wrapped: number[] = []) => [(y: number) => wrapped.includes(y), (y: number) => empty.includes(y)] as const;
+
+  it("is the spacer row of a two-row prompt", () => {
+    expect(replayedPromptLine(12, ...rows([9, 10]))).toBe(9);
   });
 
-  it("is the row above every row of a wrapped command", () => {
-    // Output starts on row 12; the command fills rows 9-11 (10 and 11 wrapped).
-    expect(replayedHeaderLine(12, (y) => y === 10 || y === 11)).toBe(8);
+  it("skips every row of a wrapped command", () => {
+    // The command fills rows 9-11 (10 and 11 wrapped); the prompt rows are 7 and 8.
+    expect(replayedPromptLine(12, ...rows([7, 8], [10, 11]))).toBe(7);
+  });
+
+  it("is the single empty row of a one-row prompt", () => {
+    expect(replayedPromptLine(12, ...rows([10]))).toBe(10);
+  });
+
+  it("is the command's own row when the shell left no empty row", () => {
+    // Row 10 is the previous block's output, not part of this block.
+    expect(replayedPromptLine(12, ...rows([]))).toBe(11);
   });
 });
 
@@ -175,5 +212,56 @@ describe("sending a block to an agent (T8)", () => {
 
   it("uses a longer fence when the output contains one", () => {
     expect(blockForAgent({ command: "cat README.md", output: "```sh\nls\n```" })).toBe("````\n$ cat README.md\n```sh\nls\n```\n````\n");
+  });
+});
+
+describe("where a block's header goes (T8)", () => {
+  const empty = (rows: number[]) => (y: number) => rows.includes(y);
+
+  it("puts the separator in the spacer row and the header below it", () => {
+    // Prompt mark on row 10; rows 10 and 11 are the shell's empty prompt; the command is on 12, output from 13.
+    expect(blockLayout(10, 13, empty([10, 11]))).toEqual({ separator: 10, header: 11, commandFrom: 12 });
+  });
+
+  it("shares one row between separator and header when the prompt has one empty row", () => {
+    expect(blockLayout(10, 12, empty([10]))).toEqual({ separator: 10, header: 10, commandFrom: 11 });
+  });
+
+  it("puts the header at the end of the command line when the shell left no empty row", () => {
+    // An older shell integration: the command sits on the prompt mark's row.
+    expect(blockLayout(10, 11, empty([]))).toEqual({ separator: 10, header: null, commandFrom: 10 });
+  });
+});
+
+describe("header at the end of the command line (T8)", () => {
+  const h = { node: "v24.19.0", place: "~/src/app git:(main)", changes: "5 • +113 -30", exit: "exit 1", duration: "(0.300s)", running: false };
+  const status = { node: null, place: null, changes: null, running: false };
+
+  it("shows everything when the row has room", () => {
+    expect(inlineHeader(h, 80)).toEqual(h);
+  });
+
+  it("drops the node version, directory and changes, then the duration, to stay clear of the command", () => {
+    expect(inlineHeader(h, 40)).toEqual({ ...status, exit: "exit 1", duration: "(0.300s)" });
+    expect(inlineHeader(h, 11)).toEqual({ ...status, exit: "exit 1", duration: null });
+  });
+
+  it("shows nothing when even the status does not fit", () => {
+    expect(inlineHeader(h, 5)).toBeNull();
+  });
+});
+
+describe("which block ⌘↵ sends (T8)", () => {
+  it("sends the selected block", () => {
+    expect(pickBlockForAgent("selected", "newest", "git status")).toBe("selected");
+  });
+
+  it("sends the newest block when nothing is selected and the input is empty", () => {
+    expect(pickBlockForAgent(null, "newest", "  ")).toBe("newest");
+  });
+
+  it("leaves ⌘↵ to a typed command", () => {
+    expect(pickBlockForAgent(null, "newest", "git status")).toBeNull();
+    expect(pickBlockForAgent(null, null, "")).toBeNull();
   });
 });

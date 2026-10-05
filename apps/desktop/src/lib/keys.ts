@@ -3,7 +3,7 @@
 
 import { closeFocused, draftToAgent, focusPane, focusedEntry, newTab, runScript, selectSessionByIndex, split, switchTab } from "./actions";
 import { errorToast, toast, useStore } from "./store";
-import { outputToCopy } from "./terminals";
+import { outputToCopy, pickBlockForAgent } from "./terminals";
 
 type Handler = () => void;
 
@@ -46,8 +46,11 @@ const bindings: Record<string, Handler> = {
  * ⇧⌘↵ to a new agent tab (T8). Elsewhere ⌘↵ keeps its own meaning. */
 function sendBlock(newTab: boolean): boolean {
   const e = focusedEntry();
-  const text = e?.selected && e.el.closest("[data-terminal-pane]")?.contains(document.activeElement) ? e.selectedForAgent() : null;
-  if (!text || !e) return false;
+  if (!e || !e.el.closest("[data-terminal-pane]")?.contains(document.activeElement)) return false;
+  // With nothing selected, the newest block, unless a command is being typed.
+  const typed = document.activeElement instanceof HTMLTextAreaElement && !e.el.contains(document.activeElement) ? document.activeElement.value : "";
+  const text = e.forAgent(pickBlockForAgent(e.selected, e.warp ? e.newestFinished() : null, typed));
+  if (!text) return false;
   e.select(null);
   void draftToAgent(text, newTab);
   return true;

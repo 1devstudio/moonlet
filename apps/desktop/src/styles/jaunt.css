@@ -71,16 +71,38 @@ textarea,
 .jaunt-block-mark.failed {
   background: var(--color-error);
 }
-/* Warp-mode command blocks (T7, T8): a header row with a separator above
-   each command, reaching into the pane padding of .jaunt-term. */
+/* Warp-mode command blocks (T7, T8): a separator in the spacer row above
+   each block, then a header row, both reaching into the pane padding of
+   .jaunt-term. The header scales with the terminal font. */
+.jaunt-block-sep {
+  pointer-events: none;
+}
+.jaunt-block-sep::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--color-border-strong);
+}
+.jaunt-block-sep.shared::after {
+  top: 0;
+}
 .jaunt-block-head {
   box-sizing: border-box;
   padding: 0 18px 0 28px;
-  border-top: 1px solid var(--color-border);
-  color: var(--color-faint);
-  font: 11px var(--font-mono);
+  color: var(--color-muted);
+  font: calc(var(--jaunt-term-font, 13px) * 0.85) var(--font-mono);
   white-space: pre;
   pointer-events: none;
+}
+/* No row of its own: at the end of the command line, over the terminal. */
+.jaunt-block-head.inline {
+  padding: 0 6px 0 12px;
+  background: var(--color-bg);
+}
+.jaunt-block-head.inline .row {
+  justify-content: flex-end;
 }
 /* A long directory shortens; the exit code and duration stay readable. */
 .jaunt-block-head .row {
@@ -95,6 +117,12 @@ textarea,
 }
 .jaunt-block-head .row > :not(.place) {
   flex-shrink: 0;
+}
+.jaunt-block-head .add {
+  color: var(--color-done);
+}
+.jaunt-block-head .del {
+  color: var(--color-error);
 }
 .jaunt-block-head .exit {
   color: var(--color-error);
