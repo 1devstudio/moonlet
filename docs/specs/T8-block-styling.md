@@ -97,6 +97,7 @@ None.
 - `shell.commands` lists file names only and runs nothing.
 - The node version is read from files, never by running `node`: any PATH entry, relative or absolute (`$PWD/node_modules/.bin`), can point into an untrusted checkout, and the prompt hook would otherwise run that checkout's `node` without a command from the user.
 - Text sent to an agent is pasted as a bracketed paste and never submitted; the user presses Enter.
+- Re-run (the header action and the palette) types a command read back from the screen, which a program could have printed, including forged prompt marks (until T9's per-terminal token). Control characters are dropped, so the text cannot act as keys or end a paste, and a multi-line command goes as one bracketed paste, so no line runs before Enter (`rerunInput()`). The command is shown in the block before the user clicks.
 
 ## Out of scope
 

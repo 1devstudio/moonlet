@@ -273,6 +273,17 @@ const LINE_HEIGHT = 1.15;
 /** Shells in Blocks mode get roomier rows (T8); agent TUIs keep 1.15. */
 const BLOCK_LINE_HEIGHT = 1.3;
 
+/** What re-running a block types into the shell (T4, T8). The command is
+ * read back from the screen, so anything a program printed there could be
+ * in it: control characters are dropped, so the text cannot act as keys or
+ * end a paste, and a multi-line command goes as one bracketed paste, so no
+ * line runs on its own before Enter, as the input editor sends commands. */
+export function rerunInput(command: string): string | null {
+  const text = command.replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
+  if (!text.trim()) return null;
+  return text.includes("\n") ? `\x1b[200~${text}\x1b[201~\r` : `${text}\r`;
+}
+
 export type BlockAction = "agent" | "copy" | "rerun";
 
 /** The actions a block's header offers on hover or selection (T8): a
@@ -860,12 +871,13 @@ export class TermEntry {
 
   /** Runs a block's command again (T8). */
   rerun(block: CommandBlock) {
-    if (block.command) void sendInput(this.host, this.session, block.command + "\r");
+    const input = rerunInput(block.command ?? "");
+    if (input) void sendInput(this.host, this.session, input);
   }
 
   rerunLast() {
     const b = this.selected?.command ? this.selected : [...this.blocks].reverse().find((x) => x.command);
-    if (b?.command) void sendInput(this.host, this.session, b.command + "\r");
+    if (b) this.rerun(b);
   }
 
   private fileLinks(y: number) {
