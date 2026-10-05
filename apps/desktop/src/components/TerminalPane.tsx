@@ -60,8 +60,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
   // the app attached starts from the daemon's record (T8 block headers).
   const reportedCwd = info?.reported_cwd;
   useEffect(() => {
-    const entry = getEntry(host, session);
-    if (!entry.cwd && reportedCwd) entry.cwd = reportedCwd;
+    if (reportedCwd) getEntry(host, session).seedCwd(reportedCwd);
   }, [host, session, reportedCwd]);
 
   useEffect(() => {
