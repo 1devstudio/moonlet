@@ -50,8 +50,6 @@ export function languageFor(path: string): string {
 
 export const editorOptions = {
   fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
-  fontSize: 12.5,
-  lineHeight: 19,
   minimap: { enabled: false },
   scrollBeyondLastLine: false,
   renderLineHighlight: "line" as const,

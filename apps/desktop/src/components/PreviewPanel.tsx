@@ -1,15 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Copy, FileText, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { previewDocument, renderMarkdown } from "../lib/markdown";
 import { M, type FileContent } from "../lib/protocol";
 import { errorToast, toast, useStore } from "../lib/store";
+import { uiScale } from "../lib/uiScale";
 import { Empty, IconButton } from "./ui";
 
 /** Rendered Markdown with live reload on file changes (M1, M2). */
 export function PreviewPanel() {
   const preview = useStore((s) => s.preview);
-  const [doc, setDoc] = useState<string | null>(null);
+  const [html, setHtml] = useState<string | null>(null);
+  const scale = useStore((s) => uiScale(s.settings.term.fontSize));
+  const doc = useMemo(() => (html === null ? null : previewDocument(html, scale)), [html, scale]);
   // Raw Markdown for "Copy", tagged with the preview it was read for so a file switch never copies the old file.
   const [source, setSource] = useState<{ of: typeof preview; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,9 +26,9 @@ export function PreviewPanel() {
       .then(async (f) => {
         if (!live) return;
         if (f.binary) throw new Error("Not a text file");
-        const html = await renderMarkdown(f.content);
+        const rendered = await renderMarkdown(f.content);
         if (live) {
-          setDoc(previewDocument(html));
+          setHtml(rendered);
           setSource({ of: preview, text: f.content });
           setError(null);
         }
@@ -45,7 +48,7 @@ export function PreviewPanel() {
   }
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 text-[11.5px]">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 ui-text-11.5">
         <FileText size={12} className="text-muted" />
         <span className="truncate font-mono text-fg" title={preview.path}>
           {preview.path.split("/").slice(-2).join("/")}

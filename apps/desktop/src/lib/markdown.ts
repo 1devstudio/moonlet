@@ -85,14 +85,15 @@ export async function renderMarkdown(source: string, withMermaid = true): Promis
   return sanitizeHtml(html);
 }
 
-const CSS = `
+/** The preview's stylesheet, its text sized by the app's text scale. */
+const css = (scale: number) => `
 :root{color-scheme:dark}
-body{margin:0;padding:20px 28px 60px;background:#121212;color:#e2e2e2;font:14px/1.65 -apple-system,BlinkMacSystemFont,"Inter",sans-serif;max-width:860px}
+body{margin:0;padding:20px 28px 60px;background:#121212;color:#e2e2e2;font:${14 * scale}px/1.65 -apple-system,BlinkMacSystemFont,"Inter",sans-serif;max-width:860px}
 h1,h2,h3,h4{color:#f2f4f8;line-height:1.3;margin:1.4em 0 .5em}
 h1{font-size:1.8em;border-bottom:1px solid #242424;padding-bottom:.3em}
 h2{font-size:1.4em;border-bottom:1px solid #242424;padding-bottom:.25em}
 a{color:#e8956f;text-decoration:none}
-code{font:12.5px "JetBrains Mono","SF Mono",Menlo,monospace;background:#1f1f1f;padding:.1em .35em;border-radius:4px}
+code{font:${12.5 * scale}px "JetBrains Mono","SF Mono",Menlo,monospace;background:#1f1f1f;padding:.1em .35em;border-radius:4px}
 pre{background:#181818;border:1px solid #242424;border-radius:8px;padding:12px 14px;overflow:auto}
 pre code{background:none;padding:0}
 blockquote{margin:0;padding:0 1em;color:#9ba1ad;border-left:3px solid #2e2e2e}
@@ -115,10 +116,11 @@ ul.contains-task-list{list-style:none;padding-left:1.2em}
 .hljs-variable,.hljs-template-variable{color:#ef8a91}
 `;
 
-/** Full document for the sandboxed iframe's `srcdoc`. */
-export function previewDocument(bodyHtml: string): string {
+/** Full document for the sandboxed iframe's `srcdoc`, its text sized by
+ *  the app's text scale (see uiScale). */
+export function previewDocument(bodyHtml: string, scale = 1): string {
   const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:";
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${CSS}</style></head><body>${bodyHtml}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${css(scale)}</style></head><body>${bodyHtml}</body></html>`;
 }
 
 // Agent messages (X6): no raw HTML at all, highlighted code, sanitized, and

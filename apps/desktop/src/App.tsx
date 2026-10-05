@@ -10,6 +10,7 @@ import { Button, IconButton, Kbd, cx } from "./components/ui";
 import { selectedSession, startStore, useStore } from "./lib/store";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
+import { uiScale } from "./lib/uiScale";
 
 function FindBar({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
@@ -32,7 +33,7 @@ function FindBar({ onClose }: { onClose: () => void }) {
           if (e.key === "Escape") onClose();
         }}
         placeholder="Find in terminal"
-        className={cx("w-52 bg-transparent text-[12.5px] outline-none", miss && q && "text-error")}
+        className={cx("w-52 bg-transparent ui-text-12.5 outline-none", miss && q && "text-error")}
       />
       <IconButton title="Previous (⇧↵)" onClick={() => go(true)}>
         <ChevronUp size={12} />
@@ -55,12 +56,12 @@ function Home() {
     <div className="flex h-full flex-col bg-bg">
       <div data-tauri-drag-region className="drag h-[52px] shrink-0 bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
       <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-        <div className="font-mono text-[22px] tracking-tight">
+        <div className="font-mono ui-text-22 tracking-tight">
           <span className="text-accent">❯</span> jaunt
         </div>
-        <div className="max-w-md text-[13.5px] text-muted">Group projects into workspaces; every session runs its agent in its own worktree. They keep running when you close the app.</div>
+        <div className="max-w-md ui-text-13.5 text-muted">Group projects into workspaces; every session runs its agent in its own worktree. They keep running when you close the app.</div>
         {local && local.status !== "connected" && (
-          <div className="text-[12px] text-blocked">{local.status === "error" ? `Daemon: ${local.message}` : "Starting the jaunt daemon…"}</div>
+          <div className="ui-text-12 text-blocked">{local.status === "error" ? `Daemon: ${local.message}` : "Starting the jaunt daemon…"}</div>
         )}
         <div className="flex gap-2">
           {hasRepos ? (
@@ -72,7 +73,7 @@ function Home() {
             <FolderPlus size={14} /> Add project
           </Button>
         </div>
-        <div className="mt-2 font-mono text-[11.5px] text-faint">
+        <div className="mt-2 font-mono ui-text-11.5 text-faint">
           <Kbd>⌘K</Kbd> command palette · <Kbd>⌘T</Kbd> new terminal · <Kbd>⌘D</Kbd> split · <Kbd>⇧⌘D</Kbd> changes
         </div>
       </div>
@@ -88,7 +89,7 @@ function Toasts() {
         <div
           key={t.id}
           className={cx(
-            "selectable pointer-events-auto max-w-[560px] rounded-lg border px-3 py-2 text-[12.5px] shadow-xl",
+            "selectable pointer-events-auto max-w-[560px] rounded-lg border px-3 py-2 ui-text-12.5 shadow-xl",
             t.kind === "error" ? "border-[#5a2a2e] bg-[#2a1416] text-[#ffb3b8]" : "border-border-strong bg-panel-2 text-fg",
           )}
         >
@@ -115,6 +116,7 @@ export default function App() {
   const ws = selectedSession(s);
   const host = s.selected?.host;
   const [finding, setFinding] = useState(false);
+  const scale = uiScale(s.settings.term.fontSize);
 
   useEffect(() => {
     void startStore();
@@ -126,6 +128,11 @@ export default function App() {
       window.removeEventListener("jaunt:find", onFind);
     };
   }, []);
+
+  // All app text scales with the font size setting (ui-text-* in jaunt.css).
+  useEffect(() => {
+    document.documentElement.style.setProperty("--ui-scale", String(scale));
+  }, [scale]);
 
   const clampSide = (w: number) => Math.max(200, Math.min(420, w));
   const clampRight = (w: number) => Math.max(320, Math.min(window.innerWidth * 0.6, w));
