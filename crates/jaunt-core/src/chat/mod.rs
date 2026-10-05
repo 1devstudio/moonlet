@@ -112,7 +112,7 @@ pub(crate) fn upsert(st: &mut ChatState, it: ChatItem) -> Out {
 }
 
 /// Stamps a completed turn's final assistant message with when the turn
-/// started and ended (X15); `None` without a start or an answer.
+/// started and ended (X16); `None` without a start or an answer.
 pub(crate) fn finish_turn(st: &mut ChatState, started_at: Option<u64>) -> Option<Out> {
     let started_at = started_at?;
     // The user's message bounds the turn; timestamps alone can tie across turns.

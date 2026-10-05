@@ -274,6 +274,12 @@ impl Daemon {
                     .await
                     .map_err(internal)?)
             }
+            m::WORKSPACE_REMOVE_PROJECT => {
+                let r: m::WorkspaceRemoveProject = params(p)?;
+                w.workspace_remove_project(&r.id, &r.project_id)
+                    .map_err(internal)?;
+                ok(true)
+            }
             m::SHELL_HISTORY => {
                 let r: m::ShellHistory = params(p)?;
                 let entries = tokio::task::spawn_blocking(move || {
@@ -388,6 +394,10 @@ impl Daemon {
                 ok(git::base_status(&path(&r.path), &r.branch, r.fetch)
                     .await
                     .map_err(internal)?)
+            }
+            m::GIT_ORIGIN_URL => {
+                let r: m::GitPath = params(p)?;
+                ok(git::origin_url(&path(&r.path)).await)
             }
             m::GIT_PULL_BASE => {
                 let r: m::GitBase = params(p)?;

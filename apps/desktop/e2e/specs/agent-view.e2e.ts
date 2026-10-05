@@ -1,5 +1,5 @@
 // Collapsed tool calls and thinking rows in the agent view (X14) and the
-// footer under the final message (X15), with a fake `claude` that replays
+// footer under the final message (X16), with a fake `claude` that replays
 // one recorded-style turn.
 
 import { execFileSync } from "node:child_process";

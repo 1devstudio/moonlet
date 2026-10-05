@@ -55,7 +55,7 @@ export interface ChatItem {
   tool?: ToolCall | null;
   ts: number;
   partial?: boolean;
-  /** On the final assistant message of a completed turn (X15). */
+  /** On the final assistant message of a completed turn (X16). */
   turn?: TurnTime | null;
 }
 
@@ -345,6 +345,7 @@ export const M = {
   gitBranches: "git.branches",
   gitBaseStatus: "git.base_status",
   gitPullBase: "git.pull_base",
+  gitOriginUrl: "git.origin_url",
   prCreate: "gh.pr_create",
   ghIssues: "gh.issues",
   shellHistory: "shell.history",
@@ -354,6 +355,7 @@ export const M = {
   workspaceUpdate: "workspace.update",
   workspaceDelete: "workspace.delete",
   workspaceAddProject: "workspace.add_project",
+  workspaceRemoveProject: "workspace.remove_project",
   prStatus: "gh.pr_status",
   prStack: "gh.pr_stack",
   fsList: "fs.list",
