@@ -40,6 +40,8 @@ export function InputEditor({
   const [history, setHistory] = useState<string[]>([]);
   const [walk, setWalk] = useState<number | null>(null); // index into history while browsing with ↑/↓
   const [hint, setHint] = useState<string | null>(null);
+  /** Command of the selected block, for the send-to-agent hint (T8). */
+  const [selectedCmd, setSelectedCmd] = useState<string | null>(null);
   const ta = useRef<HTMLTextAreaElement>(null);
   const draft = useRef("");
 
@@ -56,9 +58,12 @@ export function InputEditor({
       ta.current?.focus();
     };
     entry.focusEditor = () => ta.current?.focus();
+    entry.onSelect = (b) => setSelectedCmd(b?.command ?? null);
+    setSelectedCmd(entry.selected?.command ?? null);
     return () => {
       entry.redirect = undefined;
       entry.focusEditor = undefined;
+      entry.onSelect = undefined;
     };
   }, [host, terminal]);
 
@@ -220,12 +225,20 @@ export function InputEditor({
           onChange={(e) => {
             setText(e.target.value);
             setHint(null);
+            // Editing a command means ⌘↵ is about it, not a selected block (T8).
+            const entry = findEntry(host, terminal);
+            if (entry?.selected) entry.select(null);
           }}
           onKeyDown={onKeyDown}
           className="relative block w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
         />
       </div>
       {hint && <div className="mt-1.5 truncate font-mono text-[12px] text-muted">{hint}</div>}
+      {selectedCmd && (
+        <div className="mt-1.5 truncate font-mono text-[11px] text-faint">
+          ⌘↵ send <span className="text-muted">`{selectedCmd}`</span> to the agent · ⇧⌘↵ new agent tab
+        </div>
+      )}
     </div>
   );
 }

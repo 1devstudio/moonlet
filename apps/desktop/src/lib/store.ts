@@ -150,6 +150,9 @@ interface State extends UiPersist {
   git: Record<string, GitStatus | undefined>;
   /** Sessions that need attention and have not been looked at. */
   unread: Record<string, AgentState>;
+  /** Text waiting for a structured agent's composer (`termKey`), such as a
+   * command block sent from a shell (T8). */
+  agentDrafts: Record<string, string>;
   fsVersion: Record<string, number>;
   openFile: OpenFile | null;
   preview: OpenFile | null;
@@ -191,6 +194,7 @@ function makeStore() {
   layouts: {},
   git: {},
   unread: {},
+  agentDrafts: {},
   fsVersion: {},
   openFile: null,
   preview: null,

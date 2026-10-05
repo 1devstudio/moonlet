@@ -98,5 +98,29 @@ describe("command blocks", () => {
     // Esc clears the selection.
     await press("Escape");
     await expect($(".jaunt-block-bg.selected")).not.toExist();
+
+    // So does editing a command: ⌘↵ is then about the typed command.
+    await press("ArrowUp", { metaKey: true });
+    await expect($(".jaunt-block-bg.selected")).toExist();
+    await fill(input, "echo typed");
+    await expect($(".jaunt-block-bg.selected")).not.toExist();
+    await fill(input, "");
+  });
+
+  it("sends the selected block to the session's agent with ⌘↵", async () => {
+    // The repo's `fake` agent: a TUI that echoes what it is sent.
+    const session = rpc<{ id: string; path: string }[]>(w, "session.list", {}).find((x) => x.id === sessionId)!;
+    const agent = rpc<{ id: number }>(w, "terminal.create", { cwd: session.path, session_id: sessionId, kind: "agent", agent: "fake", cols: 100, rows: 30 });
+    await run("echo e2e-sent");
+    await browser.waitUntil(async () => (await $$(".jaunt-block-head").length) === 4, { timeout: 15_000 });
+
+    await press("ArrowUp", { metaKey: true });
+    await expect($(sel.text("⌘↵ send `echo e2e-sent` to the agent · ⇧⌘↵ new agent tab"))).toBeDisplayed();
+    await press("Enter", { metaKey: true });
+
+    await expect($('//*[@aria-current="true"][.//span[normalize-space()="fake"]]')).toBeDisplayed();
+    await browser.waitUntil(() => rpc<unknown[]>(w, "terminal.search", { id: agent.id, query: "$ echo e2e-sent" }).length > 0, {
+      timeoutMsg: "the block never reached the agent",
+    });
   });
 });
