@@ -295,12 +295,18 @@ body:not(.kbd-nav) button:focus {
 .chat-md table { border-collapse: collapse; display: block; overflow: auto; }
 .chat-md th, .chat-md td { border: 1px solid var(--color-border-strong); padding: 4px 10px; }
 .chat-md hr { border: 0; border-top: 1px solid var(--color-border); margin: 1em 0; }
-.chat-md .hljs-keyword, .chat-md .hljs-selector-tag, .chat-md .hljs-built_in { color: #c49bff; }
-.chat-md .hljs-string, .chat-md .hljs-attr { color: #8fd18e; }
-.chat-md .hljs-number, .chat-md .hljs-literal { color: #f5a97f; }
-.chat-md .hljs-comment { color: #6b717d; font-style: italic; }
-.chat-md .hljs-title, .chat-md .hljs-function { color: #7aa7ff; }
-.chat-md .hljs-type, .chat-md .hljs-class { color: #e8c46b; }
+/* Code fences in messages and file contents in tool calls (X17, `.code-hl`). */
+:is(.chat-md, .code-hl) :is(.hljs-keyword, .hljs-selector-tag, .hljs-built_in) { color: #c49bff; }
+:is(.chat-md, .code-hl) :is(.hljs-string, .hljs-attr) { color: #8fd18e; }
+:is(.chat-md, .code-hl) :is(.hljs-number, .hljs-literal, .hljs-bullet) { color: #f5a97f; }
+:is(.chat-md, .code-hl) .hljs-comment { color: #6b717d; font-style: italic; }
+:is(.chat-md, .code-hl) :is(.hljs-title, .hljs-function, .hljs-section) { color: #7aa7ff; }
+:is(.chat-md, .code-hl) :is(.hljs-type, .hljs-class) { color: #e8c46b; }
+:is(.chat-md, .code-hl) :is(.hljs-variable, .hljs-template-variable) { color: #ef8a91; }
+:is(.chat-md, .code-hl) .hljs-meta { color: #9ba1ad; }
+:is(.chat-md, .code-hl) .hljs-code { color: #8fd18e; }
+:is(.chat-md, .code-hl) .hljs-strong { font-weight: 600; }
+:is(.chat-md, .code-hl) .hljs-emphasis { font-style: italic; }
 .chat-shimmer {
   background: linear-gradient(90deg, var(--color-muted) 0%, #d8d8d8 50%, var(--color-muted) 100%);
   background-size: 200% 100%;

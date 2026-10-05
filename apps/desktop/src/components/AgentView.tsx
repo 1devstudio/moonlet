@@ -50,6 +50,8 @@ import {
   turnFooter,
   useChat,
 } from "../lib/chat";
+import { diffRows } from "../lib/codeHighlight";
+import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
 import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
@@ -176,18 +178,61 @@ export function StatusMark({ status }: { status: ToolCall["status"] }) {
   return <X size={13} className="text-error" />;
 }
 
+const DIFF_ROW = {
+  add: { sign: "+", cls: "bg-[#14301d] text-[#9fe0b0]" },
+  del: { sign: "-", cls: "bg-[#3a1719] text-[#f2a7a7]" },
+  context: { sign: " ", cls: "text-muted" },
+  hunk: { sign: "", cls: "text-faint" },
+};
+
+function DiffLines({ diff }: { diff: string }) {
+  const rows = useMemo(() => diffRows(diff), [diff]);
+  return rows.map((r, i) => (
+    <div key={i} className={cx("whitespace-pre-wrap break-all px-3", DIFF_ROW[r.kind].cls)}>
+      {DIFF_ROW[r.kind].sign}
+      {/* Escaped by diffRows; only highlight.js spans remain. */}
+      <span dangerouslySetInnerHTML={{ __html: r.html || (r.kind === "hunk" ? " " : "") }} />
+    </div>
+  ));
+}
+
 export function DiffBlock({ diff }: { diff: string }) {
   return (
-    <pre className="selectable max-h-[340px] overflow-auto rounded-md border border-border bg-[#161616] py-1.5 font-mono ui-text-12 leading-[1.55]">
-      {diff.replace(/\n$/, "").split("\n").map((l, i) => {
-        if (l.startsWith("---") || l.startsWith("+++")) return null;
-        const cls = l.startsWith("+") ? "bg-[#14301d] text-[#9fe0b0]" : l.startsWith("-") ? "bg-[#3a1719] text-[#f2a7a7]" : l.startsWith("@@") ? "text-faint" : "text-muted";
-        return (
-          <div key={i} className={cx("whitespace-pre-wrap break-all px-3", cls)}>
-            {l || " "}
-          </div>
-        );
-      })}
+    <pre className="code-hl selectable max-h-[340px] overflow-auto rounded-md border border-border bg-[#161616] py-1.5 font-mono ui-text-12 leading-[1.55]">
+      <DiffLines diff={diff} />
+    </pre>
+  );
+}
+
+const TONE: Record<Tone, string> = { add: "text-add", del: "text-del", dim: "text-faint", error: "text-error", warn: "text-blocked", ok: "text-add" };
+
+/** A shell or Grep call's output, coloured by its shape (X18). */
+function CommandOutput({ output, view }: { output: string; view: OutputView }) {
+  if (!view) return output.trim() || "(no output)";
+  if (view.kind === "diff") return <div className="-mx-3"><DiffLines diff={view.diff} /></div>;
+  if (view.kind === "code") {
+    // Escaped by highlight.js; only its spans remain.
+    return view.html.map((html, i) => <div key={i} dangerouslySetInnerHTML={{ __html: html || " " }} />);
+  }
+  return view.lines.map((line, i) => (
+    <div key={i}>
+      {line.map((seg, j) => (seg.tone ? <span key={j} className={TONE[seg.tone]}>{seg.text}</span> : seg.text))}
+      {line.every((seg) => !seg.text) && " "}
+    </div>
+  ));
+}
+
+/** A Read's numbered lines with the numbers in a gutter and the code coloured (X17). */
+function ReadBlock({ rows }: { rows: { n: number; html: string }[] }) {
+  return (
+    <pre className="code-hl selectable max-h-[300px] overflow-auto rounded-md border border-border bg-[#161616] py-2 font-mono ui-text-12 leading-[1.5] text-muted">
+      {rows.map((r) => (
+        <div key={r.n} className="flex">
+          <span className="w-12 shrink-0 select-none pr-3 text-right text-faint">{r.n}</span>
+          {/* Escaped by readRows; only highlight.js spans remain. */}
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3" dangerouslySetInnerHTML={{ __html: r.html }} />
+        </div>
+      ))}
     </pre>
   );
 }
@@ -198,6 +243,7 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
   const stat = tool.diff ? diffStat(tool.diff) : null;
   const command = toolCommand(tool);
   const expandable = !!(tool.diff || tool.output || command);
+  const view = useMemo(() => (open ? toolOutputView(tool) : null), [open, tool]);
   return (
     <div className="group">
       <button
@@ -221,6 +267,8 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
         <div className="mb-2 ml-6 mt-1">
           {tool.diff ? (
             <DiffBlock diff={tool.diff} />
+          ) : view?.kind === "read" ? (
+            <ReadBlock rows={view.rows} />
           ) : (
             <div className="overflow-hidden rounded-md border border-border bg-[#161616] font-mono ui-text-12 leading-[1.5]">
               {command && (
@@ -230,7 +278,9 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
                 </pre>
               )}
               {(tool.output || tool.status !== "running") && (
-                <pre className="selectable max-h-[300px] overflow-auto whitespace-pre-wrap break-all px-3 py-2 text-muted">{tool.output?.trim() || "(no output)"}</pre>
+                <pre className="code-hl selectable max-h-[300px] overflow-auto whitespace-pre-wrap break-all px-3 py-2 text-muted">
+                  <CommandOutput output={tool.output ?? ""} view={view} />
+                </pre>
               )}
             </div>
           )}
