@@ -27,6 +27,7 @@ New sessions branch from the project's local base branch (`main` unless `.jaunt/
 - [x] `git.pull_base` refuses a diverged branch and changes nothing.
 - [x] The chip shows the behind count, `pulling` while a pull runs, `diverged` when the branch is both ahead and behind, and nothing when the branch is up to date or only ahead.
 - [x] The app fetches when a host loads, every 5 minutes, when the project list changes (for example a new base branch in Project settings), and when one of the project's session PRs turns merged. A fetch after a merge labels the popover footer "after PR #N merged".
+- [x] Only one pull popover is open at a time. Opening another project's popover closes the first, so a Pull click cannot land on the wrong project's popover.
 - [x] The diverged popover's command targets the work tree that has the branch checked out. When none does, it switches to the branch first.
 
 ## UI
@@ -37,7 +38,7 @@ New sessions branch from the project's local base branch (`main` unless `.jaunt/
 - Pulling: spinning `Loader2` and "pulling", muted.
 - Diverged: `ShieldAlert` and "diverged", error colour.
 
-The popover is fixed below the chip, 276 px wide, like the row context menu. A mousedown outside or Escape closes it. The pure logic (chip, texts, command) lives in `lib/baseSync.ts`.
+The popover is fixed below the chip, 276 px wide, like the row context menu. A mousedown outside or Escape closes it. Only one pull popover is open at a time: opening another project's closes the first. The pure logic (chip, texts, command) lives in `lib/baseSync.ts`.
 
 ## Protocol and RPCs
 
@@ -61,4 +62,4 @@ Both run on the host that owns the project, so remote projects work the same way
 
 - Integration (`crates/jaunt-core/src/git.rs`): a clone of a bare origin that is behind, up to date, diverged, and missing the remote branch; a failed fetch; pulling with the branch checked out (work tree updated) and not checked out (ref moved); a refused diverged pull.
 - Unit (`apps/desktop/src/lib/baseSync.test.ts`): chip states, popover texts, fetched label, pull toast, the diverged command, and the newly merged PR detection that triggers a fetch.
-- e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, the popover lists the commits, and Pull moves the local branch.
+- e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, the popover lists the commits, and Pull moves the local branch. With a second project behind, opening its popover and then the first project's leaves one popover open.
