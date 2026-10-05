@@ -115,7 +115,8 @@ pub(crate) fn upsert(st: &mut ChatState, it: ChatItem) -> Out {
 /// started and ended (X15); `None` without a start or an answer.
 pub(crate) fn finish_turn(st: &mut ChatState, started_at: Option<u64>) -> Option<Out> {
     let started_at = started_at?;
-    let it = st.items.iter_mut().rev().take_while(|i| i.ts >= started_at).find(|i| i.kind == "assistant" && !i.text.is_empty())?;
+    // The user's message bounds the turn; timestamps alone can tie across turns.
+    let it = st.items.iter_mut().rev().take_while(|i| i.kind != "user" && i.ts >= started_at).find(|i| i.kind == "assistant" && !i.text.is_empty())?;
     it.turn = Some(TurnTime { started_at, ended_at: now_ms() });
     Some(Out::Item(Box::new(it.clone())))
 }
