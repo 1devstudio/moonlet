@@ -288,7 +288,7 @@ export class TermEntry {
     this.el.addEventListener("mouseup", (e) => {
       const click = down && Math.abs(e.clientX - down.x) < 4 && Math.abs(e.clientY - down.y) < 4;
       down = null;
-      if (!click || !this.warp || e.button !== 0 || this.term.hasSelection()) return;
+      if (!click || !this.warp || e.button !== 0 || this.term.hasSelection() || this.term.buffer.active.type === "alternate") return;
       const screen = this.backdrop.parentElement;
       if (!screen) return;
       const rect = screen.getBoundingClientRect();
@@ -318,6 +318,8 @@ export class TermEntry {
 
     this.unregister = registerSink(host, session, {
       reset: (data) => {
+        // The old blocks are gone, so is a selection among them.
+        this.select(null);
         this.blocks = [];
         this.term.reset();
         // Marks replayed from the snapshot carry no timing.
@@ -567,6 +569,8 @@ export class TermEntry {
   /** ⌘↑ / ⌘↓ in Warp mode: the previous or next block, and past the newest
    * one back to the input editor (T8). */
   stepSelection(delta: -1 | 1) {
+    // A full-screen program owns the screen; its rows are not blocks.
+    if (this.term.buffer.active.type === "alternate") return;
     const at = this.selected ? this.blocks.indexOf(this.selected) : -1;
     const next = selectStep(this.spans(), at < 0 ? null : at, delta);
     this.select(next === null ? null : this.blocks[next]);
@@ -576,6 +580,8 @@ export class TermEntry {
 
   /** Text of the selected block for the clipboard, if one is selected. */
   copySelected(part: "all" | "output" | "command"): string | null {
+    // Selected text wins over a selected block (T8).
+    if (this.term.hasSelection()) return null;
     const b = this.selected;
     if (!b?.command && part !== "output") return null;
     return b ? blockCopy({ command: b.command ?? "", output: this.outputOf(b) }, part) : null;
