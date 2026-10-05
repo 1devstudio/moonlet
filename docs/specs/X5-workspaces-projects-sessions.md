@@ -46,7 +46,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
   - `workspace.list`
   - `workspace.update {id, name?, project_ids?, sections?, view?}`
   - `workspace.delete {id}`
-  - `workspace.add_project {id, path}`, which adds the project if it is new and attaches it.
+  - `workspace.add_project {id, path}`, which adds the project if it is new and attaches it. A new project goes into that workspace only.
   - `view` holds group/sort/filter and is persisted.
 - **Projects** (`project.*`): `add`, `list`, `remove`, `config`.
 - **Sessions** (`session.*`): `create`, `list`, `archive`, `unarchive`, `update {name?, section?, layout?}`, `run`.
@@ -58,6 +58,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 
 - [x] An existing `state.json` from before the rename loads with all projects and sessions under "My workspaces". Unit test `migrates_pre_rename_state`; also exercised live, where a running protocol-1 daemon was upgraded in place, its state migrated, and terminals re-linked to sessions.
 - [x] Two workspaces can share a project. Collapse state is per workspace and per group. Test: `workspaces_share_projects_and_sections`.
+- [x] A new project added to a workspace appears only in that workspace. Test: `new_project_added_to_a_workspace_lands_only_there`.
 - [x] Group, sort and filter work and are persisted in the workspace `view`. Tests: `sidebar.test.ts`.
 - [x] Sections: create one, move a session into it (context menu or drag), see it under that section in every group-by mode. Deleting a section returns its sessions to their project. Drag verified in the app with synthesized mouse events, both into a section and back out.
 - [x] The composer creates a session from a prompt: name and branch derived, agent started with the selected model and effort (`names_and_agent_flags`), the prompt delivered. Verified in the app with "Terminal only".
