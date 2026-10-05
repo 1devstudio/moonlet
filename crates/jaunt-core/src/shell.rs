@@ -48,9 +48,9 @@ __jaunt_urlpath() {
   done
   REPLY=$out
 }
-# Warp mode's prompt is one empty row, where the app draws the block
-# header (T8); the command line is drawn bold.
-__jaunt_warp_ps1=$'\n'
+# Warp mode's prompt is two empty rows, where the app draws the block's
+# separator and header (T8); the command line is drawn bold.
+__jaunt_warp_ps1=$'\n\n'
 __jaunt_blank() {
   if [[ -n $JAUNT_CLASSIC_FILE && ! -e $JAUNT_CLASSIC_FILE ]]; then
     [[ $PROMPT != "$__jaunt_warp_ps1" ]] && __jaunt_ps1=$PROMPT
@@ -130,10 +130,10 @@ __jaunt_prompt() {
   fi
   printf '\e]133;A\a'
 }
-# Warp mode's prompt is one empty row, where the app draws the block
-# header (T8), and leaves bold on for the command line; the DEBUG trap
-# resets it before the command's output.
-__jaunt_warp_ps1='\n\[\e[1m\]'
+# Warp mode's prompt is two empty rows, where the app draws the block's
+# separator and header (T8), and leaves bold on for the command line; the
+# DEBUG trap resets it before the command's output.
+__jaunt_warp_ps1='\n\n\[\e[1m\]'
 __jaunt_blank() {
   if [ -n "$JAUNT_CLASSIC_FILE" ] && [ ! -e "$JAUNT_CLASSIC_FILE" ]; then
     [ "$PS1" != "$__jaunt_warp_ps1" ] && __jaunt_ps1=$PS1
@@ -217,8 +217,8 @@ if status is-interactive
       function fish_prompt
         set -l s $status
         if not __jaunt_classic
-          # One empty row, where the app draws the block header (T8).
-          printf '\n'
+          # Two empty rows, for the block's separator and header (T8).
+          printf '\n\n'
         else if functions -q __jaunt_user_fish_prompt
           __jaunt_status $s; __jaunt_user_fish_prompt
         end
@@ -481,8 +481,8 @@ mod tests {
         blanks_and_restores("/bin/bash", ".bash_profile", "PS1='USERPROMPT> '\n").await;
     }
 
-    /// Warp mode (T8): each command gets an empty header row above it, and
-    /// the command line is bold while its output is not.
+    /// Warp mode (T8): each command gets two empty rows above it (separator
+    /// and header), and the command line is bold while its output is not.
     async fn warp_screen(shell: &str) -> Option<crate::term::TermState> {
         if !Path::new(shell).exists() {
             return None;
@@ -527,7 +527,8 @@ mod tests {
 
     fn assert_warp_blocks(shell: &str, term: &crate::term::TermState) {
         let text = term.contents();
-        assert!(text.contains("echo one\none\n\necho two\ntwo"), "{shell} header rows: {text:?}");
+        // A spacer row (the separator) and a header row above each command.
+        assert!(text.contains("echo one\none\n\n\necho two\ntwo"), "{shell} header rows: {text:?}");
         let screen = term.screen();
         let row = |needle: &str| {
             (0..24u16)

@@ -22,9 +22,10 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ### Block header and command
 
-- [x] **Header row:** in Warp mode the blank prompt is one empty line (zsh `PROMPT=$'\n'`, bash `PS1='\n'`, fish a `fish_prompt` that prints a newline). The header is drawn on that row. Classic mode is unchanged.
+- [x] **Header row:** in Warp mode the blank prompt is two empty lines (zsh `PROMPT=$'\n\n'`, bash `PS1='\n\n…'`, fish a `fish_prompt` that prints two newlines). The first is the gap between blocks, with the separator through its middle; the header is drawn on the second. Classic mode is unchanged.
+- [x] **No empty row:** when the shell left no empty row above the command (an older shell integration, for example a daemon from before this change), the header goes at the end of the command line instead of over it, with only what fits after the command's last row: the directory goes first, then the duration, and with no room for the status nothing is shown (`inlineHeader()`). With one empty row, separator and header share it. `blockLayout()` in `lib/` decides. A block whose prompt came before the app attached finds its prompt rows the same way, two, one or none (`replayedPromptLine()`), so earlier output is never read as its command.
 - [x] **Header text** comes from a pure `blockHeader()` in `lib/`:
-  - `<cwd> git:(<branch>) (<duration>)`, for example `~/src/app git:(main) (0.053s)`.
+  - `<node> <cwd> git:(<branch>) <changes> (<duration>)`, as in Warp, for example `v24.19.0 ~/src/app git:(main) 5 • +113 -30 (0.053s)`. The node version and the session's uncommitted changes (files • `+`added `-`removed lines, counts in green and red) are recorded when the command starts; each part is left out when unknown, and branch and changes only appear inside the session's worktree.
   - `cwd` is the directory at the `C` mark (OSC 7), `~`-shortened.
   - `git:(<branch>)` appears only when that directory is inside the session's worktree; the branch is the session's.
   - Duration: seconds with three decimals under 10 s, as in Warp (`0.032s`); one decimal under a minute (`12.3s`); then minutes and seconds (`2m 5s`).
@@ -32,10 +33,10 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
   - A running block shows the cwd and branch with a spinner in place of the duration.
   - A block replayed from before the app attached has no duration and no parentheses.
 - [x] **Bold command:** the command line is drawn bold by the shell in Warp mode. zsh adds `default:bold` to `zle_highlight` (the user's other entries are kept and restored in classic mode). bash ends the prompt with bold and resets it in the DEBUG trap before the command runs (`PS0` does not exist in macOS's bash 3.2). Output is not bold. fish is not bold yet: it colours every token itself, and fish is not installed to test with.
-- [x] **Separator:** a hairline on the top edge of the header row, spanning the whole pane width including its padding.
+- [x] **Separator:** a hairline through the middle of the gap row above the header, spanning the whole pane width including its padding.
 - [x] **Failed block:** the block's rows get a faint red background, drawn in a layer of its own over the grid (an xterm decoration disappears once its first row scrolls out of view). In Warp mode the T4 gutter mark is left out; the overview ruler keeps its colours.
 - [x] The T7 right-hand chip (`✓ 1.2s`) is removed; its information is in the header.
-- [x] **Spacing:** one header row per block (checked in the app on 2026-10-05).
+- [x] **Spacing:** a gap row and a header row per block, and rows at 1.3× line height in Warp-mode shells (agent TUIs and classic shells keep 1.15), as Warp's rows are roomier. One header row at 1.15 was tried first and looked cramped next to Warp (user feedback, 2026-10-05).
 
 ### Block selection
 
@@ -43,15 +44,15 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 - [x] **Highlight:** the selected block's rows get an orange tint (`accent` at low alpha) and a 2px `accent` bar on the left edge, like the selected sidebar row (X4).
 - [x] **Copy:** with a block selected, the terminal focused and no text selection, ⌘C copies `$ <command>` and the output, ⇧⌘C copies the output, ⌥⌘C copies the command, each with a toast. A text selection always wins over the block. With no block selected, ⇧⌘C keeps copying the last finished output (T4).
 - [x] **Re-run:** the palette's "Re-run last command" re-runs the selected block's command when one is selected.
-- [x] **Send to agent:** ⌘↵ with a block selected pastes the block as text (`$ <command>` then the output, in a code fence longer than any fence in the output) into the input of the session's running agent (the focused one, else the first) and focuses that agent's tab; nothing is submitted. In a structured chat (X6) it goes into the composer, after anything already typed. ⇧⌘↵, or ⌘↵ when the session has no running agent, opens a new tab of the session's agent (Claude when the session has none) with the block as its draft; a TUI agent gets it once it has drawn its first screen. The selection clears. While a block is selected, a hint under the editor reads ``⌘↵ send `<command>` to the agent · ⇧⌘↵ new agent tab``. Outside a selected block, ⌘↵ keeps its usual meaning.
+- [x] **Send to agent:** ⌘↵ with a block selected pastes the block as text (`$ <command>` then the output, in a code fence longer than any fence in the output) into the input of the session's running agent (the focused one, else the first) and focuses that agent's tab; nothing is submitted. In a structured chat (X6) it goes into the composer, after anything already typed. ⇧⌘↵, or ⌘↵ when the session has no running agent, opens a new tab of the session's agent (Claude when the session has none) with the block as its draft; a TUI agent gets it once it has drawn its first screen. The selection clears. With no block selected and nothing typed, ⌘↵ sends the newest finished block, as Warp attaches the last block. A hint under the editor always names the block ⌘↵ would send: ``⌘↵ send `<command>` to the agent · ⇧⌘↵ new agent tab``. Outside a selected block, ⌘↵ keeps its usual meaning.
 
 ### Context chips
 
-- [x] Chips above the input are boxed (rounded, `border` hairline, mono 11.5px, an icon each), in this order, wrapping in a narrow pane:
+- [x] Chips above the input are boxed (rounded, `border` hairline, mono 11.5px, an icon each), in this order, on one row as in Warp: the directory chip gives way first and is cut from the left, so the end of the path stays; Classic sits outside the chips, so a narrow pane never hides it:
   - **Node version** (`v24.19.0`) when the shell reports one (see Protocol).
   - **Directory**, `~`-shortened.
   - **Branch** in the `done` green, when the session has a branch.
-  - **`± N`**: the number of files with uncommitted changes (staged, unstaged or untracked) in the session's worktree, from the git status jaunt already polls.
+  - **Changes** (`5 • +113 -30`, file icon): the number of files with uncommitted changes (staged, unstaged or untracked) in the session's worktree and their added and removed lines, in green and red, from the git status jaunt already polls.
 - [x] Which chips show is decided by a pure `chipModel()` in `lib/`.
 - [x] "Classic" moves to a small icon button at the right end of the chip row, with the same tooltip.
 - [x] The `→ accept` / `⇧↵ new line` text leaves the chip row. Ghost text is followed by an inline `→` key badge.
@@ -75,7 +76,7 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ## UI
 
-- Header: mono 11px, `faint`; `exit N` in `error`.
+- Header: mono at 85% of the terminal font size, `muted`; `exit N` in `error`.
 - Selected block: `accent` at about 12% alpha, 2px `accent` left bar.
 - Failed block: `error` at about 6% alpha.
 - Chips: `raised` background, `border` hairline, 4px radius, 2px × 6px padding.
@@ -125,6 +126,7 @@ None.
 ## Verification
 
 - 2026-10-05: zsh keeps `zle_highlight` bold on the line after the command is accepted (checked in a PTY: each character is drawn with `\e[1m` and the reset comes after Enter).
+- 2026-10-05, block layout: the user's app ran this branch's UI against the installed 0.1.7 daemon, whose shell integration has no header row, and the header covered the command. Now a gap row and a header row per block, the header scaled to the terminal font, and a fallback to the end of the command line; checked in the e2e app.
 - 2026-10-05, completion popup: in the e2e app, `cd ci` + Tab with `cipher-paas/` and `cipher-sdd/` present completed to `cd cipher-`, showed both directories with the side panel, ↓ and Enter gave `cd cipher-sdd/`; `gi` + Tab listed commands from PATH.
 - 2026-10-05, input colouring: in the e2e app, `FOO=1 git commit -m "fix it" && ls -la ~/src | wc -l > out.txt; nosuchcmd x` showed the known commands green, `commit` blue, flags muted, the string yellow, operators faint and `nosuchcmd` plain; a selection lined up with the coloured text.
 - 2026-10-05, block selection: in the e2e app, a click on a block's output row highlighted the block in orange with the left bar.

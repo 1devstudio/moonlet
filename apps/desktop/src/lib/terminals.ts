@@ -78,6 +78,12 @@ export interface CommandBlock {
   /** App clock at the `C` and `D` marks; absent for replayed blocks. */
   startedAt?: number;
   endedAt?: number;
+  /** Node version and uncommitted changes when the command started (T8). */
+  node?: string;
+  changes?: { files: number; additions: number; deletions: number };
+  /** The header's own row (T8); absent when the shell left no empty row,
+   * and the header sits at the end of the command line instead. */
+  headerAt?: IMarker;
   header?: IDisposable;
 }
 
@@ -86,6 +92,9 @@ export interface BlockContext {
   home: string | null;
   worktree?: string;
   branch?: string;
+  /** Recorded on each block when its command starts, as Warp shows them. */
+  nodeVersion?: string;
+  changes?: { files: number; additions: number; deletions: number };
 }
 
 /** `~`-shortens a path under `home`. */
@@ -103,15 +112,27 @@ function duration(ms: number): string {
 /** The grey line above a command (T8): `~/src/app git:(main) (0.053s)`,
  * with `exit 1` before the duration when the command failed. */
 export function blockHeader(
-  b: { cwd?: string; exit?: number; startedAt?: number; endedAt?: number; end?: unknown },
+  b: {
+    cwd?: string;
+    node?: string;
+    changes?: { files: number; additions: number; deletions: number };
+    exit?: number;
+    startedAt?: number;
+    endedAt?: number;
+    end?: unknown;
+  },
   ctx: BlockContext,
-): { place: string; exit: string | null; duration: string | null; running: boolean } {
+): { node: string | null; place: string; changes: string | null; exit: string | null; duration: string | null; running: boolean } {
   const cwd = b.cwd ?? "";
   const inside = !!ctx.worktree && (cwd === ctx.worktree || cwd.startsWith(ctx.worktree + "/"));
   const place = shortPath(cwd, ctx.home) + (inside && ctx.branch ? ` git:(${ctx.branch})` : "");
   const timed = !!b.end && b.startedAt !== undefined && b.endedAt !== undefined;
+  const c = b.changes;
   return {
+    node: b.node ?? null,
     place,
+    // Warp's `5 • +113 -30`: the session's uncommitted changes, only inside it.
+    changes: inside && c ? `${c.files} • +${c.additions} -${c.deletions}` : null,
     exit: b.end && b.exit ? `exit ${b.exit}` : null,
     duration: timed ? `(${duration(b.endedAt! - b.startedAt!)})` : null,
     running: !b.end,
@@ -136,13 +157,17 @@ export function blockRects(
   return out;
 }
 
-/** Buffer row of the header of a block whose prompt mark came before the
+/** Buffer row of the prompt of a block whose prompt mark came before the
  * app attached (snapshots carry no marks), from the row its output starts
- * on: above the command, which may wrap over several rows (T8). */
-export function replayedHeaderLine(outputLine: number, wrapped: (y: number) => boolean): number {
-  let y = outputLine - 1;
-  while (y > 0 && wrapped(y)) y--;
-  return y - 1;
+ * on (T8): above the command, which may wrap over several rows, the
+ * shell's empty prompt rows (two, one or none). With none, the prompt row
+ * is the command's own row, so earlier output is never taken for it. */
+export function replayedPromptLine(outputLine: number, wrapped: (y: number) => boolean, empty: (y: number) => boolean): number {
+  let start = outputLine - 1;
+  while (start > 0 && wrapped(start)) start--;
+  if (empty(start - 1) && empty(start - 2)) return start - 2;
+  if (empty(start - 1)) return start - 1;
+  return start;
 }
 
 /** The command a user typed, from its screen rows (T8): rows the terminal
@@ -202,6 +227,50 @@ export function blockForAgent(b: { command: string; output: string }): string {
   return `${fence}\n${blockCopy(b, "all")}\n${fence}\n`;
 }
 
+/** Rows of a Warp-mode block (T8), from its prompt mark's row and the row
+ * its output starts on. The shell's prompt is empty rows: with two, the
+ * first holds the separator and the second the header; with one, they
+ * share it. A shell that left no empty row (an older integration) gets no
+ * header row: the header goes at the end of the command line. */
+export function blockLayout(prompt: number, output: number, empty: (y: number) => boolean): { separator: number; header: number | null; commandFrom: number } {
+  if (!empty(prompt)) return { separator: prompt, header: null, commandFrom: prompt };
+  if (empty(prompt + 1) && prompt + 2 < output) return { separator: prompt, header: prompt + 1, commandFrom: prompt + 2 };
+  return { separator: prompt, header: prompt, commandFrom: prompt + 1 };
+}
+
+/** The parts of a header that fit at the end of the command line when the
+ * shell left no row for it (T8), in `free` columns: the directory goes
+ * first, then the duration; with not even room for the status, nothing. */
+export function inlineHeader(h: ReturnType<typeof blockHeader>, free: number) {
+  type Parts = { node: string | null; place: string | null; changes: string | null; exit: string | null; duration: string | null; running: boolean };
+  const width = (p: Parts) =>
+    2 +
+    (p.node ? p.node.length + 1 : 0) +
+    (p.place?.length ?? 0) +
+    (p.changes ? p.changes.length + 1 : 0) +
+    (p.exit ? p.exit.length + (p.place ? 3 : 0) : 0) +
+    (p.duration ? p.duration.length + 1 : 0) +
+    (p.running ? 2 : 0);
+  const options: Parts[] = [
+    { ...h },
+    { ...h, node: null, changes: null, place: null },
+    { ...h, node: null, changes: null, place: null, duration: null },
+  ];
+  return options.find((p) => (p.exit || p.duration || p.running || p.place) && width(p) <= free) ?? null;
+}
+
+/** The block ⌘↵ sends to the agent (T8): the selected one, else the newest
+ * finished one while the input is empty, as Warp attaches the last block.
+ * With a typed command, ⌘↵ is about that command. */
+export function pickBlockForAgent<T>(selected: T | null, newest: T | null, input: string): T | null {
+  if (selected) return selected;
+  return input.trim() ? null : newest;
+}
+
+const LINE_HEIGHT = 1.15;
+/** Shells in Warp mode get Warp's roomier rows (T8); agent TUIs keep 1.15. */
+const WARP_LINE_HEIGHT = 1.3;
+
 export interface FileLinkHandler {
   (path: string, line?: number): void;
 }
@@ -225,6 +294,8 @@ export class TermEntry {
   cwd = "";
   /** The shell draws no prompt; the app's editor is the input (T7). */
   warp = false;
+  /** Told when a block finishes (the input editor's send hint, T8). */
+  onBlockFinished?: (block: CommandBlock) => void;
   private replaying = false;
   private disposed = false;
   onTitle?: (title: string) => void;
@@ -251,11 +322,13 @@ export class TermEntry {
   ) {
     this.el = document.createElement("div");
     this.el.className = "jaunt-term";
+    // Block headers scale with the terminal's font (T8).
+    this.el.style.setProperty("--jaunt-term-font", `${settings.fontSize}px`);
     this.term = new Terminal({
       allowProposedApi: true,
       fontFamily: settings.fontFamily,
       fontSize: settings.fontSize,
-      lineHeight: 1.15,
+      lineHeight: LINE_HEIGHT,
       cursorBlink: true,
       macOptionIsMeta: settings.optionIsMeta,
       macOptionClickForcesSelection: true,
@@ -419,6 +492,7 @@ export class TermEntry {
     this.settings = s;
     this.term.options.fontFamily = s.fontFamily;
     this.term.options.fontSize = s.fontSize;
+    this.el.style.setProperty("--jaunt-term-font", `${s.fontSize}px`);
     this.term.options.macOptionIsMeta = s.optionIsMeta;
     this.refit();
   }
@@ -443,7 +517,8 @@ export class TermEntry {
           // In Warp mode the header row sits above the command (T8).
           const buf = this.term.buffer.active;
           const here = buf.baseY + buf.cursorY;
-          const line = this.warp ? replayedHeaderLine(here, (y) => !!buf.getLine(y)?.isWrapped) : here - 1;
+          // The spacer row above the header (T8).
+          const line = this.warp ? replayedPromptLine(here, (y) => !!buf.getLine(y)?.isWrapped, (y) => y >= 0 && !this.lineText(y).trim()) : here - 1;
           const prompt = this.term.registerMarker(line - here);
           if (prompt) {
             last = { prompt };
@@ -454,10 +529,14 @@ export class TermEntry {
         if (last) {
           last.output = marker;
           last.cwd = this.cwd;
+          last.node = this.context.nodeVersion;
+          last.changes = this.context.changes;
           if (this.warp) {
-            // The prompt is one empty header row; the command follows it.
+            // The prompt is empty rows for the separator and header (T8).
+            const layout = blockLayout(last.prompt.line, marker.line, (y) => !this.lineText(y).trim());
+            if (layout.header !== null) last.headerAt = this.term.registerMarker(layout.header - marker.line);
             const rows = [];
-            for (let y = last.prompt.line + 1; y < marker.line; y++) {
+            for (let y = layout.commandFrom; y < marker.line; y++) {
               const row = this.term.buffer.active.getLine(y);
               rows.push({ text: row?.translateToString(false) ?? "", wrapped: !!row?.isWrapped });
             }
@@ -476,6 +555,7 @@ export class TermEntry {
           if (!this.replaying && last.startedAt !== undefined) last.endedAt = Date.now();
           this.decorate(last);
           if (this.warp) this.header(last);
+          this.onBlockFinished?.(last);
         }
         break;
     }
@@ -497,27 +577,62 @@ export class TermEntry {
    * the pane's padding (`.jaunt-term` inset) so the separator spans it. */
   private header(block: CommandBlock) {
     block.header?.dispose();
-    const d = this.term.registerDecoration({ marker: block.prompt, x: 0, width: this.term.cols, layer: "top" });
-    d?.onRender((el) => {
-      el.classList.add("jaunt-block-head");
+    const inline = !block.headerAt;
+    // The separator, in the spacer row or at the top of a shared row.
+    const sep = this.term.registerDecoration({ marker: block.prompt, x: 0, width: this.term.cols, layer: "bottom" });
+    sep?.onRender((el) => {
+      el.classList.add("jaunt-block-sep");
+      el.classList.toggle("shared", inline || block.headerAt?.line === block.prompt.line);
       el.style.left = "-28px";
       el.style.width = "calc(100% + 40px)";
-      const h = blockHeader(block, this.context);
+    });
+    // Without a row of its own the header goes at the end of the command line.
+    const d = inline
+      ? this.term.registerDecoration({ marker: block.prompt, anchor: "right", x: 0, width: Math.min(this.term.cols, 40), layer: "top" })
+      : this.term.registerDecoration({ marker: block.headerAt!, x: 0, width: this.term.cols, layer: "top" });
+    d?.onRender((el) => {
+      el.classList.add("jaunt-block-head");
+      el.classList.toggle("inline", inline);
+      if (inline) {
+        // xterm only sets `right` for a non-zero offset; the width follows the text.
+        el.style.left = "auto";
+        el.style.right = "0px";
+        el.style.width = "auto";
+      } else {
+        el.style.left = "-28px";
+        el.style.width = "calc(100% + 40px)";
+      }
+      const full = blockHeader(block, this.context);
+      // Inline, only what fits after the command's last row, never over it.
+      const lastRow = block.output ? this.lineText(block.output.line - 1).trimEnd().length : this.term.cols;
+      const h = inline ? inlineHeader(full, this.term.cols - lastRow - 1) : full;
       const key = JSON.stringify(h);
       if (el.dataset.key === key) return;
       el.dataset.key = key;
+      if (!h) {
+        el.replaceChildren();
+        return;
+      }
       const span = (cls: string, text: string) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
       // xterm sets the element's `display`, so the layout lives in a row inside.
       const row = Object.assign(document.createElement("div"), { className: "row" });
+      // `5 • +113 -30`, with the line counts in green and red as in Warp.
+      const changes = (text: string) => {
+        const el = span("changes", "");
+        for (const part of text.split(/([+-]\d+)/)) el.append(part.startsWith("+") ? span("add", part) : /^-\d/.test(part) ? span("del", part) : part);
+        return el;
+      };
       row.append(
-        span("place", h.place),
-        ...(h.exit ? [span("exit", ` · ${h.exit}`)] : []),
+        ...(h.node ? [span("node", `${h.node} `)] : []),
+        ...(h.place ? [span("place", h.place)] : []),
+        ...(h.changes ? [span("gap", " "), changes(h.changes)] : []),
+        ...(h.exit ? [span("exit", h.place ? ` · ${h.exit}` : h.exit)] : []),
         ...(h.duration ? [span("duration", ` ${h.duration}`)] : []),
         ...(h.running ? [span("running", "")] : []),
       );
       el.replaceChildren(row);
     });
-    block.header = d ?? undefined;
+    block.header = { dispose: () => (sep?.dispose(), d?.dispose()) };
     this.paintBackdrop();
   }
 
@@ -559,7 +674,8 @@ export class TermEntry {
    * scrollback never ends, so it cannot be selected. */
   private spans() {
     return this.blocks.map((b) => ({
-      start: b.prompt.line,
+      // From the header down; the spacer row above it is the gap between blocks.
+      start: b.headerAt && b.headerAt.line >= 0 ? b.headerAt.line : b.prompt.line,
       end: b.end && b.end.line >= 0 && b.prompt.line >= 0 ? b.end.line : undefined,
       exit: b.exit,
       selected: b === this.selected,
@@ -591,8 +707,18 @@ export class TermEntry {
 
   /** The selected block as text for an agent, if one is selected (T8). */
   selectedForAgent(): string | null {
-    const b = this.selected;
+    return this.forAgent(this.selected);
+  }
+
+  /** A block as text for an agent (T8). */
+  forAgent(b: CommandBlock | null): string | null {
     return b?.command ? blockForAgent({ command: b.command, output: this.outputOf(b) }) : null;
+  }
+
+  /** The newest block whose command has finished, if any (T8). */
+  newestFinished(): CommandBlock | null {
+    for (let i = this.blocks.length - 1; i >= 0; i--) if (this.blocks[i].end && this.blocks[i].command) return this.blocks[i];
+    return null;
   }
 
   /** Text of the selected block for the clipboard, if one is selected. */
@@ -602,6 +728,14 @@ export class TermEntry {
     const b = this.selected;
     if (!b?.command && part !== "output") return null;
     return b ? blockCopy({ command: b.command ?? "", output: this.outputOf(b) }, part) : null;
+  }
+
+  /** Warp mode (T7): no shell prompt, and roomier rows as in Warp (T8). */
+  setWarp(warp: boolean) {
+    if (this.warp === warp) return;
+    this.warp = warp;
+    this.term.options.lineHeight = warp ? WARP_LINE_HEIGHT : LINE_HEIGHT;
+    this.refit();
   }
 
   /** Warp mode hides the terminal's cursor while the editor has the input. */
