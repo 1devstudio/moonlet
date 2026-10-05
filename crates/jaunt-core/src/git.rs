@@ -107,6 +107,14 @@ pub async fn toplevel(path: &Path) -> Result<PathBuf> {
     ))
 }
 
+/// The URL of the repository's `origin` remote, or `None` without one (spec X15).
+pub async fn origin_url(repo: &Path) -> Option<String> {
+    git_text(repo, &["remote", "get-url", "origin"])
+        .await
+        .ok()
+        .filter(|u| !u.is_empty())
+}
+
 /// The repository's main branch: `origin/HEAD`, else `main`/`master`, else the current branch.
 pub async fn default_branch(repo: &Path) -> String {
     if let Ok(r) = git_text(
@@ -1261,6 +1269,28 @@ pub(crate) mod tests {
         let st = status(dir.path(), Some("main")).await.unwrap();
         assert_eq!(st.files.len(), 1);
         assert_eq!(st.against, EMPTY_TREE);
+    }
+
+    #[tokio::test]
+    async fn origin_url_of_a_project() {
+        let dir = repo().await;
+        assert_eq!(origin_url(dir.path()).await, None);
+        git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:1devstudio/jaunt.git",
+            ],
+        )
+        .await
+        .unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        assert_eq!(
+            origin_url(&dir.path().join("sub")).await.as_deref(),
+            Some("git@github.com:1devstudio/jaunt.git")
+        );
     }
 
     /// A bare `origin`, a clone of it (the project) and a second clone

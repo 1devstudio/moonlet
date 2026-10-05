@@ -389,6 +389,10 @@ impl Daemon {
                     .await
                     .map_err(internal)?)
             }
+            m::GIT_ORIGIN_URL => {
+                let r: m::GitPath = params(p)?;
+                ok(git::origin_url(&path(&r.path)).await)
+            }
             m::GIT_PULL_BASE => {
                 let r: m::GitBase = params(p)?;
                 ok(git::pull_base(&path(&r.path), &r.branch)

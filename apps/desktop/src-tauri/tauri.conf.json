@@ -34,7 +34,7 @@
         "default-src": "'self'",
         "script-src": "'self' 'wasm-unsafe-eval'",
         "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self' data: blob: asset:",
+        "img-src": "'self' data: blob: asset: https://github.com https://avatars.githubusercontent.com",
         "font-src": "'self' data:",
         "worker-src": "'self' blob:",
         "connect-src": "'self' ipc: http://ipc.localhost",

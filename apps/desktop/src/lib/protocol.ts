@@ -337,6 +337,7 @@ export const M = {
   gitBranches: "git.branches",
   gitBaseStatus: "git.base_status",
   gitPullBase: "git.pull_base",
+  gitOriginUrl: "git.origin_url",
   prCreate: "gh.pr_create",
   ghIssues: "gh.issues",
   shellHistory: "shell.history",
