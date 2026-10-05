@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { browser } from "@wdio/globals";
+import type { ChainablePromiseElement } from "webdriverio";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -184,6 +185,15 @@ export async function choose(xpath: string, value: string) {
       ),
     { timeoutMsg: `no enabled select for ${xpath}` },
   );
+}
+/** Moves the pointer onto `el`. The embedded driver's `moveTo` raises no
+ *  mouse events, so this dispatches the `mouseover` React builds
+ *  `onMouseEnter` from. */
+export async function hover(el: ChainablePromiseElement) {
+  const target = await el.getElement();
+  await browser.execute((e) => {
+    e.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body }));
+  }, target);
 }
 export const readConfig = (w: World) => readFileSync(configPath(w), "utf8");
 export const writeConfig = (w: World, text: string) => writeFileSync(configPath(w), text);
