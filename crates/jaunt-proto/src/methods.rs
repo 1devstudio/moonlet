@@ -522,6 +522,10 @@ pub struct ShellCommands {
     /// `zsh`, `bash` or `fish`; the login shell when absent.
     #[serde(default)]
     pub shell: Option<String>,
+    /// A shell terminal whose own PATH (as its prompt hook reported it) to
+    /// use instead of the login shell's.
+    #[serde(default)]
+    pub terminal: Option<TerminalId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

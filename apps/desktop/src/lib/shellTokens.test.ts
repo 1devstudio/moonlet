@@ -37,6 +37,11 @@ describe("command line colouring (T8)", () => {
     expect(kinds("echo hi > out.txt; date")).toEqual(["command:echo", "subcommand:hi", "operator:>", "argument:out.txt", "operator:;", "command:date"]);
   });
 
+  it("takes &> and &>> for redirections, not command separators", () => {
+    expect(kinds("echo hi &> out extra")).toEqual(["command:echo", "subcommand:hi", "operator:&>", "argument:out", "argument:extra"]);
+    expect(kinds("make &>> build.log")).toEqual(["command:make", "operator:&>>", "argument:build.log"]);
+  });
+
   it("runs an unclosed quote to the end", () => {
     expect(kinds("echo 'hi there")).toEqual(["command:echo", "string:'hi there"]);
   });

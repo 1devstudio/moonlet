@@ -7,8 +7,8 @@ export interface Token {
   text: string;
 }
 
-const OPERATORS = ["&&", "||", ">>", "|", ";", "&", ">", "<"];
-const REDIRECTS = new Set([">>", ">", "<"]);
+const OPERATORS = ["&>>", "&&", "&>", "||", ">>", "|", ";", "&", ">", "<"];
+const REDIRECTS = new Set(["&>>", "&>", ">>", ">", "<"]);
 
 /** Splits `input` into labelled tokens whose texts join back to `input`. */
 export function tokenize(input: string): Token[] {
