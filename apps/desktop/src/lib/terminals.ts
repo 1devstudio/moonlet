@@ -73,19 +73,66 @@ export interface CommandBlock {
   end?: IMarker;
   exit?: number;
   command?: string;
+  /** Working directory at the `C` mark (OSC 7). */
+  cwd?: string;
   /** App clock at the `C` and `D` marks; absent for replayed blocks. */
   startedAt?: number;
   endedAt?: number;
-  chip?: IDisposable;
+  header?: IDisposable;
 }
 
-/** Right-hand block chip (T7): `✓ 1.2s`, `✗ 1 · 0.3s`, or `…` while running. */
-export function blockChip(b: { exit?: number; startedAt?: number; endedAt?: number; end?: unknown }): string {
-  if (!b.end) return "…";
-  const ms = b.startedAt !== undefined && b.endedAt !== undefined ? b.endedAt - b.startedAt : null;
-  const dur = ms === null ? "" : ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
-  if (b.exit) return dur ? `✗ ${b.exit} · ${dur}` : `✗ ${b.exit}`;
-  return dur ? `✓ ${dur}` : "✓";
+/** Where a block's header comes from: the user's home and the session. */
+export interface BlockContext {
+  home: string | null;
+  worktree?: string;
+  branch?: string;
+}
+
+/** `~`-shortens a path under `home`. */
+export function shortPath(p: string, home: string | null): string {
+  if (home && (p === home || p.startsWith(home + "/"))) return "~" + p.slice(home.length);
+  return p;
+}
+
+function duration(ms: number): string {
+  if (ms < 10_000) return `${(ms / 1000).toFixed(3)}s`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+/** The grey line above a command (T8): `~/src/app git:(main) (0.053s)`,
+ * with `exit 1` before the duration when the command failed. */
+export function blockHeader(
+  b: { cwd?: string; exit?: number; startedAt?: number; endedAt?: number; end?: unknown },
+  ctx: BlockContext,
+): { place: string; exit: string | null; duration: string | null; running: boolean } {
+  const cwd = b.cwd ?? "";
+  const inside = !!ctx.worktree && (cwd === ctx.worktree || cwd.startsWith(ctx.worktree + "/"));
+  const place = shortPath(cwd, ctx.home) + (inside && ctx.branch ? ` git:(${ctx.branch})` : "");
+  const timed = !!b.end && b.startedAt !== undefined && b.endedAt !== undefined;
+  return {
+    place,
+    exit: b.end && b.exit ? `exit ${b.exit}` : null,
+    duration: timed ? `(${duration(b.endedAt! - b.startedAt!)})` : null,
+    running: !b.end,
+  };
+}
+
+/** Background rectangles, in viewport rows, for the blocks on screen (T8).
+ * A block spans from its header row up to the row of its end mark. */
+export function blockRects(
+  blocks: readonly { start: number; end?: number; exit?: number }[],
+  top: number,
+  rows: number,
+): { top: number; height: number; kind: "failed" }[] {
+  const out: { top: number; height: number; kind: "failed" }[] = [];
+  for (const b of blocks) {
+    if (b.end === undefined || !b.exit) continue;
+    const from = Math.max(b.start, top);
+    const to = Math.min(b.end, top + rows);
+    if (to > from) out.push({ top: from - top, height: to - from, kind: "failed" });
+  }
+  return out;
 }
 
 export interface FileLinkHandler {
@@ -118,6 +165,11 @@ export class TermEntry {
   /** Set while the input editor is shown: printable keys typed into the
    * terminal go there instead (T6). */
   redirect?: (ch: string) => void;
+  /** Home and session for block headers (T8). */
+  context: BlockContext = { home: null };
+  /** Block backgrounds drawn over the grid (T8); xterm decorations vanish
+   * once their first row leaves the viewport. */
+  private backdrop = document.createElement("div");
 
   constructor(
     readonly host: string,
@@ -147,6 +199,8 @@ export class TermEntry {
     this.term.unicode.activeVersion = "11";
     this.term.loadAddon(new WebLinksAddon((_e, uri) => void openUrl(uri)));
     this.term.open(this.el);
+    this.backdrop.className = "jaunt-block-backdrop";
+    this.term.element?.querySelector(".xterm-screen")?.appendChild(this.backdrop);
 
     // Cmd shortcuts belong to the app; xterm never sees them, so they can
     // never leak into an agent's input (T2). Native copy/paste still work.
@@ -172,6 +226,8 @@ export class TermEntry {
         return false;
       }),
       this.term.parser.registerOscHandler(52, (data) => this.onOsc52(data)),
+      this.term.onRender(() => this.paintBackdrop()),
+      this.term.onScroll(() => this.paintBackdrop()),
       this.term.registerLinkProvider({
         provideLinks: (y, cb) => cb(this.fileLinks(y)),
       }),
@@ -289,7 +345,8 @@ export class TermEntry {
         // carry no marks): the command is on the line above the cursor.
         let last = this.blocks[this.blocks.length - 1];
         if (!last || last.output) {
-          const prompt = this.term.registerMarker(-1);
+          // In Warp mode the header row sits above the command (T8).
+          const prompt = this.term.registerMarker(this.warp ? -2 : -1);
           if (prompt) {
             last = { prompt };
             this.blocks.push(last);
@@ -297,11 +354,15 @@ export class TermEntry {
         }
         if (last) {
           last.output = marker;
-          const line = this.lineText(last.prompt.line);
-          // A blank prompt leaves just the command on the line.
-          last.command = (this.warp ? line : line.replace(/^.*?[$%#❯>]\s/, "")).trim();
+          last.cwd = this.cwd;
+          if (this.warp) {
+            // The prompt is one empty header row; the command follows it.
+            const rows: string[] = [];
+            for (let y = last.prompt.line + 1; y < marker.line; y++) rows.push(this.lineText(y));
+            last.command = rows.join("\n").trim();
+          } else last.command = this.lineText(last.prompt.line).replace(/^.*?[$%#❯>]\s/, "").trim();
           if (!this.replaying) last.startedAt = Date.now();
-          if (this.warp) this.chip(last);
+          if (this.warp) this.header(last);
         }
         break;
       }
@@ -312,7 +373,7 @@ export class TermEntry {
           last.exit = Number.isFinite(code) ? code : undefined;
           if (!this.replaying && last.startedAt !== undefined) last.endedAt = Date.now();
           this.decorate(last);
-          if (this.warp) this.chip(last);
+          if (this.warp) this.header(last);
         }
         break;
     }
@@ -322,30 +383,62 @@ export class TermEntry {
   private decorate(block: CommandBlock) {
     const d = this.term.registerDecoration({ marker: block.prompt, x: 0, width: 1, overviewRulerOptions: { color: block.exit ? "#ef5f5f" : "#333333" } });
     d?.onRender((el) => {
+      // Warp mode shows the status in the block header instead (T8).
+      if (this.warp) return;
       el.classList.add("jaunt-block-mark");
       el.classList.toggle("failed", !!block.exit);
       el.title = block.exit ? `exit ${block.exit}` : "ok";
     });
   }
 
-  /** Separator and status chip on a command's line (T7). */
-  private chip(block: CommandBlock) {
-    block.chip?.dispose();
-    const text = blockChip(block);
-    const width = Math.min(text.length + 2, Math.max(4, this.term.cols));
-    const sep = this.term.registerDecoration({ marker: block.prompt, x: 0, width: this.term.cols, layer: "bottom" });
-    sep?.onRender((el) => el.classList.add("jaunt-block-sep"));
-    const d = this.term.registerDecoration({ marker: block.prompt, anchor: "right", x: 0, width });
+  /** Separator and header on a block's header row (T8). They reach into
+   * the pane's padding (`.jaunt-term` inset) so the separator spans it. */
+  private header(block: CommandBlock) {
+    block.header?.dispose();
+    const d = this.term.registerDecoration({ marker: block.prompt, x: 0, width: this.term.cols, layer: "top" });
     d?.onRender((el) => {
-      el.classList.add("jaunt-block-chip");
-      // xterm only sets `right` for a non-zero offset.
-      el.style.left = "auto";
-      el.style.right = "0px";
-      el.classList.toggle("failed", !!block.exit);
-      el.classList.toggle("running", !block.end);
-      el.textContent = text;
+      el.classList.add("jaunt-block-head");
+      el.style.left = "-28px";
+      el.style.width = "calc(100% + 40px)";
+      const h = blockHeader(block, this.context);
+      const key = JSON.stringify(h);
+      if (el.dataset.key === key) return;
+      el.dataset.key = key;
+      const span = (cls: string, text: string) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
+      // xterm sets the element's `display`, so the layout lives in a row inside.
+      const row = Object.assign(document.createElement("div"), { className: "row" });
+      row.append(
+        span("place", h.place),
+        ...(h.exit ? [span("exit", ` · ${h.exit}`)] : []),
+        ...(h.duration ? [span("duration", ` ${h.duration}`)] : []),
+        ...(h.running ? [span("running", "")] : []),
+      );
+      el.replaceChildren(row);
     });
-    block.chip = { dispose: () => (sep?.dispose(), d?.dispose()) };
+    block.header = d ?? undefined;
+    this.paintBackdrop();
+  }
+
+  private paintBackdrop() {
+    const screen = this.backdrop.parentElement;
+    if (!screen || !this.warp || this.term.buffer.active.type === "alternate") {
+      this.backdrop.replaceChildren();
+      return;
+    }
+    const cell = screen.clientHeight / this.term.rows;
+    const spans = this.blocks
+      .filter((b) => b.prompt.line >= 0)
+      .map((b) => ({ start: b.prompt.line, end: b.end && b.end.line >= 0 ? b.end.line : undefined, exit: b.exit }));
+    const rects = blockRects(spans, this.term.buffer.active.viewportY, this.term.rows);
+    this.backdrop.replaceChildren(
+      ...rects.map((r) => {
+        const el = document.createElement("div");
+        el.className = `jaunt-block-bg ${r.kind}`;
+        el.style.top = `${r.top * cell}px`;
+        el.style.height = `${r.height * cell}px`;
+        return el;
+      }),
+    );
   }
 
   /** Warp mode hides the terminal's cursor while the editor has the input. */

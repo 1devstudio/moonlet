@@ -52,6 +52,10 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
     entry.setEditorActive(editing);
   }, [host, session, warp, editing]);
   const branch = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.branch : undefined));
+  const worktree = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.path : undefined));
+  useEffect(() => {
+    getEntry(host, session).context = { home, worktree, branch };
+  }, [host, session, home, worktree, branch]);
 
   useEffect(() => {
     if (focused && visible && !editing) getEntry(host, session).focus();
