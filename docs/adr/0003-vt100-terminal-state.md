@@ -1,6 +1,6 @@
 # ADR 0003: `vt100` crate for daemon-side terminal state
 
-- **Status:** accepted (2026-10-02)
+- **Status:** superseded by [ADR 0006](0006-daemon-owned-command-blocks.md) (2026-10-05); accepted 2026-10-02
 - **Answers:** spike S3 (replay fidelity)
 
 ## Options

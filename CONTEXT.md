@@ -9,5 +9,6 @@ These terms are used the same way in the UI, the code, the protocol and the docs
 | **Session** | One task inside a project: a git worktree on its own branch, plus the agents and shells working in it. Created from the composer ("What do you want to work on?"). | `Session` |
 | **Section** | A user-named group inside a workspace that sessions can be moved into. | `Section` |
 | **Terminal** | One PTY owned by `jauntd` (an agent TUI, a shell, a run script). A session has one or more terminals. | `Terminal` |
+| **Block** | One command run in a shell terminal: the command line, its output, its exit status and timing. A shell terminal in Warp mode is a list of blocks followed by the input editor. The block of a command still running is the *active block*; a full-screen program started by a command belongs to that command's block. Output from before shell integration started is not a block. | `Block` |
 | **Agent** | The program running in an agent terminal: Claude Code, Codex, or a custom command. | `agent` |
 | **Host** | A machine running `jauntd`: this Mac, or a remote host reached over SSH. | `Host` |
