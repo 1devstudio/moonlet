@@ -87,6 +87,8 @@ export interface CommandBlock {
    * and the header sits at the end of the command line instead. */
   headerAt?: IMarker;
   header?: IDisposable;
+  /** The header's element while it is on screen, for hover and selection. */
+  headerEl?: HTMLElement;
 }
 
 /** Where a block's header comes from: the user's home and the session. */
@@ -273,6 +275,37 @@ const LINE_HEIGHT = 1.15;
 /** Shells in Blocks mode get roomier rows (T8); agent TUIs keep 1.15. */
 const BLOCK_LINE_HEIGHT = 1.3;
 
+/** What re-running a block types into the shell (T4, T8). The command is
+ * read back from the screen, so anything a program printed there could be
+ * in it: control characters are dropped, so the text cannot act as keys or
+ * end a paste, and a multi-line command goes as one bracketed paste, so no
+ * line runs on its own before Enter, as the input editor sends commands. */
+export function rerunInput(command: string): string | null {
+  const text = command.replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
+  if (!text.trim()) return null;
+  return text.includes("\n") ? `\x1b[200~${text}\x1b[201~\r` : `${text}\r`;
+}
+
+export type BlockAction = "agent" | "copy" | "rerun";
+
+/** The actions a block's header offers on hover or selection (T8): a
+ * finished block with a command and a header row of its own. */
+export function blockActions(b: { end?: unknown; command?: string }, inline: boolean): BlockAction[] {
+  return b.end && b.command && !inline ? ["agent", "copy", "rerun"] : [];
+}
+
+/** Icons for the header actions (Lucide, ISC): send, copy, rotate-ccw. */
+const ACTION_ICONS: Record<BlockAction, string> = {
+  agent: '<path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z"/><path d="M6 12h16"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  rerun: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+};
+const ACTION_TITLES: Record<BlockAction, string> = {
+  agent: "Copy to agent (⌘↵): the command and its output, as a draft in the session's agent",
+  copy: "Copy command and output (⌘C)",
+  rerun: "Re-run",
+};
+
 export interface FileLinkHandler {
   (path: string, line?: number): void;
 }
@@ -311,6 +344,10 @@ export class TermEntry {
   context: BlockContext = { home: null };
   /** The block selected with a click or ⌘↑ / ⌘↓ (T8). */
   selected: CommandBlock | null = null;
+  /** Runs a block's header action (T8); set by the terminal pane. */
+  onBlockAction?: (action: BlockAction, block: CommandBlock) => void;
+  /** The block under the mouse, whose header shows its actions (T8). */
+  private hovered: CommandBlock | null = null;
   /** Told when the selection changes (the input editor's hint). */
   onSelect?: (block: CommandBlock | null) => void;
   /** Block backgrounds drawn over the grid (T8); xterm decorations vanish
@@ -373,6 +410,16 @@ export class TermEntry {
     // A click on a block, without dragging out a text selection, selects it (T8).
     let down: { x: number; y: number } | null = null;
     this.el.addEventListener("mousedown", (e) => (down = { x: e.clientX, y: e.clientY }));
+    // The block under the mouse shows its header actions (T8).
+    this.el.addEventListener("mousemove", (e) => {
+      const screen = this.backdrop.parentElement;
+      if (!screen || !this.blockMode || this.term.buffer.active.type === "alternate") return this.hover(null);
+      const rect = screen.getBoundingClientRect();
+      const row = Math.floor(((e.clientY - rect.top) / rect.height) * this.term.rows);
+      const i = row >= 0 && row < this.term.rows ? blockAt(this.spans(), this.term.buffer.active.viewportY + row) : null;
+      this.hover(i === null ? null : this.blocks[i]);
+    });
+    this.el.addEventListener("mouseleave", () => this.hover(null));
     this.el.addEventListener("mouseup", (e) => {
       const click = down && Math.abs(e.clientX - down.x) < 4 && Math.abs(e.clientY - down.y) < 4;
       down = null;
@@ -596,8 +643,11 @@ export class TermEntry {
       ? this.term.registerDecoration({ marker: block.prompt, anchor: "right", x: 0, width: Math.min(this.term.cols, 40), layer: "top" })
       : this.term.registerDecoration({ marker: block.headerAt!, x: 0, width: this.term.cols, layer: "top" });
     d?.onRender((el) => {
+      block.headerEl = el;
       el.classList.add("jaunt-block-head");
       el.classList.toggle("inline", inline);
+      el.classList.toggle("hover", this.hovered === block);
+      el.classList.toggle("selected", this.selected === block);
       if (inline) {
         // xterm only sets `right` for a non-zero offset; the width follows the text.
         el.style.left = "auto";
@@ -635,6 +685,25 @@ export class TermEntry {
         ...(h.duration ? [span("duration", ` ${h.duration}`)] : []),
         ...(h.running ? [span("running", "")] : []),
       );
+      // Copy to agent, Copy and Re-run, shown on hover or selection (T8).
+      const actions = blockActions(block, inline);
+      if (actions.length) {
+        const bar = Object.assign(document.createElement("span"), { className: "actions" });
+        for (const action of actions) {
+          const button = Object.assign(document.createElement("button"), { className: `action ${action}`, title: ACTION_TITLES[action] });
+          button.dataset.action = action;
+          button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ACTION_ICONS[action]}</svg>`;
+          if (action === "agent") button.append(span("label", "Copy to agent"));
+          // Neither xterm nor the block click handler sees these clicks.
+          for (const type of ["mousedown", "mouseup"]) button.addEventListener(type, (e) => (e.stopPropagation(), e.preventDefault()));
+          button.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.onBlockAction?.(action, block);
+          });
+          bar.append(button);
+        }
+        row.append(bar);
+      }
       el.replaceChildren(row);
     });
     block.header = { dispose: () => (sep?.dispose(), d?.dispose()) };
@@ -690,7 +759,9 @@ export class TermEntry {
   /** Selects a block (or none) and scrolls it into view (T8). */
   select(block: CommandBlock | null) {
     if (this.selected !== block) this.onSelect?.(block);
+    this.selected?.headerEl?.classList.remove("selected");
     this.selected = block;
+    block?.headerEl?.classList.add("selected");
     if (block?.end) {
       const top = this.term.buffer.active.viewportY;
       if (block.prompt.line < top || block.end.line > top + this.term.rows) this.term.scrollToLine(block.prompt.line);
@@ -790,9 +861,28 @@ export class TermEntry {
   }
 
   /** Re-runs the selected block's command, or the last one. */
+  /** The block under the mouse: its header shows its actions (T8). */
+  private hover(block: CommandBlock | null) {
+    if (this.hovered === block) return;
+    this.hovered?.headerEl?.classList.remove("hover");
+    this.hovered = block;
+    block?.headerEl?.classList.add("hover");
+  }
+
+  /** `$ <command>` and the output, as ⌘C copies a selected block (T8). */
+  copyText(block: CommandBlock): string {
+    return blockCopy({ command: block.command ?? "", output: this.outputOf(block) }, "all");
+  }
+
+  /** Runs a block's command again (T8). */
+  rerun(block: CommandBlock) {
+    const input = rerunInput(block.command ?? "");
+    if (input) void sendInput(this.host, this.session, input);
+  }
+
   rerunLast() {
     const b = this.selected?.command ? this.selected : [...this.blocks].reverse().find((x) => x.command);
-    if (b?.command) void sendInput(this.host, this.session, b.command + "\r");
+    if (b) this.rerun(b);
   }
 
   private fileLinks(y: number) {
