@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod chat;
 pub mod client;
+pub mod commands;
 pub mod fs;
 pub mod git;
 pub mod history;

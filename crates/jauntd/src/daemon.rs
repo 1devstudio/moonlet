@@ -289,6 +289,19 @@ impl Daemon {
                 .map_err(internal)?;
                 ok(entries)
             }
+            m::SHELL_COMMANDS => {
+                let r: m::ShellCommands = params(p)?;
+                // The PATH terminals get: the login shell's, not the daemon's.
+                let path = self.terminals.base_env().get("PATH").cloned().unwrap_or_default();
+                let shell = r.shell.unwrap_or_else(|| {
+                    let login = jaunt_core::pty::user_shell();
+                    login.rsplit('/').next().unwrap_or("zsh").to_string()
+                });
+                let names = tokio::task::spawn_blocking(move || jaunt_core::commands::list(&path, &shell))
+                    .await
+                    .map_err(internal)?;
+                ok(names)
+            }
             m::GH_ISSUES | m::GH_PRS => {
                 let r: m::GitPath = params(p)?;
                 let kind = if method == m::GH_PRS { "pr" } else { "issue" };

@@ -3,7 +3,8 @@ import { Diff, FolderOpen, GitBranch, Hexagon, SquareTerminal } from "lucide-rea
 import { type Chip, chipModel } from "../lib/chips";
 import { rpc, sendInput } from "../lib/daemon";
 import { M, type DirEntry, type FileChange } from "../lib/protocol";
-import { commonPrefix, firstWord, historyFor, rememberCommand, suggest } from "../lib/suggest";
+import { commonPrefix, firstWord, historyFor, knownCommands, rememberCommand, suggest } from "../lib/suggest";
+import { type TokenKind, tokenize } from "../lib/shellTokens";
 import { findEntry, getEntry } from "../lib/terminals";
 import { setClassic } from "../lib/actions";
 
@@ -53,6 +54,10 @@ export function InputEditor({
 
   useEffect(() => {
     void historyFor(host).then(setHistory);
+  }, [host]);
+  const [known, setKnown] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    void knownCommands(host).then(setKnown);
   }, [host]);
 
   // Typing into the terminal while the editor is up lands here instead.
@@ -208,9 +213,15 @@ export function InputEditor({
         </button>
       </div>
       <div className="relative font-mono text-[13.5px] leading-[20px]">
-        {/* Mirror of the text with the ghost suggestion after it. */}
-        <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
-          {text}
+        {/* Mirror of the text, coloured (T8), with the ghost suggestion after
+            it. The textarea above it has transparent text and shows the caret
+            and the selection. */}
+        <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-fg">
+          {tokenize(text).map((t, i) => (
+            <span key={i} className={tokenClass(t.kind, t.kind === "command" && known.has(t.text))}>
+              {t.text}
+            </span>
+          ))}
           {ghost && (
             <>
               <span className="text-faint">{ghost}</span>
@@ -234,7 +245,7 @@ export function InputEditor({
             if (entry?.selected) entry.select(null);
           }}
           onKeyDown={onKeyDown}
-          className="relative block w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
+          className="relative block w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent text-transparent caret-accent outline-none placeholder:text-faint selection:bg-accent/30"
         />
       </div>
       {hint && <div className="mt-1.5 truncate font-mono text-[12px] text-muted">{hint}</div>}
@@ -245,6 +256,25 @@ export function InputEditor({
       )}
     </div>
   );
+}
+
+/** Colours of the command line (T8), from the terminal palette. An unknown
+ * command stays plain: aliases and functions are invisible to the daemon. */
+function tokenClass(kind: TokenKind, known: boolean): string {
+  switch (kind) {
+    case "command":
+      return known ? "text-[#8fd18e]" : "";
+    case "subcommand":
+      return "text-[#7aa7ff]";
+    case "flag":
+      return "text-muted";
+    case "string":
+      return "text-[#e8c46b]";
+    case "operator":
+      return "text-faint";
+    default:
+      return "";
+  }
 }
 
 /** One boxed chip above the input (T8). */
