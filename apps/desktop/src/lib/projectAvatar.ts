@@ -1,7 +1,7 @@
 /** GitHub owner avatars for projects in the sidebar (X15). */
 
-/** GitHub user and organization names: letters, digits and single hyphens. */
-const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+/** GitHub user and organization names: up to 39 letters, digits and hyphens, not starting or ending with a hyphen. */
+const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 
 /** The GitHub owner of an `origin` URL (https, ssh or scp-like), if it points at github.com. */
 function githubOwner(remote: string): string | null {
