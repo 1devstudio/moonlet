@@ -1,6 +1,6 @@
 # T8: Warp-style block styling and input editor
 
-- **Status:** in progress (block header and bold command implemented)
+- **Status:** in progress (block header, bold command and block selection implemented)
 - **Priority / phase:** P1 · phase 3 (requested 2026-10-05, with Warp screenshots)
 - **PRD refs:** T1, T3, T4; "fast, modern terminal feel (in the spirit of Warp)"
 - **Related:** [T4](T4-command-blocks.md), [T6](T6-input-editor.md), [T7](T7-warp-shell-model.md), [X4](X4-visual-design.md) (tokens), [T9](T9-real-command-blocks.md) (real blocks, which reuse this spec's header and selection logic)
@@ -39,10 +39,10 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ### Block selection
 
-- [ ] **Select:** clicking a block's rows (without dragging a text selection) selects it. ⌘↑ / ⌘↓ select the previous / next block and scroll it into view; from the input editor, ⌘↑ selects the most recent block when the input is a single line. Esc clears the selection; running a new command clears it. This replaces T4's "jump to prompt" for ⌘↑ / ⌘↓.
-- [ ] **Highlight:** the selected block's rows get an orange tint (`accent` at low alpha) and a 2px `accent` bar on the left edge, like the selected sidebar row (X4).
-- [ ] **Copy:** with a block selected and no text selection, ⌘C copies the command and output, ⇧⌘C copies the output, ⌥⌘C copies the command. A text selection always wins over the block. With no block selected, ⇧⌘C keeps copying the last finished output (T4).
-- [ ] **Re-run:** the palette's "Re-run last command" re-runs the selected block's command when one is selected.
+- [x] **Select:** clicking a block's rows (without dragging a text selection) selects it. ⌘↑ / ⌘↓ select the previous / next block and scroll it into view; from the input editor, ⌘↑ selects the most recent block when the input is a single line. Esc clears the selection; running a new command, or typing while the terminal has focus, clears it. ⌘↓ past the newest block returns to the input editor. Only finished blocks can be selected. This replaces T4's "jump to prompt" for ⌘↑ / ⌘↓.
+- [x] **Highlight:** the selected block's rows get an orange tint (`accent` at low alpha) and a 2px `accent` bar on the left edge, like the selected sidebar row (X4).
+- [x] **Copy:** with a block selected, the terminal focused and no text selection, ⌘C copies `$ <command>` and the output, ⇧⌘C copies the output, ⌥⌘C copies the command, each with a toast. A text selection always wins over the block. With no block selected, ⇧⌘C keeps copying the last finished output (T4).
+- [x] **Re-run:** the palette's "Re-run last command" re-runs the selected block's command when one is selected.
 - [ ] **Send to agent:** ⌘↵ with a block selected pastes the block as text (`$ <command>` then the output, in a fenced block) into the input of the session's running agent and focuses that agent's tab; nothing is submitted. In a structured chat (X6) it goes into the composer draft. ⇧⌘↵, or ⌘↵ when the session has no running agent, opens a new agent tab with the block as its draft. A hint under the editor reads `⌘↵ send <command> to <agent>` while a block is selected.
 
 ### Context chips
@@ -124,4 +124,5 @@ None.
 ## Verification
 
 - 2026-10-05: zsh keeps `zle_highlight` bold on the line after the command is accepted (checked in a PTY: each character is drawn with `\e[1m` and the reset comes after Enter).
+- 2026-10-05, block selection: in the e2e app, a click on a block's output row highlighted the block in orange with the left bar.
 - 2026-10-05, block header: in the e2e app, `ls -la`, `false`, `printf` and `sleep 3` showed headers with the directory and duration, `· exit 1` in red with a red-tinted block, a spinner while `sleep 3` ran, and bold commands.

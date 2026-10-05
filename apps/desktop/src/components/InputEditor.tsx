@@ -55,8 +55,10 @@ export function InputEditor({
       setText((t) => t + ch);
       ta.current?.focus();
     };
+    entry.focusEditor = () => ta.current?.focus();
     return () => {
       entry.redirect = undefined;
+      entry.focusEditor = undefined;
     };
   }, [host, terminal]);
 
@@ -147,7 +149,11 @@ export function InputEditor({
     } else if (e.key === "ArrowRight" && ghost && atEnd() && !e.metaKey && !e.shiftKey) {
       e.preventDefault();
       setText(text + (e.altKey ? firstWord(ghost) : ghost));
-    } else if (e.key === "ArrowUp" && !e.shiftKey && !e.altKey && !el.value.slice(0, el.selectionStart).includes("\n")) {
+    } else if (e.key === "ArrowUp" && e.metaKey && !e.shiftKey && !e.altKey && !text.includes("\n")) {
+      // ⌘↑ selects the newest block (T8); multi-line input keeps the native move.
+      e.preventDefault();
+      findEntry(host, terminal)?.stepSelection(-1);
+    } else if (e.key === "ArrowUp" && !e.metaKey && !e.shiftKey && !e.altKey && !el.value.slice(0, el.selectionStart).includes("\n")) {
       e.preventDefault();
       browse(-1);
     } else if (e.key === "ArrowDown" && !e.shiftKey && !e.altKey && walk !== null && !el.value.slice(el.selectionEnd).includes("\n")) {
