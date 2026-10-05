@@ -19,7 +19,10 @@ __jaunt_precmd() {
   __jaunt_urlpath "$PWD"
   printf '\e]7;file://%s%s\a' "${HOST}" "$REPLY"
   # The node version for the editor's chips (T8), only when `node` changes.
+  # Only an absolute path: a relative PATH entry points into whatever
+  # directory the shell is in, which may be an untrusted checkout.
   local node=${commands[node]-}
+  [[ $node == /* ]] || node=
   if [[ $node != ${__jaunt_node-} ]]; then
     __jaunt_node=$node
     printf '\e]1337;JauntNode=%s\a' "${node:+$("$node" --version 2>/dev/null)}"
@@ -106,8 +109,11 @@ __jaunt_prompt() {
   __jaunt_urlpath "$PWD"
   printf '\e]7;file://%s%s\a' "$HOSTNAME" "$__jaunt_url"
   # The node version for the editor's chips (T8), only when `node` changes.
+  # Only an absolute path: a relative PATH entry points into whatever
+  # directory the shell is in, which may be an untrusted checkout.
   local node
   node=$(type -P node 2>/dev/null)
+  case $node in /*) ;; *) node= ;; esac
   if [ "$node" != "${__jaunt_node-}" ]; then
     __jaunt_node=$node
     printf '\e]1337;JauntNode=%s\a' "${node:+$("$node" --version 2>/dev/null)}"
@@ -177,7 +183,10 @@ if status is-interactive
     end
     printf '\e]7;file://%s%s\a' (hostname) (string escape --style=url -- $PWD)
     # The node version for the editor's chips (T8), only when `node` changes.
+    # Only an absolute path: a relative PATH entry points into whatever
+    # directory the shell is in, which may be an untrusted checkout.
     set -l node (command -s node)
+    string match -q '/*' -- "$node"; or set node ''
     if test "$node" != "$__jaunt_node"
       set -g __jaunt_node $node
       set -l version
@@ -575,6 +584,50 @@ mod tests {
         let version = mgr.get(info.id).map(|t| t.info().node_version);
         let _ = mgr.kill(info.id, true);
         assert_eq!(version, Some(Some("v2.0.0".to_string())), "{shell}");
+    }
+
+    /// A `node` reached through a relative PATH entry belongs to whatever
+    /// directory the shell is in (an untrusted checkout's
+    /// `node_modules/.bin`), so the prompt hook must never run it.
+    async fn ignores_relative_node(shell: &str) {
+        if !Path::new(shell).exists() {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("node_modules").join(".bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let ran = home.path().join("ran");
+        std::fs::write(bin.join("node"), format!("#!/bin/sh\ntouch {}\necho v6.6.6\n", ran.display())).unwrap();
+        std::fs::set_permissions(bin.join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let root = home.path().join("shell");
+        let mut env: BTreeMap<String, String> = BTreeMap::from([
+            ("HOME".into(), home.path().display().to_string()),
+            ("PATH".into(), "node_modules/.bin:/usr/bin:/bin".into()),
+            ("SHELL".into(), shell.into()),
+        ]);
+        let args = apply(&root, shell, vec![], &mut env);
+        let mgr = TerminalManager::new(home.path().join("s.sock"), env);
+        let mut command = vec![shell.to_string()];
+        command.extend(args);
+        let info = mgr
+            .create(TerminalCreate { cwd: home.path().display().to_string(), command, ..Default::default() })
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        mgr.attach(info.id, 1, tx, None).unwrap();
+        let out = read_until(&mut rx, "133;A").await;
+        let _ = mgr.kill(info.id, true);
+        assert!(!out.contains("v6.6.6"), "{shell}: {out:?}");
+        assert!(!ran.exists(), "{shell} ran a relative node");
+    }
+
+    #[tokio::test]
+    async fn zsh_never_runs_a_node_found_through_a_relative_path() {
+        ignores_relative_node("/bin/zsh").await;
+    }
+
+    #[tokio::test]
+    async fn bash_never_runs_a_node_found_through_a_relative_path() {
+        ignores_relative_node("/bin/bash").await;
     }
 
     #[tokio::test]
