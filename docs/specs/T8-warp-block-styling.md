@@ -47,7 +47,7 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ### Context chips
 
-- [x] Chips above the input are boxed (rounded, `border` hairline, mono 11.5px, an icon each), in this order:
+- [x] Chips above the input are boxed (rounded, `border` hairline, mono 11.5px, an icon each), in this order, wrapping in a narrow pane:
   - **Node version** (`v24.19.0`) when the shell reports one (see Protocol).
   - **Directory**, `~`-shortened.
   - **Branch** in the `done` green, when the session has a branch.
@@ -84,7 +84,7 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 ## Protocol and RPCs
 
 - `shell.commands {shell?}` returns `string[]`: executable file names on the login shell's `PATH`, plus the shell's builtins and reserved words, de-duplicated and sorted.
-- **Node version:** the shell integration reports it with `OSC 1337;JauntNode=<version>` in the prompt hook, only when the `node` found on PATH (zsh `$commands[node]`, bash `type -P`, fish `command -s`) is a different path than last time (so `node --version` runs only after the `PATH` changes, for example on `nvm use` or a directory change with an auto-switcher). An empty value means no node. The daemon stores it on `TerminalInfo.node_version` and emits `terminal.updated`.
+- **Node version:** the prompt hook reports where `node` is with `OSC 1337;JauntNodePath=<path>`, only when the `node` found on PATH (zsh `$commands[node]`, bash `type -P`, fish `command -s`) is a different absolute path than last time; an empty value means none. It never runs `node`. The daemon reads the version from the `include/node/node_version.h` installed beside its `bin/`, or else from a version directory in the resolved path (such as Homebrew's `Cellar/node/22.1.0`), stores it on `TerminalInfo.node_version` and emits `terminal.updated`.
 
 ## Data and config
 
@@ -93,7 +93,7 @@ None.
 ## Security considerations
 
 - `shell.commands` lists file names only and runs nothing.
-- The prompt hook runs `node --version` only for a `node` found at an absolute path. A relative `PATH` entry (such as `node_modules/.bin`) resolves inside whatever directory the shell is in, which may be an untrusted checkout, so it is never run.
+- The node version is read from files, never by running `node`: any PATH entry, relative or absolute (`$PWD/node_modules/.bin`), can point into an untrusted checkout, and the prompt hook would otherwise run that checkout's `node` without a command from the user.
 - Text sent to an agent is pasted as a bracketed paste and never submitted; the user presses Enter.
 
 ## Out of scope

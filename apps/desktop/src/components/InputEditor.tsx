@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FolderOpen, GitBranch, Hexagon, SquareTerminal } from "lucide-react";
+import { Diff, FolderOpen, GitBranch, Hexagon, SquareTerminal } from "lucide-react";
 import { type Chip, chipModel } from "../lib/chips";
 import { rpc, sendInput } from "../lib/daemon";
 import { M, type DirEntry, type FileChange } from "../lib/protocol";
@@ -194,7 +194,8 @@ export function InputEditor({
 
   return (
     <div className="shrink-0 border-t border-border bg-bg px-7 pb-3 pt-2.5" onMouseDown={(e) => e.stopPropagation()}>
-      <div className="mb-2 flex items-center gap-1.5 font-mono text-[11.5px] text-muted">
+      {/* Wraps in a narrow pane, so Classic stays reachable. */}
+      <div className="mb-2 flex flex-wrap items-center gap-1.5 font-mono text-[11.5px] text-muted">
         {chipModel({ cwd, home, nodeVersion, branch, files }).map((c) => (
           <ChipBox key={c.kind} chip={c} />
         ))}
@@ -248,14 +249,14 @@ export function InputEditor({
 
 /** One boxed chip above the input (T8). */
 function ChipBox({ chip }: { chip: Chip }) {
-  const icon = { node: <Hexagon size={11} />, dir: <FolderOpen size={11} />, branch: <GitBranch size={11} />, changes: null }[chip.kind];
+  const icon = { node: <Hexagon size={11} />, dir: <FolderOpen size={11} />, branch: <GitBranch size={11} />, changes: <Diff size={11} /> }[chip.kind];
   const title = { node: "Node.js on PATH", dir: "Current directory", branch: "Session branch", changes: "Files with uncommitted changes" }[chip.kind];
   return (
     <span
       title={title}
       className={`flex min-w-0 items-center gap-1 rounded border border-border bg-raised px-1.5 py-0.5 ${chip.kind === "dir" ? "shrink" : "shrink-0"} ${chip.kind === "branch" ? "max-w-[40%] text-done" : ""}`}
     >
-      {icon && <span className="shrink-0 opacity-80">{icon}</span>}
+      <span className="shrink-0 opacity-80">{icon}</span>
       <span className="truncate">{chip.text}</span>
     </span>
   );
