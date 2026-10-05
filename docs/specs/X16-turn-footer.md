@@ -1,4 +1,4 @@
-# X15 — Response time and copy under the agent's final message
+# X16 — Response time and copy under the agent's final message
 
 - **Status:** implemented (2026-10-05)
 - **Priority / phase:** P1 · phase 3
@@ -7,7 +7,7 @@
 
 ## Summary
 
-When the agent finishes a turn, the user wants to know how long it took and when it ended, and often wants the answer on the clipboard to paste elsewhere. X15 puts a quiet footer under the final message of every completed turn: the response time, the time the turn ended, and a copy button that copies that message.
+When the agent finishes a turn, the user wants to know how long it took and when it ended, and often wants the answer on the clipboard to paste elsewhere. X16 puts a quiet footer under the final message of every completed turn: the response time, the time the turn ended, and a copy button that copies that message.
 
 ## User journey
 
@@ -23,7 +23,7 @@ When the agent finishes a turn, the user wants to know how long it took and when
 - [x] The footer shows the duration in the `elapsed` format (`14s`, `1m 05s`), then ` · `, then the end time. (`chat.test.ts`)
 - [x] The end time is the time alone for today, weekday and time within the last 6 days, and month, day and time when older; a different year adds the year. (`chat.test.ts`)
 - [x] The copy button (title `Copy final message`) copies the message's markdown and shows `Copied message`. (`agent-view.e2e.ts`)
-- [x] Messages saved before X15 have no timing and show no footer.
+- [x] Messages saved before X16 have no timing and show no footer.
 
 ## UI
 

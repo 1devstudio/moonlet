@@ -2,17 +2,24 @@
 // local main lacks, and Pull fast-forwards main.
 
 import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { $, expect } from "@wdio/globals";
-import { CONFIG, resetConfig, sel, world } from "../fixtures";
+import { $, $$, browser, expect } from "@wdio/globals";
+import { CONFIG, resetConfig, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const origin = join(w.root, "origin.git");
 const other = join(w.root, "other");
+// A second project, one commit behind its own origin.
+const second = join(w.root, "e2e-second");
+const secondOrigin = join(w.root, "e2e-second-origin.git");
+const secondOther = join(w.root, "e2e-second-other");
+let secondId = "";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.email=e2e@jaunt.test", "-c", "user.name=e2e", ...args], { cwd, env: w.env, stdio: "pipe" }).toString().trim();
 
 const chip = () => $('button[title="main is 2 commits behind origin/main"]');
+const secondChip = () => $('button[title="main is 1 commit behind origin/main"]');
 const popover = () => $('[role="dialog"][aria-label="Pull main"]');
 
 describe("Pull base branch", () => {
@@ -25,10 +32,24 @@ describe("Pull base branch", () => {
     git(other, "commit", "-q", "--allow-empty", "-m", "Open sessions from GitHub PRs");
     git(other, "commit", "-q", "--allow-empty", "-m", "Merge pull request #128 from 1devstudio/github-pr-sessions");
     git(other, "push", "-q", "origin", "main");
+
+    mkdirSync(second);
+    writeFileSync(join(second, "README.md"), "second\n");
+    git(second, "init", "-q", "-b", "main");
+    git(second, "add", "-A");
+    git(second, "commit", "-qm", "init");
+    git(w.root, "init", "-q", "--bare", "-b", "main", secondOrigin);
+    git(second, "remote", "add", "origin", secondOrigin);
+    git(second, "push", "-q", "origin", "main");
+    git(w.root, "clone", "-q", secondOrigin, secondOther);
+    git(secondOther, "commit", "-q", "--allow-empty", "-m", "Tidy the second project");
+    git(secondOther, "push", "-q", "origin", "main");
+    secondId = rpc<{ id: string }>(w, "project.add", { path: second }).id;
   });
 
   after(() => {
     git(w.repo, "remote", "remove", "origin");
+    rpc(w, "project.remove", { id: secondId });
   });
 
   it("shows how far main is behind origin and lists the incoming commits", async () => {
@@ -41,6 +62,18 @@ describe("Pull base branch", () => {
     await expect($(sel.text("main is 2 commits behind origin"))).toBeDisplayed();
     await expect($(sel.text("Merge pull request #128 from 1devstudio/github-pr-sessions"))).toBeDisplayed();
     await expect($(sel.text("Open sessions from GitHub PRs"))).toBeDisplayed();
+  });
+
+  it("keeps one pull popover open at a time", async () => {
+    await browser.keys("Escape");
+    await expect(popover()).not.toBeExisting();
+    await expect(secondChip()).toBeDisplayed({ wait: 30_000 });
+    await secondChip().click();
+    await expect($(sel.text("Tidy the second project"))).toBeDisplayed();
+    await chip().click();
+    await expect($$('[role="dialog"][aria-label="Pull main"]')).toBeElementsArrayOfSize(1);
+    await expect($(sel.text("Open sessions from GitHub PRs"))).toBeDisplayed();
+    await expect($(sel.text("Tidy the second project"))).not.toBeExisting();
   });
 
   it("pulls main to origin's head and hides the chip", async () => {

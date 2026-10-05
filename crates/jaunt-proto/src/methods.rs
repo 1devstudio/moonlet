@@ -43,6 +43,7 @@ pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
 pub const WORKSPACE_DELETE: &str = "workspace.delete";
 pub const WORKSPACE_ADD_PROJECT: &str = "workspace.add_project";
+pub const WORKSPACE_REMOVE_PROJECT: &str = "workspace.remove_project";
 pub const SESSION_CREATE: &str = "session.create";
 pub const SESSION_LIST: &str = "session.list";
 pub const SESSION_ARCHIVE: &str = "session.archive";
@@ -63,6 +64,7 @@ pub const GIT_LOG: &str = "git.log";
 pub const GIT_BRANCHES: &str = "git.branches";
 pub const GIT_BASE_STATUS: &str = "git.base_status";
 pub const GIT_PULL_BASE: &str = "git.pull_base";
+pub const GIT_ORIGIN_URL: &str = "git.origin_url";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
 pub const GH_ISSUES: &str = "gh.issues";
 pub const SHELL_HISTORY: &str = "shell.history";
@@ -363,6 +365,12 @@ pub struct WorkspaceUpdate {
 pub struct WorkspaceAddProject {
     pub id: String,
     pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRemoveProject {
+    pub id: String,
+    pub project_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -272,7 +272,7 @@ export function ToolGroup({ tools, cwd }: { tools: ChatItem[]; cwd: string }) {
   );
 }
 
-/** Response time, end time and copy under a turn's final message (X15). */
+/** Response time, end time and copy under a turn's final message (X16). */
 function TurnFooter({ turn, text }: { turn: TurnTime; text: string }) {
   return (
     <div className="mt-1.5 flex items-center gap-1.5 chat-text-12 text-faint">

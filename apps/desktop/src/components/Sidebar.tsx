@@ -3,7 +3,7 @@ import { Archive, ArrowDown, ChevronDown, ChevronRight, Folder, FolderPlus, Hist
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
-import { arrange, compact, dropResult, lastActive, type Dragged, type Group } from "../lib/sidebar";
+import { arrange, compact, dropResult, lastActive, projectRemoval, type Dragged, type Group } from "../lib/sidebar";
 import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, fetchedLabel, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -35,8 +35,13 @@ async function deleteSection(host: string, ws: Workspace, id: string, sessions: 
 
 const activeAt = (host: string, s: Session) => lastActive(useStore.getState().terminals[host] ?? {}, s);
 
-/** Small project mark (Conductor uses a dotted glyph). */
-function ProjectMark() {
+/** Project mark: the GitHub owner's avatar (X15), else a dotted glyph like Conductor's. */
+function ProjectMark({ host, projectId }: { host: string; projectId: string }) {
+  const src = useStore((s) => s.avatars[projKey(host, projectId)]);
+  const [failed, setFailed] = useState<string | null>(null);
+  if (src && failed !== src) {
+    return <img src={src} alt="" width={15} height={15} draggable={false} onError={() => setFailed(src)} className="h-[15px] w-[15px] shrink-0 rounded-[3px]" />;
+  }
   return (
     <svg viewBox="0 0 16 16" width="15" height="15" className="shrink-0 text-[#4fd1c5]" fill="currentColor">
       {[
@@ -111,6 +116,10 @@ function InlineInput({ initial, placeholder, onDone }: { initial: string; placeh
 
 const CHIP_TONE: Record<BaseChip["kind"], string> = { behind: "text-accent", pulling: "text-muted", diverged: "text-error" };
 
+/** Closes the open pull popover. A chip's mousedown does not reach the
+ *  window, so opening another popover closes this one through here. */
+let closeBasePopover: (() => void) | null = null;
+
 /** "main is behind origin" chip on a project row, with the Pull popover. */
 function BasePullChip({ host, projectId }: { host: string; projectId: string }) {
   const sync = useStore((s) => s.base[projKey(host, projectId)]);
@@ -122,6 +131,8 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
   useEffect(() => {
     if (!pos) return;
     const close = () => setPos(null);
+    closeBasePopover?.();
+    closeBasePopover = close;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("mousedown", close);
     window.addEventListener("keydown", onKey);
@@ -129,6 +140,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
     // The sidebar list scrolled away from the chip.
     window.addEventListener("scroll", close, true);
     return () => {
+      if (closeBasePopover === close) closeBasePopover = null;
       window.removeEventListener("mousedown", close);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", close);
@@ -231,12 +243,14 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
 /** The session being dragged (HTML drag data is not readable during dragover). */
 let dragging: (Dragged & { host: string }) | null = null;
 
+/** A right-clicked session row, or a project header when `projectId` is set. */
 interface RowMenuState {
   x: number;
   y: number;
   host: string;
-  session: Session;
   workspace: Workspace;
+  session?: Session;
+  projectId?: string;
 }
 
 function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e: React.MouseEvent) => void }) {
@@ -305,7 +319,7 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   );
 }
 
-function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g: Group; onRowMenu: (s: Session, e: React.MouseEvent) => void }) {
+function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g: Group; onRowMenu: (target: { session?: Session; projectId?: string }, e: React.MouseEvent) => void }) {
   const key = `${host}/${ws.id}/${g.key}`;
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const toggle = () => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }));
@@ -341,7 +355,7 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
   const header =
     g.kind === "project" ? (
       <>
-        <ProjectMark />
+        <ProjectMark host={host} projectId={g.projectId!} />
         <span className="truncate text-[14px] font-semibold text-[#d6d6d6]">{g.label}</span>
       </>
     ) : g.kind === "section" ? (
@@ -355,7 +369,14 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
   return (
     <div {...dropProps} className={cx("mb-1 rounded-md transition-colors", over && "bg-selected outline outline-1 outline-accent/60")}>
       {header && (
-        <div className="group flex h-[38px] items-center gap-2.5 pl-4 pr-3">
+        <div
+          className="group flex h-[38px] items-center gap-2.5 pl-4 pr-3"
+          onContextMenu={(e) => {
+            if (g.kind !== "project") return;
+            e.preventDefault();
+            onRowMenu({ projectId: g.projectId }, e);
+          }}
+        >
           <button onClick={toggle} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
@@ -382,7 +403,7 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
           )}
         </div>
       )}
-      {!collapsed && g.sessions.map((s) => <SessionRow key={s.id} host={host} s={s} onMenu={(e) => onRowMenu(s, e)} />)}
+      {!collapsed && g.sessions.map((s) => <SessionRow key={s.id} host={host} s={s} onMenu={(e) => onRowMenu({ session: s }, e)} />)}
       {!collapsed && g.kind === "section" && g.sessions.length === 0 && (
         <div className="pb-1.5 pl-[30px] text-[12.5px] text-faint">Drag sessions here</div>
       )}
@@ -505,7 +526,7 @@ function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; 
             </div>
           )}
           {groups.map((g) => (
-            <GroupBlock key={g.key} host={host} ws={ws} g={g} onRowMenu={(s, e) => onRowMenu({ x: e.clientX, y: e.clientY, host, session: s, workspace: ws })} />
+            <GroupBlock key={g.key} host={host} ws={ws} g={g} onRowMenu={(target, e) => onRowMenu({ x: e.clientX, y: e.clientY, host, workspace: ws, ...target })} />
           ))}
           {wsProjects.length === 0 && (
             <button
@@ -532,8 +553,45 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
     };
   }, [onClose]);
   const { host, session: s, workspace: ws } = m;
+  const items = s ? sessionItems(host, s, ws) : m.projectId ? projectItems(host, m.projectId, ws) : [];
+  return (
+    <div
+      className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
+      style={{ left: Math.min(m.x, window.innerWidth - 250), top: Math.min(m.y, window.innerHeight - 220) }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <MenuItems items={items} onClose={onClose} />
+      {s && <div className="px-3 pb-1 pt-1.5 text-[11.5px] text-faint">Double-click a session to rename it</div>}
+    </div>
+  );
+}
+
+function projectItems(host: string, projectId: string, ws: Workspace): MenuItem[] {
+  const { projects, workspaces } = useStore.getState();
+  const project = (projects[host] ?? []).find((p) => p.id === projectId);
+  if (!project) return [];
+  const removal = projectRemoval(workspaces[host] ?? [], ws.id, project);
+  return [
+    { label: "Project settings…", icon: <Settings size={14} className="text-muted" />, onSelect: () => openProjectSettings({ host, project: projectId }) },
+    { kind: "divider" },
+    {
+      label: removal.label,
+      danger: true,
+      onSelect: async () => {
+        if (removal.confirm && !(await confirm(removal.confirm, { title: "Remove project", kind: "warning" }))) return;
+        try {
+          await rpc(host, M.workspaceRemoveProject, { id: ws.id, project_id: projectId });
+        } catch (e) {
+          errorToast(e);
+        }
+      },
+    },
+  ];
+}
+
+function sessionItems(host: string, s: Session, ws: Workspace): MenuItem[] {
   const moveTo = (section: string) => void rpc(host, M.sessionUpdate, { id: s.id, section }).catch(errorToast);
-  const items: MenuItem[] = [
+  return [
     { label: "Open", onSelect: () => selectSession(host, s.id) },
     ws.sections.length
       ? { kind: "submenu", label: "Move to section", items: ws.sections.map((sec) => ({ label: sec.name, checked: s.section === sec.id, onSelect: () => moveTo(sec.id) })) }
@@ -548,16 +606,6 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
       },
     },
   ];
-  return (
-    <div
-      className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
-      style={{ left: Math.min(m.x, window.innerWidth - 250), top: Math.min(m.y, window.innerHeight - 220) }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <MenuItems items={items} onClose={onClose} />
-      <div className="px-3 pb-1 pt-1.5 text-[11.5px] text-faint">Double-click a session to rename it</div>
-    </div>
-  );
 }
 
 function HistoryList() {

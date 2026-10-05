@@ -409,7 +409,7 @@ pub struct ChatItem {
     /// Still streaming.
     #[serde(default)]
     pub partial: bool,
-    /// On the final assistant message of a completed turn (X15).
+    /// On the final assistant message of a completed turn (X16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<TurnTime>,
 }

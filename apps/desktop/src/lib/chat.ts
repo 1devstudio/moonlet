@@ -191,7 +191,7 @@ export function tokens(n: number): string {
 const DAY = 86_400_000;
 
 /**
- * The footer under a turn's final message (X15): `14s · 4:00 PM`. The end
+ * The footer under a turn's final message (X16): `14s · 4:00 PM`. The end
  * time gains the weekday after today, and the date after the last 6 days.
  */
 export function turnFooter(turn: TurnTime, now: number, locale?: string): string {
