@@ -90,6 +90,23 @@ describe("diffRows", () => {
     ]);
   });
 
+  it("keeps a removed `-- ` line and an added `++ ` line inside a hunk", () => {
+    // An Edit of notes.txt from "-- old note" to "++ new note".
+    expect(diffRows("--- notes.txt\n+++ notes.txt\n@@\n--- old note\n+++ new note\n")).toEqual([
+      { kind: "hunk", html: "@@" },
+      { kind: "del", html: "-- old note" },
+      { kind: "add", html: "++ new note" },
+    ]);
+  });
+
+  it("colours a renamed file's removed lines by its old name and added lines by its new one", () => {
+    expect(diffRows("--- a/f.py\n+++ b/f.rs\n@@\n-def f(): pass\n+fn f() {}\n")).toEqual([
+      { kind: "hunk", html: "@@" },
+      { kind: "del", html: '<span class="hljs-keyword">def</span> <span class="hljs-title function_">f</span>(): <span class="hljs-keyword">pass</span>' },
+      { kind: "add", html: '<span class="hljs-keyword">fn</span> <span class="hljs-title function_">f</span>() {}' },
+    ]);
+  });
+
   it("colours a Write by its file and keeps git context lines", () => {
     expect(diffRows("--- /dev/null\n+++ notes.md\n@@\n+# Title\n")).toEqual([
       { kind: "hunk", html: "@@" },

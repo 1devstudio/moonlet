@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { outputView } from "./toolOutput";
+import { outputView, toolOutputView } from "./toolOutput";
 
 // Outputs below are captured from Bash calls in saved agent chats.
 
@@ -95,5 +95,29 @@ describe("outputView", () => {
   it("leaves output without any of these shapes plain", () => {
     expect(outputView("[evolve] Uploading tarball of [.]\n45000 bytes written to file /tmp/x17.png\n")).toBeNull();
     expect(outputView("")).toBeNull();
+  });
+});
+
+describe("toolOutputView", () => {
+  const tool = (name: string, input: unknown, output: string, summary = "") => ({ name, summary, input, output, status: "ok" as const });
+
+  it("colours a Read by the file path in its input, not the summary the daemon cuts to 200 characters", () => {
+    const path = `/repo/${"deep/".repeat(40)}main.rs`;
+    expect(toolOutputView(tool("Read", { file_path: path }, "1\tfn main() {}", path.slice(0, 200)))).toEqual({
+      kind: "read",
+      rows: [{ n: 1, html: '<span class="hljs-keyword">fn</span> <span class="hljs-title function_">main</span>() {}' }],
+    });
+  });
+
+  it("colours shell and Grep output, even a shell call whose input has no command", () => {
+    const diff = "--- a.txt\n+++ a.txt\n@@\n-a\n+b\n";
+    expect(toolOutputView(tool("Bash", {}, diff))).toEqual({ kind: "diff", diff });
+    expect(toolOutputView(tool("shell", { command: ["git", "diff"] }, diff))).toEqual({ kind: "diff", diff });
+    expect(toolOutputView(tool("Grep", { pattern: "x" }, "4:x", '"x"'))).toEqual({ kind: "lines", lines: [[{ text: "4:", tone: "dim" }, { text: "x" }]] });
+  });
+
+  it("leaves other tools' output plain", () => {
+    expect(toolOutputView(tool("WebFetch", { url: "https://example.com" }, "Build failed: see log"))).toBeNull();
+    expect(toolOutputView(tool("Read", { file_path: "/repo/a.rs" }, "<tool_use_error>File does not exist.</tool_use_error>"))).toBeNull();
   });
 });
