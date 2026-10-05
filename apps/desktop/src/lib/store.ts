@@ -27,6 +27,7 @@ import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, soundFor, type SoundSettings } from "./sounds";
 import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
+import { avatarUrl } from "./projectAvatar";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState } from "./protocol";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
@@ -142,6 +143,8 @@ interface State extends UiPersist {
   prs: Record<string, PullRequest | null>;
   /** Base branch against origin per project (`projKey`). */
   base: Record<string, BaseSync>;
+  /** GitHub owner avatar per project (`projKey`), or null without a GitHub origin (X15). */
+  avatars: Record<string, string | null>;
   terminals: Record<string, Record<number, TerminalInfo>>;
   layouts: Record<string, Layout>;
   git: Record<string, GitStatus | undefined>;
@@ -184,6 +187,7 @@ function makeStore() {
   workspaces: {},
   prs: {},
   base: {},
+  avatars: {},
   layouts: {},
   git: {},
   unread: {},
@@ -297,6 +301,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     for (const t of terminals) if (t.chat) void loadChat(host, t.id).catch(() => {});
     void refreshAllGit(host).then(() => refreshPrs(host));
     void refreshAllBases(host, { fetch: true });
+    void refreshAvatars(host);
   } catch (e) {
     console.warn(`loading ${host} failed (attempt ${attempt + 1})`, e);
     if (attempt < 8 && get().hosts[host]?.status === "connected") {
@@ -437,6 +442,14 @@ export async function refreshBase(host: string, projectId: string, opts: { fetch
     });
   } catch {
     /* the project folder is gone or the host disconnected */
+  }
+}
+
+/** Looks up each project's GitHub owner avatar from its origin remote (X15). */
+export async function refreshAvatars(host: string) {
+  for (const p of get().projects[host] ?? []) {
+    const url = await rpc<string | null>(host, M.gitOriginUrl, { path: p.path }).then(avatarUrl, () => null);
+    set((s) => ({ avatars: { ...s.avatars, [projKey(host, p.id)]: url } }));
   }
 }
 
@@ -594,6 +607,7 @@ function handleEvent(e: DaemonEvent) {
       set((s) => ({ projects: { ...s.projects, [host]: data as Project[] } }));
       // A new project, or a new base branch from Project settings.
       void refreshAllBases(host, { fetch: true });
+      void refreshAvatars(host);
       break;
     case EV.workspacesChanged:
       set((s) => ({ workspaces: { ...s.workspaces, [host]: data as Workspace[] } }));

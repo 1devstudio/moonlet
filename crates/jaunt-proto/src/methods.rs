@@ -63,6 +63,7 @@ pub const GIT_LOG: &str = "git.log";
 pub const GIT_BRANCHES: &str = "git.branches";
 pub const GIT_BASE_STATUS: &str = "git.base_status";
 pub const GIT_PULL_BASE: &str = "git.pull_base";
+pub const GIT_ORIGIN_URL: &str = "git.origin_url";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
 pub const GH_ISSUES: &str = "gh.issues";
 pub const SHELL_HISTORY: &str = "shell.history";
