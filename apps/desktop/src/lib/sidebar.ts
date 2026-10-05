@@ -94,6 +94,19 @@ export function dropResult(d: Dragged, target: Group): { section: string } | nul
   }
 }
 
+/**
+ * The project row's "Remove from <workspace>" item. `workspace.remove_project`
+ * drops a project no other workspace holds, so that case asks first.
+ */
+export function projectRemoval(workspaces: Workspace[], wsId: string, project: Project): { label: string; confirm: string | null } {
+  const ws = workspaces.find((w) => w.id === wsId);
+  const elsewhere = workspaces.some((w) => w.id !== wsId && w.project_ids.includes(project.id));
+  return {
+    label: `Remove from ${ws?.name ?? "workspace"}`,
+    confirm: elsewhere ? null : `${project.name} is in no other workspace, so it will be removed from jaunt. The folder on disk is not touched.`,
+  };
+}
+
 /** Latest output of a session's terminals (its "recent" sort key). */
 export function lastActive(terminals: Record<number, { session_id?: string; last_output_at: number }>, s: Session): number {
   return Object.values(terminals)

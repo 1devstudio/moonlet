@@ -346,6 +346,7 @@ export const M = {
   workspaceUpdate: "workspace.update",
   workspaceDelete: "workspace.delete",
   workspaceAddProject: "workspace.add_project",
+  workspaceRemoveProject: "workspace.remove_project",
   prStatus: "gh.pr_status",
   prStack: "gh.pr_stack",
   fsList: "fs.list",

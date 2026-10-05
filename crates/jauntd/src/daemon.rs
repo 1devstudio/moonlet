@@ -274,6 +274,12 @@ impl Daemon {
                     .await
                     .map_err(internal)?)
             }
+            m::WORKSPACE_REMOVE_PROJECT => {
+                let r: m::WorkspaceRemoveProject = params(p)?;
+                w.workspace_remove_project(&r.id, &r.project_id)
+                    .map_err(internal)?;
+                ok(true)
+            }
             m::SHELL_HISTORY => {
                 let r: m::ShellHistory = params(p)?;
                 let entries = tokio::task::spawn_blocking(move || {
