@@ -79,6 +79,9 @@ export function installShortcuts() {
       if (copyBlock()) e.preventDefault();
       return;
     }
+    // Text selected in the terminal wins over the block shortcuts (T8): they
+    // neither copy nor swallow the key.
+    if ((id === "shift+cmd+c" || id === "alt+cmd+c") && focusedEntry()?.term.hasSelection()) return;
     if (/^cmd\+[1-9]$/.test(id)) {
       e.preventDefault();
       selectSessionByIndex(Number(id.slice(-1)) - 1);
