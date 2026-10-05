@@ -54,3 +54,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X12 | End-to-end tests of the desktop app (WebdriverIO, embedded driver) | P1 | 3 | implemented (macOS) | [X12-e2e-tests.md](X12-e2e-tests.md) |
 | X13 | Pull the base branch (sidebar chip when `main` is behind origin) | P1 | 3 | implemented | [X13-pull-base-branch.md](X13-pull-base-branch.md) |
 | X14 | Collapsed tool calls and thinking rows in the agent view | P1 | 3 | implemented | [X14-collapsed-tool-calls.md](X14-collapsed-tool-calls.md) |
+| X15 | Response time and copy under the agent's final message | P1 | 3 | implemented | [X15-turn-footer.md](X15-turn-footer.md) |

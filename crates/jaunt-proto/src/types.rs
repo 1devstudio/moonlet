@@ -409,6 +409,16 @@ pub struct ChatItem {
     /// Still streaming.
     #[serde(default)]
     pub partial: bool,
+    /// On the final assistant message of a completed turn (X15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<TurnTime>,
+}
+
+/// When a turn started and ended, in milliseconds since the epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnTime {
+    pub started_at: u64,
+    pub ended_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

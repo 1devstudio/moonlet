@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use jaunt_proto::types::{ChatState, PermissionAsk};
 use serde_json::{Value, json};
 
-use super::{Adapter, ChatConfig, Out, clip, item, tool_item, update, upsert};
+use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, tool_item, update, upsert};
 use crate::paths::now_ms;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -293,7 +293,7 @@ impl Adapter for Codex {
                         let turn = &p["turn"];
                         let status = turn["status"].as_str().unwrap_or("completed");
                         self.turn = None;
-                        st.turn_started_at = None;
+                        let started_at = st.turn_started_at.take();
                         st.pending.clear();
                         self.asks.clear();
                         if status == "interrupted" {
@@ -314,6 +314,9 @@ impl Adapter for Codex {
                                 t.status = if status == "completed" { "ok".into() } else { "error".into() };
                             }
                             out.push(Out::Item(Box::new(it.clone())));
+                        }
+                        if st.status == "done" {
+                            out.extend(finish_turn(st, started_at));
                         }
                         out.push(Out::State);
                     }
@@ -454,6 +457,22 @@ mod tests {
         assert_eq!(st.items.iter().find(|i| i.id == "c1").unwrap().tool.as_ref().unwrap().status, "denied");
         assert_eq!((st.input_tokens, st.output_tokens), (100, 20));
         assert!(st.items.iter().all(|i| !i.partial));
+    }
+
+    #[test]
+    fn only_a_completed_turn_stamps_its_final_message() {
+        for (status, stamped) in [("completed", true), ("interrupted", false), ("failed", false)] {
+            let mut a = Codex::default();
+            let mut st = ChatState::default();
+            a.thread = Some("th".into());
+            a.send("hi", &mut st);
+            st.turn_started_at = Some(1_000);
+            feed(&mut a, &mut st, json!({"method": "item/agentMessage/delta", "params": {"itemId": "m1", "delta": "First"}}));
+            feed(&mut a, &mut st, json!({"method": "item/agentMessage/delta", "params": {"itemId": "m2", "delta": "Final"}}));
+            feed(&mut a, &mut st, json!({"method": "turn/completed", "params": {"turn": {"id": "tu", "status": status}}}));
+            let turns: Vec<_> = st.items.iter().filter_map(|i| i.turn.map(|t| (i.id.clone(), t.started_at))).collect();
+            assert_eq!(turns, if stamped { vec![("m2".to_string(), 1_000)] } else { vec![] }, "{status}");
+        }
     }
 
     #[test]
