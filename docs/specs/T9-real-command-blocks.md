@@ -37,14 +37,18 @@ In shell terminals in Warp mode, each command becomes a real [Block](../../CONTE
 
 ### Block lifecycle
 
-- [ ] **Marks:** jaunt's scanner reads OSC 133 marks from the raw output, including marks split across reads. The integration adds `aid=<shell pid>` to every mark, and only marks whose `aid` matches the terminal's shell are honoured, so nested shells cannot open or close blocks.
+- [ ] **Marks:** jaunt's scanner reads OSC 133 marks from the raw output, including marks split across reads. Every mark carries `aid=<token>`, a random token the daemon makes per terminal and passes in `JAUNT_MARK_TOKEN`. The integration copies it into an unexported shell variable and unsets the environment variable at startup, so programs the shell runs never see it. Only marks with the terminal's token are honoured, so nested shells and programs that print OSC 133 cannot open or close blocks. (The shell PID was rejected: any command can print `$$`.)
 - [ ] **Start:** at a `C` mark a block opens with a per-terminal id, the command line (the text between the prompt and `C`), the cwd from the last OSC 7, and the daemon clock as `started_at`.
 - [ ] **Finish:** at a `D` mark the block records its exit code and `ended_at`, and is **frozen**: its rows (from the command line to the cursor, including scrollback) are formatted into styled logical lines (wrapped rows joined) and stored. The live emulator's screen and scrollback are then cleared and the cursor homed, inside the daemon only. Terminal modes such as bracketed paste are kept.
 - [ ] Finished blocks never change.
 - [ ] **Full-screen programs** in the active block use the whole pane. When they exit, the block's earlier output is visible again.
-- [ ] **`clear`:** an erase-display (`CSI 2J` or `CSI 3J`) on the primary screen drops every finished block and the active block's output before that point. This covers `clear`, Ctrl+L at the prompt and the editor's Ctrl+L.
+- [ ] **`clear`:** only an explicit clear drops blocks:
+  - an erase-display (`CSI 2J` or `CSI 3J`) printed at the prompt, between blocks, which is how the shell answers Ctrl+L and the editor's Ctrl+L;
+  - a block whose command is `clear`, `reset` or `tput clear`: when it finishes, every earlier block is dropped, and the clearing block is not kept.
+  
+  Any other program's erase-display clears only the active block's own screen.
 - [ ] **Limits:** at most 10,000 lines across a terminal's blocks; when exceeded, whole blocks are dropped, oldest first. A single block over the limit keeps its last 10,000 lines and starts with a `… N earlier lines dropped` line. At most 2,000 blocks.
-- [ ] Output from before shell integration started is kept as the terminal's preamble, not a block.
+- [ ] Output from before shell integration started is kept as the terminal's preamble, not a block. It is sent as block 0 (see Protocol) and drawn above the first block without a header.
 
 ### Survival
 
@@ -77,7 +81,7 @@ In shell terminals in Warp mode, each command becomes a real [Block](../../CONTE
 `PROTOCOL_VERSION` goes up by one.
 
 - `BlockInfo { id, command, cwd, started_at, ended_at?, exit?, lines, dropped }`, where `lines` is the stored line count and `dropped` the number of lines cut by the limit.
-- `terminal.attach` adds `blocks: BlockInfo[]` (finished, oldest first) and `active?: BlockInfo` for Warp-mode shells. The snapshot that follows is the active block's live screen only.
+- `terminal.attach` adds `blocks: BlockInfo[]` (finished, oldest first) and `active?: BlockInfo` for Warp-mode shells. When the terminal has a preamble, it is `blocks[0]` with `id: 0`, an empty command and no timing; its lines come from `terminal.block_lines` like any finished block. The snapshot that follows is the active block's live screen only.
 - `terminal.block_lines {id, block, from, count}` returns styled lines for one finished block: `Line = Run[]`, `Run = { t, fg?, bg?, bold?, italic?, underline?, inverse?, dim?, strike? }`, colours as palette indices (`0`–`255`) or `#rrggbb`. The app fetches lines for blocks near the viewport and caches them.
 - Events, sent on the same stream as output so their order with output frames is exact:
   - `terminal.block_started {id, block: BlockInfo}`; the app resets the live xterm.
@@ -92,7 +96,7 @@ In shell terminals in Warp mode, each command becomes a real [Block](../../CONTE
 
 ## Security considerations
 
-- Marks are honoured only with the shell's own `aid`, so a program printing OSC 133 cannot forge block boundaries in the outer shell. It can still affect the block it runs in.
+- Marks are honoured only with the terminal's secret token, which programs run by the shell do not inherit, so a program printing OSC 133 cannot forge block boundaries. A program that reads the shell's memory could still find the token; that is out of scope.
 - Styled lines are rendered as text nodes, never as HTML from the terminal.
 
 ## Out of scope
@@ -105,9 +109,10 @@ In shell terminals in Warp mode, each command becomes a real [Block](../../CONTE
 ## Test plan
 
 - Rust, `jaunt-core`:
-  - Scanner: marks split across reads at every byte; `aid` filtering; OSC 9 / 777 extraction.
+  - Scanner: marks split across reads at every byte; marks with a wrong or missing token are ignored, including one built from `$$`; OSC 9 / 777 extraction.
+- Integration: `JAUNT_MARK_TOKEN` is not in the environment of a command the shell runs.
   - Ported ADR 0003 round-trip tests on libghostty-vt.
-  - Freeze: captured output of a `cargo` progress bar, `printf` with long wrapped lines, vim inside a block, `clear` mid-block; each checked against literal expected lines.
+  - Freeze: captured output of a `cargo` progress bar, `printf` with long wrapped lines, vim inside a block, a program printing `CSI 2J` mid-block (only its own block is cleared), `clear` as a command and Ctrl+L at the prompt (both drop earlier blocks); each checked against literal expected lines.
   - Limits: 10,001 lines across blocks drops the oldest whole block; a 12,000-line block keeps its last 10,000 with `dropped = 2000`; the 2,001st block drops the first.
   - Resize reflow of the active block.
 - Rust, `jauntd/tests`: attach mid-command returns finished blocks and the active one; a live upgrade keeps them; a nested shell's marks do not open blocks.
