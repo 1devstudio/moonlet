@@ -128,19 +128,19 @@ export function CommandPalette() {
             }
           }}
           placeholder="Search commands, sessions and agents…"
-          className="w-full border-b border-border bg-transparent px-4 py-3 text-[14px] outline-none placeholder:text-faint"
+          className="w-full border-b border-border bg-transparent px-4 py-3 ui-text-14 outline-none placeholder:text-faint"
         />
         <div className="max-h-[50vh] overflow-y-auto py-1">
           {filtered.map((it, i) => (
             <div
               key={it.id}
-              className={cx("flex cursor-default items-center gap-2 px-4 py-1.5 text-[13px]", i === sel ? "bg-raised" : "")}
+              className={cx("flex cursor-default items-center gap-2 px-4 py-1.5 ui-text-13", i === sel ? "bg-raised" : "")}
               onMouseEnter={() => setSel(i)}
               onClick={() => run(it)}
             >
               {it.state !== undefined && <StateGlyph state={it.state} size={12} />}
               <span className="truncate">{it.label}</span>
-              {it.hint && <span className="truncate text-[11.5px] text-faint">{it.hint}</span>}
+              {it.hint && <span className="truncate ui-text-11.5 text-faint">{it.hint}</span>}
               {it.keys && (
                 <span className="ml-auto">
                   <Kbd>{it.keys}</Kbd>
@@ -148,7 +148,7 @@ export function CommandPalette() {
               )}
             </div>
           ))}
-          {filtered.length === 0 && <div className="px-4 py-3 text-[12.5px] text-faint">No matches.</div>}
+          {filtered.length === 0 && <div className="px-4 py-3 ui-text-12.5 text-faint">No matches.</div>}
         </div>
       </div>
     </div>

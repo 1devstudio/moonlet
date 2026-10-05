@@ -51,7 +51,7 @@ export function AddProjectDialog({ host: presetHost, workspace: presetWorkspace 
         </>
       }
     >
-      <p className="mb-3 text-[12.5px] text-muted">A project is a git repository folder. Each session you start in it gets its own worktree and branch.</p>
+      <p className="mb-3 ui-text-12.5 text-muted">A project is a git repository folder. Each session you start in it gets its own worktree and branch.</p>
       {connected.length > 1 && (
         <Field label="Host">
           <select
@@ -128,7 +128,7 @@ export function NewWorkspaceDialog() {
         </>
       }
     >
-      <p className="mb-3 text-[12.5px] text-muted">A workspace is a set of projects shown together in the sidebar, e.g. "Work" or "Personal".</p>
+      <p className="mb-3 ui-text-12.5 text-muted">A workspace is a set of projects shown together in the sidebar, e.g. "Work" or "Personal".</p>
       <Field label="Name">
         <input autoFocus className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="Work" onKeyDown={(e) => e.key === "Enter" && name.trim() && void create()} />
       </Field>
@@ -174,7 +174,7 @@ export function CommitDialog() {
       onClose={close}
       footer={
         <>
-          <label className="mr-auto flex items-center gap-1.5 text-[12px] text-muted">
+          <label className="mr-auto flex items-center gap-1.5 ui-text-12 text-muted">
             <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Stage all changes first
           </label>
           <Button variant="ghost" onClick={close}>
@@ -188,7 +188,7 @@ export function CommitDialog() {
     >
       <textarea
         autoFocus
-        className={cx(inputCls, "min-h-[110px] font-mono text-[12.5px]")}
+        className={cx(inputCls, "min-h-[110px] font-mono ui-text-12.5")}
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         placeholder="feat: describe the change"
@@ -237,7 +237,7 @@ export function CreatePrDialog() {
       onClose={close}
       footer={
         <>
-          <label className="mr-auto flex items-center gap-1.5 text-[12px] text-muted">
+          <label className="mr-auto flex items-center gap-1.5 ui-text-12 text-muted">
             <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} /> Draft
           </label>
           <Button variant="ghost" onClick={close}>
@@ -249,10 +249,10 @@ export function CreatePrDialog() {
         </>
       }
     >
-      <p className="mb-3 text-[12px] text-muted">
+      <p className="mb-3 ui-text-12 text-muted">
         Pushes <span className="font-mono text-fg">{ws.branch}</span> to origin and opens a PR into <span className="font-mono text-fg">{ws.base}</span> with the GitHub CLI.
       </p>
-      {uncommitted && <p className="mb-3 rounded-md border border-[#4a3b17] bg-[#2a2210] px-2 py-1.5 text-[12px] text-blocked">There are uncommitted changes; they will not be in the PR.</p>}
+      {uncommitted && <p className="mb-3 rounded-md border border-[#4a3b17] bg-[#2a2210] px-2 py-1.5 ui-text-12 text-blocked">There are uncommitted changes; they will not be in the PR.</p>}
       <Field label="Title">
         <input autoFocus className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} />
       </Field>
@@ -287,10 +287,10 @@ function HooksSection() {
   };
   return (
     <section className="mb-5">
-      <h3 className="mb-1 text-[12px] font-semibold">Agent hooks</h3>
-      <p className="mb-2 text-[12px] text-muted">Hooks let Claude Code and Codex report exactly when they are working, waiting for approval, or done.</p>
+      <h3 className="mb-1 ui-text-12 font-semibold">Agent hooks</h3>
+      <p className="mb-2 ui-text-12 text-muted">Hooks let Claude Code and Codex report exactly when they are working, waiting for approval, or done.</p>
       {status && (
-        <div className="mb-2 space-y-1 text-[12px]">
+        <div className="mb-2 space-y-1 ui-text-12">
           <div className="flex items-center gap-2">
             <CheckCircle2 size={13} className={status.claude_installed ? "text-done" : "text-faint"} /> Claude Code
             <span className="text-faint">{status.claude_installed ? "installed" : "not installed"}</span>
@@ -335,17 +335,17 @@ function HostsSection() {
   };
   return (
     <section className="mb-5">
-      <h3 className="mb-1 text-[12px] font-semibold">Remote hosts</h3>
-      <p className="mb-2 text-[12px] text-muted">Uses your own OpenSSH config, keys and agent. Sessions keep running on the host when the connection drops.</p>
+      <h3 className="mb-1 ui-text-12 font-semibold">Remote hosts</h3>
+      <p className="mb-2 ui-text-12 text-muted">Uses your own OpenSSH config, keys and agent. Sessions keep running on the host when the connection drops.</p>
       <div className="mb-2 space-y-1">
         {remotes.map((h) => (
-          <div key={h.id} className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-[12.5px]">
+          <div key={h.id} className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 ui-text-12.5">
             <Server size={13} className="text-muted" />
             <span className="font-medium">{h.id}</span>
-            <span className={cx("text-[11.5px]", h.status === "connected" ? "text-done" : h.status === "needs_install" || h.status === "error" ? "text-error" : "text-blocked")}>
+            <span className={cx("ui-text-11.5", h.status === "connected" ? "text-done" : h.status === "needs_install" || h.status === "error" ? "text-error" : "text-blocked")}>
               {h.status.replace("_", " ")}
             </span>
-            {h.message && <span className="truncate text-[11px] text-faint" title={h.message}>{h.message}</span>}
+            {h.message && <span className="truncate ui-text-11 text-faint" title={h.message}>{h.message}</span>}
             <span className="ml-auto flex gap-1">
               {(h.status === "needs_install" || h.status === "connected") && (
                 <Button size="sm" disabled={busy === h.id} onClick={() => void install(h.id)}>
@@ -391,7 +391,7 @@ function AgentsSection() {
   const toolCalls = useStore((s) => s.settings.toolCalls);
   return (
     <section>
-      <h3 className="mb-2 text-[12px] font-semibold">Agents</h3>
+      <h3 className="mb-2 ui-text-12 font-semibold">Agents</h3>
       <Field label="Default permission mode for new Claude sessions">
         <select className={inputCls} value={mode} onChange={(e) => updateSettings({ defaultMode: e.target.value })}>
           {CLAUDE_MODES.map((m) => (
@@ -407,8 +407,8 @@ function AgentsSection() {
           <option value="expanded">Expanded · one row per call</option>
         </select>
       </Field>
-      <h4 className="mt-3 mb-1.5 text-[12px] font-medium text-muted">Sounds when not watching the agent</h4>
-      <div className="grid grid-cols-[90px_1fr_auto] items-center gap-x-2 gap-y-1.5 text-[12.5px]">
+      <h4 className="mt-3 mb-1.5 ui-text-12 font-medium text-muted">Sounds when not watching the agent</h4>
+      <div className="grid grid-cols-[90px_1fr_auto] items-center gap-x-2 gap-y-1.5 ui-text-12.5">
         {SOUND_EVENTS.map((ev) => {
           const current = soundFor(sounds, ev.id) ?? "";
           return (
@@ -443,7 +443,7 @@ function TerminalSection() {
   const setTerm = (patch: Partial<typeof t>) => updateSettings({ term: { ...t, ...patch } });
   return (
     <section>
-      <h3 className="mb-2 text-[12px] font-semibold">Terminal</h3>
+      <h3 className="mb-2 ui-text-12 font-semibold">Terminal</h3>
       <div className="grid grid-cols-[1fr_90px] gap-3">
         <Field label="Font family">
           <input className={inputCls} value={t.fontFamily} onChange={(e) => setTerm({ fontFamily: e.target.value })} />
@@ -452,7 +452,7 @@ function TerminalSection() {
           <input type="number" min={9} max={24} className={inputCls} value={t.fontSize} onChange={(e) => setTerm({ fontSize: Number(e.target.value) || 13 })} />
         </Field>
       </div>
-      <div className="space-y-1.5 text-[12.5px]">
+      <div className="space-y-1.5 ui-text-12.5">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={t.optionIsMeta} onChange={(e) => setTerm({ optionIsMeta: e.target.checked })} /> Use Option as Meta
         </label>
@@ -499,11 +499,11 @@ function DaemonSection() {
   };
   return (
     <section className="mb-5">
-      <h3 className="mb-1 text-[12px] font-semibold">Background daemon</h3>
-      <p className="mb-2 text-[12px] text-muted">Agents run in jauntd, not in this window. Running it under launchd starts it at login and restarts it if it ever crashes.</p>
-      <label className="flex items-center gap-2 text-[12.5px]">
+      <h3 className="mb-1 ui-text-12 font-semibold">Background daemon</h3>
+      <p className="mb-2 ui-text-12 text-muted">Agents run in jauntd, not in this window. Running it under launchd starts it at login and restarts it if it ever crashes.</p>
+      <label className="flex items-center gap-2 ui-text-12.5">
         <input type="checkbox" disabled={busy || !status} checked={!!status?.installed} onChange={(e) => void toggle(e.target.checked)} /> Start the jaunt daemon at login
-        {status?.installed && !status.loaded && <span className="text-[11px] text-blocked">installed but not loaded</span>}
+        {status?.installed && !status.loaded && <span className="ui-text-11 text-blocked">installed but not loaded</span>}
       </label>
     </section>
   );

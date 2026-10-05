@@ -32,12 +32,6 @@ export const defaultTermSettings: TermSettings = {
   webgl: true,
 };
 
-/** How much the structured agent view scales its text: the terminal font
- * size relative to the default, so both views follow one setting (X6). */
-export function chatScale(fontSize: number): number {
-  return Number.isFinite(fontSize) && fontSize > 0 ? fontSize / defaultTermSettings.fontSize : 1;
-}
-
 const THEME = {
   background: "#121212",
   foreground: "#e2e2e2",
