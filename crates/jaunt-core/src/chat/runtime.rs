@@ -144,6 +144,7 @@ impl ChatManager {
             pid: None,
             exit: None,
             reported_cwd: None,
+            node_version: None,
             prompt: None,
             alt_screen: false,
             chat: true,
