@@ -31,7 +31,7 @@ export interface TerminalInfo {
   alt_screen?: boolean;
   /** Structured agent (X6): render the chat view, not a terminal. */
   chat?: boolean;
-  /** Shell keeps its own prompt; no Warp editor (T7). */
+  /** Shell keeps its own prompt; no Blocks-mode editor (T7). */
   classic?: boolean;
   created_at: number;
   last_output_at: number;

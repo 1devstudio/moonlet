@@ -125,7 +125,7 @@ pub struct TerminalCreate {
     /// Run `agent` headless with the structured view (X6) instead of its TUI.
     #[serde(default)]
     pub chat: bool,
-    /// Start a shell with its own prompt instead of Warp mode (T7).
+    /// Start a shell with its own prompt instead of Blocks mode (T7).
     #[serde(default)]
     pub classic: bool,
     /// Model and effort for a structured agent.

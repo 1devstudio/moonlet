@@ -49,7 +49,7 @@ function sendBlock(newTab: boolean): boolean {
   if (!e || !e.el.closest("[data-terminal-pane]")?.contains(document.activeElement)) return false;
   // With nothing selected, the newest block, unless a command is being typed.
   const typed = document.activeElement instanceof HTMLTextAreaElement && !e.el.contains(document.activeElement) ? document.activeElement.value : "";
-  const text = e.forAgent(pickBlockForAgent(e.selected, e.warp ? e.newestFinished() : null, typed));
+  const text = e.forAgent(pickBlockForAgent(e.selected, e.blockMode ? e.newestFinished() : null, typed));
   if (!text) return false;
   e.select(null);
   void draftToAgent(text, newTab);

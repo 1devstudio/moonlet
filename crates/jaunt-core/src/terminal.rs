@@ -265,7 +265,7 @@ impl TerminalManager {
         env.extend(req.env.clone());
 
         // Interactive shells get prompt marks and cwd reporting (T3), and
-        // Warp mode with a blank prompt unless classic is chosen (T7).
+        // Blocks mode with a blank prompt unless classic is chosen (T7).
         if default_shell {
             let marker = self.classic_file(id);
             if req.classic {
@@ -583,7 +583,7 @@ impl TerminalManager {
         self.socket.with_file_name("prompt").join(id.to_string())
     }
 
-    /// Switches a shell between Warp mode and its own prompt (T7). Takes
+    /// Switches a shell between Blocks mode and its own prompt (T7). Takes
     /// effect at the shell's next prompt.
     pub fn set_classic(&self, id: TerminalId, classic: bool) -> Result<TerminalInfo> {
         let t = self.get(id).context("no such terminal")?;

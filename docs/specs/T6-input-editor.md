@@ -1,13 +1,13 @@
-# T6: Warp-style input editor with suggestions
+# T6: Input editor with suggestions
 
 - **Status:** implemented
 - **Priority / phase:** P1 · phase 3 (requested 2026-10-03)
-- **PRD refs:** T1, T3 (shell integration), T5; "fast, modern terminal feel (in the spirit of Warp)"
+- **PRD refs:** T1, T3 (shell integration), T5; "fast, modern terminal feel"
 - **Related:** [T3](T3-shell-integration.md)
 
 ## Summary
 
-At a shell prompt, typing happens in a real text editor docked under the terminal, as in Warp. You can click to place the cursor, select with the mouse or keyboard, edit multi-line commands, and accept a ghost-text suggestion from your history. When a command runs, or a full-screen program takes over, the terminal gets the keys as usual.
+At a shell prompt, typing happens in a real text editor docked under the terminal. You can click to place the cursor, select with the mouse or keyboard, edit multi-line commands, and accept a ghost-text suggestion from your history. When a command runs, or a full-screen program takes over, the terminal gets the keys as usual.
 
 ## Behaviour and acceptance criteria
 

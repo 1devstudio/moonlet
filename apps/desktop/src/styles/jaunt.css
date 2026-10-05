@@ -71,7 +71,7 @@ textarea,
 .jaunt-block-mark.failed {
   background: var(--color-error);
 }
-/* Warp-mode command blocks (T7, T8): a separator in the spacer row above
+/* Blocks-mode command blocks (T7, T8): a separator in the spacer row above
    each block, then a header row, both reaching into the pane padding of
    .jaunt-term. The header scales with the terminal font. */
 .jaunt-block-sep {
