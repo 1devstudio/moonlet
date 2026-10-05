@@ -265,6 +265,47 @@ async fn workspace_lifecycle_over_rpc() {
 }
 
 #[tokio::test]
+async fn a_project_can_be_removed_from_a_workspace_over_rpc() {
+    use jaunt_proto::types::{Project, Workspace};
+    let d = TestDaemon::start().await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let mut c = d.client().await;
+    let ws: Workspace = c
+        .request(
+            methods::WORKSPACE_CREATE,
+            serde_json::json!({"name": "Acme"}),
+        )
+        .await
+        .unwrap();
+    let p: Project = c
+        .request(
+            methods::WORKSPACE_ADD_PROJECT,
+            serde_json::json!({"id": ws.id, "path": repo}),
+        )
+        .await
+        .unwrap();
+    let _: bool = c
+        .request(
+            "workspace.remove_project",
+            serde_json::json!({"id": ws.id, "project_id": p.id}),
+        )
+        .await
+        .unwrap();
+    let left: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
+    assert!(left.is_empty());
+}
+
+#[tokio::test]
 async fn terminals_do_not_inherit_the_daemon_starters_environment() {
     let home = tempfile::tempdir().unwrap();
     let socket = home.path().join("run").join("d.sock");

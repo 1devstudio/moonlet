@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, compact, dropResult, type Group } from "./sidebar";
+import { arrange, compact, dropResult, projectRemoval, type Group } from "./sidebar";
 import type { Project, Session, Workspace } from "./protocol";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
@@ -88,5 +88,21 @@ describe("drag and drop", () => {
     expect(dropResult(filed, g("project", { projectId: "b" }))).toBeNull();
     expect(dropResult(filed, g("status"))).toEqual({ section: "" });
     expect(dropResult(loose, g("project", { projectId: "a" }))).toBeNull();
+  });
+});
+
+describe("projectRemoval", () => {
+  const home = ws({}, { id: "w1", name: "1devstudio", project_ids: ["a", "b"] });
+  const other = ws({}, { id: "w2", name: "Acme", project_ids: ["b"] });
+
+  it("only detaches a project another workspace still holds", () => {
+    expect(projectRemoval([home, other], "w1", p("b", "acmeco-paas"))).toEqual({ label: "Remove from 1devstudio", confirm: null });
+  });
+
+  it("asks before dropping a project no other workspace holds", () => {
+    expect(projectRemoval([home, other], "w1", p("a", "jaunt"))).toEqual({
+      label: "Remove from 1devstudio",
+      confirm: "jaunt is in no other workspace, so it will be removed from jaunt. The folder on disk is not touched.",
+    });
   });
 });
