@@ -225,6 +225,9 @@ export function InputEditor({
           onChange={(e) => {
             setText(e.target.value);
             setHint(null);
+            // Editing a command means ⌘↵ is about it, not a selected block (T8).
+            const entry = findEntry(host, terminal);
+            if (entry?.selected) entry.select(null);
           }}
           onKeyDown={onKeyDown}
           className="relative block w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"

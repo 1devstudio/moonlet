@@ -169,6 +169,10 @@ describe("sending a block to an agent (T8)", () => {
     );
   });
 
+  it("uses a longer fence when the command contains one", () => {
+    expect(blockForAgent({ command: "cat <<'EOF'\n```\nEOF", output: "```" })).toBe("````\n$ cat <<'EOF'\n```\nEOF\n```\n````\n");
+  });
+
   it("uses a longer fence when the output contains one", () => {
     expect(blockForAgent({ command: "cat README.md", output: "```sh\nls\n```" })).toBe("````\n$ cat README.md\n```sh\nls\n```\n````\n");
   });

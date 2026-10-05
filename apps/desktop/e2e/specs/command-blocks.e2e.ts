@@ -98,6 +98,13 @@ describe("command blocks", () => {
     // Esc clears the selection.
     await press("Escape");
     await expect($(".jaunt-block-bg.selected")).not.toExist();
+
+    // So does editing a command: ⌘↵ is then about the typed command.
+    await press("ArrowUp", { metaKey: true });
+    await expect($(".jaunt-block-bg.selected")).toExist();
+    await fill(input, "echo typed");
+    await expect($(".jaunt-block-bg.selected")).not.toExist();
+    await fill(input, "");
   });
 
   it("sends the selected block to the session's agent with ⌘↵", async () => {
