@@ -1,6 +1,6 @@
 # T8: Warp-style block styling and input editor
 
-- **Status:** in progress (steps 1 to 4 implemented: block header, selection, send to agent, context chips, input colouring)
+- **Status:** implemented (fish's bold command line is still open)
 - **Priority / phase:** P1 · phase 3 (requested 2026-10-05, with Warp screenshots)
 - **PRD refs:** T1, T3, T4; "fast, modern terminal feel (in the spirit of Warp)"
 - **Related:** [T4](T4-command-blocks.md), [T6](T6-input-editor.md), [T7](T7-warp-shell-model.md), [X4](X4-visual-design.md) (tokens), [T9](T9-real-command-blocks.md) (real blocks, which reuse this spec's header and selection logic)
@@ -65,13 +65,13 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ### Completion popup
 
-- [ ] Tab with more than one match opens a popup above the input instead of today's hint line. Each row: a folder or file icon (or a terminal icon for commands), the name with the typed prefix in bold, and a muted type label (`Directory`, `File`, `Command`).
-- [ ] A side panel shows the highlighted row's full path, `~`-shortened, and its type.
-- [ ] ↑ / ↓ move the highlight, Tab or Enter accept it, Esc closes. Typing narrows the list live; no match closes the popup.
-- [ ] Order: directories, then files, each alphabetical; commands alphabetical. At most 200 rows, scrollable.
-- [ ] The first word completes against known commands; later words complete as paths (T6 rules: dotfiles only when the stem starts with `.`).
-- [ ] A single match completes in place without a popup, as today.
-- [ ] Filtering, ordering, the bold range and highlight movement come from a pure `completionModel()` in `lib/`.
+- [x] Tab with more than one match extends the word to the matches' common prefix (as T6 did) and opens a popup above the input instead of today's hint line. Each row: a folder or file icon (or a terminal icon for commands), the name with the typed prefix in bold, and a muted type label (`Directory`, `File`, `Command`).
+- [x] A side panel shows the highlighted row's full path, `~`-shortened, and its type.
+- [x] ↑ / ↓ move the highlight, Tab or Enter accept it, Esc closes. Typing narrows the list live; no match closes the popup.
+- [x] Order: directories, then files, each alphabetical; commands alphabetical. At most 200 rows, scrollable.
+- [x] The first word completes against known commands; later words complete as paths (T6 rules: dotfiles only when the stem starts with `.`).
+- [x] A single match completes in place without a popup, as today.
+- [x] Filtering, ordering, the bold range and highlight movement come from a pure `completionModel()` in `lib/`.
 
 ## UI
 
@@ -125,6 +125,7 @@ None.
 ## Verification
 
 - 2026-10-05: zsh keeps `zle_highlight` bold on the line after the command is accepted (checked in a PTY: each character is drawn with `\e[1m` and the reset comes after Enter).
+- 2026-10-05, completion popup: in the e2e app, `cd ci` + Tab with `acmeco-paas/` and `acmeco-sdd/` present completed to `cd acmeco-`, showed both directories with the side panel, ↓ and Enter gave `cd acmeco-sdd/`; `gi` + Tab listed commands from PATH.
 - 2026-10-05, input colouring: in the e2e app, `FOO=1 git commit -m "fix it" && ls -la ~/src | wc -l > out.txt; nosuchcmd x` showed the known commands green, `commit` blue, flags muted, the string yellow, operators faint and `nosuchcmd` plain; a selection lined up with the coloured text.
 - 2026-10-05, block selection: in the e2e app, a click on a block's output row highlighted the block in orange with the left bar.
 - 2026-10-05, block header: in the e2e app, `ls -la`, `false`, `printf` and `sleep 3` showed headers with the directory and duration, `· exit 1` in red with a red-tinted block, a spinner while `sleep 3` ran, and bold commands.
