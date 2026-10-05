@@ -22,7 +22,8 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ### Block header and command
 
-- [x] **Header row:** in Warp mode the blank prompt is one empty line (zsh `PROMPT=$'\n'`, bash `PS1='\n'`, fish a `fish_prompt` that prints a newline). The header is drawn on that row. Classic mode is unchanged.
+- [x] **Header row:** in Warp mode the blank prompt is two empty lines (zsh `PROMPT=$'\n\n'`, bash `PS1='\n\n…'`, fish a `fish_prompt` that prints two newlines). The first is the gap between blocks, with the separator through its middle; the header is drawn on the second. Classic mode is unchanged.
+- [x] **No empty row:** when the shell left no empty row above the command (an older shell integration, for example a daemon from before this change), the header goes at the end of the command line instead of over it. With one empty row, separator and header share it. `blockLayout()` in `lib/` decides.
 - [x] **Header text** comes from a pure `blockHeader()` in `lib/`:
   - `<cwd> git:(<branch>) (<duration>)`, for example `~/src/app git:(main) (0.053s)`.
   - `cwd` is the directory at the `C` mark (OSC 7), `~`-shortened.
@@ -32,10 +33,10 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
   - A running block shows the cwd and branch with a spinner in place of the duration.
   - A block replayed from before the app attached has no duration and no parentheses.
 - [x] **Bold command:** the command line is drawn bold by the shell in Warp mode. zsh adds `default:bold` to `zle_highlight` (the user's other entries are kept and restored in classic mode). bash ends the prompt with bold and resets it in the DEBUG trap before the command runs (`PS0` does not exist in macOS's bash 3.2). Output is not bold. fish is not bold yet: it colours every token itself, and fish is not installed to test with.
-- [x] **Separator:** a hairline on the top edge of the header row, spanning the whole pane width including its padding.
+- [x] **Separator:** a hairline through the middle of the gap row above the header, spanning the whole pane width including its padding.
 - [x] **Failed block:** the block's rows get a faint red background, drawn in a layer of its own over the grid (an xterm decoration disappears once its first row scrolls out of view). In Warp mode the T4 gutter mark is left out; the overview ruler keeps its colours.
 - [x] The T7 right-hand chip (`✓ 1.2s`) is removed; its information is in the header.
-- [x] **Spacing:** one header row per block (checked in the app on 2026-10-05).
+- [x] **Spacing:** a gap row and a header row per block. One row was tried first and looked cramped next to Warp (user feedback, 2026-10-05).
 
 ### Block selection
 
@@ -75,7 +76,7 @@ Make shell terminals in Warp mode look and feel like Warp, on top of today's sin
 
 ## UI
 
-- Header: mono 11px, `faint`; `exit N` in `error`.
+- Header: mono at 85% of the terminal font size, `muted`; `exit N` in `error`.
 - Selected block: `accent` at about 12% alpha, 2px `accent` left bar.
 - Failed block: `error` at about 6% alpha.
 - Chips: `raised` background, `border` hairline, 4px radius, 2px × 6px padding.
@@ -125,6 +126,7 @@ None.
 ## Verification
 
 - 2026-10-05: zsh keeps `zle_highlight` bold on the line after the command is accepted (checked in a PTY: each character is drawn with `\e[1m` and the reset comes after Enter).
+- 2026-10-05, block layout: the user's app ran this branch's UI against the installed 0.1.7 daemon, whose shell integration has no header row, and the header covered the command. Now a gap row and a header row per block, the header scaled to the terminal font, and a fallback to the end of the command line; checked in the e2e app.
 - 2026-10-05, completion popup: in the e2e app, `cd ci` + Tab with `acmeco-paas/` and `acmeco-sdd/` present completed to `cd acmeco-`, showed both directories with the side panel, ↓ and Enter gave `cd acmeco-sdd/`; `gi` + Tab listed commands from PATH.
 - 2026-10-05, input colouring: in the e2e app, `FOO=1 git commit -m "fix it" && ls -la ~/src | wc -l > out.txt; nosuchcmd x` showed the known commands green, `commit` blue, flags muted, the string yellow, operators faint and `nosuchcmd` plain; a selection lined up with the coloured text.
 - 2026-10-05, block selection: in the e2e app, a click on a block's output row highlighted the block in orange with the left bar.

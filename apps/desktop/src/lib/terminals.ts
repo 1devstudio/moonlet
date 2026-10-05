@@ -78,6 +78,9 @@ export interface CommandBlock {
   /** App clock at the `C` and `D` marks; absent for replayed blocks. */
   startedAt?: number;
   endedAt?: number;
+  /** The header's own row (T8); absent when the shell left no empty row,
+   * and the header sits at the end of the command line instead. */
+  headerAt?: IMarker;
   header?: IDisposable;
 }
 
@@ -202,6 +205,17 @@ export function blockForAgent(b: { command: string; output: string }): string {
   return `${fence}\n${blockCopy(b, "all")}\n${fence}\n`;
 }
 
+/** Rows of a Warp-mode block (T8), from its prompt mark's row and the row
+ * its output starts on. The shell's prompt is empty rows: with two, the
+ * first holds the separator and the second the header; with one, they
+ * share it. A shell that left no empty row (an older integration) gets no
+ * header row: the header goes at the end of the command line. */
+export function blockLayout(prompt: number, output: number, empty: (y: number) => boolean): { separator: number; header: number | null; commandFrom: number } {
+  if (!empty(prompt)) return { separator: prompt, header: null, commandFrom: prompt };
+  if (empty(prompt + 1) && prompt + 2 < output) return { separator: prompt, header: prompt + 1, commandFrom: prompt + 2 };
+  return { separator: prompt, header: prompt, commandFrom: prompt + 1 };
+}
+
 export interface FileLinkHandler {
   (path: string, line?: number): void;
 }
@@ -251,6 +265,8 @@ export class TermEntry {
   ) {
     this.el = document.createElement("div");
     this.el.className = "jaunt-term";
+    // Block headers scale with the terminal's font (T8).
+    this.el.style.setProperty("--jaunt-term-font", `${settings.fontSize}px`);
     this.term = new Terminal({
       allowProposedApi: true,
       fontFamily: settings.fontFamily,
@@ -419,6 +435,7 @@ export class TermEntry {
     this.settings = s;
     this.term.options.fontFamily = s.fontFamily;
     this.term.options.fontSize = s.fontSize;
+    this.el.style.setProperty("--jaunt-term-font", `${s.fontSize}px`);
     this.term.options.macOptionIsMeta = s.optionIsMeta;
     this.refit();
   }
@@ -443,7 +460,8 @@ export class TermEntry {
           // In Warp mode the header row sits above the command (T8).
           const buf = this.term.buffer.active;
           const here = buf.baseY + buf.cursorY;
-          const line = this.warp ? replayedHeaderLine(here, (y) => !!buf.getLine(y)?.isWrapped) : here - 1;
+          // The spacer row above the header (T8).
+          const line = this.warp ? replayedHeaderLine(here, (y) => !!buf.getLine(y)?.isWrapped) - 1 : here - 1;
           const prompt = this.term.registerMarker(line - here);
           if (prompt) {
             last = { prompt };
@@ -455,9 +473,11 @@ export class TermEntry {
           last.output = marker;
           last.cwd = this.cwd;
           if (this.warp) {
-            // The prompt is one empty header row; the command follows it.
+            // The prompt is empty rows for the separator and header (T8).
+            const layout = blockLayout(last.prompt.line, marker.line, (y) => !this.lineText(y).trim());
+            if (layout.header !== null) last.headerAt = this.term.registerMarker(layout.header - marker.line);
             const rows = [];
-            for (let y = last.prompt.line + 1; y < marker.line; y++) {
+            for (let y = layout.commandFrom; y < marker.line; y++) {
               const row = this.term.buffer.active.getLine(y);
               rows.push({ text: row?.translateToString(false) ?? "", wrapped: !!row?.isWrapped });
             }
@@ -497,11 +517,30 @@ export class TermEntry {
    * the pane's padding (`.jaunt-term` inset) so the separator spans it. */
   private header(block: CommandBlock) {
     block.header?.dispose();
-    const d = this.term.registerDecoration({ marker: block.prompt, x: 0, width: this.term.cols, layer: "top" });
-    d?.onRender((el) => {
-      el.classList.add("jaunt-block-head");
+    const inline = !block.headerAt;
+    // The separator, in the spacer row or at the top of a shared row.
+    const sep = this.term.registerDecoration({ marker: block.prompt, x: 0, width: this.term.cols, layer: "bottom" });
+    sep?.onRender((el) => {
+      el.classList.add("jaunt-block-sep");
+      el.classList.toggle("shared", inline || block.headerAt?.line === block.prompt.line);
       el.style.left = "-28px";
       el.style.width = "calc(100% + 40px)";
+    });
+    // Without a row of its own the header goes at the end of the command line.
+    const d = inline
+      ? this.term.registerDecoration({ marker: block.prompt, anchor: "right", x: 0, width: Math.min(this.term.cols, 40), layer: "top" })
+      : this.term.registerDecoration({ marker: block.headerAt!, x: 0, width: this.term.cols, layer: "top" });
+    d?.onRender((el) => {
+      el.classList.add("jaunt-block-head");
+      el.classList.toggle("inline", inline);
+      if (inline) {
+        // xterm only sets `right` for a non-zero offset.
+        el.style.left = "auto";
+        el.style.right = "0px";
+      } else {
+        el.style.left = "-28px";
+        el.style.width = "calc(100% + 40px)";
+      }
       const h = blockHeader(block, this.context);
       const key = JSON.stringify(h);
       if (el.dataset.key === key) return;
@@ -517,7 +556,7 @@ export class TermEntry {
       );
       el.replaceChildren(row);
     });
-    block.header = d ?? undefined;
+    block.header = { dispose: () => (sep?.dispose(), d?.dispose()) };
     this.paintBackdrop();
   }
 
@@ -559,7 +598,8 @@ export class TermEntry {
    * scrollback never ends, so it cannot be selected. */
   private spans() {
     return this.blocks.map((b) => ({
-      start: b.prompt.line,
+      // From the header down; the spacer row above it is the gap between blocks.
+      start: b.headerAt && b.headerAt.line >= 0 ? b.headerAt.line : b.prompt.line,
       end: b.end && b.end.line >= 0 && b.prompt.line >= 0 ? b.end.line : undefined,
       exit: b.exit,
       selected: b === this.selected,
