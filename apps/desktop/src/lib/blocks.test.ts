@@ -55,7 +55,7 @@ describe("block headers (T8)", () => {
   });
 });
 
-describe("block header with node and changes, as in Warp (T8)", () => {
+describe("block header with node version and changes (T8)", () => {
   const changes = { files: 5, additions: 113, deletions: 30 };
 
   it("adds the node version and the uncommitted changes recorded when the command started", () => {

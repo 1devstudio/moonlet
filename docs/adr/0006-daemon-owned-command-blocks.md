@@ -6,7 +6,7 @@
 
 ## Context
 
-Shell terminals in Warp mode ([T7](../specs/T7-warp-shell-model.md)) show each command as a [Block](../../CONTEXT.md), but only as xterm.js decorations over one shared grid. That gives the look (header, separator, selection highlight, copy) but not the behaviour the user wants:
+Shell terminals in Blocks mode ([T7](../specs/T7-blocks-shell-model.md)) show each command as a [Block](../../CONTEXT.md), but only as xterm.js decorations over one shared grid. That gives the look (header, separator, selection highlight, copy) but not the behaviour the user wants:
 
 - collapse and expand a block's output;
 - a sticky block header while scrolling a long output;
@@ -37,7 +37,7 @@ Daemon side:
   - Ghostty's source comes from a pinned git submodule passed to the build as `GHOSTTY_SOURCE_DIR`, so builds are reproducible and work offline.
   - jaunt keeps its own small scanner for the OSC sequences it needs whatever the library supports: 133 (with the exit code), 9 and 777. The scanner also gives the byte offsets where blocks start and end.
 - **Block storage: freeze on finish.** One live terminal per shell holds only the active block. At the `D` mark the daemon formats the block's rows (wrapped rows joined into logical lines, with styles) into the block store and resets the live terminal for the next command. Finished blocks never change, so a running program cannot touch them, and memory stays at one emulator per terminal. One terminal per block was rejected: about 2 MiB of virtual memory each (a 512 KiB page, four preheated). Row markers in one shared terminal were rejected: a screen clear would damage earlier blocks.
-- **Blocks:** the daemon owns blocks for shell terminals in Warp mode. Classic mode, shells without integration, agent, run and setup terminals keep a single screen.
+- **Blocks:** the daemon owns blocks for shell terminals in Blocks mode. Classic mode, shells without integration, agent, run and setup terminals keep a single screen.
 - **Protocol:** carries the block model, not raw bytes for history: finished blocks as styled text runs with their metadata, plus the active block's screen and its live output. Nothing in it depends on how the app draws.
 - **App:** option A. Finished blocks are static HTML, the active block is a live xterm. It ships behind a "Block view (beta)" setting, default off, until it has e2e coverage and a few days of real use; the decoration code is removed after that.
 - The decoration-based styling (header, chips, selection) ships first; its header and chip logic carries over.
@@ -57,7 +57,7 @@ Daemon side:
 
 ## Future direction: option C in the app
 
-Write this down so it is not lost: the long-term destination is **libghostty-vt in the app as well (WASM), with jaunt's own renderer drawing from its render state**, so daemon and app run the same emulator. Warp works this way: its `Block` holds separate header and output grids and it renders everything itself.
+Write this down so it is not lost: the long-term destination is **libghostty-vt in the app as well (WASM), with jaunt's own renderer drawing from its render state**, so daemon and app run the same emulator. Block-based terminals with their own renderer work this way: each block holds separate header and output grids.
 
 What C removes:
 - Two emulators that can disagree (libghostty-vt in the daemon, xterm.js in the app).
@@ -71,6 +71,6 @@ Known pieces:
 
 Revisit when option A is the default and the block protocol has settled.
 
-Also later: warpifying a plain `ssh` (remote commands become blocks in the local terminal). Warp now does this with a companion server installed on the remote host and reached over the existing connection, which matches jaunt's remote helper ([R2](../specs/R2-remote-helper-install.md)).
+Also later: turning a plain `ssh` into blocks (remote commands become blocks in the local terminal). One known approach installs a companion server on the remote host, reached over the existing connection, which matches jaunt's remote helper ([R2](../specs/R2-remote-helper-install.md)).
 
-Sources: [ghostty `vt.h`](https://github.com/ghostty-org/ghostty/blob/main/include/ghostty/vt.h), [libghostty is coming](https://mitchellh.com/writing/libghostty-is-coming), [libghostty-rs](https://github.com/Uzaaft/libghostty-rs), [ghostty-web](https://github.com/coder/ghostty-web), [How Warp Works](https://www.warp.dev/blog/how-warp-works), [Warp `block.rs`](https://github.com/warpdotdev/warp/blob/HEAD/app/src/terminal/model/block.rs), [Warp SSH](https://docs.warp.dev/terminal/warpify/ssh/), [alacritty WASM issue](https://github.com/alacritty/alacritty/issues/7985).
+Sources: [ghostty `vt.h`](https://github.com/ghostty-org/ghostty/blob/main/include/ghostty/vt.h), [libghostty is coming](https://mitchellh.com/writing/libghostty-is-coming), [libghostty-rs](https://github.com/Uzaaft/libghostty-rs), [ghostty-web](https://github.com/coder/ghostty-web), [alacritty WASM issue](https://github.com/alacritty/alacritty/issues/7985).
