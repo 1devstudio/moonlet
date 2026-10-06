@@ -22,14 +22,47 @@ struct Daemon {
     child: std::process::Child,
 }
 
+/// A stand-in for `claude` that answers "reply 1", "reply 2"… in stream-json,
+/// and never finishes a message containing "slow".
+const FAKE_CLAUDE: &str = r#"#!/bin/sh
+n=0
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"sess-1","model":"fake"}' ;;
+    *'"type":"user"'*slow*) ;;
+    *'"type":"user"'*)
+      n=$((n+1))
+      echo '{"type":"assistant","message":{"id":"m'$n'","content":[{"type":"text","text":"reply '$n'"}]}}'
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
 impl Daemon {
     async fn start() -> Daemon {
+        Self::start_in(tempfile::tempdir().unwrap(), &[]).await
+    }
+
+    /// A daemon whose login shell finds the fake `claude` first on PATH.
+    async fn with_fake_claude() -> Daemon {
+        use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("claude"), FAKE_CLAUDE).unwrap();
+        std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(home.path().join(".profile"), "PATH=\"$HOME/bin:$PATH\"; export PATH\n").unwrap();
+        let h = home.path().display().to_string();
+        Self::start_in(home, &[("HOME", h.as_str()), ("SHELL", "/bin/sh")]).await
+    }
+
+    async fn start_in(home: tempfile::TempDir, env: &[(&str, &str)]) -> Daemon {
         let socket = home.path().join("run/d.sock");
         let child = Command::new(target_bin("jauntd"))
             .arg("daemon")
             .env("JAUNT_HOME", home.path())
             .env("JAUNT_SOCK", &socket)
+            .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -151,5 +184,48 @@ async fn terminals_know_where_the_jaunt_cli_is() {
     assert_eq!(
         std::fs::read_to_string(&out).unwrap(),
         format!("{}\n{}\n", jaunt.display(), d.socket.display())
+    );
+}
+
+#[tokio::test]
+async fn an_agent_follows_the_session_it_opened() {
+    let d = Daemon::with_fake_claude().await;
+    let web = d.home.path().join("code/web");
+    git_repo(&web);
+    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let _: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": web})).await.unwrap();
+
+    let out = d.jaunt(None, &["session", "new", "web", "--agent", "claude", "Say hello"]);
+    let s: Session = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(stdout(&d.jaunt(None, &["session", "wait", &s.id, "--timeout", "20"])), "done\n");
+    assert_eq!(stdout(&d.jaunt(None, &["session", "read", &s.id])), "reply 1\n");
+
+    assert_eq!(stdout(&d.jaunt(None, &["session", "send", &s.id, "and", "again"])), "");
+    assert_eq!(stdout(&d.jaunt(None, &["session", "wait", &s.id, "--timeout", "20"])), "done\n");
+    assert_eq!(stdout(&d.jaunt(None, &["session", "read", &s.id])), "reply 2\n");
+
+    assert_eq!(
+        stdout(&d.jaunt(None, &["session", "ls"])),
+        format!(
+            "ID            PROJECT      STATUS    FROM          NAME\n{:<13} web          done      -             Say hello\n",
+            s.id
+        )
+    );
+
+    assert_eq!(stdout(&d.jaunt(None, &["session", "send", &s.id, "slow", "one"])), "");
+    let out = d.jaunt(None, &["session", "wait", &s.id, "--timeout", "1"]);
+    assert!(!out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "jaunt: timed out after 1s; the agent is still working\n"
+    );
+
+    let out = d.jaunt(None, &["session", "new", "web", "--agent", "none", "Shell only"]);
+    let shell: Session = serde_json::from_str(&stdout(&out)).unwrap();
+    let out = d.jaunt(None, &["session", "read", &shell.id]);
+    assert!(!out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        format!("jaunt: session \"{}\" has no structured agent\n", shell.id)
     );
 }
