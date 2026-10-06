@@ -1,6 +1,6 @@
 # X22 — An agent opens a session in another project
 
-- **Status:** draft
+- **Status:** implemented (2026-10-06). Not yet tried with a live Claude Code or Codex agent reading the skill.
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** A6 (CLI and socket API), X5 (workspaces, projects and sessions)
 - **Related ADRs:** [0005](../adr/0005-workspace-project-session-terminal.md)
@@ -46,8 +46,8 @@ An agent working in one project sometimes needs a change in another project. Unt
 
 ### App
 
-- [ ] When a session with a `spawned_by` appears that the app had not seen, it shows a toast "‹parent› started ‹child› in ‹project›" with **Go to**. It does not switch to the new session.
-- [ ] A session with a `spawned_by` shows "from ‹parent›" in its sidebar row tooltip, archived parents included. A parent that is no longer in the list shows "from a removed session".
+- [x] When a session with a `spawned_by` appears that the app had not seen, it shows a toast "‹parent› started ‹child› in ‹project›" with **Go to**. It does not switch to the new session.
+- [x] A session with a `spawned_by` shows "from ‹parent›" in its sidebar row tooltip, archived parents included. A parent that is no longer in the list shows "from a removed session".
 
 ## UI
 
@@ -86,6 +86,7 @@ An agent working in one project sometimes needs a change in another project. Unt
 - `jaunt-cli/tests`: `jaunt session new` against a real daemon records the parent and prints the session; a terminal sees `JAUNT_BIN` and `JAUNT_SOCK`.
 - `jaunt-core` `hooks.rs`: install writes both skills, uninstall removes them, status reports them.
 - `apps/desktop/src/lib/spawned.test.ts`: which sessions get a toast (new and spawned only, not on the first load), the toast text, the "from" line.
+- `e2e/specs/agent-opens-session.e2e.ts`: `jaunt session new` run as the fixture session's agent shows the toast and the "from" tooltip, keeps the current session selected, and **Go to** opens the new one.
 
 ## Open questions
 

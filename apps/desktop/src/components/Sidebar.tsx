@@ -9,6 +9,7 @@ import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, rebaseCom
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
 import { ArchiveLoader } from "./ArchiveLoader";
+import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
@@ -284,13 +285,15 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   const unread = useStore((st) => sessionTerminals(st, host, s.id).some((x) => st.unread[termKey(host, x.id)]));
   const creating = useStore((st) => sessionTerminals(st, host, s.id).some((x) => x.kind === "setup" && !x.exit));
   const archiving = useStore((st) => st.archiving[sesKey(host, s.id)]);
+  const from = useStore((st) => spawnedFrom(s, st.sessions[host] ?? []));
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
   if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
   return (
     <div
       role="button"
-      title={`${s.branch} → ${s.base}${host !== "local" ? ` · ${host}` : ""}`}
+      aria-current={selected ? "true" : undefined}
+      title={`${s.branch} → ${s.base}${host !== "local" ? ` · ${host}` : ""}${from ? `\n${from}` : ""}`}
       onClick={() => {
         useStore.setState({ showHistory: false });
         selectSession(host, s.id);
