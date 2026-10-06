@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { open as openDialog, ask, confirm } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { askConfirm } from "../lib/confirm";
 import { CheckCircle2, Play, Server, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type Commit, type HookStatus, type PullRequest, type Project } from "../lib/protocol";
@@ -270,10 +271,11 @@ function HooksSection() {
     void rpc<HookStatus>("local", M.hooksStatus).then(setStatus).catch(() => {});
   }, []);
   const install = async () => {
-    const ok = await ask(
-      `jaunt will add its hooks to:\n• ${status?.claude_settings}\n• ${status?.codex_config}\n\nand a "jaunt" skill to the skills folder next to each.\n\nA backup of each file is written first and your own settings are kept.`,
-      { title: "Install agent hooks", kind: "info", okLabel: "Install" },
-    );
+    const ok = await askConfirm({
+      title: "Install agent hooks",
+      message: `jaunt will add its hooks to:\n• ${status?.claude_settings}\n• ${status?.codex_config}\n\nand a "jaunt" skill to the skills folder next to each.\n\nA backup of each file is written first and your own settings are kept.`,
+      action: "Install",
+    });
     if (!ok) return;
     setBusy(true);
     try {
@@ -318,10 +320,11 @@ function HostsSection() {
   }, []);
   const remotes = Object.values(hosts).filter((h) => h.remote);
   const install = async (id: string) => {
-    const ok = await ask(
-      `Install the jaunt helper on ${id}?\n\nThe version-pinned jauntd binary (and the jaunt CLI) are copied to ~/.jaunt/bin over your SSH connection and verified by SHA-256. Nothing else on the host is changed.`,
-      { title: "Install remote helper", kind: "info", okLabel: "Install" },
-    );
+    const ok = await askConfirm({
+      title: "Install remote helper",
+      message: `Install the jaunt helper on ${id}?\n\nThe version-pinned jauntd binary (and the jaunt CLI) are copied to ~/.jaunt/bin over your SSH connection and verified by SHA-256. Nothing else on the host is changed.`,
+      action: "Install",
+    });
     if (!ok) return;
     setBusy(id);
     try {
@@ -481,10 +484,11 @@ function DaemonSection() {
   }, []);
   const toggle = async (on: boolean) => {
     if (!on && status?.loaded) {
-      const ok = await confirm(
-        "Turning this off stops the daemon that launchd is running. Terminals and agents it holds may end. Turn it off?",
-        { title: "Stop the background daemon", kind: "warning" },
-      );
+      const ok = await askConfirm({
+        title: "Stop the background daemon",
+        message: "Turning this off stops the daemon that launchd is running. Terminals and agents it holds may end. Turn it off?",
+        action: "Turn off",
+      });
       if (!ok) return;
     }
     setBusy(true);

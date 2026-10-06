@@ -8,6 +8,8 @@ import { rpc } from "../lib/daemon";
 import { M, type ProjectConfigFile } from "../lib/protocol";
 import { errorToast, toast, useStore } from "../lib/store";
 import { agentOptions, fromForm, isDirty, loadFailure, newRowId, toForm, validate, type AgentRow, type Form, type SaveError } from "../lib/projectSettings";
+import { askConfirm } from "../lib/confirm";
+import { fromOtherDialog } from "../lib/modal";
 import { Button, IconButton, cx } from "./ui";
 
 const close = () => useStore.setState({ dialog: null });
@@ -39,10 +41,10 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
   const [file, setFile] = useState<ProjectConfigFile | null>(null);
   const [form, setForm] = useState<Form>(EMPTY);
   const [orig, setOrig] = useState<Form>(EMPTY);
-  const [confirming, setConfirming] = useState(false);
   const [saveErr, setSaveErr] = useState<SaveError | null>(null);
   const [saving, setSaving] = useState(false);
   const runRef = useRef<HTMLInputElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<number, HTMLInputElement>());
   const [pendingFocus, setPendingFocus] = useState<number | null>(null);
 
@@ -89,9 +91,16 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
   const canSave = !loading && !parseError && dirty && !v.any && !saving;
   const remote = host !== "local";
 
-  const requestClose = useCallback(() => {
-    if (parseError || !dirty) close();
-    else setConfirming(true);
+  const requestClose = useCallback(async () => {
+    if (parseError || !dirty) return close();
+    const discard = await askConfirm({
+      title: "Discard changes",
+      message: "Discard unsaved changes to .jaunt/config.toml?",
+      action: "Discard",
+      cancel: "Keep editing",
+      variant: "danger",
+    });
+    if (discard) close();
   }, [parseError, dirty]);
 
   const save = useCallback(async () => {
@@ -112,11 +121,11 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (fromOtherDialog(e, panel.current)) return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        if (confirming) setConfirming(false);
-        else requestClose();
+        void requestClose();
       } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         e.stopPropagation();
@@ -125,12 +134,11 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [confirming, requestClose, save]);
+  }, [requestClose, save]);
 
   const set = (patch: Partial<Form>) => {
     setForm((f) => ({ ...f, ...patch }));
     setSaveErr((e) => (e?.stale ? e : null));
-    setConfirming(false);
   };
   const setAgent = (id: number, patch: Partial<AgentRow>) =>
     set({ agents: form.agents.map((a) => (a.id === id ? { ...a, ...patch, fresh: false } : a)) });
@@ -144,8 +152,9 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
   const path = file?.path ?? "";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[12vh]" onMouseDown={requestClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[12vh]" onMouseDown={() => void requestClose()}>
       <div
+        ref={panel}
         role="dialog"
         aria-label="Project settings"
         className="flex max-h-[76vh] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel shadow-2xl"
@@ -157,7 +166,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
             <h2 className="ui-text-13 font-semibold">Project settings</h2>
             <span className="truncate ui-text-12 text-muted">{subtitle}</span>
           </div>
-          <IconButton title="Close" onClick={requestClose}>
+          <IconButton title="Close" onClick={() => void requestClose()}>
             <X size={14} />
           </IconButton>
         </div>
@@ -304,19 +313,9 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
           </div>
           {parseError ? (
             <Button onClick={close}>Close</Button>
-          ) : confirming ? (
-            <>
-              <span className="ui-text-12 text-muted">Discard unsaved changes?</span>
-              <Button variant="ghost" onClick={() => setConfirming(false)}>
-                Keep editing
-              </Button>
-              <Button variant="danger" onClick={close}>
-                Discard
-              </Button>
-            </>
           ) : (
             <>
-              <Button variant="ghost" onClick={requestClose}>
+              <Button variant="ghost" onClick={() => void requestClose()}>
                 Cancel
               </Button>
               <Button variant="primary" disabled={!canSave} onClick={() => void save()}>

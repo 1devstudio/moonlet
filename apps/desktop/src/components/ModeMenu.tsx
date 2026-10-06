@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, FilePen, ListTodo, ShieldAlert, ShieldCheck, Zap } from "lucide-react";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { askConfirm } from "../lib/confirm";
 import { BYPASS_MODE, CLAUDE_MODES, resolveMode } from "../lib/agents";
 import { Menu, type MenuItem } from "./Menu";
 import { cx } from "./ui";
@@ -16,9 +16,11 @@ export function useModeMenu(mode: string, onPick: (mode: string) => void) {
   const [bypassOk, setBypassOk] = useState(false);
   const bypassOn = bypassOk || mode === BYPASS_MODE.id;
   const enableBypass = async () => {
-    const ok = await confirm("Bypass permissions lets Claude run commands and edit files without asking. Turn it on for this session?", {
+    const ok = await askConfirm({
       title: "Bypass permissions",
-      kind: "warning",
+      message: "Bypass permissions lets Claude run commands and edit files without asking. Turn it on for this session?",
+      action: "Turn on",
+      variant: "danger",
     });
     if (!ok) return;
     setBypassOk(true);

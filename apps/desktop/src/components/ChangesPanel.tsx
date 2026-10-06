@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { Check, FileDiff, Minus, MessageSquarePlus, Plus, RotateCcw, Undo2 } from "lucide-react";
 import "../lib/monaco";
 
@@ -12,6 +11,7 @@ import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } 
 import { M, type FileChange, type FileVersions, type Session } from "../lib/protocol";
 import { errorToast, refreshGit, toast, useStore, sesKey } from "../lib/store";
 import { sendToAgent } from "../lib/actions";
+import { askConfirm } from "../lib/confirm";
 import { editorFont } from "../lib/uiScale";
 import { Button, DiffStat, Empty, IconButton, Kbd, cx } from "./ui";
 
@@ -182,7 +182,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
 
   const fileAction = async (f: FileChange, a: "stage" | "unstage" | "revert") => {
     if (a === "revert") {
-      const ok = await confirm(`Discard all changes to ${f.path}? This cannot be undone.`, { title: "Discard changes", kind: "warning" });
+      const ok = await askConfirm({ title: "Discard changes", message: `Discard all changes to ${f.path}? This cannot be undone.`, action: "Discard", variant: "danger" });
       if (!ok) return;
     }
     const method = a === "stage" ? M.gitStage : a === "unstage" ? M.gitUnstage : M.gitRevert;
@@ -197,7 +197,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
   const hunkAction = async (i: number, a: "stage" | "discard") => {
     if (!diff) return;
     if (a === "discard") {
-      const ok = await confirm("Discard this hunk from the working tree?", { title: "Discard hunk", kind: "warning" });
+      const ok = await askConfirm({ title: "Discard hunk", message: "Discard this hunk from the working tree?", action: "Discard", variant: "danger" });
       if (!ok) return;
     }
     try {

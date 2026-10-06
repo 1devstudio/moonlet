@@ -6,7 +6,7 @@
 import "./tauri-stub";
 import "./ds.css";
 
-export { Button, IconButton, Kbd, StateGlyph, AgentIcon, DiffStat, Dialog, Field, Empty, cx, inputCls } from "../components/ui";
+export { Button, IconButton, Kbd, StateGlyph, AgentIcon, DiffStat, Dialog, ConfirmDialog, Field, Empty, cx, inputCls } from "../components/ui";
 export { Menu, MenuItems, type MenuItem } from "../components/Menu";
 export {
   Markdown,

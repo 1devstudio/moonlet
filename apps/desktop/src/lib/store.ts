@@ -29,6 +29,7 @@ import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
+import type { PendingConfirm } from "./confirm";
 import { spawnedNotices } from "./spawned";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState } from "./protocol";
@@ -172,6 +173,8 @@ interface State extends UiPersist {
     | { kind: "project-settings"; host: string; project: string; focus?: "run" }
     | { kind: "palette" }
     | { kind: "commit" };
+  /** The open confirm modal, above any dialog (X23). */
+  confirm: PendingConfirm | null;
   settings: Settings;
   toasts: Toast[];
   lastAttention: { host: string; session: number; at: number } | null;
@@ -207,6 +210,7 @@ function makeStore() {
   preview: null,
   showHistory: false,
   dialog: null,
+  confirm: null,
   settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {} }),
   toasts: [],
   lastAttention: null,
