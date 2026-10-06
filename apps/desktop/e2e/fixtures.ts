@@ -212,5 +212,9 @@ export const sel = {
   /** A button by its visible text (ignoring nested hints such as ⌘↵). */
   button: (text: string) => `//button[starts-with(normalize-space(), ${lit(text)})]`,
   text: (text: string) => `//*[normalize-space()=${lit(text)}]`,
+  /** The confirm modal (X23), by its title. */
+  confirm: (title: string) => `//div[@role="dialog"][@aria-modal="true"][@aria-label=${lit(title)}]`,
+  /** A button in the open confirm modal, by its visible text. */
+  confirmButton: (text: string) => `//div[@role="dialog"][@aria-modal="true"]//button[normalize-space()=${lit(text)}]`,
   sessionRow: (name: string) => `//div[@role="button"][.//span[normalize-space()=${lit(name)}]]`,
 };

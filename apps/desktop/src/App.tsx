@@ -5,6 +5,7 @@ import { SessionView } from "./components/SessionView";
 import { RightPanel } from "./components/RightPanel";
 import { Splitter } from "./components/Splitter";
 import { Dialogs } from "./components/Dialogs";
+import { ConfirmHost } from "./components/ConfirmHost";
 import { CommandPalette } from "./components/CommandPalette";
 import { Button, IconButton, Kbd, cx } from "./components/ui";
 import { selectedSession, startStore, useStore } from "./lib/store";
@@ -161,6 +162,7 @@ export default function App() {
       )}
       <Dialogs />
       {s.dialog?.kind === "palette" && <CommandPalette />}
+      <ConfirmHost />
       <Toasts />
     </div>
   );

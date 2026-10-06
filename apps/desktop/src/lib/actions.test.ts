@@ -2,11 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { archiveSession } from "./actions";
 import { LOADERS } from "./archiveLoader";
 import { useStore } from "./store";
+import { answerConfirm } from "./confirm";
 import type { Session } from "./protocol";
 
 const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", () => ({ rpc: daemon.rpc, sendInput: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: () => Promise.resolve(true) }));
+
+// Answers the confirm modal as soon as it opens, like a click on its buttons.
+let reply = { ok: true, checked: false };
+useStore.subscribe((s) => {
+  if (s.confirm) answerConfirm(reply.ok, reply.checked);
+});
 
 const ws: Session = {
   id: "s1",
@@ -26,9 +32,34 @@ describe("archiveSession", () => {
   beforeEach(() => {
     daemon.rpc.mockReset();
     useStore.setState({ sessions: { local: [ws] }, selected: { host: "local", session: "s1" }, toasts: [], archiving: {} });
+    reply = { ok: true, checked: false };
     vi.useFakeTimers();
   });
   afterEach(() => vi.useRealTimers());
+
+  it("keeps the branch unless the modal's box is checked", async () => {
+    daemon.rpc.mockResolvedValue(undefined);
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.archive", { id: "s1", remove_worktree: true, delete_branch: false });
+  });
+
+  it("deletes the branch too when the modal's box is checked", async () => {
+    daemon.rpc.mockResolvedValue(undefined);
+    reply = { ok: true, checked: true };
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.archive", { id: "s1", remove_worktree: true, delete_branch: true });
+  });
+
+  it("does nothing when the modal is cancelled", async () => {
+    reply = { ok: false, checked: true };
+    await archiveSession();
+    expect(daemon.rpc).not.toHaveBeenCalled();
+    expect(useStore.getState().selected).toEqual({ host: "local", session: "s1" });
+  });
 
   it("plays a random pixel scene in the row while the daemon archives", async () => {
     let during: unknown;
