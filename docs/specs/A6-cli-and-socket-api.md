@@ -20,6 +20,7 @@
 | `jaunt agent start [--agent claude] [--cwd dir] [prompt…]` | Starts an agent session through the login shell and prints its id. |
 | `jaunt project ls [--json]` | Lists projects (see [X22](X22-agent-opens-session.md)). |
 | `jaunt session new <project> [prompt…]` | Creates a session in a project and starts its agent with the prompt (see [X22](X22-agent-opens-session.md)). |
+| `jaunt session ls\|wait\|read\|send` | Lists sessions, waits for a session's agent, prints its last reply, sends it a message (see [X22](X22-agent-opens-session.md)). |
 
 ## Behaviour and acceptance criteria
 
