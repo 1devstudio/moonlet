@@ -50,7 +50,7 @@ In Plan mode Claude ends its plan with an `ExitPlanMode` call. jaunt showed it a
 
 ## Protocol and RPCs
 
-- `chat.permission {id, ask, decision, message?, answers?, mode?}`: new optional `mode`. Only `acceptEdits` is accepted, and only with `decision: "allow"`.
+- `chat.permission {id, ask, decision, message?, answers?, mode?}`: new optional `mode`. Only `acceptEdits` is accepted ([X24](X24-plan-panel.md) adds `auto`), and only with `decision: "allow"`.
 - Claude's `system/status` line is read for `permissionMode`; `ChatState.mode` changes and a `chat.state` event goes out.
 
 Captured from claude 2.1.291 in Plan mode (`--permission-prompt-tool stdio`):

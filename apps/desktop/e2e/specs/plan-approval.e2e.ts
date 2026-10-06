@@ -111,6 +111,9 @@ describe("plan approval", () => {
 
   it("opens the Plan tab with the plan formatted, and its file", async () => {
     await expect($(planTab)).toHaveAttribute("aria-selected", "true");
+    // The panel below is the Plan tab's tabpanel.
+    await expect($(planTab)).toHaveAttribute("aria-controls", "right-tabpanel");
+    await expect($('[role="tabpanel"]#right-tabpanel')).toHaveAttribute("aria-labelledby", "right-tab-plan");
     await expect($('//h1[normalize-space()="Add a dark theme"]')).toBeDisplayed();
     await expect($('//strong[normalize-space()="App"]')).toBeDisplayed();
     await expect($('//code[normalize-space()="theme"]')).toBeDisplayed();

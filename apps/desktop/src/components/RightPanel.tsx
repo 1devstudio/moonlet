@@ -323,8 +323,10 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
         {TABS.map((t) => (
           <button
             key={t.id}
+            id={`right-tab-${t.id}`}
             role="tab"
             aria-selected={tab === t.id && !preview}
+            aria-controls="right-tabpanel"
             onClick={() => useStore.setState({ rightTab: t.id, preview: null })}
             className={cx(
               "flex items-center gap-1.5 px-3 ui-text-13 transition-colors",
@@ -336,7 +338,12 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
           </button>
         ))}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto bg-bg">
+      <div
+        id="right-tabpanel"
+        // A markdown preview is not one of the tabs.
+        {...(preview ? {} : { role: "tabpanel", "aria-labelledby": `right-tab-${tab}` })}
+        className="min-h-0 flex-1 overflow-y-auto bg-bg"
+      >
         <Suspense fallback={null}>
           {preview ? (
             <PreviewPanel />
