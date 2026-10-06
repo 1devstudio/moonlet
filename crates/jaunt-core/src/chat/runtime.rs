@@ -204,14 +204,14 @@ impl ChatManager {
     }
 
     /// `mode` switches the agent's permission mode with an approval; only a
-    /// plan approved into `acceptEdits` uses it (X20).
+    /// plan approved into `auto` or `acceptEdits` uses it (X20, X24).
     pub fn permission(&self, id: TerminalId, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>) -> Result<()> {
         if let Some(m) = mode {
             if decision != "allow" {
                 bail!("a mode needs decision allow");
             }
-            if m != "acceptEdits" {
-                bail!("a plan can only be approved into acceptEdits");
+            if m != "auto" && m != "acceptEdits" {
+                bail!("a plan can only be approved into auto or acceptEdits");
             }
         }
         let chat = self.get(id)?;
@@ -595,6 +595,11 @@ while IFS= read -r line; do
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"sess-1","model":"fake","slash_commands":["clear"]}' ;;
     *'run a command'*)
       echo '{"type":"control_request","request_id":"b1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"t1","input":{"command":"npm test"}}}' ;;
+    *'propose a plan'*)
+      echo '{"type":"control_request","request_id":"p1","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","tool_use_id":"t2","input":{"plan":"Add a theme"}}}' ;;
+    *'"mode":"auto"'*)
+      echo '{"type":"system","subtype":"status","status":null,"permissionMode":"auto"}'
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
     *'approve the plan'*)
       echo '{"type":"system","subtype":"status","status":null,"permissionMode":"acceptEdits"}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
@@ -721,12 +726,33 @@ done
     }
 
     #[tokio::test]
-    async fn a_plan_approval_only_switches_to_accept_edits() {
+    async fn approving_a_plan_can_switch_to_auto() {
         let (dir, _terms, chats) = setup().await;
         let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
         wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        let err = chats.permission(info.id, "ask-1", "allow", None, None, Some("bypassPermissions")).unwrap_err();
-        assert_eq!(err.to_string(), "a plan can only be approved into acceptEdits");
+        chats.send(info.id, "propose a plan").unwrap();
+        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        chats.permission(info.id, "p1", "allow", None, None, Some("auto")).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done" && s.mode.as_deref() == Some("auto")).await;
+
+        // The next start keeps Auto.
+        chats.settings(info.id, Some("opus".into()), None, None).unwrap();
+        chats.send(info.id, "hi").unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done" && s.items.iter().filter(|i| i.kind == "user").count() == 2).await;
+        let last_start = std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().last().unwrap().to_string();
+        assert!(last_start.contains("--permission-mode auto"), "{last_start}");
+        chats.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_plan_approval_only_switches_to_auto_or_accept_edits() {
+        let (dir, _terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        for mode in ["bypassPermissions", "plan", "manual"] {
+            let err = chats.permission(info.id, "ask-1", "allow", None, None, Some(mode)).unwrap_err();
+            assert_eq!(err.to_string(), "a plan can only be approved into auto or acceptEdits");
+        }
         let err = chats.permission(info.id, "ask-1", "deny", None, None, Some("acceptEdits")).unwrap_err();
         assert_eq!(err.to_string(), "a mode needs decision allow");
 
