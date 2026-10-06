@@ -12,7 +12,7 @@ Make shell terminals in Blocks mode look and feel like a block-based terminal, o
 
 ## User journey
 
-1. In a session shell, the user runs `ls`. Above the command a small grey line reads `~/src/app git:(main) (0.032s)`; the command is bold; the output follows; a hairline separates it from the next block.
+1. In a session shell, the user runs `ls`. Above the command a small grey line shows the chips `~/src/app` and `main`, then `(0.032s)`; the command is bold; the output follows; a hairline separates it from the next block.
 2. `false` fails: its header ends with a red `exit 1` and the block is faintly tinted red.
 3. The user clicks the `ls` block. It turns orange-tinted with an orange bar on the left. ⌘C copies its command and output. ⌘↵ pastes it into the session's agent.
 4. Back in the editor, chips above the input read `[v24.19.0] [~/src/app] [main] [± 3]`. Typing `terraform init` shows `terraform` in green and `init` in blue, followed by a faint history suggestion with a `→` key badge.
@@ -25,9 +25,9 @@ Make shell terminals in Blocks mode look and feel like a block-based terminal, o
 - [x] **Header row:** in Blocks mode the blank prompt is two empty lines (zsh `PROMPT=$'\n\n'`, bash `PS1='\n\n…'`, fish a `fish_prompt` that prints two newlines). The first is the gap between blocks, with the separator through its middle; the header is drawn on the second. Classic mode is unchanged.
 - [x] **No empty row:** when the shell left no empty row above the command (an older shell integration, for example a daemon from before this change), the header goes at the end of the command line instead of over it, with only what fits after the command's last row: the directory goes first, then the duration, and with no room for the status nothing is shown (`inlineHeader()`). With one empty row, separator and header share it. `blockLayout()` in `lib/` decides. A block whose prompt came before the app attached finds its prompt rows the same way, two, one or none (`replayedPromptLine()`), so earlier output is never read as its command.
 - [x] **Header text** comes from a pure `blockHeader()` in `lib/`:
-  - `<node> <cwd> git:(<branch>) <changes> (<duration>)`, for example `v24.19.0 ~/src/app git:(main) 5 • +113 -30 (0.053s)`. The node version and the session's uncommitted changes (files • `+`added `-`removed lines, counts in green and red) are recorded when the command starts; each part is left out when unknown, and branch and changes only appear inside the session's worktree.
+  - Boxed chips for `<node>`, `<cwd>`, `<branch>` and `<changes>`, then `(<duration>)`, for example `[v24.19.0] [~/src/app] [main] [5 • +113 -30] (0.053s)`. The chips have the input editor's icons and layout (the branch green, the directory cut from the left), but no fill and a faint border, so they are quieter than the input's (user feedback, 2026-10-06). The node version and the session's uncommitted changes (files • `+`added `-`removed lines, counts in green and red) are recorded when the command starts; each part is left out when unknown, and branch and changes only appear inside the session's worktree.
   - `cwd` is the directory at the `C` mark (OSC 7), `~`-shortened.
-  - `git:(<branch>)` appears only when that directory is inside the session's worktree; the branch is the session's.
+  - The branch chip appears only when that directory is inside the session's worktree; the branch is the session's.
   - Duration: seconds with three decimals under 10 s (`0.032s`); one decimal under a minute (`12.3s`); then minutes and seconds (`2m 5s`).
   - A failed block adds a red `exit <code>` before the duration: `~ · exit 1 (0.300s)`.
   - A running block shows the cwd and branch with a spinner in place of the duration.
@@ -108,7 +108,7 @@ None.
 ## Test plan
 
 - TS (Vitest, `lib/`):
-  - `blockHeader`: `~/src/app git:(main) (0.053s)`, `~ · exit 1 (0.300s)`, running, replayed, cwd outside the worktree has no branch.
+  - `blockHeader`: `~/src/app` with branch `main` and `(0.053s)`, `~ · exit 1 (0.300s)`, running, replayed, cwd outside the worktree has no branch.
   - Block selection: `blockAt(blocks, line)`, `selectStep` at both ends of the list.
   - `chipModel`: node chip only with a version, branch only with a session branch, `± N` counts staged, unstaged and untracked files once each.
   - `tokenize`: `terraform init -upgrade`, `FOO=1 git commit -m "a b" && ls | wc -l`, `cd ~/src`, an unclosed quote.
