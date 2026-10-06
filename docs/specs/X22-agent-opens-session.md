@@ -22,13 +22,13 @@ An agent working in one project sometimes needs a change in another project. Unt
 
 ### Creating the session (`session.create`, `jaunt session new`)
 
-- [ ] `session.create {…, spawned_by: <terminal id>}` records the parent: the new session's `spawned_by` is the id of the session that terminal belongs to. A terminal outside any session records nothing, and an unknown terminal id is rejected and creates nothing.
-- [ ] With `spawned_by`, the new session's permission mode defaults to the parent's current mode: the chat's mode for a structured agent, otherwise the parent session's `mode`. No mode on the parent means Manual.
-- [ ] With `spawned_by`, a requested mode more permissive than the parent's is rejected and nothing is created. The order is Plan < Manual < Accept edits < Auto < Bypass permissions. An equal or less permissive mode is used as asked.
-- [ ] Without `spawned_by` (the app's composer, scripts), modes behave as before (X7).
-- [ ] `jaunt session new <project> [prompt…] [--name --branch --from --agent --model --effort --mode]` calls `session.create` with `spawned_by` from `$JAUNT_TERMINAL_ID` and prints the session as JSON (`id`, `name`, `project_id`, `branch`, `path`, `terminals`, `spawned_by`, …).
-- [ ] `<project>` matches a project id, then a path (`~` expanded, trailing `/` ignored), then a name, case-insensitively. No match or more than one name match fails with `jaunt: no project "x"; known projects: api, web` (or `… matches several projects: …`) and creates nothing. jaunt never adds a project on its own.
-- [ ] `jaunt project ls [--json]` lists projects: name, base branch, path.
+- [x] `session.create {…, spawned_by: <terminal id>}` records the parent: the new session's `spawned_by` is the id of the session that terminal belongs to. A terminal outside any session records nothing, and an unknown terminal id is rejected and creates nothing.
+- [x] With `spawned_by`, the new session's permission mode defaults to the parent's current mode: the chat's mode for a structured agent, otherwise the parent session's `mode`. No mode on the parent means Manual.
+- [x] With `spawned_by`, a requested mode more permissive than the parent's is rejected and nothing is created. The order is Plan < Manual < Accept edits < Auto < Bypass permissions. An equal or less permissive mode is used as asked.
+- [x] Without `spawned_by` (the app's composer, scripts), modes behave as before (X7).
+- [x] `jaunt session new <project> [prompt…] [--name --branch --from --agent --model --effort --mode]` calls `session.create` with `spawned_by` from `$JAUNT_TERMINAL_ID` and prints the session as JSON (`id`, `name`, `project_id`, `branch`, `path`, `terminals`, `spawned_by`, …).
+- [x] `<project>` matches a project id, then a path (`~` expanded, trailing `/` ignored), then a name, case-insensitively. No match or more than one name match fails with `jaunt: no project "x"; known projects: api, web` (or `… matches several projects: …`) and creates nothing. jaunt never adds a project on its own.
+- [x] `jaunt project ls [--json]` lists projects: name, base branch, path.
 
 ### Following it (`jaunt session ls/wait/read/send`)
 
@@ -40,7 +40,7 @@ An agent working in one project sometimes needs a change in another project. Unt
 
 ### Environment and skill
 
-- [ ] Every terminal and structured agent jaunt starts gets `JAUNT_SOCK` and `JAUNT_BIN` (the `jaunt` CLI next to `jauntd`) in its environment. Structured agents get `JAUNT_TERMINAL_ID` and `JAUNT_SESSION` as before.
+- [x] Every terminal and structured agent jaunt starts gets `JAUNT_SOCK` and `JAUNT_BIN` (the `jaunt` CLI next to `jauntd`) in its environment. Structured agents get `JAUNT_TERMINAL_ID` and `JAUNT_SESSION` as before.
 - [ ] `jaunt hooks install` (and the app's one-click hook install) also writes a `jaunt` skill to `~/.claude/skills/jaunt/SKILL.md` and `$CODEX_HOME/skills/jaunt/SKILL.md` (default `~/.codex`). `hooks uninstall` removes those two files, and `hooks status` reports whether each is installed.
 - [ ] The skill tells the agent to act only when `$JAUNT_SOCK` is set, to use `"$JAUNT_BIN"`, to hand work in another project to a new session instead of editing that project's files, and to write a self-contained prompt (what, why, where the related work is).
 

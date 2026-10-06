@@ -443,6 +443,7 @@ impl ChatManager {
         let (program, args) = adapter.command(&cfg);
         let mut env = self.terms.base_env().clone();
         env.insert("JAUNT_TERMINAL_ID".into(), chat.id.to_string());
+        env.insert("JAUNT_SOCK".into(), self.terms.socket().display().to_string());
         if let Some(s) = &inner.info.session_id {
             env.insert("JAUNT_SESSION".into(), s.clone());
         }
@@ -581,7 +582,7 @@ pub fn chats_dir(home: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
@@ -607,14 +608,19 @@ while IFS= read -r line; do
 done
 "#;
 
-    async fn setup() -> (tempfile::TempDir, Arc<TerminalManager>, Arc<ChatManager>) {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
+    /// An environment whose PATH finds the fake `claude`, written under `dir`.
+    pub(crate) fn fake_claude_env(dir: &Path) -> BTreeMap<String, String> {
+        let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let fake = bin.join("claude");
         std::fs::write(&fake, FAKE_CLAUDE).unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let env = BTreeMap::from([("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display()))]);
+        BTreeMap::from([("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display()))])
+    }
+
+    async fn setup() -> (tempfile::TempDir, Arc<TerminalManager>, Arc<ChatManager>) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = fake_claude_env(dir.path());
         let terms = TerminalManager::new(dir.path().join("sock"), env);
         let chats = ChatManager::new(terms.clone(), dir.path().join("chats"));
         (dir, terms, chats)
@@ -745,6 +751,28 @@ done
         assert!(info.command.join(" ").contains("--permission-mode acceptEdits"), "{:?}", info.command);
         wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
         assert_eq!(chats.state(info.id).unwrap().mode.as_deref(), Some("acceptEdits"));
+        chats.shutdown();
+    }
+
+    /// X22: the agent can reach the daemon with `jaunt`, whatever JAUNT_HOME is.
+    #[tokio::test]
+    async fn the_agent_gets_the_daemon_socket_and_its_terminal_id() {
+        let (dir, _terms, chats) = setup().await;
+        let out = dir.path().join("env.txt");
+        std::fs::write(
+            dir.path().join("bin/claude"),
+            format!("#!/bin/sh\nprintf '%s\\n' \"$JAUNT_SOCK\" \"$JAUNT_TERMINAL_ID\" > '{}'\nexec cat >/dev/null\n", out.display()),
+        )
+        .unwrap();
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        for _ in 0..200 {
+            if std::fs::read_to_string(&out).is_ok_and(|s| s.lines().count() == 2) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let sock = dir.path().join("sock");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), format!("{}\n{}\n", sock.display(), info.id));
         chats.shutdown();
     }
 
