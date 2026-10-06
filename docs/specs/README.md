@@ -62,3 +62,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X20 | Plan approval card (Plan mode's `ExitPlanMode`) | P1 | 3 | implemented | [X20-plan-approval.md](X20-plan-approval.md) |
 | X21 | Pixel loader in the sidebar row while a session archives | P1 | 3 | implemented (UI unchecked in app) | [X21-archive-loader.md](X21-archive-loader.md) |
 | X22 | An agent opens a session in another project (`jaunt session new`) | P1 | 3 | implemented (skill untried with a live agent) | [X22-agent-opens-session.md](X22-agent-opens-session.md) |
+| X23 | In-app confirm modal for every confirmation | P1 | 3 | implemented | [X23-confirm-modal.md](X23-confirm-modal.md) |
