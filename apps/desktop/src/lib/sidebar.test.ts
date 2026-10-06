@@ -38,6 +38,11 @@ describe("sidebar arrange", () => {
     expect(g[1].sessions.map((x) => x.id)).toEqual(["s5"]);
   });
 
+  it("keeps an archived session in its group while its row still plays the archive loader", () => {
+    const g = arrange(ws(), projects, sessions, () => null, () => 0, (x) => x.id === "s3");
+    expect(g[1].sessions.map((x) => x.id)).toEqual(["s5", "s3"]);
+  });
+
   it("filters, sorts by name and groups by status", () => {
     const g = arrange(ws({ filter: ["a"], sort_by: "name", group_by: "status" }), projects, sessions, (x) => (x.id === "s1" ? "blocked" : "working"), () => 0);
     expect(g.map((x) => x.label)).toEqual(["Needs input", "Working"]);

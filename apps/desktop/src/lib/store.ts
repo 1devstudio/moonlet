@@ -28,6 +28,7 @@ import { DEFAULT_SOUNDS, soundFor, type SoundSettings } from "./sounds";
 import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { avatarUrl } from "./projectAvatar";
+import type { Archiving } from "./archiveLoader";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState } from "./protocol";
 import type { Shortcuts } from "./runActions";
@@ -178,6 +179,8 @@ interface State extends UiPersist {
   card: AgentCard | null;
   /** File shown in the Changes diff (set from the Files list). */
   diffFile: string | null;
+  /** Sessions (`sesKey`) whose sidebar row plays the archive loader (X21). */
+  archiving: Record<string, Archiving>;
 }
 
 // One store per page, even when Vite hot-reloads this module: a fresh copy
@@ -209,6 +212,7 @@ function makeStore() {
   workingSince: {},
   card: null,
   diffFile: null,
+  archiving: {},
   }));
 }
 export const useStore = (g.__jauntStore ??= makeStore());

@@ -5,11 +5,12 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc, sendInput } from "./daemon";
 import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
-import { errorToast, focusTerminal, getLayout, selectedSession, sessionState, setLayout, termKey, toast, useStore, sessionTerminals } from "./store";
+import { errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals } from "./store";
 import { arrange, lastActive } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured } from "./agents";
 import { hasRunCommand } from "./projectSettings";
+import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -251,13 +252,35 @@ export async function archiveSession(deleteBranch = false, target?: { host: stri
   const sel = useStore.getState().selected;
   const wasSelected = sel?.host === c.host && sel.session === c.ws.id;
   if (wasSelected) useStore.setState({ selected: null });
+  // The row plays a pixel scene while the daemon works, then folds away (X21).
+  const key = sesKey(c.host, c.ws.id);
+  const loader = pickLoader();
+  const started = Date.now();
+  setArchiving(key, { loader, done: false, folding: false });
   try {
     await rpc(c.host, M.sessionArchive, { id: c.ws.id, remove_worktree: true, delete_branch: deleteBranch });
+    setArchiving(key, { loader, done: true, folding: false });
+    await sleep(ARCHIVE_MIN_MS - (Date.now() - started));
+    setArchiving(key, { loader, done: true, folding: true });
+    await sleep(ARCHIVE_FOLD_MS);
+    setArchiving(key, null);
     toast(`Archived ${c.ws.name}`);
   } catch (e) {
+    setArchiving(key, null);
     if (wasSelected && !useStore.getState().selected) useStore.setState({ selected: sel });
     errorToast(e);
   }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+
+function setArchiving(key: string, a: Archiving | null) {
+  useStore.setState((s) => {
+    const archiving = { ...s.archiving };
+    if (a) archiving[key] = a;
+    else delete archiving[key];
+    return { archiving };
+  });
 }
 
 /** Sessions in the order the sidebar shows them, skipping collapsed blocks. */

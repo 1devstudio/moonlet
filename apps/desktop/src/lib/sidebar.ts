@@ -27,12 +27,14 @@ export function arrange(
   sessions: Session[],
   stateOf: (s: Session) => AgentState | null,
   activeAt: (s: Session) => number,
+  /** Archived sessions whose row still plays the archive loader (X21). */
+  archiving: (s: Session) => boolean = () => false,
 ): Group[] {
   const filter = ws.view.filter.filter((id) => ws.project_ids.includes(id));
   const visible = ws.project_ids.filter((id) => filter.length === 0 || filter.includes(id));
   const byId = new Map(projects.map((p) => [p.id, p]));
   const sorted = sessions
-    .filter((s) => !s.archived && visible.includes(s.project_id))
+    .filter((s) => (!s.archived || archiving(s)) && visible.includes(s.project_id))
     .sort((a, b) => {
       if (ws.view.sort_by === "name") return a.name.localeCompare(b.name);
       if (ws.view.sort_by === "created") return b.created_at - a.created_at;
