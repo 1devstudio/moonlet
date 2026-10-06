@@ -29,6 +29,7 @@ import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
+import { spawnedNotices } from "./spawned";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState } from "./protocol";
 import type { Shortcuts } from "./runActions";
@@ -625,7 +626,10 @@ function handleEvent(e: DaemonEvent) {
       break;
     case EV.sessionsChanged: {
       const list = data as Session[];
+      const notices = spawnedNotices(get().sessions[host], list, get().projects[host] ?? []);
       set((s) => ({ sessions: { ...s.sessions, [host]: list } }));
+      // An agent opened a session (X22): say so, and leave the user where they are.
+      for (const n of notices) toast(n.text, "info", { label: "Go to", run: () => selectSession(host, n.session) });
       for (const w of list) if (!w.archived) syncLayout(host, w);
       break;
     }

@@ -132,6 +132,8 @@ export interface Session {
   section?: string | null;
   model?: string | null;
   effort?: string | null;
+  /** The session whose agent started this one (X22). */
+  spawned_by?: string | null;
   terminals: number[];
   layout: unknown;
 }
