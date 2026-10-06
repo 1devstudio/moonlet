@@ -1,7 +1,7 @@
 import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useEffect, useRef } from "react";
 import { GitBranch, SquareTerminal, X } from "lucide-react";
 import type { AgentState } from "../lib/protocol";
-import { fromOtherDialog } from "../lib/modal";
+import { fromOtherDialog, tabWrap } from "../lib/modal";
 
 export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
@@ -183,7 +183,7 @@ export function Dialog({ title, onClose, children, width = 480, footer }: { titl
 /**
  * The confirm modal (X23): a message, an optional option at the footer's
  * left, Cancel and the action. The action has focus, so Enter confirms; it
- * sits above any open Dialog.
+ * sits above any open Dialog and the toasts.
  */
 export function ConfirmDialog({
   title,
@@ -221,7 +221,7 @@ export function ConfirmDialog({
   }, [onCancel]);
   const ring = "focus:outline-2 focus:outline-offset-2 focus:outline-accent";
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/50 pt-[12vh]" onMouseDown={onCancel}>
+    <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/50 pt-[12vh]" onMouseDown={onCancel}>
       <div
         role="dialog"
         aria-modal="true"
@@ -229,6 +229,14 @@ export function ConfirmDialog({
         tabIndex={-1}
         className="w-[440px] overflow-hidden rounded-xl border border-border-strong bg-panel shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] outline-none"
         onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // Tab stays inside, so it never reaches a dialog underneath.
+          const to = e.key === "Tab" ? tabWrap(e.currentTarget, document.activeElement, e.shiftKey) : null;
+          if (to) {
+            e.preventDefault();
+            to.focus();
+          }
+        }}
       >
         <div className="flex items-center justify-between border-b border-border bg-panel-2 px-4 py-2.5">
           <h2 className="ui-text-13 font-semibold">{title}</h2>
