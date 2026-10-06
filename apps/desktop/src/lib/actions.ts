@@ -1,7 +1,6 @@
 // User-level actions shared by buttons, menus, the command palette and
 // keyboard shortcuts.
 
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc, sendInput } from "./daemon";
 import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
@@ -11,6 +10,7 @@ import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
+import { archivePrompt, askConfirm } from "./confirm";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -87,8 +87,7 @@ export async function closeFocused() {
   if (focused === null) return;
   const info = useStore.getState().terminals[c.host]?.[focused];
   if (info?.kind === "agent" && !info.exit) {
-    const ok = await confirm(`Stop the ${info.agent ?? "agent"} running in this tab?`, { title: "Close agent", kind: "warning" });
-    if (!ok) return;
+    if (!(await confirmStopAgent(info.agent))) return;
   }
   void rpc(c.host, M.terminalKill, { id: focused, remove: true }).catch(errorToast);
 }
@@ -98,10 +97,13 @@ export async function closeTab(host: string, ids: number[]) {
   const terms = useStore.getState().terminals[host] ?? {};
   const agents = ids.map((id) => terms[id]).filter((t) => t?.kind === "agent" && !t.exit);
   if (agents.length) {
-    const ok = await confirm(`Stop the ${agents[0]?.agent ?? "agent"} running in this tab?`, { title: "Close agent", kind: "warning" });
-    if (!ok) return;
+    if (!(await confirmStopAgent(agents[0]?.agent))) return;
   }
   for (const id of ids) void rpc(host, M.terminalKill, { id, remove: true }).catch(errorToast);
+}
+
+function confirmStopAgent(agent: string | null | undefined) {
+  return askConfirm({ title: "Close agent", message: `Stop the ${agent ?? "agent"} running in this tab?`, action: "Stop agent" });
 }
 
 export function focusPane(delta: number) {
@@ -239,15 +241,14 @@ export async function runScript(script: "run" | "setup") {
   }
 }
 
-/** Archives `target`, or the selected session. */
-export async function archiveSession(deleteBranch = false, target?: { host: string; ws: Session }) {
+/** Archives `target`, or the selected session, once confirmed; the confirm
+ * modal's checkbox decides whether the branch goes too (X23). */
+export async function archiveSession(target?: { host: string; ws: Session }) {
   const c = target ?? current();
   if (!c) return;
-  const ok = await confirm(
-    `Archive "${c.ws.name}"? Its terminals stop and the worktree folder is removed.${deleteBranch ? " The branch is deleted too." : " The branch is kept."}`,
-    { title: "Archive session", kind: "warning" },
-  );
-  if (!ok) return;
+  const answer = await askConfirm(archivePrompt(c.ws.name));
+  if (!answer) return;
+  const deleteBranch = answer.checked;
   // Close its views first: they would reload while the worktree is deleted.
   const sel = useStore.getState().selected;
   const wasSelected = sel?.host === c.host && sel.session === c.ws.id;

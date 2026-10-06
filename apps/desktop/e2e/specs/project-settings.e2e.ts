@@ -12,7 +12,7 @@ const runButton = () => $('//button[normalize-space()="Run"]');
 async function start(config = CONFIG) {
   if (await dialog().isExisting()) {
     await $(`${sel.dialog} button[title="Close"]`).click();
-    if (await $(sel.dialogButton("Discard")).isExisting()) await $(sel.dialogButton("Discard")).click();
+    if (await $(sel.confirmButton("Discard")).isExisting()) await $(sel.confirmButton("Discard")).click();
     await expect(dialog()).not.toBeExisting();
   }
   resetConfig(w, config);
@@ -83,9 +83,10 @@ describe("Project settings", () => {
     await loaded();
     await fill(sel.field("Setup"), "pnpm install");
     await browser.keys("Escape");
-    await expect($(sel.text("Discard unsaved changes?"))).toBeDisplayed();
+    await expect($(sel.confirm("Discard changes"))).toBeDisplayed();
+    await expect($(sel.text("Discard unsaved changes to .jaunt/config.toml?"))).toBeDisplayed();
     await expect(dialog()).toBeDisplayed();
-    await $(sel.dialogButton("Discard")).click();
+    await $(sel.confirmButton("Discard")).click();
     await expect(dialog()).not.toBeDisplayed();
     expect(readConfig(w)).toBe(CONFIG);
   });
