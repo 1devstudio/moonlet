@@ -271,7 +271,7 @@ function HooksSection() {
   }, []);
   const install = async () => {
     const ok = await ask(
-      `jaunt will add its hooks to:\n• ${status?.claude_settings}\n• ${status?.codex_config}\n\nA backup of each file is written first and your own settings are kept.`,
+      `jaunt will add its hooks to:\n• ${status?.claude_settings}\n• ${status?.codex_config}\n\nand a "jaunt" skill to the skills folder next to each.\n\nA backup of each file is written first and your own settings are kept.`,
       { title: "Install agent hooks", kind: "info", okLabel: "Install" },
     );
     if (!ok) return;
@@ -288,7 +288,7 @@ function HooksSection() {
   return (
     <section className="mb-5">
       <h3 className="mb-1 ui-text-12 font-semibold">Agent hooks</h3>
-      <p className="mb-2 ui-text-12 text-muted">Hooks let Claude Code and Codex report exactly when they are working, waiting for approval, or done.</p>
+      <p className="mb-2 ui-text-12 text-muted">Hooks let Claude Code and Codex report exactly when they are working, waiting for approval, or done. The jaunt skill lets them open a session in another project.</p>
       {status && (
         <div className="mb-2 space-y-1 ui-text-12">
           <div className="flex items-center gap-2">
