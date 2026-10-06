@@ -74,7 +74,7 @@ function Home() {
           </Button>
         </div>
         <div className="mt-2 font-mono ui-text-11.5 text-faint">
-          <Kbd>⌘K</Kbd> command palette · <Kbd>⌘T</Kbd> new terminal · <Kbd>⌘D</Kbd> split · <Kbd>⇧⌘D</Kbd> changes
+          <Kbd>⌘K</Kbd> run action · <Kbd>⌘T</Kbd> new terminal · <Kbd>⌘D</Kbd> split · <Kbd>⇧⌘D</Kbd> changes
         </div>
       </div>
     </div>
