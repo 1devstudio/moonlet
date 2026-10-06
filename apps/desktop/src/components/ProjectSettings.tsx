@@ -7,7 +7,7 @@ import { FileWarning, FolderOpen, Plus, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ProjectConfigFile } from "../lib/protocol";
 import { errorToast, toast, useStore } from "../lib/store";
-import { agentOptions, fromForm, isDirty, loadFailure, newRowId, toForm, validate, type AgentRow, type Form, type SaveError } from "../lib/projectSettings";
+import { agentOptions, closeRequest, fromForm, isDirty, loadFailure, newRowId, toForm, validate, type AgentRow, type Form, type SaveError } from "../lib/projectSettings";
 import { askConfirm } from "../lib/confirm";
 import { fromOtherDialog } from "../lib/modal";
 import { Button, IconButton, cx } from "./ui";
@@ -92,7 +92,9 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
   const remote = host !== "local";
 
   const requestClose = useCallback(async () => {
-    if (parseError || !dirty) return close();
+    const next = closeRequest({ saving, parseError: !!parseError, dirty });
+    if (next === "close") return close();
+    if (next === "wait") return;
     const discard = await askConfirm({
       title: "Discard changes",
       message: "Discard unsaved changes to .jaunt/config.toml?",
@@ -101,7 +103,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
       variant: "danger",
     });
     if (discard) close();
-  }, [parseError, dirty]);
+  }, [saving, parseError, dirty]);
 
   const save = useCallback(async () => {
     if (!canSave || !file) return;

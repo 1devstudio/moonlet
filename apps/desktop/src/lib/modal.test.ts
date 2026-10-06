@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { fromOtherDialog } from "./modal";
+import { fromOtherDialog, tabWrap } from "./modal";
 
 // Settings open, with the confirm modal on top of it.
 function screen() {
@@ -33,5 +33,43 @@ describe("fromOtherDialog", () => {
   it("gives Settings the keys pressed outside any dialog", () => {
     const { $, settings, esc } = screen();
     expect(fromOtherDialog(esc($("outside")), settings)).toBe(false);
+  });
+});
+
+describe("tabWrap", () => {
+  afterEach(() => (document.body.innerHTML = ""));
+
+  // The Archive confirm: Close, the checkbox, Cancel, Archive.
+  function confirm() {
+    document.body.innerHTML = `
+      <div role="dialog" aria-label="Archive session" tabindex="-1">
+        <button id="close">×</button>
+        <label><input id="box" type="checkbox"> Also delete the branch</label>
+        <button id="cancel">Cancel</button>
+        <button id="archive">Archive</button>
+      </div>`;
+    const $ = (id: string) => document.getElementById(id)!;
+    return { $, panel: document.querySelector('[role="dialog"]')! };
+  }
+
+  it("wraps Tab from the last control to the first", () => {
+    const { $, panel } = confirm();
+    expect(tabWrap(panel, $("archive"), false)).toBe($("close"));
+  });
+
+  it("wraps Shift+Tab from the first control to the last", () => {
+    const { $, panel } = confirm();
+    expect(tabWrap(panel, $("close"), true)).toBe($("archive"));
+  });
+
+  it("brings focus back in from the panel itself", () => {
+    const { $, panel } = confirm();
+    expect(tabWrap(panel, panel, true)).toBe($("archive"));
+  });
+
+  it("leaves Tab alone between controls inside", () => {
+    const { $, panel } = confirm();
+    expect(tabWrap(panel, $("box"), false)).toBeNull();
+    expect(tabWrap(panel, $("cancel"), true)).toBeNull();
   });
 });

@@ -24,12 +24,14 @@ Every "are you sure?" in jaunt was a native macOS sheet from the Tauri dialog pl
 - [x] While the modal is open, the global ⌘ shortcuts do nothing, ⌘K included.
 - [x] Esc in a modal opened over Settings or Project settings closes only the modal.
 - [x] The action button has focus when the modal opens.
+- [x] Tab and Shift+Tab stay inside the modal, and the modal sits above the toasts.
+- [x] Closing Project settings while a save runs asks nothing; the save closes it.
 
 ## UI
 
 `ConfirmDialog` in `components/ui.tsx` (also exported to the design system), shown by `ConfirmHost` from `App.tsx`:
 
-- Overlay `bg-black/50` at `z-[60]`, so it sits above `Dialog` (`z-50`). The panel is top-aligned at 12vh, 440 px wide, `rounded-xl`, `border-border-strong`, `bg-panel`, shadow `0 25px 50px -12px rgba(0,0,0,.5)`.
+- Overlay `bg-black/50` at `z-[70]`, so it sits above `Dialog` (`z-50`) and the toasts (`z-[60]`). Tab and Shift+Tab wrap inside the modal. The panel is top-aligned at 12vh, 440 px wide, `rounded-xl`, `border-border-strong`, `bg-panel`, shadow `0 25px 50px -12px rgba(0,0,0,.5)`.
 - Header and footer are `bg-panel-2`, divided by `border-border`, `px-4 py-2.5`. The title is 13 px semibold, with a Close × on the right.
 - The body is one 12.5 px muted paragraph with 1.55 line height. Line breaks in the message are kept.
 - Footer: an optional checkbox on the left, then a ghost Cancel and the action button. Focused buttons get a 2 px accent outline, 2 px off the button.
@@ -57,7 +59,8 @@ Bypass permissions stays behind an explicit confirm with a danger button. The me
 - `lib/confirm.test.ts`: Archive's message and button for both checkbox states (the design's text), resolving and cancelling, and a second request cancelling the first.
 - `lib/actions.test.ts`: the checkbox decides `delete_branch`, and cancelling sends no RPC.
 - `lib/keys.test.ts`: global shortcuts are off while the modal is open.
-- `lib/modal.test.ts`: Esc inside the modal is left to it, not to the dialog under it.
+- `lib/modal.test.ts`: Esc inside the modal is left to it, not to the dialog under it; Tab wraps at both ends.
+- `lib/projectSettings.test.ts`: Close asks only for unsaved edits, and waits while a save runs.
 - `e2e/specs/confirm-modal.e2e.ts`: archive from the ⋯ menu: the message, the focused action, the checkbox's text, Cancel, then a confirm that keeps the branch.
 - `e2e/specs/project-settings.e2e.ts`: discarding unsaved changes goes through the modal.
 
