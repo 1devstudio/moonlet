@@ -8,7 +8,7 @@ import { errorToast, refreshGit, selectedSession, toast, updateSettings, useStor
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { ProjectSettingsDialog } from "./ProjectSettings";
-import { CLAUDE_MODES, resolveMode } from "../lib/agents";
+import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../lib/agents";
 import type { ToolCallView } from "../lib/chat";
 import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../lib/sounds";
 
@@ -390,6 +390,7 @@ function HostsSection() {
 
 function AgentsSection() {
   const mode = useStore((s) => resolveMode(s.settings.defaultMode));
+  const planMode = useStore((s) => resolvePlanMode(s.settings.planApproveMode));
   const sounds = useStore((s) => s.settings.sounds);
   const toolCalls = useStore((s) => s.settings.toolCalls);
   return (
@@ -398,6 +399,15 @@ function AgentsSection() {
       <Field label="Default permission mode for new Claude sessions">
         <select className={inputCls} value={mode} onChange={(e) => updateSettings({ defaultMode: e.target.value })}>
           {CLAUDE_MODES.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label} · {m.description}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="When a plan is approved, switch to">
+        <select className={inputCls} value={planMode} onChange={(e) => updateSettings({ planApproveMode: e.target.value })}>
+          {PLAN_APPROVE_MODES.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label} · {m.description}
             </option>

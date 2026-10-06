@@ -2,6 +2,7 @@
 // ChatState, loaded with `chat.state` and kept current by `chat.*` events.
 
 import { create } from "zustand";
+import type { PlanApproveMode } from "./agents";
 import { rpc } from "./daemon";
 import { type ChatItem, type ChatState, M, type ToolCall, type TurnTime } from "./protocol";
 
@@ -339,13 +340,16 @@ export function planOf(ask: { tool: string; input: unknown }): { plan: string; f
   return { plan: input.plan, file: typeof input.planFilePath === "string" ? input.planFilePath : null };
 }
 
-/** What the user does with a plan: approve into Accept edits or Manual, or send feedback. */
-export type PlanChoice = "acceptEdits" | "ask" | "keepPlanning";
+/** What the user does with a plan: approve into the Settings mode (X24) or Manual, or send feedback. */
+export type PlanChoice = "approve" | "ask" | "keepPlanning";
 
 /** `chat.permission` parameters for a plan choice; null for empty feedback. */
-export function planAnswer(choice: PlanChoice, feedback = ""): { decision: "allow" | "deny"; mode?: "acceptEdits"; message?: string } | null {
-  if (choice === "acceptEdits") return { decision: "allow", mode: "acceptEdits" };
+export function planAnswer(choice: PlanChoice, feedback = "", approveMode: PlanApproveMode = "auto"): { decision: "allow" | "deny"; mode?: PlanApproveMode; message?: string } | null {
+  if (choice === "approve") return { decision: "allow", mode: approveMode };
   if (choice === "ask") return { decision: "allow" };
   const message = feedback.trim();
   return message ? { decision: "deny", message } : null;
 }
+
+/** The approve button, named after the mode it switches to (X24). */
+export const planApproveLabel = (mode: PlanApproveMode) => (mode === "auto" ? "Approve, auto mode" : "Approve, accept edits");
