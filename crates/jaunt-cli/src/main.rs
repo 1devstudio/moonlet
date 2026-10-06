@@ -15,8 +15,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use jaunt_core::client::Client;
 use jaunt_core::hooks::{self, HookPaths};
 use jaunt_proto::TerminalId;
-use jaunt_proto::methods::{self, AgentReport, SessionCreate, TerminalCreate, TerminalWrite};
-use jaunt_proto::types::{AgentState, Project, Session, StateSource, TerminalInfo, TerminalKind};
+use jaunt_proto::methods::{
+    self, AgentReport, ChatSend, SessionCreate, TerminalCreate, TerminalRef, TerminalWrite,
+};
+use jaunt_proto::types::{
+    AgentState, ChatState, Project, Session, StateSource, TerminalInfo, TerminalKind,
+};
 
 #[derive(Parser)]
 #[command(
@@ -127,6 +131,22 @@ enum SessionAction {
         #[arg(long)]
         mode: Option<String>,
     },
+    /// List live sessions with their agent's status and parent.
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait until the session's agent stops working; prints its status.
+    Wait {
+        id: String,
+        /// Give up after this many seconds.
+        #[arg(long, default_value_t = 1800)]
+        timeout: u64,
+    },
+    /// Print the agent's last reply and any approvals it waits for.
+    Read { id: String },
+    /// Send a message to the session's agent.
+    Send { id: String, text: Vec<String> },
 }
 
 #[derive(Subcommand)]
@@ -440,8 +460,110 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                 .await?;
             println!("{}", serde_json::to_string_pretty(&created)?);
         }
+        Cmd::Session {
+            action: SessionAction::Ls { json },
+        } => {
+            let mut c = connect(&socket).await?;
+            let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await?;
+            let projects: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await?;
+            let mut rows = Vec::new();
+            for s in sessions.into_iter().filter(|s| !s.archived) {
+                let status = match session_agent(&mut c, &s.id).await {
+                    Ok(t) => Some(chat_state(&mut c, t).await?.status),
+                    Err(_) => None,
+                };
+                rows.push((s, status));
+            }
+            if json {
+                let out: Vec<_> = rows
+                    .iter()
+                    .map(|(s, status)| serde_json::json!({"session": s, "status": status}))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!("{:<13} {:<12} {:<9} {:<13} NAME", "ID", "PROJECT", "STATUS", "FROM");
+                for (s, status) in rows {
+                    let project = projects
+                        .iter()
+                        .find(|p| p.id == s.project_id)
+                        .map_or("?", |p| p.name.as_str());
+                    println!(
+                        "{:<13} {:<12} {:<9} {:<13} {}",
+                        s.id,
+                        project,
+                        status.as_deref().unwrap_or("-"),
+                        s.spawned_by.as_deref().unwrap_or("-"),
+                        // Names come from prompts an agent wrote.
+                        jaunt_core::chat::strip_ansi(&s.name)
+                    );
+                }
+            }
+        }
+        Cmd::Session {
+            action: SessionAction::Wait { id, timeout },
+        } => {
+            let mut c = connect(&socket).await?;
+            let agent = session_agent(&mut c, &id).await?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
+            loop {
+                let st = chat_state(&mut c, agent).await?;
+                if st.status != "working" {
+                    println!("{}", st.status);
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    bail!("timed out after {timeout}s; the agent is still working");
+                }
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+        }
+        Cmd::Session {
+            action: SessionAction::Read { id },
+        } => {
+            let mut c = connect(&socket).await?;
+            let agent = session_agent(&mut c, &id).await?;
+            print!("{}", session::reply(&chat_state(&mut c, agent).await?));
+        }
+        Cmd::Session {
+            action: SessionAction::Send { id, text },
+        } => {
+            let mut c = connect(&socket).await?;
+            let agent = session_agent(&mut c, &id).await?;
+            let _: bool = c
+                .request(
+                    methods::CHAT_SEND,
+                    ChatSend {
+                        id: agent,
+                        text: text.join(" "),
+                    },
+                )
+                .await?;
+        }
     }
     Ok(())
+}
+
+/// The session's agent: its first structured agent terminal.
+async fn session_agent(c: &mut Client, id: &str) -> Result<TerminalId> {
+    let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await?;
+    let s = sessions
+        .iter()
+        .find(|s| s.id == id)
+        .with_context(|| format!("no session \"{id}\""))?;
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await?;
+    s.terminals
+        .iter()
+        .copied()
+        .find(|t| {
+            terminals
+                .iter()
+                .any(|i| i.id == *t && i.chat && i.kind == TerminalKind::Agent)
+        })
+        .with_context(|| format!("session \"{id}\" has no structured agent"))
+}
+
+async fn chat_state(c: &mut Client, id: TerminalId) -> Result<ChatState> {
+    c.request(methods::CHAT_STATE, TerminalRef { id }).await
 }
 
 fn terminal_from_env() -> Option<TerminalId> {
