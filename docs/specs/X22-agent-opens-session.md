@@ -32,11 +32,11 @@ An agent working in one project sometimes needs a change in another project. Unt
 
 ### Following it (`jaunt session ls/wait/read/send`)
 
-- [ ] `jaunt session ls [--json]` lists live (not archived) sessions: id, project, name, agent status, and the parent when there is one.
-- [ ] `jaunt session wait <session> [--timeout <secs>]` returns once the session's agent is no longer `working`, and prints the status (`done`, `idle`, `blocked` or `error`). It exits 1 with `jaunt: timed out …` when the timeout passes first (default 30 minutes).
-- [ ] `jaunt session read <session>` prints the agent's last assistant message, and pending approval questions if any.
-- [ ] `jaunt session send <session> <text…>` sends a message to the session's agent (as `chat.send`).
-- [ ] The session's agent is its first structured agent terminal. A session without one fails with `jaunt: session "x" has no structured agent`.
+- [x] `jaunt session ls [--json]` lists live (not archived) sessions: id, project, name, agent status, and the parent when there is one.
+- [x] `jaunt session wait <session> [--timeout <secs>]` returns once the session's agent is no longer `working`, and prints the status (`done`, `idle`, `blocked` or `error`). It exits 1 with `jaunt: timed out …` when the timeout passes first (default 30 minutes).
+- [x] `jaunt session read <session>` prints the agent's last assistant message, and pending approval questions if any.
+- [x] `jaunt session send <session> <text…>` sends a message to the session's agent (as `chat.send`).
+- [x] The session's agent is its first structured agent terminal. A session without one fails with `jaunt: session "x" has no structured agent`.
 
 ### Environment and skill
 

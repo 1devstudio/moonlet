@@ -2,7 +2,7 @@
 //! from the socket so they can be tested on plain data.
 
 use anyhow::{Result, bail};
-use jaunt_proto::types::Project;
+use jaunt_proto::types::{ChatState, Project};
 
 /// The project `query` names: an id, then a path, then a name (any case).
 pub fn find_project<'a>(projects: &'a [Project], query: &str, home: &str) -> Result<&'a Project> {
@@ -29,6 +29,20 @@ pub fn find_project<'a>(projects: &'a [Project], query: &str, home: &str) -> Res
             bail!("\"{query}\" matches several projects: {}; pass a path instead", paths.join(", "))
         }
     }
+}
+
+/// What `jaunt session read` prints: the agent's last reply, then one line
+/// per approval it waits for.
+pub fn reply(state: &ChatState) -> String {
+    let mut out = String::new();
+    if let Some(last) = state.items.iter().rev().find(|i| i.kind == "assistant") {
+        out.push_str(last.text.trim_end());
+        out.push('\n');
+    }
+    for ask in &state.pending {
+        out.push_str(&format!("[waiting for approval] {}: {}\n", ask.tool, ask.summary));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -69,5 +83,28 @@ mod tests {
             err("docs"),
             r#""docs" matches several projects: /Users/me/code/docs, /Users/me/client/docs; pass a path instead"#
         );
+    }
+
+    #[test]
+    fn read_prints_the_last_reply_and_pending_approvals() {
+        let state: ChatState = serde_json::from_value(serde_json::json!({
+            "status": "blocked",
+            "items": [
+                {"id": "u1", "kind": "user", "text": "Add the button", "ts": 1},
+                {"id": "a1", "kind": "assistant", "text": "Looking at the page.", "ts": 2},
+                {"id": "t1", "kind": "tool", "text": "", "ts": 3},
+                {"id": "a2", "kind": "assistant", "text": "I need to run the tests.\nOne moment.", "ts": 4},
+                {"id": "t2", "kind": "tool", "text": "", "ts": 5}
+            ],
+            "pending": [
+                {"id": "p1", "tool": "Bash", "summary": "pnpm test"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            reply(&state),
+            "I need to run the tests.\nOne moment.\n[waiting for approval] Bash: pnpm test\n"
+        );
+        assert_eq!(reply(&ChatState::default()), "");
     }
 }
