@@ -107,8 +107,9 @@ function duration(ms: number): string {
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
-/** The grey line above a command (T8): `~/src/app git:(main) (0.053s)`,
- * with `exit 1` before the duration when the command failed. */
+/** The line above a command (T8): chips for the node version, directory,
+ * session branch and uncommitted changes, then the duration, with
+ * `exit 1` before it when the command failed. */
 export function blockHeader(
   b: {
     cwd?: string;
@@ -120,15 +121,16 @@ export function blockHeader(
     end?: unknown;
   },
   ctx: BlockContext,
-): { node: string | null; place: string; changes: string | null; exit: string | null; duration: string | null; running: boolean } {
+): { node: string | null; place: string; branch: string | null; changes: string | null; exit: string | null; duration: string | null; running: boolean } {
   const cwd = b.cwd ?? "";
   const inside = !!ctx.worktree && (cwd === ctx.worktree || cwd.startsWith(ctx.worktree + "/"));
-  const place = shortPath(cwd, ctx.home) + (inside && ctx.branch ? ` git:(${ctx.branch})` : "");
   const timed = !!b.end && b.startedAt !== undefined && b.endedAt !== undefined;
   const c = b.changes;
   return {
     node: b.node ?? null,
-    place,
+    place: shortPath(cwd, ctx.home),
+    // The session's branch, only inside its worktree.
+    branch: inside && ctx.branch ? ctx.branch : null,
     // `5 • +113 -30`: the session's uncommitted changes, only inside it.
     changes: inside && c ? `${c.files} • +${c.additions} -${c.deletions}` : null,
     exit: b.end && b.exit ? `exit ${b.exit}` : null,
@@ -237,22 +239,25 @@ export function blockLayout(prompt: number, output: number, empty: (y: number) =
 }
 
 /** The parts of a header that fit at the end of the command line when the
- * shell left no row for it (T8), in `free` columns: the directory goes
- * first, then the duration; with not even room for the status, nothing. */
+ * shell left no row for it (T8), in `free` columns: the chips go first,
+ * then the duration; with not even room for the status, nothing. A chip
+ * takes about three columns besides its text, for its icon and border. */
 export function inlineHeader(h: ReturnType<typeof blockHeader>, free: number) {
-  type Parts = { node: string | null; place: string | null; changes: string | null; exit: string | null; duration: string | null; running: boolean };
+  type Parts = { node: string | null; place: string | null; branch: string | null; changes: string | null; exit: string | null; duration: string | null; running: boolean };
+  const chip = (text: string | null) => (text ? text.length + 3 : 0);
   const width = (p: Parts) =>
     2 +
-    (p.node ? p.node.length + 1 : 0) +
-    (p.place?.length ?? 0) +
-    (p.changes ? p.changes.length + 1 : 0) +
+    chip(p.node) +
+    chip(p.place) +
+    chip(p.branch) +
+    chip(p.changes) +
     (p.exit ? p.exit.length + (p.place ? 3 : 0) : 0) +
     (p.duration ? p.duration.length + 1 : 0) +
     (p.running ? 2 : 0);
   const options: Parts[] = [
     { ...h },
-    { ...h, node: null, changes: null, place: null },
-    { ...h, node: null, changes: null, place: null, duration: null },
+    { ...h, node: null, place: null, branch: null, changes: null },
+    { ...h, node: null, place: null, branch: null, changes: null, duration: null },
   ];
   return options.find((p) => (p.exit || p.duration || p.running || p.place) && width(p) <= free) ?? null;
 }
@@ -294,6 +299,17 @@ const ACTION_ICONS: Record<BlockAction, string> = {
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   rerun: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
 };
+/** Lucide icons for the header chips, as the input editor's chips use. */
+const CHIP_ICONS = {
+  node: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>',
+  place: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+  branch: '<path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>',
+  changes:
+    '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M9 10h6"/><path d="M12 13V7"/><path d="M9 17h6"/>',
+};
+const CHIP_TITLES = { node: "Node.js on PATH", place: "Directory", branch: "Session branch", changes: "Files with uncommitted changes" };
+const svg = (paths: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+
 const ACTION_TITLES: Record<BlockAction, string> = {
   agent: "Copy to agent (⌘↵): the command and its output, as a draft in the session's agent",
   copy: "Copy command and output (⌘C)",
@@ -665,18 +681,24 @@ export class TermEntry {
       const span = (cls: string, text: string) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
       // xterm sets the element's `display`, so the layout lives in a row inside.
       const row = Object.assign(document.createElement("div"), { className: "row" });
-      // `5 • +113 -30`, with the line counts in green and red.
-      const changes = (text: string) => {
-        const el = span("changes", "");
-        for (const part of text.split(/([+-]\d+)/)) el.append(part.startsWith("+") ? span("add", part) : /^-\d/.test(part) ? span("del", part) : part);
+      // A boxed chip, like the input editor's (T8), with its icon.
+      const chip = (kind: keyof typeof CHIP_ICONS, ...text: (string | Node)[]) => {
+        const el = Object.assign(document.createElement("span"), { className: `chip ${kind}`, title: CHIP_TITLES[kind], innerHTML: svg(CHIP_ICONS[kind]) });
+        const label = span("label", "");
+        // The directory is cut from the left, so the end of the path stays.
+        label.append(...(kind === "place" ? [Object.assign(document.createElement("bdi"), { textContent: text.join("") })] : text));
+        el.append(label);
         return el;
       };
+      // `5 • +113 -30`, with the line counts in green and red.
+      const changes = (text: string) => text.split(/([+-]\d+)/).map((part) => (part.startsWith("+") ? span("add", part) : /^-\d/.test(part) ? span("del", part) : part));
       row.append(
-        ...(h.node ? [span("node", `${h.node} `)] : []),
-        ...(h.place ? [span("place", h.place)] : []),
-        ...(h.changes ? [span("gap", " "), changes(h.changes)] : []),
-        ...(h.exit ? [span("exit", h.place ? ` · ${h.exit}` : h.exit)] : []),
-        ...(h.duration ? [span("duration", ` ${h.duration}`)] : []),
+        ...(h.node ? [chip("node", h.node)] : []),
+        ...(h.place ? [chip("place", h.place)] : []),
+        ...(h.branch ? [chip("branch", h.branch)] : []),
+        ...(h.changes ? [chip("changes", ...changes(h.changes))] : []),
+        ...(h.exit ? [span("exit", h.place ? `· ${h.exit}` : h.exit)] : []),
+        ...(h.duration ? [span("duration", h.duration)] : []),
         ...(h.running ? [span("running", "")] : []),
       );
       // Copy to agent, Copy and Re-run, shown on hover or selection (T8).
@@ -686,7 +708,7 @@ export class TermEntry {
         for (const action of actions) {
           const button = Object.assign(document.createElement("button"), { className: `action ${action}`, title: ACTION_TITLES[action] });
           button.dataset.action = action;
-          button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ACTION_ICONS[action]}</svg>`;
+          button.innerHTML = svg(ACTION_ICONS[action]);
           if (action === "agent") button.append(span("label", "Copy to agent"));
           // Neither xterm nor the block click handler sees these clicks.
           for (const type of ["mousedown", "mouseup"]) button.addEventListener(type, (e) => (e.stopPropagation(), e.preventDefault()));
