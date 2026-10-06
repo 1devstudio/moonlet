@@ -216,6 +216,10 @@ impl ChatManager {
         }
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
+        // A session-wide mode change answers a plan, never a single tool call.
+        if mode.is_some() && !inner.state.pending.iter().any(|p| p.id == ask && p.tool == "ExitPlanMode") {
+            bail!("only a plan approval can switch the mode");
+        }
         let Inner { adapter, state, .. } = &mut *inner;
         let outs = adapter.as_mut().context("agent not running")?.permission(ask, decision, message, answers, mode, state);
         self.apply(&chat, &mut inner, outs);
@@ -588,6 +592,8 @@ echo "$*" >> claude-args
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"sess-1","model":"fake","slash_commands":["clear"]}' ;;
+    *'run a command'*)
+      echo '{"type":"control_request","request_id":"b1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"t1","input":{"command":"npm test"}}}' ;;
     *'approve the plan'*)
       echo '{"type":"system","subtype":"status","status":null,"permissionMode":"acceptEdits"}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
@@ -717,6 +723,15 @@ done
         assert_eq!(err.to_string(), "a plan can only be approved into acceptEdits");
         let err = chats.permission(info.id, "ask-1", "deny", None, None, Some("acceptEdits")).unwrap_err();
         assert_eq!(err.to_string(), "a mode needs decision allow");
+
+        // Any other ask is answered without a mode, or not at all.
+        chats.send(info.id, "run a command").unwrap();
+        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        let err = chats.permission(info.id, "b1", "allow", None, None, Some("acceptEdits")).unwrap_err();
+        assert_eq!(err.to_string(), "only a plan approval can switch the mode");
+        let st = chats.state(info.id).unwrap();
+        assert_eq!(st.pending.iter().map(|p| p.tool.as_str()).collect::<Vec<_>>(), ["Bash"]);
+        assert_eq!(st.mode.as_deref(), Some("plan"));
         chats.shutdown();
     }
 
