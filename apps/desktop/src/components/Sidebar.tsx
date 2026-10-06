@@ -7,6 +7,8 @@ import { arrange, compact, dropResult, lastActive, projectRemoval, type Dragged,
 import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
+import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
+import { ArchiveLoader } from "./ArchiveLoader";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
@@ -281,8 +283,10 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   const pr = useStore((st) => st.prs[sesKey(host, s.id)]);
   const unread = useStore((st) => sessionTerminals(st, host, s.id).some((x) => st.unread[termKey(host, x.id)]));
   const creating = useStore((st) => sessionTerminals(st, host, s.id).some((x) => x.kind === "setup" && !x.exit));
+  const archiving = useStore((st) => st.archiving[sesKey(host, s.id)]);
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
+  if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
   return (
     <div
       role="button"
@@ -336,6 +340,27 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
             {git.deletions ? ` -${compact(git.deletions)}` : ""}
           </span>
         ) : null)}
+    </div>
+  );
+}
+
+/** A session row while it archives: a pixel scene, then a fold (X21). */
+function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
+  return (
+    <div
+      title={a.done ? "Archived" : "Archiving…"}
+      className="overflow-hidden"
+      style={{ height: a.folding ? 0 : 38, opacity: a.folding ? 0 : 1, transition: `height ${ARCHIVE_FOLD_MS}ms ease, opacity 220ms ease` }}
+    >
+      <div className="relative h-[38px] overflow-hidden bg-[#121212]">
+        <ArchiveLoader loader={a.loader} />
+        <div className="relative flex h-[38px] w-1/2 items-center gap-3 pl-[30px]">
+          <span role="status" aria-label={a.done ? "Archived" : "Archiving"} className="flex w-[15px] shrink-0 justify-center text-muted">
+            {a.done ? <StateGlyph state="done" size={15} /> : <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />}
+          </span>
+          <span className="min-w-0 flex-1 truncate ui-text-14 text-[#cfcfcf]">{name}</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -444,13 +469,14 @@ function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; 
   const projects = useStore((s) => s.projects[host] ?? []);
   const sessions = useStore((s) => s.sessions[host] ?? []);
   const terminals = useStore((s) => s.terminals[host]);
+  const archiving = useStore((s) => s.archiving);
   const multiHost = useStore((s) => Object.keys(s.hosts).length > 1);
   const [editing, setEditing] = useState<null | "rename" | "section">(null);
   const groups = useMemo(
-    () => arrange(ws, projects, sessions, (s) => sessionState(useStore.getState(), host, s.id), (s) => activeAt(host, s)),
+    () => arrange(ws, projects, sessions, (s) => sessionState(useStore.getState(), host, s.id), (s) => activeAt(host, s), (s) => !!archiving[sesKey(host, s.id)]),
     // `terminals` changes agent states and activity times.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ws, projects, sessions, terminals, host],
+    [ws, projects, sessions, terminals, archiving, host],
   );
   const v = ws.view;
   const setView = (patch: Partial<WorkspaceView>) => void updateWorkspace(host, ws.id, { view: { ...v, ...patch } });
