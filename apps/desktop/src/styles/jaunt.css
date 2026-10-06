@@ -108,15 +108,40 @@ textarea,
 .jaunt-block-head .row {
   display: flex;
   align-items: center;
+  gap: 6px;
   height: 100%;
-}
-.jaunt-block-head .place {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .jaunt-block-head .row > :not(.place) {
   flex-shrink: 0;
+}
+/* Chips like the input editor's (T8), quieter: no fill, a faint border. */
+.jaunt-block-head .chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  line-height: 1.35;
+}
+.jaunt-block-head .chip svg {
+  flex-shrink: 0;
+  width: 1em;
+  height: 1em;
+  opacity: 0.7;
+}
+.jaunt-block-head .chip .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The directory is cut from the left, so the end of the path stays. */
+.jaunt-block-head .chip.place .label {
+  direction: rtl;
+}
+.jaunt-block-head .chip.branch {
+  max-width: 40%;
+  color: var(--color-done);
 }
 /* Hover actions (T8): Copy to agent, Copy, Re-run, at the end of the
    header while the block is under the mouse or selected. */
@@ -124,7 +149,7 @@ textarea,
   display: none;
   align-items: center;
   gap: 4px;
-  margin-left: 12px;
+  margin-left: 6px;
   pointer-events: auto;
 }
 .jaunt-block-head.hover .actions,
@@ -166,7 +191,7 @@ textarea,
   display: inline-block;
   width: 8px;
   height: 8px;
-  margin-left: 8px;
+  margin-left: 2px;
   border: 1.5px solid var(--color-accent);
   border-right-color: transparent;
   border-radius: 50%;

@@ -7,7 +7,8 @@ describe("block headers (T8)", () => {
   it("shows the directory, the session branch and the duration", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app", end: {}, exit: 0, startedAt: 0, endedAt: 53 }, ctx)).toEqual({
       node: null,
-      place: "~/src/app git:(main)",
+      place: "~/src/app",
+      branch: "main",
       changes: null,
       exit: null,
       duration: "(0.053s)",
@@ -19,6 +20,7 @@ describe("block headers (T8)", () => {
     expect(blockHeader({ cwd: "/Users/me", end: {}, exit: 1, startedAt: 0, endedAt: 300 }, ctx)).toEqual({
       node: null,
       place: "~",
+      branch: null,
       changes: null,
       exit: "exit 1",
       duration: "(0.300s)",
@@ -27,7 +29,7 @@ describe("block headers (T8)", () => {
   });
 
   it("leaves the branch out outside the session's worktree", () => {
-    expect(blockHeader({ cwd: "/tmp", end: {}, exit: 0, startedAt: 0, endedAt: 12_340 }, ctx).place).toBe("/tmp");
+    expect(blockHeader({ cwd: "/tmp", end: {}, exit: 0, startedAt: 0, endedAt: 12_340 }, ctx)).toMatchObject({ place: "/tmp", branch: null });
   });
 
   it("formats long durations like T7", () => {
@@ -38,7 +40,8 @@ describe("block headers (T8)", () => {
   it("marks a running block and has no duration yet", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app/lib", startedAt: 0 }, ctx)).toEqual({
       node: null,
-      place: "~/src/app/lib git:(main)",
+      place: "~/src/app/lib",
+      branch: "main",
       changes: null,
       exit: null,
       duration: null,
@@ -51,7 +54,7 @@ describe("block headers (T8)", () => {
   });
 
   it("does not treat a sibling directory as inside the worktree", () => {
-    expect(blockHeader({ cwd: "/Users/me/src/app-old", end: {} }, ctx).place).toBe("~/src/app-old");
+    expect(blockHeader({ cwd: "/Users/me/src/app-old", end: {} }, ctx)).toMatchObject({ place: "~/src/app-old", branch: null });
   });
 });
 
@@ -61,7 +64,8 @@ describe("block header with node version and changes (T8)", () => {
   it("adds the node version and the uncommitted changes recorded when the command started", () => {
     expect(blockHeader({ cwd: "/Users/me/src/app", node: "v24.19.0", changes, end: {}, exit: 0, startedAt: 0, endedAt: 53 }, ctx)).toEqual({
       node: "v24.19.0",
-      place: "~/src/app git:(main)",
+      place: "~/src/app",
+      branch: "main",
       changes: "5 • +113 -30",
       exit: null,
       duration: "(0.053s)",
@@ -234,8 +238,8 @@ describe("where a block's header goes (T8)", () => {
 });
 
 describe("header at the end of the command line (T8)", () => {
-  const h = { node: "v24.19.0", place: "~/src/app git:(main)", changes: "5 • +113 -30", exit: "exit 1", duration: "(0.300s)", running: false };
-  const status = { node: null, place: null, changes: null, running: false };
+  const h = { node: "v24.19.0", place: "~/src/app", branch: "main", changes: "5 • +113 -30", exit: "exit 1", duration: "(0.300s)", running: false };
+  const status = { node: null, place: null, branch: null, changes: null, running: false };
 
   it("shows everything when the row has room", () => {
     expect(inlineHeader(h, 80)).toEqual(h);
