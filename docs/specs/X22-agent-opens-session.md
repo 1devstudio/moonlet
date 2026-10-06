@@ -41,8 +41,8 @@ An agent working in one project sometimes needs a change in another project. Unt
 ### Environment and skill
 
 - [x] Every terminal and structured agent jaunt starts gets `JAUNT_SOCK` and `JAUNT_BIN` (the `jaunt` CLI next to `jauntd`) in its environment. Structured agents get `JAUNT_TERMINAL_ID` and `JAUNT_SESSION` as before.
-- [ ] `jaunt hooks install` (and the app's one-click hook install) also writes a `jaunt` skill to `~/.claude/skills/jaunt/SKILL.md` and `$CODEX_HOME/skills/jaunt/SKILL.md` (default `~/.codex`). `hooks uninstall` removes those two files, and `hooks status` reports whether each is installed.
-- [ ] The skill tells the agent to act only when `$JAUNT_SOCK` is set, to use `"$JAUNT_BIN"`, to hand work in another project to a new session instead of editing that project's files, and to write a self-contained prompt (what, why, where the related work is).
+- [x] `jaunt hooks install` (and the app's one-click hook install) also writes a `jaunt` skill to `~/.claude/skills/jaunt/SKILL.md` and `$CODEX_HOME/skills/jaunt/SKILL.md` (default `~/.codex`). `hooks uninstall` removes those two files, and `hooks status` reports whether each is installed.
+- [x] The skill tells the agent to act only when `$JAUNT_SOCK` is set, to use `"$JAUNT_BIN"`, to hand work in another project to a new session instead of editing that project's files, and to write a self-contained prompt (what, why, where the related work is).
 
 ### App
 
