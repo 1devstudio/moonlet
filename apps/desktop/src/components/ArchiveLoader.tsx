@@ -195,7 +195,7 @@ const SCENES: Record<Loader, (t: number, S: SceneState) => void> = {
   Reaper(t, S) {
     const p = t % LOADER_CYCLE;
     base(t);
-    let rx = 6;
+    let rx: number;
     if (p < 26) rx = 6 + p * 0.77; else if (p < 54) rx = 26; else rx = 26 - (p - 54) * 1.1;
     const ry = G - 14 + (Math.floor(p / 6) % 2);
     const WX = 46, WY = G - 16;

@@ -355,13 +355,9 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
       <div className="relative h-[38px] overflow-hidden bg-[#121212]">
         <ArchiveLoader loader={a.loader} />
         <div className="relative flex h-[38px] w-1/2 items-center gap-3 pl-[30px]">
-          {a.done ? (
-            <StateGlyph state="done" size={15} />
-          ) : (
-            <span className="flex w-[15px] shrink-0 justify-center text-muted">
-              <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
-            </span>
-          )}
+          <span role="status" aria-label={a.done ? "Archived" : "Archiving"} className="flex w-[15px] shrink-0 justify-center text-muted">
+            {a.done ? <StateGlyph state="done" size={15} /> : <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />}
+          </span>
           <span className="min-w-0 flex-1 truncate ui-text-14 text-[#cfcfcf]">{name}</span>
         </div>
       </div>
