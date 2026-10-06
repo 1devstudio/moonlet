@@ -493,7 +493,8 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                         project,
                         status.as_deref().unwrap_or("-"),
                         s.spawned_by.as_deref().unwrap_or("-"),
-                        s.name
+                        // Names come from prompts an agent wrote.
+                        jaunt_core::chat::strip_ansi(&s.name)
                     );
                 }
             }
