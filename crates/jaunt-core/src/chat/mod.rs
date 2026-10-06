@@ -26,6 +26,24 @@ pub fn check_mode(mode: Option<&str>) -> anyhow::Result<()> {
     }
 }
 
+/// Permission modes from the least to the most permissive (X22).
+const MODE_ORDER: [&str; 5] = ["plan", "manual", "acceptEdits", "auto", "bypassPermissions"];
+
+/// The mode of a session another agent starts (X22): the parent's when none
+/// is asked for, and never more permissive than the parent's. A parent
+/// without a mode runs as Claude's default, Manual.
+pub fn spawned_mode(requested: Option<&str>, parent: Option<&str>) -> anyhow::Result<String> {
+    let parent = parent.unwrap_or("manual");
+    let rank = |m: &str| MODE_ORDER.iter().position(|o| *o == m);
+    match requested {
+        None => Ok(parent.to_string()),
+        Some(m) if rank(m) > rank(parent) => {
+            anyhow::bail!("permission mode {m} is more permissive than the parent's {parent}")
+        }
+        Some(m) => Ok(m.to_string()),
+    }
+}
+
 /// How to start an agent.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
