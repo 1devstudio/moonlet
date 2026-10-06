@@ -707,6 +707,25 @@ impl SessionManager {
             req.branch = Some(head);
             req.existing_branch = true;
         }
+        // The agent asking for this session, if any (X22).
+        let parent = match req.spawned_by {
+            Some(t) => Some(
+                self.terminals
+                    .list()
+                    .into_iter()
+                    .find(|i| i.id == t)
+                    .with_context(|| format!("no terminal {t}"))?,
+            ),
+            None => None,
+        };
+        if let Some(p) = &parent {
+            let parent_mode = if p.chat {
+                self.chats.get().and_then(|c| c.state(p.id).ok()).and_then(|s| s.mode)
+            } else {
+                p.session_id.as_deref().and_then(|id| self.session(id).ok()).and_then(|s| s.mode)
+            };
+            req.mode = Some(crate::chat::spawned_mode(req.mode.as_deref(), parent_mode.as_deref())?);
+        }
         let slug = git::slug(&name);
         let existing_branches = git::branches(&repo_path).await.unwrap_or_default();
         let branch = if req.existing_branch {
@@ -757,6 +776,7 @@ impl SessionManager {
             mode: req.mode.clone(),
             // A session opened from a PR is that PR's session.
             pr: req.pr,
+            spawned_by: parent.as_ref().and_then(|p| p.session_id.clone()),
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
@@ -1235,6 +1255,7 @@ mod tests {
             mode: Some(mode.into()),
             pr: None,
             tui: false,
+            spawned_by: None,
         };
         for bad in ["", "yolo"] {
             let err = mgr.create_session(req(bad)).await.unwrap_err();
@@ -1268,6 +1289,7 @@ mod tests {
                 mode: None,
                 pr: None,
                 tui: false,
+                spawned_by: None,
             })
             .await
             .unwrap();
@@ -1305,6 +1327,7 @@ mod tests {
                 mode: None,
                 pr: None,
                 tui: false,
+                spawned_by: None,
             })
             .await
             .unwrap();
@@ -1316,6 +1339,124 @@ mod tests {
 
     // The app opens a new session on its first terminal, so the agent comes
     // before the setup script.
+    /// A terminal-only session request, as `jaunt session new` sends it (X22).
+    fn spawn_req(project_id: &str, name: &str, mode: Option<&str>, spawned_by: Option<TerminalId>) -> SessionCreate {
+        SessionCreate {
+            project_id: project_id.into(),
+            name: Some(name.into()),
+            branch: None,
+            from: None,
+            existing_branch: false,
+            agent: Some("none".into()),
+            prompt: None,
+            cols: 80,
+            rows: 24,
+            model: None,
+            effort: None,
+            mode: mode.map(Into::into),
+            pr: None,
+            tui: false,
+            spawned_by,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_started_from_another_sessions_terminal_records_its_parent() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let parent = mgr.create_session(spawn_req(&r.id, "Billing export", None, None)).await.unwrap();
+        assert_eq!(parent.spawned_by, None);
+        let child = mgr
+            .create_session(spawn_req(&r.id, "Download button", None, Some(parent.terminals[0])))
+            .await
+            .unwrap();
+        assert_eq!(child.spawned_by.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(mgr.session(&child.id).unwrap().spawned_by.as_deref(), Some(parent.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_spawned_session_starts_in_its_parents_mode_or_a_stricter_one() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let parent = mgr
+            .create_session(spawn_req(&r.id, "Edits", Some("acceptEdits"), None))
+            .await
+            .unwrap();
+        let t = Some(parent.terminals[0]);
+        let inherited = mgr.create_session(spawn_req(&r.id, "Inherited", None, t)).await.unwrap();
+        assert_eq!(inherited.mode.as_deref(), Some("acceptEdits"));
+        let stricter = mgr.create_session(spawn_req(&r.id, "Stricter", Some("plan"), t)).await.unwrap();
+        assert_eq!(stricter.mode.as_deref(), Some("plan"));
+        for wider in ["auto", "bypassPermissions"] {
+            let err = mgr.create_session(spawn_req(&r.id, wider, Some(wider), t)).await.unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!("permission mode {wider} is more permissive than the parent's acceptEdits")
+            );
+        }
+        assert_eq!(mgr.list_sessions().len(), 3, "the rejected ones created nothing");
+    }
+
+    #[tokio::test]
+    async fn a_parent_without_a_mode_counts_as_manual() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let parent = mgr.create_session(spawn_req(&r.id, "Default", None, None)).await.unwrap();
+        let t = Some(parent.terminals[0]);
+        let child = mgr.create_session(spawn_req(&r.id, "Child", None, t)).await.unwrap();
+        assert_eq!(child.mode.as_deref(), Some("manual"));
+        let err = mgr.create_session(spawn_req(&r.id, "Edits", Some("acceptEdits"), t)).await.unwrap_err();
+        assert_eq!(err.to_string(), "permission mode acceptEdits is more permissive than the parent's manual");
+    }
+
+    #[tokio::test]
+    async fn a_structured_parent_counts_with_its_current_chat_mode() {
+        let (repo, _old_home, _) = setup().await;
+        let home = tempfile::tempdir().unwrap();
+        let terminals = TerminalManager::new(
+            home.path().join("s.sock"),
+            crate::chat::runtime::tests::fake_claude_env(home.path()),
+        );
+        let chats = crate::chat::runtime::ChatManager::new(terminals.clone(), home.path().join("chats"));
+        let mgr = SessionManager::load(home.path().join("state.json"), home.path().join("worktrees"), terminals);
+        mgr.set_chats(chats.clone());
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = spawn_req(&r.id, "Structured", None, None);
+        req.agent = Some("claude".into());
+        let parent = mgr.create_session(req).await.unwrap();
+        let chat = parent.terminals[0];
+        // Picked in the footer after the session started: the session keeps
+        // its creation mode, the chat has the current one.
+        chats.settings(chat, None, None, Some("plan".into())).unwrap();
+        let child = mgr.create_session(spawn_req(&r.id, "Child", None, Some(chat))).await.unwrap();
+        assert_eq!(child.mode.as_deref(), Some("plan"));
+    }
+
+    #[tokio::test]
+    async fn without_a_parent_any_mode_is_allowed() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr
+            .create_session(spawn_req(&r.id, "Bypass", Some("bypassPermissions"), None))
+            .await
+            .unwrap();
+        assert_eq!(s.mode.as_deref(), Some("bypassPermissions"));
+        let s = mgr.create_session(spawn_req(&r.id, "Default", None, None)).await.unwrap();
+        assert_eq!(s.mode, None);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_parent_terminal_creates_nothing() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let err = mgr
+            .create_session(spawn_req(&r.id, "Orphan", None, Some(9999)))
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "no terminal 9999");
+        assert!(mgr.list_sessions().is_empty());
+    }
+
     #[tokio::test]
     async fn a_new_sessions_first_terminal_is_the_agent_not_setup() {
         let (repo, _home, mgr) = setup().await;
@@ -1343,6 +1484,7 @@ mod tests {
                     mode: None,
                     pr: None,
                     tui: false,
+                    spawned_by: None,
                 })
                 .await
                 .unwrap();
@@ -1399,6 +1541,7 @@ mod tests {
                 mode: None,
                 pr: None,
                 tui: false,
+                spawned_by: None,
             })
             .await
             .unwrap();
@@ -1431,6 +1574,7 @@ mod tests {
                 mode: None,
                 pr: None,
                 tui: false,
+                spawned_by: None,
             })
             .await
             .unwrap();
@@ -1488,6 +1632,7 @@ mod tests {
                 mode: None,
                 pr: None,
                 tui: false,
+                spawned_by: None,
             })
             .await
             .unwrap();
@@ -1544,6 +1689,7 @@ mod tests {
                 mode: None,
                 pr: None,
                 tui: false,
+                spawned_by: None,
             })
             .await
             .unwrap();
@@ -1606,6 +1752,7 @@ mod tests {
                 mode: None,
                 pr: None,
                 tui: false,
+                spawned_by: None,
             })
             .await
             .unwrap();
@@ -1774,6 +1921,7 @@ mod tests {
             mode: None,
             pr: None,
             tui: false,
+            spawned_by: None,
             cols: 80,
             rows: 24,
         })
@@ -1833,6 +1981,7 @@ mod tests {
                 mode: None,
                 pr: None,
                 tui: false,
+                spawned_by: None,
                 cols: 80,
                 rows: 24,
             })
@@ -1893,6 +2042,7 @@ mod tests {
             effort: Some("high".into()),
             mode: Some("plan".into()),
             pr: None,
+            spawned_by: None,
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],

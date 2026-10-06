@@ -56,7 +56,11 @@ pub fn internal(e: impl std::fmt::Display) -> RpcError {
 }
 
 impl Daemon {
-    pub fn new(socket: PathBuf, base_env: BTreeMap<String, String>) -> Arc<Self> {
+    pub fn new(socket: PathBuf, mut base_env: BTreeMap<String, String>) -> Arc<Self> {
+        // Agents call the CLI as "$JAUNT_BIN" (X22): it is not on PATH.
+        if let Ok(bin) = jaunt_cli_path() {
+            base_env.insert("JAUNT_BIN".into(), bin.display().to_string());
+        }
         let (shutdown, _) = watch::channel(false);
         let terminals = TerminalManager::new(socket.clone(), base_env);
         let sessions = SessionManager::load(

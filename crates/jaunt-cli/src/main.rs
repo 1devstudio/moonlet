@@ -1,7 +1,10 @@
 //! `jaunt`: command-line companion to the jaunt app (A2, A6).
 //!
 //! Agent hooks call `jaunt hook claude|codex`; scripts use `jaunt notify`,
-//! `jaunt ls`, `jaunt pane run` and `jaunt agent start`.
+//! `jaunt ls`, `jaunt pane run` and `jaunt agent start`; agents open sessions
+//! in other projects with `jaunt session new` (X22).
+
+mod session;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -12,8 +15,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use jaunt_core::client::Client;
 use jaunt_core::hooks::{self, HookPaths};
 use jaunt_proto::TerminalId;
-use jaunt_proto::methods::{self, AgentReport, TerminalCreate, TerminalWrite};
-use jaunt_proto::types::{AgentState, StateSource, TerminalInfo, TerminalKind};
+use jaunt_proto::methods::{self, AgentReport, SessionCreate, TerminalCreate, TerminalWrite};
+use jaunt_proto::types::{AgentState, Project, Session, StateSource, TerminalInfo, TerminalKind};
 
 #[derive(Parser)]
 #[command(
@@ -73,6 +76,56 @@ enum Cmd {
     Agent {
         #[command(subcommand)]
         action: AgentAction,
+    },
+    /// List the projects jaunt knows.
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
+    /// Open sessions (a worktree and an agent) and follow them.
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectAction {
+    /// List projects: name, base branch and path.
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionAction {
+    /// Create a session in a project and start its agent with a prompt.
+    /// Prints the session as JSON.
+    New {
+        /// Project id, path or name (see `jaunt project ls`).
+        project: String,
+        /// First message to the agent; also names the session.
+        prompt: Vec<String>,
+        /// Session name (defaults to the prompt's first line).
+        #[arg(long)]
+        name: Option<String>,
+        /// New branch name (defaults to `jaunt/<name>`).
+        #[arg(long)]
+        branch: Option<String>,
+        /// Start point (defaults to the project's base branch).
+        #[arg(long)]
+        from: Option<String>,
+        /// Agent to start (defaults to the project's; `none` for a shell).
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+        /// Permission mode; inside a jaunt agent, no more permissive than its own.
+        #[arg(long)]
+        mode: Option<String>,
     },
 }
 
@@ -330,8 +383,69 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                 .await?;
             println!("{}", info.id);
         }
+        Cmd::Project {
+            action: ProjectAction::Ls { json },
+        } => {
+            let mut c = connect(&socket).await?;
+            let list: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                println!("{:<20} {:<12} PATH", "NAME", "BASE");
+                for p in list {
+                    println!("{:<20} {:<12} {}", p.name, p.base_branch, p.path);
+                }
+            }
+        }
+        Cmd::Session {
+            action:
+                SessionAction::New {
+                    project,
+                    prompt,
+                    name,
+                    branch,
+                    from,
+                    agent,
+                    model,
+                    effort,
+                    mode,
+                },
+        } => {
+            let mut c = connect(&socket).await?;
+            let projects: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await?;
+            let home = std::env::var("HOME").unwrap_or_default();
+            let project = session::find_project(&projects, &project, &home)?;
+            let prompt = prompt.join(" ");
+            let created: Session = c
+                .request(
+                    methods::SESSION_CREATE,
+                    SessionCreate {
+                        project_id: project.id.clone(),
+                        name,
+                        branch,
+                        from,
+                        existing_branch: false,
+                        agent,
+                        prompt: Some(prompt).filter(|p| !p.trim().is_empty()),
+                        model,
+                        effort,
+                        mode,
+                        pr: None,
+                        tui: false,
+                        spawned_by: terminal_from_env(),
+                        cols: 120,
+                        rows: 32,
+                    },
+                )
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&created)?);
+        }
     }
     Ok(())
+}
+
+fn terminal_from_env() -> Option<TerminalId> {
+    std::env::var("JAUNT_TERMINAL_ID").ok().and_then(|v| v.parse().ok())
 }
 
 fn shell_quote(s: &str) -> String {

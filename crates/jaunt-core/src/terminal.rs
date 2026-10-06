@@ -142,6 +142,11 @@ impl TerminalManager {
         &self.base_env
     }
 
+    /// The daemon socket terminals get as `JAUNT_SOCK`.
+    pub fn socket(&self) -> &std::path::Path {
+        &self.socket
+    }
+
     pub fn subscribe_events(&self) -> broadcast::Receiver<Message> {
         self.events.subscribe()
     }
