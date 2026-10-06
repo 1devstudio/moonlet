@@ -30,6 +30,7 @@ import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { avatarUrl } from "./projectAvatar";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState } from "./protocol";
+import type { Shortcuts } from "./runActions";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
 export type RightTab = "files" | "changes" | "review";
@@ -54,6 +55,8 @@ export interface Settings {
   sounds: SoundSettings;
   /** Runs of tool calls folded into one row, or one row per call (X14). */
   toolCalls: ToolCallView;
+  /** Custom keyboard shortcuts from the Run action modal (X19). */
+  shortcuts: Shortcuts;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -200,7 +203,7 @@ function makeStore() {
   preview: null,
   showHistory: false,
   dialog: null,
-  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed" }),
+  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {} }),
   toasts: [],
   lastAttention: null,
   workingSince: {},

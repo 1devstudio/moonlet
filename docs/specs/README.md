@@ -58,3 +58,4 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X14 | Collapsed tool calls and thinking rows in the agent view | P1 | 3 | implemented | [X14-collapsed-tool-calls.md](X14-collapsed-tool-calls.md) |
 | X15 | GitHub owner avatar as the project icon | P1 | 3 | implemented (UI unchecked in app) | [X15-project-avatar.md](X15-project-avatar.md) |
 | X16 | Response time and copy under the agent's final message | P1 | 3 | implemented | [X16-turn-footer.md](X16-turn-footer.md) |
+| X19 | Run action modal with custom shortcuts | P1 | 3 | implemented | [X19-run-action.md](X19-run-action.md) |

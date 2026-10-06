@@ -7,7 +7,7 @@ import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
 import { errorToast, focusTerminal, getLayout, selectedSession, sessionState, setLayout, termKey, toast, useStore, sessionTerminals } from "./store";
 import { arrange, lastActive } from "./sidebar";
-import { findEntry } from "./terminals";
+import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 
@@ -305,4 +305,44 @@ export function focusedEntry() {
   if (!c) return undefined;
   const focused = getLayout(c.host, c.ws.id).focused;
   return focused !== null ? findEntry(c.host, focused) : undefined;
+}
+
+/** Copies the selected block's output, else the newest one (⇧⌘C, T8). */
+export function copyOutput() {
+  const e = focusedEntry();
+  if (!e) return;
+  const { text, toast: message } = outputToCopy(e.copySelected("output"), e.lastOutput());
+  if (text) void navigator.clipboard.writeText(text).then(() => toast(message ?? "Copied output"), errorToast);
+  else if (message) toast(message);
+}
+
+/** Handlers of the Run action modal's actions, by id (X19). */
+const RUN: Record<string, () => void> = {
+  "new-session": () => useStore.setState({ dialog: { kind: "new-session" } }),
+  "new-ws": () => useStore.setState({ dialog: { kind: "new-workspace" } }),
+  "add-project": () => useStore.setState({ dialog: { kind: "add-project" } }),
+  "new-tab": () => void newTab(),
+  "split-r": () => void split("row"),
+  "split-d": () => void split("col"),
+  close: () => void closeFocused(),
+  run: () => void runScript("run"),
+  setup: () => void runScript("setup"),
+  "project-settings": () => openProjectSettings(),
+  changes: () => useStore.setState({ rightTab: "changes", rightOpen: true }),
+  files: () => useStore.setState({ rightTab: "files", rightOpen: true }),
+  checks: () => useStore.setState({ rightTab: "review", rightOpen: true }),
+  commit: () => useStore.setState({ dialog: { kind: "commit" } }),
+  pr: () => useStore.setState({ dialog: { kind: "create-pr" } }),
+  archive: () => void archiveSession(),
+  find: () => window.dispatchEvent(new CustomEvent("jaunt:find")),
+  "prev-cmd": () => focusedEntry()?.jumpBlock(-1),
+  "next-cmd": () => focusedEntry()?.jumpBlock(1),
+  "copy-out": copyOutput,
+  rerun: () => focusedEntry()?.rerunLast(),
+  history: () => useStore.setState({ showHistory: true }),
+  settings: () => useStore.setState({ dialog: { kind: "settings" } }),
+};
+
+export function runAction(id: string) {
+  RUN[id]?.();
 }

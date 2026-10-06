@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, ChevronDown, ChevronRight, Folder, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, Settings, ShieldAlert } from "lucide-react";
+import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, Folder, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, Settings, ShieldAlert } from "lucide-react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
@@ -712,6 +712,7 @@ export function Sidebar() {
       <div data-tauri-drag-region className="drag h-[52px] shrink-0" />
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session" } })} />
+        <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />
         <NavRow icon={<History size={15} strokeWidth={1.75} />} label="History" active={showHistory} onClick={() => useStore.setState({ showHistory: !showHistory })} />
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
