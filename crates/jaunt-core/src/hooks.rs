@@ -4,7 +4,8 @@
 //!   states; `jaunt hook claude|codex` forwards them to the daemon.
 //! * [`install`] / [`uninstall`] / [`status`] edit `~/.claude/settings.json`
 //!   and `~/.codex/config.toml`, preserving everything that is not ours and
-//!   writing a backup first.
+//!   writing a backup first. They also manage the `jaunt` skill (X22) in
+//!   `~/.claude/skills/jaunt` and `~/.codex/skills/jaunt`.
 
 use std::path::{Path, PathBuf};
 
@@ -91,11 +92,46 @@ pub struct HookStatus {
     pub codex_installed: bool,
     /// Another `notify` program is configured for Codex; we do not replace it.
     pub codex_conflict: Option<String>,
+    /// The current `jaunt` skill is in place (X22). `*_installed` include it.
+    #[serde(default)]
+    pub claude_skill: bool,
+    #[serde(default)]
+    pub codex_skill: bool,
+}
+
+/// The `jaunt` skill (X22), the same file for Claude Code and Codex.
+pub const SKILL: &str = include_str!("skill/SKILL.md");
+
+/// Marks a skill file as ours, so uninstall never removes a user's own.
+const SKILL_MARKER: &str = "Installed by jaunt";
+
+fn skill_installed(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|s| s == SKILL)
+}
+
+fn write_skill(path: &Path) -> Result<()> {
+    if !skill_installed(path) {
+        write_atomic(path, SKILL).with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn remove_skill(path: &Path) -> Result<()> {
+    if std::fs::read_to_string(path).is_ok_and(|s| s.contains(SKILL_MARKER)) {
+        std::fs::remove_file(path)?;
+        if let Some(dir) = path.parent() {
+            // Only if empty: anything else in it is the user's.
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+    Ok(())
 }
 
 pub struct HookPaths {
     pub claude_settings: PathBuf,
     pub codex_config: PathBuf,
+    pub claude_skill: PathBuf,
+    pub codex_skill: PathBuf,
 }
 
 impl HookPaths {
@@ -109,6 +145,8 @@ impl HookPaths {
         HookPaths {
             claude_settings: claude_dir.join("settings.json"),
             codex_config: codex_dir.join("config.toml"),
+            claude_skill: claude_dir.join("skills/jaunt/SKILL.md"),
+            codex_skill: codex_dir.join("skills/jaunt/SKILL.md"),
         }
     }
 
@@ -221,14 +259,17 @@ pub fn status(paths: &HookPaths) -> Result<HookStatus> {
         .filter(|e| !found.iter().any(|f| f == *e))
         .map(|e| e.to_string())
         .collect();
-    let (codex_installed, codex_conflict) = codex_notify(paths)?;
+    let (codex_notify, codex_conflict) = codex_notify(paths)?;
+    let (claude_skill, codex_skill) = (skill_installed(&paths.claude_skill), skill_installed(&paths.codex_skill));
     Ok(HookStatus {
         claude_settings: paths.claude_settings.display().to_string(),
-        claude_installed: missing.is_empty(),
+        claude_installed: missing.is_empty() && claude_skill,
         claude_missing_events: missing,
         codex_config: paths.codex_config.display().to_string(),
-        codex_installed,
+        codex_installed: codex_notify && codex_skill,
         codex_conflict,
+        claude_skill,
+        codex_skill,
     })
 }
 
@@ -266,6 +307,7 @@ pub fn install(
     codex: bool,
 ) -> Result<HookStatus> {
     if claude {
+        write_skill(&paths.claude_skill)?;
         let mut settings = read_json(&paths.claude_settings)?;
         let Some(obj) = settings.as_object_mut() else {
             bail!("{} is not a JSON object", paths.claude_settings.display())
@@ -323,6 +365,8 @@ pub fn install(
         }
     }
     if codex {
+        // The skill does not depend on `notify`, so a conflict there keeps it.
+        write_skill(&paths.codex_skill)?;
         let (installed, conflict) = codex_notify(paths)?;
         if let Some(other) = conflict {
             bail!(
@@ -395,6 +439,8 @@ pub fn uninstall(paths: &HookPaths) -> Result<HookStatus> {
         backup(&paths.codex_config)?;
         write_atomic(&paths.codex_config, &doc.to_string())?;
     }
+    remove_skill(&paths.claude_skill)?;
+    remove_skill(&paths.codex_skill)?;
     status(paths)
 }
 
@@ -406,7 +452,42 @@ mod tests {
         HookPaths {
             claude_settings: dir.join("claude/settings.json"),
             codex_config: dir.join("codex/config.toml"),
+            claude_skill: dir.join("claude/skills/jaunt/SKILL.md"),
+            codex_skill: dir.join("codex/skills/jaunt/SKILL.md"),
         }
+    }
+
+    /// X22: the skill that teaches agents `jaunt session new`.
+    #[test]
+    fn install_writes_the_jaunt_skill_for_both_agents_and_uninstall_removes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let mine = dir.path().join("claude/skills/mine/SKILL.md");
+        std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+        std::fs::write(&mine, "---\nname: mine\n---\n").unwrap();
+
+        let bin = Path::new("/Applications/jaunt.app/Contents/MacOS/jaunt");
+        let st = install(&p, bin, true, true).unwrap();
+        assert!(st.claude_skill && st.codex_skill, "{st:?}");
+        assert!(st.claude_installed && st.codex_installed, "{st:?}");
+        for skill in [&p.claude_skill, &p.codex_skill] {
+            let text = std::fs::read_to_string(skill).unwrap();
+            assert!(text.starts_with("---\nname: jaunt\n"), "{text}");
+            assert!(text.contains(r#""$JAUNT_BIN" session new <project> "<prompt>""#), "{text}");
+        }
+
+        // Hooks without the skill (installed by an older jaunt) still need an install.
+        std::fs::remove_file(&p.claude_skill).unwrap();
+        let st = status(&p).unwrap();
+        assert!(!st.claude_skill && !st.claude_installed, "{st:?}");
+        install(&p, bin, true, false).unwrap();
+        assert!(p.claude_skill.exists());
+
+        let st = uninstall(&p).unwrap();
+        assert!(!st.claude_skill && !st.codex_skill, "{st:?}");
+        assert!(!dir.path().join("claude/skills/jaunt").exists());
+        assert!(!dir.path().join("codex/skills/jaunt").exists());
+        assert_eq!(std::fs::read_to_string(&mine).unwrap(), "---\nname: mine\n---\n", "other skills kept");
     }
 
     #[test]
