@@ -312,6 +312,11 @@ pub struct SessionCreate {
     /// (Claude Code and Codex default to the structured view, X6).
     #[serde(default)]
     pub tui: bool,
+    /// The terminal of the agent asking for this session (X22). The new
+    /// session records that terminal's session as its parent and starts in a
+    /// permission mode no more permissive than the parent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawned_by: Option<TerminalId>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]

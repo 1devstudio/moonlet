@@ -162,6 +162,9 @@ pub struct Session {
     /// reused and an old PR may still head a branch of the same name.
     #[serde(default)]
     pub pr: Option<u64>,
+    /// The session whose agent started this one (X22).
+    #[serde(default)]
+    pub spawned_by: Option<String>,
     #[serde(default, alias = "sessions")]
     pub terminals: Vec<TerminalId>,
     /// Opaque UI layout (tabs, splits), owned by the client.
