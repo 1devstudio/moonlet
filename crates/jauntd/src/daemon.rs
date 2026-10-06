@@ -188,7 +188,7 @@ impl Daemon {
             m::CHAT_PERMISSION => {
                 let r: m::ChatPermission = params(p)?;
                 self.chats
-                    .permission(r.id, &r.ask, &r.decision, r.message.as_deref(), r.answers.as_ref())
+                    .permission(r.id, &r.ask, &r.decision, r.message.as_deref(), r.answers.as_ref(), r.mode.as_deref())
                     .map_err(internal)?;
                 ok(true)
             }

@@ -75,7 +75,7 @@ The structured Claude view had a model and effort picker but no way to change Cl
 - Remembering the mode per project in the modal.
 - A per-project or per-host default mode.
 - Switching mode live without a restart through the SDK `set_permission_mode` control request. It is not verified, and the restart path reuses the model and effort mechanism.
-- Dedicated UI for the plan that Plan mode produces. It appears as a normal `ExitPlanMode` permission card.
+- Dedicated UI for the plan that Plan mode produces. Added later by [X20](X20-plan-approval.md).
 
 ## Test plan
 

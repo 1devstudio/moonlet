@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   Copy,
   ExternalLink,
   FilePen,
@@ -38,6 +39,9 @@ import {
   fuzzyFilter,
   joinDraft,
   loadChat,
+  type PlanChoice,
+  planAnswer,
+  planOf,
   promptHistory,
   questionAnswers,
   rememberPrompt,
@@ -168,6 +172,7 @@ function toolIcon(name: string) {
   if (n === "task" || n === "agent") return Bot;
   if (n === "todowrite") return ListTodo;
   if (n === "askuserquestion") return MessageCircleQuestionMark;
+  if (n === "exitplanmode") return ClipboardList;
   return Wrench;
 }
 
@@ -242,7 +247,8 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
   const Icon = toolIcon(tool.name);
   const stat = tool.diff ? diffStat(tool.diff) : null;
   const command = toolCommand(tool);
-  const expandable = !!(tool.diff || tool.output || command);
+  const plan = planOf({ tool: tool.name, input: tool.input });
+  const expandable = !!(tool.diff || tool.output || command || plan);
   const view = useMemo(() => (open ? toolOutputView(tool) : null), [open, tool]);
   return (
     <div className="group">
@@ -267,6 +273,10 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
         <div className="mb-2 ml-6 mt-1">
           {tool.diff ? (
             <DiffBlock diff={tool.diff} />
+          ) : plan ? (
+            <div className="max-h-[420px] overflow-auto rounded-md border border-border bg-[#161616] px-3 py-2">
+              <Markdown text={plan.plan} />
+            </div>
           ) : view?.kind === "read" ? (
             <ReadBlock rows={view.rows} />
           ) : (
@@ -408,6 +418,65 @@ export function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd
           Deny
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** Claude's ExitPlanMode (X20): the plan as markdown, then approve or keep planning. */
+export function PlanCard({ plan, onAnswer }: { plan: { plan: string; file: string | null }; onAnswer: (answer: NonNullable<ReturnType<typeof planAnswer>>) => void }) {
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const answer = (choice: PlanChoice, text?: string) => {
+    const a = planAnswer(choice, text);
+    if (a) onAnswer(a);
+  };
+  return (
+    <div className="jaunt-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
+      <div className="mb-2 flex items-center gap-2 ui-text-13">
+        <ClipboardList size={15} className="text-blocked" />
+        <span className="font-medium">{agentLabel("claude")} has a plan</span>
+      </div>
+      <div className="mb-2 max-h-[420px] overflow-auto rounded-md bg-[#141414] px-3 py-2">
+        <Markdown text={plan.plan} />
+      </div>
+      {plan.file && <div className="selectable mb-2 truncate font-mono ui-text-11.5 text-faint">{plan.file}</div>}
+      {feedback === null ? (
+        <div className="flex gap-1.5">
+          <Button variant="primary" onClick={() => answer("acceptEdits")}>
+            Approve, accept edits
+          </Button>
+          <Button onClick={() => answer("ask")}>Approve, ask before edits</Button>
+          <Button variant="ghost" className="ml-auto" onClick={() => setFeedback("")}>
+            Keep planning
+          </Button>
+        </div>
+      ) : (
+        <div>
+          <textarea
+            autoFocus
+            rows={2}
+            value={feedback}
+            aria-label="What should change in the plan?"
+            placeholder="What should change in the plan?"
+            onChange={(e) => setFeedback(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                answer("keepPlanning", feedback);
+              }
+              if (e.key === "Escape") setFeedback(null);
+            }}
+            className={cx(inputCls, "mb-2 resize-none")}
+          />
+          <div className="flex gap-1.5">
+            <Button variant="primary" disabled={!feedback.trim()} onClick={() => answer("keepPlanning", feedback)}>
+              Send feedback
+            </Button>
+            <Button variant="ghost" className="ml-auto" onClick={() => setFeedback(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -826,8 +895,18 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               b.kind === "tools" ? <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} /> : <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />,
             )
           )}
-          {st?.pending.map((ask) =>
-            isQuestion(ask) ? (
+          {st?.pending.map((ask) => {
+            const plan = planOf(ask);
+            return plan ? (
+              <PlanCard
+                key={ask.id}
+                plan={plan}
+                onAnswer={(answer) => {
+                  stick.current = true;
+                  void call(M.chatPermission, { ask: ask.id, ...answer });
+                }}
+              />
+            ) : isQuestion(ask) ? (
               <QuestionCard
                 key={ask.id}
                 ask={ask}
@@ -846,8 +925,8 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                   void call(M.chatPermission, { ask: ask.id, decision });
                 }}
               />
-            ),
-          )}
+            );
+          })}
         </div>
       </div>
       <div className="w-full shrink-0 px-6 pb-4">

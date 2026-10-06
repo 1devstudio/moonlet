@@ -63,8 +63,9 @@ pub trait Adapter: Send {
     /// The user sends a message.
     fn send(&mut self, text: &str, st: &mut ChatState) -> Vec<Out>;
     /// The user answers a permission request: `allow`, `always` or `deny`.
-    /// `answers` carries the user's answers to a question tool.
-    fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, st: &mut ChatState) -> Vec<Out>;
+    /// `answers` carries the user's answers to a question tool; `mode` is
+    /// the permission mode an approved plan switches to.
+    fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>, st: &mut ChatState) -> Vec<Out>;
     /// Stop the running turn.
     fn interrupt(&mut self, st: &mut ChatState) -> Vec<Out>;
 }
@@ -171,6 +172,12 @@ pub fn summarize(name: &str, input: &serde_json::Value) -> String {
         "TodoWrite" => Some("update todos".into()),
         "Skill" => str_field(input, &["skill", "command", "name"]).map(String::from),
         "AskUserQuestion" => input["questions"][0]["question"].as_str().map(String::from),
+        // The plan's first heading, else its first line.
+        "ExitPlanMode" => input["plan"].as_str().map(|p| {
+            let mut lines = p.lines().map(str::trim).filter(|l| !l.is_empty());
+            let first = lines.clone().next().unwrap_or("");
+            lines.find(|l| l.starts_with('#')).map_or(first, |h| h.trim_start_matches('#').trim()).to_string()
+        }),
         _ => None,
     };
     s.or_else(|| str_field(input, &["command", "file_path", "path", "description", "query"]).map(String::from))
