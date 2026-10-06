@@ -36,6 +36,18 @@ export function resolveMode(value: unknown): string {
   return CLAUDE_MODES.some((m) => m.id === value) ? (value as string) : DEFAULT_MODE;
 }
 
+/** Modes an approved plan can switch to (X24), the default first. */
+export const PLAN_APPROVE_MODES = [
+  { id: "auto", label: "Auto", description: "Claude handles permission decisions" },
+  { id: "acceptEdits", label: "Accept edits", description: "Automatically accept all file edits" },
+] as const;
+export type PlanApproveMode = (typeof PLAN_APPROVE_MODES)[number]["id"];
+
+/** The stored "when a plan is approved" setting, or Auto when missing or unknown. */
+export function resolvePlanMode(value: unknown): PlanApproveMode {
+  return PLAN_APPROVE_MODES.find((m) => m.id === value)?.id ?? "auto";
+}
+
 /** The mode Shift+Tab switches to; bypass joins the cycle once the user enabled it. */
 export function nextMode(current: string | null | undefined, bypassEnabled: boolean): string {
   const cycle = ["manual", "acceptEdits", "plan", "auto", ...(bypassEnabled ? [BYPASS_MODE.id] : [])];
