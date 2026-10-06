@@ -11,6 +11,8 @@ import {
   mergeItem,
   onChatItem,
   onChatState,
+  planAnswer,
+  planOf,
   questionAnswers,
   thinkingPreview,
   toolCommand,
@@ -146,5 +148,33 @@ describe("text sent to the composer (T8)", () => {
 
   it("follows what is already typed, after a blank line", () => {
     expect(joinDraft("Why does this fail?\n", "```\n$ false\n```\n")).toBe("Why does this fail?\n\n```\n$ false\n```\n");
+  });
+});
+
+describe("plan approval (X20)", () => {
+  // The input of an ExitPlanMode ask as claude 2.1.291 sent it.
+  const input = {
+    plan: "1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`.\n2. Verify by reading file back.\n",
+    planFilePath: "/Users/me/.claude/plans/plan-changing-a-txt-to-groovy-whale.md",
+  };
+
+  it("reads the plan and its file out of an ExitPlanMode ask", () => {
+    expect(planOf({ tool: "ExitPlanMode", input })).toEqual({
+      plan: "1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`.\n2. Verify by reading file back.\n",
+      file: "/Users/me/.claude/plans/plan-changing-a-txt-to-groovy-whale.md",
+    });
+    expect(planOf({ tool: "ExitPlanMode", input: { plan: "# Plan" } })).toEqual({ plan: "# Plan", file: null });
+    // Without a plan, or for another tool, the plain permission card is used.
+    expect(planOf({ tool: "ExitPlanMode", input: { plan: "  " } })).toBeNull();
+    expect(planOf({ tool: "ExitPlanMode", input: {} })).toBeNull();
+    expect(planOf({ tool: "Bash", input: { plan: "# Plan" } })).toBeNull();
+  });
+
+  it("maps each choice to its chat.permission parameters", () => {
+    expect(planAnswer("acceptEdits")).toEqual({ decision: "allow", mode: "acceptEdits" });
+    expect(planAnswer("ask")).toEqual({ decision: "allow" });
+    expect(planAnswer("keepPlanning", "  Use a feature flag instead \n")).toEqual({ decision: "deny", message: "Use a feature flag instead" });
+    // Empty feedback sends nothing.
+    expect(planAnswer("keepPlanning", " ")).toBeNull();
   });
 });

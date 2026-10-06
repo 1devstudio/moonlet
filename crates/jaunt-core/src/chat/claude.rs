@@ -120,6 +120,19 @@ impl Adapter for Claude {
                     out.push(Out::State);
                 }
             }
+            // Claude changed its own mode, for example after a plan was approved.
+            "system" if v.get("subtype").and_then(Value::as_str) == Some("status") => {
+                let mode = match v.get("permissionMode").and_then(Value::as_str) {
+                    Some("default") => Some("manual"),
+                    m => m.filter(|m| super::PERMISSION_MODES.contains(m)),
+                };
+                if let Some(m) = mode
+                    && st.mode.as_deref() != Some(m)
+                {
+                    st.mode = Some(m.into());
+                    out.push(Out::State);
+                }
+            }
             "stream_event" => {
                 let ev = &v["event"];
                 match ev.get("type").and_then(Value::as_str).unwrap_or("") {
@@ -298,7 +311,7 @@ impl Adapter for Claude {
         out
     }
 
-    fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, st: &mut ChatState) -> Vec<Out> {
+    fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>, st: &mut ChatState) -> Vec<Out> {
         let Some((tool_use, suggestions, mut input)) = self.asks.remove(ask) else { return vec![] };
         st.pending.retain(|p| p.id != ask);
         // AskUserQuestion is answered by allowing it with the answers in its input.
@@ -307,6 +320,8 @@ impl Adapter for Claude {
         }
         let mut out = Vec::new();
         let response = match decision {
+            // Approving a plan into another mode (X20); Claude reports the change.
+            "allow" if let Some(m) = mode => json!({"behavior": "allow", "updatedInput": input, "updatedPermissions": [{"type": "setMode", "mode": m, "destination": "session"}]}),
             "allow" => json!({"behavior": "allow", "updatedInput": input}),
             "always" => json!({"behavior": "allow", "updatedInput": input, "updatedPermissions": suggestions}),
             _ => {
@@ -455,7 +470,7 @@ mod tests {
             while let Some(ask) = st.pending.first().cloned() {
                 assert_eq!(st.status, "blocked");
                 let decision = if ask.tool == "Write" { "allow" } else { "deny" };
-                for o in a.permission(&ask.id, decision, None, None, &mut st) {
+                for o in a.permission(&ask.id, decision, None, None, None, &mut st) {
                     if let Out::Write(w) = o {
                         writes.push(w);
                     }
@@ -484,7 +499,7 @@ mod tests {
         a.on_line(&req.to_string(), &mut st);
         assert!(st.pending[0].can_always);
         assert_eq!(st.pending[0].summary, "npm test");
-        let outs = a.permission("r1", "always", None, None, &mut st);
+        let outs = a.permission("r1", "always", None, None, None, &mut st);
         let Out::Write(w) = &outs[0] else { panic!() };
         let v: Value = serde_json::from_str(w).unwrap();
         assert_eq!(v["response"]["response"]["updatedPermissions"][0]["type"], "addRules");
@@ -501,7 +516,7 @@ mod tests {
         assert_eq!(st.status, "blocked");
         assert_eq!(st.pending[0].summary, "Which colours?");
         let answers = BTreeMap::from([("Which colours?".to_string(), "GitHub".to_string())]);
-        let outs = a.permission("q1", "allow", None, Some(&answers), &mut st);
+        let outs = a.permission("q1", "allow", None, Some(&answers), None, &mut st);
         let Out::Write(w) = &outs[0] else { panic!() };
         let v: Value = serde_json::from_str(w).unwrap();
         let r = &v["response"]["response"];
@@ -510,6 +525,65 @@ mod tests {
         assert_eq!(r["updatedInput"]["answers"]["Which colours?"], "GitHub");
         assert!(st.pending.is_empty());
         assert_eq!(st.status, "working");
+    }
+
+    /// An `ExitPlanMode` ask as claude 2.1.291 sent it in Plan mode.
+    const PLAN_ASK: &str = r#"{"type":"control_request","request_id":"da66e8fc-fa2a-440b-aaeb-4098da758f71","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","display_name":"ExitPlanMode","input":{"plan":"1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`.\n2. Verify by reading file back. Confidence 90%: trivial edit, current content unread by choice.\n","planFilePath":"/Users/me/.claude/plans/plan-changing-a-txt-to-groovy-whale.md"},"tool_use_id":"toolu_013XgKuAKWBb9pZDCyHcs1rP","requires_user_interaction":true}}"#;
+
+    fn response(outs: &[Out]) -> Value {
+        let w = outs.iter().find_map(|o| if let Out::Write(w) = o { Some(w) } else { None }).expect("a reply to Claude");
+        serde_json::from_str::<Value>(w).unwrap()["response"]["response"].clone()
+    }
+
+    #[test]
+    fn approving_a_plan_can_switch_to_accept_edits() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.on_line(PLAN_ASK, &mut st);
+        assert!(!st.pending[0].can_always);
+        let r = response(&a.permission("da66e8fc-fa2a-440b-aaeb-4098da758f71", "allow", None, None, Some("acceptEdits"), &mut st));
+        assert_eq!(r["behavior"], "allow");
+        assert_eq!(r["updatedPermissions"], json!([{"type": "setMode", "mode": "acceptEdits", "destination": "session"}]));
+        assert!(r["updatedInput"]["plan"].as_str().unwrap().starts_with("1. Overwrite `a.txt`"));
+
+        // Without a mode the approval is plain; Claude picks `default` itself.
+        a.on_line(PLAN_ASK, &mut st);
+        let r = response(&a.permission("da66e8fc-fa2a-440b-aaeb-4098da758f71", "allow", None, None, None, &mut st));
+        assert_eq!(r["behavior"], "allow");
+        assert!(r.get("updatedPermissions").is_none(), "{r}");
+
+        // Keep planning: the feedback goes back as the deny message.
+        a.on_line(PLAN_ASK, &mut st);
+        let r = response(&a.permission("da66e8fc-fa2a-440b-aaeb-4098da758f71", "deny", Some("Use a feature flag instead"), None, None, &mut st));
+        assert_eq!(r, json!({"behavior": "deny", "message": "Use a feature flag instead"}));
+    }
+
+    #[test]
+    fn a_plan_is_summarised_by_its_heading_or_first_line() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.on_line(PLAN_ASK, &mut st);
+        assert_eq!(st.pending[0].summary, "1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`.");
+        let headed = json!({"type": "control_request", "request_id": "p2", "request": {"subtype": "can_use_tool", "tool_name": "ExitPlanMode", "tool_use_id": "t2", "input": {"plan": "# Jobs on other hosts: analysis and options\n\n## Context\n\njaunt keeps agent sessions alive on an always-on host."}}});
+        a.on_line(&headed.to_string(), &mut st);
+        assert_eq!(st.pending[1].summary, "Jobs on other hosts: analysis and options");
+    }
+
+    #[test]
+    fn claude_reports_set_the_mode() {
+        let status = |mode: &str| json!({"type": "system", "subtype": "status", "status": null, "permissionMode": mode}).to_string();
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig { mode: Some("plan".into()), ..Default::default() }, &mut st);
+        // Approving a plan with the setMode update (captured, claude 2.1.291).
+        assert_eq!(a.on_line(&status("acceptEdits"), &mut st), [Out::State]);
+        assert_eq!(st.mode.as_deref(), Some("acceptEdits"));
+        // A plain approval: Claude says `default`, the picker calls it Manual.
+        a.on_line(&status("default"), &mut st);
+        assert_eq!(st.mode.as_deref(), Some("manual"));
+        // A mode the picker does not offer changes nothing.
+        assert!(a.on_line(&status("dontAsk"), &mut st).is_empty());
+        assert_eq!(st.mode.as_deref(), Some("manual"));
     }
 
     #[test]

@@ -345,7 +345,7 @@ impl Adapter for Codex {
         out
     }
 
-    fn permission(&mut self, ask: &str, decision: &str, _message: Option<&str>, _answers: Option<&BTreeMap<String, String>>, st: &mut ChatState) -> Vec<Out> {
+    fn permission(&mut self, ask: &str, decision: &str, _message: Option<&str>, _answers: Option<&BTreeMap<String, String>>, _mode: Option<&str>, st: &mut ChatState) -> Vec<Out> {
         let Some((rid, item_id)) = self.asks.remove(ask) else { return vec![] };
         st.pending.retain(|p| p.id != ask);
         let mut out = Vec::new();
@@ -444,7 +444,7 @@ mod tests {
         let ask = st.pending[0].clone();
         assert_eq!(ask.summary, "rm -rf build");
         assert_eq!(ask.reason.as_deref(), Some("writes outside"));
-        let w = writes(&a.permission(&ask.id, "deny", None, None, &mut st));
+        let w = writes(&a.permission(&ask.id, "deny", None, None, None, &mut st));
         assert_eq!(w[0], json!({"id": 7, "result": {"decision": "decline"}}));
         feed(&mut a, &mut st, json!({"method": "item/completed", "params": {"item": {"type": "commandExecution", "id": "c1", "command": "rm -rf build", "cwd": "/repo", "status": "declined"}}}));
         feed(&mut a, &mut st, json!({"method": "item/agentMessage/delta", "params": {"itemId": "m1", "delta": "Skipped"}}));

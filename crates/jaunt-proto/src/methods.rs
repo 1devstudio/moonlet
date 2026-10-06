@@ -551,6 +551,9 @@ pub struct ChatPermission {
     /// Answers to Claude's `AskUserQuestion` (question text → answer).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answers: Option<BTreeMap<String, String>>,
+    /// Permission mode an approved plan switches to; only `acceptEdits` (X20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

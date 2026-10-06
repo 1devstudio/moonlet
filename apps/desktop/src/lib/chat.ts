@@ -330,3 +330,22 @@ export function questionAnswers(qs: readonly Question[], picks: readonly Questio
   }
   return answers;
 }
+
+/** The plan in Claude's `ExitPlanMode` ask, or null when it has none (X20). */
+export function planOf(ask: { tool: string; input: unknown }): { plan: string; file: string | null } | null {
+  if (ask.tool !== "ExitPlanMode") return null;
+  const input = ask.input as { plan?: unknown; planFilePath?: unknown } | null;
+  if (typeof input?.plan !== "string" || !input.plan.trim()) return null;
+  return { plan: input.plan, file: typeof input.planFilePath === "string" ? input.planFilePath : null };
+}
+
+/** What the user does with a plan: approve into Accept edits or Manual, or send feedback. */
+export type PlanChoice = "acceptEdits" | "ask" | "keepPlanning";
+
+/** `chat.permission` parameters for a plan choice; null for empty feedback. */
+export function planAnswer(choice: PlanChoice, feedback = ""): { decision: "allow" | "deny"; mode?: "acceptEdits"; message?: string } | null {
+  if (choice === "acceptEdits") return { decision: "allow", mode: "acceptEdits" };
+  if (choice === "ask") return { decision: "allow" };
+  const message = feedback.trim();
+  return message ? { decision: "deny", message } : null;
+}

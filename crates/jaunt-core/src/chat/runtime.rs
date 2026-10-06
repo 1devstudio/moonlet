@@ -203,11 +203,21 @@ impl ChatManager {
         Ok(())
     }
 
-    pub fn permission(&self, id: TerminalId, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>) -> Result<()> {
+    /// `mode` switches the agent's permission mode with an approval; only a
+    /// plan approved into `acceptEdits` uses it (X20).
+    pub fn permission(&self, id: TerminalId, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>) -> Result<()> {
+        if let Some(m) = mode {
+            if decision != "allow" {
+                bail!("a mode needs decision allow");
+            }
+            if m != "acceptEdits" {
+                bail!("a plan can only be approved into acceptEdits");
+            }
+        }
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
         let Inner { adapter, state, .. } = &mut *inner;
-        let outs = adapter.as_mut().context("agent not running")?.permission(ask, decision, message, answers, state);
+        let outs = adapter.as_mut().context("agent not running")?.permission(ask, decision, message, answers, mode, state);
         self.apply(&chat, &mut inner, outs);
         Ok(())
     }
@@ -540,6 +550,10 @@ impl ChatManager {
         }
         if state_changed {
             inner.dirty = true;
+            // The mode Claude reports is the one the next start uses (X20).
+            if inner.cfg.agent == "claude" && inner.state.mode.is_some() {
+                inner.cfg.mode = inner.state.mode.clone();
+            }
             // Items travel as `chat.item`; the state event leaves them out.
             let items = std::mem::take(&mut inner.state.items);
             self.terms.emit(Message::event(methods::EV_CHAT_STATE, ChatStateEvent { id: chat.id, state: inner.state.clone() }));
@@ -568,10 +582,15 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     /// A stand-in for `claude` that speaks just enough stream-json.
+    /// Each start appends its arguments to `claude-args` in the working directory.
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
+echo "$*" >> claude-args
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"sess-1","model":"fake","slash_commands":["clear"]}' ;;
+    *'approve the plan'*)
+      echo '{"type":"system","subtype":"status","status":null,"permissionMode":"acceptEdits"}'
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
     *'"type":"user"'*)
       echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}'
       echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}'
@@ -658,6 +677,46 @@ done
         chats.save_all();
         let saved = std::fs::read_to_string(dir.path().join("chats").join(format!("{}.json", info.id))).unwrap();
         assert!(saved.contains("\"mode\":\"plan\""));
+        chats.shutdown();
+    }
+
+    #[tokio::test]
+    async fn the_agent_restarts_in_the_mode_claude_last_reported() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "approve the plan").unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done" && s.mode.as_deref() == Some("acceptEdits")).await;
+        let last_start = || std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().last().unwrap().to_string();
+
+        // A settings change restarts the agent before the next message.
+        chats.settings(info.id, Some("opus".into()), None, None).unwrap();
+        chats.send(info.id, "hi").unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done" && s.items.iter().filter(|i| i.kind == "user").count() == 2).await;
+        assert!(last_start().contains("--permission-mode acceptEdits"), "{}", last_start());
+
+        // So does a daemon restart.
+        chats.save_all();
+        chats.shutdown();
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
+        let chats2 = ChatManager::new(terms2, dir.path().join("chats"));
+        chats2.restore();
+        assert_eq!(chats2.state(info.id).unwrap().mode.as_deref(), Some("acceptEdits"));
+        chats2.send(info.id, "again").unwrap();
+        wait_for(&chats2, info.id, |s| s.status == "done" && s.items.iter().filter(|i| i.kind == "user").count() == 3).await;
+        assert!(last_start().contains("--permission-mode acceptEdits"), "{}", last_start());
+        chats2.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_plan_approval_only_switches_to_accept_edits() {
+        let (dir, _terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        let err = chats.permission(info.id, "ask-1", "allow", None, None, Some("bypassPermissions")).unwrap_err();
+        assert_eq!(err.to_string(), "a plan can only be approved into acceptEdits");
+        let err = chats.permission(info.id, "ask-1", "deny", None, None, Some("acceptEdits")).unwrap_err();
+        assert_eq!(err.to_string(), "a mode needs decision allow");
         chats.shutdown();
     }
 
