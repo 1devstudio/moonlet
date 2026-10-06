@@ -12,6 +12,7 @@ import {
   onChatItem,
   onChatState,
   planAnswer,
+  planApproveLabel,
   planOf,
   questionAnswers,
   thinkingPreview,
@@ -171,10 +172,16 @@ describe("plan approval (X20)", () => {
   });
 
   it("maps each choice to its chat.permission parameters", () => {
-    expect(planAnswer("acceptEdits")).toEqual({ decision: "allow", mode: "acceptEdits" });
+    expect(planAnswer("approve", "", "auto")).toEqual({ decision: "allow", mode: "auto" });
+    expect(planAnswer("approve", "", "acceptEdits")).toEqual({ decision: "allow", mode: "acceptEdits" });
     expect(planAnswer("ask")).toEqual({ decision: "allow" });
     expect(planAnswer("keepPlanning", "  Use a feature flag instead \n")).toEqual({ decision: "deny", message: "Use a feature flag instead" });
     // Empty feedback sends nothing.
     expect(planAnswer("keepPlanning", " ")).toBeNull();
+  });
+
+  it("labels the approve button with the mode it switches to (X24)", () => {
+    expect(planApproveLabel("auto")).toBe("Approve, auto mode");
+    expect(planApproveLabel("acceptEdits")).toBe("Approve, accept edits");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentReadiness, nextMode, resolveMode } from "./agents";
+import { agentReadiness, nextMode, resolveMode, resolvePlanMode } from "./agents";
 
 describe("nextMode", () => {
   it("cycles manual, accept edits, plan, auto", () => {
@@ -37,5 +37,16 @@ describe("agentReadiness (T8)", () => {
   it("gives up on an agent that exited or is gone", () => {
     expect(agentReadiness({ ...started, exit: { code: 1, signal: null } })).toBe("gone");
     expect(agentReadiness(undefined)).toBe("gone");
+  });
+});
+
+describe("resolvePlanMode (X24)", () => {
+  it("keeps auto and acceptEdits", () => {
+    expect(resolvePlanMode("auto")).toBe("auto");
+    expect(resolvePlanMode("acceptEdits")).toBe("acceptEdits");
+  });
+
+  it("reads a missing or unknown value as auto", () => {
+    for (const v of [undefined, null, "", "manual", "plan", "bypassPermissions", 3]) expect(resolvePlanMode(v)).toBe("auto");
   });
 });

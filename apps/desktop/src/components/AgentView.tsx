@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, agentLabel, nextMode } from "../lib/agents";
+import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode } from "../lib/agents";
 import {
   type QuestionPick,
   activeToken,
@@ -41,6 +41,7 @@ import {
   loadChat,
   type PlanChoice,
   planAnswer,
+  planApproveLabel,
   planOf,
   promptHistory,
   questionAnswers,
@@ -61,6 +62,7 @@ import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo
 import { firstWord, suggest } from "../lib/suggest";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
+import { type PlanView, planLabels, planView } from "../lib/plan";
 import { uiScale } from "../lib/uiScale";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
@@ -429,60 +431,57 @@ export function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd
   );
 }
 
-/** Claude's ExitPlanMode (X20): the plan as markdown, then approve or keep planning. */
-export function PlanCard({ plan, onAnswer }: { plan: { plan: string; file: string | null }; onAnswer: (answer: NonNullable<ReturnType<typeof planAnswer>>) => void }) {
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const answer = (choice: PlanChoice, text?: string) => {
-    const a = planAnswer(choice, text);
-    if (a) onAnswer(a);
-  };
+/** Colour of a plan's status (X24), shared with the Plan tab. */
+export const PLAN_TONE_TEXT = { blocked: "text-blocked", accent: "text-accent", muted: "text-muted", done: "text-done" } as const;
+export const PLAN_TONE_BG = { blocked: "bg-blocked", accent: "bg-accent", muted: "bg-muted", done: "bg-done" } as const;
+
+/** Claude's latest plan (X20, X24): its status and title, the approval
+ *  buttons while it waits, and a way to the Plan tab, which shows the text. */
+export function PlanCard({
+  view,
+  approveMode,
+  showOpen,
+  onOpen,
+  onChoose,
+}: {
+  view: PlanView;
+  approveMode: PlanApproveMode;
+  showOpen: boolean;
+  onOpen: () => void;
+  onChoose: (choice: PlanChoice) => void;
+}) {
+  const l = planLabels(view.status, view.mode);
+  const waiting = view.status === "pending";
   return (
-    <div className="jaunt-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
-      <div className="mb-2 flex items-center gap-2 ui-text-13">
-        <ClipboardList size={15} className="text-blocked" />
-        <span className="font-medium">{agentLabel("claude")} has a plan</span>
-      </div>
-      <div className="mb-2 max-h-[420px] overflow-auto rounded-md bg-[#141414] px-3 py-2">
-        <Markdown text={plan.plan} />
-      </div>
-      {plan.file && <div className="selectable mb-2 truncate font-mono ui-text-11.5 text-faint">{plan.file}</div>}
-      {feedback === null ? (
-        <div className="flex gap-1.5">
-          <Button variant="primary" onClick={() => answer("acceptEdits")}>
-            Approve, accept edits
+    <div
+      className={cx(
+        "jaunt-card-in my-2 flex flex-col gap-2.5 rounded-[10px] border bg-panel px-3.5 py-3",
+        waiting ? "border-[color-mix(in_oklab,var(--color-blocked)_40%,var(--color-border))]" : "border-border",
+      )}
+    >
+      <div className="flex items-center gap-2.5">
+        <FileText size={15} className={cx("shrink-0", PLAN_TONE_TEXT[l.tone])} />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className={cx("ui-text-12", PLAN_TONE_TEXT[l.tone])}>{l.card}</div>
+          <div className="truncate font-semibold">{view.title}</div>
+        </div>
+        {showOpen && (
+          <Button size="sm" variant="ghost" onClick={onOpen}>
+            Open plan →
           </Button>
-          <Button onClick={() => answer("ask")}>Approve, ask before edits</Button>
-          <Button variant="ghost" className="ml-auto" onClick={() => setFeedback("")}>
+        )}
+      </div>
+      {waiting && view.askId && (
+        <div className="flex items-center gap-1.5 border-t border-border pt-2.5">
+          <Button size="sm" variant="primary" onClick={() => onChoose("approve")}>
+            {planApproveLabel(approveMode)}
+          </Button>
+          <Button size="sm" onClick={() => onChoose("ask")}>
+            Approve, ask before edits
+          </Button>
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => onChoose("keepPlanning")}>
             Keep planning
           </Button>
-        </div>
-      ) : (
-        <div>
-          <textarea
-            autoFocus
-            rows={2}
-            value={feedback}
-            aria-label="What should change in the plan?"
-            placeholder="What should change in the plan?"
-            onChange={(e) => setFeedback(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return;
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                answer("keepPlanning", feedback);
-              }
-              if (e.key === "Escape") setFeedback(null);
-            }}
-            className={cx(inputCls, "mb-2 resize-none")}
-          />
-          <div className="flex gap-1.5">
-            <Button variant="primary" disabled={!feedback.trim()} onClick={() => answer("keepPlanning", feedback)}>
-              Send feedback
-            </Button>
-            <Button variant="ghost" className="ml-auto" onClick={() => setFeedback(null)}>
-              Cancel
-            </Button>
-          </div>
         </div>
       )}
     </div>
@@ -592,6 +591,9 @@ function ChatEditor({
   onStop,
   onCycleMode,
   scale,
+  placeholder,
+  focusSignal = 0,
+  onCancel,
 }: {
   host: string;
   /** Where text sent from elsewhere waits (`agentDrafts`, T8). */
@@ -606,6 +608,11 @@ function ChatEditor({
   onCycleMode?: () => void;
   /** Text scale (see uiScale): the height is re-measured when it changes. */
   scale: number;
+  placeholder?: string;
+  /** Focuses the editor each time it changes, such as Keep planning (X24). */
+  focusSignal?: number;
+  /** Escape in the empty editor, before it would stop the agent. */
+  onCancel?: () => void;
 }) {
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -619,6 +626,10 @@ function ChatEditor({
   useEffect(() => {
     if (focused) ta.current?.focus();
   }, [focused]);
+
+  useEffect(() => {
+    if (focusSignal) ta.current?.focus();
+  }, [focusSignal]);
 
   // A command block sent from a shell (T8) joins whatever is being typed.
   const draft = useStore((s) => s.agentDrafts[draftKey]);
@@ -725,6 +736,9 @@ function ChatEditor({
         setWalk(next);
         set(history[next]);
       }
+    } else if (e.key === "Escape" && onCancel && !text) {
+      e.preventDefault();
+      onCancel();
     } else if (e.key === "Escape" && working && !text) {
       e.preventDefault();
       onStop();
@@ -761,7 +775,7 @@ function ChatEditor({
             rows={1}
             spellCheck={false}
             value={text}
-            placeholder={working ? "Queue a message…" : "Ask for a change, @ to mention a file, / for commands"}
+            placeholder={placeholder ?? (working ? "Queue a message…" : "Ask for a change, @ to mention a file, / for commands")}
             onChange={(e) => {
               setText(e.target.value);
               setCaret(e.target.selectionStart);
@@ -843,8 +857,51 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   }, [st?.items, st?.pending, visible]);
 
   const call = (method: string, params: object) => rpc(host, method, { id, ...params }).catch(errorToast);
+
+  // The latest plan (X24): its card follows its transcript row, and its text
+  // is in the Plan tab, which opens when a plan arrives on screen.
+  const plan = useMemo(() => (st ? planView(st) : null), [st]);
+  const approveMode = useStore((s) => resolvePlanMode(s.settings.planApproveMode));
+  const planShown = useStore((s) => s.rightOpen && s.rightTab === "plan" && !s.preview);
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!plan?.askId || !visible || opened.current === plan.askId) return;
+    opened.current = plan.askId;
+    useStore.setState({ rightOpen: true, rightTab: "plan", preview: null });
+  }, [plan?.askId, visible]);
+  // Keep planning: the composer's next message is the feedback on this ask.
+  const [revise, setRevise] = useState<string | null>(null);
+  const [focusSignal, setFocusSignal] = useState(0);
+  const revising = revise !== null && revise === plan?.askId;
+  const choosePlan = (choice: PlanChoice) => {
+    if (!plan?.askId) return;
+    if (choice === "keepPlanning") {
+      setRevise(plan.askId);
+      setFocusSignal((n) => n + 1);
+      return;
+    }
+    stick.current = true;
+    void call(M.chatPermission, { ask: plan.askId, ...planAnswer(choice, "", approveMode) });
+  };
+  const planCard = plan && (
+    <PlanCard
+      key={`plan-${plan.itemId ?? plan.askId}`}
+      view={plan}
+      approveMode={approveMode}
+      showOpen={!planShown}
+      onOpen={() => useStore.setState({ rightOpen: true, rightTab: "plan", preview: null })}
+      onChoose={choosePlan}
+    />
+  );
+
   const send = (text: string) => {
     stick.current = true;
+    if (revising) {
+      setRevise(null);
+      const answer = planAnswer("keepPlanning", text);
+      if (answer) void call(M.chatPermission, { ask: revise, ...answer });
+      return;
+    }
     void call(M.chatSend, { text });
   };
   const stop = () => void call(M.chatInterrupt, {});
@@ -899,22 +956,17 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               <div className="ui-text-12.5 text-faint">Describe a change, mention files with @, or run a / command.</div>
             </div>
           ) : (
-            blocks.map((b) =>
-              b.kind === "tools" ? <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} /> : <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />,
-            )
+            blocks.map((b) => {
+              const view =
+                b.kind === "tools" ? <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} /> : <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />;
+              const hasPlan = plan?.itemId && (b.kind === "tools" ? b.tools.some((t) => t.id === plan.itemId) : b.item.id === plan.itemId);
+              return hasPlan ? [view, planCard] : view;
+            })
           )}
+          {plan && !plan.itemId && planCard}
           {st?.pending.map((ask) => {
-            const plan = planOf(ask);
-            return plan ? (
-              <PlanCard
-                key={ask.id}
-                plan={plan}
-                onAnswer={(answer) => {
-                  stick.current = true;
-                  void call(M.chatPermission, { ask: ask.id, ...answer });
-                }}
-              />
-            ) : isQuestion(ask) ? (
+            if (planOf(ask)) return null;
+            return isQuestion(ask) ? (
               <QuestionCard
                 key={ask.id}
                 ask={ask}
@@ -1002,6 +1054,9 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           onStop={stop}
           onCycleMode={agent === "claude" ? () => modeMenu.pick(nextMode(modeMenu.mode, modeMenu.bypassOn)) : undefined}
           scale={scale}
+          placeholder={revising ? "What should change in the plan?" : undefined}
+          focusSignal={focusSignal}
+          onCancel={revising ? () => setRevise(null) : undefined}
         />
       </div>
     </div>

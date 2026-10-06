@@ -36,7 +36,9 @@ import type { ChatItem, ChatState } from "./protocol";
 import type { Shortcuts } from "./runActions";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
-export type RightTab = "files" | "changes" | "review";
+/** Right panel tabs, in order (X24 added Plan). */
+export const RIGHT_TABS = ["plan", "files", "changes", "review"] as const;
+export type RightTab = (typeof RIGHT_TABS)[number];
 
 export interface Selection {
   host: string;
@@ -60,6 +62,8 @@ export interface Settings {
   toolCalls: ToolCallView;
   /** Custom keyboard shortcuts from the Run action modal (X19). */
   shortcuts: Shortcuts;
+  /** Mode an approved plan switches to, `auto` or `acceptEdits` (X24). */
+  planApproveMode: string;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -83,7 +87,7 @@ function loadJson<T>(key: string, fallback: T): T {
     if (v && typeof v === "object" && (v as { rightWidth?: number }).rightWidth === 520) (v as { rightWidth: number }).rightWidth = 380;
     if (v && typeof v === "object" && (v as { sidebarWidth?: number }).sidebarWidth === 264) (v as { sidebarWidth: number }).sidebarWidth = 280;
     // Tabs from older versions.
-    if (v && typeof v === "object" && "rightTab" in v && !["files", "changes", "review"].includes((v as { rightTab: string }).rightTab)) {
+    if (v && typeof v === "object" && "rightTab" in v && !(RIGHT_TABS as readonly string[]).includes((v as { rightTab: string }).rightTab)) {
       (v as { rightTab: string }).rightTab = "files";
     }
     return v;
@@ -211,7 +215,7 @@ function makeStore() {
   showHistory: false,
   dialog: null,
   confirm: null,
-  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {} }),
+  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {}, planApproveMode: "auto" }),
   toasts: [],
   lastAttention: null,
   workingSince: {},
