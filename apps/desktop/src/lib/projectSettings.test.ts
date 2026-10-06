@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentOptions, fromForm, hasRunCommand, isDirty, loadFailure, toForm, validate, type Form } from "./projectSettings";
+import { agentOptions, closeRequest, fromForm, hasRunCommand, isDirty, loadFailure, toForm, validate, type Form } from "./projectSettings";
 
 const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], ...patch });
 
@@ -87,5 +87,20 @@ describe("loadFailure", () => {
       close: false,
       saveErr: { message: "Could not reload .jaunt/config.toml: connection lost", stale: true },
     });
+  });
+});
+
+describe("closeRequest", () => {
+  it("closes at once when nothing changed or the file did not parse", () => {
+    expect(closeRequest({ saving: false, parseError: false, dirty: false })).toBe("close");
+    expect(closeRequest({ saving: false, parseError: true, dirty: true })).toBe("close");
+  });
+
+  it("asks before discarding unsaved changes", () => {
+    expect(closeRequest({ saving: false, parseError: false, dirty: true })).toBe("ask");
+  });
+
+  it("waits while a save is running, which closes the dialog itself", () => {
+    expect(closeRequest({ saving: true, parseError: false, dirty: true })).toBe("wait");
   });
 });

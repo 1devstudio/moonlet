@@ -1,6 +1,7 @@
-import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useEffect } from "react";
+import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useEffect, useRef } from "react";
 import { GitBranch, SquareTerminal, X } from "lucide-react";
 import type { AgentState } from "../lib/protocol";
+import { fromOtherDialog, tabWrap } from "../lib/modal";
 
 export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
@@ -145,9 +146,10 @@ export function DiffStat({ add, del, className }: { add: number; del: number; cl
 }
 
 export function Dialog({ title, onClose, children, width = 480, footer }: { title: string; onClose: () => void; children: ReactNode; width?: number; footer?: ReactNode }) {
+  const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !fromOtherDialog(e, panel.current)) {
         e.stopPropagation();
         onClose();
       }
@@ -158,6 +160,7 @@ export function Dialog({ title, onClose, children, width = 480, footer }: { titl
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[12vh]" onMouseDown={onClose}>
       <div
+        ref={panel}
         role="dialog"
         aria-label={title}
         className="max-h-[76vh] overflow-hidden rounded-xl border border-border-strong bg-panel shadow-2xl"
@@ -172,6 +175,92 @@ export function Dialog({ title, onClose, children, width = 480, footer }: { titl
         </div>
         <div className="max-h-[60vh] overflow-auto p-4">{children}</div>
         {footer && <div className="flex justify-end gap-2 border-t border-border px-4 py-2.5">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The confirm modal (X23): a message, an optional option at the footer's
+ * left, Cancel and the action. The action has focus, so Enter confirms; it
+ * sits above any open Dialog and the toasts.
+ */
+export function ConfirmDialog({
+  title,
+  message,
+  action,
+  cancel = "Cancel",
+  variant = "primary",
+  checkbox,
+  checked = false,
+  onCheck,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  message: string;
+  action: string;
+  cancel?: string;
+  variant?: "primary" | "danger";
+  checkbox?: string;
+  checked?: boolean;
+  onCheck?: (checked: boolean) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onCancel]);
+  const ring = "focus:outline-2 focus:outline-offset-2 focus:outline-accent";
+  return (
+    <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/50 pt-[12vh]" onMouseDown={onCancel}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="w-[440px] overflow-hidden rounded-xl border border-border-strong bg-panel shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] outline-none"
+        onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // Tab stays inside, so it never reaches a dialog underneath.
+          const to = e.key === "Tab" ? tabWrap(e.currentTarget, document.activeElement, e.shiftKey) : null;
+          if (to) {
+            e.preventDefault();
+            to.focus();
+          }
+        }}
+      >
+        <div className="flex items-center justify-between border-b border-border bg-panel-2 px-4 py-2.5">
+          <h2 className="ui-text-13 font-semibold">{title}</h2>
+          <IconButton title="Close" onClick={onCancel}>
+            <X size={14} />
+          </IconButton>
+        </div>
+        <div className="p-4">
+          <p className="whitespace-pre-line ui-text-12.5 leading-[1.55] text-pretty text-muted">{message}</p>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-border bg-panel-2 px-4 py-2.5">
+          {checkbox && (
+            <label className="mr-auto flex items-center gap-1.5 ui-text-12 text-muted">
+              <input type="checkbox" checked={checked} onChange={(e) => onCheck?.(e.target.checked)} />
+              {checkbox}
+            </label>
+          )}
+          <Button variant="ghost" className={ring} onClick={onCancel}>
+            {cancel}
+          </Button>
+          <Button variant={variant} className={ring} autoFocus onClick={onConfirm}>
+            {action}
+          </Button>
+        </div>
       </div>
     </div>
   );

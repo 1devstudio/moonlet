@@ -48,6 +48,13 @@ export function loadFailure(reload: boolean, message: string): { close: true } |
   return reload ? { close: false, saveErr: { message: `Could not reload .jaunt/config.toml: ${message}`, stale: true } } : { close: true };
 }
 
+/** What Close, Cancel or Esc does: close, ask before discarding edits (X23),
+ *  or nothing while a save runs, since a successful save closes the dialog. */
+export function closeRequest(s: { saving: boolean; parseError: boolean; dirty: boolean }): "close" | "ask" | "wait" {
+  if (s.saving) return "wait";
+  return s.parseError || !s.dirty ? "close" : "ask";
+}
+
 let uid = 1;
 export const newRowId = () => uid++;
 

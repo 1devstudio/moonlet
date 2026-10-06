@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, Folder, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, Settings, ShieldAlert } from "lucide-react";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
 import { arrange, compact, dropResult, lastActive, projectRemoval, type Dragged, type Group } from "../lib/sidebar";
 import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
+import { askConfirm } from "../lib/confirm";
 import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
 import { ArchiveLoader } from "./ArchiveLoader";
 import { spawnedFrom } from "../lib/spawned";
@@ -22,9 +22,10 @@ function updateWorkspace(host: string, id: string, patch: Partial<Pick<Workspace
 /** Deletes a section after confirming, and moves its sessions out of it. */
 async function deleteSection(host: string, ws: Workspace, id: string, sessions: Session[]) {
   if (sessions.length) {
-    const ok = await confirm(`Delete this section? Its ${sessions.length} session${sessions.length === 1 ? "" : "s"} move back to their projects.`, {
+    const ok = await askConfirm({
       title: "Delete section",
-      kind: "warning",
+      message: `Delete this section? Its ${sessions.length} session${sessions.length === 1 ? "" : "s"} move back to their projects.`,
+      action: "Delete",
     });
     if (!ok) return;
   }
@@ -634,7 +635,7 @@ function projectItems(host: string, projectId: string, ws: Workspace): MenuItem[
       label: removal.label,
       danger: true,
       onSelect: async () => {
-        if (removal.confirm && !(await confirm(removal.confirm, { title: "Remove project", kind: "warning" }))) return;
+        if (removal.confirm && !(await askConfirm({ title: "Remove project", message: removal.confirm, action: "Remove" }))) return;
         try {
           await rpc(host, M.workspaceRemoveProject, { id: ws.id, project_id: projectId });
         } catch (e) {
@@ -658,7 +659,7 @@ function sessionItems(host: string, s: Session, ws: Workspace): MenuItem[] {
       label: "Archive",
       icon: <Archive size={14} className="text-muted" />,
       onSelect: () => {
-        void archiveSession(false, { host, ws: s });
+        void archiveSession({ host, ws: s });
       },
     },
   ];
