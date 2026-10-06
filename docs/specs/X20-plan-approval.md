@@ -25,12 +25,12 @@ In Plan mode Claude ends its plan with an `ExitPlanMode` call. jaunt showed it a
 - [x] When Claude reports a mode change (`{"type":"system","subtype":"status","permissionMode":…}`), the chat's mode becomes that mode; Claude's `default` reads as `manual`. Modes the picker does not offer (such as `dontAsk`) leave the mode unchanged. (`claude_reports_set_the_mode`)
 - [x] The next start of the agent (restart after a settings change, or resume after a daemon restart) uses the mode Claude last reported. (`the_agent_restarts_in_the_mode_claude_last_reported`)
 - [x] `chat.permission` with `mode: "acceptEdits"` and `decision: "allow"` answers Claude with `updatedPermissions: [{type: "setMode", mode: "acceptEdits", destination: "session"}]`. (`approving_a_plan_can_switch_to_accept_edits`)
-- [x] `chat.permission` rejects any other `mode` value, and a `mode` with a decision other than `allow`, and answers nothing. (`a_plan_approval_only_switches_to_accept_edits`)
+- [x] `chat.permission` rejects any other `mode` value, a `mode` with a decision other than `allow`, and a `mode` on any ask that is not a pending `ExitPlanMode`, and answers nothing. (`a_plan_approval_only_switches_to_accept_edits`)
 - [x] An `ExitPlanMode` ask with a string `plan` shows the plan card; an `ExitPlanMode` ask without one falls back to the plain permission card. (`planOf` in `chat.test.ts`, `plan-approval.e2e.ts`)
 - [x] The card renders the plan as markdown and shows `planFilePath` when present. (`plan-approval.e2e.ts`)
 - [x] "Approve, accept edits" sends `allow` with mode `acceptEdits`; "Approve, ask before edits" sends `allow` with no mode; "Keep planning" sends `deny` with the typed feedback as the message. Send feedback is disabled while the text box is empty. (`planAnswer` in `chat.test.ts`, `plan-approval.e2e.ts`)
 - [x] The ask's one-line summary (approval inbox, sidebar, notifications) is the plan's first heading, or its first line when it has none. (`a_plan_is_summarised_by_its_heading_or_first_line`)
-- [x] The `ExitPlanMode` tool row in the transcript can be opened and shows the plan as markdown. (`plan-approval.e2e.ts`)
+- [x] The `ExitPlanMode` tool row in the transcript can be opened and shows the plan as markdown, followed by the tool's result. (`plan-approval.e2e.ts`)
 - [x] The status line under the conversation reads "Waiting for your approval" while the plan card is open. (`plan-approval.e2e.ts`)
 
 ## UI
@@ -46,7 +46,7 @@ In Plan mode Claude ends its plan with an `ExitPlanMode` call. jaunt showed it a
     └──────────────────────────────────────────────────────────────┘
 
 - Same card frame as the permission and question cards.
-- "Keep planning" swaps the buttons for a text box (focused) with Send feedback and Cancel. Enter sends, Shift+Enter adds a line, Escape cancels.
+- "Keep planning" swaps the buttons for a text box (focused) with Send feedback and Cancel. Enter sends, Shift+Enter adds a line, Escape cancels; neither key acts while an input method is composing.
 
 ## Protocol and RPCs
 

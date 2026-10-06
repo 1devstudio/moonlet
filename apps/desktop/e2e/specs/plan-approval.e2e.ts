@@ -77,9 +77,13 @@ describe("plan approval", () => {
   });
 
   after(async () => {
-    rpc(w, "session.archive", { id: sessionId });
-    await expect($(sel.sessionRow(SESSION))).not.toBeExisting();
-    writeFileSync(FAKE, blocked);
+    try {
+      rpc(w, "session.archive", { id: sessionId });
+      await expect($(sel.sessionRow(SESSION))).not.toBeExisting();
+    } finally {
+      // Later specs must never get the plan-only fake.
+      writeFileSync(FAKE, blocked);
+    }
   });
 
   it("shows the plan formatted, with its file", async () => {
@@ -116,5 +120,7 @@ describe("plan approval", () => {
     await $(`(${sel.button("1 tool call")})[last()]`).click();
     await $('(//button[.//span[normalize-space()="ExitPlanMode"]])[last()]').click();
     await expect($('//h1[normalize-space()="Add a dark theme"]')).toBeDisplayed();
+    // The tool's result stays readable beside the plan.
+    await expect($(sel.text("User has approved your plan."))).toBeDisplayed();
   });
 });

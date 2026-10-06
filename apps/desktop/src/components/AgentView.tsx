@@ -274,9 +274,16 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
           {tool.diff ? (
             <DiffBlock diff={tool.diff} />
           ) : plan ? (
-            <div className="max-h-[420px] overflow-auto rounded-md border border-border bg-[#161616] px-3 py-2">
-              <Markdown text={plan.plan} />
-            </div>
+            <>
+              <div className="max-h-[420px] overflow-auto rounded-md border border-border bg-[#161616] px-3 py-2">
+                <Markdown text={plan.plan} />
+              </div>
+              {tool.output?.trim() && (
+                <pre className="selectable mt-1 max-h-[300px] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-[#161616] px-3 py-2 font-mono ui-text-12 leading-[1.5] text-muted">
+                  {tool.output.trim()}
+                </pre>
+              )}
+            </>
           ) : view?.kind === "read" ? (
             <ReadBlock rows={view.rows} />
           ) : (
@@ -459,6 +466,7 @@ export function PlanCard({ plan, onAnswer }: { plan: { plan: string; file: strin
             placeholder="What should change in the plan?"
             onChange={(e) => setFeedback(e.target.value)}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 answer("keepPlanning", feedback);
