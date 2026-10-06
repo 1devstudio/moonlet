@@ -7,7 +7,10 @@ import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
+import { chatKey, loadChat, useChat } from "../lib/chat";
+import { planChat, planTabDot, planView } from "../lib/plan";
 import { ChecksPanel } from "./ChecksPanel";
+import { PlanPanel } from "./PlanPanel";
 import { FilesPanel } from "./FilesPanel";
 import { PreviewPanel } from "./PreviewPanel";
 import { Empty, cx, prTone } from "./ui";
@@ -15,6 +18,7 @@ import { Empty, cx, prTone } from "./ui";
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
 const TABS: { id: RightTab; label: string }[] = [
+  { id: "plan", label: "Plan" },
   { id: "files", label: "Files" },
   { id: "changes", label: "Changes" },
   { id: "review", label: "Review" },
@@ -277,10 +281,34 @@ function SummaryLine({ host, ws }: { host: string; ws: Session }) {
   );
 }
 
+/** The latest plan of the session's chat the Plan tab follows (X24). */
+function useSessionPlan(host: string, ws: Session) {
+  // A string, so the selector result compares by value.
+  const ids = useStore((s) =>
+    Object.values(s.terminals[host] ?? {})
+      .filter((t) => t.session_id === ws.id && t.chat && !t.exit)
+      .map((t) => t.id)
+      .join(","),
+  );
+  const focused = useStore((s) => s.layouts[sesKey(host, ws.id)]?.focused ?? null);
+  const chatId = useChat((s) =>
+    planChat(
+      focused,
+      ids ? ids.split(",").map((id) => ({ id: Number(id), st: s.chats[chatKey(host, Number(id))] })) : [],
+    ),
+  );
+  const st = useChat((s) => (chatId === null ? undefined : s.chats[chatKey(host, chatId)]));
+  useEffect(() => {
+    if (chatId !== null && !st) void loadChat(host, chatId).catch(() => {});
+  }, [host, chatId, st]);
+  return useMemo(() => (st ? planView(st) : null), [st]);
+}
+
 export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const tab = useStore((s) => s.rightTab);
   const preview = useStore((s) => s.preview);
   const [allFiles, setAllFiles] = useState(false);
+  const plan = useSessionPlan(host, ws);
 
   // Watch the worktree for live refresh of Files, Changes and Preview.
   useEffect(() => {
@@ -291,24 +319,36 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   return (
     <div className="flex h-full flex-col bg-panel">
       <TopActions host={host} ws={ws} />
-      <div className="flex h-[48px] shrink-0 items-stretch px-2">
+      <div role="tablist" className="flex h-[38px] shrink-0 items-stretch border-b border-border px-2">
         {TABS.map((t) => (
           <button
             key={t.id}
+            id={`right-tab-${t.id}`}
+            role="tab"
+            aria-selected={tab === t.id && !preview}
+            aria-controls="right-tabpanel"
             onClick={() => useStore.setState({ rightTab: t.id, preview: null })}
             className={cx(
-              "flex-1 rounded-t-md ui-text-14 transition-colors",
-              tab === t.id && !preview ? "bg-bg font-semibold text-fg" : "text-muted hover:text-fg",
+              "flex items-center gap-1.5 px-3 ui-text-13 transition-colors",
+              tab === t.id && !preview ? "text-fg shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg",
             )}
           >
             {t.label}
+            {t.id === "plan" && planTabDot(tab, !!preview, plan?.status === "pending") && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
           </button>
         ))}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto bg-bg">
+      <div
+        id="right-tabpanel"
+        // A markdown preview is not one of the tabs.
+        {...(preview ? {} : { role: "tabpanel", "aria-labelledby": `right-tab-${tab}` })}
+        className="min-h-0 flex-1 overflow-y-auto bg-bg"
+      >
         <Suspense fallback={null}>
           {preview ? (
             <PreviewPanel />
+          ) : tab === "plan" ? (
+            <PlanPanel view={plan} />
           ) : tab === "files" ? (
             <div className="flex h-full flex-col">
               <div className="flex items-center">

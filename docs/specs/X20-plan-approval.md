@@ -1,6 +1,6 @@
 # X20 — Plan approval card
 
-- **Status:** implemented (2026-10-06). Protocol checked live against claude 2.1.291; card, chip and transcript row covered by e2e with a fake `claude`.
+- **Status:** implemented (2026-10-06). Protocol checked live against claude 2.1.291; card, chip and transcript row covered by e2e with a fake `claude`. The card, the approve choice and Keep planning were reworked by [X24](X24-plan-panel.md).
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** A5, goal 2 (agent-first)
 - **Related:** [X6](X6-structured-agent-view.md) (structured agent view), [X7](X7-agent-permission-mode.md) (permission mode picker), [X14](X14-collapsed-tool-calls.md) (collapsed tool calls), [A5](A5-approval-inbox.md) (approval inbox)
@@ -25,7 +25,7 @@ In Plan mode Claude ends its plan with an `ExitPlanMode` call. jaunt showed it a
 - [x] When Claude reports a mode change (`{"type":"system","subtype":"status","permissionMode":…}`), the chat's mode becomes that mode; Claude's `default` reads as `manual`. Modes the picker does not offer (such as `dontAsk`) leave the mode unchanged. (`claude_reports_set_the_mode`)
 - [x] The next start of the agent (restart after a settings change, or resume after a daemon restart) uses the mode Claude last reported. (`the_agent_restarts_in_the_mode_claude_last_reported`)
 - [x] `chat.permission` with `mode: "acceptEdits"` and `decision: "allow"` answers Claude with `updatedPermissions: [{type: "setMode", mode: "acceptEdits", destination: "session"}]`. (`approving_a_plan_can_switch_to_accept_edits`)
-- [x] `chat.permission` rejects any other `mode` value, a `mode` with a decision other than `allow`, and a `mode` on any ask that is not a pending `ExitPlanMode`, and answers nothing. (`a_plan_approval_only_switches_to_accept_edits`)
+- [x] `chat.permission` rejects any other `mode` value (X24 adds `auto`), a `mode` with a decision other than `allow`, and a `mode` on any ask that is not a pending `ExitPlanMode`, and answers nothing. (`a_plan_approval_only_switches_to_auto_or_accept_edits`)
 - [x] An `ExitPlanMode` ask with a string `plan` shows the plan card; an `ExitPlanMode` ask without one falls back to the plain permission card. (`planOf` in `chat.test.ts`, `plan-approval.e2e.ts`)
 - [x] The card renders the plan as markdown and shows `planFilePath` when present. (`plan-approval.e2e.ts`)
 - [x] "Approve, accept edits" sends `allow` with mode `acceptEdits`; "Approve, ask before edits" sends `allow` with no mode; "Keep planning" sends `deny` with the typed feedback as the message. Send feedback is disabled while the text box is empty. (`planAnswer` in `chat.test.ts`, `plan-approval.e2e.ts`)
@@ -50,7 +50,7 @@ In Plan mode Claude ends its plan with an `ExitPlanMode` call. jaunt showed it a
 
 ## Protocol and RPCs
 
-- `chat.permission {id, ask, decision, message?, answers?, mode?}`: new optional `mode`. Only `acceptEdits` is accepted, and only with `decision: "allow"`.
+- `chat.permission {id, ask, decision, message?, answers?, mode?}`: new optional `mode`. Only `acceptEdits` is accepted ([X24](X24-plan-panel.md) adds `auto`), and only with `decision: "allow"`.
 - Claude's `system/status` line is read for `permissionMode`; `ChatState.mode` changes and a `chat.state` event goes out.
 
 Captured from claude 2.1.291 in Plan mode (`--permission-prompt-tool stdio`):
@@ -85,4 +85,4 @@ The reported mode is saved with the chat (`cfg.mode` and `state.mode` in `chats/
 
 ## Open questions
 
-- Whether `setMode` with `auto` works from the plan card. Not offered until checked.
+- ~~Whether `setMode` with `auto` works from the plan card.~~ It does (claude 2.1.291, checked 2026-10-06); see [X24](X24-plan-panel.md).
