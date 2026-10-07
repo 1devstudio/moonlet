@@ -346,7 +346,7 @@ function CompletionPopup({ rows, highlight, dir, home, onPick }: { rows: Complet
         {rows.map((r, i) => (
           <div
             key={r.kind + r.name}
-            id={`jaunt-completion-${i}`}
+            id={`moonlet-completion-${i}`}
             role="option"
             aria-selected={i === highlight}
             className={`flex cursor-default items-center gap-2 px-2.5 py-1 ${i === highlight ? "bg-accent/20 text-fg" : "text-muted hover:bg-hover"}`}

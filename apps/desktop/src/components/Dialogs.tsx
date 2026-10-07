@@ -274,7 +274,7 @@ function HooksSection() {
   const install = async () => {
     const ok = await askConfirm({
       title: "Install agent hooks",
-      message: `jaunt will add its hooks to:\n• ${status?.claude_settings}\n• ${status?.codex_config}\n\nand a "jaunt" skill to the skills folder next to each.\n\nA backup of each file is written first and your own settings are kept.`,
+      message: `moonlet will add its hooks to:\n• ${status?.claude_settings}\n• ${status?.codex_config}\n\nand a "moonlet" skill to the skills folder next to each.\n\nA backup of each file is written first and your own settings are kept.`,
       action: "Install",
     });
     if (!ok) return;
@@ -291,7 +291,7 @@ function HooksSection() {
   return (
     <section className="mb-5">
       <h3 className="mb-1 ui-text-12 font-semibold">Agent hooks</h3>
-      <p className="mb-2 ui-text-12 text-muted">Hooks let Claude Code and Codex report exactly when they are working, waiting for approval, or done. The jaunt skill lets them open a session in another project.</p>
+      <p className="mb-2 ui-text-12 text-muted">Hooks let Claude Code and Codex report exactly when they are working, waiting for approval, or done. The moonlet skill lets them open a session in another project.</p>
       {status && (
         <div className="mb-2 space-y-1 ui-text-12">
           <div className="flex items-center gap-2">
@@ -323,14 +323,14 @@ function HostsSection() {
   const install = async (id: string) => {
     const ok = await askConfirm({
       title: "Install remote helper",
-      message: `Install the jaunt helper on ${id}?\n\nThe version-pinned jauntd binary (and the jaunt CLI) are copied to ~/.jaunt/bin over your SSH connection and verified by SHA-256. Nothing else on the host is changed.`,
+      message: `Install the moonlet helper on ${id}?\n\nThe version-pinned moonletd binary (and the moonlet CLI) are copied to ~/.jaunt/bin over your SSH connection and verified by SHA-256. Nothing else on the host is changed.`,
       action: "Install",
     });
     if (!ok) return;
     setBusy(id);
     try {
       const r = await hostsApi.install(id);
-      toast(`Installed jauntd ${r.version} (${r.triple}) on ${id}`);
+      toast(`Installed moonletd ${r.version} (${r.triple}) on ${id}`);
     } catch (e) {
       errorToast(e);
     } finally {
@@ -364,8 +364,8 @@ function HostsSection() {
         ))}
       </div>
       <div className="flex gap-2">
-        <input className={inputCls} list="jaunt-ssh-hosts" value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Host from ~/.ssh/config" />
-        <datalist id="jaunt-ssh-hosts">
+        <input className={inputCls} list="moonlet-ssh-hosts" value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Host from ~/.ssh/config" />
+        <datalist id="moonlet-ssh-hosts">
           {suggestions.map((h) => (
             <option key={h} value={h} />
           ))}
@@ -498,7 +498,7 @@ function TerminalSection() {
           <input type="checkbox" checked={t.classicPrompt} onChange={(e) => setTerm({ classicPrompt: e.target.checked })} /> New shells keep their own prompt (classic, no input editor)
         </label>
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={settings.notifyWhenFocused} onChange={(e) => updateSettings({ notifyWhenFocused: e.target.checked })} /> Notify even while jaunt is focused
+          <input type="checkbox" checked={settings.notifyWhenFocused} onChange={(e) => updateSettings({ notifyWhenFocused: e.target.checked })} /> Notify even while moonlet is focused
         </label>
       </div>
     </section>
@@ -523,7 +523,7 @@ function DaemonSection() {
     setBusy(true);
     try {
       setStatus(await hostsApi.service(on ? "install" : "uninstall"));
-      toast(on ? "The jaunt daemon now starts at login" : "Login item removed");
+      toast(on ? "The moonlet daemon now starts at login" : "Login item removed");
     } catch (e) {
       errorToast(e);
     } finally {
@@ -533,9 +533,9 @@ function DaemonSection() {
   return (
     <section className="mb-5">
       <h3 className="mb-1 ui-text-12 font-semibold">Background daemon</h3>
-      <p className="mb-2 ui-text-12 text-muted">Agents run in jauntd, not in this window. Running it under launchd starts it at login and restarts it if it ever crashes.</p>
+      <p className="mb-2 ui-text-12 text-muted">Agents run in moonletd, not in this window. Running it under launchd starts it at login and restarts it if it ever crashes.</p>
       <label className="flex items-center gap-2 ui-text-12.5">
-        <input type="checkbox" disabled={busy || !status} checked={!!status?.installed} onChange={(e) => void toggle(e.target.checked)} /> Start the jaunt daemon at login
+        <input type="checkbox" disabled={busy || !status} checked={!!status?.installed} onChange={(e) => void toggle(e.target.checked)} /> Start the moonlet daemon at login
         {status?.installed && !status.loaded && <span className="ui-text-11 text-blocked">installed but not loaded</span>}
       </label>
     </section>

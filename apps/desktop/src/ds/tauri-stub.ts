@@ -1,7 +1,7 @@
 // Outside the Tauri webview (Claude Design, previews) there is no
 // `window.__TAURI_INTERNALS__`, and every daemon call would throw. This stub
 // answers `invoke` with demo data so the app's components render as they do in
-// jaunt. Inside the real app it is never installed.
+// moonlet. Inside the real app it is never installed.
 
 type Handler = (method: string, params: Record<string, unknown>) => unknown;
 

@@ -1,9 +1,9 @@
 {
   "projectId": "dee41f1e-ea0e-48c1-9bcc-ee637ca14d36",
   "shape": "package",
-  "pkg": "@jaunt/ds",
-  "globalName": "Jaunt",
-  "buildCmd": "pnpm --filter @jaunt/desktop build:ds",
+  "pkg": "@moonlet/ds",
+  "globalName": "Moonlet",
+  "buildCmd": "pnpm --filter @moonlet/desktop build:ds",
   "srcDir": "../src",
   "cssEntry": "dist/styles.css",
   "extraFonts": [
@@ -23,7 +23,7 @@
     "QuestionCard": "ask: { id: string; tool: string; summary: string; input: unknown; reason?: string | null; can_always: boolean; diff?: string | null }; onAnswer: (decision: \"allow\" | \"deny\", answers?: Record<string, string>) => void",
     "Menu": "trigger: (open: () => void) => React.ReactNode; items: Array<{ kind?: \"item\"; label: string; icon?: React.ReactNode; checked?: boolean; danger?: boolean; hint?: string; description?: string; onSelect: () => void } | { kind: \"submenu\"; label: string; icon?: React.ReactNode; items: unknown[] } | { kind: \"divider\" } | { kind: \"label\"; label: string }>; align?: \"left\" | \"right\"; side?: \"bottom\" | \"top\"; width?: number",
     "Sidebar": "",
-    "JauntPreview": "selected?: string | null; chats?: Record<number, { status?: \"idle\" | \"working\" | \"blocked\" | \"done\" | \"error\"; items?: unknown[]; pending?: unknown[]; model?: string; cost_usd?: number }>; children: React.ReactNode"
+    "MoonletPreview": "selected?: string | null; chats?: Record<number, { status?: \"idle\" | \"working\" | \"blocked\" | \"done\" | \"error\"; items?: unknown[]; pending?: unknown[]; model?: string; cost_usd?: number }>; children: React.ReactNode"
   },
   "overrides": {
     "Button": {

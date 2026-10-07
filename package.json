@@ -1,12 +1,12 @@
 {
-  "name": "jaunt",
+  "name": "moonlet",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter @jaunt/desktop tauri dev",
-    "build": "pnpm --filter @jaunt/desktop tauri build",
-    "test": "cargo test --workspace && pnpm --filter @jaunt/desktop test",
-    "e2e:build": "pnpm --filter @jaunt/desktop e2e:build",
-    "e2e": "pnpm --filter @jaunt/desktop e2e"
+    "dev": "pnpm --filter @moonlet/desktop tauri dev",
+    "build": "pnpm --filter @moonlet/desktop tauri build",
+    "test": "cargo test --workspace && pnpm --filter @moonlet/desktop test",
+    "e2e:build": "pnpm --filter @moonlet/desktop e2e:build",
+    "e2e": "pnpm --filter @moonlet/desktop e2e"
   },
   "packageManager": "pnpm@11.20.0"
 }

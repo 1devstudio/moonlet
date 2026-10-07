@@ -16,7 +16,7 @@ const secondOrigin = join(w.root, "e2e-second-origin.git");
 const secondOther = join(w.root, "e2e-second-other");
 let secondId = "";
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-c", "user.email=e2e@jaunt.test", "-c", "user.name=e2e", ...args], { cwd, env: w.env, stdio: "pipe" }).toString().trim();
+  execFileSync("git", ["-c", "user.email=e2e@moonlet.test", "-c", "user.name=e2e", ...args], { cwd, env: w.env, stdio: "pipe" }).toString().trim();
 
 const chip = () => $('button[aria-label="main is 2 commits behind origin/main"]');
 const secondChip = () => $('button[aria-label="main is 1 commit behind origin/main"]');

@@ -18,7 +18,7 @@ Rename throughout code, protocol, storage and docs:
 | repo, `repo.*` RPCs | project, `project.*` |
 | (none) | workspace: a named set of projects, `workspace.*` |
 
-`PROTOCOL_VERSION` goes to 2. The live upgrade reports the mismatch and the app runs `jauntd upgrade`. `state.json` is migrated on load: `repos` become `projects`, old `workspaces` become `sessions`, and a default workspace "My workspaces" containing every project is created. Installed hooks keep working because `jaunt hook` reads both `JAUNT_TERMINAL_ID` and the old `JAUNT_SESSION_ID`.
+`PROTOCOL_VERSION` goes to 2. The live upgrade reports the mismatch and the app runs `moonletd upgrade`. `state.json` is migrated on load: `repos` become `projects`, old `workspaces` become `sessions`, and a default workspace "My workspaces" containing every project is created. Installed hooks keep working because `moonlet hook` reads both `JAUNT_TERMINAL_ID` and the old `JAUNT_SESSION_ID`.
 
 ## Consequences
 

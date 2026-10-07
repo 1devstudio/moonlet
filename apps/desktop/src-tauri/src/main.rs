@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    jaunt_app_lib::run()
+    moonlet_app_lib::run()
 }

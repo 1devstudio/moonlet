@@ -1,15 +1,15 @@
-import { AgentView, JauntPreview } from "@jaunt/ds";
+import { AgentView, MoonletPreview } from "@moonlet/ds";
 
 export const Conversation = () => (
-  <JauntPreview>
+  <MoonletPreview>
     <div className="bg-bg" style={{ width: 760, height: 640 }}>
       <AgentView host="local" id={1} wsId="s-checkout" focused={false} visible />
     </div>
-  </JauntPreview>
+  </MoonletPreview>
 );
 
 export const AwaitingApproval = () => (
-  <JauntPreview
+  <MoonletPreview
     selected="s-search"
     chats={{
       1: {},
@@ -22,5 +22,5 @@ export const AwaitingApproval = () => (
     <div className="bg-bg" style={{ width: 760, height: 640 }}>
       <AgentView host="local" id={3} wsId="s-search" focused={false} visible />
     </div>
-  </JauntPreview>
+  </MoonletPreview>
 );

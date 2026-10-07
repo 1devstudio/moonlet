@@ -1,4 +1,4 @@
-import { QuestionCard } from "@jaunt/ds";
+import { QuestionCard } from "@moonlet/ds";
 
 export const SingleChoice = () => (
   <div className="bg-bg p-3" style={{ width: 560 }}>

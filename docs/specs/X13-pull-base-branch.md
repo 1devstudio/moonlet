@@ -10,11 +10,11 @@ New sessions branch from the project's local base branch (`main` unless `.jaunt/
 
 ## User journey
 
-1. A session's PR merges on GitHub. jaunt fetches `origin/<base>` for that project.
+1. A session's PR merges on GitHub. moonlet fetches `origin/<base>` for that project.
 2. The project row in the sidebar shows a chip next to the project name: an arrow and the number of commits `main` is behind, for example `↓ 3`.
-3. Hovering the chip opens a popover: "main is 3 commits behind origin", the incoming commits (short sha and subject, newest first), when jaunt last fetched, and **Later** / **Pull main**.
+3. Hovering the chip opens a popover: "main is 3 commits behind origin", the incoming commits (short sha and subject, newest first), when moonlet last fetched, and **Later** / **Pull main**.
 4. Clicking the chip, or **Pull main** in the popover, fast-forwards the local branch. The chip shows `pulling` meanwhile, then disappears, and a toast says "Pulled 3 commits into main. New sessions start from 9c41e2a."
-5. When the local branch has commits that are not on `origin`, the chip reads `diverged`. Hovering or clicking it opens a popover that explains that jaunt only fast-forwards, changed nothing, and offers a `git pull --rebase` command to copy.
+5. When the local branch has commits that are not on `origin`, the chip reads `diverged`. Hovering or clicking it opens a popover that explains that moonlet only fast-forwards, changed nothing, and offers a `git pull --rebase` command to copy.
 
 ## Behaviour and acceptance criteria
 
@@ -61,6 +61,6 @@ Both run on the host that owns the project, so remote projects work the same way
 
 ## Test plan
 
-- Integration (`crates/jaunt-core/src/git.rs`): a clone of a bare origin that is behind, up to date, diverged, and missing the remote branch; a failed fetch; pulling with the branch checked out (work tree updated) and not checked out (ref moved); a refused diverged pull.
+- Integration (`crates/moonlet-core/src/git.rs`): a clone of a bare origin that is behind, up to date, diverged, and missing the remote branch; a failed fetch; pulling with the branch checked out (work tree updated) and not checked out (ref moved); a refused diverged pull.
 - Unit (`apps/desktop/src/lib/baseSync.test.ts`): chip states, what a chip click does, popover texts, fetched label, pull toast, the diverged command, and the newly merged PR detection that triggers a fetch.
 - e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, hovering it lists the commits, and clicking it moves the local branch. With a second project behind, hovering its chip and then the first project's leaves one popover open.

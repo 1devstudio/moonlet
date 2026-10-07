@@ -53,7 +53,7 @@ Make shell terminals in Blocks mode look and feel like a block-based terminal, o
   - **Node version** (`v24.19.0`) when the shell reports one (see Protocol).
   - **Directory**, `~`-shortened.
   - **Branch** in the `done` green, when the session has a branch.
-  - **Changes** (`5 • +113 -30`, file icon): the number of files with uncommitted changes (staged, unstaged or untracked) in the session's worktree and their added and removed lines, in green and red, from the git status jaunt already polls.
+  - **Changes** (`5 • +113 -30`, file icon): the number of files with uncommitted changes (staged, unstaged or untracked) in the session's worktree and their added and removed lines, in green and red, from the git status moonlet already polls.
 - [x] Which chips show is decided by a pure `chipModel()` in `lib/`.
 - [x] "Classic" moves to a small icon button at the right end of the chip row, with the same tooltip.
 - [x] The `→ accept` / `⇧↵ new line` text leaves the chip row. Ghost text is followed by an inline `→` key badge.

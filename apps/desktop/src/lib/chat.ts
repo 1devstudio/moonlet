@@ -12,12 +12,12 @@ interface ChatStore {
   chats: Record<string, ChatState>;
 }
 
-const g = globalThis as unknown as { __jauntChat?: ReturnType<typeof makeStore> };
+const g = globalThis as unknown as { __moonletChat?: ReturnType<typeof makeStore> };
 function makeStore() {
   return create<ChatStore>(() => ({ chats: {} }));
 }
 /** One store across hot reloads (see store.ts). */
-export const useChat = (g.__jauntChat ??= makeStore());
+export const useChat = (g.__moonletChat ??= makeStore());
 
 const empty: ChatState = { items: [], pending: [], status: "idle", cost_usd: 0, input_tokens: 0, output_tokens: 0, slash_commands: [], queued: [] };
 

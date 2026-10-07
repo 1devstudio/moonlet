@@ -1,6 +1,6 @@
 //! Remote hosts over the user's own OpenSSH (R1, R2): host discovery from
 //! `~/.ssh/config`, and consent-based install of the version-pinned,
-//! checksum-verified `jauntd` helper into `~/.jaunt/bin` on the host.
+//! checksum-verified `moonletd` helper into `~/.jaunt/bin` on the host.
 
 use std::path::{Path, PathBuf};
 
@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
-use crate::hosts::{REMOTE_JAUNTD, ssh_base_args};
+use crate::hosts::{REMOTE_MOONLETD, ssh_base_args};
 
 async fn ssh(alias: &str, command: &str, stdin: Option<&[u8]>) -> Result<(i32, String, String)> {
     let mut child = tokio::process::Command::new("ssh")
@@ -59,7 +59,7 @@ pub async fn remote_version(alias: &str) -> Result<Option<String>> {
     let (code, out, err) = ssh(
         alias,
         &format!(
-            "if [ -x {REMOTE_JAUNTD} ]; then {REMOTE_JAUNTD} --version; else echo __missing__; fi"
+            "if [ -x {REMOTE_MOONLETD} ]; then {REMOTE_MOONLETD} --version; else echo __missing__; fi"
         ),
         None,
     )
@@ -196,7 +196,7 @@ pub struct InstallResult {
     pub version: String,
 }
 
-/// Installs `jauntd` and `jaunt` for the host's platform. Only called after
+/// Installs `moonletd` and `moonlet` for the host's platform. Only called after
 /// the user confirmed the install dialog.
 pub async fn install(alias: &str, resource_dir: Option<PathBuf>) -> Result<InstallResult> {
     let (code, uname, err) = ssh(alias, "uname -sm", None).await?;
@@ -205,13 +205,13 @@ pub async fn install(alias: &str, resource_dir: Option<PathBuf>) -> Result<Insta
     }
     let triple = target_triple(&uname)?;
     let dirs = helper_dirs(resource_dir);
-    let jauntd = find_helper(&dirs, "jauntd", triple).with_context(|| {
-        format!("no jauntd build for {triple}; build it with `scripts/build-remote.sh {triple}`")
+    let moonletd = find_helper(&dirs, "moonletd", triple).with_context(|| {
+        format!("no moonletd build for {triple}; build it with `scripts/build-remote.sh {triple}`")
     })?;
     let want = env!("CARGO_PKG_VERSION");
-    upload(alias, &jauntd, "jauntd", Some(want)).await?;
-    if let Some(cli) = find_helper(&dirs, "jaunt", triple) {
-        upload(alias, &cli, "jaunt", None).await?;
+    upload(alias, &moonletd, "moonletd", Some(want)).await?;
+    if let Some(cli) = find_helper(&dirs, "moonlet", triple) {
+        upload(alias, &cli, "moonlet", None).await?;
     }
     let version = remote_version(alias)
         .await?

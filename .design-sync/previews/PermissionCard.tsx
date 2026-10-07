@@ -1,4 +1,4 @@
-import { PermissionCard } from "@jaunt/ds";
+import { PermissionCard } from "@moonlet/ds";
 
 const cwd = "/Users/alex/code/storefront";
 

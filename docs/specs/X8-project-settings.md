@@ -29,7 +29,7 @@ Every project setting lives in `<repo>/.jaunt/config.toml`, and the only way to 
 - [x] The write keeps comments, blank lines, key order and unknown keys and tables. A changed value keeps its trailing comment; an unchanged one is left exactly as written, quotes included (`keeps_comments_order_and_unknown_keys`).
 - [x] An empty or whitespace-only field removes its key. Comment lines right above a removed key go with it. A comment block set apart from it by a blank line (a file header) moves to the next item. The file is never deleted (`blank_fields_remove_keys_and_an_emptied_agents_table_goes`).
 - [x] `[agents]` entries are added, changed and removed one by one. Untouched entries keep their comments. When the last entry goes, the `[agents]` table goes too, unless a comment sits above its header (`an_emptied_agents_table_with_a_comment_stays`).
-- [x] The write is atomic: a uniquely named temp file in `.jaunt/`, created with `create_new` and renamed over the config. A symlink planted in `.jaunt/` is never followed (`a_symlink_planted_in_jaunt_is_never_written_through`). Not tested for crashes.
+- [x] The write is atomic: a uniquely named temp file in `.jaunt/`, created with `create_new` and renamed over the config. A symlink planted in `.jaunt/` is never followed (`a_symlink_planted_in_moonlet_is_never_written_through`). Not tested for crashes.
 - [x] A stale `version` is rejected with `config changed on disk`, and nothing is written. A file created after a "missing" read counts as stale (`a_stale_version_writes_nothing`).
 - [x] A file that does not parse, or parses with a wrong type (`run = 5`), is reported by `project.config_file` and rejected by `project.set_config` (`an_invalid_file_is_reported_and_never_overwritten`).
 - [x] A symlinked `.jaunt` or `config.toml` is refused (`a_symlinked_config_is_refused`).
@@ -86,19 +86,19 @@ Keyboard: Escape cancels (asks first if there are unsaved changes), ⌘↵ saves
 
 ## Data and config
 
-- File: `<project path>/.jaunt/config.toml`, the main checkout's copy. That is the copy the daemon already reads for every session. A session's worktree has its own checked-out copy, which jaunt does not read. The dialog footer says which file it edits.
+- File: `<project path>/.jaunt/config.toml`, the main checkout's copy. That is the copy the daemon already reads for every session. A session's worktree has its own checked-out copy, which moonlet does not read. The dialog footer says which file it edits.
 - Keys: `setup`, `run`, `archive`, `default_agent`, `base_branch`, `[agents]`. They are unchanged from X1 and X5, so nothing needs migrating.
-- Writing uses `toml_edit` (already a dependency of `jaunt-core`, used by the hook installer).
+- Writing uses `toml_edit` (already a dependency of `moonlet-core`, used by the hook installer).
 - Reveal in Finder uses the `opener:allow-reveal-item-in-dir` permission, added to `capabilities/default.json` for X8.
 - `Project.base_branch` in the daemon state follows the saved `base_branch` (see above).
 - The file is often committed. Saving shows up as an uncommitted change in the main checkout, as a hand edit would. The dialog says so once, under the footer path: "This file is part of the repository."
 
 ## Security considerations
 
-- The scripts are shell commands that jaunt runs: setup runs on its own when a session is created. In the app, only an explicit Save in the dialog changes them. The socket is limited to the local user (mode `0600` plus a peer-credential check, A6). Any process running as that user, an agent included, can call `project.set_config`, but it could already edit the file directly, so the RPC grants nothing new.
+- The scripts are shell commands that moonlet runs: setup runs on its own when a session is created. In the app, only an explicit Save in the dialog changes them. The socket is limited to the local user (mode `0600` plus a peer-credential check, A6). Any process running as that user, an agent included, can call `project.set_config`, but it could already edit the file directly, so the RPC grants nothing new.
 - The daemon writes only the fixed path `<project path>/.jaunt/config.toml`. The project id resolves to a known project; the request carries no path.
 - If `.jaunt` or `config.toml` is a symlink, the save is refused with an error. Following it could write outside the repo. `.jaunt/` comes from the repo, so the temp file gets a fresh name and is opened with `create_new` (`O_EXCL`), so it never writes through a link committed there. A link swapped in between the check and the write is not covered.
-- Agent names are restricted to `A-Za-z0-9._-`, because they appear in menus and terminal titles. Commands are stored as typed. They already run through `$SHELL -lic`, so jaunt adds no quoting of its own.
+- Agent names are restricted to `A-Za-z0-9._-`, because they appear in menus and terminal titles. Commands are stored as typed. They already run through `$SHELL -lic`, so moonlet adds no quoting of its own.
 
 ## Out of scope
 
@@ -110,17 +110,17 @@ Keyboard: Escape cancels (asks first if there are unsaved changes), ⌘↵ saves
 
 ## Implementation
 
-- Daemon: `crates/jaunt-core/src/project_config.rs` (load, validate, save with `toml_edit`), `SessionManager::project_config_file` and `set_project_config`, and handlers in `crates/jauntd/src/daemon.rs`.
+- Daemon: `crates/moonlet-core/src/project_config.rs` (load, validate, save with `toml_edit`), `SessionManager::project_config_file` and `set_project_config`, and handlers in `crates/moonletd/src/daemon.rs`.
 - App: `components/ProjectSettings.tsx` (the dialog) and `lib/projectSettings.ts` (turning the config into form fields and back, validation, default-agent options). Entry points are in `Sidebar.tsx`, `RightPanel.tsx`, `CommandPalette.tsx` and `actions.ts` (`openProjectSettings`, `runScript`).
 
 ## Test plan
 
-- Unit (`jaunt-core`): writes into an empty repo, a file with comments and unknown keys, and a file with an `[agents]` table being emptied. Each one is compared to an expected file.
+- Unit (`moonlet-core`): writes into an empty repo, a file with comments and unknown keys, and a file with an `[agents]` table being emptied. Each one is compared to an expected file.
 - Unit: an empty field removes its key; a stale version is rejected; a file that does not parse is rejected; a symlinked path is refused; validation errors for each rule.
 - Unit: saving `base_branch` updates `Project.base_branch`, and clearing it restores the git default.
 - Daemon: `project.set_config` emits `projects.changed`.
 - Unit (frontend): turning form state into `ProjectConfig` (blank fields become missing keys; agent rows become a map) and the inline validation.
-- Live RPC check (2026-10-04, scratch `JAUNT_HOME` and repo, `jaunt rpc`): a stale version, an unknown default agent and a valid save. The file kept its header and inline comments, `project.list` showed the new `base_branch`, and `session.run` started the saved command.
+- Live RPC check (2026-10-04, scratch `JAUNT_HOME` and repo, `moonlet rpc`): a stale version, an unknown default agent and a valid save. The file kept its header and inline comments, `project.list` showed the new `base_branch`, and `session.run` started the saved command.
 - Manual (`docs/manual-checks.md` M10, scratch `JAUNT_HOME`):
   - each entry point opens the dialog;
   - Run with no script opens it with the Run field focused;
@@ -130,4 +130,4 @@ Keyboard: Escape cancels (asks first if there are unsaved changes), ⌘↵ saves
 
 ## Open questions
 
-- Should the dialog write to a local, uncommitted file instead (for example `.jaunt/config.local.toml`, layered over the committed one), so that personal commands don't end up in a commit? X8 ships on the committed file, which is what jaunt reads today. The design keeps the "This file is part of the repository." line.
+- Should the dialog write to a local, uncommitted file instead (for example `.jaunt/config.local.toml`, layered over the committed one), so that personal commands don't end up in a commit? X8 ships on the committed file, which is what moonlet reads today. The design keeps the "This file is part of the repository." line.

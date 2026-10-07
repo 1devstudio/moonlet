@@ -38,7 +38,7 @@ const THEME = {
   cursor: "#d0d0d0",
   cursorAccent: "#121212",
   selectionBackground: "#d9775740",
-  // Same quiet slider as the rest of the app's scrollbars (jaunt.css).
+  // Same quiet slider as the rest of the app's scrollbars (moonlet.css).
   scrollbarSliderBackground: "#2a2a2a",
   scrollbarSliderHoverBackground: "#3a3a3a",
   scrollbarSliderActiveBackground: "#4a4a4a",
@@ -370,9 +370,9 @@ export class TermEntry {
     private settings: TermSettings,
   ) {
     this.el = document.createElement("div");
-    this.el.className = "jaunt-term";
+    this.el.className = "moonlet-term";
     // Block headers scale with the terminal's font (T8).
-    this.el.style.setProperty("--jaunt-term-font", `${settings.fontSize}px`);
+    this.el.style.setProperty("--moonlet-term-font", `${settings.fontSize}px`);
     this.term = new Terminal({
       allowProposedApi: true,
       fontFamily: settings.fontFamily,
@@ -397,7 +397,7 @@ export class TermEntry {
     this.term.unicode.activeVersion = "11";
     this.term.loadAddon(new WebLinksAddon((_e, uri) => void openUrl(uri)));
     this.term.open(this.el);
-    this.backdrop.className = "jaunt-block-backdrop";
+    this.backdrop.className = "moonlet-block-backdrop";
     this.term.element?.querySelector(".xterm-screen")?.appendChild(this.backdrop);
 
     // Cmd shortcuts belong to the app; xterm never sees them, so they can
@@ -554,7 +554,7 @@ export class TermEntry {
     this.settings = s;
     this.term.options.fontFamily = s.fontFamily;
     this.term.options.fontSize = s.fontSize;
-    this.el.style.setProperty("--jaunt-term-font", `${s.fontSize}px`);
+    this.el.style.setProperty("--moonlet-term-font", `${s.fontSize}px`);
     this.term.options.macOptionIsMeta = s.optionIsMeta;
     this.refit();
   }
@@ -629,21 +629,21 @@ export class TermEntry {
     d?.onRender((el) => {
       // Blocks mode shows the status in the block header instead (T8).
       if (this.blockMode) return;
-      el.classList.add("jaunt-block-mark");
+      el.classList.add("moonlet-block-mark");
       el.classList.toggle("failed", !!block.exit);
       el.title = block.exit ? `exit ${block.exit}` : "ok";
     });
   }
 
   /** Separator and header on a block's header row (T8). They reach into
-   * the pane's padding (`.jaunt-term` inset) so the separator spans it. */
+   * the pane's padding (`.moonlet-term` inset) so the separator spans it. */
   private header(block: CommandBlock) {
     block.header?.dispose();
     const inline = !block.headerAt;
     // The separator, in the spacer row or at the top of a shared row.
     const sep = this.term.registerDecoration({ marker: block.prompt, x: 0, width: this.term.cols, layer: "bottom" });
     sep?.onRender((el) => {
-      el.classList.add("jaunt-block-sep");
+      el.classList.add("moonlet-block-sep");
       el.classList.toggle("shared", inline || block.headerAt?.line === block.prompt.line);
       el.style.left = "-28px";
       el.style.width = "calc(100% + 40px)";
@@ -654,7 +654,7 @@ export class TermEntry {
       : this.term.registerDecoration({ marker: block.headerAt!, x: 0, width: this.term.cols, layer: "top" });
     d?.onRender((el) => {
       block.headerEl = el;
-      el.classList.add("jaunt-block-head");
+      el.classList.add("moonlet-block-head");
       el.classList.toggle("inline", inline);
       el.classList.toggle("hover", this.hovered === block);
       el.classList.toggle("selected", this.selected === block);
@@ -737,7 +737,7 @@ export class TermEntry {
     this.backdrop.replaceChildren(
       ...rects.map((r) => {
         const el = document.createElement("div");
-        el.className = `jaunt-block-bg ${r.kind}`;
+        el.className = `moonlet-block-bg ${r.kind}`;
         el.style.top = `${r.top * cell}px`;
         el.style.height = `${r.height * cell}px`;
         return el;

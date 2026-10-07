@@ -1,4 +1,4 @@
-import { ChatItemView } from "@jaunt/ds";
+import { ChatItemView } from "@moonlet/ds";
 
 const cwd = "/Users/alex/code/storefront";
 

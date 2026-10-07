@@ -1,5 +1,5 @@
-// Demo data for rendering jaunt's app screens outside the app (Claude Design,
-// design-system previews). `JauntPreview` seeds the app's stores before its
+// Demo data for rendering moonlet's app screens outside the app (Claude Design,
+// design-system previews). `MoonletPreview` seeds the app's stores before its
 // children render; the Tauri stub answers daemon calls with the same data.
 
 import { type ReactNode, useState } from "react";
@@ -44,7 +44,7 @@ function session(id: string, project: string, name: string, terminals: number[],
     id,
     project_id: project,
     name,
-    branch: `jaunt/${slug}`,
+    branch: `moonlet/${slug}`,
     base: "main",
     path: `/Users/alex/.jaunt/worktrees/${project === "p-web" ? "storefront" : "payments-api"}/${slug}`,
     agent: "claude",
@@ -214,7 +214,7 @@ export interface PreviewState {
   chats?: Record<number, Partial<ChatState>>;
 }
 
-/** Seeds jaunt's stores with demo data (idempotent). */
+/** Seeds moonlet's stores with demo data (idempotent). */
 export function seedPreview({ selected = "s-checkout", chats = { 1: {} } }: PreviewState = {}) {
   setPreviewRpc(demoRpc);
   useStore.setState({
@@ -238,11 +238,11 @@ export function seedPreview({ selected = "s-checkout", chats = { 1: {} } }: Prev
 }
 
 /**
- * Wraps jaunt's app screens (Sidebar, AgentView, Composer) with demo data, so
+ * Wraps moonlet's app screens (Sidebar, AgentView, Composer) with demo data, so
  * they render without the daemon. Plain components (Button, ToolRow...) need
  * no wrapper.
  */
-export function JauntPreview({ children, ...state }: PreviewState & { children: ReactNode }) {
+export function MoonletPreview({ children, ...state }: PreviewState & { children: ReactNode }) {
   // Seed once, before the children read the stores.
   useState(() => seedPreview(state));
   return <>{children}</>;

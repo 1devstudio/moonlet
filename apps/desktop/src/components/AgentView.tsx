@@ -402,7 +402,7 @@ export function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd
   const Icon = toolIcon(ask.tool);
   const detail = ask.diff || ["Bash", "Write", "Edit", "MultiEdit", "Read"].includes(ask.tool) ? null : JSON.stringify(ask.input, null, 2);
   return (
-    <div className="jaunt-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
+    <div className="moonlet-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
       <div className="mb-2 flex items-center gap-2 ui-text-13">
         <ShieldAlert size={15} className="text-blocked" />
         <span className="font-medium">Allow {ask.tool}?</span>
@@ -455,7 +455,7 @@ export function PlanCard({
   return (
     <div
       className={cx(
-        "jaunt-card-in my-2 flex flex-col gap-2.5 rounded-[10px] border bg-panel px-3.5 py-3",
+        "moonlet-card-in my-2 flex flex-col gap-2.5 rounded-[10px] border bg-panel px-3.5 py-3",
         waiting ? "border-[color-mix(in_oklab,var(--color-blocked)_40%,var(--color-border))]" : "border-border",
       )}
     >
@@ -502,7 +502,7 @@ export function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: 
     set(i, { labels: q.options.map((o) => o.label).filter((l) => (l === label ? !cur.includes(l) : cur.includes(l))) });
   };
   return (
-    <div className="jaunt-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
+    <div className="moonlet-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
       <div className="mb-2 flex items-center gap-2 ui-text-13">
         <MessageCircleQuestionMark size={15} className="text-blocked" />
         <span className="font-medium">{qs.length > 1 ? `${agentLabel("claude")} has ${qs.length} questions` : `${agentLabel("claude")} has a question`}</span>

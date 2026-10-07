@@ -6,7 +6,7 @@
 
 ## Summary
 
-Remote hosts are SSH aliases. jaunt runs the system `ssh`, so ProxyJump, agents, hardware keys, certificates and `Match` blocks all work exactly as in a terminal. jaunt stores no secrets.
+Remote hosts are SSH aliases. moonlet runs the system `ssh`, so ProxyJump, agents, hardware keys, certificates and `Match` blocks all work exactly as in a terminal. moonlet stores no secrets.
 
 ## Behaviour and acceptance criteria
 
@@ -17,7 +17,7 @@ Remote hosts are SSH aliases. jaunt runs the system `ssh`, so ProxyJump, agents,
 
 ## Security considerations
 
-Keys and passwords never pass through jaunt. A key that needs a passphrase must be in the ssh agent, because BatchMode never prompts.
+Keys and passwords never pass through moonlet. A key that needs a passphrase must be in the ssh agent, because BatchMode never prompts.
 
 ## Test plan
 

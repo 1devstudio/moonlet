@@ -89,7 +89,7 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: str
       {ids.length > 1 && <span className="font-mono ui-text-11 text-faint">+{ids.length - 1}</span>}
       {state === "blocked" && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blocked" title="needs input" />}
       {state === "working" && (
-        <span className="jaunt-dots shrink-0" title="working">
+        <span className="moonlet-dots shrink-0" title="working">
           <i />
           <i />
           <i />
@@ -214,7 +214,7 @@ function AgentCard({ host, ws }: { host: string; ws: Session }) {
   const status =
     card.state === "blocked" ? "needs input" : card.state === "error" ? "failed" : `finished${card.workedMs ? ` · worked for ${fmtDuration(card.workedMs)}` : ""}`;
   return (
-    <div className="jaunt-card-in absolute bottom-5 right-7 z-20 w-[440px] overflow-hidden rounded-xl border border-border-strong bg-[#171717] shadow-2xl">
+    <div className="moonlet-card-in absolute bottom-5 right-7 z-20 w-[440px] overflow-hidden rounded-xl border border-border-strong bg-[#171717] shadow-2xl">
       <div role="button" className="block w-full cursor-default px-5 pb-4 pt-4 text-left" onClick={() => focusTerminal(host, card.terminal)}>
         <div className="mb-2 flex items-center gap-2.5 ui-text-14">
           <AgentIcon agent={card.agent} size={15} />

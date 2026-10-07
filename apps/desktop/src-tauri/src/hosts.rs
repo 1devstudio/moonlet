@@ -1,5 +1,5 @@
-//! Connections from the app to `jauntd` instances: the local daemon over its
-//! Unix socket, remote daemons through `ssh <host> jauntd proxy` (R1, R3).
+//! Connections from the app to `moonletd` instances: the local daemon over its
+//! Unix socket, remote daemons through `ssh <host> moonletd proxy` (R1, R3).
 //!
 //! Each host keeps one connection and reconnects with backoff on its own.
 //! The daemon keeps sessions alive meanwhile, so a dropped link only pauses
@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use jaunt_proto::{
+use moonlet_proto::{
     Frame, FrameDecoder, Message, PROTOCOL_VERSION, RpcError, TerminalId, encode_frame,
 };
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,7 @@ impl Host {
                 ));
             };
             self.pending.lock().unwrap().insert(id, tx);
-            if method == jaunt_proto::methods::TERMINAL_ATTACH
+            if method == moonlet_proto::methods::TERMINAL_ATTACH
                 && let Some(sid) = params.get("id").and_then(Value::as_u64)
             {
                 self.attaching.lock().unwrap().insert(id, sid as TerminalId);
@@ -206,7 +206,7 @@ struct SavedHosts {
 }
 
 fn saved_hosts_file() -> PathBuf {
-    jaunt_core::paths::home().join("app-hosts.json")
+    moonlet_core::paths::home().join("app-hosts.json")
 }
 
 impl HostManager {
@@ -235,7 +235,7 @@ impl HostManager {
             .filter(|h| h.remote)
             .map(|h| h.id.clone())
             .collect();
-        let _ = jaunt_core::paths::ensure_private_dir(&jaunt_core::paths::home());
+        let _ = moonlet_core::paths::ensure_private_dir(&moonlet_core::paths::home());
         let _ = std::fs::write(
             saved_hosts_file(),
             serde_json::to_vec_pretty(&SavedHosts { remotes }).unwrap(),
@@ -358,15 +358,15 @@ pub fn sibling_binary(name: &str) -> Result<PathBuf> {
 }
 
 /// Asks the running local daemon to hand its sessions to the bundled
-/// `jauntd` (S3). Used once per app run when versions differ.
+/// `moonletd` (S3). Used once per app run when versions differ.
 async fn upgrade_local() -> Result<()> {
-    let jauntd = sibling_binary("jauntd")?;
-    let status = tokio::process::Command::new(&jauntd)
+    let moonletd = sibling_binary("moonletd")?;
+    let status = tokio::process::Command::new(&moonletd)
         .arg("upgrade")
         .status()
         .await?;
     if !status.success() {
-        bail!("jauntd upgrade failed ({status})");
+        bail!("moonletd upgrade failed ({status})");
     }
     Ok(())
 }
@@ -374,16 +374,16 @@ async fn upgrade_local() -> Result<()> {
 static UPGRADE_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 async fn connect_local() -> Result<(Reader, Writer)> {
-    let socket = jaunt_core::paths::socket_path();
+    let socket = moonlet_core::paths::socket_path();
     if tokio::net::UnixStream::connect(&socket).await.is_err() {
-        let jauntd = sibling_binary("jauntd")?;
-        let status = tokio::process::Command::new(&jauntd)
+        let moonletd = sibling_binary("moonletd")?;
+        let status = tokio::process::Command::new(&moonletd)
             .arg("start")
             .status()
             .await
-            .context("cannot start jauntd")?;
+            .context("cannot start moonletd")?;
         if !status.success() {
-            bail!("jauntd start failed ({status})");
+            bail!("moonletd start failed ({status})");
         }
     }
     let stream = tokio::net::UnixStream::connect(&socket)
@@ -394,7 +394,7 @@ async fn connect_local() -> Result<(Reader, Writer)> {
 }
 
 pub fn ssh_base_args() -> Vec<String> {
-    let control = jaunt_core::paths::run_dir().join("ssh-%C");
+    let control = moonlet_core::paths::run_dir().join("ssh-%C");
     vec![
         "-T".into(),
         "-o".into(),
@@ -414,22 +414,22 @@ pub fn ssh_base_args() -> Vec<String> {
     ]
 }
 
-pub const REMOTE_JAUNTD: &str = "~/.jaunt/bin/jauntd";
+pub const REMOTE_MOONLETD: &str = "~/.jaunt/bin/moonletd";
 
 async fn connect_remote(alias: &str) -> Result<(Reader, Writer)> {
-    let _ = jaunt_core::paths::ensure_private_dir(&jaunt_core::paths::run_dir());
+    let _ = moonlet_core::paths::ensure_private_dir(&moonlet_core::paths::run_dir());
     // Version check first so a stale helper is never used silently (R2).
     let probe = crate::remote::remote_version(alias).await?;
     let want = env!("CARGO_PKG_VERSION");
     match probe {
         Some(v) if v == want => {}
         Some(v) => bail!("needs_install: remote helper is {v}, app expects {want}"),
-        None => bail!("needs_install: jaunt helper is not installed on {alias}"),
+        None => bail!("needs_install: moonlet helper is not installed on {alias}"),
     }
     let mut child = tokio::process::Command::new("ssh")
         .args(ssh_base_args())
         .arg(alias)
-        .arg(format!("{REMOTE_JAUNTD} proxy"))
+        .arg(format!("{REMOTE_MOONLETD} proxy"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -534,7 +534,7 @@ async fn run_link(
     writer
         .write_all(&encode_frame(&Frame::Json(Message::Hello {
             protocol: PROTOCOL_VERSION,
-            client: "jaunt-app".into(),
+            client: "moonlet-app".into(),
         }))?)
         .await?;
     writer.flush().await?;
@@ -587,7 +587,7 @@ async fn run_link(
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Ok(v) = h2
-            .request(jaunt_proto::methods::DAEMON_INFO, Value::Null)
+            .request(moonlet_proto::methods::DAEMON_INFO, Value::Null)
             .await
         {
             h2.info.lock().unwrap().home = v.get("home").and_then(Value::as_str).map(String::from);
@@ -663,7 +663,7 @@ fn dispatch(app: &AppHandle, host: &Arc<Host>, frame: Frame) {
             }
         }
         Frame::Json(Message::Event { name, data }) => {
-            if name == jaunt_proto::methods::EV_AGENT_ATTENTION || name.starts_with("session.") {
+            if name == moonlet_proto::methods::EV_AGENT_ATTENTION || name.starts_with("session.") {
                 // Make sure output that preceded the state change is on screen first.
                 host.flush_output();
             }

@@ -1,4 +1,4 @@
-# Agent instructions for jaunt
+# Agent instructions for moonlet
 
 ## Tests
 

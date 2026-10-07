@@ -20,7 +20,7 @@ const defaultChoice: Choice = { agent: "claude", model: "sonnet", effort: "high"
 
 function loadChoice(projectId: string): Choice {
   try {
-    const raw = localStorage.getItem(`jaunt.composer.${projectId}`);
+    const raw = localStorage.getItem(`moonlet.composer.${projectId}`);
     return raw ? { ...defaultChoice, ...JSON.parse(raw) } : defaultChoice;
   } catch {
     return defaultChoice;
@@ -29,7 +29,7 @@ function loadChoice(projectId: string): Choice {
 
 function saveChoice(projectId: string, c: Choice) {
   try {
-    localStorage.setItem(`jaunt.composer.${projectId}`, JSON.stringify(c));
+    localStorage.setItem(`moonlet.composer.${projectId}`, JSON.stringify(c));
   } catch {
     /* storage unavailable */
   }
@@ -412,7 +412,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
             <GitBranch size={14} className="text-muted" />
             <input
               autoFocus
-              list="jaunt-composer-branches"
+              list="moonlet-composer-branches"
               placeholder={editingFrom === "existing" ? "Existing branch, e.g. feature/login" : `Branch, tag or commit (default ${current.project.base_branch})`}
               className="flex-1 bg-transparent font-mono ui-text-13.5 outline-none placeholder:text-faint"
               onKeyDown={(e) => {
@@ -427,7 +427,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
                 if (e.key === "Escape") setEditingFrom(null);
               }}
             />
-            <datalist id="jaunt-composer-branches">
+            <datalist id="moonlet-composer-branches">
               {branches.slice(0, 200).map((b) => (
                 <option key={b} value={b} />
               ))}

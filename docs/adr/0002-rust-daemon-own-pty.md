@@ -4,14 +4,14 @@
 
 ## Decision
 
-`jauntd` is written in Rust from the start; Herdr is not used as an interim backend. The same binary runs on macOS and, built for musl, on remote Linux hosts.
+`moonletd` is written in Rust from the start; Herdr is not used as an interim backend. The same binary runs on macOS and, built for musl, on remote Linux hosts.
 
-PTYs are opened with `openpty(3)` through `nix` (`crates/jaunt-core/src/pty.rs`) rather than `portable-pty`.
+PTYs are opened with `openpty(3)` through `nix` (`crates/moonlet-core/src/pty.rs`) rather than `portable-pty`.
 
 ## Why
 
 - A live daemon upgrade (S3) passes PTY master fds to a new process with `SCM_RIGHTS`. That needs direct ownership of the fd and the ability to adopt a process that is not our child. `portable-pty` hides both.
-- jaunt targets Unix only (macOS, Linux), so cross-platform PTY support buys nothing.
+- moonlet targets Unix only (macOS, Linux), so cross-platform PTY support buys nothing.
 - Master fds are non-blocking and driven by tokio's `AsyncFd`, so there is no reader thread per session.
 
 ## Consequences

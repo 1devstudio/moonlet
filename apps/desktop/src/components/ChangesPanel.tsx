@@ -147,7 +147,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
   const [mode, setMode] = useState<Mode>("base");
   // Diff models are kept per file while the panel is open, then released.
   useEffect(() => {
-    const prefix = `jaunt-diff://${ws.id}/`;
+    const prefix = `moonlet-diff://${ws.id}/`;
     // Reopened before a pending cleanup ran: its models are in use again.
     window.clearTimeout(modelCleanup.get(ws.id));
     return () => {
@@ -262,7 +262,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
     let deco: string[] = [];
     modified.onMouseMove((e) => {
       const line = e.target.position?.lineNumber;
-      deco = modified.deltaDecorations(deco, line ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: "jaunt-comment-glyph" } }] : []);
+      deco = modified.deltaDecorations(deco, line ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: "moonlet-comment-glyph" } }] : []);
     });
     modified.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) open(e.target.position.lineNumber);
@@ -349,15 +349,15 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
             ) : versions && selected && language ? (
               <DiffEditor
                 key={selected + mode}
-                theme="jaunt"
+                theme="moonlet"
                 language={language}
                 original={versions.original ?? ""}
                 modified={versions.modified ?? ""}
                 onMount={onMount}
                 // One model pair per file, reused across modes and disposed
                 // when the panel closes (see the cleanup effect).
-                originalModelPath={`jaunt-diff://${ws.id}/original/${selected}`}
-                modifiedModelPath={`jaunt-diff://${ws.id}/modified/${selected}`}
+                originalModelPath={`moonlet-diff://${ws.id}/original/${selected}`}
+                modifiedModelPath={`moonlet-diff://${ws.id}/modified/${selected}`}
                 keepCurrentOriginalModel
                 keepCurrentModifiedModel
                 options={{ ...editorOptions, ...editorFont(fontSize), readOnly: true, renderIndicators: false, renderMarginRevertIcon: false, renderSideBySide: sideBySide, originalEditable: false, renderOverviewRuler: false, hideUnchangedRegions: { enabled: true } }}
