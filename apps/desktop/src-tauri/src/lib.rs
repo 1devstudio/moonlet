@@ -4,6 +4,7 @@
 
 mod hosts;
 mod remote;
+mod webview_data;
 
 use std::sync::Arc;
 
@@ -307,6 +308,9 @@ pub fn run() {
         .try_init();
     // Before anything creates ~/.moonlet (X27).
     moonlet_core::paths::migrate_legacy_home();
+    let context = tauri::generate_context!();
+    // Before the window opens and creates its own, empty storage (X27).
+    webview_data::carry_over(&context.config().identifier);
     let builder = tauri::Builder::default();
     // Only `pnpm e2e:build` turns this on (X12).
     #[cfg(feature = "e2e")]
@@ -339,7 +343,7 @@ pub fn run() {
             play_sound,
             app_info
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running moonlet");
 }
 

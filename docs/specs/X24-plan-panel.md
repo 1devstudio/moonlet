@@ -82,7 +82,7 @@ Claude then edited the file without another `can_use_tool` ask.
 
 ## Data and config
 
-- `planApproveMode` (`auto` | `acceptEdits`) in the app settings (`jaunt.settings` in localStorage). The daemon never sees it.
+- `planApproveMode` (`auto` | `acceptEdits`) in the app settings (`moonlet.settings` in localStorage). The daemon never sees it.
 - `rightTab` may now be `plan`.
 
 ## Security considerations
