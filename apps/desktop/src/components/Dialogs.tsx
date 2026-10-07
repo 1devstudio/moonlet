@@ -11,6 +11,7 @@ import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../lib/agents";
 import type { ToolCallView } from "../lib/chat";
 import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../lib/sounds";
+import { EDITOR_THEMES, resolveEditorTheme } from "../lib/editorThemes";
 
 const close = () => useStore.setState({ dialog: null });
 
@@ -450,6 +451,24 @@ function AgentsSection() {
   );
 }
 
+function EditorSection() {
+  const theme = useStore((s) => resolveEditorTheme(s.settings.editorTheme));
+  return (
+    <section className="mb-5">
+      <h3 className="mb-2 ui-text-12 font-semibold">Editor</h3>
+      <Field label="Colour theme of files and diffs">
+        <select className={inputCls} value={theme} onChange={(e) => updateSettings({ editorTheme: e.target.value })}>
+          {EDITOR_THEMES.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </section>
+  );
+}
+
 function TerminalSection() {
   const settings = useStore((s) => s.settings);
   const t = settings.term;
@@ -530,6 +549,7 @@ export function SettingsDialog() {
       <DaemonSection />
       <HostsSection />
       <AgentsSection />
+      <EditorSection />
       <TerminalSection />
     </Dialog>
   );

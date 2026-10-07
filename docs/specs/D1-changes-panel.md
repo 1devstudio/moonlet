@@ -20,6 +20,7 @@ The right panel's Changes tab lists every file the workspace changed and shows a
 - [x] Paths must be relative; `..` and absolute paths are rejected.
 - [x] Status refreshes live: `fs.watch` on the worktree emits `fs.changed`, debounced to 150 ms, including `.git/index` and `HEAD` changes.
 - [x] UI: file list with diffstat, a toggle between base and HEAD, a split/inline toggle, Cmd+Shift+D.
+- [x] UI: the changed files grouped by folder, then a full-height diff with a back button, come from [X25](X25-file-explorer.md).
 
 ## Test plan
 

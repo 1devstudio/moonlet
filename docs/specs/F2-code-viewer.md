@@ -1,6 +1,6 @@
 # F2: Read-mostly code viewer with light editing
 
-- **Status:** implemented
+- **Status:** superseded by [X26](X26-file-tabs.md): files open in editor tabs of the main window, writable at once.
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** F2
 

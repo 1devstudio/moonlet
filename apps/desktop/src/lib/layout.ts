@@ -3,6 +3,8 @@
 
 export type PaneNode =
   | { type: "leaf"; session: number }
+  /** A file open in the editor (X26); `line` is where it opened last. */
+  | { type: "file"; path: string; line?: number }
   | { type: "split"; dir: "row" | "col"; children: PaneNode[]; sizes: number[] };
 
 export interface Tab {
@@ -21,7 +23,9 @@ export const emptyLayout = (): Layout => ({ tabs: [], active: null, focused: nul
 let counter = 0;
 export const newTabId = () => `t${Date.now().toString(36)}${(counter++).toString(36)}`;
 
+/** The terminals shown in a pane tree; file panes hold none. */
 export function leaves(node: PaneNode): number[] {
+  if (node.type === "file") return [];
   return node.type === "leaf" ? [node.session] : node.children.flatMap(leaves);
 }
 
@@ -35,6 +39,7 @@ export function tabOf(layout: Layout, session: number): Tab | undefined {
 
 /** Splits the pane showing `target`, putting `session` after it. */
 export function splitLeaf(node: PaneNode, target: number, session: number, dir: "row" | "col"): PaneNode {
+  if (node.type === "file") return node;
   if (node.type === "leaf") {
     if (node.session !== target) return node;
     return { type: "split", dir, children: [node, { type: "leaf", session }], sizes: [50, 50] };
@@ -51,6 +56,7 @@ export function splitLeaf(node: PaneNode, target: number, session: number, dir: 
 
 /** Removes a pane; collapses splits left with one child. */
 export function removeLeaf(node: PaneNode, session: number): PaneNode | null {
+  if (node.type === "file") return node;
   if (node.type === "leaf") return node.session === session ? null : node;
   const kept: { child: PaneNode; size: number }[] = [];
   node.children.forEach((c, i) => {
@@ -64,7 +70,7 @@ export function removeLeaf(node: PaneNode, session: number): PaneNode | null {
 }
 
 export function setSizes(node: PaneNode, path: number[], sizes: number[]): PaneNode {
-  if (node.type === "leaf") return node;
+  if (node.type !== "split") return node;
   if (path.length === 0) return { ...node, sizes };
   const [head, ...rest] = path;
   return { ...node, children: node.children.map((c, i) => (i === head ? setSizes(c, rest, sizes) : c)) };
@@ -79,6 +85,11 @@ export function removeSession(layout: Layout, session: number): Layout {
   const tabs = layout.tabs
     .map((t) => ({ ...t, root: removeLeaf(t.root, session) }))
     .filter((t): t is Tab => t.root !== null);
+  return withTabs(layout, tabs, session);
+}
+
+/** The layout with `tabs` left, keeping the active tab and focus where they still exist. */
+function withTabs(layout: Layout, tabs: Tab[], removed: number | null): Layout {
   let active = layout.active;
   if (!tabs.some((t) => t.id === active)) {
     const oldIdx = layout.tabs.findIndex((t) => t.id === layout.active);
@@ -86,12 +97,31 @@ export function removeSession(layout: Layout, session: number): Layout {
   }
   const activeTab = tabs.find((t) => t.id === active);
   const focused =
-    layout.focused !== session && layout.focused !== null && activeTab && leaves(activeTab.root).includes(layout.focused)
+    layout.focused !== removed && layout.focused !== null && activeTab && leaves(activeTab.root).includes(layout.focused)
       ? layout.focused
       : activeTab
-        ? leaves(activeTab.root)[0]
+        ? (leaves(activeTab.root)[0] ?? null)
         : null;
   return { tabs, active, focused };
+}
+
+const isFile = (t: Tab, path: string) => t.root.type === "file" && t.root.path === path;
+
+/** Opens a file's tab (X26), or switches to it when it is open, at `line` if given. */
+export function openFile(layout: Layout, path: string, line?: number): Layout {
+  const root: PaneNode = line ? { type: "file", path, line } : { type: "file", path };
+  const open = layout.tabs.find((t) => isFile(t, path));
+  if (!open) {
+    const tab = { id: newTabId(), root };
+    return { tabs: [...layout.tabs, tab], active: tab.id, focused: null };
+  }
+  const tabs = line ? layout.tabs.map((t) => (t === open ? { ...t, root } : t)) : layout.tabs;
+  return { tabs, active: open.id, focused: null };
+}
+
+/** Closes a file's tab (X26). */
+export function closeFile(layout: Layout, path: string): Layout {
+  return withTabs(layout, layout.tabs.filter((t) => !isFile(t, path)), null);
 }
 
 /**
@@ -115,7 +145,7 @@ export function reconcile(layout: Layout, sessions: number[]): Layout {
   if (!out.active && out.tabs.length) out = { ...out, active: out.tabs[0].id };
   const activeTab = out.tabs.find((t) => t.id === out.active);
   if (activeTab && (out.focused === null || !leaves(activeTab.root).includes(out.focused))) {
-    out = { ...out, focused: leaves(activeTab.root)[0] };
+    out = { ...out, focused: leaves(activeTab.root)[0] ?? null };
   }
   return out;
 }
@@ -124,6 +154,7 @@ function isNode(v: unknown): v is PaneNode {
   if (!v || typeof v !== "object") return false;
   const n = v as Record<string, unknown>;
   if (n.type === "leaf") return typeof n.session === "number";
+  if (n.type === "file") return typeof n.path === "string" && (n.line === undefined || typeof n.line === "number");
   return (
     n.type === "split" &&
     (n.dir === "row" || n.dir === "col") &&

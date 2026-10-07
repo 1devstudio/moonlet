@@ -862,12 +862,12 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   // is in the Plan tab, which opens when a plan arrives on screen.
   const plan = useMemo(() => (st ? planView(st) : null), [st]);
   const approveMode = useStore((s) => resolvePlanMode(s.settings.planApproveMode));
-  const planShown = useStore((s) => s.rightOpen && s.rightTab === "plan" && !s.preview);
+  const planShown = useStore((s) => s.rightOpen && s.rightTab === "plan");
   const opened = useRef<string | null>(null);
   useEffect(() => {
     if (!plan?.askId || !visible || opened.current === plan.askId) return;
     opened.current = plan.askId;
-    useStore.setState({ rightOpen: true, rightTab: "plan", preview: null });
+    useStore.setState({ rightOpen: true, rightTab: "plan" });
   }, [plan?.askId, visible]);
   // Keep planning: the composer's next message is the feedback on this ask.
   const [revise, setRevise] = useState<string | null>(null);
@@ -889,7 +889,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       view={plan}
       approveMode={approveMode}
       showOpen={!planShown}
-      onOpen={() => useStore.setState({ rightOpen: true, rightTab: "plan", preview: null })}
+      onOpen={() => useStore.setState({ rightOpen: true, rightTab: "plan" })}
       onChoose={choosePlan}
     />
   );
