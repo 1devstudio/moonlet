@@ -108,9 +108,8 @@ describe("planChat (X24)", () => {
 
 describe("planTabDot (X24)", () => {
   it("marks the Plan tab while a plan waits and the tab is not showing", () => {
-    expect(planTabDot("files", false, true)).toBe(true);
-    expect(planTabDot("plan", true, true)).toBe(true);
-    expect(planTabDot("plan", false, true)).toBe(false);
-    expect(planTabDot("files", false, false)).toBe(false);
+    expect(planTabDot("files", true)).toBe(true);
+    expect(planTabDot("plan", true)).toBe(false);
+    expect(planTabDot("files", false)).toBe(false);
   });
 });

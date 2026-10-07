@@ -31,7 +31,7 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | A3 | Sidebar state and notifications | P0 | 1 | implemented | [A3-sidebar-and-notifications.md](A3-sidebar-and-notifications.md) |
 | A5 | Approval inbox | P1 | 3 | implemented | [A5-approval-inbox.md](A5-approval-inbox.md) |
 | D3 | Comment to agent | P1 | 3 | implemented | [D3-comment-to-agent.md](D3-comment-to-agent.md) |
-| F2 | Code viewer with light editing | P1 | 3 | implemented | [F2-code-viewer.md](F2-code-viewer.md) |
+| F2 | Code viewer with light editing, superseded by X26 | P1 | 3 | superseded | [F2-code-viewer.md](F2-code-viewer.md) |
 | F3 | Open file from terminal output | P1 | 3 | implemented | [F3-open-from-terminal.md](F3-open-from-terminal.md) |
 | M1 | Markdown preview (M1, M2) | P0 | 1 | implemented | [M1-markdown-preview.md](M1-markdown-preview.md) |
 | S3 | Daemon upgrade without killing sessions | P1 | 3 | implemented | [S3-live-upgrade.md](S3-live-upgrade.md) |
@@ -64,3 +64,5 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X22 | An agent opens a session in another project (`jaunt session new`) | P1 | 3 | implemented (skill untried with a live agent) | [X22-agent-opens-session.md](X22-agent-opens-session.md) |
 | X23 | In-app confirm modal for every confirmation | P1 | 3 | implemented | [X23-confirm-modal.md](X23-confirm-modal.md) |
 | X24 | Plan panel, and approving a plan into Auto | P1 | 3 | implemented (UI unchecked in app) | [X24-plan-panel.md](X24-plan-panel.md) |
+| X25 | File explorer in the Files tab, changed files in the Changes tab | P1 | 3 | implemented (UI unchecked in app) | [X25-file-explorer.md](X25-file-explorer.md) |
+| X26 | Files open as editor tabs, with VS Code syntax colours | P1 | 3 | implemented (UI unchecked in app) | [X26-file-tabs.md](X26-file-tabs.md) |

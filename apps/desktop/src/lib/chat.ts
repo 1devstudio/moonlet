@@ -23,9 +23,21 @@ const empty: ChatState = { items: [], pending: [], status: "idle", cost_usd: 0, 
 
 /** Inserts or replaces an item by id, keeping order. */
 /** The composer's text after text sent from elsewhere arrives, such as a
- * command block from a shell (T8): it follows what is typed. */
+ * command block from a shell (T8): it follows what is typed, after a blank
+ * line, or after a space for a file mention (X25). */
 export function joinDraft(current: string, sent: string): string {
-  return current.trim() ? `${current.trimEnd()}\n\n${sent}` : sent;
+  if (!current.trim()) return sent;
+  return `${current.trimEnd()}${isMention(sent) ? " " : "\n\n"}${sent}`;
+}
+
+function isMention(text: string): boolean {
+  return /^@\S+$/.test(text);
+}
+
+/** How the Files tab's "Add to chat" mentions a file of the workspace (X25). */
+export function fileMention(root: string, path: string): string {
+  const prefix = root.endsWith("/") ? root : `${root}/`;
+  return `@${path.startsWith(prefix) ? path.slice(prefix.length) : path}`;
 }
 
 export function mergeItem(items: ChatItem[], item: ChatItem): ChatItem[] {

@@ -64,6 +64,8 @@ export interface Settings {
   shortcuts: Shortcuts;
   /** Mode an approved plan switches to, `auto` or `acceptEdits` (X24). */
   planApproveMode: string;
+  /** Shiki theme of the editor and diffs (X26). */
+  editorTheme: string;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -164,8 +166,8 @@ interface State extends UiPersist {
    * command block sent from a shell (T8). */
   agentDrafts: Record<string, string>;
   fsVersion: Record<string, number>;
-  openFile: OpenFile | null;
-  preview: OpenFile | null;
+  /** Files with unsaved edits in an editor tab (`host|path`, X26). */
+  dirtyFiles: Record<string, true>;
   showHistory: boolean;
   dialog:
     | null
@@ -210,12 +212,11 @@ function makeStore() {
   unread: {},
   agentDrafts: {},
   fsVersion: {},
-  openFile: null,
-  preview: null,
+  dirtyFiles: {},
   showHistory: false,
   dialog: null,
   confirm: null,
-  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {}, planApproveMode: "auto" }),
+  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {}, planApproveMode: "auto", editorTheme: "dark-plus" }),
   toasts: [],
   lastAttention: null,
   workingSince: {},
@@ -376,7 +377,7 @@ export function focusTerminal(host: string, session: number) {
 }
 
 export function selectSession(host: string, id: string) {
-  set({ selected: { host, session: id }, diffFile: null, preview: null });
+  set({ selected: { host, session: id }, diffFile: null });
   const layout = getLayout(host, id);
   if (layout.focused !== null) {
     set((s) => {
