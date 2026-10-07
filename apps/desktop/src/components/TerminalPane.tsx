@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { RotateCw, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
-import { draftToAgent, setClassic } from "../lib/actions";
+import { draftToAgent, openFileTab, setClassic } from "../lib/actions";
 import { errorToast, getLayout, sesKey, setLayout, toast, useStore } from "../lib/store";
 import { findEntry, getEntry } from "../lib/terminals";
 import { InputEditor } from "./InputEditor";
@@ -45,12 +45,10 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
       const cur = useStore.getState().terminals[host]?.[session];
       const base = entry.cwd || cur?.reported_cwd || cur?.cwd || "/";
       const path = resolvePath(base, p, home);
-      const target = { host, path, line };
-      if (path.endsWith(".md") || path.endsWith(".markdown")) useStore.setState({ preview: target, rightTab: "files", rightOpen: true });
-      else useStore.setState({ openFile: target, rightTab: "files", rightOpen: true });
+      openFileTab(host, wsId, path, line);
     };
     return () => entry.unmount();
-  }, [host, session, visible, home]);
+  }, [host, session, wsId, visible, home]);
 
   // In Blocks mode the editor takes over input while the shell waits at a prompt
   // (T6), unless the tab is in classic mode (T7).

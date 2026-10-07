@@ -67,4 +67,4 @@ export function planChat(focused: number | null, chats: readonly { id: number; s
 }
 
 /** The Plan tab's dot: a plan waits and the tab is not showing it. */
-export const planTabDot = (tab: string, preview: boolean, waiting: boolean) => waiting && (tab !== "plan" || preview);
+export const planTabDot = (tab: string, waiting: boolean) => waiting && tab !== "plan";

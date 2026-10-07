@@ -4,7 +4,8 @@ import { rpc } from "../lib/daemon";
 import { leaves } from "../lib/layout";
 import { M, type ProjectConfig, type Session } from "../lib/protocol";
 import { focusTerminal, getLayout, projectOf, termKey, setLayout, useStore, sesKey } from "../lib/store";
-import { closeTab, newAgentTab, newTab, sendToAgent, split } from "../lib/actions";
+import { closeFileTab, closeTab, newAgentTab, newTab, sendToAgent, split } from "../lib/actions";
+import { FileIcon } from "./FileIcon";
 import { PaneTree } from "./PaneTree";
 import { AgentIcon, Kbd, cx } from "./ui";
 import { agentLabel } from "../lib/agents";
@@ -107,15 +108,48 @@ function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: str
   );
 }
 
+/** A file's editor tab (X26): a dot while it has unsaved edits. */
+function FileTab({ host, ws, id, path, active }: { host: string; ws: Session; id: string; path: string; active: boolean }) {
+  const dirty = useStore((s) => !!s.dirtyFiles[`${host}|${path}`]);
+  const name = path.split("/").pop() ?? path;
+  return (
+    <div
+      aria-current={active || undefined}
+      title={path}
+      className={cx(
+        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
+        active ? "bg-raised text-fg" : "text-muted hover:text-fg",
+      )}
+      onMouseDown={() => setLayout(host, ws.id, { ...getLayout(host, ws.id), active: id, focused: null })}
+    >
+      <FileIcon name={name} />
+      <span className="truncate">{name}</span>
+      {dirty && <span aria-label="unsaved" className="h-1.5 w-1.5 shrink-0 rounded-full bg-fg group-hover:hidden" />}
+      <button
+        className="ml-auto rounded p-0.5 text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+        title="Close tab"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={() => void closeFileTab(host, ws.id, path)}
+      >
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
 function TabStrip({ host, ws }: { host: string; ws: Session }) {
   const layout = useStore((s) => s.layouts[sesKey(host, ws.id)]);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   return (
     <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-stretch bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }}>
       <div className="flex min-w-0 items-stretch overflow-x-auto">
-        {layout?.tabs.map((t) => (
-          <Tab key={t.id} host={host} ws={ws} id={t.id} ids={leaves(t.root)} active={t.id === layout.active} />
-        ))}
+        {layout?.tabs.map((t) =>
+          t.root.type === "file" ? (
+            <FileTab key={t.id} host={host} ws={ws} id={t.id} path={t.root.path} active={t.id === layout.active} />
+          ) : (
+            <Tab key={t.id} host={host} ws={ws} id={t.id} ids={leaves(t.root)} active={t.id === layout.active} />
+          ),
+        )}
       </div>
       <div className="flex items-center px-2">
         <AddMenu host={host} ws={ws} />

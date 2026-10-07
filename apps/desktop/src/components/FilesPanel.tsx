@@ -1,17 +1,55 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Eye, EyeOff, File, FileText, Folder, FolderOpen } from "lucide-react";
-import { rpc } from "../lib/daemon";
+import { useCallback, useEffect, useState } from "react";
+import { ChevronDown, Eye, EyeOff, Plus } from "lucide-react";
+import { hostsApi, rpc } from "../lib/daemon";
 import { M, type DirEntry, type Session } from "../lib/protocol";
-import { useStore } from "../lib/store";
+import { errorToast, sesKey, useStore } from "../lib/store";
+import { draftToAgent, openFileTab } from "../lib/actions";
+import { fileMention } from "../lib/chat";
+import { openInChoices, type OpenTarget } from "../lib/openIn";
+import { FileIcon } from "./FileIcon";
+import { Menu } from "./Menu";
 import { IconButton, cx } from "./ui";
 
-const CodeViewer = lazy(() => import("./CodeViewer"));
-
-function isMarkdown(p: string) {
-  return /\.(md|markdown|mdx)$/i.test(p);
+/** What a row needs from the panel: where it lives and what its actions do. */
+interface Tree {
+  host: string;
+  root: string;
+  showIgnored: boolean;
+  version: number;
+  selected: string | null;
+  targets: OpenTarget[];
+  onOpen: (e: DirEntry) => void;
 }
 
-function Dir({ host, path, depth, showIgnored, version, onOpen, selected }: { host: string; path: string; depth: number; showIgnored: boolean; version: number; onOpen: (e: DirEntry) => void; selected: string | null }) {
+/** Add to chat and Open in, shown on the hovered row (X25). */
+function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
+  const choices = openInChoices(tree.targets, { dir: e.is_dir, remote: tree.host !== "local" });
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100" onClick={(ev) => ev.stopPropagation()}>
+      {!e.is_dir && (
+        <IconButton title="Add to chat" onClick={() => void draftToAgent(fileMention(tree.root, e.path))}>
+          <Plus size={14} />
+        </IconButton>
+      )}
+      <Menu
+        align="right"
+        width={200}
+        trigger={(toggle) => (
+          <IconButton title="Open in…" onClick={toggle}>
+            <ChevronDown size={14} />
+          </IconButton>
+        )}
+        items={[
+          { kind: "label", label: "Open in" },
+          ...choices.map((t) => ({ label: t.label, onSelect: () => void hostsApi.openIn(t.id, e.path, tree.host).catch(errorToast) })),
+        ]}
+      />
+    </span>
+  );
+}
+
+function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree }) {
+  const { host, showIgnored, version, selected, onOpen } = tree;
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   useEffect(() => {
@@ -23,36 +61,29 @@ function Dir({ host, path, depth, showIgnored, version, onOpen, selected }: { ho
       live = false;
     };
   }, [host, path, showIgnored, version]);
-  if (!entries) return <div className="py-0.5 ui-text-11 text-faint" style={{ paddingLeft: 14 + depth * 12 }}>…</div>;
+  if (!entries) return <div className="py-1 font-mono ui-text-12 text-faint" style={{ paddingLeft: 18 + depth * 16 }}>…</div>;
   return (
     <>
       {entries.map((e) => (
         <div key={e.path}>
           <div
+            role="treeitem"
+            aria-expanded={e.is_dir ? !!open[e.path] : undefined}
+            aria-selected={selected === e.path}
+            title={e.path}
             className={cx(
-              "flex cursor-default items-center gap-1 py-[2px] pr-2 ui-text-12.5",
-              selected === e.path ? "bg-raised text-fg" : "hover:bg-panel-2",
-              e.ignored ? "text-faint" : "text-[#c5c9d1]",
+              "group mx-2 flex h-[30px] cursor-default items-center gap-2.5 rounded-md pr-1 font-mono ui-text-13",
+              selected === e.path ? "bg-raised" : "hover:bg-panel-2",
+              e.ignored ? "text-faint" : "text-fg",
             )}
-            style={{ paddingLeft: 8 + depth * 12 }}
+            style={{ paddingLeft: 10 + depth * 16 }}
             onClick={() => (e.is_dir ? setOpen((o) => ({ ...o, [e.path]: !o[e.path] })) : onOpen(e))}
           >
-            {e.is_dir ? (
-              <>
-                {open[e.path] ? <ChevronDown size={11} className="text-faint" /> : <ChevronRight size={11} className="text-faint" />}
-                {open[e.path] ? <FolderOpen size={13} className="text-accent/80" /> : <Folder size={13} className="text-accent/80" />}
-              </>
-            ) : (
-              <>
-                <span className="w-[11px]" />
-                {isMarkdown(e.name) ? <FileText size={13} className="text-muted" /> : <File size={13} className="text-faint" />}
-              </>
-            )}
-            <span className="truncate">{e.name}</span>
+            <FileIcon name={e.name} dir={e.is_dir} open={!!open[e.path]} />
+            <span className="min-w-0 truncate">{e.name}</span>
+            <RowActions e={e} tree={tree} />
           </div>
-          {e.is_dir && open[e.path] && (
-            <Dir host={host} path={e.path} depth={depth + 1} showIgnored={showIgnored} version={version} onOpen={onOpen} selected={selected} />
-          )}
+          {e.is_dir && open[e.path] && <Dir path={e.path} depth={depth + 1} tree={tree} />}
         </div>
       ))}
     </>
@@ -61,16 +92,18 @@ function Dir({ host, path, depth, showIgnored, version, onOpen, selected }: { ho
 
 export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
   const [showIgnored, setShowIgnored] = useState(false);
-  const openFile = useStore((s) => s.openFile);
   const version = useStore((s) => s.fsVersion[`${host}|${ws.path}`] ?? 0);
-  const current = openFile && openFile.host === host ? openFile : null;
-  const onOpen = useCallback(
-    (e: DirEntry) => {
-      if (isMarkdown(e.path)) useStore.setState({ preview: { host, path: e.path }, rightTab: "files" });
-      else useStore.setState({ openFile: { host, path: e.path } });
-    },
-    [host],
-  );
+  // The file of the active editor tab (X26).
+  const selected = useStore((s) => {
+    const l = s.layouts[sesKey(host, ws.id)];
+    const root = l?.tabs.find((t) => t.id === l.active)?.root;
+    return root?.type === "file" ? root.path : null;
+  });
+  const [targets, setTargets] = useState<OpenTarget[]>([]);
+  useEffect(() => {
+    void hostsApi.openTargets().then(setTargets).catch(() => {});
+  }, []);
+  const onOpen = useCallback((e: DirEntry) => openFileTab(host, ws.id, e.path), [host, ws.id]);
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 ui-text-12 text-muted">
@@ -81,16 +114,11 @@ export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
           {showIgnored ? <EyeOff size={12} /> : <Eye size={12} />}
         </IconButton>
       </div>
-      <div className={cx("overflow-y-auto py-1", current ? "max-h-[40%] shrink-0 border-b border-border" : "flex-1")}>
-        <Dir host={host} path={ws.path} depth={0} showIgnored={showIgnored} version={version} onOpen={onOpen} selected={current?.path ?? null} />
-      </div>
-      {current && (
-        <div className="min-h-0 flex-1">
-          <Suspense fallback={null}>
-            <CodeViewer key={current.path} host={host} path={current.path} line={current.line} onClose={() => useStore.setState({ openFile: null })} />
-          </Suspense>
+      <div className="min-h-0 flex-1 overflow-y-auto py-1.5">
+        <div role="tree" aria-label="Files">
+          <Dir path={ws.path} depth={0} tree={{ host, root: ws.path, showIgnored, version, selected, targets, onOpen }} />
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   activeToken,
   joinDraft,
+  fileMention,
   askQuestions,
   chatBlocks,
   chatKey,
@@ -149,6 +150,21 @@ describe("text sent to the composer (T8)", () => {
 
   it("follows what is already typed, after a blank line", () => {
     expect(joinDraft("Why does this fail?\n", "```\n$ false\n```\n")).toBe("Why does this fail?\n\n```\n$ false\n```\n");
+  });
+});
+
+describe("adding a file to the chat (X25)", () => {
+  it("mentions the file by its path in the workspace", () => {
+    expect(fileMention("/Users/me/.jaunt/worktrees/jaunt/s1", "/Users/me/.jaunt/worktrees/jaunt/s1/apps/desktop/package.json")).toBe("@apps/desktop/package.json");
+  });
+
+  it("follows what is already typed with a space", () => {
+    expect(joinDraft("Compare", "@docs/a.md")).toBe("Compare @docs/a.md");
+    expect(joinDraft("Compare @docs/a.md ", "@docs/b.md")).toBe("Compare @docs/a.md @docs/b.md");
+  });
+
+  it("fills an empty composer", () => {
+    expect(joinDraft("", "@docs/a.md")).toBe("@docs/a.md");
   });
 });
 

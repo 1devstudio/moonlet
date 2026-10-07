@@ -2,7 +2,7 @@
 // keyboard shortcuts.
 
 import { rpc, sendInput } from "./daemon";
-import { addTab, cycleFocus, splitLeaf, tabOf } from "./layout";
+import { addTab, closeFile, cycleFocus, openFile, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
 import { errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals } from "./store";
 import { arrange, lastActive } from "./sidebar";
@@ -83,7 +83,10 @@ export async function split(dir: "row" | "col") {
 export async function closeFocused() {
   const c = current();
   if (!c) return;
-  const focused = getLayout(c.host, c.ws.id).focused;
+  const layout = getLayout(c.host, c.ws.id);
+  const root = layout.tabs.find((t) => t.id === layout.active)?.root;
+  if (root?.type === "file") return closeFileTab(c.host, c.ws.id, root.path);
+  const focused = layout.focused;
   if (focused === null) return;
   const info = useStore.getState().terminals[c.host]?.[focused];
   if (info?.kind === "agent" && !info.exit) {
@@ -100,6 +103,27 @@ export async function closeTab(host: string, ids: number[]) {
     if (!(await confirmStopAgent(agents[0]?.agent))) return;
   }
   for (const id of ids) void rpc(host, M.terminalKill, { id, remove: true }).catch(errorToast);
+}
+
+/** Opens a file in an editor tab of a session's main window (X26), at `line` if given. */
+export function openFileTab(host: string, wsId: string, path: string, line?: number) {
+  setLayout(host, wsId, openFile(getLayout(host, wsId), path, line));
+}
+
+/** Closes a file's editor tab, asking first when it has unsaved edits. */
+export async function closeFileTab(host: string, wsId: string, path: string) {
+  const key = `${host}|${path}`;
+  if (useStore.getState().dirtyFiles[key]) {
+    const name = path.split("/").pop();
+    const ok = await askConfirm({ title: "Unsaved changes", message: `Discard unsaved changes to ${name}?`, action: "Discard", variant: "danger" });
+    if (!ok) return;
+  }
+  setLayout(host, wsId, closeFile(getLayout(host, wsId), path));
+  useStore.setState((s) => {
+    const dirtyFiles = { ...s.dirtyFiles };
+    delete dirtyFiles[key];
+    return { dirtyFiles };
+  });
 }
 
 function confirmStopAgent(agent: string | null | undefined) {

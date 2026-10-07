@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowRight, ChevronDown, ChevronRight, ExternalLink, Layers, MoreHorizontal, Play, Plus, SquareDot, SquareMinus, SquarePlus } from "lucide-react";
+import { ExternalLink, Layers, MoreHorizontal, Play, Plus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type FileChange, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
+import { M, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
@@ -12,8 +12,7 @@ import { planChat, planTabDot, planView } from "../lib/plan";
 import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
 import { FilesPanel } from "./FilesPanel";
-import { PreviewPanel } from "./PreviewPanel";
-import { Empty, cx, prTone } from "./ui";
+import { cx, prTone } from "./ui";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
@@ -191,96 +190,6 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   );
 }
 
-function StatusBox({ status }: { status: FileChange["status"] }) {
-  const p = { size: 14, strokeWidth: 1.5, className: "shrink-0 text-muted" };
-  if (status === "added" || status === "untracked") return <SquarePlus {...p} />;
-  if (status === "deleted") return <SquareMinus {...p} />;
-  return <SquareDot {...p} />;
-}
-
-/** Changed files grouped by directory, as in the reference design. */
-function ChangedFiles({ host, ws }: { host: string; ws: Session }) {
-  const git = useStore((s) => s.git[sesKey(host, ws.id)]);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const groups = useMemo(() => {
-    const m = new Map<string, FileChange[]>();
-    for (const f of git?.files ?? []) {
-      const i = f.path.lastIndexOf("/");
-      const dir = i < 0 ? "" : f.path.slice(0, i);
-      m.set(dir, [...(m.get(dir) ?? []), f]);
-    }
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [git]);
-  if (!git) return null;
-  if (git.files.length === 0) return <Empty title="No changes yet">{`Nothing differs from ${ws.base}.`}</Empty>;
-  return (
-    <div className="pb-4">
-      {groups.map(([dir, files]) => (
-        <div key={dir} className="mt-3">
-          <button
-            className="flex w-full items-center gap-2 px-5 py-1.5 text-left font-mono ui-text-12 tracking-[0.06em] text-muted hover:text-fg"
-            onClick={() => setCollapsed((c) => ({ ...c, [dir]: !c[dir] }))}
-          >
-            {collapsed[dir] ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-            <span className="truncate">{dir || "/"}</span>
-          </button>
-          {!collapsed[dir] &&
-            files.map((f) => {
-              const name = f.path.slice(dir ? dir.length + 1 : 0);
-              const count = f.binary ? "bin" : f.additions && f.deletions ? `+${f.additions} −${f.deletions}` : f.deletions ? `−${f.deletions}` : `+${f.additions}`;
-              return (
-                <button
-                  key={f.path}
-                  title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
-                  className="flex h-[38px] w-full items-center gap-3 pl-[34px] pr-5 text-left hover:bg-panel-2"
-                  onClick={() => {
-                    if (/\.(md|markdown)$/i.test(f.path) && f.status !== "deleted") {
-                      useStore.setState({ preview: { host, path: `${ws.path}/${f.path}` } });
-                    } else {
-                      useStore.setState({ diffFile: f.path, rightTab: "changes" });
-                    }
-                  }}
-                >
-                  <StatusBox status={f.status} />
-                  <span className={cx("min-w-0 flex-1 truncate ui-text-14", f.status === "deleted" ? "text-muted line-through" : "text-fg")}>{name}</span>
-                  <span className="shrink-0 font-mono ui-text-12 tabular-nums text-muted">{count}</span>
-                </button>
-              );
-            })}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SummaryLine({ host, ws }: { host: string; ws: Session }) {
-  const git = useStore((s) => s.git[sesKey(host, ws.id)]);
-  return (
-    <div className="flex items-center gap-2 px-5 pb-1 pt-4 font-mono ui-text-12.5 text-muted">
-      {git ? (
-        <>
-          <span className="text-add">+{git.additions}</span>
-          <span className="text-del">−{git.deletions}</span>
-          <span className="text-faint">·</span>
-          <span>
-            {git.files.length} file{git.files.length === 1 ? "" : "s"}
-          </span>
-          <span className="text-faint">·</span>
-          <ArrowRight size={12} />
-          <span className="rounded bg-raised px-1.5 py-0.5 text-fg">{ws.base}</span>
-          {git.base_missing && (
-            <span className="text-blocked" title={`"${git.base_missing}" was not found (not fetched?), so only uncommitted changes against HEAD are shown.`}>
-              base not found · showing HEAD
-            </span>
-          )}
-        </>
-      ) : (
-        <span className="text-faint">loading…</span>
-      )}
-    </div>
-  );
-}
-
 /** The latest plan of the session's chat the Plan tab follows (X24). */
 function useSessionPlan(host: string, ws: Session) {
   // A string, so the selector result compares by value.
@@ -306,11 +215,9 @@ function useSessionPlan(host: string, ws: Session) {
 
 export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const tab = useStore((s) => s.rightTab);
-  const preview = useStore((s) => s.preview);
-  const [allFiles, setAllFiles] = useState(false);
   const plan = useSessionPlan(host, ws);
 
-  // Watch the worktree for live refresh of Files, Changes and Preview.
+  // Watch the worktree for live refresh of Files and Changes.
   useEffect(() => {
     void rpc(host, M.fsWatch, { path: ws.path }).catch(() => {});
     return () => void rpc(host, M.fsUnwatch, { path: ws.path }).catch(() => {});
@@ -325,44 +232,30 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             key={t.id}
             id={`right-tab-${t.id}`}
             role="tab"
-            aria-selected={tab === t.id && !preview}
+            aria-selected={tab === t.id}
             aria-controls="right-tabpanel"
-            onClick={() => useStore.setState({ rightTab: t.id, preview: null })}
+            onClick={() => useStore.setState({ rightTab: t.id })}
             className={cx(
               "flex items-center gap-1.5 px-3 ui-text-13 transition-colors",
-              tab === t.id && !preview ? "text-fg shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg",
+              tab === t.id ? "text-fg shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg",
             )}
           >
             {t.label}
-            {t.id === "plan" && planTabDot(tab, !!preview, plan?.status === "pending") && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
+            {t.id === "plan" && planTabDot(tab, plan?.status === "pending") && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
           </button>
         ))}
       </div>
       <div
         id="right-tabpanel"
-        // A markdown preview is not one of the tabs.
-        {...(preview ? {} : { role: "tabpanel", "aria-labelledby": `right-tab-${tab}` })}
+        role="tabpanel"
+        aria-labelledby={`right-tab-${tab}`}
         className="min-h-0 flex-1 overflow-y-auto bg-bg"
       >
         <Suspense fallback={null}>
-          {preview ? (
-            <PreviewPanel />
-          ) : tab === "plan" ? (
+          {tab === "plan" ? (
             <PlanPanel view={plan} />
           ) : tab === "files" ? (
-            <div className="flex h-full flex-col">
-              <div className="flex items-center">
-                <SummaryLine host={host} ws={ws} />
-                <button
-                  className="ml-auto mr-4 mt-3 rounded px-2 py-0.5 font-mono ui-text-11.5 text-faint hover:bg-raised hover:text-fg"
-                  onClick={() => setAllFiles(!allFiles)}
-                  title={allFiles ? "Show changed files" : "Browse all files"}
-                >
-                  {allFiles ? "changed" : "all files"}
-                </button>
-              </div>
-              <div className="min-h-0 flex-1">{allFiles ? <FilesPanel host={host} ws={ws} /> : <ChangedFiles host={host} ws={ws} />}</div>
-            </div>
+            <FilesPanel host={host} ws={ws} />
           ) : tab === "changes" ? (
             <ChangesPanel host={host} ws={ws} />
           ) : (
