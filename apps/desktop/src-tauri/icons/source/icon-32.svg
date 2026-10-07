@@ -1,7 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <rect x="100" y="100" width="824" height="824" rx="186" fill="#121212" stroke="#2e2e2e" stroke-width="20"/>
-  <circle cx="512" cy="512" r="275" fill="none" stroke="#7a7a7a" stroke-width="64"/>
-  <rect x="456" y="412" width="112" height="200" rx="12" fill="#d97757"/>
-  <circle cx="706" cy="318" r="100" fill="#121212"/>
-  <circle cx="706" cy="318" r="68" fill="#d97757"/>
+  <g transform="rotate(-20 512 512)">
+    <path d="M192 512A320 92 0 0 1 832 512" fill="none" stroke="#d97757" stroke-width="52" stroke-linecap="round" stroke-opacity="0.55"/>
+  </g>
+  <circle cx="512" cy="512" r="205" fill="#e6e6e6"/>
+  <circle cx="434" cy="430" r="39" fill="#c4c4c4"/>
+  <circle cx="582" cy="487" r="27" fill="#c4c4c4"/>
+  <circle cx="492" cy="598" r="49" fill="#c4c4c4"/>
+  <g transform="rotate(-20 512 512)">
+    <path d="M192 512A320 92 0 0 0 832 512" fill="none" stroke="#121212" stroke-width="96"/>
+    <path d="M192 512A320 92 0 0 0 832 512" fill="none" stroke="#d97757" stroke-width="52" stroke-linecap="round"/>
+  </g>
 </svg>
