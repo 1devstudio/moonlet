@@ -1,20 +1,20 @@
 [package]
-name = "jaunt-app"
-description = "jaunt desktop app (thin client of jauntd)"
+name = "moonlet-app"
+description = "moonlet desktop app (thin client of moonletd)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "jaunt_app_lib"
+name = "moonlet_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-jaunt-proto.workspace = true
-jaunt-core.workspace = true
+moonlet-proto.workspace = true
+moonlet-core.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

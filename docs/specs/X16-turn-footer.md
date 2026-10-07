@@ -52,7 +52,7 @@ None new. The copied text is the message as the agent wrote it; nothing is rende
 
 ## Test plan
 
-- Unit (Rust, `crates/jaunt-core/src/chat/claude.rs` and `codex.rs`): a completed turn stamps its final message; interrupted and failed turns do not.
+- Unit (Rust, `crates/moonlet-core/src/chat/claude.rs` and `codex.rs`): a completed turn stamps its final message; interrupted and failed turns do not.
 - Unit (`apps/desktop/src/lib/chat.test.ts`): `turnFooter` for today, this week, older and another year.
 - E2E (`apps/desktop/e2e/specs/agent-view.e2e.ts`): the replayed turn shows the footer, and its copy button puts the answer on the clipboard.
 

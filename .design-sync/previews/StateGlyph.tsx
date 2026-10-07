@@ -1,4 +1,4 @@
-import { StateGlyph } from "@jaunt/ds";
+import { StateGlyph } from "@moonlet/ds";
 
 const states = [
   ["working", "Working"],

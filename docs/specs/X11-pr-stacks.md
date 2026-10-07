@@ -43,9 +43,9 @@ Read-only. `number` is a JSON integer, so it cannot inject arguments into `gh`. 
 
 ## Out of scope
 
-- Creating, rebasing or merging stacks from jaunt (use `gh stack`).
+- Creating, rebasing or merging stacks from moonlet (use `gh stack`).
 - Showing stack membership in the sidebar: it would cost two more `gh` calls per session on every poll.
-- Switching to a jaunt session from a stack row.
+- Switching to a moonlet session from a stack row.
 
 ## Test plan
 

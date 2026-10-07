@@ -46,7 +46,7 @@ The webview loads the image straight from GitHub, so the CSP `img-src` allows `h
 
 ## Test plan
 
-- `jaunt-core` `git::tests::origin_url_of_a_project`: no remote, then a remote read from a subdirectory.
-- `jauntd` `tests/daemon.rs` `origin_url_over_rpc`: the RPC end to end.
+- `moonlet-core` `git::tests::origin_url_of_a_project`: no remote, then a remote read from a subdirectory.
+- `moonletd` `tests/daemon.rs` `origin_url_over_rpc`: the RPC end to end.
 - `apps/desktop/src/lib/projectAvatar.test.ts`: URL forms, credentials, non-GitHub remotes.
 - Manual: a project cloned from GitHub shows its owner's avatar in the sidebar.

@@ -382,7 +382,7 @@ const RUN: Record<string, () => void> = {
   commit: () => useStore.setState({ dialog: { kind: "commit" } }),
   pr: () => useStore.setState({ dialog: { kind: "create-pr" } }),
   archive: () => void archiveSession(),
-  find: () => window.dispatchEvent(new CustomEvent("jaunt:find")),
+  find: () => window.dispatchEvent(new CustomEvent("moonlet:find")),
   "prev-cmd": () => focusedEntry()?.jumpBlock(-1),
   "next-cmd": () => focusedEntry()?.jumpBlock(1),
   "copy-out": copyOutput,

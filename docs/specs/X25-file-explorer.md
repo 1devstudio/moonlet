@@ -32,7 +32,7 @@ The Files tab used to open on the list of changed files, with the file tree behi
 
 Files tab:
 
-    ~/…/jaunt/my-session                         👁
+    ~/…/moonlet/my-session                         👁
     ─────────────────────────────────────────────
      🗀  apps
      🗀  docs                                     ⌄    ← hovered folder

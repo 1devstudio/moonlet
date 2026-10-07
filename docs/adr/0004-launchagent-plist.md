@@ -8,7 +8,7 @@ The plan called for `SMAppService.agent(plistName:)`, which registers a LaunchAg
 
 ## Decision
 
-`jauntd service install` writes a standard per-user plist into `~/Library/LaunchAgents` and loads it with `launchctl bootstrap gui/<uid>`. This works for dev and release builds and is easy to inspect and remove.
+`moonletd service install` writes a standard per-user plist into `~/Library/LaunchAgents` and loads it with `launchctl bootstrap gui/<uid>`. This works for dev and release builds and is easy to inspect and remove.
 
 ## Consequences
 

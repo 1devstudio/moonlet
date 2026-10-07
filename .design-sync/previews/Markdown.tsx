@@ -1,4 +1,4 @@
-import { Markdown } from "@jaunt/ds";
+import { Markdown } from "@moonlet/ds";
 
 const reply = `The checkout button had a fixed \`width: 420px\`, so it overflowed on phones.
 

@@ -1,4 +1,4 @@
-import { Field, inputCls } from "@jaunt/ds";
+import { Field, inputCls } from "@moonlet/ds";
 
 export const Form = () => (
   <div className="flex flex-col gap-3 bg-panel p-4" style={{ width: 380 }}>
@@ -6,7 +6,7 @@ export const Form = () => (
       <input className={inputCls} defaultValue="Acme" />
     </Field>
     <Field label="Branch" hint="Created from main when the session starts">
-      <input className={inputCls} defaultValue="jaunt/fix-checkout-button" />
+      <input className={inputCls} defaultValue="moonlet/fix-checkout-button" />
     </Field>
     <Field label="Setup script">
       <input className={inputCls} placeholder="pnpm install" />

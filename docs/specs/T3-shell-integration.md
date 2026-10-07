@@ -6,7 +6,7 @@
 
 ## Summary
 
-Shell sessions started by jaunt load a small integration script for zsh, bash or fish. The script emits OSC 133 prompt marks (A prompt, B command, C output, D exit code) and OSC 7 working-directory updates. The user's own startup files still run first, unchanged.
+Shell sessions started by moonlet load a small integration script for zsh, bash or fish. The script emits OSC 133 prompt marks (A prompt, B command, C output, D exit code) and OSC 7 working-directory updates. The user's own startup files still run first, unchanged.
 
 ## Behaviour and acceptance criteria
 
@@ -23,4 +23,4 @@ The scripts only print escape sequences; they never eval output.
 
 ## Test plan
 
-`crates/jaunt-core/src/shell.rs` tests run zsh and bash through the integration in a PTY and assert that OSC 133 A/C/D and OSC 7 appear.
+`crates/moonlet-core/src/shell.rs` tests run zsh and bash through the integration in a PTY and assert that OSC 133 A/C/D and OSC 7 appear.

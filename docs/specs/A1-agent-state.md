@@ -11,12 +11,12 @@ Every agent session has a state: `idle`, `working`, `blocked`, `done` or `error`
 ## Behaviour and acceptance criteria
 
 - [x] A session is an agent session when it is created with `kind: agent`, or when it first receives a hook report.
-- [x] Sources, highest first: `hook` (via `jaunt hook`/`jaunt notify`), `process` (exit), `terminal` (OSC 9 / OSC 777 notifications), `heuristic` (bell, output activity).
+- [x] Sources, highest first: `hook` (via `moonlet hook`/`moonlet notify`), `process` (exit), `terminal` (OSC 9 / OSC 777 notifications), `heuristic` (bell, output activity).
 - [x] A lower source is ignored for 20 s after a higher one reported.
 - [x] Without hooks, output marks the agent `working`, and 4 s of silence marks it `idle`. Once any hook has reported, activity heuristics are off for that session.
 - [x] Process exit makes an agent `done` (code 0) or `error` (non-zero code or signal), with a message.
 - [x] Each change emits `session.updated`. A change to `blocked`, `done` or `error` also emits `agent.attention` with the session, workspace, title and message.
-- [x] Blocked to attention event in under 2 s. Measured at 28 ms in `crates/jaunt-cli/tests/hook_e2e.rs`.
+- [x] Blocked to attention event in under 2 s. Measured at 28 ms in `crates/moonlet-cli/tests/hook_e2e.rs`.
 
 ## Claude Code mapping
 

@@ -1,6 +1,6 @@
 # Feature specifications
 
-Each feature of jaunt has its own spec in this directory. Write the spec before implementing the feature, and update it whenever the implementation diverges, so it always describes shipped behaviour.
+Each feature of moonlet has its own spec in this directory. Write the spec before implementing the feature, and update it whenever the implementation diverges, so it always describes shipped behaviour.
 
 - File name: `<PRD-id>-<slug>.md` (for example `A4-new-workspace.md`). UI-only or new-scope features use an `X<n>-` prefix.
 - Start each spec from [`_template.md`](_template.md).
@@ -61,7 +61,7 @@ Each feature of jaunt has its own spec in this directory. Write the spec before 
 | X19 | Run action modal with custom shortcuts | P1 | 3 | implemented | [X19-run-action.md](X19-run-action.md) |
 | X20 | Plan approval card (Plan mode's `ExitPlanMode`) | P1 | 3 | implemented | [X20-plan-approval.md](X20-plan-approval.md) |
 | X21 | Pixel loader in the sidebar row while a session archives | P1 | 3 | implemented (UI unchecked in app) | [X21-archive-loader.md](X21-archive-loader.md) |
-| X22 | An agent opens a session in another project (`jaunt session new`) | P1 | 3 | implemented (skill untried with a live agent) | [X22-agent-opens-session.md](X22-agent-opens-session.md) |
+| X22 | An agent opens a session in another project (`moonlet session new`) | P1 | 3 | implemented (skill untried with a live agent) | [X22-agent-opens-session.md](X22-agent-opens-session.md) |
 | X23 | In-app confirm modal for every confirmation | P1 | 3 | implemented | [X23-confirm-modal.md](X23-confirm-modal.md) |
 | X24 | Plan panel, and approving a plan into Auto | P1 | 3 | implemented (UI unchecked in app) | [X24-plan-panel.md](X24-plan-panel.md) |
 | X25 | File explorer in the Files tab, changed files in the Changes tab | P1 | 3 | implemented (UI unchecked in app) | [X25-file-explorer.md](X25-file-explorer.md) |

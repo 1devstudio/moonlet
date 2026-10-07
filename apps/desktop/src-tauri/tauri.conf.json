@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "jaunt",
+  "productName": "moonlet",
   "version": "0.1.10",
   "identifier": "dev.onedevstudio.jaunt",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "jaunt",
+        "title": "moonlet",
         "width": 1440,
         "height": 900,
         "minWidth": 900,

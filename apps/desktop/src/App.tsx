@@ -58,11 +58,11 @@ function Home() {
       <div data-tauri-drag-region className="drag h-[52px] shrink-0 bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
       <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
         <div className="font-mono ui-text-22 tracking-tight">
-          <span className="text-accent">❯</span> jaunt
+          <span className="text-accent">❯</span> moonlet
         </div>
         <div className="max-w-md ui-text-13.5 text-muted">Group projects into workspaces; every session runs its agent in its own worktree. They keep running when you close the app.</div>
         {local && local.status !== "connected" && (
-          <div className="ui-text-12 text-blocked">{local.status === "error" ? `Daemon: ${local.message}` : "Starting the jaunt daemon…"}</div>
+          <div className="ui-text-12 text-blocked">{local.status === "error" ? `Daemon: ${local.message}` : "Starting the moonlet daemon…"}</div>
         )}
         <div className="flex gap-2">
           {hasRepos ? (
@@ -123,14 +123,14 @@ export default function App() {
     void startStore();
     const off = installShortcuts();
     const onFind = () => setFinding(true);
-    window.addEventListener("jaunt:find", onFind);
+    window.addEventListener("moonlet:find", onFind);
     return () => {
       off();
-      window.removeEventListener("jaunt:find", onFind);
+      window.removeEventListener("moonlet:find", onFind);
     };
   }, []);
 
-  // All app text scales with the font size setting (ui-text-* in jaunt.css).
+  // All app text scales with the font size setting (ui-text-* in moonlet.css).
   useEffect(() => {
     document.documentElement.style.setProperty("--ui-scale", String(scale));
   }, [scale]);

@@ -10,7 +10,7 @@ const s = (id: string, name: string, extra: Partial<Session> = {}): Session => (
   id,
   project_id: "p-api",
   name,
-  branch: `jaunt/${id}`,
+  branch: `moonlet/${id}`,
   base: "main",
   path: `/w/${id}`,
   agent: "claude",

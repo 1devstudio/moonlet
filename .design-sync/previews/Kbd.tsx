@@ -1,4 +1,4 @@
-import { Kbd } from "@jaunt/ds";
+import { Kbd } from "@moonlet/ds";
 
 export const Shortcuts = () => (
   <div className="flex flex-col gap-2 bg-bg p-4 text-[13px] text-muted" style={{ width: 260 }}>

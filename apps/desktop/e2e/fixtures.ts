@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const BIN_DIR = join(here, "..", "..", "..", "target", "e2e", "debug");
-export const APP = join(BIN_DIR, "jaunt-app");
+export const APP = join(BIN_DIR, "moonlet-app");
 
 export const PROJECT = "e2e-repo";
 export const SESSION = "Fix checkout button";
@@ -30,7 +30,7 @@ export interface World {
   root: string;
   home: string;
   repo: string;
-  /** Environment for jauntd, jaunt and the app. */
+  /** Environment for moonletd, moonlet and the app. */
   env: Record<string, string>;
 }
 
@@ -42,7 +42,7 @@ export function world(): World {
 }
 
 function makeWorld(root: string): World {
-  const home = join(root, "jaunt-home");
+  const home = join(root, "moonlet-home");
   const fakeBin = join(root, "bin");
   return {
     root,
@@ -67,7 +67,7 @@ function makeWorld(root: string): World {
 /** Creates the scratch dirs, the repo and a running daemon with a project
  *  and one session. */
 export function setUp(): World {
-  const w = makeWorld(mkdtempSync(join(tmpdir(), "jaunt-e2e-")));
+  const w = makeWorld(mkdtempSync(join(tmpdir(), "moonlet-e2e-")));
   try {
     seed(w);
   } catch (e) {
@@ -89,7 +89,7 @@ function seed(w: World) {
     writeFileSync(p, `#!/bin/sh\necho "e2e: real ${name} is blocked" >&2\nexit 1\n`);
     chmodSync(p, 0o755);
   }
-  // jauntd gives terminals and agents the PATH of a login shell (SHELL is
+  // moonletd gives terminals and agents the PATH of a login shell (SHELL is
   // zsh here), not its own, so the fakes must come first there too. Each
   // zsh startup file sets it again: /etc/zprofile's path_helper reorders
   // PATH after .zshenv.
@@ -101,9 +101,9 @@ function seed(w: World) {
   const git = (...args: string[]) => execFileSync("git", args, { cwd: w.repo, env: w.env, stdio: "pipe" });
   git("init", "-q", "-b", "main");
   git("add", "-A");
-  git("-c", "user.email=e2e@jaunt.test", "-c", "user.name=e2e", "commit", "-qm", "init");
+  git("-c", "user.email=e2e@moonlet.test", "-c", "user.name=e2e", "commit", "-qm", "init");
 
-  execFileSync(join(BIN_DIR, "jauntd"), ["start"], { env: w.env, stdio: "pipe" });
+  execFileSync(join(BIN_DIR, "moonletd"), ["start"], { env: w.env, stdio: "pipe" });
   const project = rpc<{ id: string }>(w, "project.add", { path: w.repo });
   rpc(w, "session.create", { project_id: project.id, name: SESSION, agent: "none" });
 }
@@ -118,7 +118,7 @@ export function tearDown(w: World) {
 }
 
 export function rpc<T = unknown>(w: World, method: string, params: object): T {
-  const out = execFileSync(join(BIN_DIR, "jaunt"), ["rpc", method, JSON.stringify(params)], { env: w.env, stdio: "pipe" });
+  const out = execFileSync(join(BIN_DIR, "moonlet"), ["rpc", method, JSON.stringify(params)], { env: w.env, stdio: "pipe" });
   return JSON.parse(out.toString() || "null") as T;
 }
 

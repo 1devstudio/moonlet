@@ -106,7 +106,7 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
       {info?.classic && info.kind === "shell" && !exited && visible && (
         <button
           className="absolute bottom-3 right-4 z-20 rounded-full border border-border-strong bg-panel/95 px-3 py-1 ui-text-12 text-muted shadow-lg hover:text-fg"
-          title="Use jaunt's input editor and hide the shell prompt"
+          title="Use moonlet's input editor and hide the shell prompt"
           onClick={() => void setClassic(host, session, false)}
         >
           Blocks

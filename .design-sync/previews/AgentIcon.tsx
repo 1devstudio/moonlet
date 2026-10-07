@@ -1,4 +1,4 @@
-import { AgentIcon } from "@jaunt/ds";
+import { AgentIcon } from "@moonlet/ds";
 
 export const Agents = () => (
   <div className="flex flex-col gap-2 bg-panel p-4 text-[13px] text-fg">

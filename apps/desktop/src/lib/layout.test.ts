@@ -55,7 +55,7 @@ describe("layout", () => {
 });
 
 describe("file tabs (X26)", () => {
-  const file = "/Users/me/.jaunt/worktrees/jaunt/s1/package.json";
+  const file = "/Users/me/.jaunt/worktrees/moonlet/s1/package.json";
 
   it("opens a file as a new active tab after the others", () => {
     const l = openFile(reconcile(emptyLayout(), [1]), file);

@@ -10,8 +10,8 @@ license = "UNLICENSED"
 repository = "https://github.com/1devstudio/jaunt"
 
 [workspace.dependencies]
-jaunt-proto = { path = "crates/jaunt-proto" }
-jaunt-core = { path = "crates/jaunt-core" }
+moonlet-proto = { path = "crates/moonlet-proto" }
+moonlet-core = { path = "crates/moonlet-core" }
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

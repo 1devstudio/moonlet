@@ -6,17 +6,17 @@
 
 ## Summary
 
-A remote host needs the same `jauntd` (plus the `jaunt` CLI for hooks) in `~/.jaunt/bin`. The app checks the version on every connect and installs only after the user confirms a dialog that says exactly what will be copied where.
+A remote host needs the same `moonletd` (plus the `moonlet` CLI for hooks) in `~/.jaunt/bin`. The app checks the version on every connect and installs only after the user confirms a dialog that says exactly what will be copied where.
 
 ## Behaviour and acceptance criteria
 
-- [x] Before bridging, the app runs `~/.jaunt/bin/jauntd --version` over ssh. If it is missing or a different version, the host goes to `needs_install` and nothing runs on the host.
+- [x] Before bridging, the app runs `~/.jaunt/bin/moonletd --version` over ssh. If it is missing or a different version, the host goes to `needs_install` and nothing runs on the host.
 - [x] Install (after confirmation):
   - `uname -sm` picks the target: `x86_64`/`aarch64` Linux (musl), or macOS, which reuses the app's own binaries;
   - each binary is uploaded over stdin to `~/.jaunt/bin/<name>.new` with `umask 077`;
   - the remote SHA-256 (`sha256sum` or `shasum -a 256`) is compared with the local one; on a mismatch the file is deleted and the install fails;
   - otherwise the file is moved into place atomically.
-- [x] After an install, `jauntd proxy` (new binary) takes over from an older running daemon with the live upgrade ([S3](S3-live-upgrade.md)), so sessions survive helper updates.
+- [x] After an install, `moonletd proxy` (new binary) takes over from an older running daemon with the live upgrade ([S3](S3-live-upgrade.md)), so sessions survive helper updates.
 - [x] Helper lookup order: `$JAUNT_REMOTE_DIR`, the bundle's `Resources/remote/<name>-<triple>`, then `target/<triple>/{release,debug}/` in development.
 
 ## Limits
@@ -27,4 +27,4 @@ A remote host needs the same `jauntd` (plus the `jaunt` CLI for hooks) in `~/.ja
 ## Test plan
 
 - `remote.rs`: `triples`, `checksum`.
-- Manual: add a host, accept the install, verify `~/.jaunt/bin/jauntd --version` on the host.
+- Manual: add a host, accept the install, verify `~/.jaunt/bin/moonletd --version` on the host.

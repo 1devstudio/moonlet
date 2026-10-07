@@ -1,4 +1,4 @@
-import { IconButton, icons } from "@jaunt/ds";
+import { IconButton, icons } from "@moonlet/ds";
 
 const { X, MoreHorizontal, Plus, Copy, Trash2 } = icons;
 

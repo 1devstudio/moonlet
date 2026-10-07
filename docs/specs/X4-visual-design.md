@@ -6,7 +6,7 @@
 
 ## Summary
 
-jaunt's look matches the reference: a neutral near-black UI with Claude's orange as the single accent. The terminal is the hero, and the chrome is quiet, typographic and dense. Sans for UI text, mono for metadata.
+moonlet's look matches the reference: a neutral near-black UI with Claude's orange as the single accent. The terminal is the hero, and the chrome is quiet, typographic and dense. Sans for UI text, mono for metadata.
 
 ## Tokens
 
@@ -66,5 +66,5 @@ jaunt's look matches the reference: a neutral near-black UI with Claude's orange
 
 ## Test plan
 
-- Demo: fake agent scripts report state through `jaunt notify` (see [manual-checks](../manual-checks.md) M9).
+- Demo: fake agent scripts report state through `moonlet notify` (see [manual-checks](../manual-checks.md) M9).
 - Compare the window screenshot with the reference.

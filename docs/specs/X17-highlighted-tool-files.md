@@ -36,7 +36,7 @@ When the user expands a Read, Edit or Write call in the agent view, the file's c
        2      println!("hi");
        3  }
 
-The gutter uses the faint text colour, right-aligned, with the code beside it. Colours are the chat code-fence palette (`.hljs-*` in `jaunt.css`). Diff lines keep their existing backgrounds; the code's own colours sit on top.
+The gutter uses the faint text colour, right-aligned, with the code beside it. Colours are the chat code-fence palette (`.hljs-*` in `moonlet.css`). Diff lines keep their existing backgrounds; the code's own colours sit on top.
 
 ## Protocol and RPCs
 

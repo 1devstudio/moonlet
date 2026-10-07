@@ -9,7 +9,7 @@
 
 X20 showed Claude's plan inside a large card in the conversation. A long plan pushed the conversation out of view, and the card disappeared once the plan was answered. X24 moves the plan into a **Plan** tab of the right panel, which opens by itself when a plan arrives, and leaves a compact card in the conversation that carries the approval buttons and, once answered, what happened to the plan. Approving now switches to **Auto** by default; a setting chooses Auto or Accept edits. The right panel's tabs get the underlined style from the same design.
 
-Design: `Plan Panel.html` (a Claude Design bundle built from jaunt's own components), with the approval buttons placed in the conversation card.
+Design: `Plan Panel.html` (a Claude Design bundle built from moonlet's own components), with the approval buttons placed in the conversation card.
 
 ## User journey
 
@@ -100,7 +100,7 @@ Claude then edited the file without another `can_use_tool` ask.
 
 ## Test plan
 
-- Unit (Rust, `crates/jaunt-core/src/chat/runtime.rs`): approving into `auto` sends `setMode auto` and the restarted agent gets `--permission-mode auto`; other modes are rejected.
+- Unit (Rust, `crates/moonlet-core/src/chat/runtime.rs`): approving into `auto` sends `setMode auto` and the restarted agent gets `--permission-mode auto`; other modes are rejected.
 - Unit (`apps/desktop/src/lib/plan.test.ts`): `planView`, `planLabels`, `planChat`, `planTabDot`. (`agents.test.ts`): `resolvePlanMode`. (`chat.test.ts`): `planAnswer`, `planApproveLabel`.
 - E2E (`apps/desktop/e2e/specs/plan-approval.e2e.ts`): the panel opens on the Plan tab with the plan; Open plan and the tab dot; feedback through the composer; approving switches the chip to Auto, or to Accept edits per Settings; the card keeps the outcome. (`font-size.e2e.ts`): the restyled tabs.
 

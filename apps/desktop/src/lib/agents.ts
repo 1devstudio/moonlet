@@ -55,7 +55,7 @@ export function nextMode(current: string | null | undefined, bypassEnabled: bool
   return cycle[(i + 1) % cycle.length];
 }
 
-/** Agents jaunt can run with the structured view (X6). */
+/** Agents moonlet can run with the structured view (X6). */
 export const isStructured = (agent?: string | null) => agent === "claude" || agent === "codex";
 
 /** Whether a new TUI agent can take pasted text (T8): once it has printed

@@ -45,7 +45,7 @@ done
 `;
 
 /** The plan's card in the conversation, by its status label. */
-const card = (label: string) => `//div[contains(@class, "jaunt-card-in")][.//div[normalize-space()=${JSON.stringify(label)}]]`;
+const card = (label: string) => `//div[contains(@class, "moonlet-card-in")][.//div[normalize-space()=${JSON.stringify(label)}]]`;
 const waiting = card("Claude has a plan · waiting for approval");
 const planTab = '//button[@role="tab"][normalize-space()="Plan"]';
 const modeChip = 'button[title="Permission mode"]';
@@ -74,7 +74,7 @@ describe("plan approval", () => {
     // the card would stay at opacity 0 and never count as displayed.
     await browser.execute(() => {
       const style = document.createElement("style");
-      style.textContent = ".jaunt-card-in { animation: none !important; }";
+      style.textContent = ".moonlet-card-in { animation: none !important; }";
       document.head.append(style);
     });
     // The plan must open the Plan tab by itself.

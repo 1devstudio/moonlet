@@ -105,7 +105,7 @@ export function projectRemoval(workspaces: Workspace[], wsId: string, project: P
   const elsewhere = workspaces.some((w) => w.id !== wsId && w.project_ids.includes(project.id));
   return {
     label: `Remove from ${ws?.name ?? "workspace"}`,
-    confirm: elsewhere ? null : `${project.name} is in no other workspace, so it will be removed from jaunt. The folder on disk is not touched.`,
+    confirm: elsewhere ? null : `${project.name} is in no other workspace, so it will be removed from moonlet. The folder on disk is not touched.`,
   };
 }
 
