@@ -17,15 +17,15 @@ A workspace is one task: a git worktree on its own branch, the agent working in 
 
 ## Behaviour and acceptance criteria
 
-- [x] `repo.add` accepts any directory inside a repo, stores the top level, and returns the existing record for a repo added twice. The base branch comes from `.jaunt/config.toml` `base_branch`, then `origin/HEAD`, then `main`/`master`/`develop`/`trunk`.
+- [x] `repo.add` accepts any directory inside a repo, stores the top level, and returns the existing record for a repo added twice. The base branch comes from `.moonlet/config.toml` `base_branch`, then `origin/HEAD`, then `main`/`master`/`develop`/`trunk`.
 - [x] `workspace.create`:
-  - The branch defaults to `moonlet/<slug(name)>` and the directory to `~/.jaunt/worktrees/<repo>/<slug>`; both get `-2`, `-3`… suffixes when taken.
+  - The branch defaults to `moonlet/<slug(name)>` and the directory to `~/.moonlet/worktrees/<repo>/<slug>`; both get `-2`, `-3`… suffixes when taken.
   - The worktree starts from `from`, defaulting to the repo base branch. With `existing_branch` it checks out that branch instead of creating one (a leading `origin/` is stripped).
   - If `setup` is configured it runs in a `setup` tab, at the same time as the agent.
   - The agent runs in a login interactive shell (`$SHELL -lic "<agent cmd> '<prompt>'"`), so the user's PATH applies.
   - With no agent configured, a plain shell opens instead.
-- [x] Agent commands: `claude` and `codex` are built in; `[agents]` in `.jaunt/config.toml` adds or overrides them. Unknown names run as commands.
-- [x] Every workspace session gets `JAUNT_WORKSPACE_ID`, `JAUNT_ROOT_PATH` (main checkout), `JAUNT_WORKSPACE_PATH`, `JAUNT_WORKSPACE_NAME` and `JAUNT_BRANCH`.
+- [x] Agent commands: `claude` and `codex` are built in; `[agents]` in `.moonlet/config.toml` adds or overrides them. Unknown names run as commands.
+- [x] Every workspace session gets `MOONLET_WORKSPACE_ID`, `MOONLET_ROOT_PATH` (main checkout), `MOONLET_WORKSPACE_PATH`, `MOONLET_WORKSPACE_NAME` and `MOONLET_BRANCH`.
 - [x] `workspace.archive`:
   - runs the `archive` script, with a 60 s cap;
   - kills the workspace's sessions;
@@ -33,13 +33,13 @@ A workspace is one task: a git worktree on its own branch, the agent working in 
   - deletes the branch only with `delete_branch`;
   - marks the workspace archived.
 - [x] `workspace.unarchive` recreates the worktree if needed and opens a shell.
-- [x] State is saved atomically to `~/.jaunt/state.json`. Changes emit `workspaces.changed` / `repos.changed`.
+- [x] State is saved atomically to `~/.moonlet/state.json`. Changes emit `workspaces.changed` / `repos.changed`.
 - [x] A repo can't be removed while it has active workspaces.
 - [x] UI: new-workspace dialog, sidebar rows, History view.
 
 ## Data and config
 
-`.jaunt/config.toml` in the repo:
+`.moonlet/config.toml` in the repo:
 
 ```toml
 setup = "pnpm install"

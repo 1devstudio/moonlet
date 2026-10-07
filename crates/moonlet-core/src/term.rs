@@ -25,10 +25,10 @@ pub enum Signal {
         title: Option<String>,
         body: String,
     },
-    /// `OSC 1337 ; JauntNodePath=<path>` from moonlet's prompt hook (T8): where
+    /// `OSC 1337 ; MoonletNodePath=<path>` from moonlet's prompt hook (T8): where
     /// `node` is on PATH; empty when there is none any more.
     NodePath(String),
-    /// `OSC 1337 ; JauntPath=<PATH>` from moonlet's prompt hook (T8): the
+    /// `OSC 1337 ; MoonletPath=<PATH>` from moonlet's prompt hook (T8): the
     /// shell's PATH, when it changed.
     Path(String),
 }
@@ -90,10 +90,13 @@ fn parse_osc(params: &[&[u8]]) -> Option<Signal> {
         }
         "1337" => {
             let rest = text(&params[1..].join(&b';'));
-            if let Some(path) = rest.strip_prefix("JauntPath=") {
-                return Some(Signal::Path(path.to_string()));
+            // `Jaunt*` from shells jaunt's integration set up (X27).
+            let (name, value) = rest.split_once('=')?;
+            match name {
+                "MoonletPath" | "JauntPath" => Some(Signal::Path(value.to_string())),
+                "MoonletNodePath" | "JauntNodePath" => Some(Signal::NodePath(value.to_string())),
+                _ => None,
             }
-            Some(Signal::NodePath(rest.strip_prefix("JauntNodePath=")?.to_string()))
         }
         "777" if params.get(1).map(|p| *p == b"notify").unwrap_or(false) => Some(Signal::Notify {
             title: params.get(2).map(|p| text(p)),
@@ -398,5 +401,22 @@ mod tests {
             ]
         );
         assert_eq!(t.title(), "my title");
+    }
+
+    /// X27: shells report with moonlet's markers; shells jaunt's
+    /// integration set up still use the old ones.
+    #[test]
+    fn surfaces_path_markers_old_and_new() {
+        let mut t = TermState::new(5, 20);
+        let s = t.process(b"\x1b]1337;MoonletPath=/usr/bin:/bin\x07\x1b]1337;MoonletNodePath=/opt/node/bin/node\x07\x1b]1337;JauntPath=/bin\x07\x1b]1337;JauntNodePath=/n/node\x07");
+        assert_eq!(
+            s,
+            vec![
+                Signal::Path("/usr/bin:/bin".into()),
+                Signal::NodePath("/opt/node/bin/node".into()),
+                Signal::Path("/bin".into()),
+                Signal::NodePath("/n/node".into()),
+            ]
+        );
     }
 }

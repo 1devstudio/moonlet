@@ -12,11 +12,11 @@ An agent working in one project sometimes needs a change in another project. Unt
 ## User journey
 
 1. The user works with an agent in session "Add billing export" of project `api`. The agent finds it needs a new endpoint in project `web`.
-2. The agent runs `"$JAUNT_BIN" project ls` and sees `web`.
-3. It runs `"$JAUNT_BIN" session new web "Add a download button for the billing export (api PR #12)"`. The command prints the new session as JSON.
+2. The agent runs `"$MOONLET_BIN" project ls` and sees `web`.
+3. It runs `"$MOONLET_BIN" session new web "Add a download button for the billing export (api PR #12)"`. The command prints the new session as JSON.
 4. moonlet shows a toast "Add billing export started Add a download button… in web" with **Go to**. The user's focus does not move. In the sidebar, the new session's row says "from Add billing export".
 5. The new session's agent works in its own worktree. Approvals it asks for go to the user, like any other session.
-6. The parent agent runs `"$JAUNT_BIN" session wait <id>` and then `"$JAUNT_BIN" session read <id>` to get the reply, and continues. Or the user opens the new session and drives it themselves.
+6. The parent agent runs `"$MOONLET_BIN" session wait <id>` and then `"$MOONLET_BIN" session read <id>` to get the reply, and continues. Or the user opens the new session and drives it themselves.
 
 ## Behaviour and acceptance criteria
 
@@ -28,7 +28,7 @@ An agent working in one project sometimes needs a change in another project. Unt
 - [x] With `spawned_by` and no `agent`, the new session starts the project's `default_agent`; without one, the parent terminal's agent when it is Claude Code or Codex; otherwise Claude Code, as the composer does. `agent: "none"` still gives a shell. Without `spawned_by`, no `agent` means the project's `default_agent` or a shell, as before.
 - [x] With `spawned_by`, when the new session runs the same agent as the parent, an absent `model` or `effort` is the parent's current one: the chat's for a structured agent, otherwise the parent session's.
 - [x] Without `spawned_by` (the app's composer, scripts), modes behave as before (X7).
-- [x] `moonlet session new <project> [prompt…] [--name --branch --from --agent --model --effort --mode]` calls `session.create` with `spawned_by` from `$JAUNT_TERMINAL_ID` and prints the session as JSON (`id`, `name`, `project_id`, `branch`, `path`, `terminals`, `spawned_by`, …).
+- [x] `moonlet session new <project> [prompt…] [--name --branch --from --agent --model --effort --mode]` calls `session.create` with `spawned_by` from `$MOONLET_TERMINAL_ID` and prints the session as JSON (`id`, `name`, `project_id`, `branch`, `path`, `terminals`, `spawned_by`, …).
 - [x] `<project>` matches a project id, then a path (`~` expanded, trailing `/` ignored), then a name, case-insensitively. No match or more than one name match fails with `moonlet: no project "x"; known projects: api, web` (or `… matches several projects: …`) and creates nothing. moonlet never adds a project on its own.
 - [x] `moonlet project ls [--json]` lists projects: name, base branch, path.
 
@@ -42,9 +42,9 @@ An agent working in one project sometimes needs a change in another project. Unt
 
 ### Environment and skill
 
-- [x] Every terminal and structured agent moonlet starts gets `JAUNT_SOCK` and `JAUNT_BIN` (the `moonlet` CLI next to `moonletd`) in its environment. Structured agents get `JAUNT_TERMINAL_ID` and `JAUNT_SESSION` as before.
-- [x] `moonlet hooks install` (and the app's one-click hook install) also writes a `moonlet` skill to `~/.claude/skills/jaunt/SKILL.md` and `$CODEX_HOME/skills/jaunt/SKILL.md` (default `~/.codex`). `hooks uninstall` removes those two files, and `hooks status` reports whether each is installed.
-- [x] The skill tells the agent to act only when `$JAUNT_SOCK` is set, to use `"$JAUNT_BIN"`, to hand work in another project to a new session instead of editing that project's files, and to write a self-contained prompt (what, why, where the related work is).
+- [x] Every terminal and structured agent moonlet starts gets `MOONLET_SOCK` and `MOONLET_BIN` (the `moonlet` CLI next to `moonletd`) in its environment. Structured agents get `MOONLET_TERMINAL_ID` and `MOONLET_SESSION` as before.
+- [x] `moonlet hooks install` (and the app's one-click hook install) also writes a `moonlet` skill to `~/.claude/skills/moonlet/SKILL.md` and `$CODEX_HOME/skills/moonlet/SKILL.md` (default `~/.codex`). `hooks uninstall` removes those two files, and `hooks status` reports whether each is installed.
+- [x] The skill tells the agent to act only when `$MOONLET_SOCK` is set, to use `"$MOONLET_BIN"`, to hand work in another project to a new session instead of editing that project's files, and to write a self-contained prompt (what, why, where the related work is).
 
 ### App
 
@@ -65,7 +65,7 @@ An agent working in one project sometimes needs a change in another project. Unt
 ## Data and config
 
 - `state.json`: `spawned_by` on sessions.
-- `~/.claude/skills/jaunt/SKILL.md` and `$CODEX_HOME/skills/jaunt/SKILL.md`, written by hook install.
+- `~/.claude/skills/moonlet/SKILL.md` and `$CODEX_HOME/skills/moonlet/SKILL.md`, written by hook install.
 
 ## Security considerations
 
@@ -86,7 +86,7 @@ An agent working in one project sometimes needs a change in another project. Unt
 - `moonlet-core` `session.rs`: `spawned_by` recorded; unknown terminal rejected; mode inherited from a parent chat; a more permissive mode rejected; no `spawned_by` unchanged; the mode order; the agent picked without `agent` (repo default, parent's, Claude, `none`); model and effort inherited from a parent chat of the same agent.
 - `moonlet-cli/tests`: `moonlet session new` without `--agent` from an agent's terminal starts an agent that `wait` and `read` follow.
 - `moonlet-cli` unit tests: project matching (id, path, name, none, several); picking the agent terminal of a session; the reply `read` prints; when `wait` stops.
-- `moonlet-cli/tests`: `moonlet session new` against a real daemon records the parent and prints the session; a terminal sees `JAUNT_BIN` and `JAUNT_SOCK`.
+- `moonlet-cli/tests`: `moonlet session new` against a real daemon records the parent and prints the session; a terminal sees `MOONLET_BIN` and `MOONLET_SOCK`.
 - `moonlet-core` `hooks.rs`: install writes both skills, uninstall removes them, status reports them.
 - `apps/desktop/src/lib/spawned.test.ts`: which sessions get a toast (new and spawned only, not on the first load), the toast text, the "from" line.
 - `e2e/specs/agent-opens-session.e2e.ts`: `moonlet session new` run as the fixture session's agent shows the toast and the "from" tooltip, keeps the current session selected, and **Go to** opens the new one.

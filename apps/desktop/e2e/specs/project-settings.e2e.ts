@@ -84,7 +84,7 @@ describe("Project settings", () => {
     await fill(sel.field("Setup"), "pnpm install");
     await browser.keys("Escape");
     await expect($(sel.confirm("Discard changes"))).toBeDisplayed();
-    await expect($(sel.text("Discard unsaved changes to .jaunt/config.toml?"))).toBeDisplayed();
+    await expect($(sel.text("Discard unsaved changes to .moonlet/config.toml?"))).toBeDisplayed();
     await expect(dialog()).toBeDisplayed();
     await $(sel.confirmButton("Discard")).click();
     await expect(dialog()).not.toBeDisplayed();
@@ -108,7 +108,7 @@ describe("Project settings", () => {
   it("shows the parse error instead of the form for invalid TOML", async () => {
     await start("run = \n");
     await openFromMoreMenu();
-    await expect($(sel.text(".jaunt/config.toml is not valid TOML"))).toBeDisplayed();
+    await expect($(sel.text(".moonlet/config.toml is not valid TOML"))).toBeDisplayed();
     await expect(field("Run")).not.toBeExisting();
     await $(sel.dialogButton("Close")).click();
     await expect(dialog()).not.toBeDisplayed();

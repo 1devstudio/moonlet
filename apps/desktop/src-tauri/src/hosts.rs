@@ -341,9 +341,9 @@ type Reader = Box<dyn AsyncRead + Unpin + Send>;
 type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
 /// Finds a bundled binary: next to the app executable (bundle `Contents/MacOS`,
-/// or `target/<profile>` in development), or `$JAUNT_BIN_DIR`.
+/// or `target/<profile>` in development), or `$MOONLET_BIN_DIR`.
 pub fn sibling_binary(name: &str) -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os("JAUNT_BIN_DIR") {
+    if let Some(dir) = std::env::var_os("MOONLET_BIN_DIR") {
         let p = PathBuf::from(dir).join(name);
         if p.exists() {
             return Ok(p);
@@ -414,7 +414,7 @@ pub fn ssh_base_args() -> Vec<String> {
     ]
 }
 
-pub const REMOTE_MOONLETD: &str = "~/.jaunt/bin/moonletd";
+pub const REMOTE_MOONLETD: &str = "~/.moonlet/bin/moonletd";
 
 async fn connect_remote(alias: &str) -> Result<(Reader, Writer)> {
     let _ = moonlet_core::paths::ensure_private_dir(&moonlet_core::paths::run_dir());

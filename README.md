@@ -28,7 +28,7 @@ pnpm dev            # builds moonletd + moonlet, starts Vite and the app
 pnpm test           # cargo test --workspace && vitest
 ```
 
-Use `JAUNT_HOME=/some/dir pnpm dev` to keep development state away from `~/.jaunt`.
+Use `MOONLET_HOME=/some/dir pnpm dev` to keep development state away from `~/.moonlet`.
 
 Useful commands:
 
@@ -47,11 +47,11 @@ pnpm e2e:build    # the app with an embedded WebDriver server, in target/e2e (a 
 pnpm e2e          # drives the real app against a scratch daemon and repo
 ```
 
-The tests never touch `~/.jaunt` or start a real agent. A failing test saves a screenshot in `apps/desktop/e2e/artifacts/`. See spec X12.
+The tests never touch `~/.moonlet` or start a real agent. A failing test saves a screenshot in `apps/desktop/e2e/artifacts/`. See spec X12.
 
 ## Per-repo config
 
-`.jaunt/config.toml` in a repository. Edit it by hand or in Project settings (the gear on a project in the sidebar, or `⋯` › Project settings…):
+`.moonlet/config.toml` in a repository. Edit it by hand or in Project settings (the gear on a project in the sidebar, or `⋯` › Project settings…):
 
 ```toml
 setup = "pnpm install"        # runs when a workspace is created
@@ -65,4 +65,4 @@ claude-yolo = "claude --dangerously-skip-permissions"
 
 ## Remote hosts
 
-Settings › Remote hosts lists the aliases in your `~/.ssh/config`. moonlet installs a checksum-verified `moonletd` built for the host's platform into `~/.jaunt/bin`, only after you confirm. The app checks the helper's version when it connects and offers to reinstall on a mismatch. Linux helpers are built with `scripts/build-remote.sh` (needs `cargo-zigbuild`).
+Settings › Remote hosts lists the aliases in your `~/.ssh/config`. moonlet installs a checksum-verified `moonletd` built for the host's platform into `~/.moonlet/bin`, only after you confirm. The app checks the helper's version when it connects and offers to reinstall on a mismatch. Linux helpers are built with `scripts/build-remote.sh` (needs `cargo-zigbuild`).

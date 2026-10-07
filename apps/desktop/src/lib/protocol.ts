@@ -109,7 +109,7 @@ export interface ProjectConfig {
   agents: Record<string, string>;
 }
 
-/** `.jaunt/config.toml` as the Project settings dialog edits it (X8). */
+/** `.moonlet/config.toml` as the Project settings dialog edits it (X8). */
 export interface ProjectConfigFile {
   path: string;
   exists: boolean;

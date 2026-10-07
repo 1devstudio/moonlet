@@ -1,6 +1,6 @@
 //! Remote hosts over the user's own OpenSSH (R1, R2): host discovery from
 //! `~/.ssh/config`, and consent-based install of the version-pinned,
-//! checksum-verified `moonletd` helper into `~/.jaunt/bin` on the host.
+//! checksum-verified `moonletd` helper into `~/.moonlet/bin` on the host.
 
 use std::path::{Path, PathBuf};
 
@@ -94,7 +94,7 @@ fn target_triple(uname: &str) -> Result<&'static str> {
 /// Where helper builds are looked up, in order.
 pub fn helper_dirs(resource_dir: Option<PathBuf>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(d) = std::env::var_os("JAUNT_REMOTE_DIR") {
+    if let Some(d) = std::env::var_os("MOONLET_REMOTE_DIR") {
         dirs.push(PathBuf::from(d));
     }
     if let Some(r) = resource_dir {
@@ -149,15 +149,21 @@ fn sha256_hex(data: &[u8]) -> String {
         .collect()
 }
 
+/// Moves jaunt's `~/.jaunt` on the host to `~/.moonlet` once and leaves a
+/// symlink, like `paths::migrate_home` does locally (X27). Runs before the
+/// upload creates `~/.moonlet`, which would stop the move.
+const MOVE_JAUNT_HOME: &str = "if [ -d ~/.jaunt ] && [ ! -L ~/.jaunt ] && [ ! -e ~/.moonlet ] && [ ! -L ~/.moonlet ]; then \
+     mv ~/.jaunt ~/.moonlet && ln -s \"$HOME/.moonlet\" ~/.jaunt; fi";
+
 /// Uploads to `<name>.new`, verifies the checksum (and, with
 /// `expect_version`, the version it reports), then replaces the installed
 /// binary. A rejected build never replaces a working one.
 async fn upload(alias: &str, local: &Path, remote_name: &str, expect_version: Option<&str>) -> Result<()> {
     let data = std::fs::read(local).with_context(|| format!("read {}", local.display()))?;
     let want = sha256_hex(&data);
-    let tmp = format!("~/.jaunt/bin/{remote_name}.new");
+    let tmp = format!("~/.moonlet/bin/{remote_name}.new");
     let script = format!(
-        "set -e; umask 077; mkdir -p ~/.jaunt/bin; cat > {tmp}; chmod 700 {tmp}; \
+        "set -e; umask 077; {MOVE_JAUNT_HOME}; mkdir -p ~/.moonlet/bin; cat > {tmp}; chmod 700 {tmp}; \
          (sha256sum {tmp} 2>/dev/null || shasum -a 256 {tmp}) | cut -d' ' -f1"
     );
     let (code, out, err) = ssh(alias, &script, Some(&data)).await?;
@@ -180,7 +186,7 @@ async fn upload(alias: &str, local: &Path, remote_name: &str, expect_version: Op
     }
     let (code, _, err) = ssh(
         alias,
-        &format!("mv -f {tmp} ~/.jaunt/bin/{remote_name}"),
+        &format!("mv -f {tmp} ~/.moonlet/bin/{remote_name}"),
         None,
     )
     .await?;
@@ -349,6 +355,27 @@ mod tests {
             0,
         );
         assert_eq!(out, vec!["bastion", "devbox"]);
+    }
+
+    /// X27: the install runs this on the host before it creates ~/.moonlet.
+    #[test]
+    fn the_host_script_moves_jaunt_once() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".jaunt/bin")).unwrap();
+        std::fs::write(home.path().join(".jaunt/state.json"), "{}").unwrap();
+        for _ in 0..2 {
+            let ok = std::process::Command::new("/bin/sh")
+                .args(["-c", MOVE_JAUNT_HOME])
+                .env("HOME", home.path())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok);
+        }
+        assert_eq!(std::fs::read_to_string(home.path().join(".moonlet/state.json")).unwrap(), "{}");
+        let link = home.path().join(".jaunt");
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(link.join("bin").is_dir());
     }
 
     #[test]

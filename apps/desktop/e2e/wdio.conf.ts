@@ -9,7 +9,7 @@ import { APP, setUp, tearDown, world } from "./fixtures";
 if (!existsSync(APP)) throw new Error(`${APP} is missing; run \`pnpm e2e:build\` first`);
 
 // The launcher creates the scratch world once; workers find it through env.
-if (!process.env.JAUNT_E2E_ROOT) process.env.JAUNT_E2E_ROOT = setUp().root;
+if (!process.env.MOONLET_E2E_ROOT) process.env.MOONLET_E2E_ROOT = setUp().root;
 const w = world();
 const ARTIFACTS = join(dirname(fileURLToPath(import.meta.url)), "artifacts");
 

@@ -1,4 +1,4 @@
-// Form state for the Project settings dialog (X8): `.jaunt/config.toml` as
+// Form state for the Project settings dialog (X8): `.moonlet/config.toml` as
 // editable fields, the same validation the daemon applies, and the way back.
 
 import type { ProjectConfig } from "./protocol";
@@ -45,7 +45,7 @@ export interface SaveError {
  *  edit), a failed Reload keeps the user's edits and shows the error with
  *  Reload to try again. */
 export function loadFailure(reload: boolean, message: string): { close: true } | { close: false; saveErr: SaveError } {
-  return reload ? { close: false, saveErr: { message: `Could not reload .jaunt/config.toml: ${message}`, stale: true } } : { close: true };
+  return reload ? { close: false, saveErr: { message: `Could not reload .moonlet/config.toml: ${message}`, stale: true } } : { close: true };
 }
 
 /** What Close, Cancel or Esc does: close, ask before discarding edits (X23),
@@ -122,4 +122,10 @@ export function agentOptions(f: Form): { value: string; label: string }[] {
   ];
   if (f.default_agent && !opts.some((o) => o.value === f.default_agent)) opts.push({ value: f.default_agent, label: f.default_agent });
   return opts;
+}
+
+/** The config file the dialog edits, relative to the project: jaunt's
+ *  `.jaunt/config.toml` while only that one exists; saving moves it (X27). */
+export function configName(path: string | undefined): string {
+  return path?.endsWith("/.jaunt/config.toml") ? ".jaunt/config.toml" : ".moonlet/config.toml";
 }

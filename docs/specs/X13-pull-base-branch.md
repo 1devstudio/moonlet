@@ -6,7 +6,7 @@
 
 ## Summary
 
-New sessions branch from the project's local base branch (`main` unless `.jaunt/config.toml` sets `base_branch`). After a PR merges on GitHub, the local branch is stale until the user pulls it by hand, so the next session starts without the merged work. The sidebar shows when the base branch is behind `origin`, lists the incoming commits on hover, and fast-forwards it with one click.
+New sessions branch from the project's local base branch (`main` unless `.moonlet/config.toml` sets `base_branch`). After a PR merges on GitHub, the local branch is stale until the user pulls it by hand, so the next session starts without the merged work. The sidebar shows when the base branch is behind `origin`, lists the incoming commits on hover, and fast-forwards it with one click.
 
 ## User journey
 

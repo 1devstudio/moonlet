@@ -29,8 +29,8 @@ use moonlet_proto::types::{
     about = "Control moonlet sessions and agents from the shell"
 )]
 struct Cli {
-    /// Daemon socket (defaults to $JAUNT_SOCK or ~/.jaunt/run/jauntd.sock).
-    #[arg(long, env = "JAUNT_SOCK", global = true)]
+    /// Daemon socket (defaults to $MOONLET_SOCK or ~/.moonlet/run/moonletd.sock).
+    #[arg(long, env = "MOONLET_SOCK", global = true)]
     socket: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
@@ -44,8 +44,8 @@ enum Cmd {
         state: StateArg,
         #[arg(long, short)]
         message: Option<String>,
-        /// Session id (defaults to $JAUNT_TERMINAL_ID).
-        #[arg(long, env = "JAUNT_TERMINAL_ID")]
+        /// Session id (defaults to $MOONLET_TERMINAL_ID).
+        #[arg(long, env = "MOONLET_TERMINAL_ID")]
         session: Option<TerminalId>,
     },
     /// Entry point for agent hooks. Never fails, so a missing daemon cannot break an agent.
@@ -216,6 +216,7 @@ impl From<StateArg> for AgentState {
 
 fn main() {
     let cli = Cli::parse();
+    moonlet_core::paths::migrate_legacy_home();
     let socket = cli
         .socket
         .clone()
@@ -244,15 +245,7 @@ async fn connect(socket: &std::path::Path) -> Result<Client> {
 }
 
 async fn hook(socket: &std::path::Path, agent: HookAgent, payload: Option<String>) -> Result<()> {
-    // Terminals started before ADR 0005 still carry JAUNT_SESSION_ID.
-    let Some(session) = ["JAUNT_TERMINAL_ID", "JAUNT_SESSION_ID"]
-        .iter()
-        .find_map(|k| {
-            std::env::var(k)
-                .ok()
-                .and_then(|s| s.parse::<TerminalId>().ok())
-        })
-    else {
+    let Some(session) = terminal_from_env() else {
         return Ok(());
     };
     let raw = match payload {
@@ -295,8 +288,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
             message,
             session,
         } => {
-            // Terminals started before ADR 0005 still carry JAUNT_SESSION_ID.
-            let session = session.or_else(|| std::env::var("JAUNT_SESSION_ID").ok().and_then(|v| v.parse().ok()));
+            let session = session.or_else(terminal_from_env);
             let Some(session) = session else {
                 bail!("no session: run inside a moonlet pane or pass --session")
             };
@@ -569,8 +561,13 @@ async fn chat_state(c: &mut Client, id: TerminalId) -> Result<ChatState> {
     c.request(methods::CHAT_STATE, TerminalRef { id }).await
 }
 
+/// The terminal this command runs in. Terminals jaunt opened carry
+/// `JAUNT_TERMINAL_ID` (X27), and those from before ADR 0005
+/// `JAUNT_SESSION_ID`.
 fn terminal_from_env() -> Option<TerminalId> {
-    std::env::var("JAUNT_TERMINAL_ID").ok().and_then(|v| v.parse().ok())
+    ["MOONLET_TERMINAL_ID", "JAUNT_TERMINAL_ID", "JAUNT_SESSION_ID"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().and_then(|v| v.parse().ok()))
 }
 
 fn shell_quote(s: &str) -> String {

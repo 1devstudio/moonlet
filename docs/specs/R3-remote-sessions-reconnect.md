@@ -6,7 +6,7 @@
 
 ## Summary
 
-`ssh <host> ~/.jaunt/bin/moonletd proxy` is a short-lived stdio bridge to the long-lived daemon on the host, and starts it if needed. When the link drops, only the bridge dies; agents keep running. The app reconnects with backoff and resyncs every visible pane from a snapshot.
+`ssh <host> ~/.moonlet/bin/moonletd proxy` is a short-lived stdio bridge to the long-lived daemon on the host, and starts it if needed. When the link drops, only the bridge dies; agents keep running. The app reconnects with backoff and resyncs every visible pane from a snapshot.
 
 ## Behaviour and acceptance criteria
 

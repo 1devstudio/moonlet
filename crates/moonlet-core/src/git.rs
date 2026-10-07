@@ -1495,7 +1495,7 @@ pub(crate) mod tests {
                    branch refs/heads/moonlet/test\n\
                    prunable gitdir file points to non-existent location\n\
                    \n\
-                   worktree /Users/me/.jaunt/worktrees/moonlet/analyze-the-design\n\
+                   worktree /Users/me/.moonlet/worktrees/moonlet/analyze-the-design\n\
                    HEAD d2cbd2fff7abb00070689f3f1d54b872935ff77b\n\
                    branch refs/heads/moonlet/analyze-the-design\n";
         assert_eq!(
@@ -1504,7 +1504,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             checkout_of(raw, "moonlet/analyze-the-design").as_deref(),
-            Some("/Users/me/.jaunt/worktrees/moonlet/analyze-the-design")
+            Some("/Users/me/.moonlet/worktrees/moonlet/analyze-the-design")
         );
         // Its directory is gone, so nothing can be merged there.
         assert_eq!(checkout_of(raw, "moonlet/test"), None);

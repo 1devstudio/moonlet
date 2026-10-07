@@ -29,7 +29,7 @@ Daemon RPCs, frames or CLI commands added or changed.
 
 ## Data and config
 
-Files, config keys (for example `.jaunt/config.toml`), persisted state.
+Files, config keys (for example `.moonlet/config.toml`), persisted state.
 
 ## Security considerations
 

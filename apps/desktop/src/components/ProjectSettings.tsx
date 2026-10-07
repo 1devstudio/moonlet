@@ -1,4 +1,4 @@
-// Project settings dialog (X8): edits the project's `.jaunt/config.toml`
+// Project settings dialog (X8): edits the project's `.moonlet/config.toml`
 // through the daemon, which keeps the file's comments and unknown keys.
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -7,7 +7,7 @@ import { FileWarning, FolderOpen, Plus, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ProjectConfigFile } from "../lib/protocol";
 import { errorToast, toast, useStore } from "../lib/store";
-import { agentOptions, closeRequest, fromForm, isDirty, loadFailure, newRowId, toForm, validate, type AgentRow, type Form, type SaveError } from "../lib/projectSettings";
+import { agentOptions, closeRequest, configName, fromForm, isDirty, loadFailure, newRowId, toForm, validate, type AgentRow, type Form, type SaveError } from "../lib/projectSettings";
 import { askConfirm } from "../lib/confirm";
 import { fromOtherDialog } from "../lib/modal";
 import { Button, IconButton, cx } from "./ui";
@@ -97,7 +97,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
     if (next === "wait") return;
     const discard = await askConfirm({
       title: "Discard changes",
-      message: "Discard unsaved changes to .jaunt/config.toml?",
+      message: `Discard unsaved changes to ${configName(file?.path)}?`,
       action: "Discard",
       cancel: "Keep editing",
       variant: "danger",
@@ -110,7 +110,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
     setSaving(true);
     try {
       await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id: projectId, version: file.version, config: fromForm(form) });
-      toast("Saved .jaunt/config.toml");
+      toast("Saved .moonlet/config.toml");
       close();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -177,7 +177,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
           <div className="overflow-auto p-4">
             <div className="flex flex-col items-center gap-2 px-4 py-5 text-center">
               <FileWarning size={22} className="text-error" />
-              <div className="ui-text-13 font-medium text-fg">.jaunt/config.toml is not valid TOML</div>
+              <div className="ui-text-13 font-medium text-fg">{configName(file?.path)} is not valid TOML</div>
               <div className="max-w-sm ui-text-12 text-muted">Fix the file by hand, then open Project settings again. moonlet won't overwrite a file it can't read.</div>
             </div>
             <div className="rounded-md border border-border bg-panel-2 px-3 py-2.5 font-mono ui-text-12">
@@ -196,7 +196,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
           <div className="min-h-0 flex-1 overflow-auto p-4">
             {file && !file.exists && (
               <p className="mb-4 rounded-md border border-border bg-panel-2 px-2 py-1.5 ui-text-12 text-muted">
-                No <span className="font-mono text-fg">.jaunt/config.toml</span> yet. Saving creates it.
+                No <span className="font-mono text-fg">.moonlet/config.toml</span> yet. Saving creates it.
               </p>
             )}
             <fieldset disabled={loading} className={cx("m-0 min-w-0 border-0 p-0", loading && "opacity-50")}>
@@ -295,7 +295,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
           <div className="flex items-center gap-2 border-t border-[#5a2a2e] bg-[#2a1416] px-4 py-2 ui-text-12 text-error">
             <span className="min-w-0 flex-1">{saveErr.message}</span>
             {saveErr.stale && (
-              <Button size="sm" onClick={() => void load(true).then((ok) => ok && toast("Reloaded .jaunt/config.toml"))}>
+              <Button size="sm" onClick={() => void load(true).then((ok) => ok && toast(`Reloaded ${configName(file?.path)}`))}>
                 Reload
               </Button>
             )}
