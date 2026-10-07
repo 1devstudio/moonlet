@@ -25,6 +25,8 @@ An agent working in one project sometimes needs a change in another project. Unt
 - [x] `session.create {…, spawned_by: <terminal id>}` records the parent: the new session's `spawned_by` is the id of the session that terminal belongs to. A terminal outside any session records nothing, and an unknown terminal id is rejected and creates nothing.
 - [x] With `spawned_by`, the new session's permission mode defaults to the parent's current mode: the chat's mode for a structured agent, otherwise the parent session's `mode`. No mode on the parent means Manual.
 - [x] With `spawned_by`, a requested mode more permissive than the parent's is rejected and nothing is created. The order is Plan < Manual < Accept edits < Auto < Bypass permissions. An equal or less permissive mode is used as asked.
+- [x] With `spawned_by` and no `agent`, the new session starts the project's `default_agent`; without one, the parent terminal's agent when it is Claude Code or Codex; otherwise Claude Code, as the composer does. `agent: "none"` still gives a shell. Without `spawned_by`, no `agent` means the project's `default_agent` or a shell, as before.
+- [x] With `spawned_by`, when the new session runs the same agent as the parent, an absent `model` or `effort` is the parent's current one: the chat's for a structured agent, otherwise the parent session's.
 - [x] Without `spawned_by` (the app's composer, scripts), modes behave as before (X7).
 - [x] `jaunt session new <project> [prompt…] [--name --branch --from --agent --model --effort --mode]` calls `session.create` with `spawned_by` from `$JAUNT_TERMINAL_ID` and prints the session as JSON (`id`, `name`, `project_id`, `branch`, `path`, `terminals`, `spawned_by`, …).
 - [x] `<project>` matches a project id, then a path (`~` expanded, trailing `/` ignored), then a name, case-insensitively. No match or more than one name match fails with `jaunt: no project "x"; known projects: api, web` (or `… matches several projects: …`) and creates nothing. jaunt never adds a project on its own.
@@ -81,7 +83,8 @@ An agent working in one project sometimes needs a change in another project. Unt
 
 ## Test plan
 
-- `jaunt-core` `session.rs`: `spawned_by` recorded; unknown terminal rejected; mode inherited from a parent chat; a more permissive mode rejected; no `spawned_by` unchanged; the mode order.
+- `jaunt-core` `session.rs`: `spawned_by` recorded; unknown terminal rejected; mode inherited from a parent chat; a more permissive mode rejected; no `spawned_by` unchanged; the mode order; the agent picked without `agent` (repo default, parent's, Claude, `none`); model and effort inherited from a parent chat of the same agent.
+- `jaunt-cli/tests`: `jaunt session new` without `--agent` from an agent's terminal starts an agent that `wait` and `read` follow.
 - `jaunt-cli` unit tests: project matching (id, path, name, none, several); picking the agent terminal of a session; the reply `read` prints; when `wait` stops.
 - `jaunt-cli/tests`: `jaunt session new` against a real daemon records the parent and prints the session; a terminal sees `JAUNT_BIN` and `JAUNT_SOCK`.
 - `jaunt-core` `hooks.rs`: install writes both skills, uninstall removes them, status reports them.

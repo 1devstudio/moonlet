@@ -35,7 +35,9 @@ Keep your edits inside your own worktree. When the task needs a change in anothe
    "$JAUNT_BIN" session new <project> "<prompt>"
    ```
 
-   It prints the new session as JSON; keep its `id`. The session starts in your permission mode; `--mode` may only pick a stricter one. Other options: `--name`, `--branch`, `--from`, `--agent`, `--model`, `--effort`.
+   It prints the new session as JSON; keep its `id`. The session starts an agent with the prompt: the project's default agent, otherwise one like you, with your model and effort. It starts in your permission mode; `--mode` may only pick a stricter one. Other options: `--name`, `--branch`, `--from`, `--agent`, `--model`, `--effort`.
+
+   Never start an agent in the session yourself, with `jaunt agent start` or otherwise: jaunt does not count it as the session's agent, so you cannot follow it. If the JSON shows no `agent`, tell the user.
 
 3. Tell the user which session you opened and why.
 

@@ -120,11 +120,14 @@ enum SessionAction {
         /// Start point (defaults to the project's base branch).
         #[arg(long)]
         from: Option<String>,
-        /// Agent to start (defaults to the project's; `none` for a shell).
+        /// Agent to start; `none` for a shell. Defaults to the project's,
+        /// then, inside a jaunt agent, that agent, then `claude`.
         #[arg(long)]
         agent: Option<String>,
+        /// Model; inside a jaunt agent of the same kind, defaults to its own.
         #[arg(long)]
         model: Option<String>,
+        /// Effort; inside a jaunt agent of the same kind, defaults to its own.
         #[arg(long)]
         effort: Option<String>,
         /// Permission mode; inside a jaunt agent, no more permissive than its own.
