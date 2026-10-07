@@ -718,12 +718,18 @@ impl SessionManager {
             ),
             None => None,
         };
-        if let Some(p) = &parent {
-            let parent_mode = if p.chat {
-                self.chats.get().and_then(|c| c.state(p.id).ok()).and_then(|s| s.mode)
+        // What the parent runs with now, as (mode, model, effort): its chat's
+        // settings for a structured agent, otherwise its session's.
+        let parent_run = parent.as_ref().map(|p| {
+            if p.chat {
+                let s = self.chats.get().and_then(|c| c.state(p.id).ok());
+                s.map_or((None, None, None), |s| (s.mode, s.model, s.effort))
             } else {
-                p.session_id.as_deref().and_then(|id| self.session(id).ok()).and_then(|s| s.mode)
-            };
+                let s = p.session_id.as_deref().and_then(|id| self.session(id).ok());
+                s.map_or((None, None, None), |s| (s.mode, s.model, s.effort))
+            }
+        });
+        if let Some((parent_mode, _, _)) = &parent_run {
             req.mode = Some(crate::chat::spawned_mode(req.mode.as_deref(), parent_mode.as_deref())?);
         }
         let slug = git::slug(&name);
@@ -752,10 +758,30 @@ impl SessionManager {
         let config = read_config(&repo_path);
         // Absent means "the repo default"; "none" (or empty) means a plain shell.
         let agent = match req.agent.as_deref() {
+            // An agent asking for a session wants an agent in it (X22): the
+            // repo default, else the parent's own structured agent, else
+            // Claude, as in the composer. A parent's custom agent may not
+            // exist in this repo.
+            None if parent.is_some() => Some(
+                config
+                    .default_agent
+                    .clone()
+                    .or_else(|| parent.as_ref().and_then(|p| p.agent.clone()).filter(|a| crate::chat::supports(a)))
+                    .unwrap_or_else(|| "claude".into()),
+            ),
             None => config.default_agent.clone(),
             Some("") | Some("none") => None,
             Some(a) => Some(a.to_string()),
         };
+        // The same agent as the parent's runs its model and effort unless
+        // asked otherwise; another agent's model would mean nothing to it.
+        if let (Some(p), Some((_, model, effort))) = (&parent, parent_run)
+            && agent.is_some()
+            && agent == p.agent
+        {
+            req.model = req.model.filter(|m| !m.is_empty()).or(model);
+            req.effort = req.effort.filter(|e| !e.is_empty()).or(effort);
+        }
         let ws = Session {
             id: new_id(),
             project_id: repo.id.clone(),
@@ -1430,6 +1456,124 @@ mod tests {
         chats.settings(chat, None, None, Some("plan".into())).unwrap();
         let child = mgr.create_session(spawn_req(&r.id, "Child", None, Some(chat))).await.unwrap();
         assert_eq!(child.mode.as_deref(), Some("plan"));
+    }
+
+    /// A manager that runs structured agents with the fake `claude`, and a
+    /// repo with no `.jaunt/config.toml`.
+    async fn structured() -> (tempfile::TempDir, tempfile::TempDir, Arc<SessionManager>, Arc<crate::chat::runtime::ChatManager>) {
+        let repo = crate::git::tests::repo().await;
+        let home = tempfile::tempdir().unwrap();
+        let terminals = TerminalManager::new(
+            home.path().join("s.sock"),
+            crate::chat::runtime::tests::fake_claude_env(home.path()),
+        );
+        let chats = crate::chat::runtime::ChatManager::new(terminals.clone(), home.path().join("chats"));
+        let mgr = SessionManager::load(home.path().join("state.json"), home.path().join("worktrees"), terminals);
+        mgr.set_chats(chats.clone());
+        (repo, home, mgr, chats)
+    }
+
+    /// The session's terminals in creation order, as (agent, structured).
+    fn agents_of(mgr: &SessionManager, s: &Session) -> Vec<(Option<String>, bool)> {
+        let mut ts: Vec<_> = mgr
+            .terminals
+            .list()
+            .into_iter()
+            .filter(|t| t.session_id.as_deref() == Some(s.id.as_str()))
+            .collect();
+        ts.sort_by_key(|t| t.id);
+        ts.into_iter().map(|t| (t.agent, t.chat)).collect()
+    }
+
+    #[tokio::test]
+    async fn a_spawned_session_without_an_agent_starts_its_parents_agent() {
+        let (repo, _home, mgr, _chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = spawn_req(&r.id, "Parent", None, None);
+        req.agent = Some("claude".into());
+        let parent = mgr.create_session(req).await.unwrap();
+        let mut req = spawn_req(&r.id, "Child", None, Some(parent.terminals[0]));
+        req.agent = None;
+        let child = mgr.create_session(req).await.unwrap();
+        assert_eq!(child.agent.as_deref(), Some("claude"));
+        assert_eq!(agents_of(&mgr, &child), vec![(Some("claude".to_string()), true)]);
+    }
+
+    #[tokio::test]
+    async fn a_spawned_session_runs_its_parents_model_and_effort_unless_asked_otherwise() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = spawn_req(&r.id, "Parent", None, None);
+        req.agent = Some("claude".into());
+        req.model = Some("sonnet".into());
+        let parent = mgr.create_session(req).await.unwrap();
+        let chat = parent.terminals[0];
+        // Picked in the footer after the session started.
+        chats.settings(chat, Some("opus".into()), Some("max".into()), None).unwrap();
+
+        let mut req = spawn_req(&r.id, "Inherits", None, Some(chat));
+        req.agent = None;
+        let child = mgr.create_session(req).await.unwrap();
+        assert_eq!((child.model.as_deref(), child.effort.as_deref()), (Some("opus"), Some("max")));
+        let state = chats.state(child.terminals[0]).unwrap();
+        assert_eq!((state.model.as_deref(), state.effort.as_deref()), (Some("opus"), Some("max")));
+
+        let mut req = spawn_req(&r.id, "Asks", None, Some(chat));
+        req.agent = None;
+        req.model = Some("haiku".into());
+        req.effort = Some("low".into());
+        let child = mgr.create_session(req).await.unwrap();
+        assert_eq!((child.model.as_deref(), child.effort.as_deref()), (Some("haiku"), Some("low")));
+    }
+
+    #[tokio::test]
+    async fn a_spawned_session_starts_the_projects_default_agent_first() {
+        let (parent_repo, _home, mgr, _chats) = structured().await;
+        let p = mgr.add_project(&parent_repo.path().display().to_string()).await.unwrap();
+        // The `setup()` repo's config says `default_agent = "fake"`.
+        let (repo, _old_home, _) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = spawn_req(&p.id, "Parent", None, None);
+        req.agent = Some("claude".into());
+        req.model = Some("opus".into());
+        let parent = mgr.create_session(req).await.unwrap();
+        let mut req = spawn_req(&r.id, "Child", None, Some(parent.terminals[0]));
+        req.agent = None;
+        let child = mgr.create_session(req).await.unwrap();
+        assert_eq!(child.agent.as_deref(), Some("fake"));
+        assert_eq!(child.model, None, "a Claude model means nothing to another agent");
+        assert_eq!(
+            agents_of(&mgr, &child),
+            vec![(Some("fake".to_string()), false), (None, false)],
+            "the fake agent in its terminal, then setup"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_spawned_session_starts_claude_when_the_parent_has_no_structured_agent() {
+        let (repo, _home, mgr, _chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let (fake_repo, _old_home, _) = setup().await;
+        let f = mgr.add_project(&fake_repo.path().display().to_string()).await.unwrap();
+        let shell = mgr.create_session(spawn_req(&r.id, "Shell", None, None)).await.unwrap();
+        let mut req = spawn_req(&f.id, "Fake", None, None);
+        req.agent = None;
+        let fake = mgr.create_session(req).await.unwrap();
+        assert_eq!(fake.agent.as_deref(), Some("fake"));
+        for parent in [&shell, &fake] {
+            let mut req = spawn_req(&r.id, &format!("From {}", parent.name), None, Some(parent.terminals[0]));
+            req.agent = None;
+            let child = mgr.create_session(req).await.unwrap();
+            assert_eq!(child.agent.as_deref(), Some("claude"), "{}", parent.name);
+            assert_eq!(agents_of(&mgr, &child), vec![(Some("claude".to_string()), true)], "{}", parent.name);
+        }
+        // Asking for no agent still gives a shell.
+        let child = mgr
+            .create_session(spawn_req(&r.id, "Asked for a shell", None, Some(shell.terminals[0])))
+            .await
+            .unwrap();
+        assert_eq!(child.agent, None);
+        assert_eq!(agents_of(&mgr, &child), vec![(None, false)]);
     }
 
     #[tokio::test]

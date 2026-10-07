@@ -229,3 +229,26 @@ async fn an_agent_follows_the_session_it_opened() {
         format!("jaunt: session \"{}\" has no structured agent\n", shell.id)
     );
 }
+
+/// An agent that leaves out `--agent` gets an agent it can follow, not a shell.
+#[tokio::test]
+async fn a_session_an_agent_opens_without_naming_an_agent_runs_one() {
+    let d = Daemon::with_fake_claude().await;
+    let web = d.home.path().join("code/web");
+    git_repo(&web);
+    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let web_p: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": web})).await.unwrap();
+    let parent: Session = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({"project_id": web_p.id, "name": "Parent", "agent": "claude"}),
+        )
+        .await
+        .unwrap();
+
+    let out = d.jaunt(Some(parent.terminals[0]), &["session", "new", "web", "Say hello"]);
+    let s: Session = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(s.agent.as_deref(), Some("claude"));
+    assert_eq!(stdout(&d.jaunt(None, &["session", "wait", &s.id, "--timeout", "20"])), "done\n");
+    assert_eq!(stdout(&d.jaunt(None, &["session", "read", &s.id])), "reply 1\n");
+}
