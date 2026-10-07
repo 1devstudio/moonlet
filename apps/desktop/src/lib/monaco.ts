@@ -9,6 +9,7 @@ import { loader } from "@monaco-editor/react";
 import { useEffect, useState } from "react";
 import type { StateStack } from "shiki/textmate";
 import { createSyntax, editorLanguage, resolveEditorTheme } from "./syntax";
+import { serial } from "./serial";
 import { useStore } from "./store";
 
 declare global {
@@ -62,8 +63,9 @@ const HASH_LANGS = ["toml", "dotenv", "make", "shellscript", "docker", "nix", "f
 /**
  * Loads a language's grammar and the theme and has Monaco use them (X26).
  * Monaco's own definitions still give brackets and comments where it has one.
+ * One at a time, so the theme picked last is the one shown.
  */
-async function prepare(lang: string, theme: string) {
+const prepare = serial(async (lang: string, theme: string) => {
   await syntax.load(lang, theme);
   if (lang !== "plaintext" && !providers.has(lang)) {
     providers.add(lang);
@@ -84,7 +86,7 @@ async function prepare(lang: string, theme: string) {
     monaco.editor.defineTheme("jaunt", syntax.theme());
     monaco.editor.setTheme("jaunt");
   }
-}
+});
 
 /** The Monaco language of `path`, once its colours are ready; null until then. */
 export function useEditorLanguage(path: string | null): string | null {
