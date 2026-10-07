@@ -47,7 +47,7 @@ None. Grouping happens in the app from the existing `ChatItem`s.
 
 ## Data and config
 
-`jaunt.settings` in localStorage gains `toolCalls: "collapsed" | "expanded"`. A missing value means `collapsed`.
+`moonlet.settings` in localStorage gains `toolCalls: "collapsed" | "expanded"`. A missing value means `collapsed`.
 
 ## Security considerations
 

@@ -50,6 +50,12 @@ The app was renamed from jaunt to moonlet. Everything with the old name that liv
 - [x] After the takeover, `run/jauntd.sock` is a symlink to moonlet's socket, so hooks and CLI calls from jaunt's binary keep reaching the daemon until the hooks are reinstalled.
 - [x] The launchd agent is `dev.onedevstudio.moonlet.daemon`. After taking over jaunt's daemon, moonlet unloads and removes jaunt's `dev.onedevstudio.jaunt.daemon` agent, if there is one, and installs its own. A daemon with its own data folder (`MOONLET_HOME`, `JAUNT_HOME`) leaves launchd alone.
 
+### App settings and bundle identifier
+
+- [x] The bundle identifier is `dev.onedevstudio.moonlet`. The webview keeps its storage in a folder named after it, so on the first launch, before the window opens, moonlet copies `~/Library/WebKit/dev.onedevstudio.jaunt` to `~/Library/WebKit/dev.onedevstudio.moonlet`. It never overwrites moonlet's folder, and jaunt keeps its own. The e2e build (identifier `e2e`) copies nothing.
+- [x] App state in localStorage lives under `moonlet.settings`, `moonlet.ui` and `moonlet.prompts`. Until moonlet saves a value, it reads the one jaunt saved under `jaunt.*`.
+- macOS sees a new app: notification permission has to be granted again.
+
 ## UI
 
 No new UI. Copy that names files (Project settings, the remote helper confirm) now says `.moonlet/config.toml` and `~/.moonlet/bin`.
@@ -60,7 +66,7 @@ No RPC changes. The OSC 1337 markers change as above, with the old ones still pa
 
 ## Data and config
 
-`~/.moonlet` (was `~/.jaunt`), `<repo>/.moonlet/config.toml` (was `.jaunt/config.toml`), `~/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist`, `~/.claude/skills/moonlet`, `~/.codex/skills/moonlet`.
+`~/.moonlet` (was `~/.jaunt`), `~/Library/WebKit/dev.onedevstudio.moonlet` (copied from `dev.onedevstudio.jaunt`), localStorage `moonlet.*` (was `jaunt.*`), `<repo>/.moonlet/config.toml` (was `.jaunt/config.toml`), `~/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist`, `~/.claude/skills/moonlet`, `~/.codex/skills/moonlet`.
 
 ## Security considerations
 
@@ -81,5 +87,6 @@ No RPC changes. The OSC 1337 markers change as above, with the old ones still pa
 - `moonletd` tests: the move on start (`tests/migrate.rs`), taking over a daemon on `run/jauntd.sock` and reaching the new daemon through it (`tests/upgrade.rs`), the launchd label and removing jaunt's agent (`service`).
 - `moonlet-cli` tests: the move on start (`tests/migrate.rs`), a hook in a terminal that only has `JAUNT_TERMINAL_ID` (`tests/hook_e2e.rs`), `MOONLET_HOME` in terminals (`tests/session_e2e.rs`).
 - `moonlet-app` test: the host-side move script (`remote`).
-- Vitest: `configName` in `lib/projectSettings.test.ts`.
+- `moonlet-app` test: copying the webview data (`webview_data`).
+- Vitest: `configName` in `lib/projectSettings.test.ts`; `readStored` and the prompt history in `lib/storage.test.ts`.
 - Manual: install the bundle over a running jaunt 0.1.10 and check that sessions, terminals and settings survive.

@@ -253,7 +253,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
       setComment({ line, snippet });
     };
     modified.addAction({
-      id: "jaunt.comment",
+      id: "moonlet.comment",
       label: "Comment to agent",
       contextMenuGroupId: "navigation",
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyM],
