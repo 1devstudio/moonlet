@@ -41,8 +41,8 @@ async fn claude_hook_raises_attention_quickly() {
     let _daemon = KillOnDrop(
         Command::new(target_bin("moonletd"))
             .arg("daemon")
-            .env("JAUNT_HOME", home.path())
-            .env("JAUNT_SOCK", &socket)
+            .env("MOONLET_HOME", home.path())
+            .env("MOONLET_SOCK", &socket)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -100,13 +100,71 @@ async fn claude_hook_raises_attention_quickly() {
 
 #[test]
 fn hook_is_silent_outside_moonlet() {
+    let home = tempfile::tempdir().unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_moonlet"))
         .args(["hook", "claude"])
+        .env("MOONLET_HOME", home.path())
+        .env_remove("MOONLET_TERMINAL_ID")
         .env_remove("JAUNT_TERMINAL_ID")
-        .env("JAUNT_SOCK", "/nonexistent/sock")
+        .env_remove("JAUNT_SESSION_ID")
+        .env("MOONLET_SOCK", "/nonexistent/sock")
         .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(out.status.success());
     assert!(out.stdout.is_empty() && out.stderr.is_empty());
+}
+
+/// X27: an agent in a terminal jaunt opened only has `JAUNT_TERMINAL_ID`;
+/// its hook still reports to that terminal.
+#[tokio::test]
+async fn hook_in_a_terminal_jaunt_opened_reaches_its_terminal() {
+    let home = tempfile::tempdir().unwrap();
+    let socket = home.path().join("run/d.sock");
+    let _daemon = KillOnDrop(
+        Command::new(target_bin("moonletd"))
+            .arg("daemon")
+            .env("MOONLET_HOME", home.path())
+            .env("MOONLET_SOCK", &socket)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for_socket(&socket, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let moonlet = env!("CARGO_BIN_EXE_moonlet");
+    let script = format!(
+        "sleep 0.3; echo '{{\"hook_event_name\":\"Notification\",\"message\":\"Claude needs your permission to use Bash\"}}' | env -u MOONLET_TERMINAL_ID JAUNT_TERMINAL_ID=\"$MOONLET_TERMINAL_ID\" '{moonlet}' hook claude; sleep 5"
+    );
+    let info: TerminalInfo = c
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
+                cwd: home.path().display().to_string(),
+                command: vec!["/bin/sh".into(), "-c".into(), script],
+                kind: TerminalKind::Agent,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let attention = loop {
+        let f = tokio::time::timeout(Duration::from_secs(10), c.next_frame())
+            .await
+            .expect("no attention event")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == methods::EV_AGENT_ATTENTION
+        {
+            break serde_json::from_value::<Attention>(data).unwrap();
+        }
+    };
+    assert_eq!(attention.terminal, info.id);
+    assert_eq!(attention.state, AgentState::Blocked);
 }

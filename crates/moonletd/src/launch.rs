@@ -17,6 +17,9 @@ pub async fn ensure_running(socket: &Path) -> Result<()> {
         return Ok(());
     }
     let exe = std::env::current_exe().context("cannot locate moonletd binary")?;
+    if socket == moonlet_core::paths::default_socket_path() && take_over_jaunt(socket, &exe).await {
+        return Ok(());
+    }
     let log = moonlet_core::paths::log_file();
     if let Some(dir) = log.parent() {
         moonlet_core::paths::ensure_private_dir(dir)?;
@@ -26,8 +29,8 @@ pub async fn ensure_running(socket: &Path) -> Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if std::env::var_os("JAUNT_SOCK").is_none() {
-        cmd.env("JAUNT_SOCK", socket);
+    if std::env::var_os("MOONLET_SOCK").is_none() {
+        cmd.env("MOONLET_SOCK", socket);
     }
     // SAFETY: setsid is async-signal-safe.
     unsafe {
@@ -38,6 +41,38 @@ pub async fn ensure_running(socket: &Path) -> Result<()> {
     }
     cmd.spawn().context("failed to spawn moonletd")?;
     moonlet_core::client::wait_for_socket(&socket.to_path_buf(), Duration::from_secs(10)).await
+}
+
+/// Hands the terminals of a jaunt daemon still running on `run/jauntd.sock`
+/// to this binary, listening on `socket` (X27). False when there is none, or
+/// the handoff failed and a fresh daemon has to start.
+async fn take_over_jaunt(socket: &Path, exe: &Path) -> bool {
+    let legacy = moonlet_core::paths::legacy_socket_path();
+    if UnixStream::connect(&legacy).await.is_err() {
+        return false;
+    }
+    match crate::upgrade::request_upgrade_from(&legacy, socket, exe.to_path_buf()).await {
+        Ok(()) => {
+            tracing::info!("took over jaunt's daemon");
+            // Hooks and CLI calls from jaunt's binary still dial the old
+            // socket until the hooks are reinstalled.
+            let _ = std::fs::remove_file(&legacy);
+            if let Err(e) = std::os::unix::fs::symlink(socket, &legacy) {
+                tracing::warn!("cannot link {}: {e}", legacy.display());
+            }
+            // The launchd agent belongs to the default data folder; a daemon
+            // with its own (tests, e2e) leaves the user's agents alone.
+            let custom = std::env::var_os("MOONLET_HOME").is_some() || std::env::var_os("JAUNT_HOME").is_some();
+            if !custom && let Err(e) = crate::service::replace_jaunt_agent() {
+                tracing::warn!("cannot replace jaunt's launchd agent: {e:#}");
+            }
+            true
+        }
+        Err(e) => {
+            tracing::warn!("cannot take over jaunt's daemon: {e:#}");
+            false
+        }
+    }
 }
 
 /// Variables that describe the capturing shell, not the user's environment.
@@ -51,6 +86,9 @@ const SKIP: &[&str] = &[
     "TERM_PROGRAM_VERSION",
     "COLORTERM",
     "PS1",
+    "MOONLET_TERMINAL_ID",
+    "MOONLET_SESSION",
+    // Set in terminals jaunt opened (X27).
     "JAUNT_TERMINAL_ID",
     "JAUNT_SESSION",
 ];

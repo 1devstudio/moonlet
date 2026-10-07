@@ -4,8 +4,8 @@
 
 ## Transport
 
-- **Local:** Unix socket at `~/.jaunt/run/jauntd.sock`. The directory is `0700` and the socket is `0600`. The daemon also checks that the peer's uid matches its own.
-- **Remote:** `ssh <host> ~/.jaunt/bin/moonletd proxy` bridges stdio to the remote daemon's socket and starts that daemon if it is not running. The daemon outlives the SSH connection.
+- **Local:** Unix socket at `~/.moonlet/run/moonletd.sock`. The directory is `0700` and the socket is `0600`. The daemon also checks that the peer's uid matches its own.
+- **Remote:** `ssh <host> ~/.moonlet/bin/moonletd proxy` bridges stdio to the remote daemon's socket and starts that daemon if it is not running. The daemon outlives the SSH connection.
 
 ## Framing
 

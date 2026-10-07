@@ -18,7 +18,7 @@ Both sides of a change get unit tests: the daemon and core in Rust, and the UI's
 
 Each test asserts **public behaviour** against an **independent literal**, and is written as one **vertical slice** of red-green-refactor.
 
-- **Public behaviour:** go through the public interface: an RPC result, an exported `lib/` function, what the window shows, a file the user reads such as `.jaunt/config.toml`. Renaming or restructuring internals leaves the test green.
+- **Public behaviour:** go through the public interface: an RPC result, an exported `lib/` function, what the window shows, a file the user reads such as `.moonlet/config.toml`. Renaming or restructuring internals leaves the test green.
 - **Independent literal:** the expected value comes from the spec, a worked example or real captured output, written out as a literal.
 - **Vertical slice:** write one test, watch it go red, make it green, refactor, then write the next.
 

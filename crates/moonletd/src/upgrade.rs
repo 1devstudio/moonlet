@@ -19,12 +19,18 @@ use crate::daemon::Daemon;
 
 const FD_CHUNK: usize = 64;
 
-pub fn pid_file() -> PathBuf {
-    moonlet_core::paths::socket_path().with_file_name("jauntd.pid")
+/// The pid of the daemon listening on `socket`, next to it and named after
+/// it: `moonletd.pid` for `moonletd.sock`, and jaunt's `jauntd.pid` for
+/// `jauntd.sock` (X27).
+pub fn pid_file(socket: &Path) -> PathBuf {
+    let stem = socket.file_stem().unwrap_or_default().to_string_lossy();
+    socket.with_file_name(format!("{stem}.pid"))
 }
 
-fn request_file() -> PathBuf {
-    moonlet_core::paths::socket_path().with_file_name("upgrade.json")
+/// Where `moonletd upgrade` tells the daemon on `socket` which binary to
+/// hand over to. jaunt's daemon reads the same name.
+fn request_file(socket: &Path) -> PathBuf {
+    socket.with_file_name("upgrade.json")
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -32,14 +38,21 @@ struct UpgradeRequest {
     binary: PathBuf,
 }
 
-pub fn write_pid() {
-    let _ = std::fs::write(pid_file(), std::process::id().to_string());
+pub fn write_pid(socket: &Path) {
+    let _ = std::fs::write(pid_file(socket), std::process::id().to_string());
 }
 
 /// `moonletd upgrade`, run from the new binary: ask the running daemon to hand
 /// over to us, then wait until the new daemon answers.
 pub async fn request_upgrade(socket: &Path, binary: PathBuf) -> Result<()> {
-    let pid: i32 = std::fs::read_to_string(pid_file())
+    request_upgrade_from(socket, socket, binary).await
+}
+
+/// Asks the daemon on `old` to hand over to `binary`, and waits until the
+/// new daemon answers on `new`. Taking over from jaunt's daemon (X27), the
+/// two sockets differ.
+pub async fn request_upgrade_from(old: &Path, new: &Path, binary: PathBuf) -> Result<()> {
+    let pid: i32 = std::fs::read_to_string(pid_file(old))
         .context("no running daemon (pid file missing)")?
         .trim()
         .parse()
@@ -47,7 +60,7 @@ pub async fn request_upgrade(socket: &Path, binary: PathBuf) -> Result<()> {
     if pid == std::process::id() as i32 {
         bail!("refusing to upgrade into ourselves");
     }
-    let req = request_file();
+    let req = request_file(old);
     std::fs::write(&req, serde_json::to_vec(&UpgradeRequest { binary })?)?;
     std::fs::set_permissions(&req, std::fs::Permissions::from_mode(0o600))?;
     nix::sys::signal::kill(
@@ -58,7 +71,7 @@ pub async fn request_upgrade(socket: &Path, binary: PathBuf) -> Result<()> {
     // Done when a daemon with a different pid answers on the socket.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if let Ok(mut c) = moonlet_core::client::Client::connect(socket, "moonletd-upgrade").await
+        if let Ok(mut c) = moonlet_core::client::Client::connect(new, "moonletd-upgrade").await
             && let moonlet_proto::Message::Welcome { pid: new_pid, .. } = c.welcome.clone()
             && new_pid as i32 != pid
         {
@@ -66,7 +79,7 @@ pub async fn request_upgrade(socket: &Path, binary: PathBuf) -> Result<()> {
             return Ok(());
         }
         if tokio::time::Instant::now() > deadline {
-            bail!("upgrade did not complete within 30 s (see ~/.jaunt/logs/jauntd.log)");
+            bail!("upgrade did not complete within 30 s (see ~/.moonlet/logs/moonletd.log)");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -97,15 +110,18 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
     let binary = match binary {
         Some(b) => b,
         None => {
-            let raw = std::fs::read(request_file()).context("no upgrade request")?;
-            let _ = std::fs::remove_file(request_file());
+            let req = request_file(daemon.terminals.socket());
+            let raw = std::fs::read(&req).context("no upgrade request")?;
+            let _ = std::fs::remove_file(&req);
             serde_json::from_slice::<UpgradeRequest>(&raw)?.binary
         }
     };
     if !binary.is_file() {
         bail!("new moonletd binary not found: {}", binary.display());
     }
-    let path = moonlet_core::paths::socket_path()
+    let path = daemon
+        .terminals
+        .socket()
         .with_file_name(format!("handoff-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
@@ -153,7 +169,7 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
     result?;
     tracing::info!("handoff complete; exiting");
     daemon.set_handed_off();
-    let _ = std::fs::remove_file(pid_file());
+    let _ = std::fs::remove_file(pid_file(daemon.terminals.socket()));
     daemon.request_shutdown();
     Ok(())
 }

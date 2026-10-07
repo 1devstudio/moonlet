@@ -21,7 +21,7 @@ describe("an agent opens a session", () => {
 
     // As the agent in the parent session's first terminal would run it.
     execFileSync(join(BIN_DIR, "moonlet"), ["session", "new", PROJECT, "--agent", "none", "Add a download button"], {
-      env: { ...w.env, JAUNT_TERMINAL_ID: String(parent.terminals[0]) },
+      env: { ...w.env, MOONLET_TERMINAL_ID: String(parent.terminals[0]) },
       stdio: "pipe",
     });
 

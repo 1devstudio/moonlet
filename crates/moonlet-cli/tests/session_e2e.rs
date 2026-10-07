@@ -60,8 +60,8 @@ impl Daemon {
         let socket = home.path().join("run/d.sock");
         let child = Command::new(target_bin("moonletd"))
             .arg("daemon")
-            .env("JAUNT_HOME", home.path())
-            .env("JAUNT_SOCK", &socket)
+            .env("MOONLET_HOME", home.path())
+            .env("MOONLET_SOCK", &socket)
             .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -75,9 +75,14 @@ impl Daemon {
     /// Runs `moonlet` as an agent in `terminal` would.
     fn moonlet(&self, terminal: Option<u32>, args: &[&str]) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonlet"));
-        cmd.args(args).env("JAUNT_SOCK", &self.socket).env_remove("JAUNT_TERMINAL_ID");
+        cmd.args(args)
+            .env("MOONLET_HOME", self.home.path())
+            .env("MOONLET_SOCK", &self.socket)
+            .env_remove("MOONLET_TERMINAL_ID")
+            .env_remove("JAUNT_TERMINAL_ID")
+            .env_remove("JAUNT_SESSION_ID");
         if let Some(t) = terminal {
-            cmd.env("JAUNT_TERMINAL_ID", t.to_string());
+            cmd.env("MOONLET_TERMINAL_ID", t.to_string());
         }
         cmd.stdin(Stdio::null()).output().unwrap()
     }
@@ -151,7 +156,9 @@ async fn an_agent_opens_a_session_in_another_project() {
     );
 }
 
-/// The skill calls `"$JAUNT_BIN"`, so every terminal must have it.
+/// The skill calls `"$MOONLET_BIN"`, so every terminal must have it. A
+/// daemon with its own data folder passes it on, so `moonlet` in its
+/// terminals uses the same one (X27).
 #[tokio::test]
 async fn terminals_know_where_the_moonlet_cli_is() {
     use moonlet_proto::methods::TerminalCreate;
@@ -167,7 +174,7 @@ async fn terminals_know_where_the_moonlet_cli_is() {
                 command: vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    format!("printf '%s\\n' \"$JAUNT_BIN\" \"$JAUNT_SOCK\" > '{}'", out.display()),
+                    format!("printf '%s\\n' \"$MOONLET_BIN\" \"$MOONLET_SOCK\" \"$MOONLET_HOME\" > '{}'", out.display()),
                 ],
                 ..Default::default()
             },
@@ -175,7 +182,7 @@ async fn terminals_know_where_the_moonlet_cli_is() {
         .await
         .unwrap();
     for _ in 0..250 {
-        if std::fs::read_to_string(&out).is_ok_and(|s| s.lines().count() == 2) {
+        if std::fs::read_to_string(&out).is_ok_and(|s| s.lines().count() == 3) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -183,7 +190,7 @@ async fn terminals_know_where_the_moonlet_cli_is() {
     let moonlet = Path::new(env!("CARGO_BIN_EXE_moonlet")).canonicalize().unwrap();
     assert_eq!(
         std::fs::read_to_string(&out).unwrap(),
-        format!("{}\n{}\n", moonlet.display(), d.socket.display())
+        format!("{}\n{}\n{}\n", moonlet.display(), d.socket.display(), d.home.path().display())
     );
 }
 

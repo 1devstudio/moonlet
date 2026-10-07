@@ -301,10 +301,12 @@ fn app_info() -> Value {
 pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("JAUNT_LOG")
+            tracing_subscriber::EnvFilter::try_from_env("MOONLET_LOG")
                 .unwrap_or_else(|_| "info".into()),
         )
         .try_init();
+    // Before anything creates ~/.moonlet (X27).
+    moonlet_core::paths::migrate_legacy_home();
     let builder = tauri::Builder::default();
     // Only `pnpm e2e:build` turns this on (X12).
     #[cfg(feature = "e2e")]

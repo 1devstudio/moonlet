@@ -142,7 +142,7 @@ impl TerminalManager {
         &self.base_env
     }
 
-    /// The daemon socket terminals get as `JAUNT_SOCK`.
+    /// The daemon socket terminals get as `MOONLET_SOCK`.
     pub fn socket(&self) -> &std::path::Path {
         &self.socket
     }
@@ -259,13 +259,13 @@ impl TerminalManager {
             "TERM_PROGRAM_VERSION".into(),
             env!("CARGO_PKG_VERSION").into(),
         );
-        env.insert("JAUNT_TERMINAL_ID".into(), id.to_string());
-        env.insert("JAUNT_SOCK".into(), self.socket.display().to_string());
+        env.insert("MOONLET_TERMINAL_ID".into(), id.to_string());
+        env.insert("MOONLET_SOCK".into(), self.socket.display().to_string());
         env.entry("SHELL".into()).or_insert(shell);
         env.entry("LANG".into())
             .or_insert_with(|| "en_US.UTF-8".into());
         if let Some(ws) = &req.session_id {
-            env.insert("JAUNT_SESSION".into(), ws.clone());
+            env.insert("MOONLET_SESSION".into(), ws.clone());
         }
         env.extend(req.env.clone());
 
@@ -287,7 +287,7 @@ impl TerminalManager {
                     _ => {}
                 }
             }
-            env.insert("JAUNT_CLASSIC_FILE".into(), marker.display().to_string());
+            env.insert("MOONLET_CLASSIC_FILE".into(), marker.display().to_string());
         }
         let args = if default_shell {
             crate::shell::apply(&crate::shell::dir(), &program, args, &mut env)
@@ -1050,7 +1050,7 @@ mod tests {
                 command: vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    "echo hi-$JAUNT_TERMINAL_ID; exit 3".into(),
+                    "echo hi-$MOONLET_TERMINAL_ID; exit 3".into(),
                 ],
                 cols: 80,
                 rows: 24,

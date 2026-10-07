@@ -20,8 +20,8 @@ impl Link {
     async fn open(home: &std::path::Path) -> Link {
         let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
             .arg("proxy")
-            .env("JAUNT_HOME", home)
-            .env_remove("JAUNT_SOCK")
+            .env("MOONLET_HOME", home)
+            .env_remove("MOONLET_SOCK")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
