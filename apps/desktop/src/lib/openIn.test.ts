@@ -19,8 +19,9 @@ describe("openInChoices (X25)", () => {
     ]);
   });
 
-  it("opens a local folder in Finder, the editors and the terminals", () => {
-    expect(openInChoices(targets, { dir: true, remote: false })).toEqual(targets);
+  it("reveals a local folder in Finder, and offers the editors and the terminals", () => {
+    // `open` on a folder named Foo.app would launch it, so Finder reveals.
+    expect(openInChoices(targets, { dir: true, remote: false })).toEqual([{ id: "reveal", label: "Finder" }, ...targets.slice(1)]);
   });
 
   it("offers only VS Code and Cursor on a remote host", () => {

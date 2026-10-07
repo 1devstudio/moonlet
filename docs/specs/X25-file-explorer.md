@@ -14,7 +14,7 @@ The Files tab used to open on the list of changed files, with the file tree behi
 1. The user opens the Files tab. The workspace's tree shows, folders first. Each file has an icon for its type: `{}` for JSON, the YAML mark for `.yml`, the git mark for `.gitignore`, a gear for `.env`, a plain page for anything unknown.
 2. Hovering a row highlights it and shows its actions on the right: `+` (files only) and `⌄`.
 3. `+` puts `@<path relative to the workspace>` into the session's agent composer, after what is already typed. With no agent running, a new agent tab opens with it.
-4. `⌄` opens an "Open in" menu with the apps that can open the entry: Finder (which reveals a file, or opens a folder), then the installed editors, then, for folders, the installed terminals.
+4. `⌄` opens an "Open in" menu with the apps that can open the entry: Finder (which reveals the entry), then the installed editors, then, for folders, the installed terminals.
 5. Clicking a folder expands it; clicking a file opens it in an editor tab of the main window ([X26](X26-file-tabs.md)).
 6. The user opens the Changes tab. The summary line (`+12 −3 · 4 files → main`) sits above the changed files, grouped by folder, each with a status icon and its `+/−` counts. Hovering a file shows stage, unstage and discard buttons.
 7. Clicking a changed file shows its diff in the full height of the tab, under a bar with a back button and the file's path. The back button returns to the list.
@@ -22,7 +22,7 @@ The Files tab used to open on the list of changed files, with the file tree behi
 ## Behaviour and acceptance criteria
 
 - [x] A file's icon is picked by its full name first, then by its longest known extension, case-insensitively; an unknown file gets the plain file icon. (`fileIcon` in `fileIcons.test.ts`)
-- [x] The Open in menu of a local file lists Finder (revealing the file) and the installed editors, not the terminals. A local folder's menu lists Finder (opening the folder), the editors and the terminals. On a remote host both list only VS Code and Cursor. (`openInChoices` in `openIn.test.ts`)
+- [x] The Open in menu of a local file lists Finder and the installed editors, not the terminals. A local folder's menu lists Finder, the editors and the terminals. Finder reveals the entry and never opens it: `open` would run a file with its default app, and launch a folder named `Foo.app`. On a remote host both list only VS Code and Cursor. (`openInChoices` in `openIn.test.ts`)
 - [x] `+` adds `@<relative path>` to the composer: into an empty composer as is, after typed text with a space, so several files can be added in a row. Other text sent to the composer (T8) still follows a blank line. (`fileMention`, `joinDraft` in `chat.test.ts`)
 - [x] The Files tab shows the tree only; the "changed / all files" toggle and the summary line are gone from it. (`file-explorer.e2e.ts`)
 - [x] Changed files are grouped by folder, folders in path order and the root folder shown as `/`; each file shows `+a −d`, `+a`, `−d` or `bin`. (`groupByDir`, `changeCount` in `changes.test.ts`)
@@ -67,7 +67,7 @@ The icons are SVGs from the MIT-licensed `material-icon-theme` package, bundled 
 
 ## Security considerations
 
-Paths come from `fs.list` on the workspace. `open_in` already rejects unknown targets and remote paths for local-only apps.
+Paths come from `fs.list` on the workspace, so their names are the repository's and not trusted. Finder always reveals (`open -R`), since a plain `open` runs a file with its default app and launches a folder named `Foo.app`; terminals are offered for folders only, since a terminal app given a file runs it as a script. Paths are absolute, so none can be read as an option of `open`. `open_in` already rejects unknown targets and remote paths for local-only apps.
 
 ## Out of scope
 
