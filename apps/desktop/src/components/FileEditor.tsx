@@ -7,6 +7,7 @@ import { errorToast, toast, useStore } from "../lib/store";
 import { editorFont } from "../lib/uiScale";
 import { Empty, cx } from "./ui";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { afterRead, afterSave } from "../lib/fileSync";
 
 /**
  * A file in an editor tab of the main window (X26): writable at once, ⌘S
@@ -51,13 +52,11 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
       .then((f) => {
         if (!live) return;
         const model = editor.current?.getModel();
-        if (!model || model.getValue() === f.content) saved.current = f.content;
-        else if (model.getValue() === saved.current && !f.binary) {
-          // No unsaved edits: show what is on disk, undoably. The user's
-          // unsaved text is otherwise kept.
-          saved.current = f.content;
-          model.pushEditOperations([], [{ range: model.getFullModelRange(), text: f.content }], () => null);
-        }
+        const r = afterRead(model && !f.binary ? model.getValue() : null, saved.current, f.content);
+        saved.current = r.saved;
+        // Undoably, so a change on disk can be taken back.
+        if (r.replace) model?.pushEditOperations([], [{ range: model.getFullModelRange(), text: f.content }], () => null);
+        setDirty(r.dirty);
         setFile(f);
       })
       // Once open, a failed re-read (the file was deleted, say) keeps the
@@ -73,8 +72,10 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
     if (value === undefined || readOnly) return;
     try {
       await rpc(host, M.fsWrite, { path, content: value });
-      saved.current = value;
-      setDirty(false);
+      // Typing during the write stays unsaved.
+      const r = afterSave(value, editor.current?.getValue() ?? value);
+      saved.current = r.saved;
+      setDirty(r.dirty);
       toast(`Saved ${path.split("/").pop()}`);
     } catch (e) {
       errorToast(e);

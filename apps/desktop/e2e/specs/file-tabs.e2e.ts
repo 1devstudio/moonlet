@@ -41,6 +41,10 @@ async function setTheme(id: string) {
  *  which is what Monaco takes focus on. */
 const focusEditor = () => browser.execute(() => (document.querySelector(".monaco-editor textarea") as HTMLElement).focus());
 
+/** Monaco draws on animation frames, which WebKit pauses while the window
+ *  is in the background: a timeout says so instead of looking like a bug. */
+const drawn = async (what: string) => `${what} (window ${await browser.execute(() => document.visibilityState)})`;
+
 describe("File tabs", () => {
   let sessionId = "";
 
@@ -66,9 +70,9 @@ describe("File tabs", () => {
     await row("app.ts").click();
     await expect(fileTab()).toBeDisplayed();
     await expect(fileTab()).toHaveAttribute("aria-current", "true");
-    await browser.waitUntil(async () => (await editorText()).includes("const answer = 42;"), { timeoutMsg: "the file's text never showed" });
+    await browser.waitUntil(async () => (await editorText()).includes("const answer = 42;"), { timeoutMsg: await drawn("the file's text never showed") });
     // Dark+: keywords #569CD6, numbers #B5CEA8.
-    await browser.waitUntil(async () => (await tokenColour("const")) === "rgb(86, 156, 214)", { timeoutMsg: "const is not Dark+ blue" });
+    await browser.waitUntil(async () => (await tokenColour("const")) === "rgb(86, 156, 214)", { timeoutMsg: await drawn("const is not Dark+ blue") });
     expect(await tokenColour("42")).toBe("rgb(181, 206, 168)");
   });
 
@@ -76,12 +80,12 @@ describe("File tabs", () => {
     try {
       await setTheme("github-dark");
       // GitHub Dark: keywords #F97583.
-      await browser.waitUntil(async () => (await tokenColour("const")) === "rgb(249, 117, 131)", { timeoutMsg: "const did not turn GitHub Dark red" });
+      await browser.waitUntil(async () => (await tokenColour("const")) === "rgb(249, 117, 131)", { timeoutMsg: await drawn("const did not turn GitHub Dark red") });
     } finally {
       // Settings outlive the run (localStorage), so the default comes back.
       await setTheme("dark-plus");
     }
-    await browser.waitUntil(async () => (await tokenColour("const")) === "rgb(86, 156, 214)", { timeoutMsg: "const did not turn back to Dark+ blue" });
+    await browser.waitUntil(async () => (await tokenColour("const")) === "rgb(86, 156, 214)", { timeoutMsg: await drawn("const did not turn back to Dark+ blue") });
   });
 
   it("switches to the open tab when the file is clicked again", async () => {
@@ -131,6 +135,6 @@ describe("File tabs", () => {
     await expect($('//button[@role="tab"][normalize-space()="Files"]')).toHaveAttribute("aria-selected", "true");
     await $(sel.button("Source")).click();
     await expect(frame).not.toBeExisting();
-    await browser.waitUntil(async () => (await editorText()).includes("# Getting started"), { timeoutMsg: "the source never showed" });
+    await browser.waitUntil(async () => (await editorText()).includes("# Getting started"), { timeoutMsg: await drawn("the source never showed") });
   });
 });
