@@ -1,10 +1,12 @@
-import { Fragment, useRef } from "react";
+import { Fragment, lazy, Suspense, useRef } from "react";
 import { type PaneNode, setSizes } from "../lib/layout";
 import { getLayout, setLayout } from "../lib/store";
 import { Splitter } from "./Splitter";
 import { TerminalPane } from "./TerminalPane";
 import { AgentView } from "./AgentView";
 import { useStore } from "../lib/store";
+
+const FileEditor = lazy(() => import("./FileEditor"));
 
 interface Props {
   host: string;
@@ -19,6 +21,12 @@ interface Props {
 export function PaneTree({ host, wsId, tabId, node, path, focused, visible }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const chat = useStore((s) => (node.type === "leaf" ? !!s.terminals[host]?.[node.session]?.chat : false));
+  if (node.type === "file")
+    return (
+      <Suspense fallback={null}>
+        <FileEditor host={host} wsId={wsId} path={node.path} line={node.line} visible={visible} />
+      </Suspense>
+    );
   if (node.type === "leaf") {
     if (chat) return <AgentView host={host} id={node.session} wsId={wsId} focused={focused === node.session} visible={visible} />;
     return <TerminalPane host={host} session={node.session} wsId={wsId} focused={focused === node.session} visible={visible} />;

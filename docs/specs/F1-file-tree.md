@@ -11,3 +11,4 @@
 - [x] `fs.read` caps reads at 4 MiB by default and reports `truncated`, `binary` and `size`. `fs.write` saves atomically and keeps permissions.
 - [x] `fs.watch` / `fs.unwatch` are reference-counted per client and released on disconnect.
 - [x] UI: the tree roots at the workspace path (or the pane's OSC 7 cwd), loads lazily and refreshes on `fs.changed`.
+- [x] UI: file-type icons, Add to chat and Open in per row, and the explorer as the whole Files tab come from [X25](X25-file-explorer.md).

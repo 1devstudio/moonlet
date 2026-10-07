@@ -1,62 +1,99 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
-import { Check, FileDiff, Minus, MessageSquarePlus, Plus, RotateCcw, Undo2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ChevronDown, ChevronRight, FileDiff, Minus, MessageSquarePlus, Plus, RotateCcw, SquareDot, SquareMinus, SquarePlus, Undo2 } from "lucide-react";
 import "../lib/monaco";
 
 /** Pending diff-model cleanups per session, cancelled if the panel reopens. */
 const modelCleanup = new Map<string, number>();
-import { editorOptions, languageFor, monaco } from "../lib/monaco";
+import { editorOptions, monaco, useEditorLanguage } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
 import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } from "../lib/patch";
-import { M, type FileChange, type FileVersions, type Session } from "../lib/protocol";
+import { changeCount, groupByDir } from "../lib/changes";
+import { M, type FileChange, type FileVersions, type GitStatus, type Session } from "../lib/protocol";
 import { errorToast, refreshGit, toast, useStore, sesKey } from "../lib/store";
 import { sendToAgent } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
 import { editorFont } from "../lib/uiScale";
 import { Button, DiffStat, Empty, IconButton, Kbd, cx } from "./ui";
 
-const STATUS_LETTER: Record<FileChange["status"], [string, string]> = {
-  added: ["A", "text-add"],
-  untracked: ["U", "text-add"],
-  modified: ["M", "text-blocked"],
-  deleted: ["D", "text-del"],
-  renamed: ["R", "text-accent"],
-  conflicted: ["!", "text-error"],
-};
-
 type Mode = "base" | "head";
+type FileAction = "stage" | "unstage" | "revert";
 
-function FileRow({ f, active, onSelect, onAction }: { f: FileChange; active: boolean; onSelect: () => void; onAction: (a: "stage" | "unstage" | "revert") => void }) {
-  const [letter, color] = STATUS_LETTER[f.status];
-  const name = f.path.split("/").pop();
-  const dir = f.path.slice(0, f.path.length - (name?.length ?? 0));
+function StatusBox({ status }: { status: FileChange["status"] }) {
+  const p = { size: 14, strokeWidth: 1.5, className: "shrink-0 text-muted" };
+  if (status === "added" || status === "untracked") return <SquarePlus {...p} />;
+  if (status === "deleted") return <SquareMinus {...p} />;
+  return <SquareDot {...p} />;
+}
+
+function SummaryLine({ status, against }: { status: GitStatus; against: string }) {
   return (
-    <div
-      className={cx("group flex cursor-default items-center gap-2 px-3 py-[3px] ui-text-12.5", active ? "bg-raised" : "hover:bg-panel-2")}
-      onClick={onSelect}
-      title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
-    >
-      <span className={cx("w-3 shrink-0 text-center font-mono ui-text-11 font-semibold", color)}>{letter}</span>
-      <span className="min-w-0 flex-1 truncate">
-        <span className="text-fg">{name}</span> <span className="text-faint">{dir}</span>
+    <div className="flex items-center gap-2 px-5 pb-1 pt-4 font-mono ui-text-12.5 text-muted">
+      <span className="text-add">+{status.additions}</span>
+      <span className="text-del">−{status.deletions}</span>
+      <span className="text-faint">·</span>
+      <span>
+        {status.files.length} file{status.files.length === 1 ? "" : "s"}
       </span>
-      {f.staged && <Check size={11} className="shrink-0 text-done" aria-label="staged" />}
-      <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex" onClick={(e) => e.stopPropagation()}>
-        {f.unstaged || f.status === "untracked" ? (
-          <IconButton title="Stage file" onClick={() => onAction("stage")}>
-            <Plus size={12} />
-          </IconButton>
-        ) : null}
-        {f.staged && (
-          <IconButton title="Unstage file" onClick={() => onAction("unstage")}>
-            <Minus size={12} />
-          </IconButton>
-        )}
-        <IconButton title="Discard changes" onClick={() => onAction("revert")}>
-          <Undo2 size={12} />
-        </IconButton>
-      </span>
-      {f.binary ? <span className="ui-text-10.5 text-faint">bin</span> : <DiffStat add={f.additions} del={f.deletions} className="shrink-0 group-hover:hidden" />}
+      <span className="text-faint">·</span>
+      <ArrowRight size={12} />
+      <span className="rounded bg-raised px-1.5 py-0.5 text-fg">{against}</span>
+      {status.base_missing && (
+        <span className="text-blocked" title={`"${status.base_missing}" was not found (not fetched?), so only uncommitted changes against HEAD are shown.`}>
+          base not found · showing HEAD
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Changed files grouped by folder (X25); a click opens the file's diff. */
+function ChangedFiles({ files, onSelect, onAction }: { files: FileChange[]; onSelect: (path: string) => void; onAction: (f: FileChange, a: FileAction) => void }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const groups = useMemo(() => groupByDir(files), [files]);
+  return (
+    <div className="pb-4">
+      {groups.map(({ dir, files }) => (
+        <div key={dir} className="mt-3">
+          <button
+            className="flex w-full items-center gap-2 px-5 py-1.5 text-left font-mono ui-text-12 tracking-[0.06em] text-muted hover:text-fg"
+            onClick={() => setCollapsed((c) => ({ ...c, [dir]: !c[dir] }))}
+          >
+            {collapsed[dir] ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+            <span className="truncate">{dir}</span>
+          </button>
+          {!collapsed[dir] &&
+            files.map((f) => (
+              <div
+                key={f.path}
+                role="button"
+                title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
+                className="group flex h-[38px] w-full cursor-default items-center gap-3 pl-[34px] pr-5 text-left hover:bg-panel-2"
+                onClick={() => onSelect(f.path)}
+              >
+                <StatusBox status={f.status} />
+                <span className={cx("min-w-0 flex-1 truncate ui-text-14", f.status === "deleted" ? "text-muted line-through" : "text-fg")}>{f.name}</span>
+                {f.staged && <Check size={12} className="shrink-0 text-done" aria-label="staged" />}
+                <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex" onClick={(e) => e.stopPropagation()}>
+                  {(f.unstaged || f.status === "untracked") && (
+                    <IconButton title="Stage file" onClick={() => onAction(f, "stage")}>
+                      <Plus size={12} />
+                    </IconButton>
+                  )}
+                  {f.staged && (
+                    <IconButton title="Unstage file" onClick={() => onAction(f, "unstage")}>
+                      <Minus size={12} />
+                    </IconButton>
+                  )}
+                  <IconButton title="Discard changes" onClick={() => onAction(f, "revert")}>
+                    <Undo2 size={12} />
+                  </IconButton>
+                </span>
+                <span className="shrink-0 font-mono ui-text-12 tabular-nums text-muted group-hover:hidden">{changeCount(f)}</span>
+              </div>
+            ))}
+        </div>
+      ))}
     </div>
   );
 }
@@ -150,7 +187,6 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
 
   useEffect(() => {
     if (selected && !files.some((f) => f.path === selected)) setSelected(null);
-    if (!selected && files.length) setSelected(files[0].path);
   }, [files, selected]);
 
   const load = useCallback(async () => {
@@ -180,7 +216,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
     void load();
   };
 
-  const fileAction = async (f: FileChange, a: "stage" | "unstage" | "revert") => {
+  const fileAction = async (f: FileChange, a: FileAction) => {
     if (a === "revert") {
       const ok = await askConfirm({ title: "Discard changes", message: `Discard all changes to ${f.path}? This cannot be undone.`, action: "Discard", variant: "danger" });
       if (!ok) return;
@@ -234,6 +270,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
   };
 
   const current = useMemo(() => files.find((f) => f.path === selected), [files, selected]);
+  const language = useEditorLanguage(selected);
   const total = mode === "base" ? status : headStatus;
 
   return (
@@ -251,7 +288,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
             </button>
           ))}
         </div>
-        {total && <DiffStat add={total.additions} del={total.deletions} />}
+        {total && selected && <DiffStat add={total.additions} del={total.deletions} />}
         <span className="ml-auto flex items-center gap-1">
           <IconButton title="Refresh" onClick={refresh}>
             <RotateCcw size={12} />
@@ -265,15 +302,18 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
         <Empty icon={<FileDiff size={20} className="text-faint" />} title="No changes yet">
           {mode === "base" ? `Nothing differs from ${ws.base}.` : "The working tree is clean."}
         </Empty>
+      ) : !selected ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {total && <SummaryLine status={total} against={mode === "base" ? ws.base : "HEAD"} />}
+          <ChangedFiles files={files} onSelect={setSelected} onAction={(f, a) => void fileAction(f, a)} />
+        </div>
       ) : (
         <>
-          <div className="max-h-[38%] shrink-0 overflow-y-auto border-b border-border py-1">
-            {files.map((f) => (
-              <FileRow key={f.path} f={f} active={f.path === selected} onSelect={() => setSelected(f.path)} onAction={(a) => void fileAction(f, a)} />
-            ))}
-          </div>
           {current && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1 ui-text-11.5 text-muted">
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1 ui-text-11.5 text-muted">
+              <IconButton title="Back to the changed files" onClick={() => setSelected(null)}>
+                <ArrowLeft size={13} />
+              </IconButton>
               <span className="truncate font-mono text-fg">{current.path}</span>
               {/* Hunk staging works on uncommitted changes only. */}
               {mode !== "base" && diff && diff.hunks.length > 0 && (
@@ -306,11 +346,11 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
           <div className="min-h-0 flex-1">
             {versions?.binary ? (
               <Empty title="Binary file">No text diff available.</Empty>
-            ) : versions && selected ? (
+            ) : versions && selected && language ? (
               <DiffEditor
                 key={selected + mode}
                 theme="jaunt"
-                language={languageFor(selected)}
+                language={language}
                 original={versions.original ?? ""}
                 modified={versions.modified ?? ""}
                 onMount={onMount}
@@ -327,9 +367,11 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
           {comment && selected && <CommentBar file={selected} line={comment.line} snippet={comment.snippet} onDone={() => setComment(null)} />}
         </>
       )}
-      <div className="shrink-0 border-t border-border px-3 py-1 ui-text-10.5 text-faint">
-        Click the gutter or press <Kbd>⇧⌘M</Kbd> to comment a line to the agent.
-      </div>
+      {selected && (
+        <div className="shrink-0 border-t border-border px-3 py-1 ui-text-10.5 text-faint">
+          Click the gutter or press <Kbd>⇧⌘M</Kbd> to comment a line to the agent.
+        </div>
+      )}
     </div>
   );
 }
