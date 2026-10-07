@@ -719,14 +719,18 @@ impl SessionManager {
             None => None,
         };
         // What the parent runs with now, as (mode, model, effort): its chat's
-        // settings for a structured agent, otherwise its session's.
+        // settings for a structured agent, otherwise its session's. The
+        // session's model and effort belong to the session's agent, not to
+        // another agent's tab in it.
         let parent_run = parent.as_ref().map(|p| {
             if p.chat {
                 let s = self.chats.get().and_then(|c| c.state(p.id).ok());
                 s.map_or((None, None, None), |s| (s.mode, s.model, s.effort))
             } else {
                 let s = p.session_id.as_deref().and_then(|id| self.session(id).ok());
-                s.map_or((None, None, None), |s| (s.mode, s.model, s.effort))
+                s.map_or((None, None, None), |s| {
+                    if p.agent == s.agent { (s.mode, s.model, s.effort) } else { (s.mode, None, None) }
+                })
             }
         });
         if let Some((parent_mode, _, _)) = &parent_run {
@@ -1524,6 +1528,34 @@ mod tests {
         req.effort = Some("low".into());
         let child = mgr.create_session(req).await.unwrap();
         assert_eq!((child.model.as_deref(), child.effort.as_deref()), (Some("haiku"), Some("low")));
+    }
+
+    #[tokio::test]
+    async fn an_agent_tab_does_not_pass_on_its_sessions_model_for_another_agent() {
+        let (repo, _home, mgr, _chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = spawn_req(&r.id, "Claude session", None, None);
+        req.agent = Some("claude".into());
+        req.model = Some("opus".into());
+        req.effort = Some("max".into());
+        let parent = mgr.create_session(req).await.unwrap();
+        // A Codex tab the user opened in that Claude session.
+        let codex = mgr
+            .spawn_in(
+                &parent,
+                TerminalCreate {
+                    kind: TerminalKind::Agent,
+                    agent: Some("codex".into()),
+                    command: vec!["sh".into(), "-c".into(), "sleep 30".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut req = spawn_req(&r.id, "From the Codex tab", None, Some(codex.id));
+        req.agent = None;
+        let child = mgr.create_session(req).await.unwrap();
+        assert_eq!(child.agent.as_deref(), Some("codex"));
+        assert_eq!((child.model, child.effort), (None, None));
     }
 
     #[tokio::test]
