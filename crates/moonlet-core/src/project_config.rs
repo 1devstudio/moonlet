@@ -1,4 +1,4 @@
-//! Reading and writing a project's `.jaunt/config.toml` for the Project
+//! Reading and writing a project's `.moonlet/config.toml` for the Project
 //! settings dialog (X8). Writes edit the file in place with `toml_edit`, so
 //! comments, key order and unknown keys survive.
 
@@ -18,8 +18,15 @@ const SCRIPT_KEYS: [&str; 5] = ["setup", "run", "archive", "default_agent", "bas
 /// The message `save` fails with when the file changed since it was read.
 pub const STALE: &str = "config changed on disk";
 
+/// The project's config: `.moonlet/config.toml`, or jaunt's
+/// `.jaunt/config.toml` while only that one exists (X27).
 pub fn path(repo: &Path) -> PathBuf {
-    repo.join(".jaunt").join("config.toml")
+    let (new, legacy) = (repo.join(".moonlet/config.toml"), repo.join(".jaunt/config.toml"));
+    if std::fs::symlink_metadata(&new).is_err() && std::fs::symlink_metadata(&legacy).is_ok() {
+        legacy
+    } else {
+        new
+    }
 }
 
 /// Reads the file. A missing file gives an empty config; one that does not
@@ -54,7 +61,7 @@ pub fn load(repo: &Path, default_branch: String) -> ProjectConfigFile {
 pub fn save(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<()> {
     // The version check and the write must not interleave with another
     // save of the same file, or both could pass the check.
-    let lock = lock_for(&path(repo));
+    let lock = lock_for(&repo.join(".moonlet/config.toml"));
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     save_unlocked(repo, expected, config)
 }
@@ -70,17 +77,25 @@ fn lock_for(p: &Path) -> Arc<Mutex<()>> {
 fn save_unlocked(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<()> {
     let config = normalize(config);
     validate(&config)?;
-    let dir = repo.join(".jaunt");
-    let p = path(repo);
-    for link in [&dir, &p] {
+    // Reads jaunt's file while it is the only one, and always writes
+    // moonlet's (X27).
+    let src = path(repo);
+    let dir = repo.join(".moonlet");
+    let p = dir.join("config.toml");
+    let legacy_dir = repo.join(".jaunt");
+    let mut links = vec![&dir, &p];
+    if src != p {
+        links.extend([&legacy_dir, &src]);
+    }
+    for link in links {
         if std::fs::symlink_metadata(link).is_ok_and(|m| m.file_type().is_symlink()) {
             bail!("{} is a symlink; edit it by hand", link.display());
         }
     }
-    let current = match std::fs::read(&p) {
+    let current = match std::fs::read(&src) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e).with_context(|| format!("cannot read {}", p.display())),
+        Err(e) => return Err(e).with_context(|| format!("cannot read {}", src.display())),
     };
     let found = current.as_deref().map(version).unwrap_or_default();
     if found != expected {
@@ -95,14 +110,20 @@ fn save_unlocked(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<
     };
     let mut doc: DocumentMut = text
         .parse()
-        .context(".jaunt/config.toml is not valid TOML")?;
+        .with_context(|| format!("{} is not valid TOML", src.display()))?;
     apply(&mut doc, &config);
     std::fs::create_dir_all(&dir)?;
-    write_atomic(&p, &doc.to_string())
+    write_atomic(&p, &doc.to_string())?;
+    if src != p {
+        std::fs::remove_file(&src)?;
+        // Only if empty: anything else in it is the user's.
+        let _ = std::fs::remove_dir(&legacy_dir);
+    }
+    Ok(())
 }
 
 /// Writes through a fresh temp file and renames it over `path`. The temp
-/// file is created with `create_new`, so a symlink planted in `.jaunt/`
+/// file is created with `create_new`, so a symlink planted in `.moonlet/`
 /// (it is part of the repo) is never followed.
 fn write_atomic(path: &Path, text: &str) -> Result<()> {
     use std::io::Write;
@@ -316,7 +337,7 @@ mod tests {
     fn repo_with(text: Option<&str>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         if let Some(t) = text {
-            std::fs::create_dir(dir.path().join(".jaunt")).unwrap();
+            std::fs::create_dir(dir.path().join(".moonlet")).unwrap();
             std::fs::write(path(dir.path()), t).unwrap();
         }
         dir
@@ -414,7 +435,7 @@ mod tests {
         assert_eq!(read(&dir), "run = \"y\"\n");
         // A file created since a "missing" read is stale too.
         let empty = repo_with(None);
-        std::fs::create_dir(empty.path().join(".jaunt")).unwrap();
+        std::fs::create_dir(empty.path().join(".moonlet")).unwrap();
         std::fs::write(path(empty.path()), "").unwrap();
         assert_eq!(
             save(empty.path(), "", &cfg(|_| {}))
@@ -450,7 +471,7 @@ mod tests {
         let dir = repo_with(None);
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("c.toml"), "").unwrap();
-        std::fs::create_dir(dir.path().join(".jaunt")).unwrap();
+        std::fs::create_dir(dir.path().join(".moonlet")).unwrap();
         std::os::unix::fs::symlink(outside.path().join("c.toml"), path(dir.path())).unwrap();
         let v = load(dir.path(), "main".into()).version;
         let err = save(dir.path(), &v, &cfg(|c| c.run = Some("x".into()))).unwrap_err();
@@ -469,13 +490,13 @@ mod tests {
         let victim = outside.path().join("victim");
         std::fs::write(&victim, "keep").unwrap();
         // The temp name the generic `fs::write` would have used.
-        std::os::unix::fs::symlink(&victim, dir.path().join(".jaunt/.config.toml.moonlet-tmp"))
+        std::os::unix::fs::symlink(&victim, dir.path().join(".moonlet/.config.toml.moonlet-tmp"))
             .unwrap();
         let v = load(dir.path(), "main".into()).version;
         save(dir.path(), &v, &cfg(|c| c.run = Some("y".into()))).unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
         assert_eq!(read(&dir), "run = \"y\"\n");
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path().join(".jaunt"))
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path().join(".moonlet"))
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|n| n.ends_with(".tmp"))
@@ -529,5 +550,50 @@ mod tests {
         }))
         .unwrap();
         validate(&cfg(|c| c.default_agent = Some("codex".into()))).unwrap();
+    }
+
+    /// X27: a project set up under jaunt keeps its config.
+    #[test]
+    fn reads_the_jaunt_config_when_there_is_no_moonlet_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".jaunt")).unwrap();
+        std::fs::write(dir.path().join(".jaunt/config.toml"), "run = \"pnpm dev\"\n").unwrap();
+
+        let file = load(dir.path(), "main".into());
+        assert!(file.exists);
+        assert_eq!(file.path, dir.path().join(".jaunt/config.toml").display().to_string());
+        assert_eq!(file.config.run.as_deref(), Some("pnpm dev"));
+        assert_eq!(crate::session::read_config(dir.path()).run.as_deref(), Some("pnpm dev"));
+    }
+
+    #[test]
+    fn saving_moves_the_jaunt_config_to_moonlet() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".jaunt")).unwrap();
+        std::fs::write(dir.path().join(".jaunt/config.toml"), "# ours\nrun = \"pnpm dev\"\n").unwrap();
+        let before = load(dir.path(), "main".into());
+
+        save(dir.path(), &before.version, &cfg(|c| c.run = Some("pnpm start".into()))).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".moonlet/config.toml")).unwrap(),
+            "# ours\nrun = \"pnpm start\"\n"
+        );
+        assert!(!dir.path().join(".jaunt").exists(), "the emptied .jaunt/ goes");
+        assert_eq!(load(dir.path(), "main".into()).path, dir.path().join(".moonlet/config.toml").display().to_string());
+    }
+
+    #[test]
+    fn saving_keeps_other_files_in_jaunt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".jaunt")).unwrap();
+        std::fs::write(dir.path().join(".jaunt/config.toml"), "").unwrap();
+        std::fs::write(dir.path().join(".jaunt/notes.md"), "mine").unwrap();
+        let before = load(dir.path(), "main".into());
+
+        save(dir.path(), &before.version, &cfg(|c| c.run = Some("make".into()))).unwrap();
+
+        assert!(!dir.path().join(".jaunt/config.toml").exists());
+        assert_eq!(std::fs::read_to_string(dir.path().join(".jaunt/notes.md")).unwrap(), "mine");
     }
 }

@@ -1,4 +1,4 @@
-// Scratch world for the e2e tests (X12): a JAUNT_HOME, a git repo, a daemon
+// Scratch world for the e2e tests (X12): a MOONLET_HOME, a git repo, a daemon
 // that can never start a real agent, and helpers the specs share.
 
 import { execFileSync } from "node:child_process";
@@ -36,8 +36,8 @@ export interface World {
 
 /** The world created by the launcher, shared with workers through env. */
 export function world(): World {
-  const root = process.env.JAUNT_E2E_ROOT;
-  if (!root) throw new Error("JAUNT_E2E_ROOT is not set; run the specs through wdio.conf.ts");
+  const root = process.env.MOONLET_E2E_ROOT;
+  if (!root) throw new Error("MOONLET_E2E_ROOT is not set; run the specs through wdio.conf.ts");
   return makeWorld(root);
 }
 
@@ -57,9 +57,9 @@ function makeWorld(root: string): World {
       // zsh, as on a stock Mac, so shells get the integration (T3, T8).
       SHELL: "/bin/zsh",
       PATH: `${fakeBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
-      JAUNT_HOME: home,
-      JAUNT_BIN_DIR: BIN_DIR,
-      JAUNT_E2E_ROOT: root,
+      MOONLET_HOME: home,
+      MOONLET_BIN_DIR: BIN_DIR,
+      MOONLET_E2E_ROOT: root,
     },
   };
 }
@@ -95,8 +95,8 @@ function seed(w: World) {
   // PATH after .zshenv.
   const fakeFirst = `PATH="${fakeBin}:$PATH"; export PATH\n`;
   for (const rc of [".profile", ".zshenv", ".zprofile", ".zshrc"]) writeFileSync(join(w.env.HOME, rc), fakeFirst);
-  mkdirSync(join(w.repo, ".jaunt"), { recursive: true });
-  writeFileSync(join(w.repo, ".jaunt", "config.toml"), CONFIG);
+  mkdirSync(join(w.repo, ".moonlet"), { recursive: true });
+  writeFileSync(join(w.repo, ".moonlet", "config.toml"), CONFIG);
   writeFileSync(join(w.repo, "README.md"), "e2e\n");
   const git = (...args: string[]) => execFileSync("git", args, { cwd: w.repo, env: w.env, stdio: "pipe" });
   git("init", "-q", "-b", "main");
@@ -140,7 +140,7 @@ export function resetConfig(w: World, text: string) {
   }
 }
 
-export const configPath = (w: World) => join(w.repo, ".jaunt", "config.toml");
+export const configPath = (w: World) => join(w.repo, ".moonlet", "config.toml");
 
 /** Types into the input that matches `xpath` once it is usable. The
  *  embedded driver's `isEnabled` and `setValue` ignore a disabled

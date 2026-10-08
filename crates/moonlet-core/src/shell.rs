@@ -2,7 +2,7 @@
 //! marks and OSC 7 working-directory updates, after the user's own startup
 //! files have run unchanged.
 //!
-//! Blocks mode (T7): when `$JAUNT_CLASSIC_FILE` is set and that file does not
+//! Blocks mode (T7): when `$MOONLET_CLASSIC_FILE` is set and that file does not
 //! exist, the shell draws an empty prompt because the app's editor is the
 //! input. The user's prompt is kept and comes back in classic mode.
 
@@ -24,13 +24,13 @@ __moonlet_precmd() {
   # The shell's PATH, for the commands the editor colours as known (T8).
   if [[ $PATH != ${__moonlet_path-} ]]; then
     __moonlet_path=$PATH
-    printf '\e]1337;JauntPath=%s\a' "$PATH"
+    printf '\e]1337;MoonletPath=%s\a' "$PATH"
   fi
   local node=${commands[node]-}
   [[ $node == /* ]] || node=
   if [[ $node != ${__moonlet_node-} ]]; then
     __moonlet_node=$node
-    printf '\e]1337;JauntNodePath=%s\a' "$node"
+    printf '\e]1337;MoonletNodePath=%s\a' "$node"
   fi
   printf '\e]133;A\a'
 }
@@ -52,7 +52,7 @@ __moonlet_urlpath() {
 # separator and header (T8); the command line is drawn bold.
 __moonlet_blocks_ps1=$'\n\n'
 __moonlet_blank() {
-  if [[ -n $JAUNT_CLASSIC_FILE && ! -e $JAUNT_CLASSIC_FILE ]]; then
+  if [[ -n $MOONLET_CLASSIC_FILE && ! -e $MOONLET_CLASSIC_FILE ]]; then
     [[ $PROMPT != "$__moonlet_blocks_ps1" ]] && __moonlet_ps1=$PROMPT
     [[ -n $RPROMPT ]] && __moonlet_rps1=$RPROMPT
     [[ -n $PS2 ]] && __moonlet_ps2=$PS2
@@ -79,21 +79,21 @@ add-zsh-hook precmd __moonlet_blank
 fn zsh_file(name: &str, last_for_login: bool, add_hooks: bool) -> String {
     let mut s = format!(
         "# moonlet shell integration; runs the user's {name} unchanged.\n\
-         JAUNT_ZDOTDIR=\"$ZDOTDIR\"\n\
-         ZDOTDIR=\"${{JAUNT_USER_ZDOTDIR:-$HOME}}\"\n\
+         MOONLET_ZDOTDIR=\"$ZDOTDIR\"\n\
+         ZDOTDIR=\"${{MOONLET_USER_ZDOTDIR:-$HOME}}\"\n\
          [[ -f \"$ZDOTDIR/{name}\" ]] && source \"$ZDOTDIR/{name}\"\n\
-         JAUNT_USER_ZDOTDIR=\"$ZDOTDIR\"\n\
-         ZDOTDIR=\"$JAUNT_ZDOTDIR\"\n"
+         MOONLET_USER_ZDOTDIR=\"$ZDOTDIR\"\n\
+         ZDOTDIR=\"$MOONLET_ZDOTDIR\"\n"
     );
     if add_hooks {
         s.push_str("if [[ -o interactive && -z $__moonlet_hooked ]]; then\n  __moonlet_hooked=1\n");
         s.push_str(ZSH_HOOKS);
         s.push_str("fi\n");
         // Non-login shells read nothing after .zshrc: hand ZDOTDIR back now.
-        s.push_str("[[ -o login ]] || ZDOTDIR=\"$JAUNT_USER_ZDOTDIR\"\n");
+        s.push_str("[[ -o login ]] || ZDOTDIR=\"$MOONLET_USER_ZDOTDIR\"\n");
     }
     if last_for_login {
-        s.push_str("ZDOTDIR=\"$JAUNT_USER_ZDOTDIR\"\n");
+        s.push_str("ZDOTDIR=\"$MOONLET_USER_ZDOTDIR\"\n");
     }
     s
 }
@@ -119,14 +119,14 @@ __moonlet_prompt() {
   # The shell's PATH, for the commands the editor colours as known (T8).
   if [ "$PATH" != "${__moonlet_path-}" ]; then
     __moonlet_path=$PATH
-    printf '\e]1337;JauntPath=%s\a' "$PATH"
+    printf '\e]1337;MoonletPath=%s\a' "$PATH"
   fi
   local node
   node=$(type -P node 2>/dev/null)
   case $node in /*) ;; *) node= ;; esac
   if [ "$node" != "${__moonlet_node-}" ]; then
     __moonlet_node=$node
-    printf '\e]1337;JauntNodePath=%s\a' "$node"
+    printf '\e]1337;MoonletNodePath=%s\a' "$node"
   fi
   printf '\e]133;A\a'
 }
@@ -135,7 +135,7 @@ __moonlet_prompt() {
 # DEBUG trap resets it before the command's output.
 __moonlet_blocks_ps1='\n\n\[\e[1m\]'
 __moonlet_blank() {
-  if [ -n "$JAUNT_CLASSIC_FILE" ] && [ ! -e "$JAUNT_CLASSIC_FILE" ]; then
+  if [ -n "$MOONLET_CLASSIC_FILE" ] && [ ! -e "$MOONLET_CLASSIC_FILE" ]; then
     [ "$PS1" != "$__moonlet_blocks_ps1" ] && __moonlet_ps1=$PS1
     [ -n "$PS2" ] && __moonlet_ps2=$PS2
     PS1=$__moonlet_blocks_ps1 PS2=''
@@ -199,13 +199,13 @@ if status is-interactive
     set -l path (string join : $PATH)
     if test "$path" != "$__moonlet_path"
       set -g __moonlet_path $path
-      printf '\e]1337;JauntPath=%s\a' "$path"
+      printf '\e]1337;MoonletPath=%s\a' "$path"
     end
     set -l node (command -s node)
     string match -q '/*' -- "$node"; or set node ''
     if test "$node" != "$__moonlet_node"
       set -g __moonlet_node $node
-      printf '\e]1337;JauntNodePath=%s\a' "$node"
+      printf '\e]1337;MoonletNodePath=%s\a' "$node"
     end
     printf '\e]133;A\a'
     # Wrap the user's prompt once, so Blocks mode can blank it (T7).
@@ -241,7 +241,7 @@ if status is-interactive
     return $argv[1]
   end
   function __moonlet_classic
-    test -z "$JAUNT_CLASSIC_FILE"; or test -e "$JAUNT_CLASSIC_FILE"
+    test -z "$MOONLET_CLASSIC_FILE"; or test -e "$MOONLET_CLASSIC_FILE"
   end
   function __moonlet_preexec --on-event fish_preexec
     printf '\e]133;C\a'
@@ -276,14 +276,13 @@ pub fn install(root: &Path) -> Result<()> {
     write_if_changed(&zsh.join(".zshrc"), &zsh_file(".zshrc", false, true))?;
     write_if_changed(&zsh.join(".zlogin"), &zsh_file(".zlogin", true, false))?;
     write_if_changed(&root.join("bash").join("rc"), BASH_RC)?;
-    write_if_changed(
-        &root
-            .join("data")
-            .join("fish")
-            .join("vendor_conf.d")
-            .join("jaunt.fish"),
-        FISH_CONF,
-    )?;
+    let fish = root.join("data").join("fish").join("vendor_conf.d");
+    write_if_changed(&fish.join("moonlet.fish"), FISH_CONF)?;
+    // jaunt's copy, moved here with ~/.jaunt (X27): fish would load both.
+    match std::fs::remove_file(fish.join("jaunt.fish")) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
     Ok(())
 }
 
@@ -295,7 +294,7 @@ pub fn apply(
     args: Vec<String>,
     env: &mut BTreeMap<String, String>,
 ) -> Vec<String> {
-    if env.get("JAUNT_SHELL_INTEGRATION").map(String::as_str) == Some("0") || install(root).is_err()
+    if env.get("MOONLET_SHELL_INTEGRATION").map(String::as_str) == Some("0") || install(root).is_err()
     {
         return args;
     }
@@ -303,7 +302,7 @@ pub fn apply(
     match name {
         "zsh" => {
             if let Some(user) = env.get("ZDOTDIR").cloned() {
-                env.insert("JAUNT_USER_ZDOTDIR".into(), user);
+                env.insert("MOONLET_USER_ZDOTDIR".into(), user);
             }
             env.insert("ZDOTDIR".into(), root.join("zsh").display().to_string());
             args
@@ -442,7 +441,7 @@ mod tests {
             ("HOME".into(), home.path().display().to_string()),
             ("PATH".into(), "/usr/bin:/bin".into()),
             ("SHELL".into(), shell.into()),
-            ("JAUNT_CLASSIC_FILE".into(), marker.display().to_string()),
+            ("MOONLET_CLASSIC_FILE".into(), marker.display().to_string()),
         ]);
         let args = apply(&root, shell, vec!["-l".into()], &mut env);
         let mgr = TerminalManager::new(home.path().join("s.sock"), env);
@@ -493,7 +492,7 @@ mod tests {
             ("HOME".into(), home.path().display().to_string()),
             ("PATH".into(), "/usr/bin:/bin".into()),
             ("SHELL".into(), shell.into()),
-            ("JAUNT_CLASSIC_FILE".into(), home.path().join("classic").display().to_string()),
+            ("MOONLET_CLASSIC_FILE".into(), home.path().join("classic").display().to_string()),
         ]);
         let args = apply(&root, shell, vec!["-l".into()], &mut env);
         let mgr = TerminalManager::new(home.path().join("s.sock"), env);
@@ -594,15 +593,15 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         mgr.attach(info.id, 1, tx, None).unwrap();
         let first = read_until(&mut rx, "133;A").await;
-        assert!(first.contains(&format!("\x1b]1337;JauntNodePath={n1}/node\x07")), "{shell} first prompt: {first:?}");
+        assert!(first.contains(&format!("\x1b]1337;MoonletNodePath={n1}/node\x07")), "{shell} first prompt: {first:?}");
         tokio::time::sleep(Duration::from_millis(300)).await;
         mgr.write(info.id, b"true\n".to_vec()).unwrap();
         let same = read_until(&mut rx, "133;A").await;
         assert!(!same.contains("MoonletNode"), "{shell} reported again without a change: {same:?}");
         tokio::time::sleep(Duration::from_millis(300)).await;
         mgr.write(info.id, format!("PATH={n2}:$PATH\n").into_bytes()).unwrap();
-        let changed = read_until(&mut rx, &format!("JauntNodePath={n2}/node")).await;
-        assert!(changed.contains(&format!("\x1b]1337;JauntNodePath={n2}/node\x07")), "{shell} after PATH change: {changed:?}");
+        let changed = read_until(&mut rx, &format!("MoonletNodePath={n2}/node")).await;
+        assert!(changed.contains(&format!("\x1b]1337;MoonletNodePath={n2}/node\x07")), "{shell} after PATH change: {changed:?}");
         tokio::time::sleep(Duration::from_millis(200)).await;
         let version = mgr.get(info.id).map(|t| t.info().node_version);
         let _ = mgr.kill(info.id, true);
@@ -680,10 +679,10 @@ mod tests {
         mgr.attach(info.id, 1, tx, None).unwrap();
         let first = read_until(&mut rx, "133;A").await;
         // bash's login startup runs macOS's path_helper, so only the presence is fixed here.
-        assert!(first.contains("\x1b]1337;JauntPath=/"), "{shell} first prompt: {first:?}");
+        assert!(first.contains("\x1b]1337;MoonletPath=/"), "{shell} first prompt: {first:?}");
         tokio::time::sleep(Duration::from_millis(300)).await;
         mgr.write(info.id, format!("PATH={}:$PATH\n", extra.display()).into_bytes()).unwrap();
-        read_until(&mut rx, "JauntPath=").await;
+        read_until(&mut rx, "MoonletPath=").await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         let path = mgr.shell_path(info.id);
         let _ = mgr.kill(info.id, true);
@@ -772,7 +771,7 @@ mod tests {
     #[test]
     fn opt_out_and_unknown_shells() {
         let dir = tempfile::tempdir().unwrap();
-        let mut env = BTreeMap::from([("JAUNT_SHELL_INTEGRATION".to_string(), "0".to_string())]);
+        let mut env = BTreeMap::from([("MOONLET_SHELL_INTEGRATION".to_string(), "0".to_string())]);
         assert_eq!(
             apply(dir.path(), "/bin/zsh", vec!["-l".into()], &mut env),
             vec!["-l"]
@@ -785,12 +784,29 @@ mod tests {
         );
         let mut env = BTreeMap::from([("ZDOTDIR".to_string(), "/u/z".to_string())]);
         apply(dir.path(), "/bin/zsh", vec![], &mut env);
-        assert_eq!(env["JAUNT_USER_ZDOTDIR"], "/u/z");
+        assert_eq!(env["MOONLET_USER_ZDOTDIR"], "/u/z");
         assert!(dir.path().join("zsh/.zshrc").exists());
         assert!(
             dir.path()
-                .join("data/fish/vendor_conf.d/jaunt.fish")
+                .join("data/fish/vendor_conf.d/moonlet.fish")
                 .exists()
         );
+    }
+
+    /// X27: fish would load jaunt's copy of the integration as well.
+    #[test]
+    fn install_removes_the_jaunt_fish_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("data/fish/vendor_conf.d");
+        std::fs::create_dir_all(&conf).unwrap();
+        std::fs::write(conf.join("jaunt.fish"), "# jaunt shell integration for fish\n").unwrap();
+        std::fs::write(conf.join("mine.fish"), "set -g x 1\n").unwrap();
+        install(dir.path()).unwrap();
+        let mut names: Vec<_> = std::fs::read_dir(&conf)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["mine.fish", "moonlet.fish"]);
     }
 }

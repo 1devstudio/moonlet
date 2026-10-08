@@ -266,7 +266,7 @@ pub struct IdRef {
     pub id: String,
 }
 
-/// Writes a project's `.jaunt/config.toml` (X8).
+/// Writes a project's `.moonlet/config.toml` (X8).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSetConfig {
     pub id: String,

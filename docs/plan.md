@@ -46,7 +46,7 @@ Decisions made with the user:
 | Files | (unspecified) | **Add** | Daemon side uses the `ignore` crate (gitignore-aware walk) and `notify` (fs watch, live refresh). |
 | Git | git CLI on the owning host | **Confirm** | `git worktree`, `status --porcelain=v2`, `diff`, `apply --cached` for hunk staging. |
 | Remote | system OpenSSH + static musl helper | **Confirm** | `ssh host moonletd proxy` is a short-lived stdio bridge to the long-lived remote daemon's Unix socket, so the daemon outlives the connection. Use ControlMaster for fast reconnects. Cross-compile with `cargo zigbuild` for x86_64 and aarch64 musl. |
-| Agent state | hooks > OSC > heuristics | **Confirm** | Inject `JAUNT_PANE_ID` and `JAUNT_SOCK` into each PTY's env. Hooks call `moonlet notify --state …`. Claude Code: Notification, Stop, PreToolUse, UserPromptSubmit and SessionStart hooks. Codex: `notify` config, plus hooks if the installed version has them (verify in spike S4). |
+| Agent state | hooks > OSC > heuristics | **Confirm** | Inject `MOONLET_PANE_ID` and `MOONLET_SOCK` into each PTY's env. Hooks call `moonlet notify --state …`. Claude Code: Notification, Stop, PreToolUse, UserPromptSubmit and SessionStart hooks. Codex: `notify` config, plus hooks if the installed version has them (verify in spike S4). |
 | Distribution | signed + notarized, signed auto-update | **Confirm** | Use `tauri-plugin-updater`. The daemon binary is a nested signed binary in `Contents/MacOS`. |
 
 Swap option (Swift + libghostty client later): keep it possible by keeping all session logic in the daemon behind the protocol. The UI should own no session state.
@@ -82,7 +82,7 @@ Three-column layout:
   - "Open in" Cursor, VS Code, Finder or Terminal.
   - Run button for a per-repo run script.
   - Create PR (Cmd+Shift+P) via the `gh` CLI. This is new scope, not in the PRD, and is placed at P1.
-- **Per-repo config** in `.jaunt/config.toml` (Conductor-style): `setup`, `run` and `archive` scripts, default agent, base branch.
+- **Per-repo config** in `.moonlet/config.toml` (Conductor-style): `setup`, `run` and `archive` scripts, default agent, base branch.
 - **Visual**: dark-first and dense. Use Tailwind + shadcn/ui (Radix) for fast, consistent components; that pairing is what Superset-style apps typically use. Fonts are Geist/Inter for UI and a monospace font for terminals.
 
 ## 3. Repo layout (monorepo)
@@ -117,7 +117,7 @@ Gate: every spike has a result recorded, the stack is frozen, and ADRs are writt
 1. `moonlet-proto` and a minimal `moonletd`: spawn, attach and detach, resize, input. Keep terminal state server-side and replay on attach (S1, S2). The daemon is launched by the app, and launchd registration is added here.
 2. Tauri shell with the three-column layout from section 2. Includes the sidebar (repos > workspaces), terminal tabs and splits per workspace, and a prefix key that never reaches the PTY (T1, T2).
 3. Agent state machine plus `moonlet-cli notify`, one-click hook install, sidebar state glyphs and diffstat, and notifications (A1–A3).
-4. New workspace flow (Cmd+Shift+N): worktree, `.jaunt/config.toml` setup script, agent launch, task box, and archive with cleanup (A4).
+4. New workspace flow (Cmd+Shift+N): worktree, `.moonlet/config.toml` setup script, agent launch, task box, and archive with cleanup (A4).
 5. Right panel: Changes with Monaco diff (D1), Files tree (F1), Markdown Preview (M1). Add "Open in" IDE.
 
 Gate: used for all own agent work for 2 weeks, and a quit-and-reopen test reattaches every pane.

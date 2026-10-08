@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentOptions, closeRequest, fromForm, hasRunCommand, isDirty, loadFailure, toForm, validate, type Form } from "./projectSettings";
+import { agentOptions, closeRequest, configName, fromForm, hasRunCommand, isDirty, loadFailure, toForm, validate, type Form } from "./projectSettings";
 
 const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], ...patch });
 
@@ -83,7 +83,14 @@ describe("loadFailure", () => {
   });
 
   it("keeps the dialog open with the error and Reload when a reload fails", () => {
-    expect(loadFailure(true, "connection lost")).toEqual({
+    expect(loadFailure(true, "connection lost", "/Users/me/web/.moonlet/config.toml")).toEqual({
+      close: false,
+      saveErr: { message: "Could not reload .moonlet/config.toml: connection lost", stale: true },
+    });
+  });
+
+  it("names jaunt's file when that is the one being edited (X27)", () => {
+    expect(loadFailure(true, "connection lost", "/Users/me/web/.jaunt/config.toml")).toEqual({
       close: false,
       saveErr: { message: "Could not reload .jaunt/config.toml: connection lost", stale: true },
     });
@@ -102,5 +109,13 @@ describe("closeRequest", () => {
 
   it("waits while a save is running, which closes the dialog itself", () => {
     expect(closeRequest({ saving: true, parseError: false, dirty: true })).toBe("wait");
+  });
+});
+
+describe("configName", () => {
+  it("names the file the dialog edits, jaunt's while only that one exists (X27)", () => {
+    expect(configName("/Users/me/web/.moonlet/config.toml")).toBe(".moonlet/config.toml");
+    expect(configName("/Users/me/web/.jaunt/config.toml")).toBe(".jaunt/config.toml");
+    expect(configName(undefined)).toBe(".moonlet/config.toml");
   });
 });

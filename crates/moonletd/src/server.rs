@@ -19,7 +19,7 @@ use crate::daemon::Daemon;
 pub async fn bind(path: &Path) -> Result<UnixListener> {
     if let Some(dir) = path.parent() {
         // Only moonlet's own directories are created and locked down; a
-        // socket elsewhere (`--socket`, `JAUNT_SOCK`) must not change the
+        // socket elsewhere (`--socket`, `MOONLET_SOCK`) must not change the
         // mode of a directory moonlet does not own, such as `$HOME`.
         let default_dir = moonlet_core::paths::default_socket_path().parent().map(Path::to_path_buf);
         if default_dir.as_deref() == Some(dir) {
@@ -75,7 +75,7 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
     // After a handoff the socket path belongs to the new daemon.
     if !daemon.handed_off() {
         std::fs::remove_file(&socket).ok();
-        std::fs::remove_file(crate::upgrade::pid_file()).ok();
+        std::fs::remove_file(crate::upgrade::pid_file(&socket)).ok();
     }
     Ok(())
 }

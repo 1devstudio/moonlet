@@ -6,7 +6,7 @@
 
 ## Summary
 
-moonlet adds its hooks to the user's agent settings so agents report their state. The install is idempotent, keeps everything that is not moonlet's, and writes a backup first. It also writes the `moonlet` skill ([X22](X22-agent-opens-session.md)) to `~/.claude/skills/jaunt/` and `~/.codex/skills/jaunt/`; "installed" includes the current skill.
+moonlet adds its hooks to the user's agent settings so agents report their state. The install is idempotent, keeps everything that is not moonlet's, and writes a backup first. It also writes the `moonlet` skill ([X22](X22-agent-opens-session.md)) to `~/.claude/skills/moonlet/` and `~/.codex/skills/moonlet/`; "installed" includes the current skill.
 
 ## Behaviour and acceptance criteria
 

@@ -37,7 +37,7 @@ In shell terminals in Blocks mode, each command becomes a real [Block](../../CON
 
 ### Block lifecycle
 
-- [ ] **Marks:** moonlet's scanner reads OSC 133 marks from the raw output, including marks split across reads. Every mark carries `aid=<token>`, a random token the daemon makes per terminal and passes in `JAUNT_MARK_TOKEN`. The integration copies it into an unexported shell variable and unsets the environment variable at startup, so programs the shell runs never see it. Only marks with the terminal's token are honoured, so nested shells and programs that print OSC 133 cannot open or close blocks. (The shell PID was rejected: any command can print `$$`.)
+- [ ] **Marks:** moonlet's scanner reads OSC 133 marks from the raw output, including marks split across reads. Every mark carries `aid=<token>`, a random token the daemon makes per terminal and passes in `MOONLET_MARK_TOKEN`. The integration copies it into an unexported shell variable and unsets the environment variable at startup, so programs the shell runs never see it. Only marks with the terminal's token are honoured, so nested shells and programs that print OSC 133 cannot open or close blocks. (The shell PID was rejected: any command can print `$$`.)
 - [ ] **Start:** at a `C` mark a block opens with a per-terminal id, the command line (the text between the prompt and `C`), the cwd from the last OSC 7, and the daemon clock as `started_at`.
 - [ ] **Finish:** at a `D` mark the block records its exit code and `ended_at`, and is **frozen**: its rows (from the command line to the cursor, including scrollback) are formatted into styled logical lines (wrapped rows joined) and stored. The live emulator's screen and scrollback are then cleared and the cursor homed, inside the daemon only. Terminal modes such as bracketed paste are kept.
 - [ ] Finished blocks never change.
@@ -110,7 +110,7 @@ In shell terminals in Blocks mode, each command becomes a real [Block](../../CON
 
 - Rust, `moonlet-core`:
   - Scanner: marks split across reads at every byte; marks with a wrong or missing token are ignored, including one built from `$$`; OSC 9 / 777 extraction.
-- Integration: `JAUNT_MARK_TOKEN` is not in the environment of a command the shell runs.
+- Integration: `MOONLET_MARK_TOKEN` is not in the environment of a command the shell runs.
   - Ported ADR 0003 round-trip tests on libghostty-vt.
   - Freeze: captured output of a `cargo` progress bar, `printf` with long wrapped lines, vim inside a block, a program printing `CSI 2J` mid-block (only its own block is cleared), `clear` as a command and Ctrl+L at the prompt (both drop earlier blocks); each checked against literal expected lines.
   - Limits: 10,001 lines across blocks drops the oldest whole block; a 12,000-line block keeps its last 10,000 with `dropped = 2000`; the 2,001st block drops the first.

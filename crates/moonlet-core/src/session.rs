@@ -1,7 +1,7 @@
 //! Workspaces, projects and sessions (X5, A4, S4). A workspace is a named
 //! set of projects; a project is a repo folder; a session is one task: a git
 //! worktree on its own branch plus the terminals running in it. State is
-//! persisted to `~/.jaunt/state.json` so it survives daemon restarts.
+//! persisted to `~/.moonlet/state.json` so it survives daemon restarts.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -184,7 +184,7 @@ fn agent_flags(cmd: &str, s: &Session) -> String {
     out
 }
 
-/// Built-in agent commands; `.jaunt/config.toml` `[agents]` adds more.
+/// Built-in agent commands; `.moonlet/config.toml` `[agents]` adds more.
 fn builtin_agent(name: &str, resume: bool) -> Option<&'static str> {
     match (name, resume) {
         ("claude", false) => Some("claude"),
@@ -536,7 +536,7 @@ impl SessionManager {
         load_config_file(root, default_branch).await
     }
 
-    /// Writes `.jaunt/config.toml` and keeps the project's base branch in
+    /// Writes `.moonlet/config.toml` and keeps the project's base branch in
     /// step with it, then tells clients so they refetch the config.
     pub async fn set_project_config(
         &self,
@@ -592,10 +592,10 @@ impl SessionManager {
 
     fn script_env(&self, ws: &Session, repo: &Project) -> BTreeMap<String, String> {
         BTreeMap::from([
-            ("JAUNT_ROOT_PATH".into(), repo.path.clone()),
-            ("JAUNT_SESSION_PATH".into(), ws.path.clone()),
-            ("JAUNT_SESSION_NAME".into(), ws.name.clone()),
-            ("JAUNT_BRANCH".into(), ws.branch.clone()),
+            ("MOONLET_ROOT_PATH".into(), repo.path.clone()),
+            ("MOONLET_SESSION_PATH".into(), ws.path.clone()),
+            ("MOONLET_SESSION_NAME".into(), ws.name.clone()),
+            ("MOONLET_BRANCH".into(), ws.branch.clone()),
         ])
     }
 
@@ -899,7 +899,7 @@ impl SessionManager {
         };
         let cmd = cmd
             .filter(|c| !c.trim().is_empty())
-            .with_context(|| format!("no `{script}` script in .jaunt/config.toml"))?;
+            .with_context(|| format!("no `{script}` script in .moonlet/config.toml"))?;
         // Restart instead of piling up run panes.
         for s in self.terminals.list() {
             if s.session_id.as_deref() == Some(id) && s.kind == kind && s.title == script {
@@ -1196,9 +1196,10 @@ async fn load_config_file(root: PathBuf, default_branch: String) -> Result<Proje
     Ok(tokio::task::spawn_blocking(move || crate::project_config::load(&root, default_branch)).await?)
 }
 
-/// Reads `<repo>/.jaunt/config.toml`; missing or invalid files give defaults.
+/// Reads the project's config file ([`crate::project_config::path`]);
+/// missing or invalid files give defaults.
 pub fn read_config(repo: &Path) -> ProjectConfig {
-    let path = repo.join(".jaunt").join("config.toml");
+    let path = crate::project_config::path(repo);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
             let mut config: ProjectConfig = toml::from_str(&text).unwrap_or_else(|e| {
@@ -1226,10 +1227,10 @@ mod tests {
 
     async fn setup() -> (tempfile::TempDir, tempfile::TempDir, Arc<SessionManager>) {
         let repo = crate::git::tests::repo().await;
-        std::fs::create_dir(repo.path().join(".jaunt")).unwrap();
+        std::fs::create_dir(repo.path().join(".moonlet")).unwrap();
         std::fs::write(
-            repo.path().join(".jaunt/config.toml"),
-            "setup = \"echo setting-up\"\nrun = \"echo running\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'echo agent:$JAUNT_SESSION_NAME; sleep 30'\"\n",
+            repo.path().join(".moonlet/config.toml"),
+            "setup = \"echo setting-up\"\nrun = \"echo running\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'echo agent:$MOONLET_SESSION_NAME; sleep 30'\"\n",
         )
         .unwrap();
         crate::git::git(repo.path(), &["add", "-A"]).await.unwrap();
@@ -1463,7 +1464,7 @@ mod tests {
     }
 
     /// A manager that runs structured agents with the fake `claude`, and a
-    /// repo with no `.jaunt/config.toml`.
+    /// repo with no `.moonlet/config.toml`.
     async fn structured() -> (tempfile::TempDir, tempfile::TempDir, Arc<SessionManager>, Arc<crate::chat::runtime::ChatManager>) {
         let repo = crate::git::tests::repo().await;
         let home = tempfile::tempdir().unwrap();
@@ -2238,9 +2239,9 @@ mod tests {
     fn config_parsing() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(read_config(dir.path()), ProjectConfig::default());
-        std::fs::create_dir(dir.path().join(".jaunt")).unwrap();
+        std::fs::create_dir(dir.path().join(".moonlet")).unwrap();
         std::fs::write(
-            dir.path().join(".jaunt/config.toml"),
+            dir.path().join(".moonlet/config.toml"),
             "run = \"npm run dev\"\nbase_branch = \"develop\"\n",
         )
         .unwrap();

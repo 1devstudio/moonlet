@@ -323,7 +323,7 @@ function HostsSection() {
   const install = async (id: string) => {
     const ok = await askConfirm({
       title: "Install remote helper",
-      message: `Install the moonlet helper on ${id}?\n\nThe version-pinned moonletd binary (and the moonlet CLI) are copied to ~/.jaunt/bin over your SSH connection and verified by SHA-256. Nothing else on the host is changed.`,
+      message: `Install the moonlet helper on ${id}?\n\nThe version-pinned moonletd binary (and the moonlet CLI) are copied to ~/.moonlet/bin over your SSH connection and verified by SHA-256. If the host has a ~/.jaunt folder from jaunt, it is moved to ~/.moonlet and ~/.jaunt becomes a link to it. Nothing else on the host is changed.`,
       action: "Install",
     });
     if (!ok) return;

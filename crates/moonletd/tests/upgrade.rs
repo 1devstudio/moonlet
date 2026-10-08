@@ -20,8 +20,8 @@ impl Drop for Kill {
 fn moonletd(home: &std::path::Path, socket: &PathBuf, args: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_moonletd"));
     c.args(args)
-        .env("JAUNT_HOME", home)
-        .env("JAUNT_SOCK", socket)
+        .env("MOONLET_HOME", home)
+        .env("MOONLET_SOCK", socket)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -130,4 +130,80 @@ fn nix_kill(pid: u32) -> std::io::Result<()> {
     std::thread::sleep(Duration::from_millis(300));
     let _ = Command::new("kill").arg(pid.to_string()).status();
     Ok(())
+}
+
+/// X27: `moonletd start` finds a jaunt daemon on `run/jauntd.sock` and takes
+/// over its terminals instead of starting an empty daemon next to it.
+#[tokio::test]
+async fn start_takes_over_a_jaunt_daemon() {
+    let home = tempfile::tempdir().unwrap();
+    let legacy = home.path().join("run/jauntd.sock");
+    let socket = home.path().join("run/moonletd.sock");
+    let plain = |args: &[&str]| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_moonletd"));
+        c.args(args)
+            .env("MOONLET_HOME", home.path())
+            .env_remove("MOONLET_SOCK")
+            .env_remove("JAUNT_HOME")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        c
+    };
+    // jaunt's daemon listens on run/jauntd.sock and has JAUNT_SOCK in its
+    // environment, which the daemon it hands over to inherits.
+    let mut old = plain(&["--socket", legacy.to_str().unwrap(), "daemon"]);
+    old.env("JAUNT_SOCK", &legacy);
+    let mut old = Kill(old.spawn().unwrap());
+    wait_for_socket(&legacy, Duration::from_secs(15)).await.unwrap();
+
+    let mut c = Client::connect(&legacy, "test").await.unwrap();
+    let s: TerminalInfo = c
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
+                cwd: home.path().display().to_string(),
+                command: vec!["/bin/sh".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let _: AttachResult = c
+        .request(methods::TERMINAL_ATTACH, TerminalAttach { id: s.id, cols: None, rows: None })
+        .await
+        .unwrap();
+    c.send(&Frame::Input { terminal: s.id, data: b"echo before-$((6*7))\n".to_vec() })
+        .await
+        .unwrap();
+    output_until(&mut c, "before-42").await;
+    drop(c);
+
+    let status = plain(&["start"]).status().unwrap();
+    assert!(status.success(), "moonletd start failed");
+
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
+    let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let same = list.iter().find(|x| x.id == s.id).expect("jaunt's terminal is here");
+    assert_eq!(same.pid, s.pid, "same shell process");
+    let attach: AttachResult = c
+        .request(methods::TERMINAL_ATTACH, TerminalAttach { id: s.id, cols: None, rows: None })
+        .await
+        .unwrap();
+    assert!(attach.snapshot.contains("before-42"), "screen survives the takeover");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while old.0.try_wait().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline, "jaunt's daemon is still running");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Hooks and CLI calls from jaunt's binary still dial run/jauntd.sock.
+    let mut via_old = Client::connect(&legacy, "test").await.unwrap();
+    let info: DaemonInfo = via_old.request(methods::DAEMON_INFO, ()).await.unwrap();
+    assert_eq!(info.pid, after.pid);
+
+    let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
+    let _ = nix_kill(after.pid);
 }

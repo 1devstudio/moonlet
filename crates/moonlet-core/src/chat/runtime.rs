@@ -1,5 +1,5 @@
 //! Runs structured agents: one child process per chat terminal with piped
-//! stdio, its adapter, persistence under `~/.jaunt/chats` and restore.
+//! stdio, its adapter, persistence under `~/.moonlet/chats` and restore.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -442,10 +442,10 @@ impl ChatManager {
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
         let mut env = self.terms.base_env().clone();
-        env.insert("JAUNT_TERMINAL_ID".into(), chat.id.to_string());
-        env.insert("JAUNT_SOCK".into(), self.terms.socket().display().to_string());
+        env.insert("MOONLET_TERMINAL_ID".into(), chat.id.to_string());
+        env.insert("MOONLET_SOCK".into(), self.terms.socket().display().to_string());
         if let Some(s) = &inner.info.session_id {
-            env.insert("JAUNT_SESSION".into(), s.clone());
+            env.insert("MOONLET_SESSION".into(), s.clone());
         }
         env.extend(inner.env.clone());
         let exe = resolve(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
@@ -780,14 +780,14 @@ done
         chats.shutdown();
     }
 
-    /// X22: the agent can reach the daemon with `moonlet`, whatever JAUNT_HOME is.
+    /// X22: the agent can reach the daemon with `moonlet`, whatever MOONLET_HOME is.
     #[tokio::test]
     async fn the_agent_gets_the_daemon_socket_and_its_terminal_id() {
         let (dir, _terms, chats) = setup().await;
         let out = dir.path().join("env.txt");
         std::fs::write(
             dir.path().join("bin/claude"),
-            format!("#!/bin/sh\nprintf '%s\\n' \"$JAUNT_SOCK\" \"$JAUNT_TERMINAL_ID\" > '{}'\nexec cat >/dev/null\n", out.display()),
+            format!("#!/bin/sh\nprintf '%s\\n' \"$MOONLET_SOCK\" \"$MOONLET_TERMINAL_ID\" > '{}'\nexec cat >/dev/null\n", out.display()),
         )
         .unwrap();
         let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
