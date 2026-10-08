@@ -93,7 +93,8 @@ The menu closes on Escape, on a click outside, or after an item is chosen. Hover
 - The sign-in URL comes from the agent. The app opens it only for `http`/`https` URLs, through the system opener, and only after a user click on Authenticate.
 - The forwarded port comes from the URL's `redirect_uri`. Only ports 1024–65535 on `localhost`/`127.0.0.1` are forwarded, only to the session's own host, and the forward binds to the Mac's loopback interface.
 - `read_image` reads only files with an image extension, refuses anything over 5 MB, and is called only with paths the user picked in the native dialog.
-- `chat.add_dir` requires an existing directory on the session's host.
+- `chat.add_dir`, `session.create` and `terminal.create` accept only absolute paths of existing directories on the session's host, so an added directory can never reach the agent's command line as a flag. (`runtime.rs` test)
+- A session another agent opens (X22) cannot add directories: they widen what the agent may write, so only the user picks them. (`session.rs` test)
 
 ## Out of scope
 

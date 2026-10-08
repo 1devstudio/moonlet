@@ -74,6 +74,16 @@ pub struct ChatManager {
     me: Weak<ChatManager>,
 }
 
+/// An added directory as the agent gets it: absolute and existing, so it
+/// can never read as one of the agent's flags (X29).
+fn check_dir(path: &str) -> Result<String> {
+    let dir = crate::terminal::expand_home(path);
+    if !dir.is_absolute() || !dir.is_dir() {
+        bail!("not a directory: {path}");
+    }
+    Ok(dir.display().to_string())
+}
+
 fn agent_state(status: &str) -> AgentState {
     match status {
         "working" => AgentState::Working,
@@ -126,7 +136,8 @@ impl ChatManager {
         }
         // Only Claude has a permission mode.
         let mode = req.mode.filter(|_| req.agent == "claude");
-        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: req.add_dirs.clone() };
+        let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
+        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone() };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
         command.extend(args);
@@ -160,7 +171,7 @@ impl ChatManager {
                 info: info.clone(),
                 cfg,
                 env: req.env,
-                state: ChatState { status: "idle".into(), add_dirs: req.add_dirs, ..Default::default() },
+                state: ChatState { status: "idle".into(), add_dirs, ..Default::default() },
                 adapter: None,
                 stdin: None,
                 pid: None,
@@ -265,11 +276,7 @@ impl ChatManager {
     /// message, which restarts the agent with it; adding one twice does
     /// nothing.
     pub fn add_dir(&self, id: TerminalId, path: &str) -> Result<ChatState> {
-        let dir = crate::terminal::expand_home(path);
-        if !dir.is_absolute() || !dir.is_dir() {
-            bail!("not a directory: {path}");
-        }
-        let dir = dir.display().to_string();
+        let dir = check_dir(path)?;
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
         if inner.cfg.add_dirs.contains(&dir) {
@@ -730,6 +737,18 @@ done
         assert!(!lines[0].contains("--add-dir"));
         assert!(lines[1].contains(&format!("--add-dir {extra}")), "{}", lines[1]);
         chats.shutdown();
+    }
+
+    #[tokio::test]
+    async fn added_directories_must_be_absolute_directories() {
+        let (dir, _terms, chats) = setup().await;
+        let cwd = dir.path().display().to_string();
+        // Each would reach the agent's command line as a flag.
+        for bad in ["--permission-mode=bypassPermissions", "-n", "relative/dir", "/no/such/dir"] {
+            let r = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), add_dirs: vec![bad.into()], ..Default::default() });
+            assert!(r.is_err(), "{bad} was accepted");
+        }
+        assert!(chats.add_dir(1, "--permission-mode=bypassPermissions").is_err());
     }
 
     #[tokio::test]

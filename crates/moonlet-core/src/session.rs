@@ -699,6 +699,11 @@ impl SessionManager {
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
         let mut req = req;
         crate::chat::check_mode(req.mode.as_deref())?;
+        // Directories widen what the agent may write (X29): only the user
+        // picks them, never an agent opening a session (X22).
+        if req.spawned_by.is_some() && !req.add_dirs.is_empty() {
+            anyhow::bail!("a session another agent starts cannot add directories");
+        }
         let repo = self.project(&req.project_id)?;
         let repo_path = PathBuf::from(&repo.path);
         let name = derive_name(req.name.as_deref(), req.prompt.as_deref());
@@ -1516,6 +1521,20 @@ mod tests {
         }
         let started = std::fs::read_to_string(&args).unwrap();
         assert!(started.contains(&format!("--add-dir {}", extra.display())), "{started}");
+    }
+
+    #[tokio::test]
+    async fn an_agent_cannot_widen_a_spawned_sessions_directories() {
+        let (repo, home, mgr, _chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = spawn_req(&r.id, "Parent", None, None);
+        req.agent = Some("claude".into());
+        let parent = mgr.create_session(req).await.unwrap();
+        let mut req = spawn_req(&r.id, "Child", None, Some(parent.terminals[0]));
+        req.agent = Some("claude".into());
+        req.add_dirs = vec![home.path().display().to_string()];
+        let err = mgr.create_session(req).await.unwrap_err();
+        assert_eq!(err.to_string(), "a session another agent starts cannot add directories");
     }
 
     #[tokio::test]
