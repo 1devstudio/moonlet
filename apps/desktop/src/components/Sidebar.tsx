@@ -4,7 +4,7 @@ import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
 import { arrange, compact, dropResult, lastActive, projectRemoval, type Dragged, type Group } from "../lib/sidebar";
 import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
-import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, rebaseCommand, type BaseChip } from "../lib/baseSync";
+import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
 import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
@@ -126,10 +126,12 @@ let closeBasePopover: (() => void) | null = null;
 
 /** "main is behind origin" chip beside the project name. Hovering shows the
  *  details popover; clicking pulls. */
+type PopoverPos = ReturnType<typeof pullPopoverPlacement> & { left: number };
+
 function BasePullChip({ host, projectId }: { host: string; projectId: string }) {
   const sync = useStore((s) => s.base[projKey(host, projectId)]);
   const project = useStore((s) => s.projects[host]?.find((p) => p.id === projectId));
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<PopoverPos | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
   const leaveTimer = useRef<number | undefined>(undefined);
   const chip = baseChip(sync?.status, !!sync?.pulling);
@@ -161,7 +163,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
     if (pos || !openable || !ref.current) return;
     const r = ref.current.getBoundingClientRect();
     const side = ref.current.closest("aside")?.getBoundingClientRect().left ?? 0;
-    setPos({ top: Math.round(r.bottom + 6), left: side + 12 });
+    setPos({ ...pullPopoverPlacement(r, window.innerHeight), left: side + 12 });
   };
   // A short grace period lets the pointer cross the gap into the popover.
   const leave = () => {
@@ -196,14 +198,14 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
         <div
           role="dialog"
           aria-label={`Pull ${st.branch}`}
-          className="fixed z-50 w-[276px] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
+          className="fixed z-50 flex w-[276px] flex-col overflow-hidden rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
           style={pos}
           onMouseDown={(e) => e.stopPropagation()}
           onMouseEnter={open}
           onMouseLeave={leave}
         >
           {chip.kind === "diverged" ? (
-            <div className="px-3 pb-2 pt-2.5">
+            <div className="overflow-y-auto px-3 pb-2 pt-2.5">
               <div className="ui-text-13 font-medium text-fg">Can't fast-forward {st.branch}</div>
               <div className="mt-1 ui-text-12 text-muted [text-wrap:pretty]">
                 Your local {mono(st.branch)} has {aheadText(st)} on {mono(st.upstream)}. moonlet only pulls when it can fast-forward, so nothing was changed.
@@ -220,13 +222,13 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
             </div>
           ) : (
             <>
-              <div className="px-3 pb-1.5 pt-2.5">
+              <div className="shrink-0 px-3 pb-1.5 pt-2.5">
                 <div className="ui-text-13 font-medium text-fg">{behindHeadline(st)}</div>
                 <div className="mt-1 ui-text-12 text-muted [text-wrap:pretty]">
-                  New sessions branch from your local {mono(st.branch)}. Pull to start them from the merged changes.
+                  New sessions branch from your local {mono(st.branch)}. Click the chip to pull the merged changes.
                 </div>
               </div>
-              <div className="flex flex-col px-1 py-1">
+              <div className="flex min-h-0 max-h-[190px] flex-col overflow-y-auto px-1 py-1">
                 {st.commits.map((c) => (
                   <div key={c.sha} className="flex h-[26px] items-center gap-2 rounded-md px-2">
                     <span className="shrink-0 font-mono ui-text-11.5 text-faint">{c.sha.slice(0, 7)}</span>
@@ -237,23 +239,10 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
                 ))}
                 {st.behind > st.commits.length && <div className="px-2 py-1 ui-text-11.5 text-faint">and {st.behind - st.commits.length} more</div>}
               </div>
-              <div className="flex items-center gap-2 border-t border-border px-2 pb-1 pt-2">
-                <span className="min-w-0 flex-1 truncate font-mono ui-text-11 text-faint" title={sync.fetchError ?? undefined}>
+              <div className="shrink-0 border-t border-border px-3 pb-1.5 pt-2">
+                <div className="truncate font-mono ui-text-11 text-faint" title={sync.fetchError ?? undefined}>
                   {fetchedLabel(sync, Date.now())}
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => setPos(null)}>
-                  Later
-                </Button>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => {
-                    setPos(null);
-                    void pullBase(host, projectId);
-                  }}
-                >
-                  <ArrowDown size={12} strokeWidth={1.75} /> Pull {st.branch}
-                </Button>
+                </div>
               </div>
             </>
           )}

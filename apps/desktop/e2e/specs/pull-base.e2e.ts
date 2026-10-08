@@ -62,6 +62,8 @@ describe("Pull base branch", () => {
     await expect($(sel.text("main is 2 commits behind origin"))).toBeDisplayed();
     await expect($(sel.text("Merge pull request #128 from 1devstudio/github-pr-sessions"))).toBeDisplayed();
     await expect($(sel.text("Open sessions from GitHub PRs"))).toBeDisplayed();
+    // The chip is the pull button; the popover only informs.
+    await expect(popover().$("button")).not.toBeExisting();
   });
 
   it("keeps one pull popover open at a time", async () => {

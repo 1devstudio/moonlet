@@ -65,6 +65,22 @@ export function pullToast(branch: string, r: { pulled: number; head: string }): 
   return `Pulled ${commits(r.pulled)} into ${branch}. New sessions start from ${r.head.slice(0, 7)}.`;
 }
 
+/** Where the pull popover opens: below the chip, or above it when the chip
+ *  sits too low in the window for the popover to fit, so it stays visible.
+ *  `maxHeight` caps it to the room on that side; the commit list scrolls. */
+export function pullPopoverPlacement(
+  chip: { top: number; bottom: number },
+  winHeight: number,
+  want = 300,
+): { top: number; maxHeight: number } | { bottom: number; maxHeight: number } {
+  const gap = 6;
+  const margin = 8;
+  const below = winHeight - chip.bottom - gap - margin;
+  const above = chip.top - gap - margin;
+  if (below >= want || below >= above) return { top: chip.bottom + gap, maxHeight: below };
+  return { bottom: winHeight - chip.top + gap, maxHeight: above };
+}
+
 const shellQuote = (s: string) => (/^[\w./~@%+=:,-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
 
 /** The command the diverged popover offers to copy. moonlet only
