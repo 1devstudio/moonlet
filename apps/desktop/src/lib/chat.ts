@@ -5,6 +5,7 @@ import { create } from "zustand";
 import type { PlanApproveMode } from "./agents";
 import { rpc } from "./daemon";
 import { type ChatItem, type ChatState, M, type ToolCall, type TurnTime } from "./protocol";
+import { readStored, writeStored } from "./storage";
 
 export const chatKey = (host: string, id: number) => `${host}:${id}`;
 
@@ -119,12 +120,12 @@ export function forgetChat(host: string, id: number) {
 
 // ------------------------------------------------------------ prompt history
 
-const HISTORY_KEY = "jaunt.prompts";
+const HISTORY_KEY = "prompts";
 const MAX_PROMPTS = 300;
 
 export function promptHistory(): string[] {
   try {
-    const v = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+    const v = JSON.parse(readStored(HISTORY_KEY) ?? "[]");
     return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
   } catch {
     return [];
@@ -137,7 +138,7 @@ export function rememberPrompt(text: string) {
   const h = promptHistory().filter((x) => x !== t);
   h.push(t);
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(-MAX_PROMPTS)));
+    writeStored(HISTORY_KEY, JSON.stringify(h.slice(-MAX_PROMPTS)));
   } catch {
     /* storage unavailable */
   }

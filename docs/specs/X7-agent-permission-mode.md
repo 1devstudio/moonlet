@@ -57,7 +57,7 @@ The structured Claude view had a model and effort picker but no way to change Cl
 - `ChatState.mode` and `ChatConfig.mode` are optional strings. `None` means no flag.
 - `session.create {…, mode?}` and `terminal.create {…, mode?}` take the same values. Both reject an unknown value.
 - `Session.mode` records the mode chosen at creation. Later terminals of the session (for example "Open in terminal") use it when none is passed. Changing the mode in the footer does not update it.
-- The Settings default is app-side only (`jaunt.settings` in localStorage); the daemon never sees it.
+- The Settings default is app-side only (`moonlet.settings` in localStorage); the daemon never sees it.
 
 ## Data and config
 
