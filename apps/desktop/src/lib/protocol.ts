@@ -94,7 +94,20 @@ export interface ChatState {
   agents?: NamedItem[];
   /** Directories added with `chat.add_dir` (X29). */
   add_dirs?: string[];
+  /** The agent's MCP servers; null until the agent has answered (X29). */
+  mcp_servers?: McpServer[] | null;
   queued: string[];
+}
+
+export interface McpServer {
+  name: string;
+  status: "connected" | "needs-auth" | "authing" | "failed" | "pending" | "disabled" | string;
+  transport: string;
+  endpoint?: string | null;
+  scope?: string | null;
+  error?: string | null;
+  tools: string[];
+  auth_url?: string | null;
 }
 
 export interface NamedItem {
@@ -387,6 +400,7 @@ export const M = {
   chatInterrupt: "chat.interrupt",
   chatSettings: "chat.settings",
   chatAddDir: "chat.add_dir",
+  chatMcp: "chat.mcp",
 } as const;
 
 export const EV = {

@@ -1,8 +1,9 @@
 import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Bot, ChevronRight, FileText, FolderPlus, Plus, Terminal } from "lucide-react";
+import { Bot, ChevronRight, FileText, FolderPlus, Plus, Server, ShieldAlert, Terminal } from "lucide-react";
 import type { NamedItem } from "../lib/protocol";
-import { type PlusEntry, plusEntries } from "../lib/plusMenu";
+import { type PlusEntry, mcpSummary, plusEntries } from "../lib/plusMenu";
+import { type McpActions, McpPanels } from "./McpPanels";
 import { cx } from "./ui";
 
 const panel = "rounded-xl border border-border-strong bg-[#1a1a1a] p-1.5 shadow-[0_12px_32px_rgba(0,0,0,.5)]";
@@ -51,6 +52,8 @@ export function PlusMenu({
   onCommand,
   agents = [],
   onAgent,
+  mcp,
+  onOpen,
 }: {
   variant: "chat" | "composer";
   onAttach: () => void;
@@ -59,6 +62,10 @@ export function PlusMenu({
   onCommand?: (name: string) => void;
   agents?: NamedItem[];
   onAgent?: (name: string) => void;
+  /** The agent's MCP servers; absent in the new-session composer. */
+  mcp?: McpActions;
+  /** The menu opened: the time to ask the agent for fresh MCP status. */
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [sub, setSub] = useState<PlusEntry | null>(null);
@@ -115,21 +122,38 @@ export function PlusMenu({
         return <Row key={entry} icon={<FolderPlus size={15} />} label="Add directory" onEnter={() => setSub(null)} onClick={choose(onAddDir)} />;
       case "commands":
         return <Row key={entry} icon={<Terminal size={15} />} label="Slash commands" active={sub === entry} controls={`${ids}-${entry}`} trailing={chevron} onEnter={() => setSub(entry)} onClick={() => setSub(entry)} />;
+      case "mcp": {
+        const n = mcp?.servers ? mcpSummary(mcp.servers).needsAuth : 0;
+        const badge = n > 0 && (
+          <span className="flex items-center gap-1 rounded-[5px] bg-hover px-1.5 py-0.5 font-mono ui-text-11.5 font-medium text-blocked" title={`${n} server${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} sign-in`}>
+            <ShieldAlert size={12} />
+            {n}
+          </span>
+        );
+        return (
+          <Row key={entry} icon={<Server size={15} />} label="MCP servers" active={sub === entry} controls={`${ids}-${entry}`} trailing={<>{badge}{chevron}</>} onEnter={() => setSub(entry)} onClick={() => setSub(entry)} />
+        );
+      }
       case "agents":
         return <Row key={entry} icon={<Bot size={15} />} label="Subagents" active={sub === entry} controls={`${ids}-${entry}`} trailing={chevron} onEnter={() => setSub(entry)} onClick={() => setSub(entry)} />;
     }
   };
 
   const sections = plusEntries({ variant, agents: agents.length });
+  const needsAuth = mcp?.servers ? mcpSummary(mcp.servers).needsAuth : 0;
 
   return (
     <div ref={root} className="relative">
       <button
         title="Add files, commands and more"
         className={cx("relative grid h-8 w-8 place-items-center rounded-lg text-fg hover:bg-hover", open && "bg-hover")}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (!open) onOpen?.();
+          setOpen(!open);
+        }}
       >
         <Plus size={17} />
+        {needsAuth > 0 && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-blocked" aria-label="MCP servers need sign-in" />}
       </button>
       {open &&
         createPortal(
@@ -150,6 +174,11 @@ export function PlusMenu({
                     <span className="truncate">/{c}</span>
                   </button>
                 ))}
+              </div>
+            )}
+            {sub === "mcp" && mcp && (
+              <div id={`${ids}-mcp`} className="flex items-end gap-1">
+                <McpPanels {...mcp} />
               </div>
             )}
             {sub === "agents" && (
