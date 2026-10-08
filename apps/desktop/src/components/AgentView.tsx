@@ -620,12 +620,10 @@ function ChatEditor({
   onCancel?: () => void;
 }) {
   const [text, setTextState] = useState(() => chatDraft(host, id));
-  const setText = (v: string | ((cur: string) => string)) =>
-    setTextState((cur) => {
-      const next = typeof v === "function" ? v(cur) : v;
-      saveChatDraft(host, id, next);
-      return next;
-    });
+  const setText = (v: string) => {
+    saveChatDraft(host, id, v);
+    setTextState(v);
+  };
   const [caret, setCaret] = useState(text.length);
   const [files, setFiles] = useState<string[] | null>(null);
   const [sel, setSel] = useState(0);
@@ -651,14 +649,14 @@ function ChatEditor({
   const draft = useStore((s) => s.agentDrafts[draftKey]);
   useEffect(() => {
     if (!draft) return;
-    setText((cur) => joinDraft(cur, draft));
+    setText(joinDraft(text, draft));
     useStore.setState((s) => {
       const agentDrafts = { ...s.agentDrafts };
       delete agentDrafts[draftKey];
       return { agentDrafts };
     });
     ta.current?.focus();
-  }, [draft, draftKey]);
+  }, [draft, draftKey, text]);
 
   useLayoutEffect(() => {
     const el = ta.current;
