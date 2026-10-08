@@ -1,5 +1,6 @@
 // The Files tab is a file explorer with type icons and row actions; the
-// Changes tab lists the changed files by folder, then shows a file's diff (X25).
+// Changes tab lists the changed files as a tree or a list (X28), then shows a
+// file's diff (X25).
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -67,20 +68,51 @@ describe("File explorer and changed files", () => {
     await expect($(sel.text("Open in"))).not.toBeExisting();
   });
 
-  it("lists the changed files by folder in the Changes tab", async () => {
+  it("lists the changed files as a folder tree in the Changes tab", async () => {
     await tab("Changes").click();
-    await expect($(sel.text("2 files"))).toBeDisplayed({ wait: 15_000 });
+    await expect($(sel.text("2 files changed"))).toBeDisplayed({ wait: 15_000 });
+    // The view persists in localStorage, which outlives a run: start from the tree.
+    const showAsTree = $('button[aria-label="Show as tree"]');
+    if (await showAsTree.isExisting()) await showAsTree.click();
     await expect($(sel.button("docs"))).toBeDisplayed();
-    await expect($(sel.button("/"))).toBeDisplayed();
     await expect($('//div[@role="button"][@title="docs/guide.md"]')).toBeDisplayed();
+    await expect($('//div[@role="button"][@title="package.json"]')).toBeDisplayed();
+    // A folder collapses and expands.
+    await $(sel.button("docs")).click();
+    await expect($('//div[@role="button"][@title="docs/guide.md"]')).not.toBeExisting();
+    await $(sel.button("docs")).click();
+    await expect($('//div[@role="button"][@title="docs/guide.md"]')).toBeDisplayed();
+  });
+
+  it("opens a file's diff from the keyboard", async () => {
+    await browser.execute(() => (document.querySelector('div[role="button"][title="package.json"]') as HTMLElement).focus());
+    await browser.keys("Enter");
+    const back = $('button[aria-label="Back to the changed files"]');
+    await expect(back).toBeDisplayed();
+    await back.click();
+    await expect($(sel.text("2 files changed"))).toBeDisplayed();
   });
 
   it("opens a file's diff, and goes back to the list", async () => {
     await $('//div[@role="button"][@title="package.json"]').click();
     const back = $('button[aria-label="Back to the changed files"]');
     await expect(back).toBeDisplayed();
-    await expect($(sel.text("2 files"))).not.toBeExisting();
+    await expect($(sel.text("2 files changed"))).not.toBeExisting();
     await back.click();
-    await expect($(sel.text("2 files"))).toBeDisplayed();
+    await expect($(sel.text("2 files changed"))).toBeDisplayed();
+  });
+
+  it("switches the changed files to a flat list and back", async () => {
+    await $('button[aria-label="Show as list"]').click();
+    await expect($(sel.button("docs"))).not.toBeExisting();
+    const guide = '//div[@role="button"][@title="docs/guide.md"]';
+    await expect($(`${guide}//span[normalize-space()="docs/"]`)).toBeDisplayed();
+    await expect($(`${guide}//span[normalize-space()="guide.md"]`)).toBeDisplayed();
+    // The choice survives a reload.
+    await browser.refresh();
+    await tab("Changes").click();
+    await expect($(`${guide}//span[normalize-space()="docs/"]`)).toBeDisplayed({ wait: 15_000 });
+    await $('button[aria-label="Show as tree"]').click();
+    await expect($(sel.button("docs"))).toBeDisplayed();
   });
 });

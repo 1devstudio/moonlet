@@ -115,6 +115,8 @@ interface UiPersist {
   sidebarOpen: boolean;
   rightTab: RightTab;
   collapsed: Record<string, boolean>;
+  /** The Changes tab's layout (X28). */
+  changesView: "tree" | "list";
 }
 
 const uiDefaults: UiPersist = {
@@ -125,6 +127,7 @@ const uiDefaults: UiPersist = {
   sidebarOpen: true,
   rightTab: "files",
   collapsed: {},
+  changesView: "tree",
 };
 
 /** In-app card when an agent in the open workspace finishes or needs input. */
@@ -240,10 +243,11 @@ useStore.subscribe((s, prev) => {
     s.rightOpen !== prev.rightOpen ||
     s.sidebarOpen !== prev.sidebarOpen ||
     s.rightTab !== prev.rightTab ||
-    s.collapsed !== prev.collapsed
+    s.collapsed !== prev.collapsed ||
+    s.changesView !== prev.changesView
   ) {
-    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed } = s;
-    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed });
+    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView } = s;
+    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView });
   }
   if (s.settings !== prev.settings) {
     saveJson(SETTINGS_KEY, s.settings);
