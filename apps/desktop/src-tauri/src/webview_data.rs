@@ -50,10 +50,29 @@ fn copy_if_missing(old: &Path, new: &Path) -> std::io::Result<bool> {
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::create_dir(to)?;
+    let mut entries = Vec::new();
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
-        let (src, dst) = (entry.path(), to.join(entry.file_name()));
-        let kind = entry.file_type()?;
+        entries.push((
+            entry.file_name().to_string_lossy().into_owned(),
+            entry.file_type()?,
+        ));
+    }
+    // Databases first: a snapshot replaces the database's WAL files.
+    let mut snapshots = Vec::new();
+    for (name, kind) in &entries {
+        if kind.is_file() && is_database(name) && snapshot(&from.join(name), &to.join(name)) {
+            snapshots.push(name.clone());
+        }
+    }
+    for (name, kind) in &entries {
+        let (src, dst) = (from.join(name), to.join(name));
+        let wal_of = name
+            .strip_suffix("-wal")
+            .or_else(|| name.strip_suffix("-shm"));
+        if snapshots.contains(name) || wal_of.is_some_and(|db| snapshots.iter().any(|s| s == db)) {
+            continue;
+        }
         if kind.is_dir() {
             copy_dir(&src, &dst)?;
         } else if kind.is_symlink() {
@@ -63,6 +82,31 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// WebKit's SQLite databases (localStorage, IndexedDB and others).
+fn is_database(name: &str) -> bool {
+    name.ends_with(".sqlite3") || name.ends_with(".db")
+}
+
+/// A consistent copy of a database jaunt.app may still be writing to, WAL
+/// included, through SQLite's backup. False when that is not possible; the
+/// files are then copied as they are.
+fn snapshot(src: &Path, dst: &Path) -> bool {
+    let dst_text = dst.to_string_lossy();
+    if dst_text.contains('\'') {
+        return false;
+    }
+    std::process::Command::new("/usr/bin/sqlite3")
+        .arg("-readonly")
+        .arg(src)
+        .arg(format!(".backup '{dst_text}'"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+        && dst.exists()
 }
 
 #[cfg(test)]
@@ -106,5 +150,49 @@ mod tests {
         assert!(
             !copy_if_missing(&webkit.path().join("missing"), &webkit.path().join("x")).unwrap()
         );
+    }
+
+    /// jaunt.app may still be running and writing its settings: each
+    /// database is copied as a consistent snapshot, without its WAL files.
+    #[test]
+    fn databases_open_in_jaunt_are_copied_as_snapshots() {
+        use std::io::Write;
+        let webkit = tempfile::tempdir().unwrap();
+        let old = webkit.path().join("dev.onedevstudio.jaunt");
+        let new = webkit.path().join("dev.onedevstudio.moonlet");
+        let store = old.join("LocalStorage");
+        std::fs::create_dir_all(&store).unwrap();
+        let db = store.join("localstorage.sqlite3");
+        // A live writer: its rows sit in the WAL while it stays open.
+        let mut writer = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(&db)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = writer.stdin.as_mut().unwrap();
+        writeln!(stdin, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE ItemTable (key TEXT, value BLOB); INSERT INTO ItemTable VALUES ('moonlet.settings', 'dark');").unwrap();
+        stdin.flush().unwrap();
+        let wal = store.join("localstorage.sqlite3-wal");
+        for _ in 0..100 {
+            if std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        assert!(copy_if_missing(&old, &new).unwrap());
+        drop(writer.stdin.take());
+        let _ = writer.wait();
+
+        let copied = new.join("LocalStorage");
+        assert!(!copied.join("localstorage.sqlite3-wal").exists());
+        assert!(!copied.join("localstorage.sqlite3-shm").exists());
+        let out = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(copied.join("localstorage.sqlite3"))
+            .arg("SELECT value FROM ItemTable WHERE key = 'moonlet.settings';")
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "dark\n");
     }
 }
