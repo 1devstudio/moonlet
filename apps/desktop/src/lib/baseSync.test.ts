@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, justMerged, pullToast, rebaseCommand } from "./baseSync";
+import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, justMerged, pullPopoverPlacement, pullToast, rebaseCommand } from "./baseSync";
 import type { BaseStatus } from "./protocol";
 
 const status = (ahead: number, behind: number): BaseStatus => ({
@@ -72,6 +72,20 @@ describe("popover text", () => {
     expect(pullToast("main", { pulled: 3, head: "9c41e2a7d1f0b8c3e4d5a6b7c8d9e0f1a2b3c4d5" })).toBe("Pulled 3 commits into main. New sessions start from 9c41e2a.");
     expect(pullToast("main", { pulled: 1, head: "4b7d010aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" })).toBe("Pulled 1 commit into main. New sessions start from 4b7d010.");
     expect(pullToast("main", { pulled: 0, head: "4b7d010aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" })).toBe("main is already up to date.");
+  });
+});
+
+describe("pullPopoverPlacement", () => {
+  it("opens below the chip when the popover fits there", () => {
+    expect(pullPopoverPlacement({ top: 100, bottom: 122 }, 800)).toEqual({ top: 128, maxHeight: 664 });
+  });
+
+  it("opens above the chip near the bottom of the window, so it stays visible", () => {
+    expect(pullPopoverPlacement({ top: 700, bottom: 722 }, 800)).toEqual({ bottom: 106, maxHeight: 686 });
+  });
+
+  it("stays below when there is more room below than above", () => {
+    expect(pullPopoverPlacement({ top: 100, bottom: 122 }, 360)).toEqual({ top: 128, maxHeight: 224 });
   });
 });
 
