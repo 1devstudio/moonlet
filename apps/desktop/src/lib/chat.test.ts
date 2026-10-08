@@ -5,7 +5,9 @@ import {
   fileMention,
   askQuestions,
   chatBlocks,
+  chatDraft,
   chatKey,
+  forgetChat,
   diffStat,
   fuzzyFilter,
   loadChat,
@@ -16,6 +18,7 @@ import {
   planApproveLabel,
   planOf,
   questionAnswers,
+  saveChatDraft,
   thinkingPreview,
   toolCommand,
   toolGroupLabel,
@@ -150,6 +153,27 @@ describe("text sent to the composer (T8)", () => {
 
   it("follows what is already typed, after a blank line", () => {
     expect(joinDraft("Why does this fail?\n", "```\n$ false\n```\n")).toBe("Why does this fail?\n\n```\n$ false\n```\n");
+  });
+});
+
+describe("unsent text in the editor (X6)", () => {
+  it("keeps what was typed in each session while another session is open", () => {
+    saveChatDraft("local", 1, "Rename the button to");
+    saveChatDraft("local", 2, "Why does CI fail?");
+    expect(chatDraft("local", 1)).toBe("Rename the button to");
+    expect(chatDraft("local", 2)).toBe("Why does CI fail?");
+  });
+
+  it("starts empty once the text is sent", () => {
+    saveChatDraft("local", 3, "Add a test");
+    saveChatDraft("local", 3, "");
+    expect(chatDraft("local", 3)).toBe("");
+  });
+
+  it("forgets the text when the chat terminal is removed", () => {
+    saveChatDraft("local", 4, "Half a thought");
+    forgetChat("local", 4);
+    expect(chatDraft("local", 4)).toBe("");
   });
 });
 
