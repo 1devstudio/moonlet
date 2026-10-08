@@ -1,8 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <rect x="100" y="100" width="824" height="824" rx="186" fill="#121212" stroke="#2e2e2e" stroke-width="4"/>
-  <circle cx="512" cy="512" r="270" fill="none" stroke="#3a3a3a" stroke-width="14" stroke-linecap="round" stroke-dasharray="2 36"/>
-  <rect x="470" y="432" width="84" height="160" rx="10" fill="#d97757"/>
-  <circle cx="703" cy="321" r="32" fill="#d97757"/>
-  <circle cx="242" cy="512" r="32" fill="#e6e6e6" fill-opacity="0.85"/>
-  <circle cx="647" cy="746" r="32" fill="#e6e6e6" fill-opacity="0.85"/>
+  <g transform="rotate(-20 512 512)">
+    <path d="M192 512A320 92 0 0 1 832 512" fill="none" stroke="#d97757" stroke-width="30" stroke-linecap="round" stroke-opacity="0.55"/>
+  </g>
+  <circle cx="512" cy="512" r="190" fill="#e6e6e6"/>
+  <circle cx="440" cy="436" r="30" fill="#c4c4c4"/>
+  <circle cx="577" cy="489" r="21" fill="#c4c4c4"/>
+  <circle cx="493" cy="592" r="38" fill="#c4c4c4"/>
+  <g transform="rotate(-20 512 512)">
+    <path d="M192 512A320 92 0 0 0 832 512" fill="none" stroke="#121212" stroke-width="66"/>
+    <path d="M192 512A320 92 0 0 0 832 512" fill="none" stroke="#d97757" stroke-width="30" stroke-linecap="round"/>
+  </g>
 </svg>
