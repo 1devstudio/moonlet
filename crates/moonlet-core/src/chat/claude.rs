@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use moonlet_proto::types::{ChatImage, ChatState, McpServer, NamedItem, PermissionAsk};
 use serde_json::{Value, json};
 
-use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
+use super::{Adapter, ChatConfig, Out, SignIns, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
 use crate::paths::now_ms;
 
 #[derive(Default)]
@@ -20,6 +20,9 @@ pub struct Claude {
     seq: u64,
     /// The user stopped the turn; its `result` is not an error.
     interrupted: bool,
+    /// `mcp_authenticate` requests: request id → server (X29).
+    auth_ids: HashMap<String, String>,
+    sign_ins: SignIns,
 }
 
 impl Claude {
@@ -265,8 +268,18 @@ impl Adapter for Claude {
                 let resp = &v["response"];
                 let rid = resp["request_id"].as_str().unwrap_or_default();
                 if rid.starts_with("mcp-status-") && resp["subtype"] == "success" {
-                    let rows = resp["response"]["mcpServers"].as_array().into_iter().flatten().filter_map(mcp_server).collect();
+                    let mut rows: Vec<McpServer> = resp["response"]["mcpServers"].as_array().into_iter().flatten().filter_map(mcp_server).collect();
+                    self.sign_ins.merge(&mut rows);
                     st.mcp_servers = Some(rows);
+                    out.push(Out::State);
+                } else if let Some(name) = self.auth_ids.remove(rid) {
+                    let r = &resp["response"];
+                    match (resp["subtype"].as_str(), r["authUrl"].as_str()) {
+                        (Some("success"), Some(url)) => self.sign_ins.page(&name, url, !r["callbackExpected"].as_bool().unwrap_or(false), st),
+                        // Nothing to sign in to: the status tells the rest.
+                        (Some("success"), None) => out.push(self.control("mcp-status", json!({"subtype": "mcp_status"}))),
+                        _ => self.sign_ins.fail(&name, resp["error"].as_str().unwrap_or("Sign-in failed."), st),
+                    }
                     out.push(Out::State);
                 } else if rid.starts_with("mcp-reconnect-") {
                     // Connected or not, the status shows how it went.
@@ -401,10 +414,25 @@ impl Adapter for Claude {
         out
     }
 
-    fn mcp(&mut self, action: &str, server: Option<&str>, _st: &mut ChatState) -> Vec<Out> {
+    fn mcp(&mut self, action: &str, server: Option<&str>, st: &mut ChatState) -> Vec<Out> {
         match (action, server) {
-            ("refresh", _) => vec![self.control("mcp-status", json!({"subtype": "mcp_status"}))],
+            ("refresh", _) => {
+                let mut out: Vec<Out> = self.sign_ins.polled().into_iter().map(|name| self.control("mcp-reconnect", json!({"subtype": "mcp_reconnect", "serverName": name}))).collect();
+                out.push(self.control("mcp-status", json!({"subtype": "mcp_status"})));
+                out
+            }
             ("reconnect", Some(name)) => vec![self.control("mcp-reconnect", json!({"subtype": "mcp_reconnect", "serverName": name}))],
+            ("auth", Some(name)) => {
+                let id = self.next_id("mcp-auth");
+                self.auth_ids.insert(id.clone(), name.to_string());
+                self.sign_ins.start(name, st);
+                let req = json!({"type": "control_request", "request_id": id, "request": {"subtype": "mcp_authenticate", "serverName": name}});
+                vec![Out::Write(req.to_string()), Out::State]
+            }
+            ("cancel", Some(name)) => {
+                self.sign_ins.cancel(name, st);
+                vec![Out::State]
+            }
             _ => vec![],
         }
     }
@@ -522,6 +550,81 @@ mod tests {
         let outs = a.on_line(failed, &mut st);
         let w: Vec<Value> = outs.iter().filter_map(|o| if let Out::Write(l) = o { serde_json::from_str(l).ok() } else { None }).collect();
         assert_eq!(w, [json!({"type": "control_request", "request_id": "mcp-status-2", "request": {"subtype": "mcp_status"}})]);
+    }
+
+    fn writes(outs: &[Out]) -> Vec<Value> {
+        outs.iter().filter_map(|o| if let Out::Write(l) = o { serde_json::from_str(l).ok() } else { None }).collect()
+    }
+
+    fn status_of<'a>(st: &'a ChatState, name: &str) -> &'a McpServer {
+        st.mcp_servers.as_ref().unwrap().iter().find(|s| s.name == name).unwrap()
+    }
+
+    /// Captured from Claude Code 2.1.292, organization id replaced: a
+    /// claude.ai connector signs in on claude.ai, with no local callback.
+    const CLAUDE_AI_AUTH: &str = "https://claude.ai/api/organizations/00000000-0000-4000-8000-000000000000/mcp/start-auth/mcpsrv_01X9Cj9u4wAJRmUBaoFV4yFt?product_surface=sdk-cli";
+
+    #[test]
+    fn signing_in_asks_for_the_page_and_shows_the_server_signing_in() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.mcp("refresh", None, &mut st);
+        a.on_line(MCP_STATUS_REPLY, &mut st);
+
+        let w = writes(&a.mcp("auth", Some("claude.ai Linear"), &mut st));
+        assert_eq!(w, [json!({"type": "control_request", "request_id": "mcp-auth-2", "request": {"subtype": "mcp_authenticate", "serverName": "claude.ai Linear"}})]);
+        assert_eq!(status_of(&st, "claude.ai Linear").status, "authing");
+        assert_eq!(status_of(&st, "claude.ai Linear").auth_url, None);
+
+        let reply = json!({"type": "control_response", "response": {"subtype": "success", "request_id": "mcp-auth-2", "response": {"authUrl": CLAUDE_AI_AUTH, "requiresUserAction": true, "callbackExpected": false}}});
+        assert!(a.on_line(&reply.to_string(), &mut st).contains(&Out::State));
+        assert_eq!(status_of(&st, "claude.ai Linear").auth_url.as_deref(), Some(CLAUDE_AI_AUTH));
+
+        // Claude does not notice a claude.ai sign-in: each refresh reconnects.
+        let w = writes(&a.mcp("refresh", None, &mut st));
+        assert_eq!(w[0]["request"], json!({"subtype": "mcp_reconnect", "serverName": "claude.ai Linear"}));
+        assert_eq!(w[1]["request"], json!({"subtype": "mcp_status"}));
+        // Still waiting: the status says needs-auth, the card says signing in.
+        let id = w[1]["request_id"].as_str().unwrap();
+        a.on_line(&MCP_STATUS_REPLY.replace("mcp-status-1", id), &mut st);
+        assert_eq!(status_of(&st, "claude.ai Linear").status, "authing");
+        assert_eq!(status_of(&st, "claude.ai Linear").auth_url.as_deref(), Some(CLAUDE_AI_AUTH));
+
+        // Signed in: the next status has it connected.
+        let w = writes(&a.mcp("refresh", None, &mut st));
+        let id = w[1]["request_id"].as_str().unwrap();
+        let connected = MCP_STATUS_REPLY.replace("mcp-status-1", id).replace(r#""name":"claude.ai Linear","status":"needs-auth""#, r#""name":"claude.ai Linear","status":"connected""#);
+        a.on_line(&connected, &mut st);
+        assert_eq!(status_of(&st, "claude.ai Linear").status, "connected");
+        assert_eq!(status_of(&st, "claude.ai Linear").auth_url, None);
+        assert_eq!(writes(&a.mcp("refresh", None, &mut st)).len(), 1, "no more reconnects");
+    }
+
+    #[test]
+    fn a_refused_sign_in_shows_the_agents_error() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.mcp("refresh", None, &mut st);
+        a.on_line(MCP_STATUS_REPLY, &mut st);
+        a.mcp("auth", Some("broken"), &mut st);
+        // Captured: the error Claude gives for a server it cannot sign in to.
+        let refused = r#"{"type":"control_response","response":{"subtype":"error","request_id":"mcp-auth-2","error":"Server type \"stdio\" does not support OAuth authentication"}}"#;
+        a.on_line(refused, &mut st);
+        assert_eq!(status_of(&st, "broken").status, "failed");
+        assert_eq!(status_of(&st, "broken").error.as_deref(), Some(r#"Server type "stdio" does not support OAuth authentication"#));
+    }
+
+    #[test]
+    fn cancelling_a_sign_in_shows_it_needed_again() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.mcp("refresh", None, &mut st);
+        a.on_line(MCP_STATUS_REPLY, &mut st);
+        a.mcp("auth", Some("claude.ai Linear"), &mut st);
+        a.mcp("cancel", Some("claude.ai Linear"), &mut st);
+        assert_eq!(status_of(&st, "claude.ai Linear").status, "needs-auth");
+        let w = writes(&a.mcp("refresh", None, &mut st));
+        assert_eq!(w.len(), 1, "a cancelled sign-in is not reconnected");
     }
 
     /// Captured from Claude Code 2.1.292 (trimmed): `-p` mode sends no

@@ -9,9 +9,9 @@ pub mod claude;
 pub mod codex;
 pub mod runtime;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatImage, ChatItem, ChatState, ToolCall, TurnTime};
+use moonlet_proto::types::{ChatImage, ChatItem, ChatState, McpServer, ToolCall, TurnTime};
 
 use crate::paths::now_ms;
 
@@ -89,7 +89,8 @@ pub trait Adapter: Send {
     /// Stop the running turn.
     fn interrupt(&mut self, st: &mut ChatState) -> Vec<Out>;
     /// MCP servers (X29): `refresh` asks for their status, `reconnect`
-    /// retries `server`. The answer arrives later as a state change.
+    /// retries `server`, `auth` asks for its sign-in page and `cancel`
+    /// gives up on that sign-in. Answers arrive later as state changes.
     fn mcp(&mut self, action: &str, server: Option<&str>, st: &mut ChatState) -> Vec<Out>;
 }
 
@@ -107,6 +108,85 @@ pub fn supports(agent: &str) -> bool {
 }
 
 // ------------------------------------------------------------ helpers
+
+/// MCP sign-ins in progress (X29), by server name. The agents report such
+/// a server as still needing sign-in until it connects; moonlet shows it
+/// as signing in, with its page.
+#[derive(Default)]
+pub(crate) struct SignIns(HashMap<String, SignIn>);
+
+struct SignIn {
+    url: Option<String>,
+    /// The agent does not notice the sign-in finish by itself (a claude.ai
+    /// connector), so each refresh reconnects the server.
+    poll: bool,
+}
+
+fn with_server(st: &mut ChatState, name: &str, f: impl FnOnce(&mut McpServer)) {
+    if let Some(s) = st.mcp_servers.iter_mut().flatten().find(|s| s.name == name) {
+        f(s);
+    }
+}
+
+impl SignIns {
+    pub(crate) fn start(&mut self, name: &str, st: &mut ChatState) {
+        self.0.insert(name.to_string(), SignIn { url: None, poll: false });
+        with_server(st, name, |s| {
+            s.status = "authing".into();
+            s.auth_url = None;
+            s.error = None;
+        });
+    }
+
+    pub(crate) fn page(&mut self, name: &str, url: &str, poll: bool, st: &mut ChatState) {
+        if let Some(p) = self.0.get_mut(name) {
+            p.url = Some(url.to_string());
+            p.poll = poll;
+            with_server(st, name, |s| s.auth_url = Some(url.to_string()));
+        }
+    }
+
+    pub(crate) fn fail(&mut self, name: &str, error: &str, st: &mut ChatState) {
+        self.0.remove(name);
+        with_server(st, name, |s| {
+            s.status = "failed".into();
+            s.auth_url = None;
+            s.error = Some(error.to_string());
+        });
+    }
+
+    pub(crate) fn cancel(&mut self, name: &str, st: &mut ChatState) {
+        if self.0.remove(name).is_some() {
+            with_server(st, name, |s| {
+                s.status = "needs-auth".into();
+                s.auth_url = None;
+            });
+        }
+    }
+
+    /// Applies the sign-ins to a fresh list; servers past sign-in drop out.
+    pub(crate) fn merge(&mut self, rows: &mut [McpServer]) {
+        for s in rows.iter_mut() {
+            match self.0.get(&s.name) {
+                Some(p) if s.status == "needs-auth" => {
+                    s.status = "authing".into();
+                    s.auth_url = p.url.clone();
+                }
+                Some(_) => {
+                    self.0.remove(&s.name);
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Servers to reconnect on each refresh.
+    pub(crate) fn polled(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.0.iter().filter(|(_, p)| p.poll).map(|(n, _)| n.clone()).collect();
+        v.sort();
+        v
+    }
+}
 
 /// The user's message as the transcript shows it: the text, then one
 /// `[image: <name>]` line per image.
