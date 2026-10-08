@@ -25,7 +25,7 @@ The chat input gets the layout of the "MCP Servers Menu" design: the input on to
 ### Layout and `+` menu (stack part 1)
 
 - [ ] The footer row is under the input: `+` left, cost and tokens centred, model and effort then permission mode right. While a turn runs the centre shows `Working`, the elapsed time and `esc to stop` instead of the cost; while the agent waits it shows the waiting text. Stop and the More menu stay on the right.
-- [ ] The `+` menu lists `Attach files or images` (hint `⌘U`), `Add directory`, then `Slash commands`, `MCP servers` and `Subagents`, each opening a submenu on hover. (`plusMenu.test.ts`)
+- [ ] The `+` menu lists `Attach files or images` (hint `⌘U`), `Add directory`, then `Slash commands`, `MCP servers` and `Subagents`, each opening a submenu on hover. (`plusMenu.test.ts`, `plus-menu.e2e.ts`)
 - [ ] `Slash commands` lists the agent's commands; choosing one puts `/<name> ` at the start of the input. An agent without commands shows `No commands`. (`plusMenu.test.ts`, `claude.rs` test)
 - [ ] `Subagents` lists the agent's subagents with their descriptions, from Claude's `initialize` reply; choosing one inserts `@agent-<name> ` at the caret. The item is hidden when the agent has no subagents. (`claude.rs` test, `plusMenu.test.ts`)
 - [ ] `⌘U` in the input opens the attach dialog. (`plusMenu.test.ts` for the key match)
@@ -34,10 +34,10 @@ The chat input gets the layout of the "MCP Servers Menu" design: the input on to
 ### Attachments and directories (stack part 2)
 
 - [ ] Attaching a file that is not an image inserts `@<path>`, relative to the session's directory when it is inside it, else absolute. (`attachments.test.ts`)
-- [ ] Attaching a `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` file adds an image chip above the input; the chip's `×` removes it. Images over 5 MB are refused with a toast. (`attachments.test.ts`)
+- [ ] Attaching a `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` file adds an image chip above the input; the chip's `×` removes it. The app reads the image on the Mac, so it works for remote sessions too. Images over 5 MB and files that are not images are refused with a toast. (`attachments.test.ts`, `src-tauri/src/attach.rs` tests)
 - [ ] Sending with images delivers them to Claude as base64 `image` content blocks after the text, and to Codex as `image` inputs with a `data:` URL. The user's message in the conversation shows `[image: <name>]` lines. (`claude.rs`, `codex.rs` tests)
 - [ ] `Add directory` picks a folder and calls `chat.add_dir`. Claude restarts on the next message with `--add-dir <path>` for every added directory (resuming the conversation); Codex resumes its thread with the directories as extra writable roots. A system line confirms the addition. Adding the same directory twice is a no-op. (`runtime.rs`, `claude.rs`, `codex.rs` tests)
-- [ ] A directory added in the new-session composer starts the agent with it from the first message. (`session.create` with `add_dirs`, daemon test)
+- [ ] A directory added in the new-session composer shows as a chip and starts the agent with it from the first message. In the composer, attached images are @mentions like other files, because there is no conversation to send them to yet. (`session.rs` test)
 
 ### MCP server list (stack part 3)
 
