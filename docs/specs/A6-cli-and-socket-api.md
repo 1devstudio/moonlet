@@ -12,7 +12,7 @@
 
 | Command | Does |
 |---|---|
-| `moonlet notify --state <s> [-m msg] [--session id]` | Reports agent state. The session defaults to `$JAUNT_SESSION_ID`. |
+| `moonlet notify --state <s> [-m msg] [--session id]` | Reports agent state. The session defaults to `$MOONLET_SESSION_ID`. |
 | `moonlet hook claude\|codex [payload]` | Entry point for agent hooks (see [A1](A1-agent-state.md)). |
 | `moonlet hooks install\|status\|uninstall` | Manages hooks (see [A2](A2-hook-install.md)). |
 | `moonlet ls [--json]` | Lists sessions. |
@@ -24,7 +24,7 @@
 
 ## Behaviour and acceptance criteria
 
-- [x] The socket comes from `--socket`, then `$JAUNT_SOCK`, then `~/.jaunt/run/jauntd.sock`.
+- [x] The socket comes from `--socket`, then `$MOONLET_SOCK`, then `~/.moonlet/run/moonletd.sock`.
 - [x] Errors print `moonlet: <message>` and exit 1. `hook` never fails.
 - [ ] `moonlet agent start --workspace` once workspaces exist ([A4](A4-new-workspace.md)).
 

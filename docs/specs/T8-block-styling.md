@@ -85,8 +85,8 @@ Make shell terminals in Blocks mode look and feel like a block-based terminal, o
 
 ## Protocol and RPCs
 
-- `shell.commands {shell?, terminal?}` returns `string[]`: executable file names in the absolute directories of a PATH, plus the shell's builtins and reserved words, de-duplicated and sorted. The PATH is the terminal's own, as its prompt hook last reported it with `OSC 1337;JauntPath=<PATH>` (sent only when it changes, so it includes what rc files and later `PATH=` added); without one, the login shell's. The app caches the answer per terminal for a minute.
-- **Node version:** the prompt hook reports where `node` is with `OSC 1337;JauntNodePath=<path>`, only when the `node` found on PATH (zsh `$commands[node]`, bash `type -P`, fish `command -s`) is a different absolute path than last time; an empty value means none. It never runs `node`. The daemon reads the version from the `include/node/node_version.h` installed beside its `bin/`, or else from a version directory in the resolved path (such as Homebrew's `Cellar/node/22.1.0`), stores it on `TerminalInfo.node_version` and emits `terminal.updated`.
+- `shell.commands {shell?, terminal?}` returns `string[]`: executable file names in the absolute directories of a PATH, plus the shell's builtins and reserved words, de-duplicated and sorted. The PATH is the terminal's own, as its prompt hook last reported it with `OSC 1337;MoonletPath=<PATH>` (sent only when it changes, so it includes what rc files and later `PATH=` added); without one, the login shell's. The app caches the answer per terminal for a minute.
+- **Node version:** the prompt hook reports where `node` is with `OSC 1337;MoonletNodePath=<path>`, only when the `node` found on PATH (zsh `$commands[node]`, bash `type -P`, fish `command -s`) is a different absolute path than last time; an empty value means none. It never runs `node`. The daemon reads the version from the `include/node/node_version.h` installed beside its `bin/`, or else from a version directory in the resolved path (such as Homebrew's `Cellar/node/22.1.0`), stores it on `TerminalInfo.node_version` and emits `terminal.updated`.
 
 ## Data and config
 

@@ -21,8 +21,8 @@ impl TestDaemon {
         let socket = home.path().join("run").join("d.sock");
         let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
             .arg("daemon")
-            .env("JAUNT_HOME", home.path())
-            .env("JAUNT_SOCK", &socket)
+            .env("MOONLET_HOME", home.path())
+            .env("MOONLET_SOCK", &socket)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -311,8 +311,8 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
     let socket = home.path().join("run").join("d.sock");
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
-        .env("JAUNT_HOME", home.path())
-        .env("JAUNT_SOCK", &socket)
+        .env("MOONLET_HOME", home.path())
+        .env("MOONLET_SOCK", &socket)
         .env("CLAUDE_CODE_MESSAGING_TOKEN", "leaked-secret")
         .env("CLAUDECODE", "1")
         .stdin(Stdio::null())

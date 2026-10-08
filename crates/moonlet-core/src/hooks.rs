@@ -5,7 +5,7 @@
 //! * [`install`] / [`uninstall`] / [`status`] edit `~/.claude/settings.json`
 //!   and `~/.codex/config.toml`, preserving everything that is not ours and
 //!   writing a backup first. They also manage the `moonlet` skill (X22) in
-//!   `~/.claude/skills/jaunt` and `~/.codex/skills/jaunt`.
+//!   `~/.claude/skills/moonlet` and `~/.codex/skills/moonlet`.
 
 use std::path::{Path, PathBuf};
 
@@ -103,7 +103,9 @@ pub struct HookStatus {
 pub const SKILL: &str = include_str!("skill/SKILL.md");
 
 /// Marks a skill file as ours, so uninstall never removes a user's own.
-const SKILL_MARKER: &str = "Installed by jaunt";
+const SKILL_MARKER: &str = "Installed by moonlet";
+/// The same mark in the `jaunt` skill, installed before the rename (X27).
+const JAUNT_SKILL_MARKER: &str = "Installed by jaunt";
 
 fn skill_installed(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|s| s == SKILL)
@@ -113,11 +115,17 @@ fn write_skill(path: &Path) -> Result<()> {
     if !skill_installed(path) {
         write_atomic(path, SKILL).with_context(|| format!("cannot write {}", path.display()))?;
     }
-    Ok(())
+    remove_skill(&jaunt_skill(path), JAUNT_SKILL_MARKER)
 }
 
-fn remove_skill(path: &Path) -> Result<()> {
-    if std::fs::read_to_string(path).is_ok_and(|s| s.contains(SKILL_MARKER)) {
+/// `skills/jaunt/SKILL.md` next to `skills/moonlet/SKILL.md`.
+fn jaunt_skill(path: &Path) -> PathBuf {
+    let skills = path.parent().and_then(Path::parent).unwrap_or(Path::new(""));
+    skills.join("jaunt/SKILL.md")
+}
+
+fn remove_skill(path: &Path, marker: &str) -> Result<()> {
+    if std::fs::read_to_string(path).is_ok_and(|s| s.contains(marker)) {
         std::fs::remove_file(path)?;
         if let Some(dir) = path.parent() {
             // Only if empty: anything else in it is the user's.
@@ -145,8 +153,8 @@ impl HookPaths {
         HookPaths {
             claude_settings: claude_dir.join("settings.json"),
             codex_config: codex_dir.join("config.toml"),
-            claude_skill: claude_dir.join("skills/jaunt/SKILL.md"),
-            codex_skill: codex_dir.join("skills/jaunt/SKILL.md"),
+            claude_skill: claude_dir.join("skills/moonlet/SKILL.md"),
+            codex_skill: codex_dir.join("skills/moonlet/SKILL.md"),
         }
     }
 
@@ -440,8 +448,10 @@ pub fn uninstall(paths: &HookPaths) -> Result<HookStatus> {
         backup(&paths.codex_config)?;
         write_atomic(&paths.codex_config, &doc.to_string())?;
     }
-    remove_skill(&paths.claude_skill)?;
-    remove_skill(&paths.codex_skill)?;
+    for skill in [&paths.claude_skill, &paths.codex_skill] {
+        remove_skill(skill, SKILL_MARKER)?;
+        remove_skill(&jaunt_skill(skill), JAUNT_SKILL_MARKER)?;
+    }
     status(paths)
 }
 
@@ -453,14 +463,14 @@ mod tests {
         HookPaths {
             claude_settings: dir.join("claude/settings.json"),
             codex_config: dir.join("codex/config.toml"),
-            claude_skill: dir.join("claude/skills/jaunt/SKILL.md"),
-            codex_skill: dir.join("codex/skills/jaunt/SKILL.md"),
+            claude_skill: dir.join("claude/skills/moonlet/SKILL.md"),
+            codex_skill: dir.join("codex/skills/moonlet/SKILL.md"),
         }
     }
 
     /// X22: the skill that teaches agents `moonlet session new`.
     #[test]
-    fn install_writes_the_jaunt_skill_for_both_agents_and_uninstall_removes_it() {
+    fn install_writes_the_moonlet_skill_for_both_agents_and_uninstall_removes_it() {
         let dir = tempfile::tempdir().unwrap();
         let p = paths(dir.path());
         let mine = dir.path().join("claude/skills/mine/SKILL.md");
@@ -473,8 +483,8 @@ mod tests {
         assert!(st.claude_installed && st.codex_installed, "{st:?}");
         for skill in [&p.claude_skill, &p.codex_skill] {
             let text = std::fs::read_to_string(skill).unwrap();
-            assert!(text.starts_with("---\nname: jaunt\n"), "{text}");
-            assert!(text.contains(r#""$JAUNT_BIN" session new <project> "<prompt>""#), "{text}");
+            assert!(text.starts_with("---\nname: moonlet\n"), "{text}");
+            assert!(text.contains(r#""$MOONLET_BIN" session new <project> "<prompt>""#), "{text}");
         }
 
         // Hooks without the skill (installed by an older moonlet) still need an install.
@@ -486,8 +496,8 @@ mod tests {
 
         let st = uninstall(&p).unwrap();
         assert!(!st.claude_skill && !st.codex_skill, "{st:?}");
-        assert!(!dir.path().join("claude/skills/jaunt").exists());
-        assert!(!dir.path().join("codex/skills/jaunt").exists());
+        assert!(!dir.path().join("claude/skills/moonlet").exists());
+        assert!(!dir.path().join("codex/skills/moonlet").exists());
         assert_eq!(std::fs::read_to_string(&mine).unwrap(), "---\nname: mine\n---\n", "other skills kept");
     }
 
@@ -607,7 +617,7 @@ mod tests {
     #[test]
     fn only_moonlet_hook_commands_are_ours() {
         assert!(is_ours("/usr/local/bin/moonlet hook claude"));
-        assert!(is_ours("'/Users/a b/.jaunt/bin/moonlet' hook codex"));
+        assert!(is_ours("'/Users/a b/.moonlet/bin/moonlet' hook codex"));
         assert!(is_ours("moonlet hook claude"));
         assert!(is_ours(&format!("{} hook claude", quote(Path::new("/Users/O'Brien/bin/moonlet")))));
         assert!(!is_ours("~/scripts/moonlety-notify hook x"));
@@ -638,5 +648,25 @@ mod tests {
             .map(|h| h["command"].as_str().unwrap())
             .collect();
         assert_eq!(commands, ["/Applications/moonlet.app/Contents/MacOS/moonlet hook claude"]);
+    }
+
+    /// X27: the skill jaunt installed goes; a `jaunt` skill the user wrote
+    /// stays.
+    #[test]
+    fn install_removes_the_skill_jaunt_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let jaunts = dir.path().join("claude/skills/jaunt/SKILL.md");
+        std::fs::create_dir_all(jaunts.parent().unwrap()).unwrap();
+        std::fs::write(&jaunts, "---\nname: jaunt\n---\n\n<!-- Installed by jaunt (`jaunt hooks install`); reinstalling overwrites this file. -->\n").unwrap();
+        let users = dir.path().join("codex/skills/jaunt/SKILL.md");
+        std::fs::create_dir_all(users.parent().unwrap()).unwrap();
+        std::fs::write(&users, "---\nname: jaunt\n---\nmy own notes\n").unwrap();
+
+        install(&p, Path::new("/Applications/moonlet.app/Contents/MacOS/moonlet"), true, true).unwrap();
+
+        assert!(!dir.path().join("claude/skills/jaunt").exists());
+        assert_eq!(std::fs::read_to_string(&users).unwrap(), "---\nname: jaunt\n---\nmy own notes\n");
+        assert!(p.claude_skill.exists() && p.codex_skill.exists());
     }
 }

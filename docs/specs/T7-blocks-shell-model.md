@@ -16,7 +16,7 @@ In shell tabs, the input editor (T6) is the only input. The shell's own prompt i
   - The user's prompt is remembered and restored when switching to classic mode.
 - [x] **Classic mode:**
   - Per terminal, switched from the editor's chip row ("Classic") and back from a small "Blocks" pill in classic mode.
-  - `terminal.set_classic {id, classic}` records the choice in a marker file the shell checks before each prompt (`$JAUNT_CLASSIC_FILE`), updates `TerminalInfo.classic` and emits `terminal.updated`.
+  - `terminal.set_classic {id, classic}` records the choice in a marker file the shell checks before each prompt (`$MOONLET_CLASSIC_FILE`), updates `TerminalInfo.classic` and emits `terminal.updated`.
   - The frontend sends an empty Enter when the shell is at a prompt, so the new prompt mode shows immediately.
   - New shells start in Blocks mode unless the "Classic shell prompt" setting is on (`terminal.create {classic: true}`).
   - In classic mode the editor never shows.
@@ -34,7 +34,7 @@ In shell tabs, the input editor (T6) is the only input. The shell's own prompt i
 - `TerminalInfo.classic: bool`.
 - `TerminalCreate.classic: bool` (default false).
 - `terminal.set_classic {id, classic}` returns the updated `TerminalInfo`.
-- Marker files live in `~/.jaunt/run/prompt/<terminal id>`. They are removed when the terminal is removed.
+- Marker files live in `~/.moonlet/run/prompt/<terminal id>`. They are removed when the terminal is removed.
 
 ## Security
 

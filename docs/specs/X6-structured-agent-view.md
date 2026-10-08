@@ -81,7 +81,7 @@ Claude asks the user multiple-choice questions through the `AskUserQuestion` too
 
 ## Persistence and restore
 
-- The chat state is persisted to `~/.jaunt/chats/<terminal id>.json` (debounced), together with the agent session or thread id.
+- The chat state is persisted to `~/.moonlet/chats/<terminal id>.json` (debounced), together with the agent session or thread id.
 - After a daemon restart, a chat terminal is re-created and re-spawned with resume, and its items are restored from the file. A turn in flight at the time is reported as interrupted.
 - A live daemon upgrade hands chats over by restarting them with resume. The transcript is kept, but a running turn is interrupted. Pipe handoff is a possible later improvement.
 - Restored chats keep their terminal id. The agent process is only started by the next message, so a restart costs nothing until the user continues.

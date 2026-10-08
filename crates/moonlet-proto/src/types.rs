@@ -100,7 +100,7 @@ pub struct Project {
     pub base_branch: String,
 }
 
-/// Per-repo settings, read from `<repo>/.jaunt/config.toml`.
+/// Per-repo settings, read from `<repo>/.moonlet/config.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectConfig {
     #[serde(default)]
@@ -118,7 +118,7 @@ pub struct ProjectConfig {
     pub agents: BTreeMap<String, String>,
 }
 
-/// A project's `.jaunt/config.toml` as the Project settings dialog sees it (X8).
+/// A project's `.moonlet/config.toml` as the Project settings dialog sees it (X8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectConfigFile {
     pub path: String,

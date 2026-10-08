@@ -49,7 +49,7 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | T9 | Real command blocks (daemon-owned, on libghostty-vt) | P1 | 3 | draft | [T9-real-command-blocks.md](T9-real-command-blocks.md) |
 | X6 | Structured agent view (Claude Code, Codex) | P1 | 3 | implemented (Codex untested live) | [X6-structured-agent-view.md](X6-structured-agent-view.md) |
 | X7 | Permission mode picker (footer, new-session modal, Settings default) | P1 | 3 | implemented (UI unchecked in app) | [X7-agent-permission-mode.md](X7-agent-permission-mode.md) |
-| X8 | Project settings (edit `.jaunt/config.toml` from the app) | P1 | 3 | implemented (dialog unchecked in app) | [X8-project-settings.md](X8-project-settings.md) |
+| X8 | Project settings (edit `.moonlet/config.toml` from the app) | P1 | 3 | implemented (dialog unchecked in app) | [X8-project-settings.md](X8-project-settings.md) |
 | X9 | Open and copy links in agent messages | P1 | 3 | implemented (UI unchecked in app) | [X9-chat-links.md](X9-chat-links.md) |
 | X10 | Sound when an agent finishes or needs you | P1 | 3 | implemented (sound not heard in app) | [X10-attention-sounds.md](X10-attention-sounds.md) |
 | X11 | Stacked pull requests | P1 | 3 | implemented (UI unchecked in app) | [X11-pr-stacks.md](X11-pr-stacks.md) |
@@ -66,3 +66,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X24 | Plan panel, and approving a plan into Auto | P1 | 3 | implemented (UI unchecked in app) | [X24-plan-panel.md](X24-plan-panel.md) |
 | X25 | File explorer in the Files tab, changed files in the Changes tab | P1 | 3 | implemented (UI unchecked in app) | [X25-file-explorer.md](X25-file-explorer.md) |
 | X26 | Files open as editor tabs, with VS Code syntax colours | P1 | 3 | implemented (UI unchecked in app) | [X26-file-tabs.md](X26-file-tabs.md) |
+| X27 | Move from jaunt to moonlet without losing anything | P1 | 3 | implemented (untried against a real jaunt install) | [X27-moonlet-migration.md](X27-moonlet-migration.md) |

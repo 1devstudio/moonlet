@@ -5,7 +5,7 @@ describe("languageFor", () => {
   it("picks the language from the extension or file name", () => {
     expect(languageFor("/repo/src/main.rs")).toBe("rust");
     expect(languageFor("apps/desktop/src/App.tsx")).toBe("typescript");
-    expect(languageFor(".jaunt/config.toml")).toBe("ini");
+    expect(languageFor(".moonlet/config.toml")).toBe("ini");
     expect(languageFor("docs/README.MD")).toBe("markdown");
     expect(languageFor("/repo/Makefile")).toBe("makefile");
   });

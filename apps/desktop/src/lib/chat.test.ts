@@ -155,7 +155,7 @@ describe("text sent to the composer (T8)", () => {
 
 describe("adding a file to the chat (X25)", () => {
   it("mentions the file by its path in the workspace", () => {
-    expect(fileMention("/Users/me/.jaunt/worktrees/moonlet/s1", "/Users/me/.jaunt/worktrees/moonlet/s1/apps/desktop/package.json")).toBe("@apps/desktop/package.json");
+    expect(fileMention("/Users/me/.moonlet/worktrees/moonlet/s1", "/Users/me/.moonlet/worktrees/moonlet/s1/apps/desktop/package.json")).toBe("@apps/desktop/package.json");
   });
 
   it("follows what is already typed with a space", () => {

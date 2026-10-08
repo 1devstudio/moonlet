@@ -11,13 +11,13 @@ On macOS, `moonletd` can run as a per-user LaunchAgent. launchd starts it at log
 
 ## Behaviour and acceptance criteria
 
-- [x] `moonletd service install` writes `~/Library/LaunchAgents/dev.onedevstudio.jaunt.daemon.plist`:
+- [x] `moonletd service install` writes `~/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist`:
   - `ProgramArguments` = this binary plus `daemon`;
   - `RunAtLoad`;
   - `KeepAlive {SuccessfulExit: false}`, so launchd restarts the daemon after a crash but not after a clean stop or upgrade;
   - `ProcessType Interactive`;
-  - log paths under `~/.jaunt/logs`;
-  - `JAUNT_HOME` when it is set.
+  - log paths under `~/.moonlet/logs`;
+  - `MOONLET_HOME` when it is set.
 
   It then runs `launchctl bootstrap gui/<uid>`; reinstalling replaces the old registration.
 - [x] `moonletd service uninstall` boots the agent out and removes the plist. If launchd is running the serving daemon, booting it out stops that daemon, and its terminals and agents may end. The Settings toggle therefore asks for confirmation first; cancelling leaves it on. A failed bootout is reported, not treated as removed.
@@ -33,4 +33,4 @@ The plist is user-owned (`0644` in `~/Library/LaunchAgents`) and points at the a
 ## Test plan
 
 - Unit test: plist rendering (keys, escaping).
-- Manual: install, `launchctl print gui/$UID/dev.onedevstudio.jaunt.daemon`, kill the daemon, confirm it restarts.
+- Manual: install, `launchctl print gui/$UID/dev.onedevstudio.moonlet.daemon`, kill the daemon, confirm it restarts.

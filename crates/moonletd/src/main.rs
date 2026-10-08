@@ -23,8 +23,8 @@ use moonlet_proto::types::DaemonInfo;
 #[derive(Parser)]
 #[command(name = "moonletd", version, about = "moonlet session daemon")]
 struct Cli {
-    /// Socket path (defaults to ~/.jaunt/run/jauntd.sock).
-    #[arg(long, env = "JAUNT_SOCK", global = true)]
+    /// Socket path (defaults to ~/.moonlet/run/moonletd.sock).
+    #[arg(long, env = "MOONLET_SOCK", global = true)]
     socket: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -64,6 +64,7 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    moonlet_core::paths::migrate_legacy_home();
     let socket = cli.socket.unwrap_or_else(moonlet_core::paths::socket_path);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -99,7 +100,7 @@ fn main() -> Result<()> {
 
 fn init_logging() {
     use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_env("JAUNT_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_env("MOONLET_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     let log = moonlet_core::paths::log_file();
     if let Some(dir) = log.parent() {
         let _ = moonlet_core::paths::ensure_private_dir(dir);
@@ -181,7 +182,7 @@ fn run_daemon(
                 (listener, daemon)
             }
         };
-        upgrade::write_pid();
+        upgrade::write_pid(&socket);
         let chats = daemon.chats.restore();
         if chats > 0 {
             tracing::info!(chats, "restored structured agent conversations");
@@ -236,7 +237,7 @@ async fn proxy(socket: PathBuf) -> Result<()> {
         Err(_) => true,
     };
     if outdated
-        && upgrade::pid_file().exists()
+        && upgrade::pid_file(&socket).exists()
         && let Err(e) = upgrade::request_upgrade(&socket, std::env::current_exe()?).await
     {
         eprintln!("moonletd: upgrade of the running daemon failed: {e:#}");

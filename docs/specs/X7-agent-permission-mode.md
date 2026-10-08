@@ -61,7 +61,7 @@ The structured Claude view had a model and effort picker but no way to change Cl
 
 ## Data and config
 
-- `mode` is saved with the chat in `~/.jaunt/chats/<terminal id>.json` (`cfg` and `state`). Older files without it load as `None`.
+- `mode` is saved with the chat in `~/.moonlet/chats/<terminal id>.json` (`cfg` and `state`). Older files without it load as `None`.
 
 ## Security considerations
 
@@ -89,7 +89,7 @@ The structured Claude view had a model and effort picker but no way to change Cl
 ## Verification (2026-10-03)
 
 - `claude -p --model haiku --permission-mode <mode> "reply with the single word ok"` answered `ok` for `plan`, `auto` and `bypassPermissions` (claude 2.1.288). `bypassPermissions` needed no extra flag in that plain headless run.
-- In the app (scratch `JAUNT_HOME`), a session switched to Auto completed a live turn, and the saved chat file held `mode: auto` in both the config and the state.
+- In the app (scratch `MOONLET_HOME`), a session switched to Auto completed a live turn, and the saved chat file held `mode: auto` in both the config and the state.
 
 ## Open questions
 

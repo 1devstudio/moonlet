@@ -11,7 +11,7 @@ A new `moonletd` binary takes over every live PTY from the running daemon. Agent
 
 ## Flow
 
-1. `moonletd upgrade` (run from the *new* binary) reads `~/.jaunt/run/jauntd.pid`, writes `~/.jaunt/run/upgrade.json` with its own path, and sends `SIGUSR2` to the old daemon. `daemon.upgrade {binary}` does the same over RPC.
+1. `moonletd upgrade` (run from the *new* binary) reads `~/.moonlet/run/moonletd.pid`, writes `~/.moonlet/run/upgrade.json` with its own path, and sends `SIGUSR2` to the old daemon. `daemon.upgrade {binary}` does the same over RPC.
 2. The old daemon opens a private handoff socket (`run/handoff-<pid>.sock`, `0600`) and starts `<binary> daemon --handoff <path>` detached.
 3. The new daemon connects and receives:
    - a JSON header: each live session's `SessionInfo`, size and screen snapshot;
