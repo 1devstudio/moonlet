@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, Lock } from "lucide-react";
+import { ArrowRight, ChevronRight, Copy, Lock } from "lucide-react";
 import type { McpServer } from "../lib/protocol";
 import { mcpCard, mcpSummary } from "../lib/plusMenu";
 import { Button, StateGlyph, cx } from "./ui";
@@ -9,12 +9,17 @@ export interface McpActions {
   /** Why the servers could not be listed, such as an agent that cannot start. */
   error: string | null;
   onReconnect: (name: string) => void;
+  /** Sign in: the agent's sign-in page opens in the browser. */
+  onAuth: (name: string) => void;
+  onCancel: (name: string) => void;
+  /** Copies the sign-in page's address; resolves once it is copied. */
+  onCopy: (name: string) => Promise<void>;
 }
 
 const panel = "rounded-xl border border-border-strong bg-[#1a1a1a] shadow-[0_12px_32px_rgba(0,0,0,.5)]";
 
 /** The MCP server list and the selected server's card (X29). */
-export function McpPanels({ servers, error, onReconnect }: McpActions) {
+export function McpPanels({ servers, error, ...actions }: McpActions) {
   const [picked, setPicked] = useState<string | null>(null);
   if (!servers) {
     return (
@@ -24,7 +29,15 @@ export function McpPanels({ servers, error, onReconnect }: McpActions) {
       </div>
     );
   }
-  const selected = servers.find((s) => s.name === picked) ?? servers.find((s) => s.status === "needs-auth") ?? servers[0];
+  const waiting = (s: McpServer) => s.status === "needs-auth" || s.status === "authing";
+  const selected = servers.find((s) => s.name === picked) ?? servers.find(waiting) ?? servers[0];
+  // The server acted on stays selected while its status changes.
+  const keep =
+    <A extends unknown[], R>(fn: (name: string, ...rest: A) => R) =>
+    (name: string, ...rest: A) => {
+      setPicked(name);
+      return fn(name, ...rest);
+    };
   return (
     <>
       <div className={cx(panel, "flex max-h-[360px] w-[220px] flex-col gap-px overflow-y-auto p-1.5")}>
@@ -44,13 +57,24 @@ export function McpPanels({ servers, error, onReconnect }: McpActions) {
           </button>
         ))}
       </div>
-      {selected && <McpCard server={selected} onReconnect={onReconnect} />}
+      {selected && (
+        <McpCard
+          key={selected.name}
+          server={selected}
+          onReconnect={keep(actions.onReconnect)}
+          onAuth={keep(actions.onAuth)}
+          onCancel={keep(actions.onCancel)}
+          onCopy={keep(actions.onCopy)}
+        />
+      )}
     </>
   );
 }
 
-function McpCard({ server: s, onReconnect }: { server: McpServer; onReconnect: (name: string) => void }) {
+function McpCard({ server: s, onReconnect, onAuth, onCancel, onCopy }: { server: McpServer } & Omit<McpActions, "servers" | "error">) {
   const card = mcpCard(s);
+  // Reads Copied until another server is selected (the card remounts).
+  const [copied, setCopied] = useState(false);
   return (
     <div className={cx(panel, "flex w-[300px] flex-col gap-3 px-4 py-3.5")} aria-label={`MCP server ${s.name}`}>
       <div className="flex items-center gap-2">
@@ -79,7 +103,32 @@ function McpCard({ server: s, onReconnect }: { server: McpServer; onReconnect: (
       {s.status === "needs-auth" && (
         <div className="flex flex-col gap-2.5 rounded-lg border border-border-strong bg-[rgba(242,201,76,.05)] p-3">
           <div className="ui-text-12.5 font-medium text-fg">Authentication required</div>
-          <div className="ui-text-12 leading-normal text-muted">The agent can't use {s.name}'s tools in this session until you sign in.</div>
+          <div className="ui-text-12 leading-normal text-muted">
+            The agent can't use {s.name}'s tools in this session until you sign in. This opens the sign-in page in your browser; when you approve access the server connects
+            automatically.
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button variant="primary" size="sm" onClick={() => onAuth(s.name)}>
+              Authenticate <ArrowRight size={11} />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => void onCopy(s.name).then(() => setCopied(true))}>
+              <Copy size={11} /> {copied ? "Copied" : "Copy link"}
+            </Button>
+          </div>
+        </div>
+      )}
+      {s.status === "authing" && (
+        <div className="flex items-center gap-2.5 rounded-lg border border-border-strong p-3">
+          <StateGlyph state="working" size={10} />
+          <span className="flex-1 ui-text-12 text-muted">Finish signing in to {s.name} in your browser.</span>
+          {s.auth_url && (
+            <Button variant="ghost" size="sm" onClick={() => onAuth(s.name)}>
+              Open page
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => onCancel(s.name)}>
+            Cancel
+          </Button>
         </div>
       )}
       {s.status === "failed" && (

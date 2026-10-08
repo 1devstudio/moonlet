@@ -1,0 +1,44 @@
+import { describe, expect, it } from "vitest";
+import { callbackForward, pagesToOpen } from "./oauthRedirect";
+import type { McpServer } from "./protocol";
+
+// Sign-in pages captured from Claude Code 2.1.292 and codex-cli 0.160.0.
+const CLAUDE_LINEAR =
+  "https://mcp.linear.app/authorize?response_type=code&client_id=https%3A%2F%2Fclaude.ai%2Foauth%2Fclaude-code-client-metadata&code_challenge=C&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A59910%2Fcallback&state=S&scope=read+write&resource=https%3A%2F%2Fmcp.linear.app%2Fmcp";
+const CODEX_LINEAR =
+  "https://mcp.linear.app/authorize?response_type=code&client_id=https%3A%2F%2Fchatgpt.com%2Foauth%2Fcodex%2Fclient.json&state=S&code_challenge=C&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A51137%2Fcallback&scope=read+write+openid+email&resource=https%3A%2F%2Fmcp.linear.app%2Fmcp";
+const CLAUDE_AI = "https://claude.ai/api/organizations/00000000-0000-4000-8000-000000000000/mcp/start-auth/mcpsrv_01X9Cj9u4wAJRmUBaoFV4yFt?product_surface=sdk-cli";
+
+describe("sign-in callbacks on a remote host (X29)", () => {
+  it("finds the loopback port the browser returns to", () => {
+    expect(callbackForward(CLAUDE_LINEAR)).toEqual({ bind: "localhost", port: 59910 });
+    expect(callbackForward(CODEX_LINEAR)).toEqual({ bind: "127.0.0.1", port: 51137 });
+  });
+
+  it("forwards nothing for a sign-in that finishes on a website", () => {
+    expect(callbackForward(CLAUDE_AI)).toBeNull();
+    expect(callbackForward("https://idp.example/authorize?redirect_uri=https%3A%2F%2Fapp.example%2Fcb")).toBeNull();
+    expect(callbackForward("not a url")).toBeNull();
+  });
+});
+
+describe("opening sign-in pages (X29)", () => {
+  const server = (name: string, status: string, auth_url?: string): McpServer => ({ name, status, transport: "http", tools: [], auth_url });
+
+  it("opens each page once, when it first appears", () => {
+    const opened = new Set<string>();
+    const servers = [server("linear", "authing", CLAUDE_LINEAR), server("sentry", "authing"), server("slack", "connected")];
+    expect(pagesToOpen(servers, opened)).toEqual([{ name: "linear", url: CLAUDE_LINEAR }]);
+    expect(pagesToOpen(servers, opened)).toEqual([]);
+  });
+
+  it("opens a new page for a second sign-in to the same server", () => {
+    const opened = new Set<string>();
+    pagesToOpen([server("linear", "authing", CLAUDE_LINEAR)], opened);
+    expect(pagesToOpen([server("linear", "authing", CODEX_LINEAR)], opened)).toEqual([{ name: "linear", url: CODEX_LINEAR }]);
+  });
+
+  it("never opens anything but a web page", () => {
+    expect(pagesToOpen([server("x", "authing", "file:///etc/passwd"), server("y", "authing", "javascript:alert(1)")], new Set())).toEqual([]);
+  });
+});
