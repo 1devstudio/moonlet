@@ -1,6 +1,7 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type Ref, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Ban,
   Bot,
@@ -10,6 +11,7 @@ import {
   ChevronRight,
   ClipboardList,
   Copy,
+  CornerDownLeft,
   ExternalLink,
   FilePen,
   FileText,
@@ -62,12 +64,14 @@ import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
 import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
+import { fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
 import { uiScale } from "../lib/uiScale";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
+import { PlusMenu } from "./PlusMenu";
 import { AgentIcon, Button, cx, inputCls } from "./ui";
 
 // ------------------------------------------------------------ messages
@@ -597,6 +601,8 @@ function ChatEditor({
   placeholder,
   focusSignal = 0,
   onCancel,
+  onAttach,
+  handle,
 }: {
   host: string;
   /** The chat terminal, whose unsent text survives a session switch. */
@@ -618,6 +624,10 @@ function ChatEditor({
   focusSignal?: number;
   /** Escape in the empty editor, before it would stop the agent. */
   onCancel?: () => void;
+  /** ⌘U: attach files (X29). */
+  onAttach?: () => void;
+  /** Lets the `+` menu edit the input (X29). */
+  handle?: Ref<EditorHandle>;
 }) {
   const [text, setTextState] = useState(() => chatDraft(host, id));
   const setText = (v: string) => {
@@ -685,6 +695,17 @@ function ChatEditor({
     requestAnimationFrame(() => ta.current?.setSelectionRange(pos, pos));
   };
 
+  useImperativeHandle(handle, () => {
+    const apply = (r: { text: string; caret: number }) => {
+      set(r.text, r.caret);
+      ta.current?.focus();
+    };
+    return {
+      slashCommand: (name) => apply(withSlashCommand(text, name)),
+      mention: (...ms) => apply(ms.reduce((r, m) => withMention(r.text, r.caret, m), { text, caret })),
+    };
+  });
+
   const accept = (choice: string) => {
     if (!token) return;
     const before = text.slice(0, token.start) + choice + " ";
@@ -724,6 +745,9 @@ function ChatEditor({
     if (e.key === "." && e.metaKey) {
       e.preventDefault();
       onStop();
+    } else if (onAttach && isAttachShortcut(e)) {
+      e.preventDefault();
+      onAttach();
     } else if (e.key === "Tab" && e.shiftKey && onCycleMode) {
       e.preventDefault();
       onCycleMode();
@@ -778,8 +802,8 @@ function ChatEditor({
           ))}
         </div>
       )}
-      <div className="relative rounded-xl border border-border-strong bg-panel px-3.5 py-2.5 focus-within:border-[#3a3a3a]">
-        <div className="relative ui-text-14 leading-[1.5]">
+      <div className="relative flex min-h-[52px] items-center gap-3 rounded-[14px] border border-border-strong bg-panel py-3 pl-4 pr-3.5 focus-within:border-[#3a3a3a]">
+        <div className="relative min-w-0 flex-1 ui-text-14 leading-[1.5]">
           <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
             {text}
             {ghost && <span className="text-faint">{ghost}</span>}
@@ -801,9 +825,19 @@ function ChatEditor({
             className="relative block w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
           />
         </div>
+        <button title="Send (↵)" className="flex shrink-0 self-end pb-0.5 text-faint hover:text-fg" onClick={send}>
+          <CornerDownLeft size={18} strokeWidth={1.8} />
+        </button>
       </div>
     </div>
   );
+}
+
+/** What the `+` menu may do to the chat input (X29). */
+export interface EditorHandle {
+  slashCommand: (name: string) => void;
+  /** Inserts each mention at the caret, in order. */
+  mention: (...mentions: string[]) => void;
 }
 
 // ------------------------------------------------------------ view
@@ -919,6 +953,14 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     void call(M.chatSend, { text });
   };
   const stop = () => void call(M.chatInterrupt, {});
+  const editor = useRef<EditorHandle>(null);
+  // Attached files become @mentions (X29).
+  const attach = async () => {
+    const root = info?.cwd ?? "";
+    const picked = await openDialog({ multiple: true, directory: false, defaultPath: root || undefined, title: "Attach files or images" });
+    const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
+    if (list.length) editor.current?.mention(...list.map((f) => fileMention(f, root)));
+  };
 
   const agent = info?.agent ?? "claude";
   const modelLabel = agent === "claude" ? (CLAUDE_MODELS.find((m) => m.id === st?.model)?.label ?? st?.model ?? "Default") : (st?.model ?? "Default");
@@ -1003,60 +1045,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           })}
         </div>
       </div>
-      <div className="w-full shrink-0 px-6 pb-4">
-        <div className="mb-1.5 flex h-6 items-center gap-2 px-1 ui-text-12 text-muted">
-          {st?.status === "working" ? (
-            <>
-              <Loader2 size={12} className="spin text-accent" />
-              <span className="chat-shimmer">Working</span>
-              {st.turn_started_at && <span className="text-faint">{elapsed(now - st.turn_started_at)}</span>}
-              <span className="text-faint">· esc to stop</span>
-            </>
-          ) : st?.status === "blocked" ? (
-            <>
-              <ShieldAlert size={12} className="text-blocked" />
-              <span>{st.pending.length > 0 && st.pending.every(isQuestion) ? "Waiting for your answer" : "Waiting for your approval"}</span>
-            </>
-          ) : st && (st.cost_usd > 0 || st.input_tokens > 0) ? (
-            <span className="text-faint">
-              {st.cost_usd > 0 && `$${st.cost_usd.toFixed(st.cost_usd < 1 ? 3 : 2)} · `}
-              {tokens(st.input_tokens)} in · {tokens(st.output_tokens)} out
-            </span>
-          ) : null}
-          <span className="ml-auto flex items-center gap-0.5">
-            {working && (
-              <Button size="sm" variant="ghost" onClick={stop} title="Stop (⌘.)">
-                <Square size={10} fill="currentColor" /> Stop
-              </Button>
-            )}
-            {agent === "claude" && <ModeMenu menu={modeMenu} className="h-6 px-2" iconSize={12} />}
-            <Menu
-              side="top"
-              align="right"
-              width={200}
-              items={settings}
-              trigger={(open) => (
-                <button className="flex h-6 items-center gap-1.5 rounded-md px-2 hover:bg-hover hover:text-fg" onClick={open}>
-                  <AgentIcon agent={agent} size={12} />
-                  <span>{modelLabel}</span>
-                  {effortLabel && <span className="text-faint">{effortLabel}</span>}
-                  <ChevronDown size={12} />
-                </button>
-              )}
-            />
-            <Menu
-              side="top"
-              align="right"
-              width={200}
-              items={more}
-              trigger={(open) => (
-                <button title="More" className="flex h-6 w-6 items-center justify-center rounded-md hover:bg-hover hover:text-fg" onClick={open}>
-                  <MoreHorizontal size={14} />
-                </button>
-              )}
-            />
-          </span>
-        </div>
+      <div className="w-full shrink-0 px-6 pb-3">
         <ChatEditor
           host={host}
           id={id}
@@ -1072,7 +1061,74 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           placeholder={revising ? "What should change in the plan?" : undefined}
           focusSignal={focusSignal}
           onCancel={revising ? () => setRevise(null) : undefined}
+          onAttach={() => void attach()}
+          handle={editor}
         />
+        {/* Under the input (X29): + on the left, status centred, settings on the right. */}
+        <div className="mt-1.5 grid h-[34px] grid-cols-[1fr_auto_1fr] items-center px-1 ui-text-12.5 text-muted">
+          <div className="flex items-center gap-1">
+            <PlusMenu
+              variant="chat"
+              onAttach={() => void attach()}
+              commands={st?.slash_commands ?? []}
+              onCommand={(c) => editor.current?.slashCommand(c)}
+              agents={st?.agents ?? []}
+              onAgent={(a) => editor.current?.mention(`agent-${a}`)}
+            />
+          </div>
+          <div className="flex items-center gap-2 whitespace-nowrap">
+            {st?.status === "working" ? (
+              <>
+                <Loader2 size={12} className="spin text-accent" />
+                <span className="chat-shimmer">Working</span>
+                {st.turn_started_at && <span className="text-faint">{elapsed(now - st.turn_started_at)}</span>}
+                <span className="text-faint">· esc to stop</span>
+              </>
+            ) : st?.status === "blocked" ? (
+              <>
+                <ShieldAlert size={12} className="text-blocked" />
+                <span>{st.pending.length > 0 && st.pending.every(isQuestion) ? "Waiting for your answer" : "Waiting for your approval"}</span>
+              </>
+            ) : st && (st.cost_usd > 0 || st.input_tokens > 0) ? (
+              <span>
+                {st.cost_usd > 0 && `$${st.cost_usd.toFixed(st.cost_usd < 1 ? 3 : 2)} · `}
+                {tokens(st.input_tokens)} in · {tokens(st.output_tokens)} out
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-center justify-end gap-1 ui-text-13">
+            {working && (
+              <Button size="sm" variant="ghost" onClick={stop} title="Stop (⌘.)">
+                <Square size={10} fill="currentColor" /> Stop
+              </Button>
+            )}
+            <Menu
+              side="top"
+              align="right"
+              width={200}
+              items={settings}
+              trigger={(open) => (
+                <button className="flex h-7 items-center gap-1.5 rounded-md px-2 hover:bg-hover" onClick={open}>
+                  {agent !== "claude" && <AgentIcon agent={agent} size={12} />}
+                  <span className="text-fg">{modelLabel}</span>
+                  {effortLabel && <span className="text-muted">{effortLabel}</span>}
+                </button>
+              )}
+            />
+            {agent === "claude" && <ModeMenu menu={modeMenu} className="h-7 px-2 text-fg" iconSize={12} />}
+            <Menu
+              side="top"
+              align="right"
+              width={200}
+              items={more}
+              trigger={(open) => (
+                <button title="More" className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-hover hover:text-fg" onClick={open}>
+                  <MoreHorizontal size={14} />
+                </button>
+              )}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
