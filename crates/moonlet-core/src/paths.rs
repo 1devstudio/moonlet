@@ -44,6 +44,16 @@ pub fn migrate_legacy_home() {
 /// Returns whether it moved anything: nothing moves when `new` exists or
 /// `legacy` is missing or a symlink.
 pub fn migrate_home(legacy: &Path, new: &Path) -> std::io::Result<bool> {
+    migrate_home_with(legacy, new, |target, link| std::os::unix::fs::symlink(target, link))
+}
+
+/// [`migrate_home`] with the symlink step given, so a failing one can be
+/// tested. When it fails, the folder goes back to `legacy`.
+fn migrate_home_with(
+    legacy: &Path,
+    new: &Path,
+    symlink: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<bool> {
     if std::fs::symlink_metadata(new).is_ok() {
         return Ok(false);
     }
@@ -54,7 +64,10 @@ pub fn migrate_home(legacy: &Path, new: &Path) -> std::io::Result<bool> {
         Err(e) => return Err(e),
     }
     std::fs::rename(legacy, new)?;
-    std::os::unix::fs::symlink(new, legacy)?;
+    if let Err(e) = symlink(new, legacy) {
+        let _ = std::fs::rename(new, legacy);
+        return Err(e);
+    }
     Ok(true)
 }
 
@@ -231,6 +244,22 @@ mod tests {
         assert!(!super::migrate_home(&link, &fresh).unwrap());
         assert!(!fresh.exists());
         assert!(!super::migrate_home(&t.path().join("missing"), &fresh).unwrap());
+    }
+
+    #[test]
+    fn a_failed_symlink_puts_the_jaunt_folder_back() {
+        let t = tempfile::tempdir().unwrap();
+        let legacy = t.path().join(".jaunt");
+        let new = t.path().join(".moonlet");
+        std::fs::create_dir(&legacy).unwrap();
+        std::fs::write(legacy.join("state.json"), "{}").unwrap();
+
+        let failing = |_: &std::path::Path, _: &std::path::Path| -> std::io::Result<()> {
+            Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
+        };
+        assert!(super::migrate_home_with(&legacy, &new, failing).is_err());
+        assert_eq!(std::fs::read_to_string(legacy.join("state.json")).unwrap(), "{}");
+        assert!(!new.exists());
     }
 
     #[test]

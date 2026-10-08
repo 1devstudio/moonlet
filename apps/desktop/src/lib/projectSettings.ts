@@ -44,8 +44,8 @@ export interface SaveError {
 /** A failed read: the first load closes the dialog (there is nothing to
  *  edit), a failed Reload keeps the user's edits and shows the error with
  *  Reload to try again. */
-export function loadFailure(reload: boolean, message: string): { close: true } | { close: false; saveErr: SaveError } {
-  return reload ? { close: false, saveErr: { message: `Could not reload .moonlet/config.toml: ${message}`, stale: true } } : { close: true };
+export function loadFailure(reload: boolean, message: string, path?: string): { close: true } | { close: false; saveErr: SaveError } {
+  return reload ? { close: false, saveErr: { message: `Could not reload ${configName(path)}: ${message}`, stale: true } } : { close: true };
 }
 
 /** What Close, Cancel or Esc does: close, ask before discarding edits (X23),

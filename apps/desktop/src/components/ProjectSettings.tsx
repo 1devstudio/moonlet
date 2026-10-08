@@ -58,7 +58,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
       setSaveErr(null);
       return true;
     } catch (e) {
-      const failure = loadFailure(reload, e instanceof Error ? e.message : String(e));
+      const failure = loadFailure(reload, e instanceof Error ? e.message : String(e), file?.path);
       if (failure.close) {
         errorToast(e);
         close();

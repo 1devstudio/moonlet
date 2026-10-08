@@ -83,9 +83,16 @@ describe("loadFailure", () => {
   });
 
   it("keeps the dialog open with the error and Reload when a reload fails", () => {
-    expect(loadFailure(true, "connection lost")).toEqual({
+    expect(loadFailure(true, "connection lost", "/Users/me/web/.moonlet/config.toml")).toEqual({
       close: false,
       saveErr: { message: "Could not reload .moonlet/config.toml: connection lost", stale: true },
+    });
+  });
+
+  it("names jaunt's file when that is the one being edited (X27)", () => {
+    expect(loadFailure(true, "connection lost", "/Users/me/web/.jaunt/config.toml")).toEqual({
+      close: false,
+      saveErr: { message: "Could not reload .jaunt/config.toml: connection lost", stale: true },
     });
   });
 });
