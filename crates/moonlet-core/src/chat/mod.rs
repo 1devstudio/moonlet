@@ -11,7 +11,7 @@ pub mod runtime;
 
 use std::collections::BTreeMap;
 
-use moonlet_proto::types::{ChatItem, ChatState, ToolCall, TurnTime};
+use moonlet_proto::types::{ChatImage, ChatItem, ChatState, ToolCall, TurnTime};
 
 use crate::paths::now_ms;
 
@@ -58,6 +58,8 @@ pub struct ChatConfig {
     /// Display name, passed to agents that accept one.
     pub name: String,
     pub cwd: String,
+    /// Extra directories the agent may work in (X29).
+    pub add_dirs: Vec<String>,
 }
 
 /// What an adapter asks the runtime to do.
@@ -78,8 +80,8 @@ pub trait Adapter: Send {
     fn start(&mut self, cfg: &ChatConfig, st: &mut ChatState) -> Vec<Out>;
     /// One line from the agent's stdout.
     fn on_line(&mut self, line: &str, st: &mut ChatState) -> Vec<Out>;
-    /// The user sends a message.
-    fn send(&mut self, text: &str, st: &mut ChatState) -> Vec<Out>;
+    /// The user sends a message, with images after its text (X29).
+    fn send(&mut self, text: &str, images: &[ChatImage], st: &mut ChatState) -> Vec<Out>;
     /// The user answers a permission request: `allow`, `always` or `deny`.
     /// `answers` carries the user's answers to a question tool; `mode` is
     /// the permission mode an approved plan switches to.
@@ -102,6 +104,14 @@ pub fn supports(agent: &str) -> bool {
 }
 
 // ------------------------------------------------------------ helpers
+
+/// The user's message as the transcript shows it: the text, then one
+/// `[image: <name>]` line per image.
+pub(crate) fn user_text(text: &str, images: &[ChatImage]) -> String {
+    let mut lines: Vec<String> = if text.is_empty() { vec![] } else { vec![text.to_string()] };
+    lines.extend(images.iter().map(|i| format!("[image: {}]", i.name)));
+    lines.join("\n")
+}
 
 /// An id that stays unique across agent restarts (adapters start fresh
 /// when a conversation is resumed, the transcript does not).

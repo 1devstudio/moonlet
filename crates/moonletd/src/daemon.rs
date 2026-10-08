@@ -181,6 +181,7 @@ impl Daemon {
                             title: req.title,
                             session_id: None,
                             env: req.env,
+                            add_dirs: req.add_dirs,
                         })
                         .map_err(internal)?),
                     None => ok(s.create(req).map_err(internal)?),
@@ -192,7 +193,7 @@ impl Daemon {
             }
             m::CHAT_SEND => {
                 let r: m::ChatSend = params(p)?;
-                self.chats.send(r.id, &r.text).map_err(internal)?;
+                self.chats.send(r.id, &r.text, &r.images).map_err(internal)?;
                 ok(true)
             }
             m::CHAT_PERMISSION => {
@@ -210,6 +211,10 @@ impl Daemon {
             m::CHAT_SETTINGS => {
                 let r: m::ChatSettings = params(p)?;
                 ok(self.chats.settings(r.id, r.model, r.effort, r.mode).map_err(internal)?)
+            }
+            m::CHAT_ADD_DIR => {
+                let r: m::ChatAddDir = params(p)?;
+                ok(self.chats.add_dir(r.id, &r.path).map_err(internal)?)
             }
             m::TERMINAL_LIST => ok(s.list()),
             m::TERMINAL_DETACH => {

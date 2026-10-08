@@ -636,6 +636,7 @@ impl SessionManager {
                 title: req.title.clone(),
                 session_id: Some(ws.id.clone()),
                 env: req.env.clone(),
+                add_dirs: req.add_dirs.clone(),
             })?,
             None => self.terminals.create(req.clone())?,
         };
@@ -830,12 +831,13 @@ impl SessionManager {
                     chat: true,
                     cols: req.cols,
                     rows: req.rows,
+                    add_dirs: req.add_dirs.clone(),
                     ..Default::default()
                 },
             )?;
             if let Some(p) = req.prompt.as_deref().filter(|p| !p.trim().is_empty())
                 && let Some(chats) = self.chats.get()
-                && let Err(e) = chats.send(info.id, p)
+                && let Err(e) = chats.send(info.id, p, &[])
             {
                 // The session exists and the chat shows the error; creating
                 // it again would only add a second worktree.
@@ -1287,6 +1289,7 @@ mod tests {
             pr: None,
             tui: false,
             spawned_by: None,
+            add_dirs: vec![],
         };
         for bad in ["", "yolo"] {
             let err = mgr.create_session(req(bad)).await.unwrap_err();
@@ -1321,6 +1324,7 @@ mod tests {
                 pr: None,
                 tui: false,
                 spawned_by: None,
+                add_dirs: vec![],
             })
             .await
             .unwrap();
@@ -1359,6 +1363,7 @@ mod tests {
                 pr: None,
                 tui: false,
                 spawned_by: None,
+                add_dirs: vec![],
             })
             .await
             .unwrap();
@@ -1388,6 +1393,7 @@ mod tests {
             pr: None,
             tui: false,
             spawned_by,
+            add_dirs: vec![],
         }
     }
 
@@ -1488,6 +1494,28 @@ mod tests {
             .collect();
         ts.sort_by_key(|t| t.id);
         ts.into_iter().map(|t| (t.agent, t.chat)).collect()
+    }
+
+    #[tokio::test]
+    async fn directories_picked_for_a_new_session_reach_its_agent() {
+        let (repo, home, mgr, _chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let extra = home.path().join("shared-lib");
+        std::fs::create_dir(&extra).unwrap();
+        let mut req = spawn_req(&r.id, "With a directory", None, None);
+        req.agent = Some("claude".into());
+        req.add_dirs = vec![extra.display().to_string()];
+        let s = mgr.create_session(req).await.unwrap();
+        // The fake records its arguments in its working directory, the worktree.
+        let args = std::path::Path::new(&s.path).join("claude-args");
+        for _ in 0..200 {
+            if args.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let started = std::fs::read_to_string(&args).unwrap();
+        assert!(started.contains(&format!("--add-dir {}", extra.display())), "{started}");
     }
 
     #[tokio::test]
@@ -1662,6 +1690,7 @@ mod tests {
                     pr: None,
                     tui: false,
                     spawned_by: None,
+                    add_dirs: vec![],
                 })
                 .await
                 .unwrap();
@@ -1719,6 +1748,7 @@ mod tests {
                 pr: None,
                 tui: false,
                 spawned_by: None,
+                add_dirs: vec![],
             })
             .await
             .unwrap();
@@ -1752,6 +1782,7 @@ mod tests {
                 pr: None,
                 tui: false,
                 spawned_by: None,
+                add_dirs: vec![],
             })
             .await
             .unwrap();
@@ -1810,6 +1841,7 @@ mod tests {
                 pr: None,
                 tui: false,
                 spawned_by: None,
+                add_dirs: vec![],
             })
             .await
             .unwrap();
@@ -1867,6 +1899,7 @@ mod tests {
                 pr: None,
                 tui: false,
                 spawned_by: None,
+                add_dirs: vec![],
             })
             .await
             .unwrap();
@@ -1930,6 +1963,7 @@ mod tests {
                 pr: None,
                 tui: false,
                 spawned_by: None,
+                add_dirs: vec![],
             })
             .await
             .unwrap();
@@ -2099,6 +2133,7 @@ mod tests {
             pr: None,
             tui: false,
             spawned_by: None,
+            add_dirs: vec![],
             cols: 80,
             rows: 24,
         })
@@ -2159,6 +2194,7 @@ mod tests {
                 pr: None,
                 tui: false,
                 spawned_by: None,
+                add_dirs: vec![],
                 cols: 80,
                 rows: 24,
             })
