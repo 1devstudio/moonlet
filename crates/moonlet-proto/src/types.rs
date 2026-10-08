@@ -492,7 +492,18 @@ pub struct ChatState {
     pub agent_session: Option<String>,
     #[serde(default)]
     pub slash_commands: Vec<String>,
+    /// The agent's subagents, for the `+` menu (X29).
+    #[serde(default)]
+    pub agents: Vec<NamedItem>,
     /// Messages sent while a turn was running, delivered in order.
     #[serde(default)]
     pub queued: Vec<String>,
+}
+
+/// A name with a one-line description, such as a subagent.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct NamedItem {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
 }
