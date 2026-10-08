@@ -53,14 +53,21 @@ function FileRow({ f, depth = 0, children, onSelect, onAction }: { f: FileChange
   return (
     <div
       role="button"
+      tabIndex={0}
       title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
-      className="group mx-2 flex h-[34px] cursor-default items-center gap-3 rounded-md pr-3 text-left hover:bg-raised"
+      className="group mx-2 flex h-[34px] cursor-default items-center gap-3 rounded-md pr-3 text-left outline-none hover:bg-raised focus-visible:bg-raised"
       style={{ paddingLeft: PAD + depth * INDENT }}
       onClick={() => onSelect(f.path)}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onSelect(f.path);
+        }
+      }}
     >
       <span className={cx("flex min-w-0 flex-1 ui-text-14", f.status === "deleted" && "line-through")}>{children}</span>
       {f.staged && <Check size={12} className="shrink-0 text-done" aria-label="staged" />}
-      <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex" onClick={(e) => e.stopPropagation()}>
+      <span className="hidden shrink-0 items-center gap-0.5 group-focus-within:flex group-hover:flex" onClick={(e) => e.stopPropagation()}>
         {(f.unstaged || f.status === "untracked") && (
           <IconButton title="Stage file" onClick={() => onAction(f, "stage")}>
             <Plus size={12} />
@@ -75,7 +82,7 @@ function FileRow({ f, depth = 0, children, onSelect, onAction }: { f: FileChange
           <Undo2 size={12} />
         </IconButton>
       </span>
-      <span className="flex shrink-0 items-center gap-2 group-hover:hidden">
+      <span className="flex shrink-0 items-center gap-2 group-focus-within:hidden group-hover:hidden">
         <span className="font-mono ui-text-12 tabular-nums">
           {changeCount(f)
             .split(" ")

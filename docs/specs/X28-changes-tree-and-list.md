@@ -25,6 +25,7 @@ The Changes tab grouped the changed files under one header per folder, each head
 - [x] The toolbar button switches between tree and list; the tree is the default and the choice persists across restarts. (`file-explorer.e2e.ts`)
 - [x] The header reads `N files changed` with the `+a −d` totals; the "base not found" warning stays. (`file-explorer.e2e.ts`)
 - [x] Each row shows its `+a −d` counts in green and red and a status box: green for added or untracked, red for deleted or conflicted, yellow otherwise. Hovering a row shows stage, unstage and discard in their place.
+- [x] A changed-file row takes keyboard focus; Enter or Space opens its diff, and focus shows the row's actions like hover does. (`file-explorer.e2e.ts`)
 
 ## UI
 
