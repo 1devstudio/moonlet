@@ -40,7 +40,7 @@ None.
 
 ## Data and config
 
-`settings.shortcuts` in local storage (`jaunt.settings`): action id → key id (for example `"setup": "alt+cmd+s"`). An empty string means the action has no shortcut. Actions not in the map keep their default.
+`settings.shortcuts` in local storage (`moonlet.settings`): action id → key id (for example `"setup": "alt+cmd+s"`). An empty string means the action has no shortcut. Actions not in the map keep their default.
 
 ## Security considerations
 

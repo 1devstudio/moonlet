@@ -34,6 +34,7 @@ import { spawnedNotices } from "./spawned";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState } from "./protocol";
 import type { Shortcuts } from "./runActions";
+import { readStored, writeStored } from "./storage";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
 /** Right panel tabs, in order (X24 added Plan). */
@@ -78,12 +79,12 @@ export interface BaseSync extends FetchInfo {
   pulling: boolean;
 }
 
-const SETTINGS_KEY = "jaunt.settings";
-const UI_KEY = "jaunt.ui";
+const SETTINGS_KEY = "settings";
+const UI_KEY = "ui";
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = readStored(key);
     const v = raw ? { ...fallback, ...JSON.parse(raw) } : fallback;
     // Defaults from older versions (wider review panel).
     if (v && typeof v === "object" && (v as { rightWidth?: number }).rightWidth === 520) (v as { rightWidth: number }).rightWidth = 380;
@@ -100,7 +101,7 @@ function loadJson<T>(key: string, fallback: T): T {
 
 function saveJson(key: string, v: unknown) {
   try {
-    localStorage.setItem(key, JSON.stringify(v));
+    writeStored(key, JSON.stringify(v));
   } catch {
     /* storage unavailable */
   }

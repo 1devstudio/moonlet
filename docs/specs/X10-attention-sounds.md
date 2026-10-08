@@ -40,7 +40,7 @@ New Tauri command `play_sound { name }`. It plays `/System/Library/Sounds/<name>
 
 ## Data and config
 
-`jaunt.settings` in localStorage gains `sounds: { blocked, done, error }`, each a system sound name or `""` for Off.
+`moonlet.settings` in localStorage gains `sounds: { blocked, done, error }`, each a system sound name or `""` for Off.
 
 ## Security considerations
 

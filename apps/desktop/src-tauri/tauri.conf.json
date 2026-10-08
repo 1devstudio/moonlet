@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "moonlet",
   "version": "0.1.10",
-  "identifier": "dev.onedevstudio.jaunt",
+  "identifier": "dev.onedevstudio.moonlet",
   "build": {
     "beforeDevCommand": "pnpm prepare:bins && pnpm dev",
     "devUrl": "http://localhost:1420",

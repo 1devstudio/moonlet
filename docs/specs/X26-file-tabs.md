@@ -52,7 +52,7 @@ None new: `fs.read`, `fs.write` (F2) and `fs.changed` (F1). File tabs are part o
 ## Data and config
 
 - Layout: a pane can be `{ "type": "file", "path": "/abs/path", "line": 42 }` besides `{ "type": "leaf", "session": 3 }`.
-- App setting `editorTheme` (localStorage `jaunt.settings`), default `dark-plus`.
+- App setting `editorTheme` (localStorage `moonlet.settings`), default `dark-plus`.
 - Dependency: `shiki` (MIT) on its Oniguruma (WebAssembly) regex engine, as in VS Code. Its JavaScript regex engine was tried first: under WebKit it dropped patterns it could not run, and TypeScript's `;` came out in the number colour. Each grammar and theme is a separate chunk, loaded the first time it is used.
 
 ## Out of scope
