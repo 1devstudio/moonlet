@@ -356,7 +356,7 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
       className="overflow-hidden"
       style={{ height: a.folding ? 0 : 38, opacity: a.folding ? 0 : 1, transition: `height ${ARCHIVE_FOLD_MS}ms ease, opacity 220ms ease` }}
     >
-      <div className="relative h-[38px] overflow-hidden bg-[#121212]">
+      <div className="relative h-[38px] overflow-hidden bg-panel">
         <ArchiveLoader loader={a.loader} />
         <div className="relative flex h-[38px] w-1/2 items-center gap-3 pl-[30px]">
           <span role="status" aria-label={a.done ? "Archived" : "Archiving"} className="flex w-[15px] shrink-0 justify-center text-muted">
