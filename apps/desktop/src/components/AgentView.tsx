@@ -67,6 +67,7 @@ import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
+import { callbackForward, pagesToOpen } from "../lib/oauthRedirect";
 import { invoke } from "@tauri-apps/api/core";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
@@ -1005,6 +1006,69 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       (e) => setMcpError(String(e?.message ?? e)),
     );
   const refreshMcp = () => void mcpCall("refresh");
+  const servers = st?.mcp_servers ?? null;
+  const signingIn = !!servers?.some((s) => s.status === "authing");
+  // While a server signs in, its status is asked for every 3 s.
+  useEffect(() => {
+    if (!signingIn || !visible) return;
+    const t = setInterval(() => void mcpCall("refresh"), 3000);
+    return () => clearInterval(t);
+  }, [signingIn, visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A sign-in page opens in the browser once, when it arrives. On a remote
+  // host the browser's return to localhost is forwarded there over SSH.
+  const pagesOpened = useRef(new Set<string>());
+  // Copy link before there is a page: the copy waits for it (X29).
+  const copyOnly = useRef(new Map<string, (url: string) => void>());
+  const forwards = useRef(new Map<string, { bind: string; port: number }>());
+  const openPage = async (name: string, url: string) => {
+    const fwd = host !== "local" ? callbackForward(url) : null;
+    if (fwd && !forwards.current.has(name)) {
+      await invoke("ssh_forward", { host, bind: fwd.bind, port: fwd.port, open: true });
+      forwards.current.set(name, fwd);
+    }
+    await openUrl(url);
+  };
+  useEffect(() => {
+    if (!servers) return;
+    for (const page of pagesToOpen(servers, pagesOpened.current)) {
+      const copy = copyOnly.current.get(page.name);
+      if (copy) {
+        copyOnly.current.delete(page.name);
+        copy(page.url);
+        continue;
+      }
+      openPage(page.name, page.url).catch(errorToast);
+    }
+    for (const [name, fwd] of forwards.current) {
+      if (servers.some((s) => s.name === name && s.status === "authing")) continue;
+      forwards.current.delete(name);
+      void invoke("ssh_forward", { host, bind: fwd.bind, port: fwd.port, open: false }).catch(() => {});
+    }
+  }, [servers, host]);
+  const mcpActions = {
+    servers,
+    error: mcpError,
+    onReconnect: (name: string) => void mcpCall("reconnect", name),
+    onAuth: (name: string) => {
+      copyOnly.current.delete(name);
+      // Signing in already (after Copy link): open its page.
+      const s = servers?.find((x) => x.name === name);
+      if (s?.status === "authing" && s.auth_url) openPage(name, s.auth_url).catch(errorToast);
+      else void mcpCall("auth", name);
+    },
+    onCancel: (name: string) => void mcpCall("cancel", name),
+    onCopy: (name: string) => {
+      const url = servers?.find((s) => s.name === name)?.auth_url;
+      if (url) return navigator.clipboard.writeText(url);
+      // No page yet: ask for one and copy it instead of opening it. WebKit
+      // writes the clipboard only during the click, so the copy is started
+      // now with the address to come.
+      const page = new Promise<string>((resolve) => copyOnly.current.set(name, resolve));
+      const copied = navigator.clipboard.write([new ClipboardItem({ "text/plain": page.then((u) => new Blob([u], { type: "text/plain" })) })]);
+      void mcpCall("auth", name);
+      return copied.then(() => toast("Copied sign-in link"));
+    },
+  };
   const addDir = async () => {
     const picked = await openDialog({ directory: true, multiple: false, defaultPath: info?.cwd, title: "Add directory" });
     if (typeof picked === "string") void call(M.chatAddDir, { path: picked });
@@ -1124,7 +1188,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               agents={st?.agents ?? []}
               onAgent={(a) => editor.current?.mention(`agent-${a}`)}
               onOpen={refreshMcp}
-              mcp={{ servers: st?.mcp_servers ?? null, error: mcpError, onReconnect: (server) => void mcpCall("reconnect", server) }}
+              mcp={mcpActions}
             />
           </div>
           <div className="flex items-center gap-2 whitespace-nowrap">
