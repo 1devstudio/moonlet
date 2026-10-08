@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
-import { ArrowLeft, ArrowRight, Check, ChevronDown, ChevronRight, FileDiff, Minus, MessageSquarePlus, Plus, RotateCcw, SquareDot, SquareMinus, SquarePlus, Undo2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronRight, FileDiff, Folder, FolderOpen, List, ListTree, Minus, MessageSquarePlus, Plus, RotateCcw, SquareDot, SquareMinus, SquarePlus, Undo2 } from "lucide-react";
 import "../lib/monaco";
 
 /** Pending diff-model cleanups per session, cancelled if the panel reopens. */
@@ -8,7 +8,7 @@ const modelCleanup = new Map<string, number>();
 import { editorOptions, monaco, useEditorLanguage } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
 import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } from "../lib/patch";
-import { changeCount, groupByDir } from "../lib/changes";
+import { changeCount, changeList, changeTree, type ChangeNode } from "../lib/changes";
 import { M, type FileChange, type FileVersions, type GitStatus, type Session } from "../lib/protocol";
 import { errorToast, refreshGit, toast, useStore, sesKey } from "../lib/store";
 import { sendToAgent } from "../lib/actions";
@@ -20,82 +20,124 @@ type Mode = "base" | "head";
 type FileAction = "stage" | "unstage" | "revert";
 
 function StatusBox({ status }: { status: FileChange["status"] }) {
-  const p = { size: 14, strokeWidth: 1.5, className: "shrink-0 text-muted" };
-  if (status === "added" || status === "untracked") return <SquarePlus {...p} />;
-  if (status === "deleted") return <SquareMinus {...p} />;
-  return <SquareDot {...p} />;
+  const p = { size: 14, strokeWidth: 1.5 };
+  if (status === "added" || status === "untracked") return <SquarePlus {...p} className="shrink-0 text-add" />;
+  if (status === "deleted" || status === "conflicted") return <SquareMinus {...p} className="shrink-0 text-del" />;
+  return <SquareDot {...p} className="shrink-0 text-blocked" />;
 }
 
-function SummaryLine({ status, against }: { status: GitStatus; against: string }) {
+function SummaryLine({ status }: { status: GitStatus }) {
   return (
-    <div className="flex items-center gap-2 px-5 pb-1 pt-4 font-mono ui-text-12.5 text-muted">
-      <span className="text-add">+{status.additions}</span>
-      <span className="text-del">−{status.deletions}</span>
-      <span className="text-faint">·</span>
+    <div className="flex items-center gap-2 border-b border-border px-5 py-3 ui-text-14 text-muted">
       <span>
-        {status.files.length} file{status.files.length === 1 ? "" : "s"}
+        {status.files.length} file{status.files.length === 1 ? "" : "s"} changed
       </span>
-      <span className="text-faint">·</span>
-      <ArrowRight size={12} />
-      <span className="rounded bg-raised px-1.5 py-0.5 text-fg">{against}</span>
       {status.base_missing && (
-        <span className="text-blocked" title={`"${status.base_missing}" was not found (not fetched?), so only uncommitted changes against HEAD are shown.`}>
+        <span className="ui-text-12 text-blocked" title={`"${status.base_missing}" was not found (not fetched?), so only uncommitted changes against HEAD are shown.`}>
           base not found · showing HEAD
         </span>
       )}
+      <span className="ml-auto font-mono ui-text-12.5 tabular-nums">
+        <span className="text-add">+{status.additions}</span> <span className="text-del">−{status.deletions}</span>
+      </span>
     </div>
   );
 }
 
-/** Changed files grouped by folder (X25); a click opens the file's diff. */
-function ChangedFiles({ files, onSelect, onAction }: { files: FileChange[]; onSelect: (path: string) => void; onAction: (f: FileChange, a: FileAction) => void }) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const groups = useMemo(() => groupByDir(files), [files]);
+/** Left padding of a tree row at `depth`, and how far each level indents (X28). */
+const PAD = 12;
+const INDENT = 18;
+
+/** A changed file's row: status, name, counts, and stage/unstage/discard on hover. */
+function FileRow({ f, depth = 0, children, onSelect, onAction }: { f: FileChange; depth?: number; children: ReactNode; onSelect: (path: string) => void; onAction: (f: FileChange, a: FileAction) => void }) {
   return (
-    <div className="pb-4">
-      {groups.map(({ dir, files }) => (
-        <div key={dir} className="mt-3">
-          <button
-            className="flex w-full items-center gap-2 px-5 py-1.5 text-left font-mono ui-text-12 tracking-[0.06em] text-muted hover:text-fg"
-            onClick={() => setCollapsed((c) => ({ ...c, [dir]: !c[dir] }))}
-          >
-            {collapsed[dir] ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-            <span className="truncate">{dir}</span>
-          </button>
-          {!collapsed[dir] &&
-            files.map((f) => (
-              <div
-                key={f.path}
-                role="button"
-                title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
-                className="group flex h-[38px] w-full cursor-default items-center gap-3 pl-[34px] pr-5 text-left hover:bg-panel-2"
-                onClick={() => onSelect(f.path)}
-              >
-                <StatusBox status={f.status} />
-                <span className={cx("min-w-0 flex-1 truncate ui-text-14", f.status === "deleted" ? "text-muted line-through" : "text-fg")}>{f.name}</span>
-                {f.staged && <Check size={12} className="shrink-0 text-done" aria-label="staged" />}
-                <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex" onClick={(e) => e.stopPropagation()}>
-                  {(f.unstaged || f.status === "untracked") && (
-                    <IconButton title="Stage file" onClick={() => onAction(f, "stage")}>
-                      <Plus size={12} />
-                    </IconButton>
-                  )}
-                  {f.staged && (
-                    <IconButton title="Unstage file" onClick={() => onAction(f, "unstage")}>
-                      <Minus size={12} />
-                    </IconButton>
-                  )}
-                  <IconButton title="Discard changes" onClick={() => onAction(f, "revert")}>
-                    <Undo2 size={12} />
-                  </IconButton>
-                </span>
-                <span className="shrink-0 font-mono ui-text-12 tabular-nums text-muted group-hover:hidden">{changeCount(f)}</span>
-              </div>
+    <div
+      role="button"
+      title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
+      className="group mx-2 flex h-[34px] cursor-default items-center gap-3 rounded-md pr-3 text-left hover:bg-raised"
+      style={{ paddingLeft: PAD + depth * INDENT }}
+      onClick={() => onSelect(f.path)}
+    >
+      <span className={cx("flex min-w-0 flex-1 ui-text-14", f.status === "deleted" && "line-through")}>{children}</span>
+      {f.staged && <Check size={12} className="shrink-0 text-done" aria-label="staged" />}
+      <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex" onClick={(e) => e.stopPropagation()}>
+        {(f.unstaged || f.status === "untracked") && (
+          <IconButton title="Stage file" onClick={() => onAction(f, "stage")}>
+            <Plus size={12} />
+          </IconButton>
+        )}
+        {f.staged && (
+          <IconButton title="Unstage file" onClick={() => onAction(f, "unstage")}>
+            <Minus size={12} />
+          </IconButton>
+        )}
+        <IconButton title="Discard changes" onClick={() => onAction(f, "revert")}>
+          <Undo2 size={12} />
+        </IconButton>
+      </span>
+      <span className="flex shrink-0 items-center gap-2 group-hover:hidden">
+        <span className="font-mono ui-text-12 tabular-nums">
+          {changeCount(f)
+            .split(" ")
+            .map((c) => (
+              <span key={c} className={cx("ml-1.5", c.startsWith("+") ? "text-add" : c.startsWith("−") ? "text-del" : "text-muted")}>
+                {c}
+              </span>
             ))}
-        </div>
+        </span>
+        <StatusBox status={f.status} />
+      </span>
+    </div>
+  );
+}
+
+/** Changed files in path order, the folder dimmed and cut short before the name (X28). */
+function ChangeListView({ files, onSelect, onAction }: { files: FileChange[]; onSelect: (path: string) => void; onAction: (f: FileChange, a: FileAction) => void }) {
+  const rows = useMemo(() => changeList(files), [files]);
+  return (
+    <div className="py-2">
+      {rows.map((f) => (
+        <FileRow key={f.path} f={f} onSelect={onSelect} onAction={onAction}>
+          <span className="min-w-0 truncate text-muted">{f.dir}</span>
+          <span className={cx("max-w-full shrink-0 truncate", f.status === "deleted" ? "text-muted" : "text-fg")}>{f.name}</span>
+        </FileRow>
       ))}
     </div>
   );
+}
+
+/** Changed files as a folder tree with indent guides; folders collapse (X28). */
+function ChangeTreeView({ files, onSelect, onAction }: { files: FileChange[]; onSelect: (path: string) => void; onAction: (f: FileChange, a: FileAction) => void }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const tree = useMemo(() => changeTree(files), [files]);
+  const render = (nodes: ChangeNode[], depth: number): ReactNode =>
+    nodes.map((n) =>
+      n.kind === "file" ? (
+        <FileRow key={n.file.path} f={n.file} depth={depth} onSelect={onSelect} onAction={onAction}>
+          <span className={cx("truncate", n.file.status === "deleted" ? "text-muted" : "text-fg")}>{n.name}</span>
+        </FileRow>
+      ) : (
+        <div key={n.path}>
+          <button
+            className="mx-2 flex h-[34px] w-[calc(100%-16px)] items-center gap-1 rounded-md pr-3 text-left font-mono ui-text-13 text-muted hover:bg-raised hover:text-fg"
+            style={{ paddingLeft: PAD + depth * INDENT }}
+            title={n.path}
+            onClick={() => setCollapsed((c) => ({ ...c, [n.path]: !c[n.path] }))}
+          >
+            <span className="flex w-[14px] shrink-0 justify-center">{collapsed[n.path] ? <ChevronRight size={12} /> : <ChevronDown size={12} />}</span>
+            {collapsed[n.path] ? <Folder size={14} strokeWidth={1.5} className="shrink-0" /> : <FolderOpen size={14} strokeWidth={1.5} className="shrink-0" />}
+            <span className="ml-1 truncate">{n.name.split("/").join(" / ")}</span>
+          </button>
+          {!collapsed[n.path] && (
+            <div className="relative">
+              <span className="absolute bottom-0 top-0 w-px bg-border" style={{ left: 8 + PAD + depth * INDENT + 7 }} />
+              {render(n.children, depth + 1)}
+            </div>
+          )}
+        </div>
+      ),
+    );
+  return <div className="py-2">{render(tree, 0)}</div>;
 }
 
 function CommentBar({ file, line, snippet, onDone }: { file: string; line: number; snippet: string; onDone: () => void }) {
@@ -144,6 +186,7 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
 export default function ChangesPanel({ host, ws }: { host: string; ws: Session }) {
   const status = useStore((s) => s.git[sesKey(host, ws.id)]);
   const fontSize = useStore((s) => s.settings.term.fontSize);
+  const view = useStore((s) => s.changesView);
   const [mode, setMode] = useState<Mode>("base");
   // Diff models are kept per file while the panel is open, then released.
   useEffect(() => {
@@ -290,6 +333,11 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
         </div>
         {total && selected && <DiffStat add={total.additions} del={total.deletions} />}
         <span className="ml-auto flex items-center gap-1">
+          {!selected && files.length > 0 && (
+            <IconButton title={view === "tree" ? "Show as list" : "Show as tree"} onClick={() => useStore.setState({ changesView: view === "tree" ? "list" : "tree" })}>
+              {view === "tree" ? <List size={12} /> : <ListTree size={12} />}
+            </IconButton>
+          )}
           <IconButton title="Refresh" onClick={refresh}>
             <RotateCcw size={12} />
           </IconButton>
@@ -304,8 +352,12 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
         </Empty>
       ) : !selected ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {total && <SummaryLine status={total} against={mode === "base" ? ws.base : "HEAD"} />}
-          <ChangedFiles files={files} onSelect={setSelected} onAction={(f, a) => void fileAction(f, a)} />
+          {total && <SummaryLine status={total} />}
+          {view === "tree" ? (
+            <ChangeTreeView files={files} onSelect={setSelected} onAction={(f, a) => void fileAction(f, a)} />
+          ) : (
+            <ChangeListView files={files} onSelect={setSelected} onAction={(f, a) => void fileAction(f, a)} />
+          )}
         </div>
       ) : (
         <>
