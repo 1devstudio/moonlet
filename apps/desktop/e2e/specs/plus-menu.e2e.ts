@@ -1,5 +1,5 @@
 // The chat input's + menu (X29), with a fake `claude` that answers
-// `initialize` the way Claude Code 2.1.292 does: commands and subagents.
+// `initialize` and `mcp_status` the way Claude Code 2.1.292 does.
 
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +16,9 @@ const FAKE_CLAUDE = String.raw`#!/bin/sh
 out() { printf '%s\n' "$1"; }
 while IFS= read -r line; do
   case "$line" in
+    *'"subtype":"mcp_status"'*)
+      id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      out '{"type":"control_response","response":{"subtype":"success","request_id":"'"$id"'","response":{"mcpServers":[{"name":"claude.ai Slack","status":"connected","config":{"type":"claudeai-proxy","url":"https://mcp.slack.com/mcp"},"scope":"claudeai","tools":[{"name":"slack_send_message"},{"name":"slack_read_channel"}]},{"name":"claude.ai Linear","status":"needs-auth","config":{"type":"claudeai-proxy","url":"https://mcp.linear.app/mcp"},"scope":"claudeai","tools":[]},{"name":"broken","status":"failed","error":"ENOENT: no such file or directory, posix_spawn '"'stdio'"'","config":{"type":"stdio","command":"/nonexistent/mcp-server","args":["--stdio"]},"scope":"dynamic","tools":[]}]}}}' ;;
     *'"subtype":"initialize"'*) out '{"type":"control_response","response":{"subtype":"success","request_id":"init-1","response":{"commands":[{"name":"review","description":"Review changes","argumentHint":""},{"name":"compact","description":"Compact the conversation","argumentHint":""}],"agents":[{"name":"Plan","description":"Software architect agent for designing implementation plans.","model":"inherit"}]}}}' ;;
   esac
 done
@@ -54,6 +57,27 @@ describe("+ menu", () => {
     // getValue, because toHaveValue trims the trailing space.
     expect(await $(EDITOR).getValue()).toBe("/review ");
     await expect($(sel.button("Slash commands"))).not.toBeExisting();
+  });
+
+  it("lists the agent's MCP servers with the one that needs sign-in first", async () => {
+    await $('button[title="Add files, commands and more"]').click();
+    await hover($(sel.button("MCP servers")));
+    await expect($(sel.text("MCP servers · 1/3"))).toBeDisplayed();
+    await expect($('[title="1 server needs sign-in"]')).toBeDisplayed();
+    const card = (name: string) => `//div[@aria-label="MCP server ${name}"]`;
+    await expect($(`${card("claude.ai Linear")}//*[normalize-space()="Authentication required"]`)).toBeDisplayed();
+    await expect($(`${card("claude.ai Linear")}//*[normalize-space()="https://mcp.linear.app/mcp"]`)).toBeDisplayed();
+
+    await hover($('//button[span[normalize-space()="claude.ai Slack"]]'));
+    await expect($(`${card("claude.ai Slack")}//*[normalize-space()="2 tools"]`)).toBeDisplayed();
+    await expect($(`${card("claude.ai Slack")}//*[normalize-space()="slack_send_message"]`)).toBeDisplayed();
+
+    await hover($('//button[span[normalize-space()="broken"]]'));
+    await expect($(`${card("broken")}//*[normalize-space()="ENOENT: no such file or directory, posix_spawn 'stdio'"]`)).toBeDisplayed();
+    await expect($(`${card("broken")}//button[normalize-space()="Retry"]`)).toBeDisplayed();
+    await browser.keys("Escape");
+    // The + keeps a dot while a server waits for sign-in.
+    await expect($('[aria-label="MCP servers need sign-in"]')).toBeDisplayed();
   });
 
   it("mentions a subagent with its description in the list", async () => {
