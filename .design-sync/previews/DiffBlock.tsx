@@ -1,4 +1,4 @@
-import { DiffBlock } from "@jaunt/ds";
+import { DiffBlock } from "@moonlet/ds";
 
 export const CssEdit = () => (
   <div className="bg-bg p-3" style={{ width: 520 }}>

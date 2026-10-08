@@ -1,8 +1,8 @@
 {
-  "name": "@jaunt/ds",
+  "name": "@moonlet/ds",
   "version": "0.1.3",
   "private": true,
-  "description": "jaunt's design system (components and tokens) for Claude Design",
+  "description": "moonlet's design system (components and tokens) for Claude Design",
   "type": "module",
   "module": "dist/index.js",
   "types": "dist/types/ds/index.d.ts",

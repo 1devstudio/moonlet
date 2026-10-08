@@ -71,40 +71,40 @@ describe("command blocks", () => {
   it("shows a header with the exit code above a failing command", async () => {
 
     await run("false");
-    await expect($(".jaunt-block-head .exit")).toHaveText("· exit 1", { wait: 15_000 });
+    await expect($(".moonlet-block-head .exit")).toHaveText("· exit 1", { wait: 15_000 });
     // The shell reported its directory before the app attached; the header
     // still names the session's worktree.
-    await expect($(".jaunt-block-head .place")).toHaveText(/\/worktrees\/e2e-repo\/check-block-headers/);
+    await expect($(".moonlet-block-head .place")).toHaveText(/\/worktrees\/e2e-repo\/check-block-headers/);
 
     await run("echo e2e-ok");
     // The newest header: no exit code, a duration in seconds.
-    await browser.waitUntil(async () => (await $$(".jaunt-block-head").length) === 2, { timeout: 15_000 });
-    const heads = await $$(".jaunt-block-head");
+    await browser.waitUntil(async () => (await $$(".moonlet-block-head").length) === 2, { timeout: 15_000 });
+    const heads = await $$(".moonlet-block-head");
     await expect(heads[1].$(".exit")).not.toExist();
     await expect(heads[1].$(".duration")).toHaveText(/^\(\d+\.\d{3}s\)$/);
   });
 
   it("selects the newest block with ⌘↑ and copies its command and output with ⌘C", async () => {
     await run("echo e2e-copied");
-    await browser.waitUntil(async () => (await $$(".jaunt-block-head").length) === 3, { timeout: 15_000 });
-    await expect($(".jaunt-block-bg.selected")).not.toExist();
+    await browser.waitUntil(async () => (await $$(".moonlet-block-head").length) === 3, { timeout: 15_000 });
+    await expect($(".moonlet-block-bg.selected")).not.toExist();
 
     // From the input editor: ⌘↑ selects the newest block and focuses the terminal.
     await press("ArrowUp", { metaKey: true });
-    await expect($(".jaunt-block-bg.selected")).toExist();
+    await expect($(".moonlet-block-bg.selected")).toExist();
     await press("c", { metaKey: true });
     await expect($(sel.text("Copied command and output"))).toBeDisplayed();
     expect(execFileSync("pbpaste", { encoding: "utf8" })).toBe("$ echo e2e-copied\ne2e-copied");
 
     // Esc clears the selection.
     await press("Escape");
-    await expect($(".jaunt-block-bg.selected")).not.toExist();
+    await expect($(".moonlet-block-bg.selected")).not.toExist();
 
     // So does editing a command: ⌘↵ is then about the typed command.
     await press("ArrowUp", { metaKey: true });
-    await expect($(".jaunt-block-bg.selected")).toExist();
+    await expect($(".moonlet-block-bg.selected")).toExist();
     await fill(input, "echo typed");
-    await expect($(".jaunt-block-bg.selected")).not.toExist();
+    await expect($(".moonlet-block-bg.selected")).not.toExist();
     await fill(input, "");
   });
 
@@ -114,7 +114,7 @@ describe("command blocks", () => {
     const agent = rpc<{ id: number }>(w, "terminal.create", { cwd: session.path, session_id: sessionId, kind: "agent", agent: "fake", cols: 100, rows: 30 });
     agentId = agent.id;
     await run("echo e2e-sent");
-    await browser.waitUntil(async () => (await $$(".jaunt-block-head").length) === 4, { timeout: 15_000 });
+    await browser.waitUntil(async () => (await $$(".moonlet-block-head").length) === 4, { timeout: 15_000 });
 
     await press("ArrowUp", { metaKey: true });
     await expect($(sel.text("⌘↵ send `echo e2e-sent` to the agent · ⇧⌘↵ new agent tab"))).toBeDisplayed();
@@ -133,17 +133,17 @@ describe("command blocks", () => {
       tab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     });
     await run("echo e2e-hover");
-    await browser.waitUntil(async () => (await $$(".jaunt-block-head").length) === 5, { timeout: 15_000 });
+    await browser.waitUntil(async () => (await $$(".moonlet-block-head").length) === 5, { timeout: 15_000 });
 
     // The mouse over the newest block shows its actions.
     await browser.execute(() => {
-      const heads = document.querySelectorAll(".jaunt-block-head");
+      const heads = document.querySelectorAll(".moonlet-block-head");
       const r = heads[heads.length - 1].getBoundingClientRect();
       const x = r.left + r.width / 2;
       const y = r.top + r.height / 2;
       document.elementFromPoint(x, y)?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: x, clientY: y }));
     });
-    const button = $(".jaunt-block-head.hover .action.agent");
+    const button = $(".moonlet-block-head.hover .action.agent");
     await expect(button).toBeDisplayed();
     await expect(button).toHaveText("Copy to agent");
     await button.click();

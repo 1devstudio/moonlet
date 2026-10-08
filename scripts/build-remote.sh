@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds static Linux helpers (jauntd + jaunt) for remote hosts and places
+# Builds static Linux helpers (moonletd + moonlet) for remote hosts and places
 # them where the app bundle picks them up (src-tauri/remote/<name>-<triple>).
 #
 #   scripts/build-remote.sh                      # both x86_64 and aarch64
@@ -23,8 +23,8 @@ out=apps/desktop/src-tauri/remote
 mkdir -p "$out"
 for t in "${targets[@]}"; do
   rustup target add "$t" >/dev/null
-  cargo zigbuild --release --target "$t" -p jauntd -p jaunt-cli
-  for bin in jauntd jaunt; do
+  cargo zigbuild --release --target "$t" -p moonletd -p moonlet-cli
+  for bin in moonletd moonlet; do
     cp "target/$t/release/$bin" "$out/$bin-$t"
     shasum -a 256 "$out/$bin-$t"
   done

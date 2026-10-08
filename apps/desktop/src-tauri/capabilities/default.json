@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may call jaunt's own commands and a small set of plugin APIs.",
+  "description": "The main window may call moonlet's own commands and a small set of plugin APIs.",
   "windows": ["main"],
   "permissions": [
     "core:default",

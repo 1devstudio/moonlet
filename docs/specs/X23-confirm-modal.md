@@ -6,7 +6,7 @@
 
 ## Summary
 
-Every "are you sure?" in jaunt was a native macOS sheet from the Tauri dialog plugin: generic OK and Cancel buttons, no danger tone, no options, and none of the app's styling. Project settings had a footer swap of its own for its one confirmation. All of them now use one in-app confirm modal, built from the "Archive Confirm" design: a title bar, a short message, an optional checkbox, Cancel, and the action button. Archive uses the checkbox to offer deleting the branch too.
+Every "are you sure?" in moonlet was a native macOS sheet from the Tauri dialog plugin: generic OK and Cancel buttons, no danger tone, no options, and none of the app's styling. Project settings had a footer swap of its own for its one confirmation. All of them now use one in-app confirm modal, built from the "Archive Confirm" design: a title bar, a short message, an optional checkbox, Cancel, and the action button. Archive uses the checkbox to offer deleting the branch too.
 
 ## User journey
 

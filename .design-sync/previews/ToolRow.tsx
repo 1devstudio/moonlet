@@ -1,4 +1,4 @@
-import { ToolRow } from "@jaunt/ds";
+import { ToolRow } from "@moonlet/ds";
 
 const cwd = "/Users/alex/code/storefront";
 

@@ -7,7 +7,7 @@
 
 ## Summary
 
-In Plan mode Claude ends its plan with an `ExitPlanMode` call. jaunt showed it as a generic "Allow ExitPlanMode?" card with the plan as escaped JSON, cut off after one line, so the user could not read what they were approving. Approving also left jaunt thinking the session was still in Plan mode: the footer chip kept saying Plan, and the next restart (a model change, a daemon restart) started Claude with `--permission-mode plan` again. X20 gives the plan its own card, with the plan rendered as markdown and the same three choices as Claude Code's terminal UI, and makes Claude's own mode reports the source of truth for the session's mode.
+In Plan mode Claude ends its plan with an `ExitPlanMode` call. moonlet showed it as a generic "Allow ExitPlanMode?" card with the plan as escaped JSON, cut off after one line, so the user could not read what they were approving. Approving also left moonlet thinking the session was still in Plan mode: the footer chip kept saying Plan, and the next restart (a model change, a daemon restart) started Claude with `--permission-mode plan` again. X20 gives the plan its own card, with the plan rendered as markdown and the same three choices as Claude Code's terminal UI, and makes Claude's own mode reports the source of truth for the session's mode.
 
 ## User journey
 
@@ -78,8 +78,8 @@ The reported mode is saved with the chat (`cfg.mode` and `state.mode` in `chats/
 
 ## Test plan
 
-- Unit (Rust, `crates/jaunt-core/src/chat/claude.rs`): a `system/status` line updates the mode (`default` → `manual`, unknown ignored); `allow` with a mode sends `setMode`; the `ExitPlanMode` summary is the plan's heading.
-- Unit (Rust, `crates/jaunt-core/src/chat/runtime.rs`): after Claude reports a new mode, the restarted agent gets `--permission-mode` with it; `chat.permission` rejects a bad mode.
+- Unit (Rust, `crates/moonlet-core/src/chat/claude.rs`): a `system/status` line updates the mode (`default` → `manual`, unknown ignored); `allow` with a mode sends `setMode`; the `ExitPlanMode` summary is the plan's heading.
+- Unit (Rust, `crates/moonlet-core/src/chat/runtime.rs`): after Claude reports a new mode, the restarted agent gets `--permission-mode` with it; `chat.permission` rejects a bad mode.
 - Unit (`apps/desktop/src/lib/chat.test.ts`): reading the plan out of an ask, and mapping each choice to its `chat.permission` parameters.
 - E2E (`apps/desktop/e2e/specs/plan-approval.e2e.ts`): a fake `claude` proposes a plan; the card shows it formatted; Approve, accept edits switches the chip to Accept edits; Keep planning sends the feedback back to Claude.
 

@@ -73,7 +73,7 @@ export function StateGlyph({ state, size = 13 }: { state: AgentState | null; siz
     case "working":
       return (
         <span className="inline-flex shrink-0 items-center justify-center" style={box} aria-label="working">
-          <span className="jaunt-dots">
+          <span className="moonlet-dots">
             <i />
             <i />
             <i />

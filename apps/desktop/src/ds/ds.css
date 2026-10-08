@@ -1,7 +1,7 @@
-/* jaunt design-system stylesheet: Tailwind v4 utilities used by jaunt's
+/* moonlet design-system stylesheet: Tailwind v4 utilities used by moonlet's
    components, the theme tokens, and the component classes. */
 @import "tailwindcss" source("../");
-@import "../styles/jaunt.css";
+@import "../styles/moonlet.css";
 
 body {
   background: var(--color-bg);

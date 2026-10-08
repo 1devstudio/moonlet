@@ -19,7 +19,7 @@ A workspace is one task: a git worktree on its own branch, the agent working in 
 
 - [x] `repo.add` accepts any directory inside a repo, stores the top level, and returns the existing record for a repo added twice. The base branch comes from `.jaunt/config.toml` `base_branch`, then `origin/HEAD`, then `main`/`master`/`develop`/`trunk`.
 - [x] `workspace.create`:
-  - The branch defaults to `jaunt/<slug(name)>` and the directory to `~/.jaunt/worktrees/<repo>/<slug>`; both get `-2`, `-3`… suffixes when taken.
+  - The branch defaults to `moonlet/<slug(name)>` and the directory to `~/.jaunt/worktrees/<repo>/<slug>`; both get `-2`, `-3`… suffixes when taken.
   - The worktree starts from `from`, defaulting to the repo base branch. With `existing_branch` it checks out that branch instead of creating one (a leading `origin/` is stripped).
   - If `setup` is configured it runs in a `setup` tab, at the same time as the agent.
   - The agent runs in a login interactive shell (`$SHELL -lic "<agent cmd> '<prompt>'"`), so the user's PATH applies.

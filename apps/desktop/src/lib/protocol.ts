@@ -1,4 +1,4 @@
-// TypeScript mirror of crates/jaunt-proto/src/types.rs and methods.rs.
+// TypeScript mirror of crates/moonlet-proto/src/types.rs and methods.rs.
 // Keep in sync with the Rust definitions.
 
 export type AgentState = "idle" | "working" | "blocked" | "done" | "error";
@@ -288,7 +288,7 @@ export interface HookStatus {
   codex_config: string;
   codex_installed: boolean;
   codex_conflict: string | null;
-  /** The `jaunt` skill is in place (X22); `*_installed` include it. */
+  /** The `moonlet` skill is in place (X22); `*_installed` include it. */
   claude_skill?: boolean;
   codex_skill?: boolean;
 }

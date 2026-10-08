@@ -1,8 +1,8 @@
 {
   "bundle": {
     "externalBin": [
-      "binaries/jauntd",
-      "binaries/jaunt"
+      "binaries/moonletd",
+      "binaries/moonlet"
     ],
     "resources": {
       "remote/": "remote/"

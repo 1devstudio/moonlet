@@ -1,15 +1,15 @@
-# Building with jaunt's design system
+# Building with moonlet's design system
 
-jaunt is a dark, dense desktop UI for supervising coding agents. Everything renders on near-black surfaces with one warm accent (`#d97757`); state colors are reserved for agent status.
+moonlet is a dark, dense desktop UI for supervising coding agents. Everything renders on near-black surfaces with one warm accent (`#d97757`); state colors are reserved for agent status.
 
 ## Setup
 
 - Plain components (`Button`, `ToolRow`, `PermissionCard`…) need no wrapper.
-- The app screens `Sidebar`, `AgentView` and `Composer` read app state. **Always wrap them in `<JauntPreview>`**, which seeds a demo workspace (projects `storefront` and `payments-api`, five sessions, a Claude conversation). Without it they render empty. Use `selected="s-search"` (etc.) to change the highlighted session. `AgentView` shows chat terminal `id={1}` (`wsId="s-checkout"`); pass `chats={{ 1: { status: "blocked", pending: [...] } }}` to vary it.
+- The app screens `Sidebar`, `AgentView` and `Composer` read app state. **Always wrap them in `<MoonletPreview>`**, which seeds a demo workspace (projects `storefront` and `payments-api`, five sessions, a Claude conversation). Without it they render empty. Use `selected="s-search"` (etc.) to change the highlighted session. `AgentView` shows chat terminal `id={1}` (`wsId="s-checkout"`); pass `chats={{ 1: { status: "blocked", pending: [...] } }}` to vary it.
 - Put the screens on a dark surface with a fixed size. Inside a card, `Sidebar` wants about 280×540, and `AgentView` about 760×640.
 - Icons come from `icons` (lucide-react): `const { Plus, X, GitBranch } = icons;`, sized 12-16 in rows and 22 in empty states.
 
-## Styling idiom: Tailwind v4 utilities on jaunt's tokens
+## Styling idiom: Tailwind v4 utilities on moonlet's tokens
 
 Use utility classes whose names map to the theme tokens (also available as `var(--color-*)`):
 
@@ -22,7 +22,7 @@ Use utility classes whose names map to the theme tokens (also available as `var(
 | Type | `font-sans` (Inter / system), `font-mono` (JetBrains Mono, for code, paths, diff stats); sizes are explicit, e.g. `text-[13px]`, `text-[12.5px]`, `text-[11.5px]` |
 | Layout | `flex`, `flex-col`, `items-center`, `justify-between`, `gap-1` to `gap-3`, `p-3`, `p-4`, `px-3 py-2`, `rounded-md`, `rounded-xl` |
 
-**Only classes jaunt itself uses exist in the compiled stylesheet.** Arbitrary values that the app does not use (e.g. `w-[280px]`) are not generated. For sizes, use inline `style={{ width: 280, height: 540 }}`.
+**Only classes moonlet itself uses exist in the compiled stylesheet.** Arbitrary values that the app does not use (e.g. `w-[280px]`) are not generated. For sizes, use inline `style={{ width: 280, height: 540 }}`.
 
 Form inputs: `className={inputCls}`, wrapped in `Field`. Body text is 13.5px Inter on `bg-bg`.
 

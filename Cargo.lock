@@ -2079,98 +2079,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "jaunt-app"
-version = "0.1.10"
-dependencies = [
- "anyhow",
- "dirs 6.0.0",
- "jaunt-core",
- "jaunt-proto",
- "libc",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-wdio",
- "tauri-plugin-wdio-webdriver",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "jaunt-cli"
-version = "0.1.10"
-dependencies = [
- "anyhow",
- "clap",
- "jaunt-core",
- "jaunt-proto",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "jaunt-core"
-version = "0.1.10"
-dependencies = [
- "anyhow",
- "dirs 6.0.0",
- "ignore",
- "jaunt-proto",
- "libc",
- "nix",
- "notify",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "toml_edit 0.23.10+spec-1.0.0",
- "tracing",
- "uuid",
- "vt100",
-]
-
-[[package]]
-name = "jaunt-proto"
-version = "0.1.10"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "jauntd"
-version = "0.1.10"
-dependencies = [
- "anyhow",
- "clap",
- "dirs 6.0.0",
- "jaunt-core",
- "jaunt-proto",
- "libc",
- "nix",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "javascriptcore-rs"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2536,6 +2444,98 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "moonlet-app"
+version = "0.1.10"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "libc",
+ "moonlet-core",
+ "moonlet-proto",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-wdio",
+ "tauri-plugin-wdio-webdriver",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "moonlet-cli"
+version = "0.1.10"
+dependencies = [
+ "anyhow",
+ "clap",
+ "moonlet-core",
+ "moonlet-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "moonlet-core"
+version = "0.1.10"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "ignore",
+ "libc",
+ "moonlet-proto",
+ "nix",
+ "notify",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit 0.23.10+spec-1.0.0",
+ "tracing",
+ "uuid",
+ "vt100",
+]
+
+[[package]]
+name = "moonlet-proto"
+version = "0.1.10"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "moonletd"
+version = "0.1.10"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs 6.0.0",
+ "libc",
+ "moonlet-core",
+ "moonlet-proto",
+ "nix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

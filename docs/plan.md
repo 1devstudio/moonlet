@@ -1,4 +1,4 @@
-# Jaunt (Agent-First Terminal): tech confirmation and high-level plan
+# Moonlet (Agent-First Terminal): tech confirmation and high-level plan
 
 ## Implementation status (2026-10-02)
 
@@ -18,9 +18,9 @@ Manual GUI checks and measured numbers are in [manual-checks.md](manual-checks.m
 
 ## Context
 
-The PRD (Notion, "PRD — Agent-First Terminal", 2026-10-01) describes **Paddock** (working name; project name is now **jaunt**), a macOS-first desktop terminal for running and supervising AI coding agents. Its core promise is that sessions survive app quit, crash, sleep and network loss, locally and on remote Linux hosts. It also asks for agent-state awareness, built-in diff, file and Markdown review, and the same features on remote hosts as on local ones.
+The PRD (Notion, "PRD — Agent-First Terminal", 2026-10-01) describes **Paddock** (working name; project name is now **moonlet**), a macOS-first desktop terminal for running and supervising AI coding agents. Its core promise is that sessions survive app quit, crash, sleep and network loss, locally and on remote Linux hosts. It also asks for agent-state awareness, built-in diff, file and Markdown review, and the same features on remote hosts as on local ones.
 
-The repo `jaunt` is empty (no commits), so this is a greenfield build.
+The repo `moonlet` is empty (no commits), so this is a greenfield build.
 
 Decisions made with the user:
 - Build our own Rust daemon from week 1. Herdr is not used as an interim backend.
@@ -45,8 +45,8 @@ Decisions made with the user:
 | Markdown | renderer + Mermaid in sandboxed iframe | **Confirm** | `markdown-it` + `shiki` + `mermaid` inside `<iframe sandbox="allow-scripts">` (no `allow-same-origin`) using `srcdoc` and a strict CSP that blocks remote content. |
 | Files | (unspecified) | **Add** | Daemon side uses the `ignore` crate (gitignore-aware walk) and `notify` (fs watch, live refresh). |
 | Git | git CLI on the owning host | **Confirm** | `git worktree`, `status --porcelain=v2`, `diff`, `apply --cached` for hunk staging. |
-| Remote | system OpenSSH + static musl helper | **Confirm** | `ssh host jauntd proxy` is a short-lived stdio bridge to the long-lived remote daemon's Unix socket, so the daemon outlives the connection. Use ControlMaster for fast reconnects. Cross-compile with `cargo zigbuild` for x86_64 and aarch64 musl. |
-| Agent state | hooks > OSC > heuristics | **Confirm** | Inject `JAUNT_PANE_ID` and `JAUNT_SOCK` into each PTY's env. Hooks call `jaunt notify --state …`. Claude Code: Notification, Stop, PreToolUse, UserPromptSubmit and SessionStart hooks. Codex: `notify` config, plus hooks if the installed version has them (verify in spike S4). |
+| Remote | system OpenSSH + static musl helper | **Confirm** | `ssh host moonletd proxy` is a short-lived stdio bridge to the long-lived remote daemon's Unix socket, so the daemon outlives the connection. Use ControlMaster for fast reconnects. Cross-compile with `cargo zigbuild` for x86_64 and aarch64 musl. |
+| Agent state | hooks > OSC > heuristics | **Confirm** | Inject `JAUNT_PANE_ID` and `JAUNT_SOCK` into each PTY's env. Hooks call `moonlet notify --state …`. Claude Code: Notification, Stop, PreToolUse, UserPromptSubmit and SessionStart hooks. Codex: `notify` config, plus hooks if the installed version has them (verify in spike S4). |
 | Distribution | signed + notarized, signed auto-update | **Confirm** | Use `tauri-plugin-updater`. The daemon binary is a nested signed binary in `Contents/MacOS`. |
 
 Swap option (Swift + libghostty client later): keep it possible by keeping all session logic in the daemon behind the protocol. The UI should own no session state.
@@ -88,13 +88,13 @@ Three-column layout:
 ## 3. Repo layout (monorepo)
 
 ```
-jaunt/
+moonlet/
   Cargo.toml                 # workspace
   crates/
-    jaunt-proto/           # frame codec, JSON-RPC types, version handshake
-    jaunt-core/            # sessions, terminal state + serializer, agent state machine, git, files
-    jauntd/                # daemon binary: local socket server, `proxy` stdio mode, launchd entry
-    jaunt-cli/             # `jaunt` CLI: notify, pane run, agent start, hooks install
+    moonlet-proto/           # frame codec, JSON-RPC types, version handshake
+    moonlet-core/            # sessions, terminal state + serializer, agent state machine, git, files
+    moonletd/                # daemon binary: local socket server, `proxy` stdio mode, launchd entry
+    moonlet-cli/             # `moonlet` CLI: notify, pane run, agent start, hooks install
   apps/desktop/
     src-tauri/               # thin core: daemon client, Channel bridge, notifications, SMAppService, updater
     src/                     # React UI: panes, sidebar, changes panel, file tree, md preview
@@ -108,15 +108,15 @@ Tooling: pnpm, cargo, `cargo-nextest`, Vitest, Playwright (or WebDriver for Taur
 - S1: xterm.js WebGL in a Tauri window. Measure `cat` of a large file, the `htop` and Claude Code TUI, and keystroke latency below 16 ms.
 - S2: PTY to Channel raw bytes with 8–16 ms batching. Measure throughput and CPU with 10 busy panes.
 - S3: `alacritty_terminal` vs `vt100` replay fidelity on recorded agent sessions. Pick one and record the decision in an ADR.
-- S4: Claude Code and Codex hooks fire `jaunt notify` reliably. Measure blocked-to-signal latency.
+- S4: Claude Code and Codex hooks fire `moonlet notify` reliably. Measure blocked-to-signal latency.
 - S5: notification click deep-links to a pane. Also confirm that SMAppService registration works from an unsigned or dev-signed build.
 
 Gate: every spike has a result recorded, the stack is frozen, and ADRs are written.
 
 **Phase 1 — Personal MVP, local only (weeks 3–10).** P0 local scope:
-1. `jaunt-proto` and a minimal `jauntd`: spawn, attach and detach, resize, input. Keep terminal state server-side and replay on attach (S1, S2). The daemon is launched by the app, and launchd registration is added here.
+1. `moonlet-proto` and a minimal `moonletd`: spawn, attach and detach, resize, input. Keep terminal state server-side and replay on attach (S1, S2). The daemon is launched by the app, and launchd registration is added here.
 2. Tauri shell with the three-column layout from section 2. Includes the sidebar (repos > workspaces), terminal tabs and splits per workspace, and a prefix key that never reaches the PTY (T1, T2).
-3. Agent state machine plus `jaunt-cli notify`, one-click hook install, sidebar state glyphs and diffstat, and notifications (A1–A3).
+3. Agent state machine plus `moonlet-cli notify`, one-click hook install, sidebar state glyphs and diffstat, and notifications (A1–A3).
 4. New workspace flow (Cmd+Shift+N): worktree, `.jaunt/config.toml` setup script, agent launch, task box, and archive with cleanup (A4).
 5. Right panel: Changes with Monaco diff (D1), Files tree (F1), Markdown Preview (M1). Add "Open in" IDE.
 
@@ -166,4 +166,4 @@ Every feature gets its own spec file in `docs/specs/`, written **before** implem
 - Spikes S1–S5 produce numbers that confirm or reject each "spike" row in section 1 before phase 1 code is written.
 
 ## Bootstrap step (done)
-Write this plan to `jaunt/docs/plan.md`. Add `docs/specs/README.md` (empty index) and `docs/specs/_template.md`. Save a memory noting that every jaunt feature needs a spec in `docs/specs/` before it is implemented. Commit it on a branch as `docs: add high-level implementation plan` after the user confirms.
+Write this plan to `moonlet/docs/plan.md`. Add `docs/specs/README.md` (empty index) and `docs/specs/_template.md`. Save a memory noting that every moonlet feature needs a spec in `docs/specs/` before it is implemented. Commit it on a branch as `docs: add high-level implementation plan` after the user confirms.

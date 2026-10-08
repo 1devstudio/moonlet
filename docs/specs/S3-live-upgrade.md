@@ -7,11 +7,11 @@
 
 ## Summary
 
-A new `jauntd` binary takes over every live PTY from the running daemon. Agents keep running, screens and scrollback are preserved, and clients just reconnect. The trigger is independent of the protocol version, so it works even when the old and new daemons cannot talk RPC to each other.
+A new `moonletd` binary takes over every live PTY from the running daemon. Agents keep running, screens and scrollback are preserved, and clients just reconnect. The trigger is independent of the protocol version, so it works even when the old and new daemons cannot talk RPC to each other.
 
 ## Flow
 
-1. `jauntd upgrade` (run from the *new* binary) reads `~/.jaunt/run/jauntd.pid`, writes `~/.jaunt/run/upgrade.json` with its own path, and sends `SIGUSR2` to the old daemon. `daemon.upgrade {binary}` does the same over RPC.
+1. `moonletd upgrade` (run from the *new* binary) reads `~/.jaunt/run/jauntd.pid`, writes `~/.jaunt/run/upgrade.json` with its own path, and sends `SIGUSR2` to the old daemon. `daemon.upgrade {binary}` does the same over RPC.
 2. The old daemon opens a private handoff socket (`run/handoff-<pid>.sock`, `0600`) and starts `<binary> daemon --handoff <path>` detached.
 3. The new daemon connects and receives:
    - a JSON header: each live session's `SessionInfo`, size and screen snapshot;
@@ -22,12 +22,12 @@ A new `jauntd` binary takes over every live PTY from the running daemon. Agents 
 
 ## Behaviour and acceptance criteria
 
-- [x] After `jauntd upgrade`, `session.list` returns the same ids and the processes keep running (same pids).
+- [x] After `moonletd upgrade`, `session.list` returns the same ids and the processes keep running (same pids).
 - [x] Reattaching shows the screen from before the upgrade, and new output keeps flowing.
 - [x] Input works after the upgrade.
 - [x] The daemon pid changes, and the new version is reported by `daemon.info`.
-- [x] The app compares `daemon_version` with its own version on connect. If they differ, or the handshake fails with `protocol_mismatch`, it runs the bundled `jauntd upgrade` once and reconnects.
-- [x] `jauntd proxy` on a remote host does the same before bridging, so installing a new helper upgrades the running remote daemon.
+- [x] The app compares `daemon_version` with its own version on connect. If they differ, or the handshake fails with `protocol_mismatch`, it runs the bundled `moonletd upgrade` once and reconnects.
+- [x] `moonletd proxy` on a remote host does the same before bridging, so installing a new helper upgrades the running remote daemon.
 
 ## Limits
 
@@ -41,4 +41,4 @@ The handoff socket lives in the `0700` run directory with mode `0600`, and the p
 
 ## Test plan
 
-`crates/jauntd/tests/upgrade.rs`: start a daemon, run a session, upgrade, then assert the same id and pid, the snapshot contents, working input, and a changed daemon pid.
+`crates/moonletd/tests/upgrade.rs`: start a daemon, run a session, upgrade, then assert the same id and pid, the snapshot contents, working input, and a changed daemon pid.

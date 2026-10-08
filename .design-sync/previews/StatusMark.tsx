@@ -1,4 +1,4 @@
-import { StatusMark } from "@jaunt/ds";
+import { StatusMark } from "@moonlet/ds";
 
 const all = ["running", "ok", "denied", "error"] as const;
 

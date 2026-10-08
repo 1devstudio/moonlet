@@ -10,7 +10,7 @@
 
 ## Evidence
 
-`crates/jaunt-core/src/term.rs` has round-trip tests. Each test feeds output into the emulator, takes a snapshot, replays the snapshot into a fresh emulator, and compares every cell (text, colours, bold, inverse), the cursor, modes and the scrollback text. They pass for:
+`crates/moonlet-core/src/term.rs` has round-trip tests. Each test feeds output into the emulator, takes a snapshot, replays the snapshot into a fresh emulator, and compares every cell (text, colours, bold, inverse), the cursor, modes and the scrollback text. They pass for:
 - plain shell output with 100 lines of scrollback;
 - Ink-style frame redraws as Claude Code produces them (cursor up, erase line, 24-bit colour, inverse cursor cell);
 - an alternate-screen TUI with application cursor and keypad modes;

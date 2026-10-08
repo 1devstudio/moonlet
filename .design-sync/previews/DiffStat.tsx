@@ -1,4 +1,4 @@
-import { DiffStat } from "@jaunt/ds";
+import { DiffStat } from "@moonlet/ds";
 
 export const Examples = () => (
   <div className="flex flex-col gap-2 bg-panel p-4 text-[13px]">

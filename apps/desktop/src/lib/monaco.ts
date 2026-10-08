@@ -21,8 +21,8 @@ declare global {
 window.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
-// Monaco shows the "jaunt" theme until the first file's colours load.
-monaco.editor.defineTheme("jaunt", {
+// Monaco shows the "moonlet" theme until the first file's colours load.
+monaco.editor.defineTheme("moonlet", {
   base: "vs-dark",
   inherit: true,
   rules: [],
@@ -83,8 +83,8 @@ const prepare = serial(async (lang: string, theme: string) => {
   }
   if (theme !== shownTheme) {
     shownTheme = theme;
-    monaco.editor.defineTheme("jaunt", syntax.theme());
-    monaco.editor.setTheme("jaunt");
+    monaco.editor.defineTheme("moonlet", syntax.theme());
+    monaco.editor.setTheme("moonlet");
   }
 });
 

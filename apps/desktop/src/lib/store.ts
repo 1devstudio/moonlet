@@ -195,7 +195,7 @@ interface State extends UiPersist {
 
 // One store per page, even when Vite hot-reloads this module: a fresh copy
 // would be empty and never wired to daemon events.
-const g = globalThis as { __jauntStore?: ReturnType<typeof makeStore>; __jauntStarted?: boolean; __jauntOnEvent?: (e: DaemonEvent) => void };
+const g = globalThis as { __moonletStore?: ReturnType<typeof makeStore>; __moonletStarted?: boolean; __moonletOnEvent?: (e: DaemonEvent) => void };
 function makeStore() {
   return create<State>(() => ({
   ...loadJson(UI_KEY, uiDefaults),
@@ -225,7 +225,7 @@ function makeStore() {
   archiving: {},
   }));
 }
-export const useStore = (g.__jauntStore ??= makeStore());
+export const useStore = (g.__moonletStore ??= makeStore());
 
 const set = useStore.setState;
 
@@ -662,13 +662,13 @@ function scheduleGit(host: string, id: string) {
 
 // Set on every module load, so a hot-reloaded module's handler takes over
 // while the one registered listener stays.
-g.__jauntOnEvent = handleEvent;
+g.__moonletOnEvent = handleEvent;
 
 export async function startStore() {
-  if (g.__jauntStarted) return;
-  g.__jauntStarted = true;
+  if (g.__moonletStarted) return;
+  g.__moonletStarted = true;
   setTermSettings(get().settings.term);
-  await onDaemonEvent((e) => g.__jauntOnEvent?.(e));
+  await onDaemonEvent((e) => g.__moonletOnEvent?.(e));
   await onHostStatus((h) => {
     const prev = get().hosts[h.id];
     set((s) => ({ hosts: { ...s.hosts, [h.id]: h } }));

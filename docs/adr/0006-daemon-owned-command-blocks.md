@@ -32,20 +32,20 @@ Daemon side:
 
 ## Decision
 
-- **Daemon:** move terminal state from `vt100` to **libghostty-vt now**, as part of blocks v1. jaunt is used and tested only by its author, locally, so an unstable upstream API costs only our own update work. It replaces `vt100` for every terminal (agents, run scripts, classic shells), so the daemon has one emulator; `vt100` is removed.
+- **Daemon:** move terminal state from `vt100` to **libghostty-vt now**, as part of blocks v1. moonlet is used and tested only by its author, locally, so an unstable upstream API costs only our own update work. It replaces `vt100` for every terminal (agents, run scripts, classic shells), so the daemon has one emulator; `vt100` is removed.
   - Use the released crate **0.2.2**, pinned, and move to a newer release on purpose.
   - Ghostty's source comes from a pinned git submodule passed to the build as `GHOSTTY_SOURCE_DIR`, so builds are reproducible and work offline.
-  - jaunt keeps its own small scanner for the OSC sequences it needs whatever the library supports: 133 (with the exit code), 9 and 777. The scanner also gives the byte offsets where blocks start and end.
+  - moonlet keeps its own small scanner for the OSC sequences it needs whatever the library supports: 133 (with the exit code), 9 and 777. The scanner also gives the byte offsets where blocks start and end.
 - **Block storage: freeze on finish.** One live terminal per shell holds only the active block. At the `D` mark the daemon formats the block's rows (wrapped rows joined into logical lines, with styles) into the block store and resets the live terminal for the next command. Finished blocks never change, so a running program cannot touch them, and memory stays at one emulator per terminal. One terminal per block was rejected: about 2 MiB of virtual memory each (a 512 KiB page, four preheated). Row markers in one shared terminal were rejected: a screen clear would damage earlier blocks.
 - **Blocks:** the daemon owns blocks for shell terminals in Blocks mode. Classic mode, shells without integration, agent, run and setup terminals keep a single screen.
 - **Protocol:** carries the block model, not raw bytes for history: finished blocks as styled text runs with their metadata, plus the active block's screen and its live output. Nothing in it depends on how the app draws.
 - **App:** option A. Finished blocks are static HTML, the active block is a live xterm. It ships behind a "Block view (beta)" setting, default off, until it has e2e coverage and a few days of real use; the decoration code is removed after that.
 - The decoration-based styling (header, chips, selection) ships first; its header and chip logic carries over.
-- `ssh` typed in a shell runs inside one active block. Remote hosts (R1 to R4) get full blocks natively, because the remote `jauntd` owns the shell. Prompt marks from a nested shell are ignored while a block is active.
+- `ssh` typed in a shell runs inside one active block. Remote hosts (R1 to R4) get full blocks natively, because the remote `moonletd` owns the shell. Prompt marks from a nested shell are ignored while a block is active.
 
 ## Consequences
 
-- Every build of `jauntd`, the app and the remote helpers needs Zig 0.15.2 on `PATH` (cargo does not fetch it). jaunt already uses Zig through `cargo-zigbuild` in `scripts/build-remote.sh`; musl cross builds of libghostty-vt are not covered by its CI and must be checked.
+- Every build of `moonletd`, the app and the remote helpers needs Zig 0.15.2 on `PATH` (cargo does not fetch it). moonlet already uses Zig through `cargo-zigbuild` in `scripts/build-remote.sh`; musl cross builds of libghostty-vt are not covered by its CI and must be checked.
 - libghostty-vt types are `!Send` and `!Sync`, so a terminal's emulator can no longer sit behind the shared state mutex in `terminal.rs`. Each terminal's emulator lives on its own thread and the rest of the daemon talks to it over channels.
 - The live upgrade replays the formatter's VT output (with input modes) into a fresh emulator; no binary snapshot is needed.
 - While a full-screen program runs, the primary screen is not readable (same limit as `vt100`), so the active block's earlier output reappears only after the program exits.
@@ -57,7 +57,7 @@ Daemon side:
 
 ## Future direction: option C in the app
 
-Write this down so it is not lost: the long-term destination is **libghostty-vt in the app as well (WASM), with jaunt's own renderer drawing from its render state**, so daemon and app run the same emulator. Block-based terminals with their own renderer work this way: each block holds separate header and output grids.
+Write this down so it is not lost: the long-term destination is **libghostty-vt in the app as well (WASM), with moonlet's own renderer drawing from its render state**, so daemon and app run the same emulator. Block-based terminals with their own renderer work this way: each block holds separate header and output grids.
 
 What C removes:
 - Two emulators that can disagree (libghostty-vt in the daemon, xterm.js in the app).
@@ -71,6 +71,6 @@ Known pieces:
 
 Revisit when option A is the default and the block protocol has settled.
 
-Also later: turning a plain `ssh` into blocks (remote commands become blocks in the local terminal). One known approach installs a companion server on the remote host, reached over the existing connection, which matches jaunt's remote helper ([R2](../specs/R2-remote-helper-install.md)).
+Also later: turning a plain `ssh` into blocks (remote commands become blocks in the local terminal). One known approach installs a companion server on the remote host, reached over the existing connection, which matches moonlet's remote helper ([R2](../specs/R2-remote-helper-install.md)).
 
 Sources: [ghostty `vt.h`](https://github.com/ghostty-org/ghostty/blob/main/include/ghostty/vt.h), [libghostty is coming](https://mitchellh.com/writing/libghostty-is-coming), [libghostty-rs](https://github.com/Uzaaft/libghostty-rs), [ghostty-web](https://github.com/coder/ghostty-web), [alacritty WASM issue](https://github.com/alacritty/alacritty/issues/7985).

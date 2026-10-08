@@ -21,7 +21,7 @@ describe("new session and Run", () => {
     const project = rpc<Project[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     // Start the composer on "Terminal only" rather than its Claude default.
     // It reads this choice each time it opens.
-    await browser.execute((id: string) => localStorage.setItem(`jaunt.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), project.id);
+    await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), project.id);
 
     await $('button[title="New session"]').click();
     await fill('//textarea[@placeholder="What do you want to work on?"]', "Add e2e banner");
