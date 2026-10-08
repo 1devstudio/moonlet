@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, Plus, X } from "lucide-react";
+import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, useStore } from "../lib/store";
@@ -8,6 +8,8 @@ import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, cx } from "./ui";
 import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
+import { PlusMenu } from "./PlusMenu";
+import { fileMention } from "../lib/plusMenu";
 
 
 interface Choice {
@@ -283,10 +285,10 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   ];
 
   const attach = async () => {
-    const files = await openDialog({ multiple: true, directory: false, defaultPath: current?.project.path, title: "Attach files" });
+    const files = await openDialog({ multiple: true, directory: false, defaultPath: current?.project.path, title: "Attach files or images" });
     const list = Array.isArray(files) ? files : files ? [files] : [];
     if (!list.length || !current) return;
-    const rel = list.map((f) => (f.startsWith(current.project.path + "/") ? f.slice(current.project.path.length + 1) : f));
+    const rel = list.map((f) => fileMention(f, current.project.path));
     setPrompt((p) => `${p}${p && !p.endsWith("\n") ? "\n" : ""}${rel.map((r) => `@${r}`).join(" ")} `);
     ta.current?.focus();
   };
@@ -451,9 +453,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
           {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 ui-text-14" iconSize={14} align="left" />}
           <span className="ml-auto" />
-          <button title="Attach files" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg" onClick={() => void attach()}>
-            <Plus size={16} />
-          </button>
+          <PlusMenu variant="composer" onAttach={() => void attach()} />
           <button
             disabled={busy}
             className="flex items-center gap-2 rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg hover:bg-white disabled:opacity-50"
