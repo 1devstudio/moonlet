@@ -133,6 +133,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
   const project = useStore((s) => s.projects[host]?.find((p) => p.id === projectId));
   const [pos, setPos] = useState<PopoverPos | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const leaveTimer = useRef<number | undefined>(undefined);
   const chip = baseChip(sync?.status, !!sync?.pulling);
   const openable = chip?.kind === "behind" || chip?.kind === "diverged";
@@ -143,17 +144,19 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
     closeBasePopover?.();
     closeBasePopover = close;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    // The sidebar list scrolled away from the chip; the popover's own commit
+    // list scrolling keeps it open.
+    const onScroll = (e: Event) => !popRef.current?.contains(e.target as Node) && close();
     window.addEventListener("mousedown", close);
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", close);
-    // The sidebar list scrolled away from the chip.
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       if (closeBasePopover === close) closeBasePopover = null;
       window.removeEventListener("mousedown", close);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [pos]);
   if (!chip || !sync?.status || !project) return null;
@@ -196,6 +199,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
       </button>
       {pos && openable && (
         <div
+          ref={popRef}
           role="dialog"
           aria-label={`Pull ${st.branch}`}
           className="fixed z-50 flex w-[276px] flex-col overflow-hidden rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"

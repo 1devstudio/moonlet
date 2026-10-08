@@ -64,6 +64,10 @@ describe("Pull base branch", () => {
     await expect($(sel.text("Open sessions from GitHub PRs"))).toBeDisplayed();
     // The chip is the pull button; the popover only informs.
     await expect(popover().$("button")).not.toBeExisting();
+    // Scrolling the commit list keeps the popover open.
+    const commit = await $(sel.text("Open sessions from GitHub PRs"));
+    await browser.execute((el) => el.dispatchEvent(new Event("scroll")), commit);
+    await expect(popover()).toBeDisplayed();
   });
 
   it("keeps one pull popover open at a time", async () => {
