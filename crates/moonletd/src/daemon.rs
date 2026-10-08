@@ -212,6 +212,11 @@ impl Daemon {
                 let r: m::ChatSettings = params(p)?;
                 ok(self.chats.settings(r.id, r.model, r.effort, r.mode).map_err(internal)?)
             }
+            m::CHAT_MCP => {
+                let r: m::ChatMcp = params(p)?;
+                self.chats.mcp(r.id, &r.action, r.server.as_deref()).map_err(internal)?;
+                ok(true)
+            }
             m::CHAT_ADD_DIR => {
                 let r: m::ChatAddDir = params(p)?;
                 ok(self.chats.add_dir(r.id, &r.path).map_err(internal)?)

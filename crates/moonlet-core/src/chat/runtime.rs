@@ -291,6 +291,27 @@ impl ChatManager {
         Ok(inner.state.clone())
     }
 
+    /// MCP servers (X29): `refresh` lists them, `reconnect` retries
+    /// `server`. A stopped agent is started to answer.
+    pub fn mcp(&self, id: TerminalId, action: &str, server: Option<&str>) -> Result<()> {
+        if !matches!(action, "refresh" | "reconnect") {
+            bail!("unknown MCP action: {action}");
+        }
+        let chat = self.get(id)?;
+        let mut inner = chat.inner.lock().unwrap();
+        if inner.stdin.is_none() {
+            inner.restart = false;
+            if let Err(e) = self.spawn(&chat, &mut inner) {
+                self.fail(&chat, &mut inner, &format!("{e:#}"));
+                return Err(e);
+            }
+        }
+        let Inner { adapter, state, .. } = &mut *inner;
+        let outs = adapter.as_mut().context("agent not running")?.mcp(action, server, state);
+        self.apply(&chat, &mut inner, outs);
+        Ok(())
+    }
+
     /// Stops the agent process; `remove` also forgets the conversation.
     pub fn stop(&self, id: TerminalId, remove: bool) {
         let Ok(chat) = self.get(id) else { return };
@@ -625,6 +646,9 @@ echo "$*" >> claude-args
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"sess-1","model":"fake","slash_commands":["clear"]}' ;;
+    *'"subtype":"mcp_status"'*)
+      id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      echo '{"type":"control_response","response":{"subtype":"success","request_id":"'"$id"'","response":{"mcpServers":[{"name":"linear","status":"needs-auth","config":{"type":"http","url":"https://mcp.linear.app/mcp"},"scope":"user","tools":[]}]}}}' ;;
     *'run a command'*)
       echo '{"type":"control_request","request_id":"b1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"t1","input":{"command":"npm test"}}}' ;;
     *'propose a plan'*)
@@ -737,6 +761,27 @@ done
         assert!(!lines[0].contains("--add-dir"));
         assert!(lines[1].contains(&format!("--add-dir {extra}")), "{}", lines[1]);
         chats.shutdown();
+    }
+
+    #[tokio::test]
+    async fn listing_mcp_servers_starts_a_stopped_agent_and_reports_them() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.save_all();
+        chats.shutdown();
+
+        // After a daemon restart the agent is not running until it is needed.
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
+        let chats2 = ChatManager::new(terms2, dir.path().join("chats"));
+        chats2.restore();
+        chats2.mcp(info.id, "refresh", None).unwrap();
+        let st = wait_for(&chats2, info.id, |s| s.mcp_servers.is_some()).await;
+        let servers = st.mcp_servers.unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!((servers[0].name.as_str(), servers[0].status.as_str(), servers[0].endpoint.as_deref()), ("linear", "needs-auth", Some("https://mcp.linear.app/mcp")));
+        assert!(chats2.mcp(info.id, "explode", None).is_err());
+        chats2.shutdown();
     }
 
     #[tokio::test]

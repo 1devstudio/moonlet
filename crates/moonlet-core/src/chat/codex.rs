@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatImage, ChatState, PermissionAsk};
+use moonlet_proto::types::{ChatImage, ChatState, McpServer, PermissionAsk};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, tool_item, update, upsert, user_text};
@@ -14,7 +14,37 @@ enum Pending {
     Initialize,
     Thread,
     Turn,
+    /// `mcpServerStatus/list` (X29).
+    McpList,
     Other,
+}
+
+/// One row of Codex's `mcpServerStatus/list` reply (X29).
+fn mcp_server(v: &Value) -> Option<McpServer> {
+    let status = match v["runtimeStatus"].as_str() {
+        Some("connected") => "connected",
+        Some("authenticationRequired") => "needs-auth",
+        Some("failed") => "failed",
+        Some("disabled" | "cancelled") => "disabled",
+        Some(_) => "pending",
+        None if v["authStatus"] == "notLoggedIn" => "needs-auth",
+        None if v["toolsError"].is_string() => "failed",
+        None => "pending",
+    };
+    let origin = v["httpOrigin"].as_str();
+    // Tools are keyed by name, in no promised order: sort them.
+    let mut tools: Vec<String> = v["tools"].as_object().map(|t| t.keys().cloned().collect()).unwrap_or_default();
+    tools.sort();
+    Some(McpServer {
+        name: v["name"].as_str()?.to_string(),
+        status: status.into(),
+        transport: if origin.is_some() { "http".into() } else { "stdio".into() },
+        endpoint: origin.map(String::from),
+        scope: None,
+        error: if status == "failed" { v["toolsError"].as_str().map(String::from) } else { None },
+        tools,
+        auth_url: None,
+    })
 }
 
 #[derive(Default)]
@@ -28,6 +58,8 @@ pub struct Codex {
     cfg: ChatConfig,
     /// Approval requests: our ask id → JSON-RPC request id and item id.
     asks: HashMap<String, (Value, String)>,
+    /// The MCP servers were asked for before the thread existed (X29).
+    mcp_wanted: bool,
 }
 
 impl Codex {
@@ -55,6 +87,11 @@ impl Codex {
             }
             None => self.request(Pending::Thread, "thread/start", params),
         }
+    }
+
+    fn mcp_list(&mut self) -> Out {
+        let params = json!({"threadId": self.thread, "detail": "toolsAndAuthOnly"});
+        self.request(Pending::McpList, "mcpServerStatus/list", params)
     }
 
     /// A message as Codex `UserInput`s: the text, then each image as a
@@ -196,6 +233,12 @@ impl Adapter for Codex {
             // Response to one of our requests.
             (None, Some(id)) => {
                 let kind = id.as_u64().and_then(|n| self.calls.remove(&n)).unwrap_or(Pending::Other);
+                if kind == Pending::McpList {
+                    let rows = v["result"]["data"].as_array().into_iter().flatten().filter_map(mcp_server).collect();
+                    st.mcp_servers = Some(rows);
+                    out.push(Out::State);
+                    return out;
+                }
                 if let Some(err) = v.get("error") {
                     let msg = err["message"].as_str().unwrap_or("Codex request failed").to_string();
                     if kind == Pending::Thread && self.cfg.resume.take().is_some() {
@@ -232,13 +275,16 @@ impl Adapter for Codex {
                         if let Some(m) = r["model"].as_str() {
                             st.model.get_or_insert_with(|| m.to_string());
                         }
+                        if std::mem::take(&mut self.mcp_wanted) {
+                            out.push(self.mcp_list());
+                        }
                         for (text, images) in std::mem::take(&mut self.queued) {
                             out.push(self.turn_start(&text, &images));
                         }
                         out.push(Out::State);
                     }
                     Pending::Turn => self.turn = r["turn"]["id"].as_str().map(String::from).or(self.turn.take()),
-                    Pending::Other => {}
+                    Pending::McpList | Pending::Other => {}
                 }
             }
             // Request from the server.
@@ -279,6 +325,9 @@ impl Adapter for Codex {
                             }
                         }));
                     }
+                    // A server started, failed or came back: list them again
+                    // once the user has looked at them.
+                    "mcpServer/startupStatus/updated" if st.mcp_servers.is_some() && self.thread.is_some() => out.push(self.mcp_list()),
                     "thread/tokenUsage/updated" => {
                         let total = &p["tokenUsage"]["total"];
                         st.input_tokens = total["inputTokens"].as_u64().unwrap_or(st.input_tokens);
@@ -357,6 +406,18 @@ impl Adapter for Codex {
         out
     }
 
+    fn mcp(&mut self, action: &str, _server: Option<&str>, _st: &mut ChatState) -> Vec<Out> {
+        // Codex has no per-server reconnect: retrying lists the servers again.
+        if !matches!(action, "refresh" | "reconnect") {
+            return vec![];
+        }
+        if self.thread.is_none() {
+            self.mcp_wanted = true;
+            return vec![];
+        }
+        vec![self.mcp_list()]
+    }
+
     fn permission(&mut self, ask: &str, decision: &str, _message: Option<&str>, _answers: Option<&BTreeMap<String, String>>, _mode: Option<&str>, st: &mut ChatState) -> Vec<Out> {
         let Some((rid, item_id)) = self.asks.remove(ask) else { return vec![] };
         st.pending.retain(|p| p.id != ask);
@@ -395,6 +456,7 @@ impl Adapter for Codex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moonlet_proto::types::McpServer;
 
     fn writes(outs: &[Out]) -> Vec<Value> {
         outs.iter()
@@ -456,6 +518,60 @@ mod tests {
             ])
         );
         assert_eq!(st.items.last().unwrap().text, "What is wrong here?\n[image: shot.png]");
+    }
+
+    /// Captured from codex-cli 0.160.0 (`mcpServerStatus/list` with a
+    /// thread, trimmed): a stdio server that cannot start, a connected one,
+    /// and an HTTP server that is not logged in.
+    fn status_reply(id: u64) -> Value {
+        json!({"id": id, "result": {"data": [
+            {"name": "broken", "runtimeStatus": "failed", "pluginId": null, "httpOrigin": null, "serverInfo": null, "tools": {}, "toolsError": "MCP startup failed: No such file or directory (os error 2)", "resources": [], "resourceTemplates": [], "authStatus": "unsupported"},
+            {"name": "everything", "runtimeStatus": "connected", "pluginId": null, "httpOrigin": null, "tools": {"get-env": {"name": "get-env", "title": "Print Environment Tool"}, "echo": {"name": "echo"}}, "toolsError": null, "resources": [], "resourceTemplates": [], "authStatus": "unsupported"},
+            {"name": "linear", "runtimeStatus": "authenticationRequired", "pluginId": null, "httpOrigin": "https://mcp.linear.app", "tools": {}, "toolsError": "MCP startup failed: handshaking with MCP server failed: Send message error Transport error: Auth required", "resources": [], "resourceTemplates": [], "authStatus": "notLoggedIn"}
+        ], "nextCursor": null}})
+    }
+
+    fn server(name: &str, status: &str, transport: &str, endpoint: Option<&str>, error: Option<&str>, tools: &[&str]) -> McpServer {
+        McpServer { name: name.into(), status: status.into(), transport: transport.into(), endpoint: endpoint.map(Into::into), scope: None, error: error.map(Into::into), tools: tools.iter().map(|t| t.to_string()).collect(), auth_url: None }
+    }
+
+    #[test]
+    fn mcp_servers_are_listed_for_the_thread_once_it_exists() {
+        let mut a = Codex::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        assert!(writes(&a.mcp("refresh", None, &mut st)).is_empty(), "no thread yet");
+        feed(&mut a, &mut st, json!({"id": 1, "result": {}}));
+        let w = writes(&feed(&mut a, &mut st, json!({"id": 2, "result": {"thread": {"id": "th"}}})));
+        assert_eq!(w[0]["method"], "mcpServerStatus/list");
+        assert_eq!(w[0]["params"], json!({"threadId": "th", "detail": "toolsAndAuthOnly"}));
+        let id = w[0]["id"].as_u64().unwrap();
+        feed(&mut a, &mut st, status_reply(id));
+        assert_eq!(
+            st.mcp_servers.clone().unwrap(),
+            [
+                server("broken", "failed", "stdio", None, Some("MCP startup failed: No such file or directory (os error 2)"), &[]),
+                server("everything", "connected", "stdio", None, None, &["echo", "get-env"]),
+                server("linear", "needs-auth", "http", Some("https://mcp.linear.app"), None, &[]),
+            ]
+        );
+        assert_eq!(st.status, "idle", "listing servers is not a turn");
+    }
+
+    #[test]
+    fn a_server_changing_state_relists_the_servers() {
+        let mut a = Codex::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        feed(&mut a, &mut st, json!({"id": 1, "result": {}}));
+        feed(&mut a, &mut st, json!({"id": 2, "result": {"thread": {"id": "th"}}}));
+        // Not listed yet: startup news is not worth a request.
+        let quiet = json!({"method": "mcpServer/startupStatus/updated", "params": {"threadId": "th", "name": "everything", "status": "ready", "error": null, "failureReason": null}});
+        assert!(writes(&feed(&mut a, &mut st, quiet.clone())).is_empty());
+        let w = writes(&a.mcp("refresh", None, &mut st));
+        feed(&mut a, &mut st, status_reply(w[0]["id"].as_u64().unwrap()));
+        let w = writes(&feed(&mut a, &mut st, quiet));
+        assert_eq!(w[0]["method"], "mcpServerStatus/list");
     }
 
     #[test]
