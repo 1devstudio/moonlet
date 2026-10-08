@@ -33,6 +33,7 @@ import {
   activeToken,
   askQuestions,
   chatBlocks,
+  chatDraft,
   chatKey,
   diffStat,
   elapsed,
@@ -46,6 +47,7 @@ import {
   promptHistory,
   questionAnswers,
   rememberPrompt,
+  saveChatDraft,
   thinkingPreview,
   toolCommand,
   toolGroupLabel,
@@ -582,6 +584,7 @@ function projectFiles(host: string, root: string): Promise<string[]> {
 
 function ChatEditor({
   host,
+  id,
   draftKey,
   root,
   commands,
@@ -596,6 +599,8 @@ function ChatEditor({
   onCancel,
 }: {
   host: string;
+  /** The chat terminal, whose unsent text survives a session switch. */
+  id: number;
   /** Where text sent from elsewhere waits (`agentDrafts`, T8). */
   draftKey: string;
   root: string;
@@ -614,14 +619,25 @@ function ChatEditor({
   /** Escape in the empty editor, before it would stop the agent. */
   onCancel?: () => void;
 }) {
-  const [text, setText] = useState("");
-  const [caret, setCaret] = useState(0);
+  const [text, setTextState] = useState(() => chatDraft(host, id));
+  const setText = (v: string | ((cur: string) => string)) =>
+    setTextState((cur) => {
+      const next = typeof v === "function" ? v(cur) : v;
+      saveChatDraft(host, id, next);
+      return next;
+    });
+  const [caret, setCaret] = useState(text.length);
   const [files, setFiles] = useState<string[] | null>(null);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState<number | null>(null);
   const [walk, setWalk] = useState<number | null>(null);
   const ta = useRef<HTMLTextAreaElement>(null);
   const history = promptHistory();
+
+  // A restored draft continues from its end.
+  useLayoutEffect(() => {
+    ta.current?.setSelectionRange(text.length, text.length);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (focused) ta.current?.focus();
@@ -1045,6 +1061,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
         </div>
         <ChatEditor
           host={host}
+          id={id}
           draftKey={termKey(host, id)}
           root={info?.cwd ?? "/"}
           commands={st?.slash_commands ?? []}

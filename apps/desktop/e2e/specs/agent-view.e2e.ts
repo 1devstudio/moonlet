@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { PROJECT, choose, rpc, sel, world } from "../fixtures";
+import { PROJECT, SESSION as OTHER_SESSION, choose, fill, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
@@ -101,6 +101,15 @@ describe("agent view", () => {
     await $('button[title="Copy final message"]').click();
     await expect($(sel.text("Copied message"))).toBeDisplayed();
     expect(execFileSync("pbpaste", { encoding: "utf8" })).toBe(ANSWER);
+  });
+
+  it("keeps unsent text when another session opens and this one comes back", async () => {
+    const editor = '//textarea[@placeholder="Ask for a change, @ to mention a file, / for commands"]';
+    await fill(editor, "Also check the signup page");
+    await $(sel.sessionRow(OTHER_SESSION)).click();
+    await expect($(editor)).not.toBeExisting();
+    await $(sel.sessionRow(SESSION)).click();
+    await expect($(editor)).toHaveValue("Also check the signup page");
   });
 
   it("shows one row per call when Settings says Expanded", async () => {

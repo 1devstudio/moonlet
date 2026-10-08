@@ -116,6 +116,20 @@ export function forgetChat(host: string, id: number) {
     delete chats[chatKey(host, id)];
     return { chats };
   });
+  saveChatDraft(host, id, "");
+}
+
+// ------------------------------------------------------------ unsent text
+
+// What is typed but not sent, per chat terminal. The editor unmounts when
+// another session opens, so the text lives here until it is sent.
+const drafts = new Map<string, string>();
+
+export const chatDraft = (host: string, id: number) => drafts.get(chatKey(host, id)) ?? "";
+
+export function saveChatDraft(host: string, id: number, text: string) {
+  if (text) drafts.set(chatKey(host, id), text);
+  else drafts.delete(chatKey(host, id));
 }
 
 // ------------------------------------------------------------ prompt history
