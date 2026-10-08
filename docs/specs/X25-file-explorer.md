@@ -25,7 +25,7 @@ The Files tab used to open on the list of changed files, with the file tree behi
 - [x] The Open in menu of a local file lists Finder and the installed editors, not the terminals. A local folder's menu lists Finder, the editors and the terminals. Finder reveals the entry and never opens it: `open` would run a file with its default app, and launch a folder named `Foo.app`. On a remote host both list only VS Code and Cursor. (`openInChoices` in `openIn.test.ts`)
 - [x] `+` adds `@<relative path>` to the composer: into an empty composer as is, after typed text with a space, so several files can be added in a row. Other text sent to the composer (T8) still follows a blank line. (`fileMention`, `joinDraft` in `chat.test.ts`)
 - [x] The Files tab shows the tree only; the "changed / all files" toggle and the summary line are gone from it. (`file-explorer.e2e.ts`)
-- [x] Changed files are grouped by folder, folders in path order and the root folder shown as `/`; each file shows `+a −d`, `+a`, `−d` or `bin`. (`groupByDir`, `changeCount` in `changes.test.ts`)
+- [x] Changed files are grouped by folder, folders in path order and the root folder shown as `/`; each file shows `+a −d`, `+a`, `−d` or `bin`. (`changeCount` in `changes.test.ts`; the folder grouping was replaced by the tree and list of [X28](X28-changes-tree-and-list.md))
 - [x] The Changes tab opens on the grouped list with the summary line; clicking a file shows its diff with a back button; back returns to the list. (`file-explorer.e2e.ts`)
 
 ## UI
