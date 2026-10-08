@@ -21,7 +21,7 @@ const FONT: Record<string, string[]> = {
   "!": ["1", "1", "1", "0", "1"],
 };
 const K = {
-  sky: "#121212", ground: "#1c1c1c", groundTop: "#2e2e2e", grass: "#3d5a3a", hole: "#070707", dirt: "#5b3f2e", dirtLight: "#7a5640",
+  sky: "#161616", ground: "#1c1c1c", groundTop: "#2e2e2e", grass: "#3d5a3a", hole: "#070707", dirt: "#5b3f2e", dirtLight: "#7a5640",
   stone: "#7d7d7d", stoneLight: "#a3a3a3", stoneDark: "#4a4a4a", wood: "#8a6a4a", skin: "#e8c4a0", pants: "#3a4a6a", accent: "#d97757",
   fg: "#e6e6e6", done: "#6fbf73", ghost: "#ececec", cloak: "#3a3a3a", void: "#050505", blade: "#d9d9d9", bone: "#e6e0d0", border: "#3a3a3a",
   winBg: "#1a1a1a", winBar: "#2a2a2a", star: "#444", starOn: "#9a9a9a",
@@ -228,10 +228,10 @@ const SCENES: Record<Loader, (t: number, S: SceneState) => void> = {
   },
 };
 
-/** Takes the accent, foreground and done colours from the theme. */
+/** Takes the sky (the sidebar panel), accent, foreground and done colours from the theme. */
 function themeColors() {
   const cs = getComputedStyle(document.documentElement);
-  for (const [k, v] of [["accent", "--color-accent"], ["fg", "--color-fg"], ["done", "--color-done"]] as const) {
+  for (const [k, v] of [["sky", "--color-panel"], ["accent", "--color-accent"], ["fg", "--color-fg"], ["done", "--color-done"]] as const) {
     const c = cs.getPropertyValue(v).trim();
     if (c) K[k] = c;
   }
