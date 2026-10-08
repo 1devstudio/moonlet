@@ -495,9 +495,20 @@ pub struct ChatState {
     /// The agent's subagents, for the `+` menu (X29).
     #[serde(default)]
     pub agents: Vec<NamedItem>,
+    /// Directories added with `chat.add_dir` (X29).
+    #[serde(default)]
+    pub add_dirs: Vec<String>,
     /// Messages sent while a turn was running, delivered in order.
     #[serde(default)]
     pub queued: Vec<String>,
+}
+
+/// An image sent with a message (X29), base64-encoded.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ChatImage {
+    pub name: String,
+    pub media_type: String,
+    pub data: String,
 }
 
 /// A name with a one-line description, such as a subagent.
