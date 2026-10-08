@@ -498,9 +498,34 @@ pub struct ChatState {
     /// Directories added with `chat.add_dir` (X29).
     #[serde(default)]
     pub add_dirs: Vec<String>,
+    /// The agent's MCP servers; `None` until the agent has answered (X29).
+    #[serde(default)]
+    pub mcp_servers: Option<Vec<McpServer>>,
     /// Messages sent while a turn was running, delivered in order.
     #[serde(default)]
     pub queued: Vec<String>,
+}
+
+/// One of the agent's MCP servers (X29).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct McpServer {
+    pub name: String,
+    /// `connected`, `needs-auth`, `authing`, `failed`, `pending` or `disabled`.
+    pub status: String,
+    /// `http`, `sse`, `stdio`, `ws`, `sdk` or `claude.ai`.
+    pub transport: String,
+    /// The URL, or the command and its arguments.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// The sign-in page while the server is `authing`.
+    #[serde(default)]
+    pub auth_url: Option<String>,
 }
 
 /// An image sent with a message (X29), base64-encoded.
