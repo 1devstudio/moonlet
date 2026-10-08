@@ -12,8 +12,8 @@ New sessions branch from the project's local base branch (`main` unless `.moonle
 
 1. A session's PR merges on GitHub. moonlet fetches `origin/<base>` for that project.
 2. The project row in the sidebar shows a chip next to the project name: an arrow and the number of commits `main` is behind, for example `↓ 3`.
-3. Hovering the chip opens a popover: "main is 3 commits behind origin", the incoming commits (short sha and subject, newest first), when moonlet last fetched, and **Later** / **Pull main**.
-4. Clicking the chip, or **Pull main** in the popover, fast-forwards the local branch. The chip shows `pulling` meanwhile, then disappears, and a toast says "Pulled 3 commits into main. New sessions start from 9c41e2a."
+3. Hovering the chip opens a popover: "main is 3 commits behind origin", the incoming commits (short sha and subject, newest first), and when moonlet last fetched. The popover only informs; it has no buttons.
+4. Clicking the chip fast-forwards the local branch. The chip shows `pulling` meanwhile, then disappears, and a toast says "Pulled 3 commits into main. New sessions start from 9c41e2a."
 5. When the local branch has commits that are not on `origin`, the chip reads `diverged`. Hovering or clicking it opens a popover that explains that moonlet only fast-forwards, changed nothing, and offers a `git pull --rebase` command to copy.
 
 ## Behaviour and acceptance criteria
@@ -28,6 +28,8 @@ New sessions branch from the project's local base branch (`main` unless `.moonle
 - [x] The chip shows the behind count, `pulling` while a pull runs, `diverged` when the branch is both ahead and behind, and nothing when the branch is up to date or only ahead.
 - [x] The app fetches when a host loads, every 5 minutes, when the project list changes (for example a new base branch in Project settings), and when one of the project's session PRs turns merged. A fetch after a merge labels the popover footer "after PR #N merged".
 - [x] Hovering the chip shows the popover. Clicking a behind chip pulls straight away; clicking a diverged chip opens the popover, and clicking while a pull runs does nothing.
+- [x] The behind popover has no buttons: the chip is the only way to pull. Its commit list scrolls when the commits do not fit.
+- [x] The popover opens below the chip, or above it when the chip sits too low in the window for the popover to fit below.
 - [x] Only one pull popover is open at a time. Opening another project's popover closes the first, so a Pull click cannot land on the wrong project's popover.
 - [x] The diverged popover's command targets the work tree that has the branch checked out. When none does, it switches to the branch first.
 
@@ -39,7 +41,7 @@ New sessions branch from the project's local base branch (`main` unless `.moonle
 - Pulling: spinning `Loader2` and "pulling", muted.
 - Diverged: `ShieldAlert` and "diverged", error colour.
 
-The popover is fixed below the chip, 276 px wide, like the row context menu. It opens when the pointer enters the chip and closes 150 ms after the pointer leaves both the chip and the popover, so the pointer can cross the gap. A mousedown outside or Escape closes it too. Only one pull popover is open at a time: opening another project's closes the first. The pure logic (chip, texts, command) lives in `lib/baseSync.ts`.
+The popover is fixed below the chip, 276 px wide, like the row context menu. When there is less than 300 px below the chip and more room above, it opens above the chip instead. Its height is capped to the room on that side, and the commit list scrolls (at most about 7 rows tall). It opens when the pointer enters the chip and closes 150 ms after the pointer leaves both the chip and the popover, so the pointer can cross the gap. A mousedown outside or Escape closes it too. Only one pull popover is open at a time: opening another project's closes the first. The pure logic (chip, texts, command, placement) lives in `lib/baseSync.ts`.
 
 ## Protocol and RPCs
 
@@ -62,5 +64,5 @@ Both run on the host that owns the project, so remote projects work the same way
 ## Test plan
 
 - Integration (`crates/moonlet-core/src/git.rs`): a clone of a bare origin that is behind, up to date, diverged, and missing the remote branch; a failed fetch; pulling with the branch checked out (work tree updated) and not checked out (ref moved); a refused diverged pull.
-- Unit (`apps/desktop/src/lib/baseSync.test.ts`): chip states, what a chip click does, popover texts, fetched label, pull toast, the diverged command, and the newly merged PR detection that triggers a fetch.
-- e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, hovering it lists the commits, and clicking it moves the local branch. With a second project behind, hovering its chip and then the first project's leaves one popover open.
+- Unit (`apps/desktop/src/lib/baseSync.test.ts`): chip states, what a chip click does, popover texts, popover placement above or below the chip, fetched label, pull toast, the diverged command, and the newly merged PR detection that triggers a fetch.
+- e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, hovering it lists the commits with no buttons in the popover, and clicking it moves the local branch. With a second project behind, hovering its chip and then the first project's leaves one popover open.
