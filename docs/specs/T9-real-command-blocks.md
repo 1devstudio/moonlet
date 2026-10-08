@@ -25,19 +25,19 @@ In shell terminals in Blocks mode, each command becomes a real [Block](../../CON
 ### Scope
 
 - [ ] Blocks exist only in shell terminals with shell integration in Blocks mode. Classic mode, shells without integration, and agent, run and setup terminals keep a single screen, drawn as today.
-- [ ] Remote hosts behave the same, because their `jauntd` owns the shell.
+- [ ] Remote hosts behave the same, because their `moonletd` owns the shell.
 
 ### Emulator
 
-- [ ] `jaunt-core` uses the `libghostty-vt` crate 0.2.2 for every terminal; `vt100` is removed. Ghostty's source is a pinned git submodule passed as `GHOSTTY_SOURCE_DIR`.
+- [ ] `moonlet-core` uses the `libghostty-vt` crate 0.2.2 for every terminal; `vt100` is removed. Ghostty's source is a pinned git submodule passed as `GHOSTTY_SOURCE_DIR`.
 - [ ] ADR 0003's round-trip tests are ported and pass: plain output with scrollback, Ink-style redraws, an alternate-screen TUI with application cursor and keypad modes, CJK, combining marks and emoji.
-- [ ] Today's terminal signals keep working: title, bell, OSC 7 cwd (A1, T3), OSC 52 (opt-in), alternate-screen state, and OSC 9 / OSC 777 notifications (through jaunt's own scanner, since 0.2.2 ignores them).
+- [ ] Today's terminal signals keep working: title, bell, OSC 7 cwd (A1, T3), OSC 52 (opt-in), alternate-screen state, and OSC 9 / OSC 777 notifications (through moonlet's own scanner, since 0.2.2 ignores them).
 - [ ] Each terminal's emulator runs on its own thread; the rest of the daemon talks to it over channels.
 - [ ] Resizing reflows the primary screen.
 
 ### Block lifecycle
 
-- [ ] **Marks:** jaunt's scanner reads OSC 133 marks from the raw output, including marks split across reads. Every mark carries `aid=<token>`, a random token the daemon makes per terminal and passes in `JAUNT_MARK_TOKEN`. The integration copies it into an unexported shell variable and unsets the environment variable at startup, so programs the shell runs never see it. Only marks with the terminal's token are honoured, so nested shells and programs that print OSC 133 cannot open or close blocks. (The shell PID was rejected: any command can print `$$`.)
+- [ ] **Marks:** moonlet's scanner reads OSC 133 marks from the raw output, including marks split across reads. Every mark carries `aid=<token>`, a random token the daemon makes per terminal and passes in `JAUNT_MARK_TOKEN`. The integration copies it into an unexported shell variable and unsets the environment variable at startup, so programs the shell runs never see it. Only marks with the terminal's token are honoured, so nested shells and programs that print OSC 133 cannot open or close blocks. (The shell PID was rejected: any command can print `$$`.)
 - [ ] **Start:** at a `C` mark a block opens with a per-terminal id, the command line (the text between the prompt and `C`), the cwd from the last OSC 7, and the daemon clock as `started_at`.
 - [ ] **Finish:** at a `D` mark the block records its exit code and `ended_at`, and is **frozen**: its rows (from the command line to the cursor, including scrollback) are formatted into styled logical lines (wrapped rows joined) and stored. The live emulator's screen and scrollback are then cleared and the cursor homed, inside the daemon only. Terminal modes such as bracketed paste are kept.
 - [ ] Finished blocks never change.
@@ -101,21 +101,21 @@ In shell terminals in Blocks mode, each command becomes a real [Block](../../CON
 
 ## Out of scope
 
-- Option C (libghostty-vt in the app with jaunt's own renderer) and turning a plain `ssh` into blocks: see ADR 0006, "Future direction".
+- Option C (libghostty-vt in the app with moonlet's own renderer) and turning a plain `ssh` into blocks: see ADR 0006, "Future direction".
 - Per-block output filter (show only matching lines): a later PR.
 - Saving blocks to disk across daemon restarts.
 - Nested blocks.
 
 ## Test plan
 
-- Rust, `jaunt-core`:
+- Rust, `moonlet-core`:
   - Scanner: marks split across reads at every byte; marks with a wrong or missing token are ignored, including one built from `$$`; OSC 9 / 777 extraction.
 - Integration: `JAUNT_MARK_TOKEN` is not in the environment of a command the shell runs.
   - Ported ADR 0003 round-trip tests on libghostty-vt.
   - Freeze: captured output of a `cargo` progress bar, `printf` with long wrapped lines, vim inside a block, a program printing `CSI 2J` mid-block (only its own block is cleared), `clear` as a command and Ctrl+L at the prompt (both drop earlier blocks); each checked against literal expected lines.
   - Limits: 10,001 lines across blocks drops the oldest whole block; a 12,000-line block keeps its last 10,000 with `dropped = 2000`; the 2,001st block drops the first.
   - Resize reflow of the active block.
-- Rust, `jauntd/tests`: attach mid-command returns finished blocks and the active one; a live upgrade keeps them; a nested shell's marks do not open blocks.
+- Rust, `moonletd/tests`: attach mid-command returns finished blocks and the active one; a live upgrade keeps them; a nested shell's marks do not open blocks.
 - TS (Vitest, `lib/`): lines and runs to DOM spans (colours, bold, inverse); virtual list offsets with collapsed blocks; cross-block search positions.
 - e2e (`e2e/specs/`): with Block view on, run `echo one` and `seq 1 20000`, collapse the second block, reload the window and see both blocks; run `clear` and see none.
 - Manual: musl remote helper build with libghostty-vt; memory of 20 open shells.

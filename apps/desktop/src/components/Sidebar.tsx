@@ -206,7 +206,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
             <div className="px-3 pb-2 pt-2.5">
               <div className="ui-text-13 font-medium text-fg">Can't fast-forward {st.branch}</div>
               <div className="mt-1 ui-text-12 text-muted [text-wrap:pretty]">
-                Your local {mono(st.branch)} has {aheadText(st)} on {mono(st.upstream)}. jaunt only pulls when it can fast-forward, so nothing was changed.
+                Your local {mono(st.branch)} has {aheadText(st)} on {mono(st.upstream)}. moonlet only pulls when it can fast-forward, so nothing was changed.
               </div>
               <div className="mt-2.5 flex items-center gap-2 rounded-md border border-border bg-panel-2 px-2 py-1.5">
                 <span className="min-w-0 flex-1 truncate font-mono ui-text-11.5 text-fg" title={command}>

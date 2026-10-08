@@ -7,7 +7,7 @@ const s = (id: string, project: string, extra: Partial<Session> = {}): Session =
   id,
   project_id: project,
   name: id,
-  branch: `jaunt/${id}`,
+  branch: `moonlet/${id}`,
   base: "main",
   path: `/w/${id}`,
   agent: "claude",
@@ -105,9 +105,9 @@ describe("projectRemoval", () => {
   });
 
   it("asks before dropping a project no other workspace holds", () => {
-    expect(projectRemoval([home, other], "w1", p("a", "jaunt"))).toEqual({
+    expect(projectRemoval([home, other], "w1", p("a", "moonlet"))).toEqual({
       label: "Remove from 1devstudio",
-      confirm: "jaunt is in no other workspace, so it will be removed from jaunt. The folder on disk is not touched.",
+      confirm: "moonlet is in no other workspace, so it will be removed from moonlet. The folder on disk is not touched.",
     });
   });
 });

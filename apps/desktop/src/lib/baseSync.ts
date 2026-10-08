@@ -67,7 +67,7 @@ export function pullToast(branch: string, r: { pulled: number; head: string }): 
 
 const shellQuote = (s: string) => (/^[\w./~@%+=:,-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
 
-/** The command the diverged popover offers to copy. jaunt only
+/** The command the diverged popover offers to copy. moonlet only
  *  fast-forwards, so rebasing local commits is left to the user. */
 export function rebaseCommand(st: BaseStatus, projectPath: string): string {
   if (st.checkout) return `git -C ${shellQuote(st.checkout)} pull --rebase`;

@@ -1,4 +1,4 @@
-import { Empty, icons } from "@jaunt/ds";
+import { Empty, icons } from "@moonlet/ds";
 
 const { FileDiff, Search } = icons;
 

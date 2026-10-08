@@ -1,4 +1,4 @@
-import { Button, icons } from "@jaunt/ds";
+import { Button, icons } from "@moonlet/ds";
 
 const { GitPullRequest, Play } = icons;
 

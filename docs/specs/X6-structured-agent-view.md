@@ -26,7 +26,7 @@ Agent tabs show a native conversation view instead of the agent's terminal UI: m
 
 ## Model
 
-Both agents map onto one normalized chat model in `jaunt-proto`.
+Both agents map onto one normalized chat model in `moonlet-proto`.
 
 - **`ChatItem`**: id (stable; streaming deltas update the same item), kind (`user`, `assistant`, `thinking`, `tool`, `system`, `error`), text, an optional `ToolCall`, and a timestamp.
   - `ToolCall` holds the name, a one-line summary, the input, the output, a status (`running`, `ok`, `error`, `denied`) and an optional unified diff.
@@ -45,7 +45,7 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 - `chat.settings {id, model?, effort?, mode?}` changes the model, effort or (Claude only) permission mode, see [X7](X7-agent-permission-mode.md). The agent restarts with resume before the next message.
 - `fs.files {root}` lists the project's non-ignored files for `@` mentions.
 - Events: `chat.item {id, item}`, `chat.state {id, state}` (everything except the items), and the usual `terminal.*`.
-- Item ids for jaunt's own items (user, system, error) include a timestamp. A resumed agent starts a fresh adapter, and its ids must not clash with the saved transcript.
+- Item ids for moonlet's own items (user, system, error) include a timestamp. A resumed agent starts a fresh adapter, and its ids must not clash with the saved transcript.
 
 ## UI
 

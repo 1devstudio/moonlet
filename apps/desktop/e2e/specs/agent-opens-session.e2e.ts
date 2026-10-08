@@ -1,4 +1,4 @@
-// X22: an agent in the fixture session runs `jaunt session new`; the app
+// X22: an agent in the fixture session runs `moonlet session new`; the app
 // announces the new session and marks where it came from.
 
 import { execFileSync } from "node:child_process";
@@ -20,7 +20,7 @@ describe("an agent opens a session", () => {
     await $(sel.sessionRow(SESSION)).click();
 
     // As the agent in the parent session's first terminal would run it.
-    execFileSync(join(BIN_DIR, "jaunt"), ["session", "new", PROJECT, "--agent", "none", "Add a download button"], {
+    execFileSync(join(BIN_DIR, "moonlet"), ["session", "new", PROJECT, "--agent", "none", "Add a download button"], {
       env: { ...w.env, JAUNT_TERMINAL_ID: String(parent.terminals[0]) },
       stdio: "pipe",
     });

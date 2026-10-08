@@ -6,7 +6,7 @@
 
 ## Summary
 
-Unit tests cover the daemon and the app's `lib/` logic, but nothing exercises the real window: a React component wired to the wrong RPC, or a dialog that never opens, only shows up when someone clicks through the app. X12 adds end-to-end tests that launch the real jaunt app against a real `jauntd`, drive the WKWebView with WebdriverIO, and check what a user would see.
+Unit tests cover the daemon and the app's `lib/` logic, but nothing exercises the real window: a React component wired to the wrong RPC, or a dialog that never opens, only shows up when someone clicks through the app. X12 adds end-to-end tests that launch the real moonlet app against a real `moonletd`, drive the WKWebView with WebdriverIO, and check what a user would see.
 
 ## Approach
 
@@ -14,13 +14,13 @@ Unit tests cover the daemon and the app's `lib/` logic, but nothing exercises th
 - **Build:** the plugin is behind a cargo feature, `e2e`. Release and dev builds never contain it, because it exposes the window over HTTP. The e2e build uses its own target directory (`target/e2e`) and embeds the built frontend, so it needs no Vite server and doesn't disturb a running `pnpm dev`.
 - **Plugins:** `tauri-plugin-wdio-webdriver` (the driver) and `tauri-plugin-wdio` (window states, which the service asks for), both behind `e2e`, and `withGlobalTauri` in the e2e config only.
 - **Capability:** the plugins' `wdio-webdriver:default` and `wdio:default` permissions live in an inline capability in `src-tauri/tauri.e2e.conf.json`, which only the e2e build merges. `capabilities/default.json` stays unchanged, so normal builds don't reference a plugin they don't compile.
-- **Isolation:** each run creates a scratch `JAUNT_HOME` and a scratch git repo under the system temp dir. `JAUNT_BIN_DIR` points the app at the e2e build's `jauntd`. Before the app starts, the harness starts that daemon and seeds a project and a session through `jaunt rpc`. Sessions use `agent: "none"` and the repo's only agent is a fake shell command, so no test ever starts a real Claude or Codex. The daemon is shut down and the scratch dirs deleted at the end.
+- **Isolation:** each run creates a scratch `JAUNT_HOME` and a scratch git repo under the system temp dir. `JAUNT_BIN_DIR` points the app at the e2e build's `moonletd`. Before the app starts, the harness starts that daemon and seeds a project and a session through `moonlet rpc`. Sessions use `agent: "none"` and the repo's only agent is a fake shell command, so no test ever starts a real Claude or Codex. The daemon is shut down and the scratch dirs deleted at the end.
 
 ## Behaviour and acceptance criteria
 
-- [x] `pnpm e2e:build` builds the app with the `e2e` feature, plus `jauntd` and `jaunt`, into `target/e2e/debug`.
+- [x] `pnpm e2e:build` builds the app with the `e2e` feature, plus `moonletd` and `moonlet`, into `target/e2e/debug`.
 - [x] `pnpm e2e` runs every spec in `apps/desktop/e2e/specs` against that build and exits non-zero on a failure. A failing test leaves a window screenshot in `apps/desktop/e2e/artifacts/`.
-- [x] Release and dev builds do not contain the WebDriver plugins (`cargo tree -p jaunt-app` lists them only with `--features e2e`).
+- [x] Release and dev builds do not contain the WebDriver plugins (`cargo tree -p moonlet-app` lists them only with `--features e2e`).
 - [x] A run never touches `~/.jaunt` or a real repository, and leaves no daemon or temp dir behind. The daemon runs with a scratch `HOME`, `SHELL=/bin/zsh` (so shells get the integration, T3), and a `PATH` whose `claude` and `codex` are stubs that fail; every zsh startup file and `.profile` put the stubs first.
 - [x] **Smoke** (`smoke.e2e.ts`): the app starts, connects to the scratch daemon, and the sidebar shows the seeded project and session.
 - [x] **Project settings** (`project-settings.e2e.ts`, X8 and M10):
@@ -49,7 +49,7 @@ These are quirks of the embedded driver (`tauri-plugin-wdio-webdriver` 1.4), wor
 ## Layout
 
 - `apps/desktop/e2e/wdio.conf.ts`: the WebdriverIO config, plus scratch setup and teardown.
-- `apps/desktop/e2e/fixtures.ts`: the scratch repo, `jaunt rpc` helpers, `fill()` and selectors.
+- `apps/desktop/e2e/fixtures.ts`: the scratch repo, `moonlet rpc` helpers, `fill()` and selectors.
 - `apps/desktop/scripts/e2e-build.mjs` and `src-tauri/tauri.e2e.conf.json`: the e2e build.
 - `apps/desktop/e2e/specs/*.e2e.ts`: one file per flow. The `.e2e.ts` suffix keeps Vitest from picking them up.
 

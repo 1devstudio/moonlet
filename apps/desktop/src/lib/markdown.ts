@@ -50,7 +50,7 @@ async function renderMermaid(source: string): Promise<string> {
       flowchart: { htmlLabels: false },
       fontFamily: "-apple-system, sans-serif",
     });
-    const { svg } = await mermaid.render(`jaunt-mermaid-${++mermaidId}`, source);
+    const { svg } = await mermaid.render(`moonlet-mermaid-${++mermaidId}`, source);
     // As an image the SVG is inert (no scripts, no external loads) and the
     // sanitizer has nothing to strip from it.
     const bytes = new TextEncoder().encode(svg);

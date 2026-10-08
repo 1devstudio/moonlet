@@ -178,7 +178,7 @@ export function ProjectSettingsDialog({ host, project: projectId, focus }: { hos
             <div className="flex flex-col items-center gap-2 px-4 py-5 text-center">
               <FileWarning size={22} className="text-error" />
               <div className="ui-text-13 font-medium text-fg">.jaunt/config.toml is not valid TOML</div>
-              <div className="max-w-sm ui-text-12 text-muted">Fix the file by hand, then open Project settings again. jaunt won't overwrite a file it can't read.</div>
+              <div className="max-w-sm ui-text-12 text-muted">Fix the file by hand, then open Project settings again. moonlet won't overwrite a file it can't read.</div>
             </div>
             <div className="rounded-md border border-border bg-panel-2 px-3 py-2.5 font-mono ui-text-12">
               <div className="whitespace-pre-wrap text-error">{parseError}</div>

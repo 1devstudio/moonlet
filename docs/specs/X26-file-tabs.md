@@ -37,11 +37,11 @@ A file opened from the Files tab used to show in a read-only viewer squeezed und
     ┌──────────────────────────────────────────────────────────┐
     │ apps/desktop/package.json            [Source|Preview] (md)│  ← path bar
     │  1  {                                                    │
-    │  2    "name": "@jaunt/desktop",                          │  ← Monaco, Dark+
+    │  2    "name": "@moonlet/desktop",                          │  ← Monaco, Dark+
     └──────────────────────────────────────────────────────────┘
 
 - The file tab is as wide as a terminal tab and shows the file-type icon (X25), the name, a dot while unsaved and × on hover.
-- The editor keeps jaunt's #121212 background whatever the theme, so it matches the terminals.
+- The editor keeps moonlet's #121212 background whatever the theme, so it matches the terminals.
 - Binary files show "Binary file" and their size; files over 4 MiB open read-only with a "truncated" note, as in F2.
 - The right panel's code viewer and its markdown preview are gone; the Files tab shows only the tree.
 

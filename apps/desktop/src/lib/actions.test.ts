@@ -18,7 +18,7 @@ const ws: Session = {
   id: "s1",
   project_id: "p",
   name: "s1",
-  branch: "jaunt/s1",
+  branch: "moonlet/s1",
   base: "main",
   path: "/w/s1",
   agent: "claude",

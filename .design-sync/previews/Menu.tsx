@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { IconButton, Menu, icons } from "@jaunt/ds";
+import { IconButton, Menu, icons } from "@moonlet/ds";
 
 const { MoreHorizontal, Archive, FolderPlus } = icons;
 

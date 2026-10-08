@@ -38,7 +38,7 @@ export function editorLanguage(name: string): string {
   return (dot > 0 && LANGS.get(n.slice(dot + 1))) || "plaintext";
 }
 
-/** jaunt's own editor background and diff colours, whatever the theme. */
+/** moonlet's own editor background and diff colours, whatever the theme. */
 const OVERRIDES: Record<string, string> = {
   "editor.background": "#121212",
   "editorGutter.background": "#121212",

@@ -1,4 +1,4 @@
-//! jaunt desktop app: a thin Tauri shell around `jauntd`. It owns no
+//! moonlet desktop app: a thin Tauri shell around `moonletd`. It owns no
 //! sessions; it connects to daemons, relays RPCs and events, and streams
 //! PTY output to the webview over a binary channel.
 
@@ -8,7 +8,7 @@ mod remote;
 use std::sync::Arc;
 
 use hosts::{HostInfo, HostManager};
-use jaunt_proto::{RpcError, TerminalId};
+use moonlet_proto::{RpcError, TerminalId};
 use serde_json::Value;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
@@ -197,14 +197,14 @@ fn open_in(target: String, path: String, host: Option<String>) -> Result<(), Rpc
     Ok(())
 }
 
-/// Runs the bundled `jauntd service install|uninstall|status` (S1b).
+/// Runs the bundled `moonletd service install|uninstall|status` (S1b).
 #[tauri::command]
 async fn daemon_service(action: String) -> Result<Value, RpcError> {
     if !["install", "uninstall", "status"].contains(&action.as_str()) {
         return Err(RpcError::new("invalid_params", "unknown action"));
     }
-    let jauntd = hosts::sibling_binary("jauntd").map_err(err)?;
-    let out = tokio::process::Command::new(&jauntd)
+    let moonletd = hosts::sibling_binary("moonletd").map_err(err)?;
+    let out = tokio::process::Command::new(&moonletd)
         .args(["service", &action])
         .output()
         .await
@@ -215,7 +215,7 @@ async fn daemon_service(action: String) -> Result<Value, RpcError> {
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         ));
     }
-    let status = tokio::process::Command::new(&jauntd)
+    let status = tokio::process::Command::new(&moonletd)
         .args(["service", "status"])
         .output()
         .await
@@ -292,7 +292,7 @@ async fn play_sound(name: String) -> Result<(), RpcError> {
 fn app_info() -> Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "protocol": jaunt_proto::PROTOCOL_VERSION,
+        "protocol": moonlet_proto::PROTOCOL_VERSION,
         "home": dirs::home_dir().map(|h| h.display().to_string()),
     })
 }
@@ -338,7 +338,7 @@ pub fn run() {
             app_info
         ])
         .run(tauri::generate_context!())
-        .expect("error while running jaunt");
+        .expect("error while running moonlet");
 }
 
 #[cfg(test)]

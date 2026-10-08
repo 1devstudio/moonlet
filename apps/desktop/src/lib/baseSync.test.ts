@@ -8,7 +8,7 @@ const status = (ahead: number, behind: number): BaseStatus => ({
   ahead,
   behind,
   commits: [],
-  checkout: "/src/jaunt",
+  checkout: "/src/moonlet",
   fetch_error: null,
 });
 
@@ -39,7 +39,7 @@ describe("chipClick", () => {
     expect(chipClick(baseChip(status(0, 3), false))).toBe("pull");
   });
 
-  it("opens the details for a diverged branch, which jaunt can't pull", () => {
+  it("opens the details for a diverged branch, which moonlet can't pull", () => {
     expect(chipClick(baseChip(status(1, 3), false))).toBe("details");
   });
 
@@ -59,7 +59,7 @@ describe("popover text", () => {
     expect(aheadText(status(2, 3))).toBe("2 commits that aren't");
   });
 
-  it("says when jaunt last fetched and why", () => {
+  it("says when moonlet last fetched and why", () => {
     const now = 1_000_000_000;
     expect(fetchedLabel({ fetchedAt: now - 5_000, reason: "after PR #128 merged", fetchError: null }, now)).toBe("fetched just now · after PR #128 merged");
     expect(fetchedLabel({ fetchedAt: now - 7 * 60_000, reason: null, fetchError: null }, now)).toBe("fetched 7 min ago");
@@ -77,11 +77,11 @@ describe("popover text", () => {
 
 describe("rebaseCommand", () => {
   it("rebases in the work tree that has the branch checked out", () => {
-    expect(rebaseCommand(status(1, 3), "/src/jaunt")).toBe("git -C /src/jaunt pull --rebase");
+    expect(rebaseCommand(status(1, 3), "/src/moonlet")).toBe("git -C /src/moonlet pull --rebase");
   });
 
   it("switches to the branch first when no work tree has it", () => {
-    expect(rebaseCommand({ ...status(1, 3), checkout: null }, "/src/jaunt")).toBe("git -C /src/jaunt switch main && git -C /src/jaunt pull --rebase");
+    expect(rebaseCommand({ ...status(1, 3), checkout: null }, "/src/moonlet")).toBe("git -C /src/moonlet switch main && git -C /src/moonlet pull --rebase");
   });
 
   it("quotes a path the shell would split", () => {
@@ -92,7 +92,7 @@ describe("rebaseCommand", () => {
 describe("justMerged", () => {
   const pr = (state: string) => ({ number: 128, state });
 
-  it("fires when a PR jaunt saw open turns merged", () => {
+  it("fires when a PR moonlet saw open turns merged", () => {
     expect(justMerged(pr("open"), pr("merged"))).toBe(true);
     expect(justMerged(null, pr("merged"))).toBe(true);
   });

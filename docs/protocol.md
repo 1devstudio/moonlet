@@ -1,11 +1,11 @@
-# jaunt wire protocol
+# moonlet wire protocol
 
-`jauntd` speaks one protocol to every client: the desktop app, the `jaunt` CLI, and remote connections tunnelled through `ssh host jauntd proxy`. The Rust source of truth is `crates/jaunt-proto`.
+`moonletd` speaks one protocol to every client: the desktop app, the `moonlet` CLI, and remote connections tunnelled through `ssh host moonletd proxy`. The Rust source of truth is `crates/moonlet-proto`.
 
 ## Transport
 
 - **Local:** Unix socket at `~/.jaunt/run/jauntd.sock`. The directory is `0700` and the socket is `0600`. The daemon also checks that the peer's uid matches its own.
-- **Remote:** `ssh <host> ~/.jaunt/bin/jauntd proxy` bridges stdio to the remote daemon's socket and starts that daemon if it is not running. The daemon outlives the SSH connection.
+- **Remote:** `ssh <host> ~/.jaunt/bin/moonletd proxy` bridges stdio to the remote daemon's socket and starts that daemon if it is not running. The daemon outlives the SSH connection.
 
 ## Framing
 
@@ -35,11 +35,11 @@ Every JSON message is an object with a `t` tag:
 
 ## Methods
 
-Method names and parameter structs are in `crates/jaunt-proto/src/methods.rs`; result types are in `types.rs`. Groups:
+Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`; result types are in `types.rs`. Groups:
 
 - `daemon.*`: info, shutdown, upgrade.
 - `terminal.*`: create, list, attach, detach, resize, kill, write, search.
-- `agent.report`: state reports from agent hooks (`jaunt hook …`).
+- `agent.report`: state reports from agent hooks (`moonlet hook …`).
 - `workspace.*`, `project.*` and `session.*`: workspaces, projects, worktree sessions, scripts.
 - `chat.*`: state, send, permission, interrupt, settings (model, effort, permission mode) for structured agents (X6, X7). Events: `chat.item`, `chat.state`.
 - `git.*` and `gh.*`: status, diffs, staging, commit, log, PRs, issues.

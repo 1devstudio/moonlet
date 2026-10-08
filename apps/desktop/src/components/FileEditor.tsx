@@ -142,7 +142,7 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
           <Empty title="Binary file">{(file.size / 1024).toFixed(1)} KB</Empty>
         ) : file && language ? (
           <Editor
-            theme="jaunt"
+            theme="moonlet"
             language={language}
             defaultValue={file.content}
             onMount={onMount}

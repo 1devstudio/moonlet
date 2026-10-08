@@ -6,8 +6,8 @@
 
 ## Behaviour and acceptance criteria
 
-- [x] The `bundle` script produces `jaunt.app` with `jauntd` and `jaunt` in `Contents/MacOS` and remote helpers in `Resources/remote`.
-- [x] An app update never kills sessions: a version change triggers `jauntd upgrade` ([S3](S3-live-upgrade.md)).
+- [x] The `bundle` script produces `moonlet.app` with `moonletd` and `moonlet` in `Contents/MacOS` and remote helpers in `Resources/remote`.
+- [x] An app update never kills sessions: a version change triggers `moonletd upgrade` ([S3](S3-live-upgrade.md)).
 - [ ] Developer ID signing of the app and nested binaries (hardened runtime).
 - [ ] Notarization and stapling.
 - [ ] `tauri-plugin-updater` with a signed update feed.

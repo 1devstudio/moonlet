@@ -1,4 +1,4 @@
-import { Thinking } from "@jaunt/ds";
+import { Thinking } from "@moonlet/ds";
 
 export const Done = () => (
   <div className="bg-bg p-3" style={{ width: 480 }}>

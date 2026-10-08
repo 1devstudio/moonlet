@@ -10,6 +10,6 @@ Style inputs with the exported `inputCls` class string.
 
 ```tsx
 <Field label="Branch name" hint="Created from main">
-  <input className={inputCls} defaultValue="jaunt/fix-login" />
+  <input className={inputCls} defaultValue="moonlet/fix-login" />
 </Field>
 ```

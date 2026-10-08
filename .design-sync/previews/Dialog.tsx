@@ -1,4 +1,4 @@
-import { Button, Dialog, Field, inputCls } from "@jaunt/ds";
+import { Button, Dialog, Field, inputCls } from "@moonlet/ds";
 
 export const CommitChanges = () => (
   <div className="bg-bg" style={{ width: 640, height: 420 }}>

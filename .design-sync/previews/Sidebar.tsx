@@ -1,9 +1,9 @@
-import { JauntPreview, Sidebar } from "@jaunt/ds";
+import { MoonletPreview, Sidebar } from "@moonlet/ds";
 
 export const Default = () => (
-  <JauntPreview>
+  <MoonletPreview>
     <div className="overflow-hidden bg-panel" style={{ width: 280, height: 640 }}>
       <Sidebar />
     </div>
-  </JauntPreview>
+  </MoonletPreview>
 );

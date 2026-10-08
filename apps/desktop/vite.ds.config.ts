@@ -1,4 +1,4 @@
-// Library build of jaunt's design system (src/ds) for Claude Design sync.
+// Library build of moonlet's design system (src/ds) for Claude Design sync.
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
