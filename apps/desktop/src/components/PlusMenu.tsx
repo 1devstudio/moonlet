@@ -1,6 +1,6 @@
 import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Bot, ChevronRight, FileText, Plus, Terminal } from "lucide-react";
+import { Bot, ChevronRight, FileText, FolderPlus, Plus, Terminal } from "lucide-react";
 import type { NamedItem } from "../lib/protocol";
 import { type PlusEntry, plusEntries } from "../lib/plusMenu";
 import { cx } from "./ui";
@@ -39,13 +39,14 @@ function Row({ icon, label, active, trailing, controls, onEnter, onClick }: { ic
 const chevron = <ChevronRight size={14} className="text-muted" />;
 
 /**
- * The `+` beside the chat input (X29): attach files, and in a session the
+ * The `+` beside the chat input (X29): attach files, add a directory, and in a session the
  * agent's slash commands and subagents. Submenus open on hover, beside the
  * menu, the way the design lays them out.
  */
 export function PlusMenu({
   variant,
   onAttach,
+  onAddDir,
   commands = [],
   onCommand,
   agents = [],
@@ -53,6 +54,7 @@ export function PlusMenu({
 }: {
   variant: "chat" | "composer";
   onAttach: () => void;
+  onAddDir: () => void;
   commands?: string[];
   onCommand?: (name: string) => void;
   agents?: NamedItem[];
@@ -109,6 +111,8 @@ export function PlusMenu({
     switch (entry) {
       case "attach":
         return <Row key={entry} icon={<FileText size={15} />} label="Attach files or images" trailing={<Keys keys={["⌘", "U"]} />} onEnter={() => setSub(null)} onClick={choose(onAttach)} />;
+      case "add-dir":
+        return <Row key={entry} icon={<FolderPlus size={15} />} label="Add directory" onEnter={() => setSub(null)} onClick={choose(onAddDir)} />;
       case "commands":
         return <Row key={entry} icon={<Terminal size={15} />} label="Slash commands" active={sub === entry} controls={`${ids}-${entry}`} trailing={chevron} onEnter={() => setSub(entry)} onClick={() => setSub(entry)} />;
       case "agents":

@@ -2,6 +2,7 @@
 //! sessions; it connects to daemons, relays RPCs and events, and streams
 //! PTY output to the webview over a binary channel.
 
+mod attach;
 mod hosts;
 mod remote;
 mod webview_data;
@@ -77,6 +78,16 @@ fn send_input(
     data: String,
 ) -> Result<(), RpcError> {
     hosts.get(&host)?.input(session, data.into_bytes())
+}
+
+/// The bytes of an image the user picked to attach (X29).
+#[tauri::command]
+async fn read_image(path: String) -> Result<tauri::ipc::Response, RpcError> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || attach::read_image(&path))
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
@@ -335,6 +346,7 @@ pub fn run() {
             rpc,
             send_input,
             ssh_hosts,
+            read_image,
             remote_install,
             open_targets,
             open_in,
