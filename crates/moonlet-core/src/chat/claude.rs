@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatImage, ChatState, NamedItem, PermissionAsk};
+use moonlet_proto::types::{ChatImage, ChatState, McpServer, NamedItem, PermissionAsk};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
@@ -28,6 +28,11 @@ impl Claude {
         format!("{prefix}-{}", self.seq)
     }
 
+    fn control(&mut self, prefix: &str, request: Value) -> Out {
+        let id = self.next_id(prefix);
+        Out::Write(json!({"type": "control_request", "request_id": id, "request": request}).to_string())
+    }
+
     fn user_line(text: &str, images: &[ChatImage]) -> String {
         let mut content: Vec<Value> = if text.is_empty() { vec![] } else { vec![json!({"type": "text", "text": text})] };
         content.extend(images.iter().map(|i| json!({"type": "image", "source": {"type": "base64", "media_type": i.media_type, "data": i.data}})));
@@ -38,6 +43,29 @@ impl Claude {
         })
         .to_string()
     }
+}
+
+/// One row of Claude's `mcp_status` reply (X29).
+fn mcp_server(v: &Value) -> Option<McpServer> {
+    let cfg = &v["config"];
+    let kind = cfg["type"].as_str().unwrap_or(if cfg.get("command").is_some() { "stdio" } else { "http" });
+    let endpoint = match cfg["url"].as_str() {
+        Some(u) => Some(u.to_string()),
+        None => cfg["command"].as_str().map(|c| {
+            let args = cfg["args"].as_array().into_iter().flatten().filter_map(Value::as_str);
+            std::iter::once(c).chain(args).collect::<Vec<_>>().join(" ")
+        }),
+    };
+    Some(McpServer {
+        name: v["name"].as_str()?.to_string(),
+        status: v["status"].as_str().unwrap_or("pending").to_string(),
+        transport: if kind == "claudeai-proxy" { "claude.ai".into() } else { kind.to_string() },
+        endpoint,
+        scope: v["scope"].as_str().map(String::from),
+        error: v["error"].as_str().map(String::from),
+        tools: v["tools"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str().map(String::from)).collect(),
+        auth_url: None,
+    })
 }
 
 fn result_text(content: &Value) -> String {
@@ -236,7 +264,14 @@ impl Adapter for Claude {
             "control_response" => {
                 let resp = &v["response"];
                 let rid = resp["request_id"].as_str().unwrap_or_default();
-                if rid.starts_with("init-") && resp["subtype"] == "success" {
+                if rid.starts_with("mcp-status-") && resp["subtype"] == "success" {
+                    let rows = resp["response"]["mcpServers"].as_array().into_iter().flatten().filter_map(mcp_server).collect();
+                    st.mcp_servers = Some(rows);
+                    out.push(Out::State);
+                } else if rid.starts_with("mcp-reconnect-") {
+                    // Connected or not, the status shows how it went.
+                    out.push(self.control("mcp-status", json!({"subtype": "mcp_status"})));
+                } else if rid.starts_with("init-") && resp["subtype"] == "success" {
                     let r = &resp["response"];
                     if let Some(cmds) = r["commands"].as_array() {
                         st.slash_commands = cmds.iter().filter_map(|c| c["name"].as_str().map(String::from)).collect();
@@ -366,6 +401,14 @@ impl Adapter for Claude {
         out
     }
 
+    fn mcp(&mut self, action: &str, server: Option<&str>, _st: &mut ChatState) -> Vec<Out> {
+        match (action, server) {
+            ("refresh", _) => vec![self.control("mcp-status", json!({"subtype": "mcp_status"}))],
+            ("reconnect", Some(name)) => vec![self.control("mcp-reconnect", json!({"subtype": "mcp_reconnect", "serverName": name}))],
+            _ => vec![],
+        }
+    }
+
     fn interrupt(&mut self, st: &mut ChatState) -> Vec<Out> {
         let req = json!({"type": "control_request", "request_id": self.next_id("interrupt"), "request": {"subtype": "interrupt"}});
         let mut out = Vec::new();
@@ -387,6 +430,7 @@ impl Adapter for Claude {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moonlet_proto::types::McpServer;
 
     fn replay(fixture: &str, a: &mut Claude, st: &mut ChatState) -> Vec<Out> {
         fixture.lines().flat_map(|l| a.on_line(l, st)).collect()
@@ -426,6 +470,58 @@ mod tests {
             ])
         );
         assert_eq!(st.items.last().unwrap().text, "What is wrong here?\n[image: shot.png]");
+    }
+
+    /// Captured from Claude Code 2.1.292 (`mcp_status`, trimmed: one
+    /// claude.ai connector of each state, and `--mcp-config` servers).
+    const MCP_STATUS_REPLY: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"mcp-status-1","response":{"mcpServers":[{"name":"claude.ai Slack","status":"connected","serverInfo":{"name":"Slack MCP","version":"1.0.0"},"config":{"type":"claudeai-proxy","url":"https://mcp.slack.com/mcp","id":"mcpsrv_01RTuDjFH4dWET4nBWFHSt6k"},"scope":"claudeai","source":"claudeai","tools":[{"name":"slack_send_message","annotations":{"openWorld":true}},{"name":"slack_read_channel","annotations":{}}]},{"name":"claude.ai Linear","status":"needs-auth","config":{"type":"claudeai-proxy","url":"https://mcp.linear.app/mcp","id":"mcpsrv_01X9Cj9u4wAJRmUBaoFV4yFt"},"scope":"claudeai","source":"claudeai","tools":[]},{"name":"broken","status":"failed","error":"ENOENT: no such file or directory, posix_spawn 'stdio'","config":{"type":"stdio","command":"/nonexistent/mcp-server","args":["--stdio"]},"scope":"dynamic","source":"dynamic","tools":[]},{"name":"everything","status":"connected","serverInfo":{"name":"mcp-servers/everything","title":"Everything Reference Server","version":"2.0.0"},"config":{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-everything"]},"scope":"dynamic","source":"dynamic","tools":[{"name":"echo"},{"name":"get-env"}]}]}}}"#;
+
+    fn server(name: &str, status: &str, transport: &str, endpoint: &str, scope: &str, error: Option<&str>, tools: &[&str]) -> McpServer {
+        McpServer {
+            name: name.into(),
+            status: status.into(),
+            transport: transport.into(),
+            endpoint: Some(endpoint.into()),
+            scope: Some(scope.into()),
+            error: error.map(Into::into),
+            tools: tools.iter().map(|t| t.to_string()).collect(),
+            auth_url: None,
+        }
+    }
+
+    #[test]
+    fn refreshing_mcp_servers_asks_for_their_status() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        let outs = a.mcp("refresh", None, &mut st);
+        let w: Vec<Value> = outs.iter().filter_map(|o| if let Out::Write(l) = o { serde_json::from_str(l).ok() } else { None }).collect();
+        assert_eq!(w, [json!({"type": "control_request", "request_id": "mcp-status-1", "request": {"subtype": "mcp_status"}})]);
+        assert_eq!(st.mcp_servers, None, "not known until the agent answers");
+
+        assert!(a.on_line(MCP_STATUS_REPLY, &mut st).contains(&Out::State));
+        assert_eq!(
+            st.mcp_servers.unwrap(),
+            [
+                server("claude.ai Slack", "connected", "claude.ai", "https://mcp.slack.com/mcp", "claudeai", None, &["slack_send_message", "slack_read_channel"]),
+                server("claude.ai Linear", "needs-auth", "claude.ai", "https://mcp.linear.app/mcp", "claudeai", None, &[]),
+                server("broken", "failed", "stdio", "/nonexistent/mcp-server --stdio", "dynamic", Some("ENOENT: no such file or directory, posix_spawn 'stdio'"), &[]),
+                server("everything", "connected", "stdio", "npx -y @modelcontextprotocol/server-everything", "dynamic", None, &["echo", "get-env"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn retrying_a_server_reconnects_it_then_refreshes() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        let outs = a.mcp("reconnect", Some("broken"), &mut st);
+        let w: Vec<Value> = outs.iter().filter_map(|o| if let Out::Write(l) = o { serde_json::from_str(l).ok() } else { None }).collect();
+        assert_eq!(w, [json!({"type": "control_request", "request_id": "mcp-reconnect-1", "request": {"subtype": "mcp_reconnect", "serverName": "broken"}})]);
+        // Captured: a server that still cannot start answers with an error.
+        let failed = r#"{"type":"control_response","response":{"subtype":"error","request_id":"mcp-reconnect-1","error":"ENOENT: no such file or directory, posix_spawn 'stdio'"}}"#;
+        let outs = a.on_line(failed, &mut st);
+        let w: Vec<Value> = outs.iter().filter_map(|o| if let Out::Write(l) = o { serde_json::from_str(l).ok() } else { None }).collect();
+        assert_eq!(w, [json!({"type": "control_request", "request_id": "mcp-status-2", "request": {"subtype": "mcp_status"}})]);
     }
 
     /// Captured from Claude Code 2.1.292 (trimmed): `-p` mode sends no

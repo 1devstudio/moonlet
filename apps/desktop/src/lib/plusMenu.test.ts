@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { canMentionFiles, fileMention, isAttachShortcut, plusEntries, withMention, withSlashCommand } from "./plusMenu";
+import { canMentionFiles, fileMention, isAttachShortcut, mcpCard, mcpSummary, plusEntries, withMention, withSlashCommand } from "./plusMenu";
+import type { McpServer } from "./protocol";
 
 describe("+ menu: slash commands (X29)", () => {
   it("puts the command at the start of an empty input", () => {
@@ -35,11 +36,11 @@ describe("+ menu: subagents (X29)", () => {
 
 describe("+ menu: entries (X29)", () => {
   it("offers files, then the agent's commands and subagents, in a session", () => {
-    expect(plusEntries({ variant: "chat", agents: 2 })).toEqual([["attach", "add-dir"], ["commands", "agents"]]);
+    expect(plusEntries({ variant: "chat", agents: 2 })).toEqual([["attach", "add-dir"], ["commands", "mcp", "agents"]]);
   });
 
   it("hides Subagents when the agent has none", () => {
-    expect(plusEntries({ variant: "chat", agents: 0 })).toEqual([["attach", "add-dir"], ["commands"]]);
+    expect(plusEntries({ variant: "chat", agents: 0 })).toEqual([["attach", "add-dir"], ["commands", "mcp"]]);
   });
 
   it("offers only the file items in the new-session composer", () => {
@@ -77,5 +78,45 @@ describe("+ menu: files on a remote host (X29)", () => {
   it("mentions this Mac's files only in a local session", () => {
     expect(canMentionFiles("local")).toBe(true);
     expect(canMentionFiles("devbox")).toBe(false);
+  });
+});
+
+const mcp = (name: string, status: string, over: Partial<McpServer> = {}): McpServer => ({ name, status, transport: "http", tools: [], ...over });
+
+describe("+ menu: MCP servers (X29)", () => {
+  // The servers Claude Code 2.1.292 reported in a captured session.
+  const servers = [
+    mcp("claude.ai Slack", "connected", { transport: "claude.ai" }),
+    mcp("claude.ai Linear", "needs-auth", { transport: "claude.ai" }),
+    mcp("claude.ai Gmail", "authing", { transport: "claude.ai" }),
+    mcp("broken", "failed", { transport: "stdio" }),
+    mcp("everything", "connected", { transport: "stdio" }),
+  ];
+
+  it("counts connected servers and those waiting for sign-in", () => {
+    expect(mcpSummary(servers)).toEqual({ header: "MCP servers · 2/5", needsAuth: 2 });
+    expect(mcpSummary([])).toEqual({ header: "MCP servers · 0/0", needsAuth: 0 });
+  });
+
+  it("labels each status and picks its dot", () => {
+    const card = (status: string) => mcpCard(mcp("x", status));
+    expect([card("connected"), card("needs-auth"), card("authing"), card("failed"), card("pending"), card("disabled")].map((c) => [c.label, c.glyph])).toEqual([
+      ["Connected", "done"],
+      ["Needs authentication", "blocked"],
+      ["Signing in…", "working"],
+      ["Failed to connect", "error"],
+      ["Starting…", "idle"],
+      ["Disabled", "idle"],
+    ]);
+  });
+
+  it("shows up to six tools and how many more there are", () => {
+    const tools = ["create_issue", "search_code", "get_pull_request", "list_commits", "create_branch", "add_comment", "merge_pr", "list_repos"];
+    expect(mcpCard(mcp("github", "connected", { tools })).tools).toEqual({
+      summary: "8 tools",
+      chips: ["create_issue", "search_code", "get_pull_request", "list_commits", "create_branch", "add_comment", "+2 more"],
+    });
+    expect(mcpCard(mcp("context7", "connected", { tools: ["resolve-library-id"] })).tools).toEqual({ summary: "1 tool", chips: ["resolve-library-id"] });
+    expect(mcpCard(mcp("linear", "needs-auth", { tools: ["list_issues"] })).tools).toBeNull();
   });
 });

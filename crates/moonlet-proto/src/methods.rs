@@ -75,6 +75,7 @@ pub const CHAT_PERMISSION: &str = "chat.permission";
 pub const CHAT_INTERRUPT: &str = "chat.interrupt";
 pub const CHAT_SETTINGS: &str = "chat.settings";
 pub const CHAT_ADD_DIR: &str = "chat.add_dir";
+pub const CHAT_MCP: &str = "chat.mcp";
 pub const EV_CHAT_ITEM: &str = "chat.item";
 pub const EV_CHAT_STATE: &str = "chat.state";
 pub const GH_PRS: &str = "gh.prs";
@@ -554,6 +555,15 @@ pub struct ChatSend {
     /// Images sent with the message (X29).
     #[serde(default)]
     pub images: Vec<crate::types::ChatImage>,
+}
+
+/// Acts on a chat's MCP servers (X29): `refresh` or `reconnect`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMcp {
+    pub id: TerminalId,
+    pub action: String,
+    #[serde(default)]
+    pub server: Option<String>,
 }
 
 /// A directory the agent may work in from the next message on (X29).

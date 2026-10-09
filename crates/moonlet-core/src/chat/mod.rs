@@ -88,6 +88,9 @@ pub trait Adapter: Send {
     fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>, st: &mut ChatState) -> Vec<Out>;
     /// Stop the running turn.
     fn interrupt(&mut self, st: &mut ChatState) -> Vec<Out>;
+    /// MCP servers (X29): `refresh` asks for their status, `reconnect`
+    /// retries `server`. The answer arrives later as a state change.
+    fn mcp(&mut self, action: &str, server: Option<&str>, st: &mut ChatState) -> Vec<Out>;
 }
 
 pub fn adapter_for(agent: &str) -> Option<Box<dyn Adapter>> {
