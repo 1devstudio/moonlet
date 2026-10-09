@@ -67,3 +67,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X25 | File explorer in the Files tab, changed files in the Changes tab | P1 | 3 | implemented (UI unchecked in app) | [X25-file-explorer.md](X25-file-explorer.md) |
 | X26 | Files open as editor tabs, with VS Code syntax colours | P1 | 3 | implemented (UI unchecked in app) | [X26-file-tabs.md](X26-file-tabs.md) |
 | X27 | Move from jaunt to moonlet without losing anything | P1 | 3 | implemented (untried against a real jaunt install) | [X27-moonlet-migration.md](X27-moonlet-migration.md) |
+| X29 | Chat input `+` menu: attachments, commands, subagents and MCP servers | P1 | 3 | draft | [X29-chat-plus-menu-and-mcp.md](X29-chat-plus-menu-and-mcp.md) |

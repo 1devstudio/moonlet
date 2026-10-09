@@ -90,7 +90,14 @@ export interface ChatState {
   turn_started_at?: number | null;
   agent_session?: string | null;
   slash_commands: string[];
+  /** The agent's subagents (X29). */
+  agents?: NamedItem[];
   queued: string[];
+}
+
+export interface NamedItem {
+  name: string;
+  description: string;
 }
 
 export interface Project {

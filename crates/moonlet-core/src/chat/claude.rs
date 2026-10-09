@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatState, PermissionAsk};
+use moonlet_proto::types::{ChatState, NamedItem, PermissionAsk};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, summarize, tool_item, update, upsert};
@@ -227,6 +227,24 @@ impl Adapter for Claude {
                     }
                 }
             }
+            // Replies to our own control requests.
+            "control_response" => {
+                let resp = &v["response"];
+                let rid = resp["request_id"].as_str().unwrap_or_default();
+                if rid.starts_with("init-") && resp["subtype"] == "success" {
+                    let r = &resp["response"];
+                    if let Some(cmds) = r["commands"].as_array() {
+                        st.slash_commands = cmds.iter().filter_map(|c| c["name"].as_str().map(String::from)).collect();
+                    }
+                    if let Some(agents) = r["agents"].as_array() {
+                        st.agents = agents
+                            .iter()
+                            .filter_map(|a| Some(NamedItem { name: a["name"].as_str()?.to_string(), description: a["description"].as_str().unwrap_or_default().to_string() }))
+                            .collect();
+                    }
+                    out.push(Out::State);
+                }
+            }
             "control_request" => {
                 let rid = v["request_id"].as_str().unwrap_or_default().to_string();
                 let req = &v["request"];
@@ -377,6 +395,28 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("--input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio"));
         assert!(joined.contains("--model haiku --effort high --permission-mode plan --resume abc -n Fix it"));
+    }
+
+    /// Captured from Claude Code 2.1.292 (trimmed): `-p` mode sends no
+    /// `system/init` before the first message, so commands and subagents
+    /// come from the reply to `initialize` (X29).
+    const INIT_REPLY: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"init-1","response":{"commands":[{"name":"ask-matt","description":"Ask which skill or flow fits your situation. (user)","argumentHint":""},{"name":"claude-handoff","description":"Hand the current conversation off to a fresh background agent.","argumentHint":"What will the next session be used for?"}],"agents":[{"name":"Plan","description":"Software architect agent for designing implementation plans.","model":"inherit"},{"name":"statusline-setup","description":"Use this agent to configure the user's Claude Code status line setting.","model":"sonnet"}],"output_style":"default","models":[{"value":"haiku","displayName":"Haiku"}],"pid":4242}}}"#;
+
+    #[test]
+    fn the_initialize_reply_gives_commands_and_subagents() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        let outs = a.on_line(INIT_REPLY, &mut st);
+        assert!(outs.contains(&Out::State));
+        assert_eq!(st.slash_commands, ["ask-matt", "claude-handoff"]);
+        assert_eq!(
+            st.agents,
+            [
+                NamedItem { name: "Plan".into(), description: "Software architect agent for designing implementation plans.".into() },
+                NamedItem { name: "statusline-setup".into(), description: "Use this agent to configure the user's Claude Code status line setting.".into() },
+            ]
+        );
     }
 
     #[test]
