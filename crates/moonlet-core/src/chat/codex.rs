@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use moonlet_proto::types::{ChatImage, ChatState, McpServer, PermissionAsk};
 use serde_json::{Value, json};
 
-use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, tool_item, update, upsert, user_text};
+use super::{Adapter, ChatConfig, Out, SignIns, clip, finish_turn, item, tool_item, update, upsert, user_text};
 use crate::paths::now_ms;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -16,6 +16,8 @@ enum Pending {
     Turn,
     /// `mcpServerStatus/list` (X29).
     McpList,
+    /// `mcpServer/oauth/login` (X29).
+    McpLogin,
     Other,
 }
 
@@ -60,6 +62,9 @@ pub struct Codex {
     asks: HashMap<String, (Value, String)>,
     /// The MCP servers were asked for before the thread existed (X29).
     mcp_wanted: bool,
+    /// `mcpServer/oauth/login` requests: request id → server (X29).
+    logins: HashMap<u64, String>,
+    sign_ins: SignIns,
 }
 
 impl Codex {
@@ -234,8 +239,18 @@ impl Adapter for Codex {
             (None, Some(id)) => {
                 let kind = id.as_u64().and_then(|n| self.calls.remove(&n)).unwrap_or(Pending::Other);
                 if kind == Pending::McpList {
-                    let rows = v["result"]["data"].as_array().into_iter().flatten().filter_map(mcp_server).collect();
+                    let mut rows: Vec<McpServer> = v["result"]["data"].as_array().into_iter().flatten().filter_map(mcp_server).collect();
+                    self.sign_ins.merge(&mut rows);
                     st.mcp_servers = Some(rows);
+                    out.push(Out::State);
+                    return out;
+                }
+                if kind == Pending::McpLogin {
+                    let name = id.as_u64().and_then(|n| self.logins.remove(&n)).unwrap_or_default();
+                    match v["result"]["authorizationUrl"].as_str() {
+                        Some(url) => self.sign_ins.page(&name, url, false, st),
+                        None => self.sign_ins.fail(&name, v["error"]["message"].as_str().unwrap_or("Sign-in failed."), st),
+                    }
                     out.push(Out::State);
                     return out;
                 }
@@ -284,7 +299,7 @@ impl Adapter for Codex {
                         out.push(Out::State);
                     }
                     Pending::Turn => self.turn = r["turn"]["id"].as_str().map(String::from).or(self.turn.take()),
-                    Pending::McpList | Pending::Other => {}
+                    Pending::McpList | Pending::McpLogin | Pending::Other => {}
                 }
             }
             // Request from the server.
@@ -328,6 +343,15 @@ impl Adapter for Codex {
                     // A server started, failed or came back: list them again
                     // once the user has looked at them.
                     "mcpServer/startupStatus/updated" if st.mcp_servers.is_some() && self.thread.is_some() => out.push(self.mcp_list()),
+                    "mcpServer/oauthLogin/completed" => {
+                        let name = p["name"].as_str().unwrap_or_default();
+                        if p["success"].as_bool().unwrap_or(false) {
+                            out.push(self.mcp_list());
+                        } else {
+                            self.sign_ins.fail(name, p["error"].as_str().unwrap_or("Sign-in failed."), st);
+                            out.push(Out::State);
+                        }
+                    }
                     "thread/tokenUsage/updated" => {
                         let total = &p["tokenUsage"]["total"];
                         st.input_tokens = total["inputTokens"].as_u64().unwrap_or(st.input_tokens);
@@ -406,10 +430,21 @@ impl Adapter for Codex {
         out
     }
 
-    fn mcp(&mut self, action: &str, _server: Option<&str>, _st: &mut ChatState) -> Vec<Out> {
-        // Codex has no per-server reconnect: retrying lists the servers again.
-        if !matches!(action, "refresh" | "reconnect") {
-            return vec![];
+    fn mcp(&mut self, action: &str, server: Option<&str>, st: &mut ChatState) -> Vec<Out> {
+        match (action, server) {
+            ("auth", Some(name)) if self.thread.is_some() => {
+                let out = self.request(Pending::McpLogin, "mcpServer/oauth/login", json!({"name": name, "threadId": self.thread}));
+                self.logins.insert(self.next, name.to_string());
+                self.sign_ins.start(name, st);
+                return vec![out, Out::State];
+            }
+            ("cancel", Some(name)) => {
+                self.sign_ins.cancel(name, st);
+                return vec![Out::State];
+            }
+            // Codex has no per-server reconnect: retrying lists the servers again.
+            ("refresh" | "reconnect", _) => {}
+            _ => return vec![],
         }
         if self.thread.is_none() {
             self.mcp_wanted = true;
@@ -572,6 +607,57 @@ mod tests {
         feed(&mut a, &mut st, status_reply(w[0]["id"].as_u64().unwrap()));
         let w = writes(&feed(&mut a, &mut st, quiet));
         assert_eq!(w[0]["method"], "mcpServerStatus/list");
+    }
+
+    /// Captured from codex-cli 0.160.0, state and challenge replaced.
+    const LINEAR_LOGIN: &str = "https://mcp.linear.app/authorize?response_type=code&client_id=https%3A%2F%2Fchatgpt.com%2Foauth%2Fcodex%2Fclient.json&state=STATE&code_challenge=CHALLENGE&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A51137%2Fcallback&scope=read+write+openid+email&resource=https%3A%2F%2Fmcp.linear.app%2Fmcp";
+
+    /// A Codex adapter with a thread and the captured servers listed.
+    fn listed() -> (Codex, ChatState) {
+        let mut a = Codex::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        feed(&mut a, &mut st, json!({"id": 1, "result": {}}));
+        feed(&mut a, &mut st, json!({"id": 2, "result": {"thread": {"id": "th"}}}));
+        let w = writes(&a.mcp("refresh", None, &mut st));
+        feed(&mut a, &mut st, status_reply(w[0]["id"].as_u64().unwrap()));
+        (a, st)
+    }
+
+    fn linear(st: &ChatState) -> McpServer {
+        st.mcp_servers.as_ref().unwrap().iter().find(|s| s.name == "linear").unwrap().clone()
+    }
+
+    #[test]
+    fn signing_in_asks_codex_for_the_page_and_relists_when_done() {
+        let (mut a, mut st) = listed();
+        let w = writes(&a.mcp("auth", Some("linear"), &mut st));
+        assert_eq!(w[0]["method"], "mcpServer/oauth/login");
+        assert_eq!(w[0]["params"], json!({"name": "linear", "threadId": "th"}));
+        assert_eq!(linear(&st).status, "authing");
+        feed(&mut a, &mut st, json!({"id": w[0]["id"], "result": {"authorizationUrl": LINEAR_LOGIN}}));
+        assert_eq!(linear(&st).auth_url.as_deref(), Some(LINEAR_LOGIN));
+
+        // Listing again while the user signs in keeps it signing in.
+        let w = writes(&a.mcp("refresh", None, &mut st));
+        feed(&mut a, &mut st, status_reply(w[0]["id"].as_u64().unwrap()));
+        assert_eq!((linear(&st).status.as_str(), linear(&st).auth_url.as_deref()), ("authing", Some(LINEAR_LOGIN)));
+
+        let w = writes(&feed(&mut a, &mut st, json!({"method": "mcpServer/oauthLogin/completed", "params": {"name": "linear", "success": true, "error": null, "threadId": "th"}})));
+        assert_eq!(w[0]["method"], "mcpServerStatus/list");
+        let connected = status_reply(w[0]["id"].as_u64().unwrap()).to_string().replace("authenticationRequired", "connected");
+        a.on_line(&connected, &mut st);
+        assert_eq!((linear(&st).status.as_str(), linear(&st).auth_url.as_deref()), ("connected", None));
+    }
+
+    #[test]
+    fn a_failed_codex_sign_in_shows_its_error() {
+        let (mut a, mut st) = listed();
+        let w = writes(&a.mcp("auth", Some("linear"), &mut st));
+        feed(&mut a, &mut st, json!({"id": w[0]["id"], "result": {"authorizationUrl": LINEAR_LOGIN}}));
+        feed(&mut a, &mut st, json!({"method": "mcpServer/oauthLogin/completed", "params": {"name": "linear", "success": false, "error": "access denied", "threadId": "th"}}));
+        assert_eq!((linear(&st).status.as_str(), linear(&st).error.as_deref()), ("failed", Some("access denied")));
+        assert_eq!(st.status, "idle", "a sign-in is not a turn");
     }
 
     #[test]

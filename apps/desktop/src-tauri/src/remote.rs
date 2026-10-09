@@ -54,6 +54,39 @@ async fn ssh(alias: &str, command: &str, stdin: Option<&[u8]>) -> Result<(i32, S
     ))
 }
 
+/// `ssh` arguments that add (or cancel) a forward of a sign-in callback
+/// port on the host's control connection (X29): the browser on this Mac
+/// returns to `bind:port`, and the agent on the host listens there.
+pub fn forward_args(alias: &str, bind: &str, port: u16, open: bool) -> Result<Vec<String>> {
+    if alias.starts_with('-') {
+        bail!("invalid host: {alias}");
+    }
+    if !matches!(bind, "localhost" | "127.0.0.1") {
+        bail!("only loopback callbacks are forwarded, not {bind}");
+    }
+    if port < 1024 {
+        bail!("port {port} is not forwarded");
+    }
+    let mut args = crate::hosts::ssh_base_args();
+    let spec = format!("{bind}:{port}:{bind}:{port}");
+    args.extend(["-O".into(), if open { "forward" } else { "cancel" }.into(), "-L".into(), spec, alias.into()]);
+    Ok(args)
+}
+
+/// Adds or cancels the forward; the host's connection must be up.
+pub async fn forward(alias: &str, bind: &str, port: u16, open: bool) -> Result<()> {
+    let out = tokio::process::Command::new("ssh")
+        .args(forward_args(alias, bind, port, open)?)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .context("cannot run ssh")?;
+    if !out.status.success() {
+        bail!("ssh {alias}: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
 /// Installed helper version on the host, `None` if it is not installed.
 pub async fn remote_version(alias: &str) -> Result<Option<String>> {
     let (code, out, err) = ssh(
@@ -326,6 +359,24 @@ fn expand_glob(path: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forwards_a_sign_in_callback_port_over_the_control_connection() {
+        let args = forward_args("devbox", "127.0.0.1", 51137, true).unwrap();
+        let tail: Vec<&str> = args.iter().map(String::as_str).skip_while(|a| *a != "-O").collect();
+        assert_eq!(tail, ["-O", "forward", "-L", "127.0.0.1:51137:127.0.0.1:51137", "devbox"]);
+        let args = forward_args("devbox", "localhost", 59910, false).unwrap();
+        let tail: Vec<&str> = args.iter().map(String::as_str).skip_while(|a| *a != "-O").collect();
+        assert_eq!(tail, ["-O", "cancel", "-L", "localhost:59910:localhost:59910", "devbox"]);
+    }
+
+    #[test]
+    fn forwards_only_unprivileged_loopback_ports() {
+        assert!(forward_args("devbox", "127.0.0.1", 22, true).is_err());
+        assert!(forward_args("devbox", "0.0.0.0", 51137, true).is_err());
+        assert!(forward_args("devbox", "evil.example", 51137, true).is_err());
+        assert!(forward_args("-oProxyCommand=x", "localhost", 51137, true).is_err());
+    }
 
     #[test]
     fn triples() {

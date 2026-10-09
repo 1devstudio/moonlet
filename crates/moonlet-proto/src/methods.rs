@@ -557,7 +557,8 @@ pub struct ChatSend {
     pub images: Vec<crate::types::ChatImage>,
 }
 
-/// Acts on a chat's MCP servers (X29): `refresh` or `reconnect`.
+/// Acts on a chat's MCP servers (X29): `refresh`, `reconnect`, `auth` or
+/// `cancel`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMcp {
     pub id: TerminalId,

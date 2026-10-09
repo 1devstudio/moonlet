@@ -90,6 +90,16 @@ async fn read_image(path: String) -> Result<tauri::ipc::Response, RpcError> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// Forwards a sign-in callback port to a remote host while an MCP server
+/// signs in, and removes the forward after (X29).
+#[tauri::command]
+async fn ssh_forward(host: String, bind: String, port: u16, open: bool) -> Result<(), RpcError> {
+    if host == hosts::LOCAL {
+        return Ok(());
+    }
+    remote::forward(&host, &bind, port, open).await.map_err(err)
+}
+
 #[tauri::command]
 fn ssh_hosts() -> Vec<String> {
     remote::ssh_config_hosts()
@@ -347,6 +357,7 @@ pub fn run() {
             send_input,
             ssh_hosts,
             read_image,
+            ssh_forward,
             remote_install,
             open_targets,
             open_in,
