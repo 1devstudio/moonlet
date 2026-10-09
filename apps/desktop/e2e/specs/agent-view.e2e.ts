@@ -74,7 +74,7 @@ describe("agent view", () => {
   it("folds the tool calls into one row and keeps text and thinking visible", async () => {
     await expect($(sel.button("2 tool calls"))).toBeDisplayed();
     await expect(bashRows()).toBeElementsArrayOfSize(0);
-    await expect($(`//button[.//span[normalize-space()="Thinking"]]//span[normalize-space()=${JSON.stringify(THOUGHT)}]`)).toBeDisplayed();
+    await expect($('//button[.//span[normalize-space()="Thinking"]]')).toBeDisplayed();
 
     await $(sel.button("2 tool calls")).click();
     await expect(bashRows()).toBeElementsArrayOfSize(2);
@@ -89,9 +89,15 @@ describe("agent view", () => {
     await expect($(`//pre[normalize-space()=${JSON.stringify("$ echo first echo the-tail-the-row-cuts-off")}]`)).toBeDisplayed();
   });
 
-  it("shows the whole thought when its row is opened", async () => {
-    await $('//button[.//span[normalize-space()="Thinking"]]').click();
-    await expect($(`//div[not(ancestor::button)][normalize-space()=${JSON.stringify(THOUGHT)}]`)).toBeDisplayed();
+  it("shows the whole thought without a click, and folds it to one line on click", async () => {
+    const row = '//button[.//span[normalize-space()="Thinking"]]';
+    const body = `//div[not(ancestor::button)][normalize-space()=${JSON.stringify(THOUGHT)}]`;
+    const preview = `${row}//span[normalize-space()=${JSON.stringify(THOUGHT)}]`;
+    await expect($(body)).toBeDisplayed();
+    await expect($(preview)).not.toBeExisting();
+    await $(row).click();
+    await expect($(body)).not.toBeExisting();
+    await expect($(preview)).toBeDisplayed();
   });
 
   it("shows the response time under the answer and copies it", async () => {
