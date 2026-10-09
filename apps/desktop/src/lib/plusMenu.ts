@@ -5,7 +5,8 @@
  *  one already there, and the caret follows it. */
 export function withSlashCommand(text: string, name: string): { text: string; caret: number } {
   const head = `/${name} `;
-  const rest = text.replace(/^\/\S*\s*/, "");
+  // Only the spaces after the old command go; its line breaks stay.
+  const rest = text.replace(/^\/\S*[ \t]*/, "");
   return { text: head + rest, caret: head.length };
 }
 
@@ -40,4 +41,9 @@ export function fileMention(path: string, root: string): string {
   const prefix = root.endsWith("/") ? root : `${root}/`;
   const rel = path.startsWith(prefix) ? path.slice(prefix.length) : path;
   return /\s/.test(rel) ? `"${rel}"` : rel;
+}
+
+/** Mentions of this Mac's files mean nothing to an agent on another host. */
+export function canMentionFiles(host: string): boolean {
+  return host === "local";
 }

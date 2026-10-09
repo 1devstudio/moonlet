@@ -64,7 +64,7 @@ import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
 import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
-import { fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
+import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
@@ -956,6 +956,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const editor = useRef<EditorHandle>(null);
   // Attached files become @mentions (X29).
   const attach = async () => {
+    if (!canMentionFiles(host)) return toast(`Files on this Mac can't be mentioned in a session on ${host}. Type @ to mention a file there.`);
     const root = info?.cwd ?? "";
     const picked = await openDialog({ multiple: true, directory: false, defaultPath: root || undefined, title: "Attach files or images" });
     const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
