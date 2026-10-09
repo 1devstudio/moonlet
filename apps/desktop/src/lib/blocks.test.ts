@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockActions, blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, commandFromRows, inlineHeader, outputToCopy, pickBlockForAgent, replayedPromptLine, rerunInput, selectStep } from "./terminals";
+import { blockActions, blockAt, blockCopy, blockForAgent, blockHeader, blockLayout, blockRects, commandFromRows, inlineHeader, markTime, outputToCopy, pickBlockForAgent, replayedPromptLine, rerunInput, selectStep, stickyBlock } from "./terminals";
 
 const ctx = { home: "/Users/me", worktree: "/Users/me/src/app", branch: "main" };
 
@@ -297,5 +297,57 @@ describe("re-running a block (T8)", () => {
 
   it("sends nothing for an empty command", () => {
     expect(rerunInput("  ")).toBeNull();
+  });
+});
+
+describe("sticky block header (T8)", () => {
+  // `ls` has its header on row 0 and ends on row 10; `cat log` has its
+  // header on row 12 and ends on row 40.
+  const blocks = [
+    { start: 0, end: 10 },
+    { start: 12, end: 40 },
+  ];
+
+  it("pins the header of the block whose header scrolled above the viewport", () => {
+    expect(stickyBlock(blocks, 20)).toBe(1);
+  });
+
+  it("pins nothing while the block's own header is on screen", () => {
+    expect(stickyBlock(blocks, 12)).toBeNull();
+  });
+
+  it("pins nothing once the top row is the gap after a block", () => {
+    expect(stickyBlock(blocks, 10)).toBeNull();
+    expect(stickyBlock(blocks, 11)).toBeNull();
+  });
+
+  it("pins a running block, whose output is still growing", () => {
+    expect(stickyBlock([{ start: 0, end: 10 }, { start: 12 }], 30)).toBe(1);
+  });
+
+  it("pins nothing for a block without a header row of its own", () => {
+    expect(stickyBlock([{ start: 0, end: 40, inline: true }], 20)).toBeNull();
+  });
+
+  it("pins nothing for a block whose rows were trimmed from the scrollback", () => {
+    expect(stickyBlock([{ start: -1 }, { start: 12, end: 40 }], 5)).toBeNull();
+  });
+});
+
+describe("when a replayed mark came (S2)", () => {
+  const now = 1_000_000;
+
+  it("is its age before now, from the daemon's snapshot", () => {
+    // `OSC 133;C;moonlet_age=9000` and `OSC 133;D;0;moonlet_age=7000`.
+    expect(markTime(["moonlet_age=9000"], true, now)).toBe(991_000);
+    expect(markTime(["0", "moonlet_age=7000"], true, now)).toBe(993_000);
+  });
+
+  it("is now for a live mark", () => {
+    expect(markTime(["0"], false, now)).toBe(now);
+  });
+
+  it("is unknown for a mark replayed by an older daemon, which gives no age", () => {
+    expect(markTime(["0"], true, now)).toBeUndefined();
   });
 });
