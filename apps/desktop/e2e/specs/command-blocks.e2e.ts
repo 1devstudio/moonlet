@@ -157,4 +157,66 @@ describe("command blocks", () => {
     expect(lines("e2e-hover").filter((t) => t.endsWith("e2e-hover") && !t.includes("$ echo")).length).toBeGreaterThan(0);
     expect(lines("```").filter((t) => t.endsWith("```")).length).toBeGreaterThanOrEqual(2);
   });
+
+  it("pins the header of a block whose output fills the screen, with Copy to agent in reach", async () => {
+    // Back to the shell's tab (tabs switch on mousedown).
+    await browser.execute(() => {
+      const tab = document.evaluate('//span[normalize-space()="zsh"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+      tab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    await run("seq 1 300");
+    // The output pushed the block's own header above the viewport.
+    const sticky = $(".moonlet-block-head.sticky");
+    await expect(sticky).toBeDisplayed({ wait: 15_000 });
+    await expect(sticky.$(".place")).toHaveText(/\/worktrees\/e2e-repo\/check-block-headers/);
+    await expect(sticky.$(".duration")).toHaveText(/^\(\d+\.\d{3}s\)$/);
+
+    // The mouse over the pinned header shows the block's actions there.
+    await browser.execute(() => {
+      const r = document.querySelector(".moonlet-block-head.sticky")!.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      document.elementFromPoint(x, y)?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: x, clientY: y }));
+    });
+    const button = $(".moonlet-block-head.sticky.hover .action.agent");
+    await expect(button).toBeDisplayed();
+    await button.click();
+
+    await expect($('//*[@aria-current="true"][.//span[normalize-space()="fake"]]')).toBeDisplayed();
+    await browser.waitUntil(() => rpc<unknown[]>(w, "terminal.search", { id: agentId, query: "$ seq 1 300" }).length > 0, {
+      timeoutMsg: "the pinned block never reached the agent",
+    });
+  });
+
+  it("keeps the blocks, with exit codes and durations, when the app attaches again", async () => {
+    // A reload attaches to the shell as a new window does: from the
+    // daemon's snapshot, without the marks the app saw live.
+    await browser.refresh();
+    await $(sel.sessionRow(SESSION)).click();
+    await browser.execute(() => {
+      const tab = document.evaluate('//span[normalize-space()="zsh"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+      tab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+
+    // `seq 1 300` fills the screen; its header is pinned, with its duration.
+    const sticky = $(".moonlet-block-head.sticky");
+    await expect(sticky).toBeDisplayed({ wait: 15_000 });
+    await expect(sticky.$(".place")).toHaveText(/\/worktrees\/e2e-repo\/check-block-headers/);
+    await expect(sticky.$(".duration")).toHaveText(/^\(\d+\.\d{3}s\)$/);
+
+    // ⌘↑ selects it, and steps back through the earlier blocks to `false`.
+    await browser.waitUntil(async () => (await $(input).isExisting()) && (await $(input).isEnabled()), { timeout: 15_000 });
+    await browser.execute((xp: string) => {
+      const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement | null;
+      el?.focus();
+    }, input);
+    await press("ArrowUp", { metaKey: true });
+    await expect($(sel.text("⌘↵ send `seq 1 300` to the agent · ⇧⌘↵ new agent tab"))).toBeDisplayed();
+    // echo e2e-hover, e2e-sent, e2e-copied, e2e-ok, then false.
+    for (let i = 0; i < 5; i++) await press("ArrowUp", { metaKey: true });
+    await expect($(sel.text("⌘↵ send `false` to the agent · ⇧⌘↵ new agent tab"))).toBeDisplayed();
+    await expect($(".moonlet-block-head.selected .exit")).toHaveText("· exit 1");
+    await press("Escape");
+  });
 });
+

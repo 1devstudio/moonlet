@@ -191,6 +191,34 @@ export function blockAt(blocks: readonly { start: number; end?: number }[], line
   return i < 0 ? null : i;
 }
 
+/** When an OSC 133 mark came, from its parameters after the mark letter
+ * (S2): a mark replayed from the daemon's snapshot carries
+ * `moonlet_age=<ms>`, how long ago the daemon saw it; a live mark came
+ * now; a replayed one without an age (an older daemon) has no time. */
+export function markTime(params: readonly string[], replaying: boolean, now: number): number | undefined {
+  for (const p of params) {
+    const m = /^moonlet_age=(\d+)$/.exec(p);
+    if (m) return now - Number(m[1]);
+  }
+  return replaying ? undefined : now;
+}
+
+/** Index of the block whose header is pinned to the top of the viewport
+ * (T8): the one whose header row scrolled above buffer row `top` while
+ * its rows still reach into the viewport. The newest block may still be
+ * running; a block with its header at the end of the command line, or
+ * whose rows were trimmed from the scrollback, has none to pin. */
+export function stickyBlock(blocks: readonly { start: number; end?: number; inline?: boolean }[], top: number): number | null {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.start >= top) continue;
+    if (b.start < 0 || b.inline) return null;
+    const running = b.end === undefined && i === blocks.length - 1;
+    return running || (b.end !== undefined && b.end > top) ? i : null;
+  }
+  return null;
+}
+
 /** The block selected after ⌘↑ (`-1`) or ⌘↓ (`1`) from `current`, where
  * `null` is the input editor. Only finished blocks can be selected; going
  * down past the newest one returns to the input. */
@@ -342,6 +370,8 @@ export class TermEntry {
   /** Told when a block finishes (the input editor's send hint, T8). */
   onBlockFinished?: (block: CommandBlock) => void;
   private replaying = false;
+  /** The size the last attach asked for, which its snapshot is drawn at. */
+  private snapshotSize: { cols: number; rows: number } | null = null;
   private disposed = false;
   onTitle?: (title: string) => void;
   onFileLink?: FileLinkHandler;
@@ -363,6 +393,10 @@ export class TermEntry {
   /** Block backgrounds drawn over the grid (T8); xterm decorations vanish
    * once their first row leaves the viewport. */
   private backdrop = document.createElement("div");
+  /** The header of the block whose own header scrolled off the top, pinned
+   * there so its actions stay in reach (T8). */
+  private sticky = document.createElement("div");
+  private stuck: CommandBlock | null = null;
 
   constructor(
     readonly host: string,
@@ -399,6 +433,7 @@ export class TermEntry {
     this.term.open(this.el);
     this.backdrop.className = "moonlet-block-backdrop";
     this.term.element?.querySelector(".xterm-screen")?.appendChild(this.backdrop);
+    this.sticky.className = "moonlet-block-head sticky";
 
     // Cmd shortcuts belong to the app; xterm never sees them, so they can
     // never leak into an agent's input (T2). Native copy/paste still work.
@@ -467,9 +502,17 @@ export class TermEntry {
         this.select(null);
         this.blocks = [];
         this.term.reset();
-        // Marks replayed from the snapshot carry no timing.
+        // Replayed marks are timed by their age in the snapshot (S2).
         this.replaying = true;
-        this.term.write(data, () => (this.replaying = false));
+        // The daemon drew the snapshot at the size the attach asked for; the
+        // pane may have been fitted since. Draw it at that size, then fit, so
+        // the rows land where the daemon's marks say (S2).
+        const size = this.snapshotSize;
+        if (size && (size.cols !== this.term.cols || size.rows !== this.term.rows)) this.term.resize(size.cols, size.rows);
+        this.term.write(data, () => {
+          this.replaying = false;
+          this.refit();
+        });
         this.ready = true;
       },
       write: (data) => {
@@ -482,6 +525,7 @@ export class TermEntry {
   async attach() {
     this.ready = false;
     const { cols, rows } = this.term;
+    this.snapshotSize = { cols, rows };
     try {
       await rpc(this.host, M.terminalAttach, { id: this.session, cols, rows });
     } catch (e) {
@@ -537,6 +581,8 @@ export class TermEntry {
   }
 
   private sendResize(cols: number, rows: number) {
+    // Only the snapshot's own size, while it is drawn; the fit after it sends.
+    if (this.replaying) return;
     const key = `${cols}x${rows}`;
     if (key === this.lastSize) return;
     window.clearTimeout(this.resizeTimer);
@@ -572,8 +618,9 @@ export class TermEntry {
       case "B":
         break;
       case "C": {
-        // No open block when the prompt came before we attached (snapshots
-        // carry no marks): the command is on the line above the cursor.
+        // No open block when the prompt came before we attached and the
+        // daemon's snapshot had no marks (an older daemon, S2): the command
+        // is on the line above the cursor.
         let last = this.blocks[this.blocks.length - 1];
         if (!last || last.output) {
           // In Blocks mode the header row sits above the command (T8).
@@ -591,20 +638,13 @@ export class TermEntry {
         if (last) {
           last.output = marker;
           last.cwd = this.cwd;
-          last.node = this.context.nodeVersion;
-          last.changes = this.context.changes;
-          if (this.blockMode) {
-            // The prompt is empty rows for the separator and header (T8).
-            const layout = blockLayout(last.prompt.line, marker.line, (y) => !this.lineText(y).trim());
-            if (layout.header !== null) last.headerAt = this.term.registerMarker(layout.header - marker.line);
-            const rows = [];
-            for (let y = layout.commandFrom; y < marker.line; y++) {
-              const row = this.term.buffer.active.getLine(y);
-              rows.push({ text: row?.translateToString(false) ?? "", wrapped: !!row?.isWrapped });
-            }
-            last.command = commandFromRows(rows);
-          } else last.command = this.lineText(last.prompt.line).replace(/^.*?[$%#❯>]\s/, "").trim();
-          if (!this.replaying) last.startedAt = Date.now();
+          // What a replayed block ran with is unknown; today's would mislead.
+          if (!this.replaying) {
+            last.node = this.context.nodeVersion;
+            last.changes = this.context.changes;
+          }
+          this.layOut(last);
+          last.startedAt = markTime(rest, this.replaying, Date.now());
           if (this.blockMode) this.header(last);
         }
         break;
@@ -614,7 +654,7 @@ export class TermEntry {
           last.end = marker;
           const code = Number(rest[0]);
           last.exit = Number.isFinite(code) ? code : undefined;
-          if (!this.replaying && last.startedAt !== undefined) last.endedAt = Date.now();
+          if (last.startedAt !== undefined) last.endedAt = markTime(rest, this.replaying, Date.now());
           this.decorate(last);
           if (this.blockMode) this.header(last);
           this.onBlockFinished?.(last);
@@ -622,6 +662,31 @@ export class TermEntry {
         break;
     }
     return true;
+  }
+
+  /** A block's command, and in Blocks mode its header row (T8), read from
+   * its rows. Its header is drawn again by the caller. */
+  private layOut(block: CommandBlock) {
+    block.header?.dispose();
+    block.header = undefined;
+    block.headerAt?.dispose();
+    block.headerAt = undefined;
+    const output = block.output?.line ?? -1;
+    if (output < 0 || block.prompt.line < 0) return;
+    if (!this.blockMode) {
+      block.command = this.lineText(block.prompt.line).replace(/^.*?[$%#❯>]\s/, "").trim();
+      return;
+    }
+    // The prompt is empty rows for the separator and header (T8).
+    const layout = blockLayout(block.prompt.line, output, (y) => !this.lineText(y).trim());
+    const buf = this.term.buffer.active;
+    if (layout.header !== null) block.headerAt = this.term.registerMarker(layout.header - (buf.baseY + buf.cursorY));
+    const rows = [];
+    for (let y = layout.commandFrom; y < output; y++) {
+      const row = buf.getLine(y);
+      rows.push({ text: row?.translateToString(false) ?? "", wrapped: !!row?.isWrapped });
+    }
+    block.command = commandFromRows(rows);
   }
 
   private decorate(block: CommandBlock) {
@@ -667,66 +732,72 @@ export class TermEntry {
         el.style.left = "-28px";
         el.style.width = "calc(100% + 40px)";
       }
-      const full = blockHeader(block, this.context);
-      // Inline, only what fits after the command's last row, never over it.
-      const lastRow = block.output ? this.lineText(block.output.line - 1).trimEnd().length : this.term.cols;
-      const h = inline ? inlineHeader(full, this.term.cols - lastRow - 1) : full;
-      const key = JSON.stringify(h);
-      if (el.dataset.key === key) return;
-      el.dataset.key = key;
-      if (!h) {
-        el.replaceChildren();
-        return;
-      }
-      const span = (cls: string, text: string) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
-      // xterm sets the element's `display`, so the layout lives in a row inside.
-      const row = Object.assign(document.createElement("div"), { className: "row" });
-      // A boxed chip, like the input editor's (T8), with its icon.
-      const chip = (kind: keyof typeof CHIP_ICONS, ...text: (string | Node)[]) => {
-        const el = Object.assign(document.createElement("span"), { className: `chip ${kind}`, title: CHIP_TITLES[kind], innerHTML: svg(CHIP_ICONS[kind]) });
-        const label = span("label", "");
-        // The directory is cut from the left, so the end of the path stays.
-        label.append(...(kind === "place" ? [Object.assign(document.createElement("bdi"), { textContent: text.join("") })] : text));
-        el.append(label);
-        return el;
-      };
-      // `5 • +113 -30`, with the line counts in green and red.
-      const changes = (text: string) => text.split(/([+-]\d+)/).map((part) => (part.startsWith("+") ? span("add", part) : /^-\d/.test(part) ? span("del", part) : part));
-      row.append(
-        ...(h.node ? [chip("node", h.node)] : []),
-        ...(h.place ? [chip("place", h.place)] : []),
-        ...(h.branch ? [chip("branch", h.branch)] : []),
-        ...(h.changes ? [chip("changes", ...changes(h.changes))] : []),
-        ...(h.exit ? [span("exit", h.place ? `· ${h.exit}` : h.exit)] : []),
-        ...(h.duration ? [span("duration", h.duration)] : []),
-        ...(h.running ? [span("running", "")] : []),
-      );
-      // Copy to agent, Copy and Re-run, shown on hover or selection (T8).
-      const actions = blockActions(block, inline);
-      if (actions.length) {
-        const bar = Object.assign(document.createElement("span"), { className: "actions" });
-        for (const action of actions) {
-          const button = Object.assign(document.createElement("button"), { className: `action ${action}`, title: ACTION_TITLES[action] });
-          button.dataset.action = action;
-          button.innerHTML = svg(ACTION_ICONS[action]);
-          if (action === "agent") button.append(span("label", "Copy to agent"));
-          // Neither xterm nor the block click handler sees these clicks.
-          for (const type of ["mousedown", "mouseup"]) button.addEventListener(type, (e) => (e.stopPropagation(), e.preventDefault()));
-          button.addEventListener("click", (e) => {
-            e.stopPropagation();
-            this.onBlockAction?.(action, block);
-          });
-          bar.append(button);
-        }
-        row.append(bar);
-      }
-      el.replaceChildren(row);
+      this.fillHeader(el, block, inline);
     });
     block.header = { dispose: () => (sep?.dispose(), d?.dispose()) };
     this.paintBackdrop();
   }
 
+  /** A block's header content: its chips, status and actions (T8). */
+  private fillHeader(el: HTMLElement, block: CommandBlock, inline: boolean) {
+    const full = blockHeader(block, this.context);
+    // Inline, only what fits after the command's last row, never over it.
+    const lastRow = block.output ? this.lineText(block.output.line - 1).trimEnd().length : this.term.cols;
+    const h = inline ? inlineHeader(full, this.term.cols - lastRow - 1) : full;
+    const key = JSON.stringify(h);
+    if (el.dataset.key === key) return;
+    el.dataset.key = key;
+    if (!h) {
+      el.replaceChildren();
+      return;
+    }
+    const span = (cls: string, text: string) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
+    // xterm sets the element's `display`, so the layout lives in a row inside.
+    const row = Object.assign(document.createElement("div"), { className: "row" });
+    // A boxed chip, like the input editor's (T8), with its icon.
+    const chip = (kind: keyof typeof CHIP_ICONS, ...text: (string | Node)[]) => {
+      const el = Object.assign(document.createElement("span"), { className: `chip ${kind}`, title: CHIP_TITLES[kind], innerHTML: svg(CHIP_ICONS[kind]) });
+      const label = span("label", "");
+      // The directory is cut from the left, so the end of the path stays.
+      label.append(...(kind === "place" ? [Object.assign(document.createElement("bdi"), { textContent: text.join("") })] : text));
+      el.append(label);
+      return el;
+    };
+    // `5 • +113 -30`, with the line counts in green and red.
+    const changes = (text: string) => text.split(/([+-]\d+)/).map((part) => (part.startsWith("+") ? span("add", part) : /^-\d/.test(part) ? span("del", part) : part));
+    row.append(
+      ...(h.node ? [chip("node", h.node)] : []),
+      ...(h.place ? [chip("place", h.place)] : []),
+      ...(h.branch ? [chip("branch", h.branch)] : []),
+      ...(h.changes ? [chip("changes", ...changes(h.changes))] : []),
+      ...(h.exit ? [span("exit", h.place ? `· ${h.exit}` : h.exit)] : []),
+      ...(h.duration ? [span("duration", h.duration)] : []),
+      ...(h.running ? [span("running", "")] : []),
+    );
+    // Copy to agent, Copy and Re-run, shown on hover or selection (T8).
+    const actions = blockActions(block, inline);
+    if (actions.length) {
+      const bar = Object.assign(document.createElement("span"), { className: "actions" });
+      for (const action of actions) {
+        const button = Object.assign(document.createElement("button"), { className: `action ${action}`, title: ACTION_TITLES[action] });
+        button.dataset.action = action;
+        button.innerHTML = svg(ACTION_ICONS[action]);
+        if (action === "agent") button.append(span("label", "Copy to agent"));
+        // Neither xterm nor the block click handler sees these clicks.
+        for (const type of ["mousedown", "mouseup"]) button.addEventListener(type, (e) => (e.stopPropagation(), e.preventDefault()));
+        button.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.onBlockAction?.(action, block);
+        });
+        bar.append(button);
+      }
+      row.append(bar);
+    }
+    el.replaceChildren(row);
+  }
+
   private paintBackdrop() {
+    this.paintSticky();
     const screen = this.backdrop.parentElement;
     if (!screen || !this.blockMode || this.term.buffer.active.type === "alternate") {
       this.backdrop.replaceChildren();
@@ -743,6 +814,23 @@ export class TermEntry {
         return el;
       }),
     );
+  }
+
+  /** Pins the header of the block at the top of the viewport (T8). */
+  private paintSticky() {
+    const screen = this.backdrop.parentElement;
+    const on = !!screen && this.blockMode && this.term.buffer.active.type !== "alternate";
+    const i = on ? stickyBlock(this.spans(), this.term.buffer.active.viewportY) : null;
+    const block = i === null ? null : this.blocks[i];
+    // Another block may have the same header text; its actions are its own.
+    if (block !== this.stuck) delete this.sticky.dataset.key;
+    this.stuck = block;
+    if (!block || !screen) return this.sticky.remove();
+    if (this.sticky.parentElement !== screen) screen.appendChild(this.sticky);
+    this.sticky.style.height = `${screen.clientHeight / this.term.rows}px`;
+    this.sticky.classList.toggle("hover", this.hovered === block);
+    this.sticky.classList.toggle("selected", this.selected === block);
+    this.fillHeader(this.sticky, block, false);
   }
 
   /** A directory known only after blocks started (the daemon's record
@@ -767,6 +855,7 @@ export class TermEntry {
       // From the header down; the spacer row above it is the gap between blocks.
       start: b.headerAt && b.headerAt.line >= 0 ? b.headerAt.line : b.prompt.line,
       end: b.end && b.end.line >= 0 && b.prompt.line >= 0 ? b.end.line : undefined,
+      inline: !b.headerAt,
       exit: b.exit,
       selected: b === this.selected,
     }));
@@ -828,6 +917,15 @@ export class TermEntry {
     this.blockMode = on;
     this.term.options.lineHeight = on ? BLOCK_LINE_HEIGHT : LINE_HEIGHT;
     this.refit();
+    // Blocks from before the mode was known (a snapshot replayed before the
+    // terminal's info arrived, as in a new window) get their headers now, or
+    // lose them.
+    for (const b of this.blocks) {
+      if (!b.output) continue;
+      this.layOut(b);
+      if (on) this.header(b);
+    }
+    this.paintBackdrop();
   }
 
   /** Blocks mode hides the terminal's cursor while the editor has the input. */
@@ -883,6 +981,7 @@ export class TermEntry {
     this.hovered?.headerEl?.classList.remove("hover");
     this.hovered = block;
     block?.headerEl?.classList.add("hover");
+    this.sticky.classList.toggle("hover", !!block && this.stuck === block);
   }
 
   /** `$ <command>` and the output, as ⌘C copies a selected block (T8). */
