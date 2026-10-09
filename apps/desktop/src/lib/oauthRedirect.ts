@@ -22,17 +22,16 @@ export function isWebPage(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
-/** Sign-in pages that appeared since the last call; `opened` remembers
- *  them. Only http(s) pages are ever opened. */
-export function pagesToOpen(servers: McpServer[], opened: Set<string>): { name: string; url: string }[] {
+/** The sign-in pages to open: those of servers the user asked to sign in
+ *  from this window (`asked`), once each page arrives. A server leaves
+ *  `asked` when its page is returned. Only http(s) pages are opened. */
+export function pagesToOpen(servers: McpServer[], asked: Set<string>): { name: string; url: string }[] {
   const out: { name: string; url: string }[] = [];
   for (const s of servers) {
     const url = s.status === "authing" ? s.auth_url : null;
-    if (!url || !isWebPage(url)) continue;
-    const key = `${s.name}\n${url}`;
-    if (opened.has(key)) continue;
-    opened.add(key);
-    out.push({ name: s.name, url });
+    if (!asked.has(s.name) || !url) continue;
+    asked.delete(s.name);
+    if (isWebPage(url)) out.push({ name: s.name, url });
   }
   return out;
 }

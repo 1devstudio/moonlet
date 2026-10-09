@@ -1014,9 +1014,10 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     const t = setInterval(() => void mcpCall("refresh"), 3000);
     return () => clearInterval(t);
   }, [signingIn, visible]); // eslint-disable-line react-hooks/exhaustive-deps
-  // A sign-in page opens in the browser once, when it arrives. On a remote
-  // host the browser's return to localhost is forwarded there over SSH.
-  const pagesOpened = useRef(new Set<string>());
+  // A sign-in page opens in the browser when it arrives, only for a server
+  // the user clicked Authenticate on here. On a remote host the browser's
+  // return to localhost is forwarded there over SSH.
+  const asked = useRef(new Set<string>());
   // Copy link before there is a page: the copy waits for it (X29).
   const copyOnly = useRef(new Map<string, (url: string) => void>());
   const forwards = useRef(new Map<string, { bind: string; port: number }>());
@@ -1031,14 +1032,12 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   };
   useEffect(() => {
     if (!servers) return;
-    for (const page of pagesToOpen(servers, pagesOpened.current)) {
-      const copy = copyOnly.current.get(page.name);
-      if (copy) {
-        copyOnly.current.delete(page.name);
-        copy(page.url);
-        continue;
-      }
-      openPage(page.name, page.url).catch(errorToast);
+    for (const page of pagesToOpen(servers, asked.current)) openPage(page.name, page.url).catch(errorToast);
+    for (const [name, copy] of copyOnly.current) {
+      const url = servers.find((s) => s.name === name && s.status === "authing")?.auth_url;
+      if (!url) continue;
+      copyOnly.current.delete(name);
+      copy(url);
     }
     for (const [name, fwd] of forwards.current) {
       if (servers.some((s) => s.name === name && s.status === "authing")) continue;
@@ -1055,7 +1054,10 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       // Signing in already (after Copy link): open its page.
       const s = servers?.find((x) => x.name === name);
       if (s?.status === "authing" && s.auth_url) openPage(name, s.auth_url).catch(errorToast);
-      else void mcpCall("auth", name);
+      else {
+        asked.current.add(name);
+        void mcpCall("auth", name);
+      }
     },
     onCancel: (name: string) => void mcpCall("cancel", name),
     onCopy: (name: string) => {

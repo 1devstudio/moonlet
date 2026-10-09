@@ -50,7 +50,7 @@ The chat input gets the layout of the "MCP Servers Menu" design: the input on to
 
 ### MCP sign-in (stack part 4)
 
-- [x] **Authenticate** calls `chat.mcp_auth`. Claude gets `mcp_authenticate`, Codex `mcpServer/oauth/login`. The reply's sign-in URL is stored on the server, which turns `authing`. The app opens the URL in the default browser once, when it first appears. (`claude.rs`, `codex.rs` tests; `plusMenu.test.ts` for open-once)
+- [x] **Authenticate** calls `chat.mcp_auth`. Claude gets `mcp_authenticate`, Codex `mcpServer/oauth/login`. The reply's sign-in URL is stored on the server, which turns `authing`. When the URL arrives, the app opens it in the default browser, once, and only for a server the user clicked Authenticate on in that window; a sign-in started elsewhere or by Copy link never opens the browser. (`claude.rs`, `codex.rs` tests; `plusMenu.test.ts` for open-once)
 - [x] **Copy link** copies the sign-in URL and reads `Copied` until another server is selected. Before Authenticate has been clicked, Copy link asks for the URL and copies it instead of opening it; the server shows as signing in, with **Open page** to open it later. (`plus-menu.e2e.ts`)
 - [x] While any server is `authing`, the app refreshes the list every 3 seconds. A Claude server whose sign-in completes in claude.ai (no local callback) is reconnected on each refresh until it connects. Codex's `mcpServer/oauthLogin/completed` refreshes at once, and its failure marks the server `failed` with the error. (`claude.rs`, `codex.rs` tests)
 - [x] **Cancel** returns the server to `needs-auth` in moonlet; a late success still shows it connected.
