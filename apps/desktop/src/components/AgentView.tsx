@@ -997,6 +997,14 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     }
     if (read.length) editor.current?.addImages(read);
   };
+  // MCP servers (X29): asked for each time the + menu opens.
+  const [mcpError, setMcpError] = useState<string | null>(null);
+  const mcpCall = (action: string, server?: string) =>
+    rpc(host, M.chatMcp, { id, action, server }).then(
+      () => setMcpError(null),
+      (e) => setMcpError(String(e?.message ?? e)),
+    );
+  const refreshMcp = () => void mcpCall("refresh");
   const addDir = async () => {
     const picked = await openDialog({ directory: true, multiple: false, defaultPath: info?.cwd, title: "Add directory" });
     if (typeof picked === "string") void call(M.chatAddDir, { path: picked });
@@ -1115,6 +1123,8 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               onCommand={(c) => editor.current?.slashCommand(c)}
               agents={st?.agents ?? []}
               onAgent={(a) => editor.current?.mention(`agent-${a}`)}
+              onOpen={refreshMcp}
+              mcp={{ servers: st?.mcp_servers ?? null, error: mcpError, onReconnect: (server) => void mcpCall("reconnect", server) }}
             />
           </div>
           <div className="flex items-center gap-2 whitespace-nowrap">

@@ -46,7 +46,7 @@ The chat input gets the layout of the "MCP Servers Menu" design: the input on to
 - [ ] The submenu header reads `MCP servers · <connected>/<total>`. Rows show a status dot, the name, and a lock for servers that need sign-in. The `MCP servers` item shows a badge with the number of servers that need sign-in, and the `+` shows a yellow dot while that number is above zero. (`plusMenu.test.ts`)
 - [ ] The detail card shows the selected server's status label (`Connected`, `Needs authentication`, `Signing in…`, `Failed to connect`, `Starting…`, `Disabled`), transport, endpoint and scope. Connected servers list up to 6 tool names and `+N more`. (`plusMenu.test.ts`)
 - [ ] A failed server's card shows its error and **Retry**, which reconnects it (Claude `mcp_reconnect`; Codex re-lists the server) and refreshes the list.
-- [ ] Before the agent has answered, the submenu shows `Loading…`; an agent that is not running shows `Start the conversation to see its MCP servers.`
+- [ ] The list is asked for each time the `+` menu opens. Before the agent has answered, the submenu shows `Loading…`. A stopped agent (after a daemon restart) is started to answer; one that cannot start shows `Start the conversation to see its MCP servers.` (`runtime.rs` test)
 
 ### MCP sign-in (stack part 4)
 
@@ -94,7 +94,7 @@ The menu closes on Escape, on a click outside, or after an item is chosen. Hover
 - The forwarded port comes from the URL's `redirect_uri`. Only ports 1024–65535 on `localhost`/`127.0.0.1` are forwarded, only to the session's own host, and the forward binds to the Mac's loopback interface.
 - `read_image` reads only files with an image extension, refuses anything over 5 MB, and is called only with paths the user picked in the native dialog.
 - `chat.add_dir`, `session.create` and `terminal.create` accept only absolute paths of existing directories on the session's host, so an added directory can never reach the agent's command line as a flag. (`runtime.rs` test)
-- A session another agent opens (X22) cannot add directories: they widen what the agent may write, so only the user picks them. (`session.rs` test)
+- A session another agent opens (X22) cannot add directories: they widen what the agent may write, so only the user picks them. (`session.rs` test) Like X22's mode cap this guard trusts the caller's `spawned_by`; the socket is private to the user (S1), and an agent could already run any command as the user.
 
 ## Out of scope
 
