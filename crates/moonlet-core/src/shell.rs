@@ -482,7 +482,8 @@ mod tests {
 
     /// Blocks mode (T8): each command gets two empty rows above it (separator
     /// and header), and the command line is bold while its output is not.
-    async fn blocks_screen(shell: &str) -> Option<crate::term::TermState> {
+    /// Also returns the snapshot a second client gets on attach (S2).
+    async fn blocks_screen(shell: &str) -> Option<(crate::term::TermState, String)> {
         if !Path::new(shell).exists() {
             return None;
         }
@@ -518,10 +519,36 @@ mod tests {
         mgr.write(info.id, b"echo two\n".to_vec()).unwrap();
         out += &read_until(&mut rx, "133;D;0").await;
         out += &read_until(&mut rx, "133;A").await;
+        let (tx2, _rx2) = tokio::sync::mpsc::unbounded_channel();
+        let (_, snapshot) = mgr.attach(info.id, 2, tx2, None).unwrap();
         let _ = mgr.kill(info.id, true);
         let mut term = crate::term::TermState::new(24, 80);
         term.process(out.as_bytes());
-        Some(term)
+        Some((term, String::from_utf8_lossy(&snapshot).into_owned()))
+    }
+
+    /// The text of the line a snapshot writes right after each OSC 133 `C`
+    /// mark, without escape sequences: each command's first output row.
+    fn rows_after_c(snapshot: &str) -> Vec<String> {
+        snapshot
+            .split("\x1b]133;C;")
+            .skip(1)
+            .map(|rest| {
+                let line = &rest[rest.find('\x07').unwrap() + 1..];
+                let line = &line[..line.find("\r\n").unwrap_or(line.len())];
+                let mut text = String::new();
+                let mut chars = line.chars();
+                while let Some(c) = chars.next() {
+                    if c == '\x1b' {
+                        // CSI: up to its final byte.
+                        chars.by_ref().find(|c| c.is_ascii_alphabetic());
+                    } else {
+                        text.push(c);
+                    }
+                }
+                text.trim_end().to_string()
+            })
+            .collect()
     }
 
     fn assert_blocks(shell: &str, term: &crate::term::TermState) {
@@ -540,15 +567,31 @@ mod tests {
 
     #[tokio::test]
     async fn zsh_blocks_mode_gives_each_command_a_header_row_and_bold_command() {
-        if let Some(term) = blocks_screen("/bin/zsh").await {
+        if let Some((term, _)) = blocks_screen("/bin/zsh").await {
             assert_blocks("zsh", &term);
         }
     }
 
     #[tokio::test]
     async fn bash_blocks_mode_gives_each_command_a_header_row_and_bold_command() {
-        if let Some(term) = blocks_screen("/bin/bash").await {
+        if let Some((term, _)) = blocks_screen("/bin/bash").await {
             assert_blocks("bash", &term);
+        }
+    }
+
+    /// S2: a client attaching later gets each block's `C` mark right before
+    /// the command's output, so it rebuilds the blocks.
+    #[tokio::test]
+    async fn zsh_snapshot_puts_each_output_after_its_mark() {
+        if let Some((_, snapshot)) = blocks_screen("/bin/zsh").await {
+            assert_eq!(rows_after_c(&snapshot), vec!["one", "two"], "{snapshot:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn bash_snapshot_puts_each_output_after_its_mark() {
+        if let Some((_, snapshot)) = blocks_screen("/bin/bash").await {
+            assert_eq!(rows_after_c(&snapshot), vec!["one", "two"], "{snapshot:?}");
         }
     }
 
