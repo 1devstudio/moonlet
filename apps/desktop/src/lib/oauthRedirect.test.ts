@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callbackForward, pagesToOpen } from "./oauthRedirect";
+import { callbackForward, isWebPage, pagesToOpen } from "./oauthRedirect";
 import type { McpServer } from "./protocol";
 
 // Sign-in pages captured from Claude Code 2.1.292 and codex-cli 0.160.0.
@@ -40,5 +40,15 @@ describe("opening sign-in pages (X29)", () => {
 
   it("never opens anything but a web page", () => {
     expect(pagesToOpen([server("x", "authing", "file:///etc/passwd"), server("y", "authing", "javascript:alert(1)")], new Set())).toEqual([]);
+  });
+});
+
+describe("which sign-in pages may open (X29)", () => {
+  it("accepts web pages only", () => {
+    expect(isWebPage(CLAUDE_AI)).toBe(true);
+    expect(isWebPage("HTTP://example.test/x")).toBe(true);
+    expect(isWebPage("file:///etc/passwd")).toBe(false);
+    expect(isWebPage("javascript:alert(1)")).toBe(false);
+    expect(isWebPage("vscode://open?x")).toBe(false);
   });
 });

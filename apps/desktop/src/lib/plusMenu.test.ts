@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canMentionFiles, fileMention, isAttachShortcut, mcpCard, mcpSummary, plusEntries, withMention, withSlashCommand } from "./plusMenu";
+import { canMentionFiles, fileMention, isAttachShortcut, mcpCard, mcpErrorText, mcpSummary, plusEntries, withMention, withSlashCommand } from "./plusMenu";
 import type { McpServer } from "./protocol";
 
 describe("+ menu: slash commands (X29)", () => {
@@ -118,5 +118,16 @@ describe("+ menu: MCP servers (X29)", () => {
     });
     expect(mcpCard(mcp("context7", "connected", { tools: ["resolve-library-id"] })).tools).toEqual({ summary: "1 tool", chips: ["resolve-library-id"] });
     expect(mcpCard(mcp("linear", "needs-auth", { tools: ["list_issues"] })).tools).toBeNull();
+  });
+});
+
+describe("+ menu: when the servers cannot be listed (X29)", () => {
+  it("says the daemon is too old for MCP servers", () => {
+    // What a 0.1.12 daemon answers.
+    expect(mcpErrorText("unknown method chat.mcp")).toBe("The moonlet daemon is older than this app. Restart it to see MCP servers.");
+  });
+
+  it("passes on why the agent could not start", () => {
+    expect(mcpErrorText("claude not found on PATH")).toBe("The agent could not start: claude not found on PATH");
   });
 });

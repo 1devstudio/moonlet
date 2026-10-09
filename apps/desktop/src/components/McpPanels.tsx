@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowRight, ChevronRight, Copy, Lock } from "lucide-react";
 import type { McpServer } from "../lib/protocol";
-import { mcpCard, mcpSummary } from "../lib/plusMenu";
+import { mcpCard, mcpErrorText, mcpSummary } from "../lib/plusMenu";
 import { Button, StateGlyph, cx } from "./ui";
 
 export interface McpActions {
@@ -25,7 +25,7 @@ export function McpPanels({ servers, error, ...actions }: McpActions) {
     return (
       <div className={cx(panel, "w-[220px] p-1.5")}>
         <div className="px-2 py-1.5 ui-text-11 text-faint">MCP servers</div>
-        <div className="px-2 pb-1.5 ui-text-12 text-muted">{error ? "Start the conversation to see its MCP servers." : "Loading…"}</div>
+        <div className="px-2 pb-1.5 ui-text-12 text-muted">{error ? mcpErrorText(error) : "Loading…"}</div>
       </div>
     );
   }

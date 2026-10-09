@@ -17,13 +17,18 @@ export function callbackForward(url: string): { bind: "localhost" | "127.0.0.1";
   }
 }
 
+/** Only web pages are opened in the browser, never `file:` or app links. */
+export function isWebPage(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
+
 /** Sign-in pages that appeared since the last call; `opened` remembers
  *  them. Only http(s) pages are ever opened. */
 export function pagesToOpen(servers: McpServer[], opened: Set<string>): { name: string; url: string }[] {
   const out: { name: string; url: string }[] = [];
   for (const s of servers) {
     const url = s.status === "authing" ? s.auth_url : null;
-    if (!url || !/^https?:\/\//i.test(url)) continue;
+    if (!url || !isWebPage(url)) continue;
     const key = `${s.name}\n${url}`;
     if (opened.has(key)) continue;
     opened.add(key);

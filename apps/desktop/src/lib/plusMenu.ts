@@ -77,3 +77,10 @@ export function mcpCard(s: McpServer): { label: string; glyph: AgentState; tools
   if (n > MAX_TOOL_CHIPS) chips.push(`+${n - MAX_TOOL_CHIPS} more`);
   return { label, glyph, tools: { summary: `${n} tool${n === 1 ? "" : "s"}`, chips } };
 }
+
+/** Why the MCP submenu has no servers to show, from the `chat.mcp` error. */
+export function mcpErrorText(message: string): string {
+  // A daemon from before X29 runs on until it is restarted or upgraded.
+  if (/unknown method/i.test(message)) return "The moonlet daemon is older than this app. Restart it to see MCP servers.";
+  return `The agent could not start: ${message}`;
+}
