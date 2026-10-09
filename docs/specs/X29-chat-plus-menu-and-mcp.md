@@ -1,6 +1,6 @@
 # X29 — Chat input `+` menu: attachments, commands, subagents and MCP servers
 
-- **Status:** draft
+- **Status:** implemented (live sign-in, SSH forwarding and the layout unchecked in the app)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** goal 2 (agent-first), journeys J2 and J3
 - **Related:** [X6](X6-structured-agent-view.md) (structured agent view), [X7](X7-agent-permission-mode.md) (permission mode), [X5](X5-workspaces-projects-sessions.md) (new-session composer), [R1](R1-ssh-hosts.md) (SSH hosts)
@@ -24,38 +24,38 @@ The chat input gets the layout of the "MCP Servers Menu" design: the input on to
 
 ### Layout and `+` menu (stack part 1)
 
-- [ ] The footer row is under the input: `+` left, cost and tokens centred, model and effort then permission mode right. While a turn runs the centre shows `Working`, the elapsed time and `esc to stop` instead of the cost; while the agent waits it shows the waiting text. Stop and the More menu stay on the right.
-- [ ] The `+` menu lists `Attach files or images` (hint `⌘U`), `Add directory`, then `Slash commands`, `MCP servers` and `Subagents`, each opening a submenu on hover. (`plusMenu.test.ts`, `plus-menu.e2e.ts`)
-- [ ] `Slash commands` lists the agent's commands; choosing one puts `/<name> ` at the start of the input. An agent without commands shows `No commands`. (`plusMenu.test.ts`, `claude.rs` test)
-- [ ] `Subagents` lists the agent's subagents with their descriptions, from Claude's `initialize` reply; choosing one inserts `@agent-<name> ` at the caret. The item is hidden when the agent has no subagents. (`claude.rs` test, `plusMenu.test.ts`)
-- [ ] `⌘U` in the input opens the attach dialog. (`plusMenu.test.ts` for the key match)
-- [ ] The new-session composer's `+` opens the same menu with `Attach files or images` and `Add directory` only.
+- [x] The footer row is under the input: `+` left, cost and tokens centred, model and effort then permission mode right. While a turn runs the centre shows `Working`, the elapsed time and `esc to stop` instead of the cost; while the agent waits it shows the waiting text. Stop and the More menu stay on the right.
+- [x] The `+` menu lists `Attach files or images` (hint `⌘U`), `Add directory`, then `Slash commands`, `MCP servers` and `Subagents`, each opening a submenu on hover. (`plusMenu.test.ts`, `plus-menu.e2e.ts`)
+- [x] `Slash commands` lists the agent's commands; choosing one puts `/<name> ` at the start of the input. An agent without commands shows `No commands`. (`plusMenu.test.ts`, `claude.rs` test)
+- [x] `Subagents` lists the agent's subagents with their descriptions, from Claude's `initialize` reply; choosing one inserts `@agent-<name> ` at the caret. The item is hidden when the agent has no subagents. (`claude.rs` test, `plusMenu.test.ts`)
+- [x] `⌘U` in the input opens the attach dialog. (`plusMenu.test.ts` for the key match)
+- [x] The new-session composer's `+` opens the same menu with `Attach files or images` and `Add directory` only.
 
 ### Attachments and directories (stack part 2)
 
-- [ ] Attaching a file that is not an image inserts `@<path>`, relative to the session's directory when it is inside it, else absolute. (`attachments.test.ts`)
-- [ ] Attaching a `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` file adds an image chip above the input; the chip's `×` removes it. The app reads the image on the Mac, so it works for remote sessions too. Images over 5 MB and files that are not images are refused with a toast. (`attachments.test.ts`, `src-tauri/src/attach.rs` tests)
-- [ ] Sending with images delivers them to Claude as base64 `image` content blocks after the text, and to Codex as `image` inputs with a `data:` URL. The user's message in the conversation shows `[image: <name>]` lines. (`claude.rs`, `codex.rs` tests)
-- [ ] `Add directory` picks a folder and calls `chat.add_dir`. Claude restarts on the next message with `--add-dir <path>` for every added directory (resuming the conversation); Codex resumes its thread with the directories as extra writable roots. A system line confirms the addition. Adding the same directory twice is a no-op. (`runtime.rs`, `claude.rs`, `codex.rs` tests)
-- [ ] A directory added in the new-session composer shows as a chip and starts the agent with it from the first message. In the composer, attached images are @mentions like other files, because there is no conversation to send them to yet. (`session.rs` test)
+- [x] Attaching a file that is not an image inserts `@<path>`, relative to the session's directory when it is inside it, else absolute. (`attachments.test.ts`)
+- [x] Attaching a `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` file adds an image chip above the input; the chip's `×` removes it. The app reads the image on the Mac, so it works for remote sessions too. Images over 5 MB and files that are not images are refused with a toast. (`attachments.test.ts`, `src-tauri/src/attach.rs` tests)
+- [x] Sending with images delivers them to Claude as base64 `image` content blocks after the text, and to Codex as `image` inputs with a `data:` URL. The user's message in the conversation shows `[image: <name>]` lines. (`claude.rs`, `codex.rs` tests)
+- [x] `Add directory` picks a folder and calls `chat.add_dir`. Claude restarts on the next message with `--add-dir <path>` for every added directory (resuming the conversation); Codex resumes its thread with the directories as extra writable roots. A system line confirms the addition. Adding the same directory twice is a no-op. (`runtime.rs`, `claude.rs`, `codex.rs` tests)
+- [x] A directory added in the new-session composer shows as a chip and starts the agent with it from the first message. In the composer, attached images are @mentions like other files, because there is no conversation to send them to yet. (`session.rs` test)
 
 ### MCP server list (stack part 3)
 
-- [ ] Opening the `MCP servers` submenu asks the agent for its servers: Claude's `mcp_status` control request, Codex's `mcpServerStatus/list`. The reply fills `ChatState.mcp_servers`. (`claude.rs`, `codex.rs` tests with captured replies)
-- [ ] Each server has a status `connected`, `needs-auth`, `authing`, `failed`, `pending` or `disabled`, a transport (`http`, `sse`, `stdio`, `claude.ai`), an endpoint (URL or command), a scope when the agent reports one, an error for failed servers and its tool names. (`claude.rs`, `codex.rs` tests)
-- [ ] The submenu header reads `MCP servers · <connected>/<total>`. Rows show a status dot, the name, and a lock for servers that need sign-in. The `MCP servers` item shows a badge with the number of servers that need sign-in, and the `+` shows a yellow dot while that number is above zero. (`plusMenu.test.ts`)
-- [ ] The detail card shows the selected server's status label (`Connected`, `Needs authentication`, `Signing in…`, `Failed to connect`, `Starting…`, `Disabled`), transport, endpoint and scope. Connected servers list up to 6 tool names and `+N more`. (`plusMenu.test.ts`)
-- [ ] A failed server's card shows its error and **Retry**, which reconnects it (Claude `mcp_reconnect`; Codex re-lists the server) and refreshes the list.
-- [ ] The list is asked for each time the `+` menu opens. Before the agent has answered, the submenu shows `Loading…`. A stopped agent (after a daemon restart) is started to answer; one that cannot start shows `Start the conversation to see its MCP servers.` (`runtime.rs` test)
+- [x] Opening the `MCP servers` submenu asks the agent for its servers: Claude's `mcp_status` control request, Codex's `mcpServerStatus/list`. The reply fills `ChatState.mcp_servers`. (`claude.rs`, `codex.rs` tests with captured replies)
+- [x] Each server has a status `connected`, `needs-auth`, `authing`, `failed`, `pending` or `disabled`, a transport (`http`, `sse`, `stdio`, `claude.ai`), an endpoint (URL or command), a scope when the agent reports one, an error for failed servers and its tool names. (`claude.rs`, `codex.rs` tests)
+- [x] The submenu header reads `MCP servers · <connected>/<total>`. Rows show a status dot, the name, and a lock for servers that need sign-in. The `MCP servers` item shows a badge with the number of servers that need sign-in, and the `+` shows a yellow dot while that number is above zero. (`plusMenu.test.ts`)
+- [x] The detail card shows the selected server's status label (`Connected`, `Needs authentication`, `Signing in…`, `Failed to connect`, `Starting…`, `Disabled`), transport, endpoint and scope. Connected servers list up to 6 tool names and `+N more`. (`plusMenu.test.ts`)
+- [x] A failed server's card shows its error and **Retry**, which reconnects it (Claude `mcp_reconnect`; Codex re-lists the server) and refreshes the list.
+- [x] The list is asked for each time the `+` menu opens. Before the agent has answered, the submenu shows `Loading…`. A stopped agent (after a daemon restart) is started to answer; one that cannot start shows `The agent could not start: <reason>`, and a daemon from before X29 shows `The moonlet daemon is older than this app. Restart it to see MCP servers.` (`runtime.rs` test, `plusMenu.test.ts`)
 
 ### MCP sign-in (stack part 4)
 
-- [ ] **Authenticate** calls `chat.mcp_auth`. Claude gets `mcp_authenticate`, Codex `mcpServer/oauth/login`. The reply's sign-in URL is stored on the server, which turns `authing`. The app opens the URL in the default browser once, when it first appears. (`claude.rs`, `codex.rs` tests; `plusMenu.test.ts` for open-once)
-- [ ] **Copy link** copies the sign-in URL and reads `Copied` until another server is selected. Before Authenticate has been clicked, Copy link first asks for the URL, then copies it.
-- [ ] While any server is `authing`, the app refreshes the list every 3 seconds. A Claude server whose sign-in completes in claude.ai (no local callback) is reconnected on each refresh until it connects. Codex's `mcpServer/oauthLogin/completed` refreshes at once, and its failure marks the server `failed` with the error. (`claude.rs`, `codex.rs` tests)
-- [ ] **Cancel** returns the server to `needs-auth` in moonlet; a late success still shows it connected.
+- [x] **Authenticate** calls `chat.mcp_auth`. Claude gets `mcp_authenticate`, Codex `mcpServer/oauth/login`. The reply's sign-in URL is stored on the server, which turns `authing`. When the URL arrives, the app opens it in the default browser, once, and only for a server the user clicked Authenticate on in that window; a sign-in started elsewhere or by Copy link never opens the browser. (`claude.rs`, `codex.rs` tests; `plusMenu.test.ts` for open-once)
+- [x] **Copy link** copies the sign-in URL and reads `Copied` until another server is selected. Before Authenticate has been clicked, Copy link asks for the URL and copies it instead of opening it; the server shows as signing in, with **Open page** to open it later. (`plus-menu.e2e.ts`)
+- [x] While any server is `authing`, the app refreshes the list every 3 seconds. A Claude server whose sign-in completes in claude.ai (no local callback) is reconnected on each refresh until it connects. Codex's `mcpServer/oauthLogin/completed` refreshes at once, and its failure marks the server `failed` with the error. (`claude.rs`, `codex.rs` tests)
+- [x] **Cancel** returns the server to `needs-auth` in moonlet; a late success still shows it connected.
 - [ ] When the session runs on a remote host and the sign-in URL's `redirect_uri` points at `localhost` or `127.0.0.1` with a port, the app forwards that port from the Mac to the host over the host's SSH connection before opening the browser, and removes the forward when the server leaves `authing`. (`oauthRedirect.test.ts` for the port, `remote.rs` test for the ssh arguments)
-- [ ] Sign-in errors from the agent (`Server not found`, unsupported transport) show in the card as the failed state.
+- [x] Sign-in errors from the agent (`Server not found`, unsupported transport) show in the card as the failed state.
 
 ## UI
 
@@ -90,7 +90,8 @@ The menu closes on Escape, on a click outside, or after an item is chosen. Hover
 
 ## Security considerations
 
-- The sign-in URL comes from the agent. The app opens it only for `http`/`https` URLs, through the system opener, and only after a user click on Authenticate.
+- The sign-in URL comes from the agent. The app opens it only for `http`/`https` URLs (every path, including **Open page**), through the system opener, and only after a user click on Authenticate. (`oauthRedirect.test.ts`)
+- `chat.add_dir` from an agent's own terminal is not refused: like `chat.settings`, which can already switch the agent to Bypass permissions, it relies on the socket being private to the user (S1).
 - The forwarded port comes from the URL's `redirect_uri`. Only ports 1024–65535 on `localhost`/`127.0.0.1` are forwarded, only to the session's own host, and the forward binds to the Mac's loopback interface.
 - `read_image` reads only files with an image extension, refuses anything over 5 MB, and is called only with paths the user picked in the native dialog.
 - `chat.add_dir`, `session.create` and `terminal.create` accept only absolute paths of existing directories on the session's host, so an added directory can never reach the agent's command line as a flag. (`runtime.rs` test)

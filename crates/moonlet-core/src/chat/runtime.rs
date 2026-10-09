@@ -292,9 +292,10 @@ impl ChatManager {
     }
 
     /// MCP servers (X29): `refresh` lists them, `reconnect` retries
-    /// `server`. A stopped agent is started to answer.
+    /// `server`, `auth` signs in to it, `cancel` gives that up. A stopped
+    /// agent is started to answer.
     pub fn mcp(&self, id: TerminalId, action: &str, server: Option<&str>) -> Result<()> {
-        if !matches!(action, "refresh" | "reconnect") {
+        if !matches!(action, "refresh" | "reconnect" | "auth" | "cancel") {
             bail!("unknown MCP action: {action}");
         }
         let chat = self.get(id)?;
