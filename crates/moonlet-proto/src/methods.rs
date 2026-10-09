@@ -23,6 +23,15 @@ pub const TERMINAL_KILL: &str = "terminal.kill";
 pub const TERMINAL_WRITE: &str = "terminal.write";
 pub const TERMINAL_SEARCH: &str = "terminal.search";
 pub const TERMINAL_SET_CLASSIC: &str = "terminal.set_classic";
+/// An agent reads a terminal of its own session, once the user allows (X31).
+pub const TERMINAL_READ: &str = "terminal.read";
+/// The terminals `terminal.read` may read for a caller: `TerminalRef`
+/// of the caller, returns `[TerminalInfo]`.
+pub const TERMINAL_READ_LIST: &str = "terminal.read_list";
+pub const TERMINAL_READ_ANSWER: &str = "terminal.read_answer";
+pub const TERMINAL_READ_REQUESTS: &str = "terminal.read_requests";
+pub const TERMINAL_READ_GRANTS: &str = "terminal.read_grants";
+pub const TERMINAL_READ_GRANT_CLEAR: &str = "terminal.read_grant_clear";
 
 // Agents
 pub const AGENT_REPORT: &str = "agent.report";
@@ -97,6 +106,12 @@ pub const EV_TERMINAL_EXITED: &str = "terminal.exited";
 pub const EV_TERMINAL_REMOVED: &str = "terminal.removed";
 /// Sent to one client whose output queue overflowed: it was detached from
 /// the terminal and must attach again for a fresh snapshot.
+/// A [`ReadRequest`] waits for the user (X31).
+pub const EV_TERMINAL_READ_REQUEST: &str = "terminal.read_request";
+/// A read request was answered, withdrawn or timed out: [`ReadDone`].
+pub const EV_TERMINAL_READ_DONE: &str = "terminal.read_done";
+/// A session's standing permission to read changed: [`ReadGrant`].
+pub const EV_TERMINAL_READ_GRANT: &str = "terminal.read_grant";
 pub const EV_TERMINAL_RESYNC: &str = "terminal.resync";
 pub const EV_AGENT_ATTENTION: &str = "agent.attention";
 pub const EV_PROJECTS_CHANGED: &str = "projects.changed";
@@ -233,6 +248,75 @@ pub struct SearchHit {
     /// Line index counted from the oldest scrollback line.
     pub line: usize,
     pub text: String,
+}
+
+/// `terminal.read` (X31). `caller` is the reading terminal; the daemon
+/// takes its session from it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalRead {
+    pub caller: TerminalId,
+    pub id: TerminalId,
+    #[serde(default)]
+    pub lines: Option<usize>,
+}
+
+/// What `terminal.read` returns: the text the user allowed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReadResult {
+    pub terminal: TerminalId,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+    pub running: bool,
+    /// Earlier output was left out.
+    pub truncated: bool,
+    pub text: String,
+}
+
+/// A read waiting for the user's answer; the `text` is exactly what the
+/// agent gets on Allow.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReadRequest {
+    pub request_id: u64,
+    pub session_id: String,
+    pub caller: TerminalId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub terminal_id: TerminalId,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+    pub lines: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadAnswer {
+    pub request_id: u64,
+    pub allow: bool,
+    /// Allow every later read in the session without asking.
+    #[serde(default)]
+    pub remember: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadDone {
+    pub request_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadGrantClear {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadGrant {
+    pub session_id: String,
+    pub granted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
