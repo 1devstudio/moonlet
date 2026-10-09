@@ -25,21 +25,25 @@ describe("sign-in callbacks on a remote host (X29)", () => {
 describe("opening sign-in pages (X29)", () => {
   const server = (name: string, status: string, auth_url?: string): McpServer => ({ name, status, transport: "http", tools: [], auth_url });
 
-  it("opens each page once, when it first appears", () => {
-    const opened = new Set<string>();
+  it("opens the page of a server the user asked to sign in, once", () => {
+    const asked = new Set(["linear"]);
     const servers = [server("linear", "authing", CLAUDE_LINEAR), server("sentry", "authing"), server("slack", "connected")];
-    expect(pagesToOpen(servers, opened)).toEqual([{ name: "linear", url: CLAUDE_LINEAR }]);
-    expect(pagesToOpen(servers, opened)).toEqual([]);
+    expect(pagesToOpen(servers, asked)).toEqual([{ name: "linear", url: CLAUDE_LINEAR }]);
+    expect(pagesToOpen(servers, asked)).toEqual([]);
   });
 
-  it("opens a new page for a second sign-in to the same server", () => {
-    const opened = new Set<string>();
-    pagesToOpen([server("linear", "authing", CLAUDE_LINEAR)], opened);
-    expect(pagesToOpen([server("linear", "authing", CODEX_LINEAR)], opened)).toEqual([{ name: "linear", url: CODEX_LINEAR }]);
+  it("opens nothing for a sign-in started elsewhere, such as another window", () => {
+    expect(pagesToOpen([server("linear", "authing", CLAUDE_LINEAR)], new Set())).toEqual([]);
+  });
+
+  it("keeps waiting until the page arrives", () => {
+    const asked = new Set(["linear"]);
+    expect(pagesToOpen([server("linear", "authing")], asked)).toEqual([]);
+    expect(pagesToOpen([server("linear", "authing", CODEX_LINEAR)], asked)).toEqual([{ name: "linear", url: CODEX_LINEAR }]);
   });
 
   it("never opens anything but a web page", () => {
-    expect(pagesToOpen([server("x", "authing", "file:///etc/passwd"), server("y", "authing", "javascript:alert(1)")], new Set())).toEqual([]);
+    expect(pagesToOpen([server("x", "authing", "file:///etc/passwd"), server("y", "authing", "javascript:alert(1)")], new Set(["x", "y"]))).toEqual([]);
   });
 });
 
