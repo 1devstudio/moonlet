@@ -74,6 +74,7 @@ pub const CHAT_SEND: &str = "chat.send";
 pub const CHAT_PERMISSION: &str = "chat.permission";
 pub const CHAT_INTERRUPT: &str = "chat.interrupt";
 pub const CHAT_SETTINGS: &str = "chat.settings";
+pub const CHAT_ADD_DIR: &str = "chat.add_dir";
 pub const EV_CHAT_ITEM: &str = "chat.item";
 pub const EV_CHAT_STATE: &str = "chat.state";
 pub const GH_PRS: &str = "gh.prs";
@@ -136,6 +137,9 @@ pub struct TerminalCreate {
     /// Claude permission mode (X7).
     #[serde(default)]
     pub mode: Option<String>,
+    /// Extra directories a structured agent may work in (X29).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_dirs: Vec<String>,
 }
 
 impl Default for TerminalCreate {
@@ -155,6 +159,7 @@ impl Default for TerminalCreate {
             model: None,
             effort: None,
             mode: None,
+            add_dirs: Vec::new(),
         }
     }
 }
@@ -317,6 +322,9 @@ pub struct SessionCreate {
     /// permission mode no more permissive than the parent's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawned_by: Option<TerminalId>,
+    /// Extra directories the agent may work in from the start (X29).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_dirs: Vec<String>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
@@ -543,6 +551,16 @@ pub struct TerminalSetClassic {
 pub struct ChatSend {
     pub id: TerminalId,
     pub text: String,
+    /// Images sent with the message (X29).
+    #[serde(default)]
+    pub images: Vec<crate::types::ChatImage>,
+}
+
+/// A directory the agent may work in from the next message on (X29).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatAddDir {
+    pub id: TerminalId,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

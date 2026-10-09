@@ -3,10 +3,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatState, NamedItem, PermissionAsk};
+use moonlet_proto::types::{ChatImage, ChatState, NamedItem, PermissionAsk};
 use serde_json::{Value, json};
 
-use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, summarize, tool_item, update, upsert};
+use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
 use crate::paths::now_ms;
 
 #[derive(Default)]
@@ -28,10 +28,12 @@ impl Claude {
         format!("{prefix}-{}", self.seq)
     }
 
-    fn user_line(text: &str) -> String {
+    fn user_line(text: &str, images: &[ChatImage]) -> String {
+        let mut content: Vec<Value> = if text.is_empty() { vec![] } else { vec![json!({"type": "text", "text": text})] };
+        content.extend(images.iter().map(|i| json!({"type": "image", "source": {"type": "base64", "media_type": i.media_type, "data": i.data}})));
         json!({
             "type": "user",
-            "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+            "message": {"role": "user", "content": content},
             "parent_tool_use_id": null,
         })
         .to_string()
@@ -81,6 +83,9 @@ impl Adapter for Claude {
         }
         if !cfg.name.is_empty() {
             args.extend(["-n".into(), cfg.name.clone()]);
+        }
+        for d in &cfg.add_dirs {
+            args.extend(["--add-dir".into(), d.clone()]);
         }
         ("claude".into(), args)
     }
@@ -318,9 +323,9 @@ impl Adapter for Claude {
         out
     }
 
-    fn send(&mut self, text: &str, st: &mut ChatState) -> Vec<Out> {
+    fn send(&mut self, text: &str, images: &[ChatImage], st: &mut ChatState) -> Vec<Out> {
         let id = super::local_id("user");
-        let mut out = vec![upsert(st, item(id, "user", text)), Out::Write(Self::user_line(text))];
+        let mut out = vec![upsert(st, item(id, "user", user_text(text, images))), Out::Write(Self::user_line(text, images))];
         if st.status != "working" && st.status != "blocked" {
             st.turn_started_at = Some(now_ms());
         }
@@ -390,11 +395,37 @@ mod tests {
     #[test]
     fn command_line() {
         let a = Claude::default();
-        let (prog, args) = a.command(&ChatConfig { agent: "claude".into(), model: Some("haiku".into()), effort: Some("high".into()), mode: Some("plan".into()), resume: Some("abc".into()), name: "Fix it".into(), cwd: "/r".into() });
+        let (prog, args) = a.command(&ChatConfig { agent: "claude".into(), model: Some("haiku".into()), effort: Some("high".into()), mode: Some("plan".into()), resume: Some("abc".into()), name: "Fix it".into(), cwd: "/r".into(), ..Default::default() });
         assert_eq!(prog, "claude");
         let joined = args.join(" ");
         assert!(joined.contains("--input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio"));
         assert!(joined.contains("--model haiku --effort high --permission-mode plan --resume abc -n Fix it"));
+    }
+
+    #[test]
+    fn added_directories_become_add_dir_flags() {
+        let a = Claude::default();
+        let cfg = ChatConfig { agent: "claude".into(), add_dirs: vec!["/work/shared".into(), "/tmp/notes".into()], cwd: "/r".into(), ..Default::default() };
+        let (_, args) = a.command(&cfg);
+        assert!(args.join(" ").contains("--add-dir /work/shared --add-dir /tmp/notes"), "{args:?}");
+    }
+
+    #[test]
+    fn images_go_after_the_text_as_base64_blocks() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        let img = ChatImage { name: "shot.png".into(), media_type: "image/png".into(), data: "iVBORw0KGgo=".into() };
+        let outs = a.send("What is wrong here?", std::slice::from_ref(&img), &mut st);
+        let line = outs.iter().find_map(|o| if let Out::Write(l) = o { Some(l.clone()) } else { None }).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            v["message"]["content"],
+            json!([
+                {"type": "text", "text": "What is wrong here?"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}},
+            ])
+        );
+        assert_eq!(st.items.last().unwrap().text, "What is wrong here?\n[image: shot.png]");
     }
 
     /// Captured from Claude Code 2.1.292 (trimmed): `-p` mode sends no
@@ -424,7 +455,7 @@ mod tests {
         let mut a = Claude::default();
         let mut st = ChatState::default();
         a.start(&ChatConfig::default(), &mut st);
-        a.send("Run ls", &mut st);
+        a.send("Run ls", &[], &mut st);
         assert_eq!(st.status, "working");
         let outs = replay(include_str!("fixtures/claude-stream.jsonl"), &mut a, &mut st);
         assert!(outs.iter().any(|o| matches!(o, Out::Item(i) if i.partial)), "streaming produced partial updates");
@@ -444,7 +475,7 @@ mod tests {
         let mut a = Claude::default();
         let mut st = ChatState::default();
         a.start(&ChatConfig::default(), &mut st);
-        a.send("Run ls", &mut st);
+        a.send("Run ls", &[], &mut st);
         st.turn_started_at = Some(1_000);
         replay(include_str!("fixtures/claude-stream.jsonl"), &mut a, &mut st);
         let stamped: Vec<_> = st.items.iter().filter(|i| i.turn.is_some()).collect();
@@ -460,14 +491,14 @@ mod tests {
         let done = r#"{"type":"result","subtype":"success","is_error":false}"#;
         let mut a = Claude::default();
         let mut st = ChatState::default();
-        a.send("first", &mut st);
+        a.send("first", &[], &mut st);
         st.turn_started_at = Some(1_000);
         a.on_line(r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"First answer"}]}}"#, &mut st);
         a.on_line(done, &mut st);
         let first = st.items.iter().find(|i| i.kind == "assistant").unwrap().turn;
         assert_eq!(first.map(|t| t.started_at), Some(1_000));
         // The next turn starts in the same millisecond and ends without text.
-        a.send("second", &mut st);
+        a.send("second", &[], &mut st);
         st.turn_started_at = Some(st.items.iter().find(|i| i.kind == "assistant").unwrap().ts);
         a.on_line(done, &mut st);
         assert_eq!(st.status, "done");
@@ -479,7 +510,7 @@ mod tests {
         let answer = r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Partly done"}]}}"#;
         let mut a = Claude::default();
         let mut st = ChatState::default();
-        a.send("go", &mut st);
+        a.send("go", &[], &mut st);
         a.on_line(answer, &mut st);
         a.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true}"#, &mut st);
         assert_eq!(st.status, "error");
@@ -487,7 +518,7 @@ mod tests {
 
         let mut a = Claude::default();
         let mut st = ChatState::default();
-        a.send("go", &mut st);
+        a.send("go", &[], &mut st);
         a.on_line(answer, &mut st);
         a.interrupt(&mut st);
         a.on_line(r#"{"type":"result","subtype":"success","is_error":false}"#, &mut st);

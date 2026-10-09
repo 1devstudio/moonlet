@@ -16,6 +16,7 @@ import {
   FilePen,
   FileText,
   Globe,
+  Image as ImageIcon,
   ListTodo,
   Loader2,
   MessageCircleQuestionMark,
@@ -65,6 +66,8 @@ import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
+import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
+import { invoke } from "@tauri-apps/api/core";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
@@ -613,7 +616,7 @@ function ChatEditor({
   commands: string[];
   working: boolean;
   focused: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, images: ChatImage[]) => void;
   onStop: () => void;
   /** Shift+Tab; absent for agents without a permission mode. */
   onCycleMode?: () => void;
@@ -639,6 +642,7 @@ function ChatEditor({
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState<number | null>(null);
   const [walk, setWalk] = useState<number | null>(null);
+  const [images, setImages] = useState<ChatImage[]>([]);
   const ta = useRef<HTMLTextAreaElement>(null);
   const history = promptHistory();
 
@@ -703,6 +707,10 @@ function ChatEditor({
     return {
       slashCommand: (name) => apply(withSlashCommand(text, name)),
       mention: (...ms) => apply(ms.reduce((r, m) => withMention(r.text, r.caret, m), { text, caret })),
+      addImages: (more) => {
+        setImages((cur) => [...cur, ...more]);
+        ta.current?.focus();
+      },
     };
   });
 
@@ -714,9 +722,10 @@ function ChatEditor({
 
   const send = () => {
     const t = text.trim();
-    if (!t) return;
-    rememberPrompt(t);
-    onSend(t);
+    if (!t && !images.length) return;
+    if (t) rememberPrompt(t);
+    onSend(t, images);
+    setImages([]);
     setText("");
     setCaret(0);
     setWalk(null);
@@ -802,6 +811,19 @@ function ChatEditor({
           ))}
         </div>
       )}
+      {images.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {images.map((img, i) => (
+            <span key={`${img.name}-${i}`} className="flex items-center gap-1.5 rounded-md border border-border-strong bg-panel py-1 pl-2 pr-1 font-mono ui-text-12 text-muted">
+              <ImageIcon size={12} />
+              {img.name}
+              <button title={`Remove ${img.name}`} className="rounded p-0.5 hover:bg-hover hover:text-fg" onClick={() => setImages((cur) => cur.filter((_, j) => j !== i))}>
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="relative flex min-h-[52px] items-center gap-3 rounded-[14px] border border-border-strong bg-panel py-3 pl-4 pr-3.5 focus-within:border-[#3a3a3a]">
         <div className="relative min-w-0 flex-1 ui-text-14 leading-[1.5]">
           <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
@@ -838,6 +860,8 @@ export interface EditorHandle {
   slashCommand: (name: string) => void;
   /** Inserts each mention at the caret, in order. */
   mention: (...mentions: string[]) => void;
+  /** Adds images, sent with the next message. */
+  addImages: (images: ChatImage[]) => void;
 }
 
 // ------------------------------------------------------------ view
@@ -942,7 +966,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     />
   );
 
-  const send = (text: string) => {
+  const send = (text: string, images: ChatImage[]) => {
     stick.current = true;
     if (revising) {
       setRevise(null);
@@ -950,17 +974,32 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       if (answer) void call(M.chatPermission, { ask: revise, ...answer });
       return;
     }
-    void call(M.chatSend, { text });
+    void call(M.chatSend, { text, images });
   };
   const stop = () => void call(M.chatInterrupt, {});
   const editor = useRef<EditorHandle>(null);
-  // Attached files become @mentions (X29).
+  // Attached images go with the next message, other files become @mentions (X29).
   const attach = async () => {
-    if (!canMentionFiles(host)) return toast(`Files on this Mac can't be mentioned in a session on ${host}. Type @ to mention a file there.`);
     const root = info?.cwd ?? "";
     const picked = await openDialog({ multiple: true, directory: false, defaultPath: root || undefined, title: "Attach files or images" });
-    const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
-    if (list.length) editor.current?.mention(...list.map((f) => fileMention(f, root)));
+    const { images, files } = splitAttachments(Array.isArray(picked) ? picked : picked ? [picked] : []);
+    // Images are sent along; mentions of this Mac's files only work locally.
+    if (files.length && !canMentionFiles(host)) toast(`Files on this Mac can't be mentioned in a session on ${host}. Type @ to mention a file there.`);
+    else if (files.length) editor.current?.mention(...files.map((f) => fileMention(f, root)));
+    const read: ChatImage[] = [];
+    for (const img of images) {
+      try {
+        const bytes = await invoke<ArrayBuffer>("read_image", { path: img.path });
+        read.push({ name: img.name, media_type: img.mediaType, data: base64(bytes) });
+      } catch (e) {
+        errorToast(e);
+      }
+    }
+    if (read.length) editor.current?.addImages(read);
+  };
+  const addDir = async () => {
+    const picked = await openDialog({ directory: true, multiple: false, defaultPath: info?.cwd, title: "Add directory" });
+    if (typeof picked === "string") void call(M.chatAddDir, { path: picked });
   };
 
   const agent = info?.agent ?? "claude";
@@ -1071,6 +1110,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
             <PlusMenu
               variant="chat"
               onAttach={() => void attach()}
+              onAddDir={() => void addDir()}
               commands={st?.slash_commands ?? []}
               onCommand={(c) => editor.current?.slashCommand(c)}
               agents={st?.agents ?? []}

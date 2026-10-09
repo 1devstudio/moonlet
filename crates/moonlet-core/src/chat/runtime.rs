@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use moonlet_proto::methods::{self, ChatItemEvent, ChatStateEvent};
-use moonlet_proto::types::{AgentState, ChatState, StateSource, TerminalInfo, TerminalKind};
+use moonlet_proto::types::{AgentState, ChatImage, ChatState, StateSource, TerminalInfo, TerminalKind};
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -31,6 +31,8 @@ pub struct ChatCreate {
     pub title: Option<String>,
     pub session_id: Option<String>,
     pub env: BTreeMap<String, String>,
+    /// Extra directories the agent may work in from the start (X29).
+    pub add_dirs: Vec<String>,
 }
 
 /// What is persisted per chat.
@@ -70,6 +72,16 @@ pub struct ChatManager {
     chats: Mutex<HashMap<TerminalId, Arc<Chat>>>,
     dir: PathBuf,
     me: Weak<ChatManager>,
+}
+
+/// An added directory as the agent gets it: absolute and existing, so it
+/// can never read as one of the agent's flags (X29).
+fn check_dir(path: &str) -> Result<String> {
+    let dir = crate::terminal::expand_home(path);
+    if !dir.is_absolute() || !dir.is_dir() {
+        bail!("not a directory: {path}");
+    }
+    Ok(dir.display().to_string())
 }
 
 fn agent_state(status: &str) -> AgentState {
@@ -124,7 +136,8 @@ impl ChatManager {
         }
         // Only Claude has a permission mode.
         let mode = req.mode.filter(|_| req.agent == "claude");
-        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string() };
+        let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
+        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone() };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
         command.extend(args);
@@ -158,7 +171,7 @@ impl ChatManager {
                 info: info.clone(),
                 cfg,
                 env: req.env,
-                state: ChatState { status: "idle".into(), ..Default::default() },
+                state: ChatState { status: "idle".into(), add_dirs, ..Default::default() },
                 adapter: None,
                 stdin: None,
                 pid: None,
@@ -185,7 +198,7 @@ impl ChatManager {
         Ok(self.get(id)?.inner.lock().unwrap().state.clone())
     }
 
-    pub fn send(&self, id: TerminalId, text: &str) -> Result<()> {
+    pub fn send(&self, id: TerminalId, text: &str, images: &[ChatImage]) -> Result<()> {
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
         if inner.restart || inner.stdin.is_none() {
@@ -198,7 +211,7 @@ impl ChatManager {
             }
         }
         let Inner { adapter, state, .. } = &mut *inner;
-        let outs = adapter.as_mut().context("agent not running")?.send(text, state);
+        let outs = adapter.as_mut().context("agent not running")?.send(text, images, state);
         self.apply(&chat, &mut inner, outs);
         Ok(())
     }
@@ -256,6 +269,25 @@ impl ChatManager {
         }
         inner.restart = true;
         self.apply(&chat, &mut inner, vec![Out::State]);
+        Ok(inner.state.clone())
+    }
+
+    /// A directory the agent may work in (X29). It applies from the next
+    /// message, which restarts the agent with it; adding one twice does
+    /// nothing.
+    pub fn add_dir(&self, id: TerminalId, path: &str) -> Result<ChatState> {
+        let dir = check_dir(path)?;
+        let chat = self.get(id)?;
+        let mut inner = chat.inner.lock().unwrap();
+        if inner.cfg.add_dirs.contains(&dir) {
+            return Ok(inner.state.clone());
+        }
+        inner.cfg.add_dirs.push(dir.clone());
+        inner.state.add_dirs.push(dir.clone());
+        inner.restart = true;
+        let note = format!("Added directory {dir}. The agent can use it from the next message.");
+        let o = upsert(&mut inner.state, item(super::local_id("system"), "system", note));
+        self.apply(&chat, &mut inner, vec![o, Out::State]);
         Ok(inner.state.clone())
     }
 
@@ -651,7 +683,7 @@ done
         assert!(info.chat);
         assert!(terms.list().iter().any(|t| t.id == info.id && t.chat));
         wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        chats.send(info.id, "hi").unwrap();
+        chats.send(info.id, "hi", &[]).unwrap();
         let st = wait_for(&chats, info.id, |s| s.status == "done").await;
         assert_eq!(st.items.iter().find(|i| i.kind == "assistant").unwrap().text, "hello");
         assert_eq!(terms.get(info.id).unwrap().info().agent_state, AgentState::Done);
@@ -668,7 +700,7 @@ done
         assert_eq!(terms2.get(info.id).unwrap().info().agent_state, AgentState::Done);
 
         // The next message resumes the agent and keeps earlier messages intact.
-        chats2.send(info.id, "again").unwrap();
+        chats2.send(info.id, "again", &[]).unwrap();
         let st3 = wait_for(&chats2, info.id, |s| s.status == "done" && s.items.len() > st2.items.len()).await;
         let users: Vec<_> = st3.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect();
         assert_eq!(users, ["hi", "again"]);
@@ -678,6 +710,45 @@ done
         terms.kill(info.id, true).unwrap();
         assert!(!chats.is_chat(info.id));
         assert!(!dir.path().join("chats").join(format!("{}.json", info.id)).exists());
+    }
+
+    #[tokio::test]
+    async fn an_added_directory_restarts_the_agent_with_it() {
+        let (dir, _terms, chats) = setup().await;
+        let extra = dir.path().join("shared-lib");
+        std::fs::create_dir(&extra).unwrap();
+        let extra = extra.display().to_string();
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+
+        assert!(chats.add_dir(info.id, "/no/such/dir").is_err());
+        let st = chats.add_dir(info.id, &extra).unwrap();
+        assert_eq!(st.add_dirs, [extra.clone()]);
+        assert_eq!(st.items.last().unwrap().text, format!("Added directory {extra}. The agent can use it from the next message."));
+        let again = chats.add_dir(info.id, &extra).unwrap();
+        assert_eq!(again.add_dirs, [extra.clone()]);
+        assert_eq!(again.items.len(), st.items.len(), "adding it twice changes nothing");
+
+        chats.send(info.id, "hi", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done").await;
+        let starts = std::fs::read_to_string(dir.path().join("claude-args")).unwrap();
+        let lines: Vec<&str> = starts.lines().collect();
+        assert_eq!(lines.len(), 2, "{starts}");
+        assert!(!lines[0].contains("--add-dir"));
+        assert!(lines[1].contains(&format!("--add-dir {extra}")), "{}", lines[1]);
+        chats.shutdown();
+    }
+
+    #[tokio::test]
+    async fn added_directories_must_be_absolute_directories() {
+        let (dir, _terms, chats) = setup().await;
+        let cwd = dir.path().display().to_string();
+        // Each would reach the agent's command line as a flag.
+        for bad in ["--permission-mode=bypassPermissions", "-n", "relative/dir", "/no/such/dir"] {
+            let r = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), add_dirs: vec![bad.into()], ..Default::default() });
+            assert!(r.is_err(), "{bad} was accepted");
+        }
+        assert!(chats.add_dir(1, "--permission-mode=bypassPermissions").is_err());
     }
 
     #[tokio::test]
@@ -702,13 +773,13 @@ done
         let (dir, terms, chats) = setup().await;
         let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
         wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        chats.send(info.id, "approve the plan").unwrap();
+        chats.send(info.id, "approve the plan", &[]).unwrap();
         wait_for(&chats, info.id, |s| s.status == "done" && s.mode.as_deref() == Some("acceptEdits")).await;
         let last_start = || std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().last().unwrap().to_string();
 
         // A settings change restarts the agent before the next message.
         chats.settings(info.id, Some("opus".into()), None, None).unwrap();
-        chats.send(info.id, "hi").unwrap();
+        chats.send(info.id, "hi", &[]).unwrap();
         wait_for(&chats, info.id, |s| s.status == "done" && s.items.iter().filter(|i| i.kind == "user").count() == 2).await;
         assert!(last_start().contains("--permission-mode acceptEdits"), "{}", last_start());
 
@@ -719,7 +790,7 @@ done
         let chats2 = ChatManager::new(terms2, dir.path().join("chats"));
         chats2.restore();
         assert_eq!(chats2.state(info.id).unwrap().mode.as_deref(), Some("acceptEdits"));
-        chats2.send(info.id, "again").unwrap();
+        chats2.send(info.id, "again", &[]).unwrap();
         wait_for(&chats2, info.id, |s| s.status == "done" && s.items.iter().filter(|i| i.kind == "user").count() == 3).await;
         assert!(last_start().contains("--permission-mode acceptEdits"), "{}", last_start());
         chats2.shutdown();
@@ -730,14 +801,14 @@ done
         let (dir, _terms, chats) = setup().await;
         let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
         wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        chats.send(info.id, "propose a plan").unwrap();
+        chats.send(info.id, "propose a plan", &[]).unwrap();
         wait_for(&chats, info.id, |s| s.status == "blocked").await;
         chats.permission(info.id, "p1", "allow", None, None, Some("auto")).unwrap();
         wait_for(&chats, info.id, |s| s.status == "done" && s.mode.as_deref() == Some("auto")).await;
 
         // The next start keeps Auto.
         chats.settings(info.id, Some("opus".into()), None, None).unwrap();
-        chats.send(info.id, "hi").unwrap();
+        chats.send(info.id, "hi", &[]).unwrap();
         wait_for(&chats, info.id, |s| s.status == "done" && s.items.iter().filter(|i| i.kind == "user").count() == 2).await;
         let last_start = std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().last().unwrap().to_string();
         assert!(last_start.contains("--permission-mode auto"), "{last_start}");
@@ -757,7 +828,7 @@ done
         assert_eq!(err.to_string(), "a mode needs decision allow");
 
         // Any other ask is answered without a mode, or not at all.
-        chats.send(info.id, "run a command").unwrap();
+        chats.send(info.id, "run a command", &[]).unwrap();
         wait_for(&chats, info.id, |s| s.status == "blocked").await;
         let err = chats.permission(info.id, "b1", "allow", None, None, Some("acceptEdits")).unwrap_err();
         assert_eq!(err.to_string(), "only a plan approval can switch the mode");

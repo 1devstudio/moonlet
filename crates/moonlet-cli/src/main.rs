@@ -448,6 +448,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                         pr: None,
                         tui: false,
                         spawned_by: terminal_from_env(),
+                        add_dirs: vec![],
                         cols: 120,
                         rows: 32,
                     },
@@ -530,6 +531,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                     ChatSend {
                         id: agent,
                         text: text.join(" "),
+                        images: vec![],
                     },
                 )
                 .await?;

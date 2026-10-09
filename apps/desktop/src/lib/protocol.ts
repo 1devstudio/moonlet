@@ -92,6 +92,8 @@ export interface ChatState {
   slash_commands: string[];
   /** The agent's subagents (X29). */
   agents?: NamedItem[];
+  /** Directories added with `chat.add_dir` (X29). */
+  add_dirs?: string[];
   queued: string[];
 }
 
@@ -384,6 +386,7 @@ export const M = {
   chatPermission: "chat.permission",
   chatInterrupt: "chat.interrupt",
   chatSettings: "chat.settings",
+  chatAddDir: "chat.add_dir",
 } as const;
 
 export const EV = {
