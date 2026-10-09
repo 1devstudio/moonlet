@@ -7,12 +7,12 @@
 
 ## Summary
 
-A long agent turn is mostly tool calls, which push the agent's answers off screen. X14 folds each run of consecutive tool calls into a single row, such as `› 2 tool calls`, that expands on click. Everything the agent writes stays visible: assistant text always renders in full, and each thinking block keeps its own one-line row. Collapsed is the default; Settings can switch back to one row per call.
+A long agent turn is mostly tool calls, which push the agent's answers off screen. X14 folds each run of consecutive tool calls into a single row, such as `› 2 tool calls`, that expands on click. Everything the agent writes stays visible: assistant text and thinking always render in full. Collapsed is the default; Settings can switch back to one row per call.
 
 ## User journey
 
 1. The user asks the agent for a change. The agent thinks, runs `Bash` twice, then answers.
-2. The conversation shows a `Thinking` row with the first words of the thought, one `› 2 tool calls` row, and the answer in full.
+2. The conversation shows a `Thinking` row with the whole thought under it, one `› 2 tool calls` row, and the answer in full.
 3. The user clicks `› 2 tool calls`. The two `Bash` rows appear below it, and each expands to show its output, as in X6.
 4. In **Settings › Agents › Tool calls in the conversation**, the user picks **Expanded**. Every tool call now has its own row, as before X14.
 
@@ -23,7 +23,7 @@ A long agent turn is mostly tool calls, which push the agent's answers off scree
 - [x] Items that render nothing (assistant text not yet streamed, redacted thinking) do not split a run. (`chat.test.ts`)
 - [x] A group starts closed. Clicking it shows the tool rows, which work as in X6 (expand for output or diff). The group stays open while more calls stream into it. (`agent-view.e2e.ts`)
 - [x] The group row shows the distinct icons of its tools (up to 4) and a status mark: a spinner while any call runs, otherwise the red mark of an error or a denial. No mark when every call succeeded. (`chat.test.ts` for the status)
-- [x] Thinking is a row like a tool call: a brain icon, `Thinking`, and the thought on one line (whitespace collapsed, truncated to the width). Clicking it shows the full thought. While streaming it shows the `Thinking…` shimmer, as before. (`chat.test.ts` for the preview, `agent-view.e2e.ts`)
+- [x] Thinking is a row like a tool call, a brain icon and `Thinking`, with the whole thought under it: it adds context the user should not have to click for. Clicking the row folds the thought to one line (whitespace collapsed, truncated to the width); clicking again shows it in full. While streaming it shows the `Thinking…` shimmer, as before. (`chat.test.ts` for the preview, `agent-view.e2e.ts`)
 - [x] A shell call's row shows only the first line of its command, truncated to the width. Opening the row shows the whole command, every line wrapped, as `$ <command>` above the output. A running call with no output yet can be opened too. (`chat.test.ts` for `toolCommand`, `agent-view.e2e.ts`)
 - [x] With **Expanded**, every tool call has its own row as in X6. Thinking keeps its row in both modes. (`chat.test.ts`, `agent-view.e2e.ts`)
 - [x] The setting defaults to Collapsed, also for users with settings saved by an older version. It applies to open conversations immediately.
@@ -33,7 +33,9 @@ A long agent turn is mostly tool calls, which push the agent's answers off scree
     ⌄ 2 tool calls  >_                      ← group row, open
         >_ Bash  cd /tmp && curl …     ✓
         >_ Bash  rm -f jar3; curl …    ✓
-    🧠 Thinking  That "no connections enabled" error on …
+    🧠 Thinking
+       │ That "no connections enabled" error on the probe means the
+       │ jar was dropped between requests. Keep the cookies.
     Found the error, and it's a one-setting fix. …
 
 Settings › Agents, under the default permission mode:
@@ -62,7 +64,7 @@ None new. Tool output and thinking are still rendered as plain text, as in X6.
 ## Test plan
 
 - Unit (`apps/desktop/src/lib/chat.test.ts`): `chatBlocks` for both views, `toolGroupLabel`, `toolGroupStatus`, `thinkingPreview`, `toolCommand`.
-- E2E (`apps/desktop/e2e/specs/agent-view.e2e.ts`): a fake `claude` replays a turn with thinking, two `Bash` calls and an answer. The first command has two lines. The spec checks the collapsed group, opening it, the whole command in an opened row, the thinking row, and the Expanded setting.
+- E2E (`apps/desktop/e2e/specs/agent-view.e2e.ts`): a fake `claude` replays a turn with thinking, two `Bash` calls and an answer. The first command has two lines. The spec checks the collapsed group, opening it, the whole command in an opened row, the whole thought and folding it, and the Expanded setting.
 
 ## Open questions
 

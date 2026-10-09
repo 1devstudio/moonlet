@@ -319,8 +319,9 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
   );
 }
 
+/** A thought, shown in full: it carries the agent's reasoning. Click to fold it to one line. */
 export function Thinking({ item }: { item: ChatItem }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   if (item.partial) return <div className="chat-shimmer px-2 py-1 ui-text-13">Thinking…</div>;
   if (!item.text.trim()) return null;
   return (
@@ -330,7 +331,7 @@ export function Thinking({ item }: { item: ChatItem }) {
         <span className="shrink-0 font-medium text-fg">Thinking</span>
         {!open && <span className="min-w-0 truncate text-muted">{thinkingPreview(item.text)}</span>}
         <span className="ml-auto flex shrink-0 items-center">
-          {open ? <ChevronDown size={13} className="text-faint" /> : <ChevronRight size={13} className="text-faint opacity-0 group-hover:opacity-100" />}
+          {open ? <ChevronDown size={13} className="text-faint opacity-0 group-hover:opacity-100" /> : <ChevronRight size={13} className="text-faint" />}
         </span>
       </button>
       {open && <div className="selectable mb-2 ml-6 mt-1 whitespace-pre-wrap border-l border-border pl-3 ui-text-13 italic leading-relaxed text-muted">{item.text}</div>}
