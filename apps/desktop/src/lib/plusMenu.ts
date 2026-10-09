@@ -19,12 +19,12 @@ export function withMention(text: string, caret: number, mention: string): { tex
   return { text: head + text.slice(caret), caret: head.length };
 }
 
-export type PlusEntry = "attach" | "commands" | "agents";
+export type PlusEntry = "attach" | "add-dir" | "commands" | "agents";
 
 /** The menu's items in sections (a divider between them). The new-session
  *  composer has no running agent, so it offers the file items only. */
 export function plusEntries({ variant, agents }: { variant: "chat" | "composer"; agents: number }): PlusEntry[][] {
-  const files: PlusEntry[] = ["attach"];
+  const files: PlusEntry[] = ["attach", "add-dir"];
   if (variant === "composer") return [files];
   const agent: PlusEntry[] = agents > 0 ? ["commands", "agents"] : ["commands"];
   return [files, agent];

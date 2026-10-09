@@ -236,6 +236,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   const [branches, setBranches] = useState<string[]>([]);
   const [issue, setIssue] = useState<IssueRef | null>(null);
   const [pr, setPr] = useState<IssueRef | null>(null);
+  const [addDirs, setAddDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
 
@@ -247,6 +248,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
     setPr(null);
     setFrom(null);
     setIssue(null);
+    setAddDirs([]);
   }, [current?.host, current?.project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => ta.current?.focus(), []);
@@ -293,6 +295,12 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
     ta.current?.focus();
   };
 
+  // Directories the agent may work in from its first message (X29).
+  const addDir = async () => {
+    const picked = await openDialog({ directory: true, multiple: false, defaultPath: current?.project.path, title: "Add directory" });
+    if (typeof picked === "string") setAddDirs((d) => (d.includes(picked) ? d : [...d, picked]));
+  };
+
   const create = async () => {
     if (!current || busy) return;
     setBusy(true);
@@ -309,6 +317,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
         existing_branch: !!from?.existing,
         branch: from?.existing ? from.ref : null,
         pr: pr?.number ?? null,
+        add_dirs: choice.agent === "none" ? [] : addDirs,
         cols: 120,
         rows: 32,
       });
@@ -365,7 +374,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
               </button>
             )}
           />
-          {(from || pr || issue) && (
+          {(from || pr || issue || addDirs.length > 0) && (
             <div className="flex min-w-0 items-center gap-1.5">
               {from && (
                 <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
@@ -383,6 +392,14 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
                   </button>
                 </span>
               )}
+              {addDirs.map((d) => (
+                <span key={d} className="flex min-w-0 items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted" title={d}>
+                  <FolderPlus size={12} className="shrink-0" /> <span className="truncate">{d.slice(d.lastIndexOf("/") + 1)}</span>
+                  <button title={`Remove ${d}`} onClick={() => setAddDirs((ds) => ds.filter((x) => x !== d))} className="hover:text-fg">
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
               {issue && (
                 <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
                   #{issue.number}
@@ -453,7 +470,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
           {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 ui-text-14" iconSize={14} align="left" />}
           <span className="ml-auto" />
-          <PlusMenu variant="composer" onAttach={() => void attach()} />
+          <PlusMenu variant="composer" onAttach={() => void attach()} onAddDir={() => void addDir()} />
           <button
             disabled={busy}
             className="flex items-center gap-2 rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg hover:bg-white disabled:opacity-50"

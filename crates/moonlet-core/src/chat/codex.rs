@@ -3,10 +3,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatState, PermissionAsk};
+use moonlet_proto::types::{ChatImage, ChatState, PermissionAsk};
 use serde_json::{Value, json};
 
-use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, tool_item, update, upsert};
+use super::{Adapter, ChatConfig, Out, clip, finish_turn, item, tool_item, update, upsert, user_text};
 use crate::paths::now_ms;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -23,8 +23,8 @@ pub struct Codex {
     calls: HashMap<u64, Pending>,
     thread: Option<String>,
     turn: Option<String>,
-    /// Messages sent before the thread exists.
-    queued: Vec<String>,
+    /// Messages (text and images) sent before the thread exists.
+    queued: Vec<(String, Vec<ChatImage>)>,
     cfg: ChatConfig,
     /// Approval requests: our ask id → JSON-RPC request id and item id.
     asks: HashMap<String, (Value, String)>,
@@ -43,6 +43,10 @@ impl Codex {
         if let Some(m) = &self.cfg.model {
             params["model"] = json!(m);
         }
+        // Added directories (X29) are writable next to the workspace.
+        if !self.cfg.add_dirs.is_empty() {
+            params["config"] = json!({"sandbox_workspace_write.writable_roots": self.cfg.add_dirs});
+        }
         match self.cfg.resume.clone() {
             Some(t) => {
                 params["threadId"] = json!(t);
@@ -53,10 +57,18 @@ impl Codex {
         }
     }
 
-    fn turn_start(&mut self, text: &str) -> Out {
+    /// A message as Codex `UserInput`s: the text, then each image as a
+    /// `data:` URL (X29).
+    fn input(text: &str, images: &[ChatImage]) -> Value {
+        let mut input: Vec<Value> = if text.is_empty() { vec![] } else { vec![json!({"type": "text", "text": text, "text_elements": []})] };
+        input.extend(images.iter().map(|i| json!({"type": "image", "url": format!("data:{};base64,{}", i.media_type, i.data)})));
+        json!(input)
+    }
+
+    fn turn_start(&mut self, text: &str, images: &[ChatImage]) -> Out {
         let mut params = json!({
             "threadId": self.thread.clone().unwrap_or_default(),
-            "input": [{"type": "text", "text": text, "text_elements": []}],
+            "input": Self::input(text, images),
         });
         if let Some(m) = &self.cfg.model {
             params["model"] = json!(m);
@@ -220,8 +232,8 @@ impl Adapter for Codex {
                         if let Some(m) = r["model"].as_str() {
                             st.model.get_or_insert_with(|| m.to_string());
                         }
-                        for text in std::mem::take(&mut self.queued) {
-                            out.push(self.turn_start(&text));
+                        for (text, images) in std::mem::take(&mut self.queued) {
+                            out.push(self.turn_start(&text, &images));
                         }
                         out.push(Out::State);
                     }
@@ -328,16 +340,16 @@ impl Adapter for Codex {
         out
     }
 
-    fn send(&mut self, text: &str, st: &mut ChatState) -> Vec<Out> {
-        let mut out = vec![upsert(st, item(super::local_id("user"), "user", text))];
+    fn send(&mut self, text: &str, images: &[ChatImage], st: &mut ChatState) -> Vec<Out> {
+        let mut out = vec![upsert(st, item(super::local_id("user"), "user", user_text(text, images)))];
         if self.thread.is_none() {
-            self.queued.push(text.to_string());
+            self.queued.push((text.to_string(), images.to_vec()));
         } else if let Some(turn) = self.turn.clone() {
             // A turn is running: steer it with the new input.
-            let params = json!({"threadId": self.thread, "expectedTurnId": turn, "input": [{"type": "text", "text": text, "text_elements": []}]});
+            let params = json!({"threadId": self.thread, "expectedTurnId": turn, "input": Self::input(text, images)});
             out.push(self.request(Pending::Other, "turn/steer", params));
         } else {
-            out.push(self.turn_start(text));
+            out.push(self.turn_start(text, images));
         }
         st.status = "working".into();
         st.turn_started_at.get_or_insert_with(now_ms);
@@ -404,7 +416,7 @@ mod tests {
         let cfg = ChatConfig { agent: "codex".into(), model: Some("gpt-5.5".into()), effort: Some("high".into()), cwd: "/repo".into(), ..Default::default() };
         let w = writes(&a.start(&cfg, &mut st));
         assert_eq!(w[0]["method"], "initialize");
-        assert!(writes(&a.send("hello", &mut st)).is_empty(), "queued");
+        assert!(writes(&a.send("hello", &[], &mut st)).is_empty(), "queued");
         let w = writes(&feed(&mut a, &mut st, json!({"id": 1, "result": {"userAgent": "codex"}})));
         assert_eq!(w[0]["method"], "initialized");
         assert_eq!(w[1]["method"], "thread/start");
@@ -415,6 +427,35 @@ mod tests {
         assert_eq!(w[0]["method"], "turn/start");
         assert_eq!(w[0]["params"]["input"][0]["text"], "hello");
         assert_eq!(w[0]["params"]["effort"], "high");
+    }
+
+    #[test]
+    fn added_directories_are_extra_writable_roots() {
+        let mut a = Codex::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig { add_dirs: vec!["/work/shared".into()], resume: Some("th9".into()), ..Default::default() }, &mut st);
+        let w = writes(&feed(&mut a, &mut st, json!({"id": 1, "result": {}})));
+        assert_eq!(w[1]["method"], "thread/resume");
+        assert_eq!(w[1]["params"]["config"], json!({"sandbox_workspace_write.writable_roots": ["/work/shared"]}));
+    }
+
+    #[test]
+    fn images_are_data_url_inputs_after_the_text() {
+        let mut a = Codex::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        feed(&mut a, &mut st, json!({"id": 1, "result": {}}));
+        feed(&mut a, &mut st, json!({"id": 2, "result": {"thread": {"id": "th"}}}));
+        let img = ChatImage { name: "shot.png".into(), media_type: "image/png".into(), data: "iVBORw0KGgo=".into() };
+        let w = writes(&a.send("What is wrong here?", &[img], &mut st));
+        assert_eq!(
+            w[0]["params"]["input"],
+            json!([
+                {"type": "text", "text": "What is wrong here?", "text_elements": []},
+                {"type": "image", "url": "data:image/png;base64,iVBORw0KGgo="},
+            ])
+        );
+        assert_eq!(st.items.last().unwrap().text, "What is wrong here?\n[image: shot.png]");
     }
 
     #[test]
@@ -434,7 +475,7 @@ mod tests {
         a.start(&ChatConfig::default(), &mut st);
         feed(&mut a, &mut st, json!({"id": 1, "result": {}}));
         feed(&mut a, &mut st, json!({"id": 2, "result": {"thread": {"id": "th"}}}));
-        a.send("list files", &mut st);
+        a.send("list files", &[], &mut st);
         feed(&mut a, &mut st, json!({"method": "turn/started", "params": {"threadId": "th", "turn": {"id": "tu"}}}));
         feed(&mut a, &mut st, json!({"method": "item/started", "params": {"item": {"type": "reasoning", "id": "r1", "summary": [], "content": []}}}));
         feed(&mut a, &mut st, json!({"method": "item/reasoning/summaryTextDelta", "params": {"itemId": "r1", "delta": "Look"}}));
@@ -465,7 +506,7 @@ mod tests {
             let mut a = Codex::default();
             let mut st = ChatState::default();
             a.thread = Some("th".into());
-            a.send("hi", &mut st);
+            a.send("hi", &[], &mut st);
             st.turn_started_at = Some(1_000);
             feed(&mut a, &mut st, json!({"method": "item/agentMessage/delta", "params": {"itemId": "m1", "delta": "First"}}));
             feed(&mut a, &mut st, json!({"method": "item/agentMessage/delta", "params": {"itemId": "m2", "delta": "Final"}}));
@@ -493,7 +534,7 @@ mod tests {
         let mut a = Codex::default();
         let mut st = ChatState::default();
         a.start(&ChatConfig { resume: Some("gone".into()), ..Default::default() }, &mut st);
-        a.send("hi", &mut st);
+        a.send("hi", &[], &mut st);
         feed(&mut a, &mut st, json!({"id": 1, "result": {}}));
         let w = writes(&feed(&mut a, &mut st, json!({"id": 2, "error": {"message": "thread not found"}})));
         assert_eq!(w[0]["method"], "thread/start");

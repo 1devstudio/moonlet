@@ -35,15 +35,15 @@ describe("+ menu: subagents (X29)", () => {
 
 describe("+ menu: entries (X29)", () => {
   it("offers files, then the agent's commands and subagents, in a session", () => {
-    expect(plusEntries({ variant: "chat", agents: 2 })).toEqual([["attach"], ["commands", "agents"]]);
+    expect(plusEntries({ variant: "chat", agents: 2 })).toEqual([["attach", "add-dir"], ["commands", "agents"]]);
   });
 
   it("hides Subagents when the agent has none", () => {
-    expect(plusEntries({ variant: "chat", agents: 0 })).toEqual([["attach"], ["commands"]]);
+    expect(plusEntries({ variant: "chat", agents: 0 })).toEqual([["attach", "add-dir"], ["commands"]]);
   });
 
   it("offers only the file items in the new-session composer", () => {
-    expect(plusEntries({ variant: "composer", agents: 3 })).toEqual([["attach"]]);
+    expect(plusEntries({ variant: "composer", agents: 3 })).toEqual([["attach", "add-dir"]]);
   });
 });
 
