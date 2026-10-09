@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileMention, isAttachShortcut, plusEntries, withMention, withSlashCommand } from "./plusMenu";
+import { canMentionFiles, fileMention, isAttachShortcut, plusEntries, withMention, withSlashCommand } from "./plusMenu";
 
 describe("+ menu: slash commands (X29)", () => {
   it("puts the command at the start of an empty input", () => {
@@ -12,6 +12,10 @@ describe("+ menu: slash commands (X29)", () => {
 
   it("replaces a command already at the start", () => {
     expect(withSlashCommand("/compact keep the plan", "review")).toEqual({ text: "/review keep the plan", caret: 8 });
+  });
+
+  it("keeps the line breaks after a replaced command", () => {
+    expect(withSlashCommand("/compact\n\nkeep the plan", "review")).toEqual({ text: "/review \n\nkeep the plan", caret: 8 });
   });
 });
 
@@ -66,5 +70,12 @@ describe("+ menu: attached files become mentions (X29)", () => {
 
   it("quotes a path with spaces", () => {
     expect(fileMention("/Users/me/repo/docs/Release notes.md", "/Users/me/repo")).toBe('"docs/Release notes.md"');
+  });
+});
+
+describe("+ menu: files on a remote host (X29)", () => {
+  it("mentions this Mac's files only in a local session", () => {
+    expect(canMentionFiles("local")).toBe(true);
+    expect(canMentionFiles("devbox")).toBe(false);
   });
 });
