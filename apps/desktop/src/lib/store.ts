@@ -32,7 +32,8 @@ import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
 import { spawnedNotices } from "./spawned";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
-import type { ChatItem, ChatState } from "./protocol";
+import type { ChatItem, ChatState, ReadRequest } from "./protocol";
+import { readWaits, type ReadQueue } from "./terminalRead";
 import type { Shortcuts } from "./runActions";
 import { readStored, writeStored } from "./storage";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
@@ -185,6 +186,10 @@ interface State extends UiPersist {
     | { kind: "commit" };
   /** The open confirm modal, above any dialog (X23). */
   confirm: PendingConfirm | null;
+  /** Agents' requests to read a terminal, waiting for the user (X31). */
+  reads: ReadQueue;
+  /** Sessions per host whose terminal reads need no answer (X31). */
+  readGrants: Record<string, string[]>;
   settings: Settings;
   toasts: Toast[];
   lastAttention: { host: string; session: number; at: number } | null;
@@ -220,6 +225,8 @@ function makeStore() {
   showHistory: false,
   dialog: null,
   confirm: null,
+  reads: {},
+  readGrants: {},
   settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {}, planApproveMode: "auto", editorTheme: "dark-plus" }),
   toasts: [],
   lastAttention: null,
@@ -283,6 +290,8 @@ const RANK: Record<AgentState, number> = { blocked: 5, error: 4, working: 3, don
 
 /** The most urgent agent state among a workspace's sessions. */
 export function sessionState(s: State, host: string, wsId: string): AgentState | null {
+  // An agent waiting for the user to share a terminal needs them (X31).
+  if (readWaits(s.reads, host, wsId)) return "blocked";
   let best: AgentState | null = null;
   for (const x of sessionTerminals(s, host, wsId)) {
     if (x.kind !== "agent") continue;
@@ -328,6 +337,15 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     void refreshAllGit(host).then(() => refreshPrs(host));
     void refreshAllBases(host, { fetch: true });
     void refreshAvatars(host);
+    // Apart from the rest: a daemon from before X31 does not know these.
+    void Promise.all([
+      rpc<ReadRequest[]>(host, M.terminalReadRequests),
+      rpc<string[]>(host, M.terminalReadGrants),
+    ])
+      .then(([requests, grants]) =>
+        set((s) => ({ reads: { ...s.reads, [host]: requests }, readGrants: { ...s.readGrants, [host]: grants } })),
+      )
+      .catch(() => {});
   } catch (e) {
     console.warn(`loading ${host} failed (attempt ${attempt + 1})`, e);
     if (attempt < 8 && get().hosts[host]?.status === "connected") {
@@ -568,6 +586,39 @@ async function onAttention(host: string, a: Attention) {
   }
 }
 
+/** An agent asks to read a terminal (X31). The modal opens when its session
+ * is in view; otherwise the session needs the user like a blocked agent. */
+async function onReadRequest(host: string, req: ReadRequest) {
+  set((s) => ({ reads: { ...s.reads, [host]: [...(s.reads[host] ?? []).filter((r) => r.request_id !== req.request_id), req] } }));
+  const s = get();
+  const focused = document.hasFocus();
+  const inView = focused && s.selected?.host === host && s.selected.session === req.session_id;
+  if (!inView) {
+    set((st) => ({ unread: { ...st.unread, [termKey(host, req.caller)]: "blocked" } }));
+    updateBadge();
+    const sound = soundFor(s.settings.sounds, "blocked");
+    if (sound) void hostsApi.playSound(sound).catch(() => {});
+  }
+  if (!focused || (s.settings.notifyWhenFocused && !inView)) {
+    const ws = s.sessions[host]?.find((w) => w.id === req.session_id);
+    const hostLabel = host === "local" ? "" : ` · ${host}`;
+    await notify(`${ws?.name ?? "A session"} needs you${hostLabel}`, `Wants to read terminal ${sanitize(req.title, 60)}`);
+  }
+}
+
+function onReadDone(host: string, requestId: number) {
+  const req = get().reads[host]?.find((r) => r.request_id === requestId);
+  if (!req) return;
+  set((s) => {
+    const rest = (s.reads[host] ?? []).filter((r) => r.request_id !== requestId);
+    const unread = { ...s.unread };
+    const key = termKey(host, req.caller);
+    if (unread[key] === "blocked" && !rest.some((r) => r.caller === req.caller)) delete unread[key];
+    return { reads: { ...s.reads, [host]: rest }, unread };
+  });
+  updateBadge();
+}
+
 function upsertSession(host: string, info: TerminalInfo) {
   set((s) => {
     const prev = s.terminals[host]?.[info.id];
@@ -645,6 +696,20 @@ function handleEvent(e: DaemonEvent) {
       // An agent opened a session (X22): say so, and leave the user where they are.
       for (const n of notices) toast(n.text, "info", { label: "Go to", run: () => selectSession(host, n.session) });
       for (const w of list) if (!w.archived) syncLayout(host, w);
+      break;
+    }
+    case EV.terminalReadRequest:
+      void onReadRequest(host, data as ReadRequest);
+      break;
+    case EV.terminalReadDone:
+      onReadDone(host, (data as { request_id: number }).request_id);
+      break;
+    case EV.terminalReadGrant: {
+      const g = data as { session_id: string; granted: boolean };
+      set((s) => {
+        const rest = (s.readGrants[host] ?? []).filter((x) => x !== g.session_id);
+        return { readGrants: { ...s.readGrants, [host]: g.granted ? [...rest, g.session_id] : rest } };
+      });
       break;
     }
     case EV.fsChanged: {
