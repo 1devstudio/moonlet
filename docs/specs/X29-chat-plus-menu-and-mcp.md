@@ -46,7 +46,7 @@ The chat input gets the layout of the "MCP Servers Menu" design: the input on to
 - [x] The submenu header reads `MCP servers · <connected>/<total>`. Rows show a status dot, the name, and a lock for servers that need sign-in. The `MCP servers` item shows a badge with the number of servers that need sign-in, and the `+` shows a yellow dot while that number is above zero. (`plusMenu.test.ts`)
 - [x] The detail card shows the selected server's status label (`Connected`, `Needs authentication`, `Signing in…`, `Failed to connect`, `Starting…`, `Disabled`), transport, endpoint and scope. Connected servers list up to 6 tool names and `+N more`. (`plusMenu.test.ts`)
 - [x] A failed server's card shows its error and **Retry**, which reconnects it (Claude `mcp_reconnect`; Codex re-lists the server) and refreshes the list.
-- [x] The list is asked for each time the `+` menu opens. Before the agent has answered, the submenu shows `Loading…`. A stopped agent (after a daemon restart) is started to answer; one that cannot start shows `Start the conversation to see its MCP servers.` (`runtime.rs` test)
+- [x] The list is asked for each time the `+` menu opens. Before the agent has answered, the submenu shows `Loading…`. A stopped agent (after a daemon restart) is started to answer; one that cannot start shows `The agent could not start: <reason>`, and a daemon from before X29 shows `The moonlet daemon is older than this app. Restart it to see MCP servers.` (`runtime.rs` test, `plusMenu.test.ts`)
 
 ### MCP sign-in (stack part 4)
 
@@ -90,7 +90,8 @@ The menu closes on Escape, on a click outside, or after an item is chosen. Hover
 
 ## Security considerations
 
-- The sign-in URL comes from the agent. The app opens it only for `http`/`https` URLs, through the system opener, and only after a user click on Authenticate.
+- The sign-in URL comes from the agent. The app opens it only for `http`/`https` URLs (every path, including **Open page**), through the system opener, and only after a user click on Authenticate. (`oauthRedirect.test.ts`)
+- `chat.add_dir` from an agent's own terminal is not refused: like `chat.settings`, which can already switch the agent to Bypass permissions, it relies on the socket being private to the user (S1).
 - The forwarded port comes from the URL's `redirect_uri`. Only ports 1024–65535 on `localhost`/`127.0.0.1` are forwarded, only to the session's own host, and the forward binds to the Mac's loopback interface.
 - `read_image` reads only files with an image extension, refuses anything over 5 MB, and is called only with paths the user picked in the native dialog.
 - `chat.add_dir`, `session.create` and `terminal.create` accept only absolute paths of existing directories on the session's host, so an added directory can never reach the agent's command line as a flag. (`runtime.rs` test)
