@@ -5,6 +5,7 @@
 //! in other projects with `moonlet session new` (X22).
 
 mod session;
+mod term;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -90,6 +91,29 @@ enum Cmd {
     Session {
         #[command(subcommand)]
         action: SessionAction,
+    },
+    /// Read the terminals of your session, with the user's approval (X31).
+    Term {
+        #[command(subcommand)]
+        action: TermAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TermAction {
+    /// List the terminals of your session you may read.
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a terminal's output once the user allows it.
+    Read {
+        id: TerminalId,
+        /// The last N lines (default 200, at most 2000).
+        #[arg(long)]
+        lines: Option<usize>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -361,6 +385,40 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                     },
                 )
                 .await?;
+        }
+        Cmd::Term { action } => {
+            let Some(caller) = terminal_from_env() else {
+                bail!("term {} runs inside a moonlet terminal or agent", match action {
+                    TermAction::Ls { .. } => "ls",
+                    TermAction::Read { .. } => "read",
+                });
+            };
+            let mut c = connect(&socket).await?;
+            match action {
+                TermAction::Ls { json } => {
+                    let list: Vec<TerminalInfo> = c
+                        .request(methods::TERMINAL_READ_LIST, TerminalRef { id: caller })
+                        .await
+                        .map_err(term::rpc_message)?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&list)?);
+                    } else {
+                        print!("{}", term::ls_table(&list));
+                    }
+                }
+                TermAction::Read { id, lines, json } => {
+                    // Waits for the user's answer in the app.
+                    let read: methods::ReadResult = c
+                        .request(methods::TERMINAL_READ, methods::TerminalRead { caller, id, lines })
+                        .await
+                        .map_err(term::rpc_message)?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&read)?);
+                    } else if !read.text.is_empty() {
+                        println!("{}", read.text);
+                    }
+                }
+            }
         }
         Cmd::Rpc { method, params } => {
             let params: serde_json::Value = match params {
