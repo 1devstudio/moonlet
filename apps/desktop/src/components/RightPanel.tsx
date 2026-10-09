@@ -9,6 +9,7 @@ import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { chatKey, loadChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
+import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
 import { FileLinks, useProjectFiles } from "./AgentView";
@@ -31,6 +32,7 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
     if (open && !targets.length) void hostsApi.openTargets().then(setTargets);
   }, [open, targets.length]);
   const remote = host !== "local";
+  const askAgain = useStore((s) => grantMenuLabel(s.readGrants, host, ws.id));
   const usable = targets.filter((t) => !remote || t.id === "vscode" || t.id === "cursor");
   const item = (label: string, run: () => void, danger = false) => (
     <button
@@ -59,6 +61,7 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
             {item("Re-run setup script", () => void runScript("setup"))}
             {item("Project settings…", () => openProjectSettings({ host, project: ws.project_id }))}
             {item("Toggle sidebar  ⌘B", () => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen })))}
+            {askAgain && item(askAgain, () => void rpc(host, M.terminalReadGrantClear, { session_id: ws.id }).catch(errorToast))}
             <div className="my-1 border-t border-border" />
             {item("Archive session…", () => void archiveSession(), true)}
           </div>

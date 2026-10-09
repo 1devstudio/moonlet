@@ -196,6 +196,8 @@ export function ConfirmDialog({
   onCheck,
   onConfirm,
   onCancel,
+  wide = false,
+  children,
 }: {
   title: string;
   message: string;
@@ -207,6 +209,10 @@ export function ConfirmDialog({
   onCheck?: (checked: boolean) => void;
   onConfirm: () => void;
   onCancel: () => void;
+  /** 560 px instead of 440 px, for a preview of 80 columns (X31). */
+  wide?: boolean;
+  /** Shown under the message, such as the text an agent would read. */
+  children?: ReactNode;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -227,7 +233,7 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="w-[440px] overflow-hidden rounded-xl border border-border-strong bg-panel shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] outline-none"
+        className={cx(wide ? "w-[560px]" : "w-[440px]", "overflow-hidden rounded-xl border border-border-strong bg-panel shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] outline-none")}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           // Tab stays inside, so it never reaches a dialog underneath.
@@ -246,6 +252,7 @@ export function ConfirmDialog({
         </div>
         <div className="p-4">
           <p className="whitespace-pre-line ui-text-12.5 leading-[1.55] text-pretty text-muted">{message}</p>
+          {children}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border bg-panel-2 px-4 py-2.5">
           {checkbox && (

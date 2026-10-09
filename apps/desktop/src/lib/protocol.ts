@@ -303,6 +303,21 @@ export interface Attention {
   message: string | null;
 }
 
+/** An agent asks to read a terminal of its session (X31). `text` is
+ * exactly what it gets on Allow. */
+export interface ReadRequest {
+  request_id: number;
+  session_id: string;
+  caller: number;
+  agent?: string;
+  terminal_id: number;
+  title: string;
+  command?: string;
+  exit?: number;
+  lines: number;
+  text: string;
+}
+
 export interface HookStatus {
   claude_settings: string;
   claude_installed: boolean;
@@ -401,6 +416,10 @@ export const M = {
   chatSettings: "chat.settings",
   chatAddDir: "chat.add_dir",
   chatMcp: "chat.mcp",
+  terminalReadAnswer: "terminal.read_answer",
+  terminalReadRequests: "terminal.read_requests",
+  terminalReadGrants: "terminal.read_grants",
+  terminalReadGrantClear: "terminal.read_grant_clear",
 } as const;
 
 export const EV = {
@@ -416,4 +435,7 @@ export const EV = {
   fsChanged: "fs.changed",
   chatItem: "chat.item",
   chatState: "chat.state",
+  terminalReadRequest: "terminal.read_request",
+  terminalReadDone: "terminal.read_done",
+  terminalReadGrant: "terminal.read_grant",
 } as const;
