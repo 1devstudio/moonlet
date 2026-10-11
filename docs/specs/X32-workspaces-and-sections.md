@@ -1,6 +1,6 @@
 # X32: Workspaces above sections (today's workspaces become sections)
 
-- **Status:** draft
+- **Status:** implemented (daemon and sidebar; the switcher and dialogs come in the next part of the stack)
 - **Priority / phase:** P1 · phase 3
 - **Related:** [ADR 0007](../adr/0007-workspaces-above-sections.md), [X5](X5-workspaces-projects-sessions.md) (the model this changes), [X33](X33-workspace-claude-profiles.md) (a Claude profile per workspace), [R4](R4-unified-hosts-sidebar.md) (hosts), [glossary](../../CONTEXT.md).
 - **References:** the user's design "Workspaces & Sections" (2026-10-11): sidebar with the workspace switcher, the switcher open, and the New workspace dialog.
@@ -47,10 +47,12 @@ The hierarchy becomes **Workspace › Section › Project › Session › Termin
 - [ ] `workspace.create {name, color, move_sections?}` creates a workspace, optionally moving the listed sections from another workspace into it. Test: `a_workspace_takes_sections_over_rpc`.
 - [ ] Moving a section to another workspace (from the New workspace dialog, or **Move to workspace ›** in the section's `⋯` menu) also moves the sessions of its projects, unless the old workspace still holds that project in another section. Test: `moving_a_section_takes_sessions_it_alone_holds`.
 - [ ] **Workspace settings…** edits the name, colour and Claude profile (X33), and holds **Delete workspace**.
-- [ ] A workspace can be deleted only when it has no sections and it is not the last one. The confirm says so, and otherwise the button explains why it is disabled. Archived sessions of a deleted workspace move to the first workspace that holds their project. Tests: `a_workspace_is_deleted_only_when_empty_and_not_last`, `a_workspace_takes_sections_over_rpc`.
+- [ ] A workspace can be deleted only when it has no sections and it is not the last one. The confirm says so, and otherwise the button explains why it is disabled. Archived sessions move to the first workspace that holds their project whenever theirs no longer does (it was deleted, or lost its last section). Tests: `a_workspace_is_deleted_only_when_empty_and_not_last`, `a_workspace_takes_sections_over_rpc`, `archived_sessions_move_to_a_workspace_holding_their_project`.
 - [ ] Deleting a section keeps its projects: those no other section of the workspace holds move to the workspace's first other section. A workspace's last section can be deleted only while its projects have no live sessions there. Test: `deleting_a_section_keeps_projects_and_sessions`.
-- [ ] Removing a project from a section is refused while the project has unarchived sessions in this workspace and no other section here holds it (X5's rule, now per workspace). Test: carried over from X5.
-- [ ] Workspace names cannot be empty, and the colour must be one of the five. Test: `workspace_colours_and_names_are_checked`.
+- [ ] Removing a project from a section is refused while the project has unarchived sessions in this workspace and no other section here holds it (X5's rule, now per workspace). Test: `a_project_with_live_sessions_stays_in_its_workspace`.
+- [ ] Workspace names cannot be empty, in `workspace.create` or `workspace.update`, and the colour must be one of the five. Tests: `workspace_names_are_checked_and_colours_change`, `workspace_names_cannot_be_emptied`, `a_workspace_takes_sections_over_rpc` (an unknown colour is refused).
+- [ ] A request that fails half-way changes nothing, in memory or on disk (for example `workspace.create` with an unknown section to move). Test: `a_failed_workspace_create_leaves_nothing_behind`.
+- [ ] `workspace.update {section_ids}` reorders the workspace's sections and moves in sections listed from other workspaces, with their sessions; it cannot drop one of its own. Test: `updating_a_workspaces_sections_reorders_and_moves_them_in`.
 
 ### Sidebar
 
@@ -80,8 +82,8 @@ Taken from the design:
 
 ## Protocol and RPCs
 
-- `workspace.*` now means the new scope: `workspace.list`, `workspace.create {name, color, move_sections?}`, `workspace.update {id, name?, color?, section_ids?}` (order, and moving sections in), `workspace.delete {id}`. Event `workspaces.changed`.
-- X5's `workspace.*` methods become `section.*`: `section.create {workspace_id, name}`, `section.update {id, name?, project_ids?, view?}`, `section.delete {id}`, `section.add_project {id, path}`, `section.remove_project {id, project_id}`, `section.move {id, workspace_id}`. Event `sections.changed`.
+- `workspace.*` now means the new scope: `workspace.list`, `workspace.create {name, color, move_sections?}`, `workspace.update {id, name?, color?, section_ids?}` (order, and moving sections in; it keeps the workspace's own), `workspace.delete {id}`. Event `workspaces.changed`.
+- X5's `workspace.*` methods become `section.*`: `section.list`, `section.create {workspace_id, name}`, `section.update {id, name?, project_ids?, view?}`, `section.delete {id}`, `section.add_project {id, path}`, `section.remove_project {id, project_id}`, `section.move {id, workspace_id}`. Event `sections.changed`.
 - `Session.section` is removed and `Session.workspace_id` is added. `session.update` no longer takes `section`.
 - `PROTOCOL_VERSION` 3. `docs/protocol.md` is updated.
 
