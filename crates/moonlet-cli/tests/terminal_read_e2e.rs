@@ -26,7 +26,18 @@ struct Daemon {
 
 impl Daemon {
     async fn start(env: &[(&str, &str)]) -> Daemon {
+        Self::start_in(tempfile::tempdir().unwrap(), env).await
+    }
+
+    /// A daemon whose terminals run zsh with moonlet's shell integration,
+    /// and none of the user's startup files.
+    async fn with_zsh() -> Daemon {
         let home = tempfile::tempdir().unwrap();
+        let h = home.path().display().to_string();
+        Self::start_in(home, &[("HOME", h.as_str()), ("SHELL", "/bin/zsh")]).await
+    }
+
+    async fn start_in(home: tempfile::TempDir, env: &[(&str, &str)]) -> Daemon {
         let socket = home.path().join("run/d.sock");
         let child = Command::new(target_bin("moonletd"))
             .arg("daemon")
@@ -317,6 +328,7 @@ async fn term_ls_lists_the_sessions_terminals_without_their_output() {
 
     let out = d.moonlet(Some(mine.terminals[0]), &["term", "ls"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let last = |i: &TerminalInfo| i.last_exit.map_or(String::new(), |e| format!("exit {e}"));
     let shell = mine.terminals[0];
     let shell_info: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, json!({})).await.unwrap();
     // The session's own shell depends on the user's shell: take its title,
@@ -328,13 +340,14 @@ async fn term_ls_lists_the_sessions_terminals_without_their_output() {
         Some(true) => "at prompt",
         _ => "running",
     };
+    let shell_last = last(sh);
     assert_eq!(
         String::from_utf8(out.stdout).unwrap(),
         format!(
-            "  ID  KIND     STATUS      TITLE                    CWD\n\
-             {shell:>4}  shell    {shell_status:<11} {shell_title:<24} {shell_cwd}\n\
-             {:>4}  shell    running     tests                    {path}\n\
-             {:>4}  shell    exited 3    build                    {path}\n",
+            "  ID  KIND     STATUS      LAST     TITLE                    CWD\n\
+             {shell:>4}  shell    {shell_status:<11} {shell_last:<8} {shell_title:<24} {shell_cwd}\n\
+             {:>4}  shell    running              tests                    {path}\n\
+             {:>4}  shell    exited 3             build                    {path}\n",
             t.id,
             done.id,
             path = mine.path,
@@ -531,4 +544,79 @@ async fn the_request_event_skips_cli_connections() {
     }
     assert!(events_until_done(&mut app).await.iter().any(|n| n == "terminal.read_request"));
     assert!(!events_until_done(&mut cli).await.iter().any(|n| n == "terminal.read_request"));
+}
+
+/// Waits until shell `id` is at a prompt after a command that exited `exit`.
+async fn at_prompt(c: &mut Client, id: u32, exit: Option<i32>) {
+    for _ in 0..200 {
+        let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, json!({})).await.unwrap();
+        let i = list.into_iter().find(|i| i.id == id).unwrap();
+        if i.prompt == Some(true) && i.last_exit == exit {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("terminal {id} never got back to a prompt with {exit:?}");
+}
+
+/// X31 part 2: without `--lines`, a read is the last command a shell ran:
+/// its command line and its output, with its exit code.
+#[tokio::test]
+async fn a_read_is_the_last_command_and_its_exit_code() {
+    if !Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let d = Daemon::with_zsh().await;
+    let mut c = d.client().await;
+    let s = d.session(&mut c, "Fix login").await;
+    let t: TerminalInfo = c
+        .request(
+            methods::TERMINAL_CREATE,
+            json!({ "cwd": s.path, "session_id": s.id, "title": "tests" }),
+        )
+        .await
+        .unwrap();
+    at_prompt(&mut c, t.id, None).await;
+    let _: Value = c
+        .request(methods::TERMINAL_WRITE, json!({ "id": t.id, "data": "printf 'one\\ntwo\\n'; false\n" }))
+        .await
+        .unwrap();
+    at_prompt(&mut c, t.id, Some(1)).await;
+
+    let out = d.moonlet(Some(s.terminals[0]), &["term", "ls"]);
+    let ls = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        ls.lines().any(|l| l.starts_with(&format!("{:>4}  shell    at prompt   exit 1   tests ", t.id))),
+        "{ls}"
+    );
+
+    let reader = d.spawn(s.terminals[0], &["term", "read", &t.id.to_string(), "--json"]);
+    let req = requests(&mut c, 1).await.remove(0);
+    assert_eq!(req["command"], json!("printf 'one\\ntwo\\n'; false"));
+    assert_eq!(req["exit"], json!(1));
+    let _: Value = c
+        .request(
+            "terminal.read_answer",
+            json!({ "request_id": req["request_id"], "allow": true, "remember": true }),
+        )
+        .await
+        .unwrap();
+    let (ok, out, err) = finished(reader);
+    assert!(ok, "{err}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&out).unwrap(),
+        json!({
+            "terminal": t.id,
+            "title": "tests",
+            "command": "printf 'one\\ntwo\\n'; false",
+            "exit": 1,
+            "running": false,
+            "truncated": false,
+            "text": "$ printf 'one\\ntwo\\n'; false\none\ntwo",
+        })
+    );
+
+    // `--lines` still reads the screen's last lines, prompt included.
+    let out = d.moonlet(Some(s.terminals[0]), &["term", "read", &t.id.to_string(), "--lines", "3"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("two\n"));
 }

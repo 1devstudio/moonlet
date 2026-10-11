@@ -68,7 +68,7 @@ impl TerminalReads {
         if !list.iter().any(|t| t.id == req.id) {
             bail!("no terminal {} in this session", req.id);
         }
-        let lines = req.lines.unwrap_or(DEFAULT_LINES).clamp(1, MAX_LINES);
+        let lines = req.lines.map(|n| n.clamp(1, MAX_LINES));
         let result = self.terminals.read_text(req.id, lines)?;
         if self.grants.lock().unwrap().contains(&session) {
             return Ok(result);

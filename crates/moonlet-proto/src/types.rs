@@ -75,6 +75,9 @@ pub struct TerminalInfo {
     /// `None` until the shell reports prompt marks at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<bool>,
+    /// Exit code of the last command the shell ran (OSC 133 `D`, X31).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_exit: Option<i32>,
     /// A full-screen program (vim, htop, less) holds the alternate screen.
     #[serde(default)]
     pub alt_screen: bool,
