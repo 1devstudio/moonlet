@@ -67,11 +67,16 @@ struct Chat {
     inner: Mutex<Inner>,
 }
 
+/// Variables a session's agents get on every start, looked up then rather
+/// than stored with the chat: the Claude profile (X33) can change.
+pub type SessionEnv = Box<dyn Fn(&str) -> BTreeMap<String, String> + Send + Sync>;
+
 pub struct ChatManager {
     terms: Arc<TerminalManager>,
     chats: Mutex<HashMap<TerminalId, Arc<Chat>>>,
     dir: PathBuf,
     me: Weak<ChatManager>,
+    session_env: std::sync::OnceLock<SessionEnv>,
 }
 
 /// An added directory as the agent gets it: absolute and existing, so it
@@ -96,7 +101,7 @@ fn agent_state(status: &str) -> AgentState {
 
 /// Finds `program` on the PATH the agent will get (the login environment),
 /// not the daemon's own.
-fn resolve(program: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+pub(crate) fn resolve(program: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
     if program.contains('/') {
         return Some(PathBuf::from(program));
     }
@@ -109,7 +114,7 @@ fn resolve(program: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -137,7 +142,7 @@ impl ChatManager {
         // Only Claude has a permission mode.
         let mode = req.mode.filter(|_| req.agent == "claude");
         let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
-        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone() };
+        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), config_dir: None };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
         command.extend(args);
@@ -491,8 +496,26 @@ impl ChatManager {
         self.apply(chat, inner, vec![o, Out::State]);
     }
 
+    pub fn set_session_env(&self, f: SessionEnv) {
+        let _ = self.session_env.set(f);
+    }
+
     fn spawn(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
         let adapter = adapter_for(&inner.cfg.agent).context("unknown agent")?;
+        let session_env = match (&inner.info.session_id, self.session_env.get()) {
+            (Some(s), Some(f)) => f(s),
+            _ => BTreeMap::new(),
+        };
+        // A conversation lives in its profile's folder (X33): after the
+        // workspace switched profiles, start a new one.
+        let config_dir = session_env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
+        if inner.state.agent_session.is_some() && inner.cfg.config_dir != config_dir {
+            inner.state.agent_session = None;
+            let note = "Started a new conversation: this workspace now uses another Claude profile";
+            let o = upsert(&mut inner.state, item(super::local_id("system"), "system", note));
+            self.apply(chat, inner, vec![o]);
+        }
+        inner.cfg.config_dir = config_dir;
         let mut cfg = inner.cfg.clone();
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
@@ -503,6 +526,7 @@ impl ChatManager {
             env.insert("MOONLET_SESSION".into(), s.clone());
         }
         env.extend(inner.env.clone());
+        env.extend(session_env);
         let exe = resolve(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let mut child = tokio::process::Command::new(&exe)
             .args(&args)
@@ -642,9 +666,11 @@ pub(crate) mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     /// A stand-in for `claude` that speaks just enough stream-json.
-    /// Each start appends its arguments to `claude-args` in the working directory.
+    /// Each start appends its arguments to `claude-args` in the working
+    /// directory, and its `CLAUDE_CONFIG_DIR` (X33) to `claude-env`.
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
 echo "$*" >> claude-args
+echo "${CLAUDE_CONFIG_DIR:-default}" >> claude-env
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"sess-1","model":"fake","slash_commands":["clear"]}' ;;
