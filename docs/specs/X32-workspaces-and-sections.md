@@ -36,18 +36,19 @@ The hierarchy becomes **Workspace › Section › Project › Session › Termin
 
 ### Switching
 
-- [ ] The sidebar shows the current workspace only. The current workspace is remembered across restarts. Test: vitest, the arrangement of a workspace leaves out other workspaces' sections and sessions.
-- [ ] ⌃⌘1 to ⌃⌘9 switch to the first nine workspaces, in list order. Test: `keys.test.ts`.
-- [ ] Switching restores the session last selected in that workspace, or shows none. Terminals and agents of other workspaces keep running. Test: vitest, the selection restored on switch.
-- [ ] When a session in another workspace needs input or has finished unread, the switcher button and that workspace's row show the attention dot. Notifications and the approval inbox (A5) still cover every workspace; opening one switches to its workspace. Test: vitest, the attention state per workspace.
-- [ ] With several hosts (R4), each host has its own workspaces. The switcher lists them grouped under host names, local first. Test: vitest, switcher grouping.
+- [ ] The sidebar shows the current workspace only. The current workspace is remembered across restarts, and falls back to the first one when it is gone. Tests: `currentWorkspace` in `workspaces.test.ts`, the fallback in `keys.test.ts`, and `workspaces.e2e.ts`.
+- [ ] ⌃⌘1 to ⌃⌘9 switch to the first nine workspaces, in list order. Tests: "workspace shortcuts" in `keys.test.ts`, and `workspaces.e2e.ts`.
+- [ ] Switching restores the session last selected in that workspace, or shows none. Opening a session from elsewhere (a notification, the inbox, the palette) shows its workspace. Terminals and agents of other workspaces keep running. Tests: `sessionToRestore` in `workspaces.test.ts`, "⌃⌘2 switches to the second workspace and reopens its last session" in `keys.test.ts`.
+- [ ] When a session in another workspace needs input or has finished unread, the switcher button and that workspace's row show the attention dot. Notifications and the approval inbox (A5) still cover every workspace; opening one switches to its workspace. Test: `workspacesNeedingYou` in `workspaces.test.ts`.
+- [ ] With several hosts (R4), each host has its own workspaces. The switcher lists them grouped under host names, local first. Test: `switcherRows` in `workspaces.test.ts`.
 
 ### Creating, editing and deleting workspaces
 
 - [ ] `workspace.create {name, color, move_sections?}` creates a workspace, optionally moving the listed sections from another workspace into it. Test: `a_workspace_takes_sections_over_rpc`.
 - [ ] Moving a section to another workspace (from the New workspace dialog, or **Move to workspace ›** in the section's `⋯` menu) also moves the sessions of its projects, unless the old workspace still holds that project in another section. Test: `moving_a_section_takes_sessions_it_alone_holds`.
+- [ ] **New workspace…** sends the trimmed name, the colour, and the ticked sections only when "Move sections from …" is chosen; Create is disabled while the name is empty. Tests: `createRequest` in `workspaces.test.ts`, `workspaces.e2e.ts`.
 - [ ] **Workspace settings…** edits the name, colour and Claude profile (X33), and holds **Delete workspace**.
-- [ ] A workspace can be deleted only when it has no sections and it is not the last one. The confirm says so, and otherwise the button explains why it is disabled. Archived sessions move to the first workspace that holds their project whenever theirs no longer does (it was deleted, or lost its last section). Tests: `a_workspace_is_deleted_only_when_empty_and_not_last`, `a_workspace_takes_sections_over_rpc`, `archived_sessions_move_to_a_workspace_holding_their_project`.
+- [ ] A workspace can be deleted only when it has no sections and it is not the last one. The confirm says so, and otherwise the button explains why it is disabled (`deleteBlocked` in `workspaces.test.ts`). Archived sessions move to the first workspace that holds their project whenever theirs no longer does (it was deleted, or lost its last section). Tests: `a_workspace_is_deleted_only_when_empty_and_not_last`, `a_workspace_takes_sections_over_rpc`, `archived_sessions_move_to_a_workspace_holding_their_project`.
 - [ ] Deleting a section keeps its projects: those no other section of the workspace holds move to the workspace's first other section. A workspace's last section can be deleted only while its projects have no live sessions there. Test: `deleting_a_section_keeps_projects_and_sessions`.
 - [ ] Removing a project from a section is refused while the project has unarchived sessions in this workspace and no other section here holds it (X5's rule, now per workspace). Test: `a_project_with_live_sessions_stays_in_its_workspace`.
 - [ ] Workspace names cannot be empty, in `workspace.create` or `workspace.update`, and the colour must be one of the five. Tests: `workspace_names_are_checked_and_colours_change`, `workspace_names_cannot_be_emptied`, `a_workspace_takes_sections_over_rpc` (an unknown colour is refused).
@@ -63,7 +64,7 @@ The hierarchy becomes **Workspace › Section › Project › Session › Termin
   - **New section…** at the end of the list;
   - a footer with Settings and the workspace's Claude account ("Claude · Work profile", X33).
 - [ ] Each section has a header with its name and a `⋯` menu: Group by, Filter by project, Sort by, Add project…, Rename section…, Move to workspace ›, Delete section. Collapsing a section is remembered per section.
-- [ ] New session (button, ⇧⌘N, palette) opens the composer on the current workspace. Its project picker lists that workspace's projects.
+- [ ] New session (button, ⇧⌘N, palette) opens the composer on the current workspace. Its project picker lists that workspace's projects, or every project while it has none. Tests: `composerProjects` in `workspaces.test.ts`, and the session created in `workspaces.e2e.ts`.
 
 ## UI
 

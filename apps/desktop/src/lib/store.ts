@@ -32,6 +32,7 @@ import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
 import { spawnedNotices } from "./spawned";
+import { currentWorkspace, sessionToRestore, switcherRows, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
@@ -119,6 +120,10 @@ interface UiPersist {
   collapsed: Record<string, boolean>;
   /** The Changes tab's layout (X28). */
   changesView: "tree" | "list";
+  /** The workspace the sidebar shows (X32). */
+  workspace: WorkspaceRef | null;
+  /** The session last open in each workspace (`host/workspaceId`). */
+  lastSession: Record<string, string>;
 }
 
 const uiDefaults: UiPersist = {
@@ -130,6 +135,8 @@ const uiDefaults: UiPersist = {
   rightTab: "files",
   collapsed: {},
   changesView: "tree",
+  workspace: null,
+  lastSession: {},
 };
 
 /** In-app card when an agent in the open workspace finishes or needs input. */
@@ -183,6 +190,8 @@ interface State extends UiPersist {
     | { kind: "new-session"; host?: string; project?: string; workspace?: string }
     | { kind: "add-project"; host?: string; section?: string }
     | { kind: "new-section" }
+    | { kind: "new-workspace" }
+    | { kind: "workspace-settings"; host: string; workspace: string }
     | { kind: "create-pr" }
     | { kind: "settings" }
     | { kind: "project-settings"; host: string; project: string; focus?: "run" }
@@ -256,10 +265,12 @@ useStore.subscribe((s, prev) => {
     s.sidebarOpen !== prev.sidebarOpen ||
     s.rightTab !== prev.rightTab ||
     s.collapsed !== prev.collapsed ||
-    s.changesView !== prev.changesView
+    s.changesView !== prev.changesView ||
+    s.workspace !== prev.workspace ||
+    s.lastSession !== prev.lastSession
   ) {
-    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView } = s;
-    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView });
+    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession } = s;
+    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession });
   }
   if (s.settings !== prev.settings) {
     saveJson(SETTINGS_KEY, s.settings);
@@ -407,7 +418,14 @@ export function focusTerminal(host: string, session: number) {
 }
 
 export function selectSession(host: string, id: string) {
-  set({ selected: { host, session: id }, diffFile: null });
+  // Opening a session (from a notification, the inbox, the palette) shows
+  // its workspace (X32).
+  const wsId = get().sessions[host]?.find((x) => x.id === id)?.workspace_id;
+  set((s) => ({
+    selected: { host, session: id },
+    diffFile: null,
+    ...(wsId && { workspace: s.workspace?.host === host && s.workspace.id === wsId ? s.workspace : { host, id: wsId }, lastSession: { ...s.lastSession, [`${host}/${wsId}`]: id } }),
+  }));
   const layout = getLayout(host, id);
   if (layout.focused !== null) {
     set((s) => {
@@ -418,6 +436,42 @@ export function selectSession(host: string, id: string) {
   }
   updateBadge();
   void refreshGit(host, id);
+}
+
+/** Every host's workspaces, local first, as the switcher lists them (X32). */
+export function hostWorkspaces(s: State): HostWorkspaces[] {
+  return Object.values(s.hosts)
+    .sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id))
+    .map((h) => ({ host: h.id, label: h.label, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [], sessions: s.sessions[h.id] ?? [] }));
+}
+
+let fallback: WorkspaceRef | null = null;
+
+/** The workspace the sidebar shows: the remembered one, else the first.
+ * The same object while it is unchanged, so it can be a zustand selector. */
+export function shownWorkspace(s: State): WorkspaceRef | null {
+  const r = currentWorkspace(s.workspace, hostWorkspaces(s));
+  if (!r || r === s.workspace) return r;
+  if (fallback?.host !== r.host || fallback.id !== r.id) fallback = r;
+  return fallback;
+}
+
+/** Shows workspace `ref` and reopens the session last open in it. */
+export function switchWorkspace(ref: WorkspaceRef) {
+  const s = get();
+  // Remember what was open in the workspace being left.
+  const from = shownWorkspace(s);
+  const lastSession = from && s.selected ? { ...s.lastSession, [`${from.host}/${from.id}`]: s.selected.session } : s.lastSession;
+  const restore = sessionToRestore(lastSession[`${ref.host}/${ref.id}`], s.sessions[ref.host] ?? [], ref.id);
+  set({ workspace: ref, lastSession, showHistory: false });
+  if (restore) selectSession(ref.host, restore);
+  else set({ selected: null });
+}
+
+/** ⌃⌘1–9: the n-th workspace in the switcher's order. */
+export function switchWorkspaceByIndex(n: number) {
+  const row = switcherRows(hostWorkspaces(get()))[n];
+  if (row) switchWorkspace({ host: row.host, id: row.ws.id });
 }
 
 const gitInflight: Record<string, boolean> = {};
