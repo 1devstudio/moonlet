@@ -264,7 +264,16 @@ async fn only_terminals_of_the_callers_session_can_be_read() {
         .await
         .unwrap();
 
-    for id in [theirs.id, 999] {
+    // An agent's own terminal in the same session is not readable either.
+    let agent: TerminalInfo = c
+        .request(
+            methods::TERMINAL_CREATE,
+            json!({ "cwd": mine.path, "session_id": mine.id, "kind": "agent", "agent": "claude",
+                    "command": ["/bin/sh", "-c", "exec sleep 600"] }),
+        )
+        .await
+        .unwrap();
+    for id in [theirs.id, agent.id, 999] {
         let out = d.moonlet(Some(mine.terminals[0]), &["term", "read", &id.to_string()]);
         assert!(!out.status.success());
         assert_eq!(
@@ -480,4 +489,46 @@ async fn a_terminal_that_exited_can_still_be_read() {
         read,
         json!({ "terminal": t.id, "title": "tests", "exit": 2, "running": false, "truncated": false, "text": "build failed" })
     );
+}
+
+/// The waiting text reaches the app's connection, never one the `moonlet`
+/// CLI opened: an agent listening on the socket cannot read it unasked.
+#[tokio::test]
+async fn the_request_event_skips_cli_connections() {
+    use moonlet_proto::{Frame, Message};
+    let d = Daemon::start(&[]).await;
+    let mut c = d.client().await;
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let s = d.session(&mut c, "Fix login").await;
+    let t = d.terminal(&mut c, &s, THREE_LINES, "three").await;
+
+    let reader = d.spawn(s.terminals[0], &["term", "read", &t.id.to_string()]);
+    let req = requests(&mut c, 1).await.remove(0);
+    let _: Value = c
+        .request(
+            "terminal.read_answer",
+            json!({ "request_id": req["request_id"], "allow": false, "remember": false }),
+        )
+        .await
+        .unwrap();
+    assert!(!finished(reader).0);
+
+    // Both saw `read_done`; only the app saw the request with its text.
+    async fn events_until_done(c: &mut Client) -> Vec<String> {
+        let mut names = Vec::new();
+        while !names.iter().any(|n| n == "terminal.read_done") {
+            let frame = tokio::time::timeout(Duration::from_secs(5), c.next_frame())
+                .await
+                .expect("no terminal.read_done")
+                .unwrap()
+                .unwrap();
+            if let Frame::Json(Message::Event { name, .. }) = frame {
+                names.push(name);
+            }
+        }
+        names
+    }
+    assert!(events_until_done(&mut app).await.iter().any(|n| n == "terminal.read_request"));
+    assert!(!events_until_done(&mut cli).await.iter().any(|n| n == "terminal.read_request"));
 }
