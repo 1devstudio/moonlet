@@ -1,6 +1,6 @@
 # X31 — The agent reads a terminal tab, with the user's approval
 
-- **Status:** draft (parts 1 and 2 implemented: reading, approval, CLI, modal and the last command)
+- **Status:** implemented (remote hosts and a live agent reading the skill not tried yet)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** goal 2 (agent-first), A6 (CLI and socket API), journey J2
 - **Related:** [T3](T3-shell-integration.md) (shell integration), [T8](T8-block-styling.md) (copy a block to the agent), [T9](T9-real-command-blocks.md) (daemon-owned blocks, draft), [X22](X22-agent-opens-session.md) (moonlet skill), [X23](X23-confirm-modal.md) (confirm modal), [A3](A3-sidebar-and-notifications.md) (attention)
@@ -56,8 +56,9 @@ A command fails in a terminal tab and the user asks the session's agent to "chec
 
 ### Skill (stack part 3)
 
-- [ ] The moonlet skill gets a section "Read the user's terminals". When the user mentions a terminal, a failed command, a test run or a server log, the agent runs `term ls` and picks the tab that fits; if several fit, it asks the user which one. It then runs `term read <id>` and reads only that output. It tells the user it asked for the output, never retries a declined read, and never sends input to the terminal to reproduce the output. The skill's description mentions reading terminal output.
-- [ ] When the daemon starts, it rewrites each installed skill file (`~/.claude/skills/moonlet/SKILL.md`, `$CODEX_HOME/skills/moonlet/SKILL.md`) that carries the `Installed by moonlet` marker and differs from the current skill. It never creates a missing file and never touches a file without the marker. (`hooks.rs` tests: outdated, current, missing, and foreign files)
+- [x] The moonlet skill gets a section "Read the user's terminals". When the user mentions a terminal, a failed command, a test run or a server log, the agent runs `term ls` and picks the tab that fits; if several fit, it asks the user which one. It then runs `term read <id>` with a tool timeout of at least 6 minutes, since the read waits up to 5 for the user, and tells the user it asked. It never asks again on its own after a decline, never reads the tab another way, and never types into the terminal to reproduce the output. The skill's description mentions reading terminal output. (`hooks.rs` test)
+- [ ] An agent with the skill reads a terminal when asked to "check the terminal". (Not yet tried with a live Claude Code or Codex.)
+- [x] When the daemon starts, it rewrites each installed skill file (`~/.claude/skills/moonlet/SKILL.md`, `$CODEX_HOME/skills/moonlet/SKILL.md`) that carries the `Installed by moonlet` marker and differs from the current skill. It never creates a missing file and never touches a file without the marker. A daemon started with `MOONLET_HOME` or `JAUNT_HOME` (tests, e2e, a custom setup) skips this, so it never writes the user's real skills. (`hooks.rs` test for outdated, current, missing and foreign files; `crates/moonletd/tests/daemon.rs` for the start)
 
 ## UI
 
@@ -126,4 +127,4 @@ Three stacked PRs (`gh stack`): part 1 (read, approval, CLI, modal), part 2 (las
 ## Open questions
 
 - Should the grant cover the whole session, or only the terminal the user approved? This spec uses the whole session, which is simpler to explain; a tab opened later is covered too.
-- Is 5 minutes right for the timeout? Claude Code's Bash tool times out after 2 minutes by default unless the agent passes a longer timeout. The skill should tell the agent to pass `timeout: 300000`, or the CLI should return earlier.
+- Is 5 minutes right for the timeout? Claude Code's Bash tool times out after 2 minutes by default; the skill tells the agent to pass a 6-minute timeout. Codex's command timeout has not been checked.

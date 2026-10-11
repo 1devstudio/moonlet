@@ -69,4 +69,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X27 | Move from jaunt to moonlet without losing anything | P1 | 3 | implemented (untried against a real jaunt install) | [X27-moonlet-migration.md](X27-moonlet-migration.md) |
 | X29 | Chat input `+` menu: attachments, commands, subagents and MCP servers | P1 | 3 | implemented (live sign-in unchecked in app) | [X29-chat-plus-menu-and-mcp.md](X29-chat-plus-menu-and-mcp.md) |
 | X30 | Open project files from agent messages | P1 | 3 | implemented (click unchecked in app) | [X30-file-links-in-chat.md](X30-file-links-in-chat.md) |
-| X31 | The agent reads a terminal tab, with the user's approval | P1 | 3 | partial (parts 1 and 2 of 3) | [X31-agent-reads-terminal.md](X31-agent-reads-terminal.md) |
+| X31 | The agent reads a terminal tab, with the user's approval | P1 | 3 | implemented (remote hosts and a live agent untried) | [X31-agent-reads-terminal.md](X31-agent-reads-terminal.md) |
