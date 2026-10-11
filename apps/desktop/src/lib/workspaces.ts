@@ -28,7 +28,7 @@ export interface HostWorkspaces {
   sections: Section[];
   sessions: Session[];
   /** Claude profiles (X33), named at the end of each summary. */
-  profiles?: ProfileInfo[];
+  profiles: ProfileInfo[];
 }
 
 export interface SwitcherRow {
@@ -57,7 +57,7 @@ export function switcherRows(hosts: HostWorkspaces[]): SwitcherRow[] {
         hostLabel: hosts.length > 1 && i === 0 ? h.label : null,
         ws,
         initial: workspaceInitial(ws.name),
-        summary: `${count(ws.section_ids.length, "section")} · ${count(live, "session")} · ${profileName(ws, h.profiles ?? [])}`,
+        summary: `${count(ws.section_ids.length, "section")} · ${count(live, "session")} · ${profileName(ws, h.profiles)}`,
         kbd: n < 9 ? `⌃⌘${n + 1}` : null,
       });
     });

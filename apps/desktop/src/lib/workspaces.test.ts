@@ -46,8 +46,8 @@ describe("switcherRows", () => {
   it("names the host of each group when there are several hosts, local first", () => {
     const remote = w("r", "Lab", []);
     const rows = switcherRows([
-      { host: "local", label: "This Mac", workspaces: [personal], sections, sessions },
-      { host: "devbox", label: "devbox", workspaces: [remote], sections: [], sessions: [] },
+      { host: "local", label: "This Mac", workspaces: [personal], sections, sessions, profiles: [] },
+      { host: "devbox", label: "devbox", workspaces: [remote], sections: [], sessions: [], profiles: [] },
     ]);
     expect(rows.map((r) => [r.hostLabel, r.ws.name, r.kbd])).toEqual([
       ["This Mac", "Personal", "⌃⌘1"],
@@ -58,7 +58,7 @@ describe("switcherRows", () => {
 });
 
 describe("currentWorkspace", () => {
-  const hosts = [{ host: "local", label: "This Mac", workspaces: [w("personal", "Personal", []), w("acmeco", "Acme", [])], sections: [], sessions: [] }];
+  const hosts = [{ host: "local", label: "This Mac", workspaces: [w("personal", "Personal", []), w("acmeco", "Acme", [])], sections: [], sessions: [], profiles: [] }];
 
   it("keeps the remembered workspace while it exists, else falls back to the first", () => {
     expect(currentWorkspace({ host: "local", id: "acmeco" }, hosts)).toEqual({ host: "local", id: "acmeco" });
@@ -70,7 +70,7 @@ describe("currentWorkspace", () => {
 
 describe("workspacesNeedingYou", () => {
   it("marks workspaces with a live session that needs input or is unread", () => {
-    const hosts = [{ host: "local", label: "This Mac", workspaces: [], sections: [], sessions: [s("1", "personal"), s("2", "acmeco"), s("3", "lab", true)] }];
+    const hosts = [{ host: "local", label: "This Mac", workspaces: [], sections: [], sessions: [s("1", "personal"), s("2", "acmeco"), s("3", "lab", true)], profiles: [] }];
     const needs = (_host: string, x: Session) => x.id !== "1";
     expect([...workspacesNeedingYou(hosts, needs)]).toEqual(["local/acmeco"]);
   });

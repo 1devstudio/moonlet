@@ -186,7 +186,6 @@ export interface ProfileAccount {
   logged_in: boolean;
   email: string | null;
   org_name: string | null;
-  subscription: string | null;
 }
 
 export interface ProfileInfo extends ClaudeProfile {
