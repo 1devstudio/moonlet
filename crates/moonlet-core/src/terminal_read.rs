@@ -84,7 +84,7 @@ impl TerminalReads {
             title: result.title.clone(),
             command: result.command.clone(),
             exit: result.exit,
-            lines: result.text.lines().count(),
+            lines: result.lines,
             text: result.text.clone(),
         };
         // Subscribe before asking, so a tab closed right away is noticed.
