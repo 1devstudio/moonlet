@@ -500,7 +500,7 @@ async fn a_terminal_that_exited_can_still_be_read() {
     let read: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(
         read,
-        json!({ "terminal": t.id, "title": "tests", "exit": 2, "running": false, "truncated": false, "text": "build failed" })
+        json!({ "terminal": t.id, "title": "tests", "exit": 2, "running": false, "truncated": false, "lines": 1, "text": "build failed" })
     );
 }
 
@@ -594,6 +594,7 @@ async fn a_read_is_the_last_command_and_its_exit_code() {
     let req = requests(&mut c, 1).await.remove(0);
     assert_eq!(req["command"], json!("printf 'one\\ntwo\\n'; false"));
     assert_eq!(req["exit"], json!(1));
+    assert_eq!(req["lines"], json!(2), "lines of output, not the command line");
     let _: Value = c
         .request(
             "terminal.read_answer",
@@ -612,6 +613,7 @@ async fn a_read_is_the_last_command_and_its_exit_code() {
             "exit": 1,
             "running": false,
             "truncated": false,
+            "lines": 2,
             "text": "$ printf 'one\\ntwo\\n'; false\none\ntwo",
         })
     );

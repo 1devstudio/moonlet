@@ -54,14 +54,53 @@ pub struct LastCommand {
     pub running: bool,
     /// The output as printed, at most the asked number of lines.
     pub text: String,
+    /// Lines of output in `text`, not counting a note about omitted ones.
+    pub lines: usize,
+    /// Earlier output was left out.
+    pub truncated: bool,
 }
 
+#[derive(Clone)]
 struct Capture {
     command: Option<String>,
     exit: Option<i32>,
     running: bool,
     bytes: Vec<u8>,
     dropped: bool,
+}
+
+/// A copy of the last command's raw output (X31), so it can be rendered
+/// without holding the terminal it came from.
+pub struct CommandCapture {
+    capture: Capture,
+    rows: u16,
+    cols: u16,
+}
+
+impl CommandCapture {
+    /// The command and the last `max` lines of its output, as printed.
+    pub fn render(&self, max: usize) -> LastCommand {
+        let c = &self.capture;
+        let mut render = TermState::with_scrollback(self.rows, self.cols, 100_000);
+        render.feed(&c.bytes, Instant::now());
+        let (lines, omitted) = render.tail_lines(max);
+        let shown = lines.len();
+        let mut text = Vec::new();
+        if c.dropped {
+            text.push("… earlier output was not kept".to_string());
+        } else if omitted > 0 {
+            text.push(format!("… {omitted} earlier lines omitted"));
+        }
+        text.extend(lines);
+        LastCommand {
+            command: c.command.clone(),
+            exit: c.exit,
+            running: c.running,
+            text: text.join("\n"),
+            lines: shown,
+            truncated: c.dropped || omitted > 0,
+        }
+    }
 }
 
 /// Where each OSC 133 sequence in `data` ends, so the bytes after a `C`
@@ -337,24 +376,13 @@ impl TermState {
 
     /// The most recent command and the last `max` lines of its output (X31).
     pub fn last_command(&self, max: usize) -> Option<LastCommand> {
-        let c = self.last.as_ref()?;
+        Some(self.last_capture()?.render(max))
+    }
+
+    /// A copy of the most recent command's output, to render later.
+    pub fn last_capture(&self) -> Option<CommandCapture> {
         let (rows, cols) = self.size();
-        let mut render = TermState::with_scrollback(rows, cols, 100_000);
-        render.feed(&c.bytes, Instant::now());
-        let (lines, omitted) = render.tail_lines(max);
-        let mut text = Vec::new();
-        if c.dropped {
-            text.push("… earlier output was not kept".to_string());
-        } else if omitted > 0 {
-            text.push(format!("… {omitted} earlier lines omitted"));
-        }
-        text.extend(lines);
-        Some(LastCommand {
-            command: c.command.clone(),
-            exit: c.exit,
-            running: c.running,
-            text: text.join("\n"),
-        })
+        Some(CommandCapture { capture: self.last.clone()?, rows, cols })
     }
 
     fn feed(&mut self, bytes: &[u8], now: Instant) -> Vec<Signal> {
@@ -758,6 +786,8 @@ mod tests {
                 exit: None,
                 running: true,
                 text: "loading 100%".into(),
+                lines: 1,
+                truncated: false,
             })
         );
         t.process(b"FAIL src/login.test.ts\r\n\x1b]133;D;1\x07\x1b]133;A\x07$ ");
@@ -768,13 +798,15 @@ mod tests {
                 exit: Some(1),
                 running: false,
                 text: "loading 100%\nFAIL src/login.test.ts".into(),
+                lines: 2,
+                truncated: false,
             })
         );
         // The next command replaces it, and one without a reported line has none.
         t.process(b"\x1b]133;C\x07ok\r\n\x1b]133;D;0\x07");
         assert_eq!(
             t.last_command(2000),
-            Some(LastCommand { command: None, exit: Some(0), running: false, text: "ok".into() })
+            Some(LastCommand { command: None, exit: Some(0), running: false, text: "ok".into(), lines: 1, truncated: false })
         );
     }
 
@@ -789,9 +821,19 @@ mod tests {
         let last = t.last_command(2000).unwrap();
         let lines: Vec<&str> = last.text.lines().collect();
         assert_eq!(lines.len(), 2001);
+        assert_eq!((last.lines, last.truncated), (2000, true), "the marker is not a line of output");
         assert_eq!(lines[0], "… 500 earlier lines omitted");
         assert_eq!(lines[1], "501");
         assert_eq!(lines[2000], "2500");
+    }
+
+    /// Output that itself starts with "…" is not mistaken for a cut.
+    #[test]
+    fn output_starting_with_an_ellipsis_is_whole() {
+        let mut t = TermState::new(5, 20);
+        t.process("\x1b]133;C\x07… waiting\r\ndone\r\n\x1b]133;D;0\x07".as_bytes());
+        let last = t.last_command(2000).unwrap();
+        assert_eq!((last.text.as_str(), last.lines, last.truncated), ("… waiting\ndone", 2, false));
     }
 
     #[test]
