@@ -506,6 +506,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                         pr: None,
                         tui: false,
                         spawned_by: terminal_from_env(),
+                        workspace_id: None,
                         add_dirs: vec![],
                         cols: 120,
                         rows: 32,

@@ -61,7 +61,7 @@ function Home() {
         <div className="font-mono ui-text-22 tracking-tight">
           <span className="text-accent">❯</span> moonlet
         </div>
-        <div className="max-w-md ui-text-13.5 text-muted">Group projects into workspaces; every session runs its agent in its own worktree. They keep running when you close the app.</div>
+        <div className="max-w-md ui-text-13.5 text-muted">Group projects into sections; every session runs its agent in its own worktree. They keep running when you close the app.</div>
         {local && local.status !== "connected" && (
           <div className="ui-text-12 text-blocked">{local.status === "error" ? `Daemon: ${local.message}` : "Starting the moonlet daemon…"}</div>
         )}

@@ -14,6 +14,7 @@ describe("filtering", () => {
       "Settings…",
       "Re-run setup script",
       "Project settings…",
+      "New section…",
       "Split pane right",
       "Show review (PR, checks, commits)",
     ]);

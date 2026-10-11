@@ -51,8 +51,13 @@ pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
 pub const WORKSPACE_DELETE: &str = "workspace.delete";
-pub const WORKSPACE_ADD_PROJECT: &str = "workspace.add_project";
-pub const WORKSPACE_REMOVE_PROJECT: &str = "workspace.remove_project";
+pub const SECTION_CREATE: &str = "section.create";
+pub const SECTION_LIST: &str = "section.list";
+pub const SECTION_UPDATE: &str = "section.update";
+pub const SECTION_DELETE: &str = "section.delete";
+pub const SECTION_ADD_PROJECT: &str = "section.add_project";
+pub const SECTION_REMOVE_PROJECT: &str = "section.remove_project";
+pub const SECTION_MOVE: &str = "section.move";
 pub const SESSION_CREATE: &str = "session.create";
 pub const SESSION_LIST: &str = "session.list";
 pub const SESSION_ARCHIVE: &str = "session.archive";
@@ -117,6 +122,7 @@ pub const EV_AGENT_ATTENTION: &str = "agent.attention";
 pub const EV_PROJECTS_CHANGED: &str = "projects.changed";
 pub const EV_SESSIONS_CHANGED: &str = "sessions.changed";
 pub const EV_WORKSPACES_CHANGED: &str = "workspaces.changed";
+pub const EV_SECTIONS_CHANGED: &str = "sections.changed";
 pub const EV_FS_CHANGED: &str = "fs.changed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +420,10 @@ pub struct SessionCreate {
     /// Extra directories the agent may work in from the start (X29).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub add_dirs: Vec<String>,
+    /// The workspace to create the session in (X32). Absent: the spawning
+    /// agent's workspace, else the first workspace holding the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
@@ -441,14 +451,15 @@ pub struct SessionUpdate {
     pub name: Option<String>,
     #[serde(default)]
     pub layout: Option<serde_json::Value>,
-    /// Move into a section; `Some("")` removes it from any section.
-    #[serde(default)]
-    pub section: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceCreate {
     pub name: String,
+    pub color: String,
+    /// Sections to move into the new workspace from the ones they are in.
+    #[serde(default)]
+    pub move_sections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -457,23 +468,46 @@ pub struct WorkspaceUpdate {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub project_ids: Option<Vec<String>>,
+    pub color: Option<String>,
+    /// The workspace's sections in their new order. Only reorders: moving a
+    /// section between workspaces is `section.move`.
     #[serde(default)]
-    pub sections: Option<Vec<crate::types::Section>>,
-    #[serde(default)]
-    pub view: Option<crate::types::WorkspaceView>,
+    pub section_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceAddProject {
+pub struct SectionCreate {
+    pub workspace_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionUpdate {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub view: Option<crate::types::SectionView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionAddProject {
     pub id: String,
     pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceRemoveProject {
+pub struct SectionRemoveProject {
     pub id: String,
     pub project_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionMove {
+    pub id: String,
+    pub workspace_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -150,9 +150,10 @@ pub struct Session {
     pub agent: Option<String>,
     pub archived: bool,
     pub created_at: u64,
-    /// Section (within a workspace) the user moved this session into.
+    /// The workspace the session belongs to (X32). Only absent while a
+    /// state file from before X32 is being migrated.
     #[serde(default)]
-    pub section: Option<String>,
+    pub workspace_id: Option<String>,
     /// Last agent model and effort chosen for this session.
     #[serde(default)]
     pub model: Option<String>,
@@ -178,29 +179,39 @@ pub struct Session {
     pub restore: Vec<RestoreEntry>,
 }
 
-/// A named set of projects shown as one block in the sidebar (X5).
+/// A named, coloured scope with its own sections, sessions and (X33) Claude
+/// profile. The sidebar shows one workspace at a time (X32).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
+    pub id: String,
+    pub name: String,
+    /// One of [`WORKSPACE_COLORS`].
+    pub color: String,
+    /// The workspace's sections, in sidebar order.
+    #[serde(default)]
+    pub section_ids: Vec<String>,
+    pub created_at: u64,
+}
+
+/// The colours a workspace can have, as the design names them.
+pub const WORKSPACE_COLORS: [&str; 5] = ["clay", "blue", "violet", "sand", "grey"];
+
+/// A named set of projects shown as one block in the sidebar (X5's
+/// workspace, renamed in X32).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Section {
     pub id: String,
     pub name: String,
     #[serde(default)]
     pub project_ids: Vec<String>,
     #[serde(default)]
-    pub sections: Vec<Section>,
-    #[serde(default)]
-    pub view: WorkspaceView,
+    pub view: SectionView,
     pub created_at: u64,
 }
 
+/// Sidebar presentation of a section, persisted with it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Section {
-    pub id: String,
-    pub name: String,
-}
-
-/// Sidebar presentation of a workspace, persisted with it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WorkspaceView {
+pub struct SectionView {
     /// `project` (default), `status` or `none`.
     #[serde(default = "default_group")]
     pub group_by: String,
@@ -212,7 +223,7 @@ pub struct WorkspaceView {
     pub filter: Vec<String>,
 }
 
-impl Default for WorkspaceView {
+impl Default for SectionView {
     fn default() -> Self {
         Self {
             group_by: default_group(),

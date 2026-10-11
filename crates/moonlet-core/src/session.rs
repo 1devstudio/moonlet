@@ -9,11 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use moonlet_proto::methods::{
-    self, SessionArchive, SessionCreate, SessionUpdate, TerminalCreate, WorkspaceUpdate,
+    self, SectionUpdate, SessionArchive, SessionCreate, SessionUpdate, TerminalCreate, WorkspaceCreate,
+    WorkspaceUpdate,
 };
 use moonlet_proto::types::{
-    Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Session, TerminalInfo, TerminalKind,
-    Workspace, WorkspaceView,
+    Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session, TerminalInfo,
+    TerminalKind, WORKSPACE_COLORS, Workspace,
 };
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
@@ -23,8 +24,13 @@ use crate::paths::now_ms;
 use crate::pty::user_shell;
 use crate::terminal::{TerminalManager, expand_home};
 
-const STATE_VERSION: u32 = 2;
-pub const DEFAULT_WORKSPACE: &str = "My workspaces";
+const STATE_VERSION: u32 = 3;
+/// The workspace every install starts with, and that X5's workspaces are
+/// migrated into (X32).
+pub const DEFAULT_WORKSPACE: &str = "Personal";
+const DEFAULT_COLOR: &str = "clay";
+/// The section a project lands in when nothing else holds it.
+pub const DEFAULT_SECTION: &str = "My projects";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct State {
@@ -33,6 +39,8 @@ pub struct State {
     #[serde(default)]
     pub workspaces: Vec<Workspace>,
     #[serde(default)]
+    pub sections: Vec<Section>,
+    #[serde(default)]
     pub projects: Vec<Project>,
     #[serde(default)]
     pub sessions: Vec<Session>,
@@ -40,14 +48,15 @@ pub struct State {
 
 impl State {
     /// Reads `state.json`, migrating the pre-ADR-0005 layout where `repos`
-    /// were projects and `workspaces` were what are now sessions.
+    /// were projects and `workspaces` were what are now sessions, and the X5
+    /// layout where workspaces were what are now sections (ADR 0007).
     pub fn parse(text: &str) -> State {
         Self::try_parse(text).unwrap_or_else(|_| {
             let mut st = State {
                 version: STATE_VERSION,
                 ..Default::default()
             };
-            st.ensure_workspace();
+            st.ensure();
             st
         })
     }
@@ -56,23 +65,25 @@ impl State {
     /// of silently starting empty.
     pub fn try_parse(text: &str) -> Result<State, serde_json::Error> {
         let mut v = serde_json::from_str::<serde_json::Value>(text)?;
-        if v.get("version").and_then(|x| x.as_u64()).unwrap_or(0) < 2
-            && let Some(obj) = v.as_object_mut()
-        {
-            let repos = obj.remove("repos").unwrap_or(serde_json::json!([]));
-            let tasks = obj.remove("workspaces").unwrap_or(serde_json::json!([]));
-            obj.insert("projects".into(), repos);
-            obj.insert("sessions".into(), tasks);
+        let version = v.get("version").and_then(|x| x.as_u64()).unwrap_or(0);
+        if let Some(obj) = v.as_object_mut() {
+            if version < 2 {
+                let repos = obj.remove("repos").unwrap_or(serde_json::json!([]));
+                let tasks = obj.remove("workspaces").unwrap_or(serde_json::json!([]));
+                obj.insert("projects".into(), repos);
+                obj.insert("sessions".into(), tasks);
+            }
+            if version < 3 {
+                migrate_x5(obj);
+            }
         }
         let mut st: State = serde_json::from_value(v)?;
         st.version = STATE_VERSION;
-        st.ensure_workspace();
+        st.ensure();
         Ok(st)
     }
 
-    /// There is always at least one workspace; projects nobody groups land
-    /// in the first one so nothing disappears from the sidebar.
-    /// Forgets a project, its archived sessions and its workspace entries.
+    /// Forgets a project, its archived sessions and its section entries.
     fn drop_project(&mut self, id: &str) -> Result<()> {
         if self
             .sessions
@@ -83,35 +94,192 @@ impl State {
         }
         self.projects.retain(|r| r.id != id);
         self.sessions.retain(|w| w.project_id != id);
-        for w in &mut self.workspaces {
-            w.project_ids.retain(|p| p != id);
+        for s in &mut self.sections {
+            s.project_ids.retain(|p| p != id);
         }
         Ok(())
     }
 
-    fn ensure_workspace(&mut self) {
+    fn workspace_of_section(&self, section: &str) -> Option<usize> {
+        self.workspaces
+            .iter()
+            .position(|w| w.section_ids.iter().any(|s| s == section))
+    }
+
+    /// Whether a section of workspace `ws`, other than `except`, holds `project`.
+    fn holds(&self, ws: &str, project: &str, except: Option<&str>) -> bool {
+        let Some(w) = self.workspaces.iter().find(|w| w.id == ws) else {
+            return false;
+        };
+        self.sections.iter().any(|s| {
+            Some(s.id.as_str()) != except
+                && w.section_ids.contains(&s.id)
+                && s.project_ids.iter().any(|p| p == project)
+        })
+    }
+
+    /// The first workspace with a section holding `project`.
+    fn first_holding(&self, project: &str) -> Option<String> {
+        self.workspaces
+            .iter()
+            .find(|w| self.holds(&w.id, project, None))
+            .map(|w| w.id.clone())
+    }
+
+    /// Keeps the model whole: there is always a workspace; every section
+    /// belongs to one; every project is in a section; every session is in a
+    /// workspace, preferably one that holds its project.
+    fn ensure(&mut self) {
         if self.workspaces.is_empty() {
-            self.workspaces.push(Workspace {
-                id: new_id(),
-                name: DEFAULT_WORKSPACE.into(),
-                project_ids: Vec::new(),
-                sections: Vec::new(),
-                view: WorkspaceView::default(),
-                created_at: now_ms(),
-            });
+            self.workspaces.push(new_workspace(DEFAULT_WORKSPACE, DEFAULT_COLOR));
+        }
+        let known: Vec<String> = self.sections.iter().map(|s| s.id.clone()).collect();
+        for w in &mut self.workspaces {
+            w.section_ids.retain(|id| known.contains(id));
+        }
+        for id in known {
+            if self.workspace_of_section(&id).is_none() {
+                self.workspaces[0].section_ids.push(id);
+            }
         }
         let orphans: Vec<String> = self
             .projects
             .iter()
-            .filter(|p| {
-                !self
-                    .workspaces
-                    .iter()
-                    .any(|w| w.project_ids.contains(&p.id))
-            })
+            .filter(|p| !self.sections.iter().any(|s| s.project_ids.contains(&p.id)))
             .map(|p| p.id.clone())
             .collect();
-        self.workspaces[0].project_ids.extend(orphans);
+        if self.sections.is_empty() || !orphans.is_empty() {
+            let first = self.workspaces[0].section_ids.first().cloned();
+            let id = match first {
+                Some(id) => id,
+                None => {
+                    let s = new_section(DEFAULT_SECTION);
+                    let id = s.id.clone();
+                    self.sections.push(s);
+                    self.workspaces[0].section_ids.push(id.clone());
+                    id
+                }
+            };
+            if let Some(s) = self.sections.iter_mut().find(|s| s.id == id) {
+                s.project_ids.extend(orphans);
+            }
+        }
+        let workspaces: Vec<String> = self.workspaces.iter().map(|w| w.id.clone()).collect();
+        for i in 0..self.sessions.len() {
+            let ok = self.sessions[i]
+                .workspace_id
+                .as_ref()
+                .is_some_and(|w| workspaces.contains(w));
+            if !ok {
+                let home = self
+                    .first_holding(&self.sessions[i].project_id)
+                    .unwrap_or_else(|| workspaces[0].clone());
+                self.sessions[i].workspace_id = Some(home);
+            }
+        }
+    }
+}
+
+/// X5 to X32 (ADR 0007): X5's workspaces become sections of one workspace,
+/// "Personal", in the same order; X5's session sections are dropped.
+fn migrate_x5(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    use serde_json::{Value, json};
+    let old = match obj.remove("workspaces") {
+        Some(Value::Array(a)) => a,
+        _ => Vec::new(),
+    };
+    let sections: Vec<Value> = old
+        .into_iter()
+        .map(|mut w| {
+            if let Some(o) = w.as_object_mut() {
+                o.remove("sections");
+            }
+            w
+        })
+        .collect();
+    let ids: Vec<Value> = sections.iter().filter_map(|s| s.get("id").cloned()).collect();
+    let mut personal = new_workspace(DEFAULT_WORKSPACE, DEFAULT_COLOR);
+    personal.section_ids = ids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    let pid = personal.id.clone();
+    obj.insert("workspaces".into(), json!([personal]));
+    obj.insert("sections".into(), Value::Array(sections));
+    if let Some(Value::Array(sessions)) = obj.get_mut("sessions") {
+        for s in sessions {
+            if let Some(o) = s.as_object_mut() {
+                o.remove("section");
+                o.insert("workspace_id".into(), json!(pid));
+            }
+        }
+    }
+}
+
+fn check_color(color: &str) -> Result<()> {
+    if !WORKSPACE_COLORS.contains(&color) {
+        bail!("unknown workspace colour {color:?}");
+    }
+    Ok(())
+}
+
+/// Whether `project` has an unarchived session in workspace `ws`.
+fn live_in(st: &State, ws: &str, project: &str) -> bool {
+    st.sessions
+        .iter()
+        .any(|s| !s.archived && s.project_id == project && s.workspace_id.as_deref() == Some(ws))
+}
+
+/// Moves section `id` to workspace `to`. Sessions of its projects follow it
+/// unless their old workspace still holds the project in another section.
+fn move_section(st: &mut State, id: &str, to: &str) -> Result<()> {
+    if !st.workspaces.iter().any(|w| w.id == to) {
+        bail!("no such workspace");
+    }
+    let from = st.workspace_of_section(id).context("no such section")?;
+    let from_id = st.workspaces[from].id.clone();
+    if from_id == to {
+        return Ok(());
+    }
+    let projects = st
+        .sections
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| s.project_ids.clone())
+        .unwrap_or_default();
+    let follow: Vec<String> = projects
+        .into_iter()
+        .filter(|p| !st.holds(&from_id, p, Some(id)))
+        .collect();
+    st.workspaces[from].section_ids.retain(|s| s != id);
+    st.workspaces
+        .iter_mut()
+        .find(|w| w.id == to)
+        .unwrap()
+        .section_ids
+        .push(id.to_string());
+    for s in &mut st.sessions {
+        if s.workspace_id.as_deref() == Some(from_id.as_str()) && follow.contains(&s.project_id) {
+            s.workspace_id = Some(to.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn new_workspace(name: &str, color: &str) -> Workspace {
+    Workspace {
+        id: new_id(),
+        name: name.into(),
+        color: color.into(),
+        section_ids: Vec::new(),
+        created_at: now_ms(),
+    }
+}
+
+fn new_section(name: &str) -> Section {
+    Section {
+        id: new_id(),
+        name: name.into(),
+        project_ids: Vec::new(),
+        view: SectionView::default(),
+        created_at: now_ms(),
     }
 }
 
@@ -335,35 +503,58 @@ impl SessionManager {
         ));
     }
 
+    fn emit_sections(&self) {
+        self.terminals.emit(Message::event(
+            methods::EV_SECTIONS_CHANGED,
+            self.list_sections(),
+        ));
+    }
+
+    fn emit_projects(&self) {
+        self.terminals.emit(Message::event(
+            methods::EV_PROJECTS_CHANGED,
+            self.list_projects(),
+        ));
+    }
+
     pub fn list_workspaces(&self) -> Vec<Workspace> {
         self.state.lock().unwrap().workspaces.clone()
     }
 
-    pub fn create_workspace(&self, name: &str) -> Result<Workspace> {
-        let name = name.trim();
+    pub fn list_sections(&self) -> Vec<Section> {
+        self.state.lock().unwrap().sections.clone()
+    }
+
+    /// Creates a workspace (X32), moving `move_sections` into it from the
+    /// workspaces they are in.
+    pub fn create_workspace(&self, req: WorkspaceCreate) -> Result<Workspace> {
+        let name = req.name.trim();
         if name.is_empty() {
             bail!("workspace name is empty");
         }
-        let ws = Workspace {
-            id: new_id(),
-            name: name.to_string(),
-            project_ids: Vec::new(),
-            sections: Vec::new(),
-            view: WorkspaceView::default(),
-            created_at: now_ms(),
-        };
-        let out = ws.clone();
+        check_color(&req.color)?;
+        let ws = new_workspace(name, &req.color);
+        let id = ws.id.clone();
         self.mutate(|st| {
             st.workspaces.push(ws);
+            for sec in &req.move_sections {
+                move_section(st, sec, &id)?;
+            }
             Ok(())
         })?;
-        self.emit_workspaces();
-        Ok(out)
+        self.emit_all();
+        Ok(self
+            .list_workspaces()
+            .into_iter()
+            .find(|w| w.id == id)
+            .unwrap())
     }
 
     pub fn update_workspace(&self, req: WorkspaceUpdate) -> Result<Workspace> {
+        if let Some(c) = &req.color {
+            check_color(c)?;
+        }
         let out = self.mutate(|st| {
-            let known: Vec<String> = st.projects.iter().map(|p| p.id.clone()).collect();
             let w = st
                 .workspaces
                 .iter_mut()
@@ -372,84 +563,180 @@ impl SessionManager {
             if let Some(n) = req.name.filter(|n| !n.trim().is_empty()) {
                 w.name = n.trim().to_string();
             }
-            if let Some(ids) = req.project_ids {
-                w.project_ids = ids.into_iter().filter(|id| known.contains(id)).collect();
+            if let Some(c) = req.color {
+                w.color = c;
             }
-            if let Some(sections) = req.sections {
-                let ids: Vec<String> = sections.iter().map(|s| s.id.clone()).collect();
-                w.sections = sections;
-                // Sessions in a removed section fall back to their project.
-                for s in &mut st.sessions {
-                    if s.section.as_ref().is_some_and(|sec| {
-                        sec.starts_with(&format!("{}:", req.id)) && !ids.contains(sec)
-                    }) {
-                        s.section = None;
-                    }
+            if let Some(ids) = req.section_ids {
+                let (mut a, mut b) = (ids.clone(), w.section_ids.clone());
+                a.sort();
+                b.sort();
+                if a != b {
+                    bail!("section_ids only reorders this workspace's sections");
                 }
+                w.section_ids = ids;
             }
-            if let Some(view) = req.view {
-                w.view = view;
-            }
-            Ok(st
-                .workspaces
-                .iter()
-                .find(|w| w.id == req.id)
-                .cloned()
-                .unwrap())
+            Ok(w.clone())
         })?;
         self.emit_workspaces();
-        self.emit_sessions();
         Ok(out)
     }
 
-    /// Deletes the grouping only; projects and sessions stay.
+    /// Deletes an empty workspace. Its archived sessions move to the first
+    /// workspace holding their project.
     pub fn delete_workspace(&self, id: &str) -> Result<()> {
         self.mutate(|st| {
+            let w = st
+                .workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .context("no such workspace")?;
             if st.workspaces.len() == 1 {
                 bail!("the last workspace cannot be deleted");
             }
+            if !w.section_ids.is_empty() {
+                bail!("move or delete this workspace's sections first");
+            }
             st.workspaces.retain(|w| w.id != id);
-            st.ensure_workspace();
+            st.ensure();
             Ok(())
         })?;
         self.emit_workspaces();
+        self.emit_sessions();
         Ok(())
     }
 
-    /// Adds a project (or finds it) and attaches it to a workspace.
-    pub async fn workspace_add_project(&self, id: &str, path: &str) -> Result<Project> {
+    pub fn create_section(&self, workspace_id: &str, name: &str) -> Result<Section> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("section name is empty");
+        }
+        let sec = new_section(name);
+        let out = sec.clone();
+        self.mutate(|st| {
+            st.workspaces
+                .iter_mut()
+                .find(|w| w.id == workspace_id)
+                .context("no such workspace")?
+                .section_ids
+                .push(sec.id.clone());
+            st.sections.push(sec);
+            Ok(())
+        })?;
+        self.emit_sections();
+        self.emit_workspaces();
+        Ok(out)
+    }
+
+    pub fn update_section(&self, req: SectionUpdate) -> Result<Section> {
+        let out = self.mutate(|st| {
+            let known: Vec<String> = st.projects.iter().map(|p| p.id.clone()).collect();
+            let s = st
+                .sections
+                .iter_mut()
+                .find(|s| s.id == req.id)
+                .context("no such section")?;
+            if let Some(n) = req.name.filter(|n| !n.trim().is_empty()) {
+                s.name = n.trim().to_string();
+            }
+            if let Some(ids) = req.project_ids {
+                s.project_ids = ids.into_iter().filter(|id| known.contains(id)).collect();
+            }
+            if let Some(view) = req.view {
+                s.view = view;
+            }
+            Ok(s.clone())
+        })?;
+        self.emit_sections();
+        Ok(out)
+    }
+
+    /// Deletes the grouping only. Projects no other section of the workspace
+    /// holds move to its first other section; without one, they may only go
+    /// while none of their sessions here is live.
+    pub fn delete_section(&self, id: &str) -> Result<()> {
+        self.mutate(|st| {
+            let wi = st.workspace_of_section(id).context("no such section")?;
+            let ws = st.workspaces[wi].id.clone();
+            let other = st.workspaces[wi].section_ids.iter().find(|s| *s != id).cloned();
+            let sec = st.sections.iter().find(|s| s.id == id).cloned().context("no such section")?;
+            let alone: Vec<String> = sec
+                .project_ids
+                .iter()
+                .filter(|p| !st.holds(&ws, p, Some(id)))
+                .cloned()
+                .collect();
+            match other {
+                Some(other) => {
+                    let o = st.sections.iter_mut().find(|s| s.id == other).unwrap();
+                    o.project_ids.extend(alone);
+                }
+                None if alone.iter().any(|p| live_in(st, &ws, p)) => {
+                    bail!("archive the sessions of this section's projects first")
+                }
+                None => {}
+            }
+            st.sections.retain(|s| s.id != id);
+            st.ensure();
+            Ok(())
+        })?;
+        self.emit_all();
+        Ok(())
+    }
+
+    /// Moves a section to another workspace, with the sessions of the
+    /// projects only it held in its old workspace.
+    pub fn move_section(&self, id: &str, workspace_id: &str) -> Result<()> {
+        self.mutate(|st| move_section(st, id, workspace_id))?;
+        self.emit_all();
+        Ok(())
+    }
+
+    fn emit_all(&self) {
+        self.emit_workspaces();
+        self.emit_sections();
+        self.emit_sessions();
+        self.emit_projects();
+    }
+
+    /// Adds a project (or finds it) and attaches it to a section.
+    pub async fn section_add_project(&self, id: &str, path: &str) -> Result<Project> {
         self.add_project_to(path, Some(id)).await
     }
 
-    /// Detaches a project from a workspace. A project no other workspace
-    /// holds is removed from moonlet, which needs its sessions archived first.
-    pub fn workspace_remove_project(&self, id: &str, project_id: &str) -> Result<()> {
+    /// Detaches a project from a section. It must not leave live sessions
+    /// behind in a workspace that no longer holds it, and a project no
+    /// section holds is removed from moonlet, which needs its sessions
+    /// archived first.
+    pub fn section_remove_project(&self, id: &str, project_id: &str) -> Result<()> {
         let dropped = self.mutate(|st| {
+            let wi = st.workspace_of_section(id).context("no such section")?;
+            let ws = st.workspaces[wi].id.clone();
             let i = st
-                .workspaces
+                .sections
                 .iter()
-                .position(|w| w.id == id)
-                .context("no such workspace")?;
-            if !st.workspaces[i].project_ids.iter().any(|p| p == project_id) {
-                bail!("the project is not in this workspace");
+                .position(|s| s.id == id)
+                .context("no such section")?;
+            if !st.sections[i].project_ids.iter().any(|p| p == project_id) {
+                bail!("the project is not in this section");
             }
             let elsewhere = st
-                .workspaces
+                .sections
                 .iter()
-                .any(|w| w.id != id && w.project_ids.iter().any(|p| p == project_id));
-            if elsewhere {
-                st.workspaces[i].project_ids.retain(|p| p != project_id);
-            } else {
+                .any(|s| s.id != id && s.project_ids.iter().any(|p| p == project_id));
+            if !elsewhere {
                 st.drop_project(project_id)?;
+                return Ok(true);
             }
-            Ok(!elsewhere)
+            if !st.holds(&ws, project_id, Some(id)) && live_in(st, &ws, project_id) {
+                bail!("archive this project's sessions in this workspace first");
+            }
+            st.sections[i].project_ids.retain(|p| p != project_id);
+            st.ensure();
+            Ok(false)
         })?;
-        self.emit_workspaces();
+        self.emit_sections();
         if dropped {
-            self.terminals.emit(Message::event(
-                methods::EV_PROJECTS_CHANGED,
-                self.list_projects(),
-            ));
+            self.emit_projects();
         }
         Ok(())
     }
@@ -458,25 +745,25 @@ impl SessionManager {
         self.add_project_to(path, None).await
     }
 
-    /// A new project joins `workspace` in the same update, so the orphan
-    /// sweep in `ensure_workspace` does not also file it under the first one.
-    async fn add_project_to(&self, path: &str, workspace: Option<&str>) -> Result<Project> {
+    /// A new project joins `section` in the same update, so the orphan sweep
+    /// in `State::ensure` does not also file it under the first one.
+    async fn add_project_to(&self, path: &str, section: Option<&str>) -> Result<Project> {
         let root = git::toplevel(&expand_home(path)).await?;
         let root_s = root.display().to_string();
         if let Some(r) = self.list_projects().into_iter().find(|r| r.path == root_s) {
-            if let Some(id) = workspace {
+            if let Some(id) = section {
                 self.mutate(|st| {
-                    let w = st
-                        .workspaces
+                    let s = st
+                        .sections
                         .iter_mut()
-                        .find(|w| w.id == id)
-                        .context("no such workspace")?;
-                    if !w.project_ids.contains(&r.id) {
-                        w.project_ids.push(r.id.clone());
+                        .find(|s| s.id == id)
+                        .context("no such section")?;
+                    if !s.project_ids.contains(&r.id) {
+                        s.project_ids.push(r.id.clone());
                     }
                     Ok(())
                 })?;
-                self.emit_workspaces();
+                self.emit_sections();
             }
             return Ok(r);
         }
@@ -496,23 +783,21 @@ impl SessionManager {
         };
         let r = repo.clone();
         self.mutate(|st| {
-            if let Some(id) = workspace {
-                st.workspaces
+            if let Some(id) = section {
+                st.sections
                     .iter_mut()
-                    .find(|w| w.id == id)
-                    .context("no such workspace")?
+                    .find(|s| s.id == id)
+                    .context("no such section")?
                     .project_ids
                     .push(r.id.clone());
             }
             st.projects.push(r);
-            st.ensure_workspace();
+            st.ensure();
             Ok(())
         })?;
+        self.emit_sections();
         self.emit_workspaces();
-        self.terminals.emit(Message::event(
-            methods::EV_PROJECTS_CHANGED,
-            self.list_projects(),
-        ));
+        self.emit_projects();
         Ok(repo)
     }
 
@@ -696,6 +981,26 @@ impl SessionManager {
         }
     }
 
+    /// The workspace a new session of `project` goes into (X32): the one
+    /// asked for, which must hold the project; else the spawning agent's,
+    /// when it holds the project; else the first that does.
+    fn session_workspace(&self, project: &str, asked: Option<&str>, parent: Option<&str>) -> Result<String> {
+        let st = self.state.lock().unwrap();
+        if let Some(ws) = asked {
+            if !st.workspaces.iter().any(|w| w.id == ws) {
+                bail!("no such workspace");
+            }
+            if !st.holds(ws, project, None) {
+                bail!("the project is not in this workspace");
+            }
+            return Ok(ws.to_string());
+        }
+        if let Some(ws) = parent.filter(|ws| st.holds(ws, project, None)) {
+            return Ok(ws.to_string());
+        }
+        Ok(st.first_holding(project).unwrap_or_else(|| st.workspaces[0].id.clone()))
+    }
+
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
         let mut req = req;
         crate::chat::check_mode(req.mode.as_deref())?;
@@ -742,6 +1047,12 @@ impl SessionManager {
         if let Some((parent_mode, _, _)) = &parent_run {
             req.mode = Some(crate::chat::spawned_mode(req.mode.as_deref(), parent_mode.as_deref())?);
         }
+        let parent_ws = parent
+            .as_ref()
+            .and_then(|p| p.session_id.as_deref())
+            .and_then(|id| self.session(id).ok())
+            .and_then(|s| s.workspace_id);
+        let workspace_id = self.session_workspace(&repo.id, req.workspace_id.as_deref(), parent_ws.as_deref())?;
         let slug = git::slug(&name);
         let existing_branches = git::branches(&repo_path).await.unwrap_or_default();
         let branch = if req.existing_branch {
@@ -806,7 +1117,7 @@ impl SessionManager {
             agent: agent.clone(),
             archived: false,
             created_at: now_ms(),
-            section: None,
+            workspace_id: Some(workspace_id),
             model: req.model.clone().filter(|m| !m.is_empty()),
             effort: req.effort.clone().filter(|e| !e.is_empty()),
             mode: req.mode.clone(),
@@ -1004,9 +1315,6 @@ impl SessionManager {
             }
             if let Some(l) = req.layout {
                 w.layout = l;
-            }
-            if let Some(sec) = req.section {
-                w.section = (!sec.is_empty()).then_some(sec);
             }
             Ok(())
         })?;
@@ -1295,6 +1603,7 @@ mod tests {
             tui: false,
             spawned_by: None,
             add_dirs: vec![],
+            workspace_id: None,
         };
         for bad in ["", "yolo"] {
             let err = mgr.create_session(req(bad)).await.unwrap_err();
@@ -1330,6 +1639,7 @@ mod tests {
                 tui: false,
                 spawned_by: None,
                 add_dirs: vec![],
+                workspace_id: None,
             })
             .await
             .unwrap();
@@ -1369,6 +1679,7 @@ mod tests {
                 tui: false,
                 spawned_by: None,
                 add_dirs: vec![],
+                workspace_id: None,
             })
             .await
             .unwrap();
@@ -1399,6 +1710,7 @@ mod tests {
             tui: false,
             spawned_by,
             add_dirs: vec![],
+            workspace_id: None,
         }
     }
 
@@ -1437,6 +1749,26 @@ mod tests {
             );
         }
         assert_eq!(mgr.list_sessions().len(), 3, "the rejected ones created nothing");
+    }
+
+    /// X32: an agent's new session joins the agent's workspace when that
+    /// workspace holds the project, not the first one that does.
+    #[tokio::test]
+    async fn a_spawned_session_joins_its_parents_workspace() {
+        let (repo, _home, mgr) = setup().await;
+        let path = repo.path().display().to_string();
+        let r = mgr.add_project(&path).await.unwrap();
+        let work = workspace(&mgr, "CipherHealth", vec![]);
+        let sec = mgr.create_section(&work.id, "AI Operations").unwrap();
+        mgr.section_add_project(&sec.id, &path).await.unwrap();
+        let mut req = spawn_req(&r.id, "Parent", None, None);
+        req.workspace_id = Some(work.id.clone());
+        let parent = mgr.create_session(req).await.unwrap();
+        let child = mgr
+            .create_session(spawn_req(&r.id, "Child", None, Some(parent.terminals[0])))
+            .await
+            .unwrap();
+        assert_eq!(child.workspace_id.as_deref(), Some(work.id.as_str()));
     }
 
     #[tokio::test]
@@ -1710,6 +2042,7 @@ mod tests {
                     tui: false,
                     spawned_by: None,
                     add_dirs: vec![],
+                    workspace_id: None,
                 })
                 .await
                 .unwrap();
@@ -1768,6 +2101,7 @@ mod tests {
                 tui: false,
                 spawned_by: None,
                 add_dirs: vec![],
+                workspace_id: None,
             })
             .await
             .unwrap();
@@ -1802,6 +2136,7 @@ mod tests {
                 tui: false,
                 spawned_by: None,
                 add_dirs: vec![],
+                workspace_id: None,
             })
             .await
             .unwrap();
@@ -1861,6 +2196,7 @@ mod tests {
                 tui: false,
                 spawned_by: None,
                 add_dirs: vec![],
+                workspace_id: None,
             })
             .await
             .unwrap();
@@ -1919,6 +2255,7 @@ mod tests {
                 tui: false,
                 spawned_by: None,
                 add_dirs: vec![],
+                workspace_id: None,
             })
             .await
             .unwrap();
@@ -1983,6 +2320,7 @@ mod tests {
                 tui: false,
                 spawned_by: None,
                 add_dirs: vec![],
+                workspace_id: None,
             })
             .await
             .unwrap();
@@ -2047,99 +2385,61 @@ mod tests {
         assert_eq!(st.sessions[0].terminals, vec![3]);
         assert_eq!(st.sessions[0].restore[0].terminal, Some(3));
         assert_eq!(st.workspaces.len(), 1);
-        assert_eq!(st.workspaces[0].name, DEFAULT_WORKSPACE);
-        assert_eq!(st.workspaces[0].project_ids, vec!["p1".to_string()]);
+        assert_eq!(st.workspaces[0].name, "Personal");
+        assert_eq!(st.sections.len(), 1);
+        assert_eq!(st.sections[0].name, "My projects");
+        assert_eq!(st.sections[0].project_ids, vec!["p1".to_string()]);
+        assert_eq!(st.sessions[0].workspace_id.as_deref(), Some(st.workspaces[0].id.as_str()));
         // Already-migrated files are read as they are.
         let again = State::parse(&serde_json::to_string(&st).unwrap());
         assert_eq!(again.workspaces.len(), 1);
         assert_eq!(again.workspaces[0].id, st.workspaces[0].id);
     }
 
-    #[tokio::test]
-    async fn new_project_added_to_a_workspace_lands_only_there() {
-        let (repo, _home, mgr) = setup().await;
-        let first = mgr.list_workspaces()[0].clone();
-        let work = mgr.create_workspace("CipherHealth").unwrap();
-        let r = mgr
-            .workspace_add_project(&work.id, &repo.path().display().to_string())
-            .await
-            .unwrap();
-        let all = mgr.list_workspaces();
-        let names: Vec<&str> = all
-            .iter()
-            .filter(|w| w.project_ids.contains(&r.id))
-            .map(|w| w.name.as_str())
-            .collect();
-        assert_eq!(names, vec!["CipherHealth"]);
-        assert!(
-            !all.iter()
-                .find(|w| w.id == first.id)
-                .unwrap()
-                .project_ids
-                .contains(&r.id)
-        );
+    /// X32: the X5 workspaces become sections of one workspace, "Personal";
+    /// the X5 session sections are dropped.
+    #[test]
+    fn migrates_x5_workspaces_into_sections() {
+        let x5 = r#"{"version":2,
+            "workspaces":[
+              {"id":"w1","name":"1devstudio","project_ids":["p1","p2"],"sections":[],
+               "view":{"group_by":"project","sort_by":"recent","filter":[]},"created_at":1},
+              {"id":"w2","name":"CipherHealth","project_ids":["p2","p3"],"sections":[{"id":"w2:a","name":"Today"}],
+               "view":{"group_by":"status","sort_by":"name","filter":["p3"]},"created_at":2}],
+            "projects":[
+              {"id":"p1","name":"jaunt","path":"/r/jaunt","base_branch":"main"},
+              {"id":"p2","name":"shared","path":"/r/shared","base_branch":"main"},
+              {"id":"p3","name":"cipher-paas","path":"/r/cipher-paas","base_branch":"develop"}],
+            "sessions":[
+              {"id":"s1","project_id":"p1","name":"Fix","branch":"moonlet/fix","base":"main","path":"/w/fix",
+               "agent":"claude","archived":false,"created_at":3,"section":null},
+              {"id":"s2","project_id":"p3","name":"Deploy","branch":"moonlet/deploy","base":"develop","path":"/w/deploy",
+               "agent":"claude","archived":false,"created_at":4,"section":"w2:a"}]}"#;
+        let st = State::parse(x5);
+        assert_eq!(st.workspaces.len(), 1);
+        let personal = &st.workspaces[0];
+        assert_eq!(personal.name, "Personal");
+        assert_eq!(personal.color, "clay");
+        assert_eq!(personal.section_ids, vec!["w1".to_string(), "w2".to_string()]);
+        let names: Vec<&str> = st.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["1devstudio", "CipherHealth"]);
+        assert_eq!(st.sections[1].project_ids, vec!["p2".to_string(), "p3".to_string()]);
+        assert_eq!(st.sections[1].view.group_by, "status");
+        assert_eq!(st.sections[1].view.filter, vec!["p3".to_string()]);
+        for s in &st.sessions {
+            assert_eq!(s.workspace_id.as_deref(), Some(personal.id.as_str()), "{}", s.id);
+        }
+        let text = serde_json::to_string(&st).unwrap();
+        assert!(!text.contains("w2:a"), "the X5 session section is gone");
+        // A migrated file reads back unchanged.
+        let again = State::parse(&text);
+        assert_eq!(again.workspaces, st.workspaces);
+        assert_eq!(again.sections, st.sections);
     }
 
-    #[tokio::test]
-    async fn removing_a_shared_project_detaches_it_from_one_workspace() {
-        let (repo, _home, mgr) = setup().await;
-        let first = mgr.list_workspaces()[0].clone();
-        let r = mgr
-            .add_project(&repo.path().display().to_string())
-            .await
-            .unwrap();
-        let work = mgr.create_workspace("CipherHealth").unwrap();
-        mgr.workspace_add_project(&work.id, &repo.path().display().to_string())
-            .await
-            .unwrap();
-        mgr.workspace_remove_project(&first.id, &r.id).unwrap();
-        let names: Vec<String> = mgr
-            .list_workspaces()
-            .into_iter()
-            .filter(|w| w.project_ids.contains(&r.id))
-            .map(|w| w.name)
-            .collect();
-        assert_eq!(names, vec!["CipherHealth".to_string()]);
-        assert_eq!(mgr.list_projects().len(), 1, "the project is kept");
-    }
-
-    #[tokio::test]
-    async fn removing_a_project_from_its_last_workspace_drops_it() {
-        let (repo, _home, mgr) = setup().await;
-        let first = mgr.list_workspaces()[0].clone();
-        let r = mgr
-            .add_project(&repo.path().display().to_string())
-            .await
-            .unwrap();
-        mgr.workspace_remove_project(&first.id, &r.id).unwrap();
-        assert!(mgr.list_projects().is_empty());
-        assert!(mgr.list_workspaces()[0].project_ids.is_empty());
-    }
-
-    #[tokio::test]
-    async fn removing_a_project_a_workspace_does_not_hold_changes_nothing() {
-        let (repo, _home, mgr) = setup().await;
-        let r = mgr
-            .add_project(&repo.path().display().to_string())
-            .await
-            .unwrap();
-        let empty = mgr.create_workspace("CipherHealth").unwrap();
-        let err = mgr.workspace_remove_project(&empty.id, &r.id).unwrap_err();
-        assert_eq!(err.to_string(), "the project is not in this workspace");
-        assert_eq!(mgr.list_projects().len(), 1);
-        assert_eq!(mgr.list_workspaces()[0].project_ids, vec![r.id.clone()]);
-    }
-
-    #[tokio::test]
-    async fn a_project_with_live_sessions_stays_in_its_last_workspace() {
-        let (repo, _home, mgr) = setup().await;
-        let first = mgr.list_workspaces()[0].clone();
-        let r = mgr
-            .add_project(&repo.path().display().to_string())
-            .await
-            .unwrap();
-        mgr.create_session(SessionCreate {
-            project_id: r.id.clone(),
+    fn new_session(project: &str, workspace: Option<&str>) -> SessionCreate {
+        SessionCreate {
+            project_id: project.into(),
             name: None,
             branch: None,
             from: None,
@@ -2153,103 +2453,216 @@ mod tests {
             tui: false,
             spawned_by: None,
             add_dirs: vec![],
+            workspace_id: workspace.map(Into::into),
             cols: 80,
             rows: 24,
-        })
-        .await
-        .unwrap();
-        let err = mgr.workspace_remove_project(&first.id, &r.id).unwrap_err();
-        assert_eq!(err.to_string(), "archive this project's sessions first");
-        assert_eq!(mgr.list_workspaces()[0].project_ids, vec![r.id.clone()]);
-        assert_eq!(mgr.list_projects().len(), 1);
+        }
+    }
+
+    fn color(c: &str) -> String {
+        c.to_string()
+    }
+
+    fn workspace(mgr: &SessionManager, name: &str, move_sections: Vec<String>) -> Workspace {
+        mgr.create_workspace(WorkspaceCreate { name: name.into(), color: color("blue"), move_sections })
+            .unwrap()
+    }
+
+    fn section_names(mgr: &SessionManager, ws: &Workspace) -> Vec<String> {
+        let ws = mgr.list_workspaces().into_iter().find(|w| w.id == ws.id).unwrap();
+        let all = mgr.list_sections();
+        ws.section_ids
+            .iter()
+            .map(|id| all.iter().find(|s| &s.id == id).unwrap().name.clone())
+            .collect()
     }
 
     #[tokio::test]
-    async fn workspaces_share_projects_and_sections() {
+    async fn new_project_added_to_a_section_lands_only_there() {
         let (repo, _home, mgr) = setup().await;
-        let first = mgr.list_workspaces()[0].clone();
+        let first = mgr.list_sections()[0].clone();
+        let ws = mgr.list_workspaces()[0].clone();
+        let work = mgr.create_section(&ws.id, "CipherHealth").unwrap();
+        let r = mgr
+            .section_add_project(&work.id, &repo.path().display().to_string())
+            .await
+            .unwrap();
+        let names: Vec<String> = mgr
+            .list_sections()
+            .into_iter()
+            .filter(|s| s.project_ids.contains(&r.id))
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(names, vec!["CipherHealth".to_string()]);
+        assert_eq!(first.name, "My projects");
+    }
+
+    #[tokio::test]
+    async fn removing_a_shared_project_detaches_it_from_one_section() {
+        let (repo, _home, mgr) = setup().await;
+        let ws = mgr.list_workspaces()[0].clone();
+        let first = mgr.list_sections()[0].clone();
         let r = mgr
             .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
-        assert!(
-            mgr.list_workspaces()[0].project_ids.contains(&r.id),
-            "new projects land in the first workspace"
-        );
-        let work = mgr.create_workspace("Work").unwrap();
-        mgr.workspace_add_project(&work.id, &repo.path().display().to_string())
+        let work = mgr.create_section(&ws.id, "CipherHealth").unwrap();
+        mgr.section_add_project(&work.id, &repo.path().display().to_string())
             .await
             .unwrap();
-        let all = mgr.list_workspaces();
-        assert!(
-            all.iter().all(|w| w.project_ids.contains(&r.id)),
-            "shared by both"
-        );
+        mgr.section_remove_project(&first.id, &r.id).unwrap();
+        let names: Vec<String> = mgr
+            .list_sections()
+            .into_iter()
+            .filter(|s| s.project_ids.contains(&r.id))
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(names, vec!["CipherHealth".to_string()]);
+        assert_eq!(mgr.list_projects().len(), 1, "the project is kept");
+    }
 
-        let sec = moonlet_proto::types::Section {
-            id: format!("{}:a", work.id),
-            name: "Today".into(),
-        };
-        mgr.update_workspace(WorkspaceUpdate {
-            id: work.id.clone(),
-            name: None,
-            project_ids: None,
-            sections: Some(vec![sec.clone()]),
-            view: None,
-        })
-        .unwrap();
-        let s = mgr
-            .create_session(SessionCreate {
-                project_id: r.id.clone(),
-                name: None,
-                branch: None,
-                from: None,
-                existing_branch: false,
-                agent: Some("none".into()),
-                prompt: Some("Make the login page faster\nand more".into()),
-                model: None,
-                effort: None,
-                mode: None,
-                pr: None,
-                tui: false,
-                spawned_by: None,
-                add_dirs: vec![],
-                cols: 80,
-                rows: 24,
-            })
+    #[tokio::test]
+    async fn removing_a_project_from_its_last_section_drops_it() {
+        let (repo, _home, mgr) = setup().await;
+        let first = mgr.list_sections()[0].clone();
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
-        assert_eq!(s.name, "Make the login page faster");
-        assert_eq!(s.branch, "moonlet/make-the-login-page-faster");
-        let moved = mgr
-            .update(SessionUpdate {
-                id: s.id.clone(),
-                name: None,
-                layout: None,
-                section: Some(sec.id.clone()),
-            })
-            .unwrap();
-        assert_eq!(moved.section.as_deref(), Some(sec.id.as_str()));
-        // Removing the section returns the session to its project.
-        mgr.update_workspace(WorkspaceUpdate {
-            id: work.id.clone(),
-            name: None,
-            project_ids: None,
-            sections: Some(vec![]),
-            view: None,
-        })
-        .unwrap();
-        assert_eq!(mgr.session(&s.id).unwrap().section, None);
+        mgr.section_remove_project(&first.id, &r.id).unwrap();
+        assert!(mgr.list_projects().is_empty());
+        assert!(mgr.list_sections()[0].project_ids.is_empty());
+    }
 
+    #[tokio::test]
+    async fn removing_a_project_a_section_does_not_hold_changes_nothing() {
+        let (repo, _home, mgr) = setup().await;
+        let ws = mgr.list_workspaces()[0].clone();
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        let empty = mgr.create_section(&ws.id, "CipherHealth").unwrap();
+        let err = mgr.section_remove_project(&empty.id, &r.id).unwrap_err();
+        assert_eq!(err.to_string(), "the project is not in this section");
+        assert_eq!(mgr.list_projects().len(), 1);
+        assert_eq!(mgr.list_sections()[0].project_ids, vec![r.id.clone()]);
+    }
+
+    #[tokio::test]
+    async fn a_project_with_live_sessions_stays_in_its_last_section() {
+        let (repo, _home, mgr) = setup().await;
+        let first = mgr.list_sections()[0].clone();
+        let r = mgr
+            .add_project(&repo.path().display().to_string())
+            .await
+            .unwrap();
+        mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let err = mgr.section_remove_project(&first.id, &r.id).unwrap_err();
+        assert_eq!(err.to_string(), "archive this project's sessions first");
+        assert_eq!(mgr.list_sections()[0].project_ids, vec![r.id.clone()]);
+        assert_eq!(mgr.list_projects().len(), 1);
+    }
+
+    /// X32: a project held by sections of two workspaces has sessions in
+    /// each, and a session goes where it is asked to.
+    #[tokio::test]
+    async fn sessions_belong_to_the_workspace_they_are_created_in() {
+        let (repo, _home, mgr) = setup().await;
+        let personal = mgr.list_workspaces()[0].clone();
+        let path = repo.path().display().to_string();
+        let r = mgr.add_project(&path).await.unwrap();
+        let work = workspace(&mgr, "CipherHealth", vec![]);
+        let sec = mgr.create_section(&work.id, "AI Operations").unwrap();
+        mgr.section_add_project(&sec.id, &path).await.unwrap();
+
+        let here = mgr.create_session(new_session(&r.id, Some(&work.id))).await.unwrap();
+        assert_eq!(here.workspace_id.as_deref(), Some(work.id.as_str()));
+        let default = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        assert_eq!(
+            default.workspace_id.as_deref(),
+            Some(personal.id.as_str()),
+            "without a workspace, the first one holding the project"
+        );
+        let empty = workspace(&mgr, "Empty", vec![]);
+        let err = mgr
+            .create_session(new_session(&r.id, Some(&empty.id)))
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "the project is not in this workspace");
+    }
+
+    /// X32: moving a section takes the sessions of the projects only it held
+    /// in its old workspace, and leaves the others.
+    #[tokio::test]
+    async fn moving_a_section_takes_sessions_it_alone_holds() {
+        let (repo, _home, mgr) = setup().await;
+        let personal = mgr.list_workspaces()[0].clone();
+        let path = repo.path().display().to_string();
+        let r = mgr.add_project(&path).await.unwrap();
+        let alone = mgr.list_sections()[0].clone();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+
+        let work = workspace(&mgr, "CipherHealth", vec![alone.id.clone()]);
+        assert_eq!(section_names(&mgr, &work), vec!["My projects".to_string()]);
+        assert!(section_names(&mgr, &personal).is_empty());
+        assert_eq!(mgr.session(&s.id).unwrap().workspace_id.as_deref(), Some(work.id.as_str()));
+
+        // Back in Personal, a second section holds the project too: moving
+        // the first one away leaves the session behind.
+        mgr.move_section(&alone.id, &personal.id).unwrap();
+        let kept = mgr.create_section(&personal.id, "Side projects").unwrap();
+        mgr.section_add_project(&kept.id, &path).await.unwrap();
+        mgr.move_section(&alone.id, &work.id).unwrap();
+        assert_eq!(mgr.session(&s.id).unwrap().workspace_id.as_deref(), Some(personal.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_workspace_is_deleted_only_when_empty_and_not_last() {
+        let (_repo, _home, mgr) = setup().await;
+        let personal = mgr.list_workspaces()[0].clone();
+        let err = mgr.delete_workspace(&personal.id).unwrap_err();
+        assert_eq!(err.to_string(), "the last workspace cannot be deleted");
+        let sec = mgr.list_sections()[0].clone();
+        let work = workspace(&mgr, "CipherHealth", vec![sec.id.clone()]);
+        let err = mgr.delete_workspace(&work.id).unwrap_err();
+        assert_eq!(err.to_string(), "move or delete this workspace's sections first");
+        mgr.move_section(&sec.id, &personal.id).unwrap();
         mgr.delete_workspace(&work.id).unwrap();
-        assert!(
-            mgr.delete_workspace(&first.id).is_err(),
-            "the last workspace stays"
-        );
-        assert!(
-            !mgr.list_projects().is_empty(),
-            "deleting a workspace keeps projects"
-        );
+        assert_eq!(mgr.list_workspaces().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn workspace_colours_and_names_are_checked() {
+        let (_repo, _home, mgr) = setup().await;
+        let bad = mgr.create_workspace(WorkspaceCreate { name: "W".into(), color: color("#ff0000"), move_sections: vec![] });
+        assert_eq!(bad.unwrap_err().to_string(), "unknown workspace colour \"#ff0000\"");
+        let empty = mgr.create_workspace(WorkspaceCreate { name: "  ".into(), color: color("sand"), move_sections: vec![] });
+        assert_eq!(empty.unwrap_err().to_string(), "workspace name is empty");
+        let w = workspace(&mgr, "CipherHealth", vec![]);
+        let renamed = mgr
+            .update_workspace(WorkspaceUpdate { id: w.id.clone(), name: Some("Cipher".into()), color: Some("violet".into()), section_ids: None })
+            .unwrap();
+        assert_eq!((renamed.name.as_str(), renamed.color.as_str()), ("Cipher", "violet"));
+    }
+
+    /// Deleting a section keeps its projects: they move to another section of
+    /// the workspace, with their sessions still shown there.
+    #[tokio::test]
+    async fn deleting_a_section_keeps_projects_and_sessions() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let first = mgr.list_sections()[0].clone();
+        let work = workspace(&mgr, "CipherHealth", vec![first.id.clone()]);
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let err = mgr.delete_section(&first.id).unwrap_err();
+        assert_eq!(err.to_string(), "archive the sessions of this section's projects first");
+        let other = mgr.create_section(&work.id, "Integrations").unwrap();
+        mgr.delete_section(&first.id).unwrap();
+        assert_eq!(section_names(&mgr, &work), vec!["Integrations".to_string()]);
+        let other = mgr.list_sections().into_iter().find(|s| s.id == other.id).unwrap();
+        assert_eq!(other.project_ids, vec![r.id.clone()]);
+        assert_eq!(mgr.session(&s.id).unwrap().workspace_id.as_deref(), Some(work.id.as_str()));
     }
 
     #[test]
@@ -2269,7 +2682,7 @@ mod tests {
             agent: Some("claude".into()),
             archived: false,
             created_at: 0,
-            section: None,
+            workspace_id: None,
             model: Some("sonnet".into()),
             effort: Some("high".into()),
             mode: Some("plan".into()),
