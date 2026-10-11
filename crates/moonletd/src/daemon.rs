@@ -33,8 +33,8 @@ pub struct Daemon {
     shutdown: watch::Sender<bool>,
     handed_off: AtomicBool,
     upgrading: AtomicBool,
-    /// Last `claude auth status` per profile id (`""`: the default), X33.
-    accounts: Mutex<HashMap<String, moonlet_proto::types::ProfileAccount>>,
+    /// Last `claude auth status` per profile id (`None`: the default), X33.
+    accounts: Mutex<HashMap<Option<String>, moonlet_proto::types::ProfileAccount>>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -57,6 +57,11 @@ async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
 ) -> Result<T, RpcError> {
     tokio::task::spawn_blocking(f).await.map_err(internal)?.map_err(internal)
+}
+
+/// moonlet's hook and skill paths with Claude's in profile folder `dir` (X33).
+fn profile_hooks(dir: &str) -> HookPaths {
+    HookPaths::default_paths().with_claude_dir(Path::new(dir))
 }
 
 pub fn internal(e: impl std::fmt::Display) -> RpcError {
@@ -96,6 +101,15 @@ impl Daemon {
         );
         let chats = ChatManager::new(terminals.clone(), chats_dir(&moonlet_core::paths::home()));
         sessions.set_chats(chats.clone());
+        // Profiles' skills too (X33), under the same rule as the default's.
+        if !own_home {
+            for p in sessions.list_profiles() {
+                match hooks::refresh_skills(&profile_hooks(&p.path)) {
+                    Ok(updated) => updated.iter().for_each(|path| tracing::info!("updated the moonlet skill at {}", path.display())),
+                    Err(e) => tracing::warn!("cannot update the moonlet skill in {}: {e:#}", p.path),
+                }
+            }
+        }
         let emitter = terminals.clone();
         let watchers = Watchers::new(Arc::new(move |m| emitter.emit(m)));
         // Tests shorten how long a read waits for the user (X31).
@@ -125,11 +139,16 @@ impl Daemon {
             .list_profiles()
             .into_iter()
             .map(|p| {
-                let paths = HookPaths::default_paths().with_claude_dir(Path::new(&p.path));
-                let hooks_installed = hooks::status(&paths).is_ok_and(|s| s.claude_installed);
-                moonlet_proto::types::ProfileInfo { account: accounts.get(&p.id).cloned(), hooks_installed, profile: p }
+                let hooks_installed = hooks::status(&profile_hooks(&p.path)).is_ok_and(|s| s.claude_installed);
+                moonlet_proto::types::ProfileInfo { account: accounts.get(&Some(p.id.clone())).cloned(), hooks_installed, profile: p }
             })
             .collect()
+    }
+
+    /// Every change to profiles or their accounts sends the full list, as
+    /// `profile.list` returns it.
+    fn emit_profiles(&self) {
+        self.terminals.emit(Message::event(m::EV_PROFILES_CHANGED, self.profile_infos()));
     }
 
     pub fn shutdown_signal(&self) -> watch::Receiver<bool> {
@@ -332,14 +351,17 @@ impl Daemon {
                 // And into every Claude profile's folder (X33).
                 if r.claude {
                     for p in self.sessions.list_profiles() {
-                        hooks::install(&HookPaths::default_paths().with_claude_dir(Path::new(&p.path)), &bin, true, false)
-                            .map_err(internal)?;
+                        hooks::install(&profile_hooks(&p.path), &bin, true, false).map_err(internal)?;
                     }
                 }
                 ok(status)
             }
             m::HOOKS_UNINSTALL => {
-                ok(hooks::uninstall(&HookPaths::default_paths()).map_err(internal)?)
+                let status = hooks::uninstall(&HookPaths::default_paths()).map_err(internal)?;
+                for p in self.sessions.list_profiles() {
+                    hooks::uninstall(&profile_hooks(&p.path)).map_err(internal)?;
+                }
+                ok(status)
             }
             _ => self.handle_project(conn, method, p).await,
         }
@@ -353,31 +375,38 @@ impl Daemon {
             m::PROFILE_CREATE => {
                 let r: m::ProfileCreate = params(p)?;
                 let profile = w.create_profile(&r.name, r.path.as_deref()).map_err(internal)?;
-                let bin = moonlet_cli_path().map_err(internal)?;
-                // Without its hooks, agents in the profile report no state (A2).
-                hooks::install(&HookPaths::default_paths().with_claude_dir(Path::new(&profile.path)), &bin, true, false)
-                    .map_err(internal)?;
+                // Without its hooks, agents in the profile report no state
+                // (A2), so a profile they cannot go into is not kept.
+                let installed = moonlet_cli_path().and_then(|bin| hooks::install(&profile_hooks(&profile.path), &bin, true, false));
+                if let Err(e) = installed {
+                    let _ = w.delete_profile(&profile.id);
+                    return Err(internal(e));
+                }
+                self.emit_profiles();
                 ok(profile)
             }
             m::PROFILE_UPDATE => {
                 let r: m::ProfileUpdate = params(p)?;
-                ok(w.update_profile(&r.id, r.name.as_deref()).map_err(internal)?)
+                let profile = w.update_profile(&r.id, r.name.as_deref()).map_err(internal)?;
+                self.emit_profiles();
+                ok(profile)
             }
             m::PROFILE_DELETE => {
                 let r: m::IdRef = params(p)?;
                 w.delete_profile(&r.id).map_err(internal)?;
-                self.accounts.lock().unwrap().remove(&r.id);
+                self.accounts.lock().unwrap().remove(&Some(r.id));
+                self.emit_profiles();
                 ok(true)
             }
             m::PROFILE_STATUS => {
                 let r: m::ProfileStatus = params(p)?;
                 let dir = match &r.id {
-                    Some(id) => Some(w.list_profiles().into_iter().find(|p| &p.id == id).ok_or_else(|| internal("no such Claude profile"))?.path),
+                    Some(id) => Some(w.profile(id).map_err(internal)?.path),
                     None => None,
                 };
                 let account = moonlet_core::profiles::account(self.terminals.base_env(), dir.as_deref()).await.map_err(internal)?;
-                self.accounts.lock().unwrap().insert(r.id.clone().unwrap_or_default(), account.clone());
-                self.terminals.emit(Message::event(m::EV_PROFILES_CHANGED, self.profile_infos()));
+                self.accounts.lock().unwrap().insert(r.id, account.clone());
+                self.emit_profiles();
                 ok(account)
             }
             m::WORKSPACE_LIST => ok(w.list_workspaces()),

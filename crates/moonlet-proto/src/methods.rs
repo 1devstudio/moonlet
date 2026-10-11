@@ -507,9 +507,14 @@ pub struct WorkspaceUpdate {
     /// workspace's own; sections of other workspaces listed here move in.
     #[serde(default)]
     pub section_ids: Option<Vec<String>>,
-    /// A profile id, or `""` for the default profile (X33).
-    #[serde(default)]
-    pub claude_profile: Option<String>,
+    /// Absent: unchanged; `null`: the default profile; else a profile id (X33).
+    #[serde(default, deserialize_with = "present")]
+    pub claude_profile: Option<Option<String>>,
+}
+
+/// Tells a field sent as `null` (`Some(None)`) from one left out (`None`).
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
