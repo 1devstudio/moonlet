@@ -11,8 +11,8 @@ export interface ActionDef {
 
 export const ACTIONS: ActionDef[] = [
   ["new-session", "New session…", "Session", "shift+cmd+n"],
-  ["new-ws", "New workspace…", "Workspace", ""],
-  ["add-project", "Add project…", "Workspace", ""],
+  ["new-section", "New section…", "Section", ""],
+  ["add-project", "Add project…", "Section", ""],
   ["new-tab", "New terminal tab", "Terminal", "cmd+t"],
   ["split-r", "Split pane right", "Terminal", "cmd+d"],
   ["split-d", "Split pane down", "Terminal", "alt+cmd+d"],

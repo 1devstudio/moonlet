@@ -13,6 +13,7 @@ import type {
   PullRequest,
   Session,
   TerminalInfo,
+  Section,
   Workspace,
 } from "../lib/protocol";
 import { sesKey, useStore } from "../lib/store";
@@ -50,6 +51,7 @@ function session(id: string, project: string, name: string, terminals: number[],
     agent: "claude",
     archived: false,
     created_at: ago(minutesAgo),
+    workspace_id: "w-main",
     model: "sonnet",
     effort: "high",
     terminals,
@@ -96,12 +98,19 @@ export const demoTerminals: TerminalInfo[] = [
   term(6, "s-rate", { agent: "codex", title: "codex", command: ["codex"], agent_state: "error", agent_message: "exited with code 1", last_output_at: ago(200) }),
 ];
 
-export const demoWorkspace: Workspace = {
-  id: "w-main",
+export const demoSection: Section = {
+  id: "sec-main",
   name: "Acme",
   project_ids: demoProjects.map((p) => p.id),
-  sections: [],
   view: { group_by: "project", sort_by: "recent", filter: [] },
+  created_at: ago(10_000),
+};
+
+export const demoWorkspace: Workspace = {
+  id: "w-main",
+  name: "Personal",
+  color: "clay",
+  section_ids: [demoSection.id],
   created_at: ago(10_000),
 };
 
@@ -222,6 +231,7 @@ export function seedPreview({ selected = "s-checkout", chats = { 1: {} } }: Prev
     projects: { [DEMO_HOST]: demoProjects },
     sessions: { [DEMO_HOST]: demoSessions },
     workspaces: { [DEMO_HOST]: [demoWorkspace] },
+    sections: { [DEMO_HOST]: [demoSection] },
     terminals: { [DEMO_HOST]: Object.fromEntries(demoTerminals.map((x) => [x.id, x])) },
     git: demoGit,
     prs: demoPrs,

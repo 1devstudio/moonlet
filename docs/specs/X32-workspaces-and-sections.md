@@ -22,16 +22,16 @@ The hierarchy becomes **Workspace › Section › Project › Session › Termin
 
 ### Model
 
-- [ ] A **workspace** has a name, a colour and an ordered list of sections. Every section belongs to exactly one workspace. Test: `workspace.list` returns each workspace with its sections, in order.
-- [ ] A **section** is what X5 called a workspace: a name, its projects, and its view (group by, filter, sort). Its sessions are listed under its projects, as today. Test: the X5 tests carried over to `section.*`.
+- [ ] A **workspace** has a name, a colour and an ordered list of sections. Every section belongs to exactly one workspace. Tests: `migrates_x5_workspaces_into_sections`, `workspaceSections` in `sidebar.test.ts`.
+- [ ] A **section** is what X5 called a workspace: a name, its projects, and its view (group by, filter, sort). Its sessions are listed under its projects, as today. Tests: the X5 tests carried over to `section.*` (`new_project_added_to_a_section_lands_only_there`, `removing_a_shared_project_detaches_it_from_one_section`, `removing_a_project_from_its_last_section_drops_it`, `a_project_with_live_sessions_stays_in_its_last_section`, `a_project_can_be_removed_from_a_section_over_rpc`, `section-projects.e2e.ts`).
 - [ ] A project can be in several sections, in the same workspace or in different ones.
-- [ ] A **session belongs to one workspace**, recorded as `workspace_id` when it is created. A session shows only in its own workspace: under each section of that workspace that holds its project. Test: a project in sections of two workspaces shows each workspace's sessions only in that workspace (`sidebar.test.ts` and a Rust unit test).
-- [ ] `session.create` takes `workspace_id`. The app sends the current workspace. A session started by an agent (`moonlet session new`, X22) goes into the spawning session's workspace when the project is there, else into the first workspace that holds the project. A CLI call without either uses the first workspace that holds the project. Test: an agent-spawned session in a second workspace's project lands in that workspace.
+- [ ] A **session belongs to one workspace**, recorded as `workspace_id` when it is created. A session shows only in its own workspace: under each section of that workspace that holds its project. Tests: `sessions_belong_to_the_workspace_they_are_created_in`, and "shows only the sessions of its own workspace" in `sidebar.test.ts`.
+- [ ] `session.create` takes `workspace_id`. The app sends the current workspace. A session started by an agent (`moonlet session new`, X22) goes into the spawning session's workspace when the project is there, else into the first workspace that holds the project. A CLI call without either uses the first workspace that holds the project. Test: `a_spawned_session_joins_its_parents_workspace`.
 - [ ] The old session sections are removed: no "Move to section", no dragging rows onto sections, no `section` field on sessions.
 
 ### Migration
 
-- [ ] An X5 `state.json` loads with one workspace, "Personal" (colour Clay). Each old workspace becomes one of its sections, in the same order, with its projects and view. Every session gets that workspace. Old session sections are dropped, and their sessions show under their project again. Test: `migrates_x5_workspaces_into_sections`, using a captured X5 `state.json` with two workspaces, a shared project and a session in a section.
+- [ ] An X5 `state.json` loads with one workspace, "Personal" (colour Clay). Each old workspace becomes one of its sections, in the same order, with its projects and view. Every session gets that workspace. Old session sections are dropped, and their sessions show under their project again. Test: `migrates_x5_workspaces_into_sections`, using an X5 `state.json` with two workspaces, a shared project and a session in a section.
 - [ ] `PROTOCOL_VERSION` goes to 3, so an app and a daemon on different versions upgrade the daemon (S3), the same way as ADR 0005.
 
 ### Switching
@@ -44,11 +44,13 @@ The hierarchy becomes **Workspace › Section › Project › Session › Termin
 
 ### Creating, editing and deleting workspaces
 
-- [ ] `workspace.create {name, color, move_sections?}` creates a workspace, optionally moving the listed sections from another workspace into it. Test: daemon e2e.
+- [ ] `workspace.create {name, color, move_sections?}` creates a workspace, optionally moving the listed sections from another workspace into it. Test: `a_workspace_takes_sections_over_rpc`.
 - [ ] Moving a section to another workspace (from the New workspace dialog, or **Move to workspace ›** in the section's `⋯` menu) also moves the sessions of its projects, unless the old workspace still holds that project in another section. Test: `moving_a_section_takes_sessions_it_alone_holds`.
 - [ ] **Workspace settings…** edits the name, colour and Claude profile (X33), and holds **Delete workspace**.
-- [ ] A workspace can be deleted only when it has no sections and it is not the last one. The confirm says so, and otherwise the button explains why it is disabled. Archived sessions of a deleted workspace move to the first workspace that holds their project when they are unarchived. Test: both refusals, over RPC.
+- [ ] A workspace can be deleted only when it has no sections and it is not the last one. The confirm says so, and otherwise the button explains why it is disabled. Archived sessions of a deleted workspace move to the first workspace that holds their project. Tests: `a_workspace_is_deleted_only_when_empty_and_not_last`, `a_workspace_takes_sections_over_rpc`.
+- [ ] Deleting a section keeps its projects: those no other section of the workspace holds move to the workspace's first other section. A workspace's last section can be deleted only while its projects have no live sessions there. Test: `deleting_a_section_keeps_projects_and_sessions`.
 - [ ] Removing a project from a section is refused while the project has unarchived sessions in this workspace and no other section here holds it (X5's rule, now per workspace). Test: carried over from X5.
+- [ ] Workspace names cannot be empty, and the colour must be one of the five. Test: `workspace_colours_and_names_are_checked`.
 
 ### Sidebar
 
@@ -85,12 +87,14 @@ Taken from the design:
 
 ## Data and config
 
-- `state.json` gains `workspaces: [{id, name, color, section_ids, created_at}]`. X5's `workspaces` are stored as `sections: [{id, workspace_id, name, project_ids, view, created_at}]`.
+- `state.json` (version 3) gains `workspaces: [{id, name, color, section_ids, created_at}]`. A workspace's `section_ids` is the only record of which sections it holds. X5's `workspaces` are stored as `sections: [{id, name, project_ids, view, created_at}]`, keeping their ids, so the app's collapse state carries over.
+- Colours are stored by name: `clay`, `blue`, `violet`, `sand`, `grey`. The app maps them to the design's values.
+- A fresh install starts with "Personal" and one section, "My projects". A project added without a section goes into the first section of the first workspace.
 - The current workspace per host, and the last session selected in each workspace, live in the app's settings (localStorage), like collapse state.
 
 ## Security considerations
 
-- Names and colours come from the user. The colour must be one of the five palette values; other values are refused.
+- Names and colours come from the user. The colour must be one of the five palette names; other values are refused.
 - Nothing crosses a new trust boundary: workspaces and sections only group existing projects and sessions.
 
 ## Out of scope

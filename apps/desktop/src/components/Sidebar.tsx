@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, Folder, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, Settings, ShieldAlert } from "lucide-react";
+import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, Settings, ShieldAlert } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { M, type HostInfo, type Project, type Session, type Workspace, type WorkspaceView } from "../lib/protocol";
-import { arrange, compact, dropResult, lastActive, projectRemoval, type Dragged, type Group } from "../lib/sidebar";
+import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
+import { arrange, compact, lastActive, projectRemoval, workspaceSections, type Group } from "../lib/sidebar";
 import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -15,26 +15,8 @@ import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
 // ------------------------------------------------------------------ helpers
 
-function updateWorkspace(host: string, id: string, patch: Partial<Pick<Workspace, "name" | "project_ids" | "sections">> & { view?: WorkspaceView }) {
-  return rpc<Workspace>(host, M.workspaceUpdate, { id, ...patch }).catch(errorToast);
-}
-
-/** Deletes a section after confirming, and moves its sessions out of it. */
-async function deleteSection(host: string, ws: Workspace, id: string, sessions: Session[]) {
-  if (sessions.length) {
-    const ok = await askConfirm({
-      title: "Delete section",
-      message: `Delete this section? Its ${sessions.length} session${sessions.length === 1 ? "" : "s"} move back to their projects.`,
-      action: "Delete",
-    });
-    if (!ok) return;
-  }
-  try {
-    await Promise.all(sessions.map((s) => rpc(host, M.sessionUpdate, { id: s.id, section: "" })));
-    await updateWorkspace(host, ws.id, { sections: ws.sections.filter((x) => x.id !== id) });
-  } catch (e) {
-    errorToast(e);
-  }
+function updateSection(host: string, id: string, patch: { name?: string; view?: SectionView }) {
+  return rpc<Section>(host, M.sectionUpdate, { id, ...patch }).catch(errorToast);
 }
 
 const activeAt = (host: string, s: Session) => lastActive(useStore.getState().terminals[host] ?? {}, s);
@@ -258,15 +240,12 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
 
 // ------------------------------------------------------------------- rows
 
-/** The session being dragged (HTML drag data is not readable during dragover). */
-let dragging: (Dragged & { host: string }) | null = null;
-
 /** A right-clicked session row, or a project header when `projectId` is set. */
 interface RowMenuState {
   x: number;
   y: number;
   host: string;
-  workspace: Workspace;
+  section: Section;
   session?: Session;
   projectId?: string;
 }
@@ -293,15 +272,6 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
         selectSession(host, s.id);
       }}
       onDoubleClick={() => setRenaming(true)}
-      draggable={!renaming}
-      onDragStart={(e) => {
-        dragging = { host, sessionId: s.id, projectId: s.project_id, section: s.section };
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", s.name);
-      }}
-      onDragEnd={() => {
-        dragging = null;
-      }}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu(e);
@@ -362,55 +332,23 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
   );
 }
 
-function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g: Group; onRowMenu: (target: { session?: Session; projectId?: string }, e: React.MouseEvent) => void }) {
-  const key = `${host}/${ws.id}/${g.key}`;
+function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; workspaceId: string; sec: Section; g: Group; onRowMenu: (target: { session?: Session; projectId?: string }, e: React.MouseEvent) => void }) {
+  // Keyed by the section id, which X32 kept from the X5 workspace it was, so
+  // collapse state carries over.
+  const key = `${host}/${sec.id}/${g.key}`;
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const toggle = () => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }));
-  const [over, setOver] = useState(false);
-  const depth = useRef(0);
-  const accepts = () => !!dragging && dragging.host === host && dropResult(dragging, g) !== null;
-  const dropProps = {
-    onDragEnter: (e: React.DragEvent) => {
-      if (!accepts()) return;
-      e.preventDefault();
-      depth.current += 1;
-      setOver(true);
-    },
-    onDragOver: (e: React.DragEvent) => {
-      if (!accepts()) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-    },
-    onDragLeave: () => {
-      depth.current = Math.max(0, depth.current - 1);
-      if (depth.current === 0) setOver(false);
-    },
-    onDrop: (e: React.DragEvent) => {
-      e.preventDefault();
-      depth.current = 0;
-      setOver(false);
-      const d = dragging;
-      dragging = null;
-      const r = d && dropResult(d, g);
-      if (d && r) void rpc(host, M.sessionUpdate, { id: d.sessionId, section: r.section }).catch(errorToast);
-    },
-  };
   const header =
     g.kind === "project" ? (
       <>
         <ProjectMark host={host} projectId={g.projectId!} />
         <span className="truncate ui-text-14 font-semibold text-[#d6d6d6]">{g.label}</span>
       </>
-    ) : g.kind === "section" ? (
-      <>
-        <Folder size={14} className="shrink-0 text-muted" />
-        <span className="truncate ui-text-14 font-semibold text-[#d6d6d6]">{g.label}</span>
-      </>
     ) : g.kind === "status" ? (
       <span className="truncate ui-text-11.5 font-medium uppercase tracking-[0.1em] text-muted">{g.label}</span>
     ) : null;
   return (
-    <div {...dropProps} className={cx("mb-1 rounded-md transition-colors", over && "bg-selected outline outline-1 outline-accent/60")}>
+    <div className="mb-1 rounded-md">
       {header && (
         <div
           className="group flex h-[38px] items-center gap-2.5 pl-4 pr-3"
@@ -437,47 +375,40 @@ function GroupBlock({ host, ws, g, onRowMenu }: { host: string; ws: Workspace; g
             </IconButton>
           )}
           {g.kind === "project" && (
-            <IconButton title="New session" className="h-7 w-7" onClick={() => useStore.setState({ dialog: { kind: "new-session", host, project: g.projectId, workspace: ws.id } })}>
+            <IconButton title="New session" className="h-7 w-7" onClick={() => useStore.setState({ dialog: { kind: "new-session", host, project: g.projectId, workspace: workspaceId } })}>
               <Plus size={16} />
-            </IconButton>
-          )}
-          {g.kind === "section" && (
-            <IconButton
-              title="Delete section"
-              className="opacity-0 group-hover:opacity-100"
-              onClick={() => void deleteSection(host, ws, g.sectionId!, g.sessions)}
-            >
-              <span className="ui-text-13">×</span>
             </IconButton>
           )}
         </div>
       )}
       {!collapsed && g.sessions.map((s) => <SessionRow key={s.id} host={host} s={s} onMenu={(e) => onRowMenu({ session: s }, e)} />)}
-      {!collapsed && g.kind === "section" && g.sessions.length === 0 && (
-        <div className="pb-1.5 pl-[30px] ui-text-12.5 text-faint">Drag sessions here</div>
-      )}
     </div>
   );
 }
 
-function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; onRowMenu: (m: RowMenuState) => void }) {
-  const key = `ws:${host}/${ws.id}`;
+function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspace; sec: Section; onRowMenu: (m: RowMenuState) => void }) {
+  // The X5 workspace's key: the section kept its id (X32).
+  const key = `ws:${host}/${sec.id}`;
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const projects = useStore((s) => s.projects[host] ?? []);
   const sessions = useStore((s) => s.sessions[host] ?? []);
   const terminals = useStore((s) => s.terminals[host]);
   const archiving = useStore((s) => s.archiving);
+  // Select the stored array and filter outside: a selector returning a new
+  // array on every call makes zustand re-render forever.
+  const allWorkspaces = useStore((s) => s.workspaces[host]);
+  const others = useMemo(() => (allWorkspaces ?? []).filter((w) => w.id !== ws.id), [allWorkspaces, ws.id]);
   const multiHost = useStore((s) => Object.keys(s.hosts).length > 1);
-  const [editing, setEditing] = useState<null | "rename" | "section">(null);
+  const [renaming, setRenaming] = useState(false);
   const groups = useMemo(
-    () => arrange(ws, projects, sessions, (s) => sessionState(useStore.getState(), host, s.id), (s) => activeAt(host, s), (s) => !!archiving[sesKey(host, s.id)]),
+    () => arrange(ws.id, sec, projects, sessions, (s) => sessionState(useStore.getState(), host, s.id), (s) => activeAt(host, s), (s) => !!archiving[sesKey(host, s.id)]),
     // `terminals` changes agent states and activity times.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ws, projects, sessions, terminals, archiving, host],
+    [ws.id, sec, projects, sessions, terminals, archiving, host],
   );
-  const v = ws.view;
-  const setView = (patch: Partial<WorkspaceView>) => void updateWorkspace(host, ws.id, { view: { ...v, ...patch } });
-  const wsProjects = ws.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
+  const v = sec.view;
+  const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
+  const wsProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
   const toggleFilter = (id: string) => {
     const cur = v.filter.length ? v.filter : wsProjects.map((p) => p.id);
     const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
@@ -516,17 +447,28 @@ function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; 
       ).map(([id, label]) => ({ label, checked: v.sort_by === id, onSelect: () => setView({ sort_by: id }) })),
     },
     { kind: "divider" },
-    { label: "New section…", icon: <Plus size={15} className="text-muted" />, onSelect: () => setEditing("section") },
-    { label: "Add project…", icon: <FolderPlus size={15} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "add-project", host, workspace: ws.id } }) },
+    { label: "Add project…", icon: <FolderPlus size={15} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "add-project", host, section: sec.id } }) },
     { kind: "divider" },
-    { label: "Rename workspace…", onSelect: () => setEditing("rename") },
+    { label: "Rename section…", onSelect: () => setRenaming(true) },
+    ...(others.length
+      ? [
+          {
+            kind: "submenu" as const,
+            label: "Move to workspace",
+            items: others.map((w) => ({
+              label: w.name,
+              onSelect: () => void rpc(host, M.sectionMove, { id: sec.id, workspace_id: w.id }).catch(errorToast),
+            })),
+          },
+        ]
+      : []),
     {
-      label: "Delete workspace",
+      label: "Delete section",
       danger: true,
       onSelect: async () => {
         try {
-          await rpc(host, M.workspaceDelete, { id: ws.id });
-          toast(`Deleted ${ws.name}; its projects and sessions are kept`);
+          await rpc(host, M.sectionDelete, { id: sec.id });
+          toast(`Deleted ${sec.name}; its projects and sessions are kept`);
         } catch (e) {
           errorToast(e);
         }
@@ -536,17 +478,17 @@ function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; 
   return (
     <div className="mb-3">
       <div className="group mx-2 flex h-[38px] items-center gap-1 rounded-lg bg-[#1e1e1e] pl-2.5 pr-1.5">
-        {editing === "rename" ? (
+        {renaming ? (
           <InlineInput
-            initial={ws.name}
+            initial={sec.name}
             onDone={(name) => {
-              setEditing(null);
-              if (name && name !== ws.name) void updateWorkspace(host, ws.id, { name });
+              setRenaming(false);
+              if (name && name !== sec.name) void updateSection(host, sec.id, { name });
             }}
           />
         ) : (
           <button className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }))}>
-            <span className="truncate ui-text-14 font-semibold text-muted group-hover:text-fg">{ws.name}</span>
+            <span className="truncate ui-text-14 font-semibold text-muted group-hover:text-fg">{sec.name}</span>
             {multiHost && host !== "local" && <span className="truncate font-mono ui-text-11 text-faint">@{host}</span>}
             {collapsed ? <ChevronRight size={13} className="text-faint" /> : <ChevronDown size={13} className="text-faint opacity-0 group-hover:opacity-100" />}
           </button>
@@ -554,7 +496,7 @@ function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; 
         <Menu
           items={items}
           trigger={(open) => (
-            <IconButton title="Workspace options" className="h-7 w-7" onClick={open}>
+            <IconButton title="Section options" className="h-7 w-7" onClick={open}>
               <MoreHorizontal size={16} />
             </IconButton>
           )}
@@ -562,28 +504,15 @@ function WorkspaceBlock({ host, ws, onRowMenu }: { host: string; ws: Workspace; 
       </div>
       {!collapsed && (
         <div className="pt-1">
-          {editing === "section" && (
-            <div className="flex items-center gap-2 py-1 pl-4 pr-3">
-              <Folder size={14} className="text-muted" />
-              <InlineInput
-                initial=""
-                placeholder="Section name"
-                onDone={(name) => {
-                  setEditing(null);
-                  if (name) void updateWorkspace(host, ws.id, { sections: [...ws.sections, { id: `${ws.id}:${Date.now().toString(36)}`, name }] });
-                }}
-              />
-            </div>
-          )}
           {groups.map((g) => (
-            <GroupBlock key={g.key} host={host} ws={ws} g={g} onRowMenu={(target, e) => onRowMenu({ x: e.clientX, y: e.clientY, host, workspace: ws, ...target })} />
+            <GroupBlock key={g.key} host={host} workspaceId={ws.id} sec={sec} g={g} onRowMenu={(target, e) => onRowMenu({ x: e.clientX, y: e.clientY, host, section: sec, ...target })} />
           ))}
           {wsProjects.length === 0 && (
             <button
               className="ml-4 mt-1 flex items-center gap-2 ui-text-13 text-faint hover:text-accent"
-              onClick={() => useStore.setState({ dialog: { kind: "add-project", host, workspace: ws.id } })}
+              onClick={() => useStore.setState({ dialog: { kind: "add-project", host, section: sec.id } })}
             >
-              <FolderPlus size={14} /> Add a project to this workspace
+              <FolderPlus size={14} /> Add a project to this section
             </button>
           )}
         </div>
@@ -602,8 +531,8 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
       window.removeEventListener("keydown", close);
     };
   }, [onClose]);
-  const { host, session: s, workspace: ws } = m;
-  const items = s ? sessionItems(host, s, ws) : m.projectId ? projectItems(host, m.projectId, ws) : [];
+  const { host, session: s, section: sec } = m;
+  const items = s ? sessionItems(host, s) : m.projectId ? projectItems(host, m.projectId, sec) : [];
   return (
     <div
       className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
@@ -616,11 +545,11 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   );
 }
 
-function projectItems(host: string, projectId: string, ws: Workspace): MenuItem[] {
-  const { projects, workspaces } = useStore.getState();
+function projectItems(host: string, projectId: string, sec: Section): MenuItem[] {
+  const { projects, sections } = useStore.getState();
   const project = (projects[host] ?? []).find((p) => p.id === projectId);
   if (!project) return [];
-  const removal = projectRemoval(workspaces[host] ?? [], ws.id, project);
+  const removal = projectRemoval(sections[host] ?? [], sec.id, project);
   return [
     { label: "Project settings…", icon: <Settings size={14} className="text-muted" />, onSelect: () => openProjectSettings({ host, project: projectId }) },
     { kind: "divider" },
@@ -630,7 +559,7 @@ function projectItems(host: string, projectId: string, ws: Workspace): MenuItem[
       onSelect: async () => {
         if (removal.confirm && !(await askConfirm({ title: "Remove project", message: removal.confirm, action: "Remove" }))) return;
         try {
-          await rpc(host, M.workspaceRemoveProject, { id: ws.id, project_id: projectId });
+          await rpc(host, M.sectionRemoveProject, { id: sec.id, project_id: projectId });
         } catch (e) {
           errorToast(e);
         }
@@ -639,14 +568,9 @@ function projectItems(host: string, projectId: string, ws: Workspace): MenuItem[
   ];
 }
 
-function sessionItems(host: string, s: Session, ws: Workspace): MenuItem[] {
-  const moveTo = (section: string) => void rpc(host, M.sessionUpdate, { id: s.id, section }).catch(errorToast);
+function sessionItems(host: string, s: Session): MenuItem[] {
   return [
     { label: "Open", onSelect: () => selectSession(host, s.id) },
-    ws.sections.length
-      ? { kind: "submenu", label: "Move to section", items: ws.sections.map((sec) => ({ label: sec.name, checked: s.section === sec.id, onSelect: () => moveTo(sec.id) })) }
-      : { label: "Move to section…", hint: "none yet", onSelect: () => toast("Create one first: workspace ⋯ › New section…") },
-    ...(s.section && ws.sections.some((x) => x.id === s.section) ? [{ label: "Remove from section", onSelect: () => moveTo("") }] : []),
     { kind: "divider" },
     {
       label: "Archive",
@@ -725,6 +649,7 @@ function NavRow({ icon, label, active, onClick, hint }: { icon: ReactNode; label
 export function Sidebar() {
   const hosts = useStore((s) => s.hosts);
   const workspaces = useStore((s) => s.workspaces);
+  const sections = useStore((s) => s.sections);
   const showHistory = useStore((s) => s.showHistory);
   const [rowMenu, setRowMenu] = useState<RowMenuState | null>(null);
   const [creating, setCreating] = useState(false);
@@ -745,9 +670,9 @@ export function Sidebar() {
           ordered.map((h) => (
             <div key={h.id}>
               <HostNotice host={h} />
-              {(workspaces[h.id] ?? []).map((ws) => (
-                <WorkspaceBlock key={ws.id} host={h.id} ws={ws} onRowMenu={setRowMenu} />
-              ))}
+              {(workspaces[h.id] ?? []).flatMap((ws) =>
+                workspaceSections(ws, sections[h.id] ?? []).map((sec) => <SectionBlock key={sec.id} host={h.id} ws={ws} sec={sec} onRowMenu={setRowMenu} />),
+              )}
             </div>
           ))
         )}
@@ -757,12 +682,15 @@ export function Sidebar() {
               <div className="flex h-[38px] items-center gap-2 rounded-lg bg-[#1e1e1e] px-2.5">
                 <InlineInput
                   initial=""
-                  placeholder="Workspace name"
+                  placeholder="Section name"
                   onDone={async (name) => {
                     setCreating(false);
                     if (!name) return;
+                    const host = ordered.find((h) => h.status === "connected")?.id ?? "local";
+                    const ws = workspaces[host]?.[0];
+                    if (!ws) return;
                     try {
-                      await rpc(ordered.find((h) => h.status === "connected")?.id ?? "local", M.workspaceCreate, { name });
+                      await rpc(host, M.sectionCreate, { workspace_id: ws.id, name });
                     } catch (e) {
                       errorToast(e);
                     }
@@ -771,7 +699,7 @@ export function Sidebar() {
               </div>
             ) : (
               <button className="flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-13.5 text-faint hover:bg-panel-2 hover:text-fg" onClick={() => setCreating(true)}>
-                <Plus size={14} /> New workspace
+                <Plus size={14} /> New section
               </button>
             )}
           </div>

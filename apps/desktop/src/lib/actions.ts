@@ -5,7 +5,7 @@ import { rpc, sendInput } from "./daemon";
 import { addTab, closeFile, cycleFocus, openFile, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
 import { errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals } from "./store";
-import { arrange, lastActive } from "./sidebar";
+import { arrange, lastActive, workspaceSections } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured } from "./agents";
 import { hasRunCommand } from "./projectSettings";
@@ -316,11 +316,11 @@ export function visibleSessionOrder(): { host: string; id: string }[] {
   const seen = new Set<string>();
   for (const h of hosts) {
     const terms = s.terminals[h.id] ?? {};
-    for (const ws of s.workspaces[h.id] ?? []) {
-      if (s.collapsed[`ws:${h.id}/${ws.id}`]) continue;
-      const groups = arrange(ws, s.projects[h.id] ?? [], s.sessions[h.id] ?? [], (x) => sessionState(s, h.id, x.id), (x) => lastActive(terms, x));
+    for (const { ws, sec } of (s.workspaces[h.id] ?? []).flatMap((ws) => workspaceSections(ws, s.sections[h.id] ?? []).map((sec) => ({ ws, sec })))) {
+      if (s.collapsed[`ws:${h.id}/${sec.id}`]) continue;
+      const groups = arrange(ws.id, sec, s.projects[h.id] ?? [], s.sessions[h.id] ?? [], (x) => sessionState(s, h.id, x.id), (x) => lastActive(terms, x));
       for (const g of groups) {
-        if (s.collapsed[`${h.id}/${ws.id}/${g.key}`]) continue;
+        if (s.collapsed[`${h.id}/${sec.id}/${g.key}`]) continue;
         for (const x of g.sessions) {
           const key = `${h.id}/${x.id}`;
           if (seen.has(key)) continue;
@@ -367,7 +367,7 @@ export function copyOutput() {
 /** Handlers of the Run action modal's actions, by id (X19). */
 const RUN: Record<string, () => void> = {
   "new-session": () => useStore.setState({ dialog: { kind: "new-session" } }),
-  "new-ws": () => useStore.setState({ dialog: { kind: "new-workspace" } }),
+  "new-section": () => useStore.setState({ dialog: { kind: "new-section" } }),
   "add-project": () => useStore.setState({ dialog: { kind: "add-project" } }),
   "new-tab": () => void newTab(),
   "split-r": () => void split("row"),

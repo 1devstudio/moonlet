@@ -328,25 +328,38 @@ impl Daemon {
         let w = &self.sessions;
         match method {
             m::WORKSPACE_LIST => ok(w.list_workspaces()),
-            m::WORKSPACE_CREATE => {
-                let r: m::WorkspaceCreate = params(p)?;
-                ok(w.create_workspace(&r.name).map_err(internal)?)
-            }
+            m::WORKSPACE_CREATE => ok(w.create_workspace(params(p)?).map_err(internal)?),
             m::WORKSPACE_UPDATE => ok(w.update_workspace(params(p)?).map_err(internal)?),
             m::WORKSPACE_DELETE => {
                 let r: m::IdRef = params(p)?;
                 w.delete_workspace(&r.id).map_err(internal)?;
                 ok(true)
             }
-            m::WORKSPACE_ADD_PROJECT => {
-                let r: m::WorkspaceAddProject = params(p)?;
-                ok(w.workspace_add_project(&r.id, &r.path)
+            m::SECTION_LIST => ok(w.list_sections()),
+            m::SECTION_CREATE => {
+                let r: m::SectionCreate = params(p)?;
+                ok(w.create_section(&r.workspace_id, &r.name).map_err(internal)?)
+            }
+            m::SECTION_UPDATE => ok(w.update_section(params(p)?).map_err(internal)?),
+            m::SECTION_DELETE => {
+                let r: m::IdRef = params(p)?;
+                w.delete_section(&r.id).map_err(internal)?;
+                ok(true)
+            }
+            m::SECTION_MOVE => {
+                let r: m::SectionMove = params(p)?;
+                w.move_section(&r.id, &r.workspace_id).map_err(internal)?;
+                ok(true)
+            }
+            m::SECTION_ADD_PROJECT => {
+                let r: m::SectionAddProject = params(p)?;
+                ok(w.section_add_project(&r.id, &r.path)
                     .await
                     .map_err(internal)?)
             }
-            m::WORKSPACE_REMOVE_PROJECT => {
-                let r: m::WorkspaceRemoveProject = params(p)?;
-                w.workspace_remove_project(&r.id, &r.project_id)
+            m::SECTION_REMOVE_PROJECT => {
+                let r: m::SectionRemoveProject = params(p)?;
+                w.section_remove_project(&r.id, &r.project_id)
                     .map_err(internal)?;
                 ok(true)
             }

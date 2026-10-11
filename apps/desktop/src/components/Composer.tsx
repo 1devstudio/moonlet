@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
+import { holdsProject } from "../lib/sidebar";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
@@ -201,6 +202,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   const hosts = useStore((s) => s.hosts);
   const allProjects = useStore((s) => s.projects);
   const allWorkspaces = useStore((s) => s.workspaces);
+  const allSections = useStore((s) => s.sections);
   const selected = useStore((s) => s.selected);
   const close = () => useStore.setState({ dialog: null });
 
@@ -210,17 +212,22 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
     for (const [h, list] of Object.entries(allProjects)) {
       if (hosts[h]?.status !== "connected") continue;
       for (const p of list) {
-        const ws = (allWorkspaces[h] ?? []).find((w) => w.project_ids.includes(p.id));
-        out.push({ host: h, project: p, workspace: ws?.name ?? null });
+        const sec = (allSections[h] ?? []).find((s) => s.project_ids.includes(p.id));
+        out.push({ host: h, project: p, workspace: sec?.name ?? null });
       }
     }
     return out;
-  }, [allProjects, allWorkspaces, hosts]);
+  }, [allProjects, allSections, hosts]);
+  /** The preset workspace, when it holds the project (X32); else the daemon picks. */
+  const workspaceFor = (host: string, projectId: string) => {
+    const ws = (allWorkspaces[host] ?? []).find((w) => w.id === presetWorkspace);
+    return ws && holdsProject(ws, allSections[host] ?? [], projectId) ? ws.id : null;
+  };
   const currentProject = useStore((s) => (s.selected ? s.sessions[s.selected.host]?.find((x) => x.id === s.selected!.session)?.project_id : undefined));
   const initial =
     options.find((o) => o.host === presetHost && o.project.id === presetProject) ??
     options.find((o) => o.host === selected?.host && o.project.id === currentProject) ??
-    options.find((o) => !presetWorkspace || (allWorkspaces[o.host] ?? []).find((w) => w.id === presetWorkspace)?.project_ids.includes(o.project.id)) ??
+    options.find((o) => !presetWorkspace || workspaceFor(o.host, o.project.id)) ??
     options[0];
   const [pick, setPick] = useState(initial ? { host: initial.host, id: initial.project.id } : null);
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
@@ -277,7 +284,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
       onSelect: () => setPick({ host: o.host, id: o.project.id }),
     })),
     { kind: "divider" },
-    { label: "Add project…", icon: <FolderPlus size={14} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "add-project", workspace: presetWorkspace } }) },
+    { label: "Add project…", icon: <FolderPlus size={14} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "add-project" } }) },
   ];
 
   const moreItems: MenuItem[] = [
@@ -318,6 +325,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
         branch: from?.existing ? from.ref : null,
         pr: pr?.number ?? null,
         add_dirs: choice.agent === "none" ? [] : addDirs,
+        workspace_id: workspaceFor(current.host, current.project.id),
         cols: 120,
         rows: 32,
       });
@@ -336,7 +344,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
         <div className="w-[560px] rounded-2xl border border-border-strong bg-[#1f1f1f] p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
           <div className="mb-2 ui-text-14 font-semibold">Add a project first</div>
           <p className="mb-4 ui-text-14 text-muted">A project is a git repository folder on disk. Sessions are created as worktrees of it.</p>
-          <button className="rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg" onClick={() => useStore.setState({ dialog: { kind: "add-project", workspace: presetWorkspace } })}>
+          <button className="rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg" onClick={() => useStore.setState({ dialog: { kind: "add-project" } })}>
             Add project…
           </button>
         </div>
