@@ -14,7 +14,13 @@ export function ReadHost() {
   return shown ? <ReadDialog key={`${shown.host}:${shown.request.request_id}`} host={shown.host} request={shown.request} /> : null;
 }
 
+/** The preview: 12 px text on 18 px lines, at most 16 of them, plus its
+ * 8 px padding and 1 px border on each side. */
+const PREVIEW_LINE = 18;
+const PREVIEW_MAX = 16 * PREVIEW_LINE + 2 * 8 + 2 * 1;
+
 function ReadDialog({ host, request }: { host: string; request: ReadRequest }) {
+  const font = useStore((s) => s.settings.term.fontFamily);
   const name = useStore((s) => s.sessions[host]?.find((w) => w.id === request.session_id)?.name ?? "this session");
   const [remember, setRemember] = useState(false);
   const [before] = useState(() => document.activeElement);
@@ -45,7 +51,10 @@ function ReadDialog({ host, request }: { host: string; request: ReadRequest }) {
       onCancel={() => answer(false)}
       wide
     >
-      <pre className="selectable mt-3 max-h-[290px] overflow-auto rounded-md border border-border bg-panel-2 px-3 py-2 font-mono ui-text-12 leading-[1.5] text-muted">
+      <pre
+        className="selectable mt-3 overflow-auto rounded-md border border-border bg-panel-2 text-muted"
+        style={{ fontFamily: font, fontSize: 12, lineHeight: `${PREVIEW_LINE}px`, padding: "8px 12px", maxHeight: PREVIEW_MAX }}
+      >
         {request.text}
       </pre>
     </ConfirmDialog>
