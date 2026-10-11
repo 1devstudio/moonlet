@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, Settings, ShieldAlert } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrange, compact, lastActive, projectRemoval, workspaceSections, type Group } from "../lib/sidebar";
+import { arrange, compact, hostSections, lastActive, projectRemoval, type Group } from "../lib/sidebar";
 import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -408,11 +408,11 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
   );
   const v = sec.view;
   const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
-  const wsProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
+  const secProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
   const toggleFilter = (id: string) => {
-    const cur = v.filter.length ? v.filter : wsProjects.map((p) => p.id);
+    const cur = v.filter.length ? v.filter : secProjects.map((p) => p.id);
     const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-    setView({ filter: next.length === wsProjects.length ? [] : next });
+    setView({ filter: next.length === secProjects.length ? [] : next });
   };
   const items: MenuItem[] = [
     {
@@ -432,7 +432,7 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
       items: [
         { label: "All projects", checked: v.filter.length === 0, onSelect: () => setView({ filter: [] }) },
         { kind: "divider" },
-        ...wsProjects.map((p) => ({ label: p.name, checked: v.filter.length === 0 || v.filter.includes(p.id), onSelect: () => toggleFilter(p.id) })),
+        ...secProjects.map((p) => ({ label: p.name, checked: v.filter.length === 0 || v.filter.includes(p.id), onSelect: () => toggleFilter(p.id) })),
       ],
     },
     {
@@ -507,7 +507,7 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
           {groups.map((g) => (
             <GroupBlock key={g.key} host={host} workspaceId={ws.id} sec={sec} g={g} onRowMenu={(target, e) => onRowMenu({ x: e.clientX, y: e.clientY, host, section: sec, ...target })} />
           ))}
-          {wsProjects.length === 0 && (
+          {secProjects.length === 0 && (
             <button
               className="ml-4 mt-1 flex items-center gap-2 ui-text-13 text-faint hover:text-accent"
               onClick={() => useStore.setState({ dialog: { kind: "add-project", host, section: sec.id } })}
@@ -670,9 +670,9 @@ export function Sidebar() {
           ordered.map((h) => (
             <div key={h.id}>
               <HostNotice host={h} />
-              {(workspaces[h.id] ?? []).flatMap((ws) =>
-                workspaceSections(ws, sections[h.id] ?? []).map((sec) => <SectionBlock key={sec.id} host={h.id} ws={ws} sec={sec} onRowMenu={setRowMenu} />),
-              )}
+              {hostSections(workspaces[h.id] ?? [], sections[h.id] ?? []).map(({ ws, sec }) => (
+                <SectionBlock key={sec.id} host={h.id} ws={ws} sec={sec} onRowMenu={setRowMenu} />
+              ))}
             </div>
           ))
         )}

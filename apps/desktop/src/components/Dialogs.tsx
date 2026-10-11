@@ -7,7 +7,7 @@ import { M, type Commit, type HookStatus, type PullRequest, type Project } from 
 import { errorToast, refreshGit, selectedSession, toast, updateSettings, useStore } from "../lib/store";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
-import { workspaceSections } from "../lib/sidebar";
+import { hostSections } from "../lib/sidebar";
 import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../lib/agents";
 import type { ToolCallView } from "../lib/chat";
@@ -20,14 +20,13 @@ export function AddProjectDialog({ host: presetHost, section: presetSection }: {
   const hosts = useStore((s) => s.hosts);
   const workspaces = useStore((s) => s.workspaces);
   const sections = useStore((s) => s.sections);
-  /** A host's sections in sidebar order, with the workspace each is in. */
-  const sectionsOf = (h: string) => (workspaces[h] ?? []).flatMap((ws) => workspaceSections(ws, sections[h] ?? []).map((sec) => ({ ws, sec })));
+  const sectionsOf = (h: string) => hostSections(workspaces[h] ?? [], sections[h] ?? []);
   const [host, setHost] = useState(presetHost ?? "local");
   const [secId, setSecId] = useState(presetSection ?? sectionsOf(presetHost ?? "local")[0]?.sec.id ?? "");
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const connected = Object.values(hosts).filter((h) => h.status === "connected");
-  const hostSections = sectionsOf(host);
+  const choices = sectionsOf(host);
   const add = async () => {
     setBusy(true);
     try {
@@ -35,7 +34,7 @@ export function AddProjectDialog({ host: presetHost, section: presetSection }: {
         ? await rpc<Project>(host, M.sectionAddProject, { id: secId, path })
         : await rpc<Project>(host, M.projectAdd, { path });
       toast(`Added ${project.name}`);
-      const ws = hostSections.find((x) => x.sec.id === secId)?.ws.id;
+      const ws = choices.find((x) => x.sec.id === secId)?.ws.id;
       useStore.setState({ dialog: { kind: "new-session", host, project: project.id, workspace: ws } });
     } catch (e) {
       errorToast(e);
@@ -92,12 +91,12 @@ export function AddProjectDialog({ host: presetHost, section: presetSection }: {
           )}
         </div>
       </Field>
-      {hostSections.length > 0 && (
+      {choices.length > 0 && (
         <Field label="Section">
           <select className={inputCls} value={secId} onChange={(e) => setSecId(e.target.value)}>
-            {hostSections.map(({ ws, sec }) => (
+            {choices.map(({ sec, label }) => (
               <option key={sec.id} value={sec.id}>
-                {(workspaces[host] ?? []).length > 1 ? `${ws.name} › ${sec.name}` : sec.name}
+                {label}
               </option>
             ))}
           </select>

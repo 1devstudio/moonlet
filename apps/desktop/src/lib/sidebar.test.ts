@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, compact, holdsProject, projectRemoval, workspaceSections } from "./sidebar";
+import { arrange, compact, holdsProject, hostSections, projectRemoval, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
@@ -31,7 +31,7 @@ const projects = [p("a", "api"), p("b", "web"), p("c", "other")];
 const sessions = [s("s1", "a"), s("s2", "a"), s("s3", "b", { archived: true }), s("s4", "c"), s("s5", "b")];
 
 describe("sidebar arrange", () => {
-  it("groups by project in workspace order, newest first, without archived or foreign projects", () => {
+  it("groups by project in section order, newest first, without archived or foreign projects", () => {
     const g = arrange("personal", sec(), projects, sessions, () => null, () => 0);
     expect(g.map((x) => x.label)).toEqual(["api", "web"]);
     expect(g[0].sessions.map((x) => x.id)).toEqual(["s2", "s1"]);
@@ -96,5 +96,21 @@ describe("workspaceSections", () => {
     const all = [sec({}, { id: "a", project_ids: ["p1"] }), sec({}, { id: "b", project_ids: ["p2"] })];
     expect(holdsProject(w("personal", ["a", "b"]), all, "p2")).toBe(true);
     expect(holdsProject(w("acmeco", ["a"]), all, "p2")).toBe(false);
+  });
+});
+
+describe("hostSections", () => {
+  const w = (id: string, name: string, section_ids: string[]): Workspace => ({ id, name, color: "clay", section_ids, created_at: 0 });
+  const all = [sec({}, { id: "a", name: "1devstudio" }), sec({}, { id: "b", name: "Side projects" }), sec({}, { id: "c", name: "AI Operations" })];
+
+  it("lists every section of a host in workspace order, labelled by section alone with one workspace", () => {
+    expect(hostSections([w("p", "Personal", ["b", "a"])], all).map((x) => [x.ws.id, x.sec.id, x.label])).toEqual([
+      ["p", "b", "Side projects"],
+      ["p", "a", "1devstudio"],
+    ]);
+  });
+
+  it("names the workspace too when there are several", () => {
+    expect(hostSections([w("p", "Personal", ["a"]), w("c", "Acme", ["c"])], all).map((x) => x.label)).toEqual(["Personal › 1devstudio", "Acme › AI Operations"]);
   });
 });
