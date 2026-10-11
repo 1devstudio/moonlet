@@ -34,7 +34,12 @@ __moonlet_precmd() {
   fi
   printf '\e]133;A\a'
 }
-__moonlet_preexec() { printf '\e]133;C\a'; __moonlet_ran=1; }
+# The command line, for an agent reading the terminal (X31), then the mark.
+__moonlet_preexec() {
+  __moonlet_urlpath "$1"
+  printf '\e]1337;MoonletCommand=%s\a\e]133;C\a' "$REPLY"
+  __moonlet_ran=1
+}
 # Percent-encodes a path for OSC 7 (into $REPLY), byte by byte.
 __moonlet_urlpath() {
   emulate -L zsh
@@ -177,7 +182,9 @@ __moonlet_debug() {
   case "$BASH_COMMAND" in __moonlet_*) return 0 ;; esac
   __moonlet_armed=
   __moonlet_ran=1
-  printf '\e[0m\e]133;C\a'
+  # The command (first of a pipeline) for an agent reading the terminal (X31).
+  __moonlet_urlpath "$BASH_COMMAND"
+  printf '\e[0m\e]1337;MoonletCommand=%s\a\e]133;C\a' "$__moonlet_url"
   return $user
 }
 trap '__moonlet_debug' DEBUG
@@ -244,6 +251,8 @@ if status is-interactive
     test -z "$MOONLET_CLASSIC_FILE"; or test -e "$MOONLET_CLASSIC_FILE"
   end
   function __moonlet_preexec --on-event fish_preexec
+    # The command line, for an agent reading the terminal (X31).
+    printf '\e]1337;MoonletCommand=%s\a' (string escape --style=url -- $argv[1])
     printf '\e]133;C\a'
     set -g __moonlet_ran 1
   end
@@ -408,6 +417,21 @@ mod tests {
         assert!(out.contains("\x1b]133;A\x07"), "prompt mark: {out:?}");
         assert!(out.contains("\x1b]133;D;1\x07"), "exit status: {out:?}");
         assert!(out.contains("\x1b]7;file://"), "cwd: {out:?}");
+    }
+
+    /// X31: the command line is reported before its output, percent-encoded.
+    #[tokio::test]
+    async fn shells_report_the_command_line_before_its_output() {
+        for shell in ["/bin/zsh", "/bin/bash", "/opt/homebrew/bin/fish"] {
+            let Some(out) = run_shell(shell).await else {
+                continue;
+            };
+            assert!(
+                out.contains("\x1b]1337;MoonletCommand=false\x07\x1b]133;C\x07")
+                    || out.contains("\x1b]1337;MoonletCommand=false\x07\x1b[0m\x1b]133;C\x07"),
+                "{shell}: {out:?}"
+            );
+        }
     }
 
     /// Output until `needle` shows up (or a timeout).
