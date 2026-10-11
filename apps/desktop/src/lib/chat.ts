@@ -161,6 +161,11 @@ export function rememberPrompt(text: string) {
 // ------------------------------------------------------------ display helpers
 
 /** `+a −d` from a unified diff. */
+/** Whether the agent is in a turn: working, or waiting on a permission. */
+export function turnRunning(status: ChatState["status"] | undefined): boolean {
+  return status === "working" || status === "blocked";
+}
+
 export function diffStat(diff: string): { add: number; del: number } {
   let add = 0;
   let del = 0;

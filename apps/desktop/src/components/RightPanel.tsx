@@ -11,6 +11,7 @@ import { chatKey, loadChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
 import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
+import { FileLinks, useProjectFiles } from "./AgentView";
 import { FilesPanel } from "./FilesPanel";
 import { cx, prTone } from "./ui";
 
@@ -216,6 +217,8 @@ function useSessionPlan(host: string, ws: Session) {
 export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const tab = useStore((s) => s.rightTab);
   const plan = useSessionPlan(host, ws);
+  // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
+  const exists = useProjectFiles(host, tab === "plan" ? ws.path : "", plan?.plan);
 
   // Watch the worktree for live refresh of Files and Changes.
   useEffect(() => {
@@ -253,7 +256,9 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
       >
         <Suspense fallback={null}>
           {tab === "plan" ? (
-            <PlanPanel view={plan} />
+            <FileLinks.Provider value={{ host, wsId: ws.id, cwd: ws.path, exists }}>
+              <PlanPanel view={plan} />
+            </FileLinks.Provider>
           ) : tab === "files" ? (
             <FilesPanel host={host} ws={ws} />
           ) : tab === "changes" ? (
