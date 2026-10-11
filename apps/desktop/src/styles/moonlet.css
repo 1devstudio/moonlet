@@ -96,6 +96,21 @@ textarea,
   white-space: pre;
   pointer-events: none;
 }
+/* The header of the block at the top of the viewport, pinned while its
+   output scrolls under it, with the separator under it (T8). */
+.moonlet-block-head.sticky {
+  position: absolute;
+  top: 0;
+  left: -28px;
+  right: -12px;
+  z-index: 7;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border-strong);
+}
+.moonlet-block-head.sticky.selected {
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg));
+  box-shadow: inset 2px 0 var(--color-accent);
+}
 /* No row of its own: at the end of the command line, over the terminal. */
 .moonlet-block-head.inline {
   padding: 0 6px 0 12px;
