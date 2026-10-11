@@ -133,9 +133,14 @@ where
     // Fan daemon events out to this client.
     let mut events = daemon.terminals.subscribe_events();
     let ev_tx = tx.clone();
+    // The text an agent asks to read is for the app alone, not for the
+    // agent's own `moonlet` connections (X31).
+    let is_cli = conn.client == crate::daemon::CLI_CLIENT;
     let event_task = tokio::spawn(async move {
         loop {
             match events.recv().await {
+                Ok(Message::Event { name, .. })
+                    if is_cli && name == moonlet_proto::methods::EV_TERMINAL_READ_REQUEST => {}
                 Ok(m) => {
                     if !ev_tx.send(Frame::Json(m)) {
                         break;
