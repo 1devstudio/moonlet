@@ -36,6 +36,93 @@ pub enum Signal {
     /// `OSC 1337 ; MoonletPath=<PATH>` from moonlet's prompt hook (T8): the
     /// shell's PATH, when it changed.
     Path(String),
+    /// `OSC 1337 ; MoonletCommand=<percent-encoded>` from moonlet's preexec
+    /// hook (X31): the command line about to run.
+    Command(String),
+}
+
+/// Raw output of the last command kept for an agent to read (X31); beyond
+/// this its start is dropped.
+const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
+
+/// The most recent command a shell ran (X31), from its OSC 133 marks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastCommand {
+    pub command: Option<String>,
+    pub exit: Option<i32>,
+    /// No `D` mark yet.
+    pub running: bool,
+    /// The output as printed, at most the asked number of lines.
+    pub text: String,
+    /// Lines of output in `text`, not counting a note about omitted ones.
+    pub lines: usize,
+    /// Earlier output was left out.
+    pub truncated: bool,
+}
+
+#[derive(Clone)]
+struct Capture {
+    command: Option<String>,
+    exit: Option<i32>,
+    running: bool,
+    bytes: Vec<u8>,
+    dropped: bool,
+}
+
+/// A copy of the last command's raw output (X31), so it can be rendered
+/// without holding the terminal it came from.
+pub struct CommandCapture {
+    capture: Capture,
+    rows: u16,
+    cols: u16,
+}
+
+impl CommandCapture {
+    /// The command and the last `max` lines of its output, as printed.
+    pub fn render(&self, max: usize) -> LastCommand {
+        let c = &self.capture;
+        let mut render = TermState::with_scrollback(self.rows, self.cols, 100_000);
+        render.feed(&c.bytes, Instant::now());
+        let (lines, omitted) = render.tail_lines(max);
+        let shown = lines.len();
+        let mut text = Vec::new();
+        if c.dropped {
+            text.push("… earlier output was not kept".to_string());
+        } else if omitted > 0 {
+            text.push(format!("… {omitted} earlier lines omitted"));
+        }
+        text.extend(lines);
+        LastCommand {
+            command: c.command.clone(),
+            exit: c.exit,
+            running: c.running,
+            text: text.join("\n"),
+            lines: shown,
+            truncated: c.dropped || omitted > 0,
+        }
+    }
+}
+
+/// Where each OSC 133 sequence in `data` ends, so the bytes after a `C`
+/// mark can be told from those before it.
+fn mark_ends(data: &[u8]) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut i = 0;
+    while let Some(at) = find(&data[i..], b"\x1b]133;") {
+        let start = i + at + 6;
+        let Some(len) = data[start..].iter().position(|&b| b == 0x07 || b == 0x1b) else {
+            break;
+        };
+        let end = start + len + if data[start + len] == 0x1b { 2 } else { 1 };
+        let end = end.min(data.len());
+        ends.push(end);
+        i = end;
+    }
+    ends
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 /// An OSC 133 mark on the primary screen, kept so a snapshot can put it
@@ -151,6 +238,7 @@ fn parse_osc(params: &[&[u8]]) -> Option<Signal> {
             match name {
                 "MoonletPath" | "JauntPath" => Some(Signal::Path(value.to_string())),
                 "MoonletNodePath" | "JauntNodePath" => Some(Signal::NodePath(value.to_string())),
+                "MoonletCommand" => Some(Signal::Command(percent_decode(value))),
                 _ => None,
             }
         }
@@ -205,6 +293,10 @@ pub struct TermState {
     scrollback: usize,
     /// Prompt marks, oldest first, for snapshots (S2).
     marks: VecDeque<Mark>,
+    /// The command line the preexec hook reported, until its `C` mark.
+    next_command: Option<String>,
+    last: Option<Capture>,
+    capture_limit: usize,
 }
 
 impl TermState {
@@ -223,16 +315,77 @@ impl TermState {
             title: String::new(),
             scrollback,
             marks: VecDeque::new(),
+            next_command: None,
+            last: None,
+            capture_limit: CAPTURE_LIMIT,
         }
     }
 
-    /// Feeds PTY output; returns the signals it produced.
+    /// Feeds PTY output; returns the signals it produced. Output between a
+    /// command's `C` and `D` marks is also kept, for [`Self::last_command`].
     pub fn process(&mut self, bytes: &[u8]) -> Vec<Signal> {
         self.process_at(bytes, Instant::now())
     }
 
     /// `process`, with the time the output came (prompt marks keep it).
     pub fn process_at(&mut self, bytes: &[u8], now: Instant) -> Vec<Signal> {
+        let mut signals = Vec::new();
+        let mut from = 0;
+        for end in mark_ends(bytes).into_iter().chain([bytes.len()]) {
+            if end > from {
+                signals.extend(self.process_part(&bytes[from..end], now));
+            }
+            from = end;
+        }
+        signals
+    }
+
+    fn process_part(&mut self, bytes: &[u8], now: Instant) -> Vec<Signal> {
+        if let Some(c) = self.last.as_mut().filter(|c| c.running) {
+            c.bytes.extend_from_slice(bytes);
+            if c.bytes.len() > self.capture_limit {
+                let keep = self.capture_limit * 3 / 4;
+                c.bytes.drain(..c.bytes.len() - keep);
+                c.dropped = true;
+            }
+        }
+        let signals = self.feed(bytes, now);
+        for s in &signals {
+            match s {
+                Signal::Command(c) => self.next_command = Some(c.clone()),
+                Signal::Prompt { mark: 'C', .. } => {
+                    self.last = Some(Capture {
+                        command: self.next_command.take(),
+                        exit: None,
+                        running: true,
+                        bytes: Vec::new(),
+                        dropped: false,
+                    });
+                }
+                Signal::Prompt { mark: 'D', exit } => {
+                    if let Some(c) = self.last.as_mut().filter(|c| c.running) {
+                        c.running = false;
+                        c.exit = *exit;
+                    }
+                }
+                _ => {}
+            }
+        }
+        signals
+    }
+
+    /// The most recent command and the last `max` lines of its output (X31).
+    pub fn last_command(&self, max: usize) -> Option<LastCommand> {
+        Some(self.last_capture()?.render(max))
+    }
+
+    /// A copy of the most recent command's output, to render later.
+    pub fn last_capture(&self) -> Option<CommandCapture> {
+        let (rows, cols) = self.size();
+        Some(CommandCapture { capture: self.last.clone()?, rows, cols })
+    }
+
+    fn feed(&mut self, bytes: &[u8], now: Instant) -> Vec<Signal> {
         let parser = &mut self.parser;
         let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.process(bytes)))
             .is_ok();
@@ -441,12 +594,21 @@ impl TermState {
     /// The last `n` printed lines as plain text (X31), and whether earlier
     /// lines were left out. Trailing blank lines do not count.
     pub fn tail_text(&mut self, n: usize) -> (String, bool) {
+        let (lines, omitted) = self.tail_lines(n);
+        (lines.join("\n"), omitted > 0)
+    }
+
+    /// The last `n` printed lines, without blank lines at either end, and
+    /// how many came before them.
+    fn tail_lines(&mut self, n: usize) -> (Vec<String>, usize) {
         let mut lines = self.logical_lines();
         while lines.last().is_some_and(|l| l.trim().is_empty()) {
             lines.pop();
         }
-        let start = lines.len().saturating_sub(n);
-        (lines[start..].join("\n"), start > 0)
+        let first = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
+        let start = lines.len().saturating_sub(n).max(first);
+        let tail = lines.split_off(start);
+        (tail, start - first)
     }
 }
 
@@ -607,6 +769,85 @@ mod tests {
         assert_eq!(text.lines().count(), 200);
         assert_eq!(text.lines().next(), Some("line 101"));
         assert_eq!(text.lines().last(), Some("line 300"));
+    }
+
+    /// X31: the last command is what the shell printed between its `C`
+    /// and `D` marks, rendered, with the command line the hook reported.
+    #[test]
+    fn last_command_is_the_output_between_the_marks() {
+        let mut t = TermState::new(5, 20);
+        assert_eq!(t.last_command(2000), None);
+        t.process(b"\x1b]133;A\x07$ pnpm test\r\n\x1b]1337;MoonletCommand=pnpm%20test\x07\x1b]133;C\x07");
+        t.process(b"\r\nloading 10%\rloading 100%\r\n");
+        assert_eq!(
+            t.last_command(2000),
+            Some(LastCommand {
+                command: Some("pnpm test".into()),
+                exit: None,
+                running: true,
+                text: "loading 100%".into(),
+                lines: 1,
+                truncated: false,
+            })
+        );
+        t.process(b"FAIL src/login.test.ts\r\n\x1b]133;D;1\x07\x1b]133;A\x07$ ");
+        assert_eq!(
+            t.last_command(2000),
+            Some(LastCommand {
+                command: Some("pnpm test".into()),
+                exit: Some(1),
+                running: false,
+                text: "loading 100%\nFAIL src/login.test.ts".into(),
+                lines: 2,
+                truncated: false,
+            })
+        );
+        // The next command replaces it, and one without a reported line has none.
+        t.process(b"\x1b]133;C\x07ok\r\n\x1b]133;D;0\x07");
+        assert_eq!(
+            t.last_command(2000),
+            Some(LastCommand { command: None, exit: Some(0), running: false, text: "ok".into(), lines: 1, truncated: false })
+        );
+    }
+
+    #[test]
+    fn a_long_last_command_keeps_its_end() {
+        let mut t = TermState::new(5, 20);
+        t.process(b"\x1b]1337;MoonletCommand=seq\x07\x1b]133;C\x07");
+        for i in 1..=2500 {
+            t.process(format!("{i}\r\n").as_bytes());
+        }
+        t.process(b"\x1b]133;D;0\x07");
+        let last = t.last_command(2000).unwrap();
+        let lines: Vec<&str> = last.text.lines().collect();
+        assert_eq!(lines.len(), 2001);
+        assert_eq!((last.lines, last.truncated), (2000, true), "the marker is not a line of output");
+        assert_eq!(lines[0], "… 500 earlier lines omitted");
+        assert_eq!(lines[1], "501");
+        assert_eq!(lines[2000], "2500");
+    }
+
+    /// Output that itself starts with "…" is not mistaken for a cut.
+    #[test]
+    fn output_starting_with_an_ellipsis_is_whole() {
+        let mut t = TermState::new(5, 20);
+        t.process("\x1b]133;C\x07… waiting\r\ndone\r\n\x1b]133;D;0\x07".as_bytes());
+        let last = t.last_command(2000).unwrap();
+        assert_eq!((last.text.as_str(), last.lines, last.truncated), ("… waiting\ndone", 2, false));
+    }
+
+    #[test]
+    fn output_over_the_capture_limit_says_its_start_is_gone() {
+        let mut t = TermState::new(5, 20);
+        t.capture_limit = 64;
+        t.process(b"\x1b]133;C\x07");
+        for i in 1..=40 {
+            t.process(format!("{i}\r\n").as_bytes());
+        }
+        t.process(b"\x1b]133;D;0\x07");
+        let text = t.last_command(2000).unwrap().text;
+        assert_eq!(text.lines().next(), Some("… earlier output was not kept"));
+        assert_eq!(text.lines().last(), Some("40"));
     }
 
     /// X27: shells report with moonlet's markers; shells jaunt's

@@ -159,6 +159,7 @@ impl ChatManager {
             reported_cwd: None,
             node_version: None,
             prompt: None,
+            last_exit: None,
             alt_screen: false,
             chat: true,
             classic: false,

@@ -272,6 +272,10 @@ pub struct ReadResult {
     pub running: bool,
     /// Earlier output was left out.
     pub truncated: bool,
+    /// Lines of output in `text`, without the `$ <command>` line or a note
+    /// about omitted lines.
+    #[serde(default)]
+    pub lines: usize,
     pub text: String,
 }
 

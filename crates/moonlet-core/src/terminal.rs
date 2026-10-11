@@ -337,6 +337,7 @@ impl TerminalManager {
             reported_cwd: None,
             node_version: None,
             prompt: None,
+            last_exit: None,
             alt_screen: false,
             chat: false,
             classic: req.classic,
@@ -693,11 +694,37 @@ impl TerminalManager {
             .collect())
     }
 
-    /// A terminal's last `lines` printed lines as plain text (X31).
-    pub fn read_text(&self, id: TerminalId, lines: usize) -> Result<methods::ReadResult> {
+    /// What an agent reads from a terminal (X31): its last `lines` printed
+    /// lines, or without `lines` the last command it ran and that command's
+    /// output (else the last [`DEFAULT_LINES`] lines).
+    pub fn read_text(&self, id: TerminalId, lines: Option<usize>) -> Result<methods::ReadResult> {
+        use crate::terminal_read::{DEFAULT_LINES, MAX_LINES};
         let t = self.get(id).context("no such terminal")?;
+        // Copied under the lock, rendered after it: up to 8 MB of output
+        // must not hold up the terminal's own output meanwhile.
+        let (capture, title) = {
+            let st = t.state.lock().unwrap();
+            (lines.is_none().then(|| st.term.last_capture()).flatten(), st.info.title.clone())
+        };
+        if let Some(capture) = capture {
+            let last = capture.render(MAX_LINES);
+            let mut text = last.command.as_ref().map(|c| format!("$ {c}")).into_iter().collect::<Vec<_>>();
+            if !last.text.is_empty() {
+                text.push(last.text.clone());
+            }
+            return Ok(methods::ReadResult {
+                terminal: id,
+                title,
+                command: last.command,
+                exit: last.exit,
+                running: last.running,
+                truncated: last.truncated,
+                lines: last.lines,
+                text: text.join("\n"),
+            });
+        }
         let mut st = t.state.lock().unwrap();
-        let (text, truncated) = st.term.tail_text(lines);
+        let (text, truncated) = st.term.tail_text(lines.unwrap_or(DEFAULT_LINES));
         Ok(methods::ReadResult {
             terminal: id,
             title: st.info.title.clone(),
@@ -705,6 +732,7 @@ impl TerminalManager {
             exit: st.info.exit.as_ref().and_then(|e| e.code),
             running: st.info.exit.is_none() && st.info.prompt == Some(false),
             truncated,
+            lines: if text.is_empty() { 0 } else { text.lines().count() },
             text,
         })
     }
@@ -951,7 +979,11 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
                     .flatten();
                 info_changed = true;
             }
-            Signal::Prompt { mark, .. } => {
+            Signal::Prompt { mark, exit } => {
+                if mark == 'D' && exit != st.info.last_exit {
+                    st.info.last_exit = exit;
+                    info_changed = true;
+                }
                 let at_prompt = match mark {
                     'A' | 'D' => Some(true),
                     'C' => Some(false),
