@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronsUpDown, Plus, Settings } from "lucide-react";
-import { hostWorkspaces, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, termKey, useStore } from "../lib/store";
-import { colorHex, switcherRows, workspaceInitial, workspacesNeedingYou } from "../lib/workspaces";
+import { hostWorkspaces, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "../lib/store";
+import { colorHex, isShown, switcherRows, workspaceInitial, workspacesNeedingYou, wsKey } from "../lib/workspaces";
 import type { WorkspaceColor } from "../lib/protocol";
 import { cx } from "./ui";
 
@@ -28,17 +28,13 @@ export function WorkspaceSwitcher() {
   const workspaces = useStore((s) => s.workspaces);
   const sections = useStore((s) => s.sections);
   const sessions = useStore((s) => s.sessions);
-  const terminals = useStore((s) => s.terminals);
-  const unread = useStore((s) => s.unread);
   const current = useStore((s) => shownWorkspace(s));
   const rows = useMemo(() => switcherRows(hostWorkspaces(useStore.getState())), [hosts, workspaces, sections, sessions]);
-  // A session needs you when an agent is blocked or finished unread.
-  const needing = useMemo(() => {
-    const st = useStore.getState();
-    return workspacesNeedingYou(hostWorkspaces(st), (h, x) => sessionState(st, h, x.id) === "blocked" || sessionTerminals(st, h, x.id).some((t) => st.unread[termKey(h, t.id)]));
-  }, [hosts, sessions, terminals, unread]);
-  const cur = rows.find((r) => r.host === current?.host && r.ws.id === current.id);
-  const othersNeedYou = [...needing].some((k) => k !== `${current?.host}/${current?.id}`);
+  // Joined into one string, so the selector's value is stable between renders.
+  const needingKey = useStore((s) => [...workspacesNeedingYou(hostWorkspaces(s), (h, x) => sessionNeedsYou(s, h, x.id))].sort().join("\n"));
+  const needing = useMemo(() => new Set(needingKey ? needingKey.split("\n") : []), [needingKey]);
+  const cur = rows.find((r) => isShown(current, r.host, r.ws.id));
+  const othersNeedYou = [...needing].some((k) => !current || k !== wsKey(current.host, current.id));
 
   useEffect(() => {
     if (!open) return;
@@ -70,7 +66,7 @@ export function WorkspaceSwitcher() {
             {rows.map((r) => {
               const isCur = r === cur;
               return (
-                <div key={`${r.host}/${r.ws.id}`}>
+                <div key={wsKey(r.host, r.ws.id)}>
                   {r.hostLabel && <div className="px-2 pb-0.5 pt-1.5 ui-text-11 uppercase tracking-[0.08em] text-faint">{r.hostLabel}</div>}
                   <button
                     role="menuitemradio"
@@ -85,7 +81,7 @@ export function WorkspaceSwitcher() {
                     <span className="flex min-w-0 flex-1 flex-col gap-px">
                       <span className="flex items-center gap-1.5 ui-text-13 font-semibold text-fg">
                         {r.ws.name}
-                        {needing.has(`${r.host}/${r.ws.id}`) && !isCur && <AttentionDot />}
+                        {needing.has(wsKey(r.host, r.ws.id)) && !isCur && <AttentionDot />}
                       </span>
                       <span className="truncate ui-text-11.5 text-muted">{r.summary}</span>
                     </span>

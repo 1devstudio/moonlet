@@ -6,6 +6,7 @@ import { addTab, closeFile, cycleFocus, openFile, splitLeaf, tabOf } from "./lay
 import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
 import { errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
 import { arrange, hostSections, lastActive } from "./sidebar";
+import { isShown } from "./workspaces";
 import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured } from "./agents";
 import { hasRunCommand } from "./projectSettings";
@@ -318,7 +319,7 @@ export function visibleSessionOrder(): { host: string; id: string }[] {
     const terms = s.terminals[h.id] ?? {};
     // Only the workspace the sidebar shows (X32).
     const shown = shownWorkspace(s);
-    const wss = (s.workspaces[h.id] ?? []).filter((w) => shown?.host === h.id && w.id === shown.id);
+    const wss = (s.workspaces[h.id] ?? []).filter((w) => isShown(shown, h.id, w.id));
     for (const { ws, sec } of hostSections(wss, s.sections[h.id] ?? [])) {
       if (s.collapsed[`ws:${h.id}/${sec.id}`]) continue;
       const groups = arrange(ws.id, sec, s.projects[h.id] ?? [], s.sessions[h.id] ?? [], (x) => sessionState(s, h.id, x.id), (x) => lastActive(terms, x));

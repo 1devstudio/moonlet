@@ -8,6 +8,7 @@ import { errorToast, refreshGit, selectedSession, shownWorkspace, toast, updateS
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { hostSections } from "../lib/sidebar";
+import { newSectionWorkspace } from "../lib/workspaces";
 import { NewWorkspaceDialog, WorkspaceSettingsDialog } from "./WorkspaceDialogs";
 import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../lib/agents";
@@ -114,10 +115,10 @@ export function NewSectionDialog() {
   const [host, setHost] = useState(() => (connected.some((h) => h.id === "local") ? "local" : (connected[0]?.id ?? "local")));
   const create = async () => {
     try {
-      const shown = shownWorkspace(useStore.getState());
-      const ws = shown?.host === host ? shown.id : useStore.getState().workspaces[host]?.[0]?.id;
-      if (!ws) return;
-      await rpc(host, M.sectionCreate, { workspace_id: ws, name });
+      const st = useStore.getState();
+      const workspaceId = newSectionWorkspace(shownWorkspace(st), host, st.workspaces[host] ?? []);
+      if (!workspaceId) return;
+      await rpc(host, M.sectionCreate, { workspace_id: workspaceId, name });
       close();
     } catch (e) {
       errorToast(e);

@@ -32,7 +32,7 @@ import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
 import { spawnedNotices } from "./spawned";
-import { currentWorkspace, sessionToRestore, switcherRows, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
+import { currentWorkspace, isShown, sessionToRestore, switcherRows, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
@@ -402,6 +402,20 @@ export function getLayout(host: string, id: string): Layout {
   return get().layouts[sesKey(host, id)] ?? emptyLayout();
 }
 
+/** Opening a session, from the sidebar, a notification, the inbox or the
+ * palette, shows its workspace and makes it that workspace's last session (X32). */
+function showSessionWorkspace(s: State, host: string, id: string): Partial<State> {
+  const wsId = s.sessions[host]?.find((x) => x.id === id)?.workspace_id;
+  if (!wsId) return {};
+  return { workspace: isShown(s.workspace, host, wsId) ? s.workspace : { host, id: wsId }, lastSession: { ...s.lastSession, [wsKey(host, wsId)]: id } };
+}
+
+/** A session needs you while one of its agents is blocked or a terminal of
+ * it finished unread: the switcher's attention dot (X32). */
+export function sessionNeedsYou(s: State, host: string, id: string): boolean {
+  return sessionState(s, host, id) === "blocked" || sessionTerminals(s, host, id).some((t) => !!s.unread[termKey(host, t.id)]);
+}
+
 export function focusTerminal(host: string, session: number) {
   const info = get().terminals[host]?.[session];
   if (!info?.session_id) return;
@@ -411,21 +425,14 @@ export function focusTerminal(host: string, session: number) {
   set((s) => {
     const unread = { ...s.unread };
     delete unread[termKey(host, session)];
-    return { selected: { host, session: ws }, unread, showHistory: false };
+    return { selected: { host, session: ws }, unread, showHistory: false, ...showSessionWorkspace(s, host, ws) };
   });
   if (tab) setLayout(host, ws, { ...layout, active: tab.id, focused: session });
   updateBadge();
 }
 
 export function selectSession(host: string, id: string) {
-  // Opening a session (from a notification, the inbox, the palette) shows
-  // its workspace (X32).
-  const wsId = get().sessions[host]?.find((x) => x.id === id)?.workspace_id;
-  set((s) => ({
-    selected: { host, session: id },
-    diffFile: null,
-    ...(wsId && { workspace: s.workspace?.host === host && s.workspace.id === wsId ? s.workspace : { host, id: wsId }, lastSession: { ...s.lastSession, [`${host}/${wsId}`]: id } }),
-  }));
+  set((s) => ({ selected: { host, session: id }, diffFile: null, ...showSessionWorkspace(s, host, id) }));
   const layout = getLayout(host, id);
   if (layout.focused !== null) {
     set((s) => {
@@ -461,8 +468,8 @@ export function switchWorkspace(ref: WorkspaceRef) {
   const s = get();
   // Remember what was open in the workspace being left.
   const from = shownWorkspace(s);
-  const lastSession = from && s.selected ? { ...s.lastSession, [`${from.host}/${from.id}`]: s.selected.session } : s.lastSession;
-  const restore = sessionToRestore(lastSession[`${ref.host}/${ref.id}`], s.sessions[ref.host] ?? [], ref.id);
+  const lastSession = from && s.selected ? { ...s.lastSession, [wsKey(from.host, from.id)]: s.selected.session } : s.lastSession;
+  const restore = sessionToRestore(lastSession[wsKey(ref.host, ref.id)], s.sessions[ref.host] ?? [], ref.id);
   set({ workspace: ref, lastSession, showHistory: false });
   if (restore) selectSession(ref.host, restore);
   else set({ selected: null });
