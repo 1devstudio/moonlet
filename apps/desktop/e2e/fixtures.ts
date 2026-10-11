@@ -218,3 +218,35 @@ export const sel = {
   confirmButton: (text: string) => `//div[@role="dialog"][@aria-modal="true"]//button[normalize-space()=${lit(text)}]`,
   sessionRow: (name: string) => `//div[@role="button"][.//span[normalize-space()=${lit(name)}]]`,
 };
+
+/** The shell input editor (T6). */
+export const commandInput = '//textarea[@placeholder="Type a command…"]';
+
+/** Types `command` into the input editor and presses Enter there. Right
+ *  after a terminal opens, typed text does not always reach React, so it is
+ *  typed again until the editor's mirror layer (just before the textarea)
+ *  shows it. Enter goes to the editor itself, since a new terminal can take
+ *  focus back from it. */
+export async function run(command: string) {
+  const shown = () =>
+    browser.execute(
+      (xp: string, c: string) => {
+        const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
+        return el?.previousElementSibling?.textContent?.startsWith(c) ?? false;
+      },
+      commandInput,
+      command,
+    );
+  await browser.waitUntil(
+    async () => {
+      await fill(commandInput, command);
+      await browser.pause(300);
+      return shown();
+    },
+    { timeout: 15_000, timeoutMsg: `the editor never showed ${command}` },
+  );
+  await browser.execute((xp: string) => {
+    const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    el?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  }, commandInput);
+}

@@ -5,42 +5,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { PROJECT, choose, fill, rpc, sel, world } from "../fixtures";
+import type { ProfileInfo } from "../../src/lib/protocol";
+import { PROJECT, choose, fill, rpc, run, sel, world } from "../fixtures";
 
 const w = world();
-const input = '//textarea[@placeholder="Type a command…"]';
 
-/** Types `command` into the input editor and presses Enter (as in
- *  command-blocks.e2e.ts: retyped until the editor shows it). */
-async function run(command: string) {
-  const shown = () =>
-    browser.execute(
-      (xp: string, c: string) => {
-        const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
-        return el?.previousElementSibling?.textContent?.startsWith(c) ?? false;
-      },
-      input,
-      command,
-    );
-  await browser.waitUntil(
-    async () => {
-      await fill(input, command);
-      await browser.pause(300);
-      return shown();
-    },
-    { timeout: 15_000, timeoutMsg: `the editor never showed ${command}` },
-  );
-  await browser.execute((xp: string) => {
-    const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-    el?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  }, input);
-}
-
-interface Profile {
-  id: string;
-  name: string;
-  path: string;
-}
+type Profile = Pick<ProfileInfo, "id" | "name" | "path">;
 
 describe("workspace Claude profile", () => {
   it("creates a profile for a new workspace and starts its sessions with it", async () => {

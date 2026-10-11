@@ -28,8 +28,9 @@ export function WorkspaceSwitcher() {
   const workspaces = useStore((s) => s.workspaces);
   const sections = useStore((s) => s.sections);
   const sessions = useStore((s) => s.sessions);
+  const profiles = useStore((s) => s.profiles);
   const current = useStore((s) => shownWorkspace(s));
-  const rows = useMemo(() => switcherRows(hostWorkspaces(useStore.getState())), [hosts, workspaces, sections, sessions]);
+  const rows = useMemo(() => switcherRows(hostWorkspaces(useStore.getState())), [hosts, workspaces, sections, sessions, profiles]);
   // Joined into one string, so the selector's value is stable between renders.
   const needingKey = useStore((s) => [...workspacesNeedingYou(hostWorkspaces(s), (h, x) => sessionNeedsYou(s, h, x.id))].sort().join("\n"));
   const needing = useMemo(() => new Set(needingKey ? needingKey.split("\n") : []), [needingKey]);

@@ -13,13 +13,25 @@ import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { isShown } from "../lib/workspaces";
-import { ProfileFooter } from "./WorkspaceDialogs";
+import { ProfileFooter } from "./Profiles";
+import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
 // ------------------------------------------------------------------ helpers
 
 function updateSection(host: string, id: string, patch: { name?: string; view?: SectionView }) {
   return rpc<Section>(host, M.sectionUpdate, { id, ...patch }).catch(errorToast);
+}
+
+/** Moves a section to another workspace, asking first when sessions moving
+ * with it run Claude agents that would switch accounts (X33). */
+async function moveSection(host: string, from: Workspace, sectionId: string, to: Workspace) {
+  const st = useStore.getState();
+  const sessions = st.sessions[host] ?? [];
+  const ids = movingSessions(from, st.sections[host] ?? [], sessions, sectionId);
+  const message = switchConfirm(from.claude_profile ?? null, to.claude_profile ?? null, runningClaudeAgents(sessions, Object.values(st.terminals[host] ?? {}), ids), st.profiles[host] ?? []);
+  if (message && !(await askConfirm({ title: "Change Claude profile", message, action: "Move section" }))) return;
+  await rpc(host, M.sectionMove, { id: sectionId, workspace_id: to.id }).catch(errorToast);
 }
 
 const activeAt = (host: string, s: Session) => lastActive(useStore.getState().terminals[host] ?? {}, s);
@@ -460,7 +472,7 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
             label: "Move to workspace",
             items: others.map((w) => ({
               label: w.name,
-              onSelect: () => void rpc(host, M.sectionMove, { id: sec.id, workspace_id: w.id }).catch(errorToast),
+              onSelect: () => void moveSection(host, ws, sec.id, w),
             })),
           },
         ]

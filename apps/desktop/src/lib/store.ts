@@ -20,6 +20,7 @@ import {
   type PullRequest,
   type TerminalInfo,
   type Session,
+  type ProfileAccount,
   type ProfileInfo,
   type Section,
   type Workspace,
@@ -170,6 +171,8 @@ interface State extends UiPersist {
   sections: Record<string, Section[]>;
   /** Claude profiles per host (X33). */
   profiles: Record<string, ProfileInfo[]>;
+  /** Who the default profile (`~/.claude`) is signed in as, per host. */
+  defaultAccounts: Record<string, ProfileAccount | null>;
   /** Pull request per session (`sesKey`), when known. */
   prs: Record<string, PullRequest | null>;
   /** Base branch against origin per project (`projKey`). */
@@ -231,6 +234,7 @@ function makeStore() {
   workspaces: {},
   sections: {},
   profiles: {},
+  defaultAccounts: {},
   prs: {},
   base: {},
   avatars: {},
@@ -370,7 +374,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
         set((s) => ({ reads: { ...s.reads, [host]: requests }, readGrants: { ...s.readGrants, [host]: grants } })),
       )
       .catch(() => {});
-    for (const p of profiles) void refreshProfile(host, p.id);
+    for (const p of [null, ...profiles.map((p) => p.id)]) void refreshProfile(host, p);
   } catch (e) {
     console.warn(`loading ${host} failed (attempt ${attempt + 1})`, e);
     if (attempt < 8 && get().hosts[host]?.status === "connected") {
@@ -459,13 +463,14 @@ export function hostWorkspaces(s: State): HostWorkspaces[] {
     .map((h) => ({ host: h.id, label: h.label, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [], sessions: s.sessions[h.id] ?? [], profiles: s.profiles[h.id] ?? [] }));
 }
 
-/** Asks `claude auth status` who a profile is signed in as (X33); the
- * daemon answers with `profiles.changed`. */
-export async function refreshProfile(host: string, id: string) {
+/** Asks `claude auth status` who a profile (`null`: the default) is signed
+ * in as (X33). The daemon answers named profiles with `profiles.changed`. */
+export async function refreshProfile(host: string, id: string | null) {
   try {
-    await rpc(host, M.profileStatus, { id });
+    const account = await rpc<ProfileAccount>(host, M.profileStatus, id ? { id } : {});
+    if (!id) set((s) => ({ defaultAccounts: { ...s.defaultAccounts, [host]: account } }));
   } catch (e) {
-    console.warn(`profile status for ${id} failed`, e);
+    console.warn(`profile status for ${id ?? "the default profile"} failed`, e);
   }
 }
 
@@ -777,14 +782,10 @@ function handleEvent(e: DaemonEvent) {
     case EV.sectionsChanged:
       set((s) => ({ sections: { ...s.sections, [host]: data as Section[] } }));
       break;
-    case EV.profilesChanged: {
-      // `profile.create` and friends send bare profiles; keep the last known
-      // account and hook state until `profile.status` reports again.
-      const prev = get().profiles[host] ?? [];
-      const list = (data as ProfileInfo[]).map((p) => ({ ...prev.find((x) => x.id === p.id), ...p, account: p.account ?? prev.find((x) => x.id === p.id)?.account ?? null }));
-      set((s) => ({ profiles: { ...s.profiles, [host]: list } }));
+    case EV.profilesChanged:
+      // The full list, as profile.list returns it (X33).
+      set((s) => ({ profiles: { ...s.profiles, [host]: data as ProfileInfo[] } }));
       break;
-    }
     case EV.sessionsChanged: {
       const list = data as Session[];
       const notices = spawnedNotices(get().sessions[host], list, get().projects[host] ?? []);
