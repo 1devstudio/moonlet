@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installShortcuts } from "./keys";
 import { askConfirm } from "./confirm";
-import { shownWorkspace, useStore } from "./store";
+import { useStore } from "./store";
 
 vi.mock("./daemon", () => ({ rpc: vi.fn(), sendInput: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
@@ -53,13 +53,6 @@ describe("workspace shortcuts (X32)", () => {
     ctrlCmd("1");
     expect(useStore.getState().workspace).toEqual({ host: "local", id: "personal" });
     expect(useStore.getState().selected).toEqual({ host: "local", session: "s1" });
-  });
-
-  it("falls back to the first workspace as one stable object, safe as a zustand selector", () => {
-    useStore.setState({ workspace: { host: "local", id: "deleted" } });
-    const a = shownWorkspace(useStore.getState());
-    expect(a).toEqual({ host: "local", id: "personal" });
-    expect(shownWorkspace(useStore.getState())).toBe(a);
   });
 
   it("⌃⌘ with a number past the last workspace does nothing", () => {

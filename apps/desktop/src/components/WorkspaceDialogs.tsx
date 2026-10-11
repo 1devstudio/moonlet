@@ -6,7 +6,7 @@ import { M, type Workspace, type WorkspaceColor } from "../lib/protocol";
 import { askConfirm } from "../lib/confirm";
 import { workspaceSections } from "../lib/sidebar";
 import { errorToast, shownWorkspace, switchWorkspace, toast, useStore } from "../lib/store";
-import { WORKSPACE_COLORS, createRequest, deleteBlocked } from "../lib/workspaces";
+import { WORKSPACE_COLORS, count, createRequest, deleteBlocked } from "../lib/workspaces";
 import { WorkspaceMark } from "./WorkspaceSwitcher";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 
@@ -80,15 +80,17 @@ export function NewWorkspaceDialog() {
       <Field label="Color">
         <ColorPicker value={color} onChange={setColor} />
       </Field>
-      {fromWs && fromSections.length > 0 && (
+      {fromWs && (
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-2 ui-text-12 text-muted">Start with</legend>
           <label className="flex items-center gap-2.5 ui-text-13">
             <input type="radio" name="nw-start" checked={start === "empty"} onChange={() => setStart("empty")} className="accent-accent" /> An empty workspace
           </label>
-          <label className="flex items-center gap-2.5 ui-text-13">
-            <input type="radio" name="nw-start" checked={start === "move"} onChange={() => setStart("move")} className="accent-accent" /> Move sections from {fromWs.name}
+          <label className={cx("flex items-center gap-2.5 ui-text-13", !fromSections.length && "text-faint")}>
+            <input type="radio" name="nw-start" disabled={!fromSections.length} checked={start === "move"} onChange={() => setStart("move")} className="accent-accent" /> Move sections from {fromWs.name}
+            {!fromSections.length && <span className="ui-text-11.5">(it has none)</span>}
           </label>
+          {fromSections.length > 0 && (
           <div className={cx("ml-[22px] flex flex-col gap-0.5 rounded-lg border border-border bg-[#1a1a1a] p-1.5", start !== "move" && "opacity-50")}>
             {fromSections.map((sec) => (
               <label key={sec.id} className="flex h-7 items-center gap-2.5 px-1.5 ui-text-13">
@@ -100,12 +102,11 @@ export function NewWorkspaceDialog() {
                   className="accent-accent"
                 />
                 {sec.name}
-                <span className="ml-auto ui-text-11.5 text-faint">
-                  {sec.project_ids.length} project{sec.project_ids.length === 1 ? "" : "s"}
-                </span>
+                <span className="ml-auto ui-text-11.5 text-faint">{count(sec.project_ids.length, "project")}</span>
               </label>
             ))}
           </div>
+          )}
         </fieldset>
       )}
     </Dialog>

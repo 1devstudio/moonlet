@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerProjects, createRequest, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceInitial, workspacesNeedingYou } from "./workspaces";
+import { composerOptions, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceInitial, workspacesNeedingYou } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay"): Workspace => ({ id, name, color, section_ids, created_at: 0 });
@@ -103,16 +103,54 @@ describe("deleteBlocked", () => {
   });
 });
 
-describe("composerProjects", () => {
+describe("composerOptions", () => {
   const p = (id: string) => ({ id, name: id, path: `/${id}`, base_branch: "main" });
-  const projects = [p("jaunt"), p("revd"), p("cipher-paas")];
+  const personal = w("personal", "Personal", ["a", "b"]);
+  const lab = w("lab", "Lab", []);
   const sections = [sec("a", ["jaunt"]), sec("b", ["revd", "jaunt"]), sec("c", ["cipher-paas"])];
+  const hosts = {
+    local: { connected: true, workspaces: [personal, lab, w("cipher", "CipherHealth", ["c"])], sections, projects: [p("jaunt"), p("revd"), p("cipher-paas")] },
+    devbox: { connected: true, workspaces: [w("r", "Remote", ["x"])], sections: [{ ...sec("x", ["api"]), name: "Servers" }], projects: [p("api")] },
+  };
+  const rows = (target: { host: string; id: string } | null) => composerOptions(hosts, target).map((o) => [o.host, o.project.id, o.section]);
 
-  it("offers the workspace's projects once each, in section order", () => {
-    expect(composerProjects(w("personal", "Personal", ["a", "b"]), sections, projects).map((x) => x.id)).toEqual(["jaunt", "revd"]);
+  it("offers only the target workspace's projects once each, in section order, labelled with its sections", () => {
+    expect(rows({ host: "local", id: "personal" })).toEqual([
+      ["local", "jaunt", "a"],
+      ["local", "revd", "b"],
+    ]);
   });
 
-  it("offers every project when the workspace has none yet", () => {
-    expect(composerProjects(w("lab", "Lab", []), sections, projects).map((x) => x.id)).toEqual(["jaunt", "revd", "cipher-paas"]);
+  it("offers nothing for a workspace without projects, so the composer asks to add one", () => {
+    expect(rows({ host: "local", id: "lab" })).toEqual([]);
+  });
+
+  it("offers every connected host's projects without a target", () => {
+    expect(rows(null)).toEqual([
+      ["local", "jaunt", "a"],
+      ["local", "revd", "b"],
+      ["local", "cipher-paas", "c"],
+      ["devbox", "api", "Servers"],
+    ]);
+    expect(composerOptions({ ...hosts, devbox: { ...hosts.devbox, connected: false } }, null).map((o) => o.host)).not.toContain("devbox");
+  });
+});
+
+describe("composerTarget", () => {
+  it("is the workspace the composer was opened for, else the shown one", () => {
+    expect(composerTarget("devbox", "r", { host: "local", id: "personal" })).toEqual({ host: "devbox", id: "r" });
+    expect(composerTarget(undefined, "cipher", { host: "local", id: "personal" })).toEqual({ host: "local", id: "cipher" });
+    expect(composerTarget(undefined, undefined, { host: "local", id: "personal" })).toEqual({ host: "local", id: "personal" });
+    expect(composerTarget(undefined, undefined, null)).toBeNull();
+  });
+});
+
+describe("newSectionWorkspace", () => {
+  const workspaces = [w("personal", "Personal", []), w("cipher", "CipherHealth", [])];
+
+  it("is the shown workspace on its host, else the host's first", () => {
+    expect(newSectionWorkspace({ host: "local", id: "cipher" }, "local", workspaces)).toBe("cipher");
+    expect(newSectionWorkspace({ host: "devbox", id: "r" }, "local", workspaces)).toBe("personal");
+    expect(newSectionWorkspace(null, "local", [])).toBeNull();
   });
 });

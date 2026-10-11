@@ -12,6 +12,7 @@ import { ArchiveLoader } from "./ArchiveLoader";
 import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { isShown } from "../lib/workspaces";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
 // ------------------------------------------------------------------ helpers
@@ -676,7 +677,7 @@ export function Sidebar() {
             <div key={h.id}>
               <HostNotice host={h} />
               {hostSections(
-                (workspaces[h.id] ?? []).filter((ws) => shown?.host === h.id && ws.id === shown.id),
+                (workspaces[h.id] ?? []).filter((ws) => isShown(shown, h.id, ws.id)),
                 sections[h.id] ?? [],
               ).map(({ ws, sec }) => (
                 <SectionBlock key={sec.id} host={h.id} ws={ws} sec={sec} onRowMenu={setRowMenu} />

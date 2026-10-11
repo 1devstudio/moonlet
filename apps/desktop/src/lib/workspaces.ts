@@ -39,7 +39,8 @@ export interface SwitcherRow {
   kbd: string | null;
 }
 
-const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+/** `1 section`, `2 sections`. */
+export const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 /** The switcher menu's rows, in order: hosts as given, workspaces in each. */
 export function switcherRows(hosts: HostWorkspaces[]): SwitcherRow[] {
@@ -67,6 +68,12 @@ export interface WorkspaceRef {
   id: string;
 }
 
+/** The key of a workspace in per-workspace records (`lastSession`, attention). */
+export const wsKey = (host: string, id: string) => `${host}/${id}`;
+
+/** Whether workspace `id` of `host` is the one shown. */
+export const isShown = (shown: WorkspaceRef | null, host: string, id: string) => shown?.host === host && shown.id === id;
+
 /** The remembered workspace while it still exists, else the first one. */
 export function currentWorkspace(cur: WorkspaceRef | null, hosts: HostWorkspaces[]): WorkspaceRef | null {
   if (cur && hosts.some((h) => h.host === cur.host && h.workspaces.some((w) => w.id === cur.id))) return cur;
@@ -80,7 +87,7 @@ export function workspacesNeedingYou(hosts: HostWorkspaces[], needs: (host: stri
   const out = new Set<string>();
   for (const h of hosts) {
     for (const s of h.sessions) {
-      if (!s.archived && s.workspace_id && needs(h.host, s)) out.add(`${h.host}/${s.workspace_id}`);
+      if (!s.archived && s.workspace_id && needs(h.host, s)) out.add(wsKey(h.host, s.workspace_id));
     }
   }
   return out;
@@ -115,10 +122,46 @@ export function deleteBlocked(ws: Workspace, workspaceCount: number): string | n
   return null;
 }
 
-/** The projects the composer offers for a session in `ws`: those its
- * sections hold, or all of them while it holds none. */
-export function composerProjects<P extends { id: string }>(ws: Workspace, sections: Section[], projects: P[]): P[] {
-  const ids = ws.section_ids.flatMap((id) => sections.find((s) => s.id === id)?.project_ids ?? []);
-  const held = projects.filter((p) => ids.includes(p.id)).sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
-  return held.length ? held : projects;
+/** One host as the composer sees it. */
+export interface ComposerHost<P extends { id: string }> {
+  connected: boolean;
+  workspaces: Workspace[];
+  sections: Section[];
+  projects: P[];
+}
+
+/** The composer's project picker (X32): the target workspace's projects, in
+ * section order and labelled with the section holding them; without a
+ * target, every connected host's projects. */
+export function composerOptions<P extends { id: string }>(hosts: Record<string, ComposerHost<P>>, target: WorkspaceRef | null): { host: string; project: P; section: string | null }[] {
+  const out: { host: string; project: P; section: string | null }[] = [];
+  for (const [host, h] of Object.entries(hosts)) {
+    if (!h.connected) continue;
+    const ws = target ? h.workspaces.find((w) => isShown(target, host, w.id)) : undefined;
+    if (target && !ws) continue;
+    const secs = ws ? ws.section_ids.flatMap((id) => h.sections.find((s) => s.id === id) ?? []) : h.sections;
+    for (const sec of secs) {
+      for (const id of sec.project_ids) {
+        const project = h.projects.find((p) => p.id === id);
+        if (project && !out.some((o) => o.host === host && o.project.id === id)) out.push({ host, project, section: sec.name });
+      }
+    }
+    if (!ws) for (const project of h.projects) if (!out.some((o) => o.host === host && o.project.id === project.id)) out.push({ host, project, section: null });
+  }
+  return out;
+}
+
+/** Where the composer creates the session: the workspace it was opened for
+ * (`host` defaults to the shown one's), else the shown workspace. */
+export function composerTarget(host: string | undefined, workspace: string | undefined, shown: WorkspaceRef | null): WorkspaceRef | null {
+  if (workspace) {
+    const h = host ?? shown?.host;
+    return h ? { host: h, id: workspace } : null;
+  }
+  return shown;
+}
+
+/** The workspace "New section" adds to: the shown one on `host`, else the host's first. */
+export function newSectionWorkspace(shown: WorkspaceRef | null, host: string, workspaces: Workspace[]): string | null {
+  return shown?.host === host ? shown.id : (workspaces[0]?.id ?? null);
 }
