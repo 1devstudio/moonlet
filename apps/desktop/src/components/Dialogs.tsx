@@ -9,7 +9,7 @@ import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { hostSections } from "../lib/sidebar";
 import { newSectionWorkspace } from "../lib/workspaces";
-import { NewWorkspaceDialog, WorkspaceSettingsDialog } from "./WorkspaceDialogs";
+import { NewWorkspaceDialog, ProfilesSection, WorkspaceSettingsDialog } from "./WorkspaceDialogs";
 import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../lib/agents";
 import type { ToolCallView } from "../lib/chat";
@@ -555,6 +555,7 @@ export function SettingsDialog() {
   return (
     <Dialog title="Settings" width={600} onClose={close}>
       <HooksSection />
+      <ProfilesSection />
       <DaemonSection />
       <HostsSection />
       <AgentsSection />

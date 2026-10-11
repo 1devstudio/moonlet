@@ -1,6 +1,6 @@
 # X33: A Claude Code profile per workspace
 
-- **Status:** implemented in the daemon (the app comes in the next part of the stack)
+- **Status:** implemented (sign-in with a real second account unchecked)
 - **Priority / phase:** P1 · phase 3
 - **Related:** [X32](X32-workspaces-and-sections.md) (workspaces), [A2](A2-hook-install.md) (hooks), [X6](X6-structured-agent-view.md) (structured agent view), [glossary](../../CONTEXT.md).
 - **References:** user request of 2026-10-09. A client pays for one Claude subscription for work; the user's own subscription covers private projects. Both are used on the same Mac, and each workspace must keep the right one. The design "Workspaces & Sections" (2026-10-11) shows the profile in the New workspace dialog and in the sidebar footer.
@@ -40,6 +40,8 @@ Checked on Claude Code 2.1.292: with `CLAUDE_CONFIG_DIR` pointing at an empty fo
 - [ ] The profile is resolved each time a process starts, never stored in a chat's saved environment. After the workspace's profile changes, or the session's section moves to another workspace (X32), a running agent keeps its account until it restarts. The next start uses the new profile, and a restored tab whose agent left the repo's config gets the new profile in place of the one it started with. Tests: `the_structured_agent_starts_in_the_workspaces_profile`, `a_restored_custom_agent_tab_takes_the_current_profile`.
 - [ ] A Claude conversation lives in the profile, so a session whose profile changed cannot resume it. The structured view starts a new conversation instead of failing on `--resume`, and shows a notice ("Started a new conversation: this workspace now uses Work profile", or "the default Claude profile"). A Claude TUI tab restored after the profile changed starts `claude` without `--continue`. Tests: `the_structured_agent_starts_in_the_workspaces_profile`, `a_restored_claude_tab_continues_only_in_the_same_profile` (which also checks the TUI process sees the folder).
 - [ ] Changing a workspace's profile, or moving a section to a workspace with another profile, asks first when sessions have agents. The confirm names the number of sessions and says running agents switch when they next start, without their old conversation. Test: the `lib/` function that builds the confirm text, in vitest.
+- [ ] The profile select offers the default, every profile and New profile…; the sidebar footer names the shown workspace's profile, warns when it is not signed in, and shows the account on hover. Tests: `profileOptions`, `footerLabel` in `profiles.test.ts`, and `workspace-profile.e2e.ts`.
+- [ ] A profile created in the New workspace dialog is picked for the workspace, and a session started there gets its folder. Test: `workspace-profile.e2e.ts`.
 
 ### Codex and other agents
 
@@ -48,9 +50,9 @@ Checked on Claude Code 2.1.292: with `CLAUDE_CONFIG_DIR` pointing at an empty fo
 ## UI
 
 - **New workspace and Workspace settings:** the **Claude profile** select, as in the design ("Work profile — ~/.claude-work", "Default — ~/.claude", "New profile…"). Under it, the hint "Every session in this workspace signs in with this account.", and **Sign in…** when the picked profile is not signed in.
-- **Sidebar footer:** a person icon and "Claude · <profile name>", or "Claude · Default". It shows "not signed in" in the warning colour when the profile has no login; clicking it opens Workspace settings.
+- **Sidebar footer:** a person icon and "Claude · <profile name>", or "Claude · Default". It adds "not signed in" in the warning colour when the profile has no login; hovering shows the account and the folder; clicking opens Workspace settings.
 - **Switcher menu (X32):** each workspace's summary line ends with its profile name.
-- **Settings → Claude profiles:** one row per profile with its name, folder, account, the workspaces using it, and **Sign in…**, **Sign out**, **Rename**, **Remove**.
+- **Settings → Claude profiles:** one row per profile (this Mac's) with its name, folder, account, the workspaces using it, and **Sign in…** (when signed out), **Rename**, **Remove**. Signing out is done with `/logout` inside Claude Code.
 - **Sign in…:** a modal holding a terminal that runs `claude auth login`. When the command exits, the profile's account refreshes. A second button runs `claude auth login --console`, to use Console (API) billing instead of a subscription.
 
 ## Protocol and RPCs
