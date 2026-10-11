@@ -39,7 +39,7 @@ pub type HandlerResult = Result<Value, RpcError>;
 
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
-const CLI_CLIENT: &str = "moonlet-cli";
+pub const CLI_CLIENT: &str = "moonlet-cli";
 
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
     serde_json::from_value(v).map_err(|e| RpcError::new("invalid_params", e.to_string()))
