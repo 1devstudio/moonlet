@@ -28,7 +28,7 @@ A command fails in a terminal tab and the user asks the session's agent to "chec
 - [x] `caller` is the reading terminal's id. The daemon resolves its session from that terminal, not from anything the caller claims about its session. A caller outside any session is refused with `this terminal is not in a session`.
 - [x] Only terminals of the caller's session can be read, and only `shell`, `run` and `setup` terminals. Any other id (another session's terminal, an agent terminal, an unknown id) fails with the same `no terminal <id> in this session`, so a refusal does not reveal that a terminal exists elsewhere. (`terminal_read_e2e.rs`: two sessions, an agent terminal, an unknown id)
 - [x] A terminal that has exited can still be read until it is removed; the result carries its exit code. (`terminal_read_e2e.rs`)
-- [x] `moonlet term read <id> [--lines N] [--json]` calls `terminal.read` with `caller` from `$MOONLET_TERMINAL_ID` and prints the text. `--json` prints `{ terminal, title, command?, exit?, running, truncated, text }`. Without `$MOONLET_TERMINAL_ID` it fails with `moonlet: term read runs inside a moonlet terminal or agent`. (`crates/moonlet-cli/tests`)
+- [x] `moonlet term read <id> [--lines N] [--json]` calls `terminal.read` with `caller` from `$MOONLET_TERMINAL_ID` and prints the text. `--json` prints `{ terminal, title, command?, exit?, running, truncated, lines, text }`. Without `$MOONLET_TERMINAL_ID` it fails with `moonlet: term read runs inside a moonlet terminal or agent`. (`crates/moonlet-cli/tests`)
 - [x] `moonlet term ls [--json]` lists the readable terminals of the caller's session (`terminal.read_list`): id, kind, title, directory, and status (`running`, `at prompt`, `exited <code>`). It needs no approval and shows no output and no command text. (`terminal_read_e2e.rs`)
 
 ### Approval (stack part 1)
@@ -51,7 +51,7 @@ A command fails in a terminal tab and the user asks the session's agent to "chec
 - [x] The daemon keeps each terminal's most recent command from its OSC 133 marks: the output printed between `C` and `D`, rendered as the screen would show it (a progress line rewritten with `\r` reads as its last state), and the exit code from `D`. A command without its `D` yet is the last command, with `running: true`. The next `C` replaces it. It lives in the daemon's memory, so a daemon upgrade (S3) forgets it. (`term.rs` unit tests)
 - [x] The zsh, bash and fish hooks report the command line in their preexec hook as `OSC 1337;MoonletCommand=<percent-encoded command>`, just before the `C` mark. zsh and fish report the line as typed; bash reports `$BASH_COMMAND`, the first command of a pipeline. (`shell.rs` test with real zsh and bash: `false` reports `MoonletCommand=false` then `133;C`; fish is not installed on the test machine and is untested)
 - [x] `terminal.read` without `lines` returns the last command when the terminal has one: the line `$ <command>` (when the hook reported it), then its output, with `command`, `exit` and `running` set. Without shell marks it returns the last 200 lines as before. `--lines N` always returns the last N lines. (`terminal_read_e2e.rs` with a real zsh)
-- [x] Output longer than 2000 lines keeps the last 2000 lines, starts with `… <n> earlier lines omitted`, and sets `truncated`. The daemon keeps at most 8 MB of a command's raw output; past that its start is dropped and the text starts with `… earlier output was not kept`. (`term.rs` unit tests)
+- [x] Output longer than 2000 lines keeps the last 2000 lines, starts with `… <n> earlier lines omitted`, and sets `truncated`. The daemon keeps at most 8 MB of a command's raw output; past that its start is dropped and the text starts with `… earlier output was not kept`. Neither note counts as a line of output, and output that itself begins with `…` is not taken for a cut. The output is copied out of the terminal and rendered after, so a large read never holds up the terminal's own output. (`term.rs` unit tests; `terminal_read_e2e.rs` for `lines`)
 - [x] `TerminalInfo` gets `last_exit`, and `moonlet term ls` shows it in a `LAST` column (`exit 1`), never the command line. (`terminal_read_e2e.rs`)
 
 ### Skill (stack part 3)
@@ -77,7 +77,7 @@ The modal is the X23 `ConfirmDialog` with a preview slot: the same overlay, pane
 
 ## Protocol and RPCs
 
-- New `terminal.read { caller: TerminalId, id: TerminalId, lines?: u32 }` returns `{ terminal, title, command?, exit?, running, truncated, text }`. The response waits for the user's answer.
+- New `terminal.read { caller: TerminalId, id: TerminalId, lines?: u32 }` returns `{ terminal, title, command?, exit?, running, truncated, lines, text }`, where `lines` counts lines of output only, without the `$ <command>` line or a note about omitted lines. The response waits for the user's answer.
 - New `terminal.read_answer { request_id, allow: bool, remember: bool }` returns `true`.
 - New `terminal.read_list { id: caller }` returns the caller's readable terminals (`[TerminalInfo]`).
 - New `terminal.read_requests` returns the waiting requests, oldest first, and `terminal.read_grants` the session ids with a standing grant. The app loads both on connect.
