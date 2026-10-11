@@ -6,7 +6,12 @@
 //! for agent state (A1): title changes, bells, OSC 7 (cwd), OSC 133 (shell
 //! prompt marks) and OSC 9 / OSC 777 desktop notifications.
 
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
+/// Prompt marks kept for snapshots (S2): three per block for 2,000 blocks.
+const MAX_MARKS: usize = 6_000;
 /// Smallest size the emulator accepts; tiny grids trip edge cases in vt100.
 const MIN_ROWS: u16 = 2;
 const MIN_COLS: u16 = 4;
@@ -33,9 +38,55 @@ pub enum Signal {
     Path(String),
 }
 
+/// An OSC 133 mark on the primary screen, kept so a snapshot can put it
+/// back on its row (S2).
+#[derive(Debug, Clone)]
+struct Mark {
+    /// The row's number: rows ever pushed into the scrollback when the mark
+    /// came, plus the cursor's screen row.
+    row: u64,
+    mark: char,
+    exit: Option<i32>,
+    /// The shell's directory when the mark came, for a `C`.
+    cwd: Option<String>,
+    /// From a replayed snapshot: how long ago the daemon that wrote it saw
+    /// the mark, in ms.
+    age: Option<u64>,
+    /// When the mark came; set by `process_at`.
+    at: Option<Instant>,
+}
+
 #[derive(Default)]
 pub struct Signals {
     pending: Vec<Signal>,
+    marks: Vec<Mark>,
+    /// The last directory OSC 7 reported.
+    cwd: Option<String>,
+}
+
+impl Signals {
+    /// Remembers where an OSC 133 mark was printed, unless a full-screen
+    /// program has the alternate screen.
+    fn mark(&mut self, screen: &vt100::Screen, params: &[&[u8]]) {
+        if screen.alternate_screen() {
+            return;
+        }
+        let Some(Signal::Prompt { mark, exit }) = parse_osc(params) else {
+            return;
+        };
+        let age = params[2..]
+            .iter()
+            .find_map(|p| text(p).strip_prefix("moonlet_age=")?.parse().ok());
+        let (row, _) = screen.cursor_position();
+        self.marks.push(Mark {
+            row: screen.scrolled_rows() + u64::from(row),
+            mark,
+            exit,
+            cwd: (mark == 'C').then(|| self.cwd.clone()).flatten(),
+            age,
+            at: None,
+        });
+    }
 }
 
 impl vt100::Callbacks for Signals {
@@ -50,8 +101,13 @@ impl vt100::Callbacks for Signals {
 
     fn set_window_icon_name(&mut self, _: &mut vt100::Screen, _: &[u8]) {}
 
-    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+    fn unhandled_osc(&mut self, screen: &mut vt100::Screen, params: &[&[u8]]) {
         if let Some(signal) = parse_osc(params) {
+            match &signal {
+                Signal::Cwd(cwd) => self.cwd = Some(cwd.clone()),
+                Signal::Prompt { .. } => self.mark(screen, params),
+                _ => {}
+            }
             self.pending.push(signal);
         }
     }
@@ -109,6 +165,20 @@ fn parse_osc(params: &[&[u8]]) -> Option<Signal> {
     }
 }
 
+/// A path for an OSC 7 URL: bytes other than unreserved ones and `/`
+/// percent-encoded, as `percent_decode` and the app read them back.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -133,6 +203,8 @@ pub struct TermState {
     parser: vt100::Parser<Signals>,
     title: String,
     scrollback: usize,
+    /// Prompt marks, oldest first, for snapshots (S2).
+    marks: VecDeque<Mark>,
 }
 
 impl TermState {
@@ -150,11 +222,17 @@ impl TermState {
             ),
             title: String::new(),
             scrollback,
+            marks: VecDeque::new(),
         }
     }
 
     /// Feeds PTY output; returns the signals it produced.
     pub fn process(&mut self, bytes: &[u8]) -> Vec<Signal> {
+        self.process_at(bytes, Instant::now())
+    }
+
+    /// `process`, with the time the output came (prompt marks keep it).
+    pub fn process_at(&mut self, bytes: &[u8], now: Instant) -> Vec<Signal> {
         let parser = &mut self.parser;
         let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.process(bytes)))
             .is_ok();
@@ -163,13 +241,24 @@ impl TermState {
             // screen of the same size and keep streaming.
             tracing::error!("terminal emulator panicked; resetting screen state");
             let (rows, cols) = self.size();
-            self.parser = vt100::Parser::new_with_callbacks(
-                rows,
-                cols,
-                self.scrollback,
-                Signals::default(),
-            );
+            self.parser =
+                vt100::Parser::new_with_callbacks(rows, cols, self.scrollback, Signals::default());
+            self.marks.clear();
             return Vec::new();
+        }
+        for mut m in std::mem::take(&mut self.parser.callbacks_mut().marks) {
+            // A replayed mark keeps the age it was given.
+            let age = Duration::from_millis(m.age.take().unwrap_or(0));
+            m.at = Some(now.checked_sub(age).unwrap_or(now));
+            // A mark above earlier ones: the screen was cleared or redrawn
+            // (`clear`), so the rows below it no longer hold what they marked.
+            while self.marks.back().is_some_and(|last| last.row > m.row) {
+                self.marks.pop_back();
+            }
+            self.marks.push_back(m);
+        }
+        while self.marks.len() > MAX_MARKS {
+            self.marks.pop_front();
         }
         let signals = std::mem::take(&mut self.parser.callbacks_mut().pending);
         for s in &signals {
@@ -207,46 +296,97 @@ impl TermState {
     /// reset terminal of the same size: scrollback lines first (so they land
     /// in the client's scrollback), then the screen, cursor and input modes.
     pub fn snapshot(&mut self) -> Vec<u8> {
+        self.snapshot_at(Instant::now())
+    }
+
+    /// `snapshot`, with prompt marks aged as of `now`.
+    pub fn snapshot_at(&mut self, now: Instant) -> Vec<u8> {
         let mut out = Vec::new();
         // Full reset of the receiving terminal, then default attributes.
         out.extend_from_slice(b"\x1bc\x1b[0m");
         let alternate = self.parser.screen().alternate_screen();
         if !alternate {
-            self.write_scrollback(&mut out);
+            self.write_rows(&mut out, now);
         } else {
             out.extend_from_slice(b"\x1b[?1049h");
         }
         let screen = self.parser.screen();
-        out.extend_from_slice(&screen.contents_formatted());
+        let mut redraw = screen.contents_formatted();
+        // The rows written above hold the screen already, with the marks
+        // on them; erasing it first would make xterm drop those marks, so
+        // the redraw goes over them from the top left instead.
+        const CLEAR: &[u8] = b"\x1b[H\x1b[J";
+        if !alternate && let Some(at) = redraw.windows(CLEAR.len()).position(|w| w == CLEAR) {
+            redraw.drain(at + 3..at + CLEAR.len());
+        }
+        out.extend_from_slice(&redraw);
         out.extend_from_slice(&screen.input_mode_formatted());
         out
     }
 
-    fn write_scrollback(&mut self, out: &mut Vec<u8>) {
+    /// Scrollback and screen rows, oldest first, one line each, with the
+    /// prompt marks (S2) at the start of the rows they were printed on. The
+    /// screen redraw that follows draws the screen rows again, exactly, over
+    /// these.
+    fn write_rows(&mut self, out: &mut Vec<u8>, now: Instant) {
         let screen = self.parser.screen_mut();
         let (rows, cols) = screen.size();
-        screen.set_scrollback(usize::MAX);
-        let total = screen.scrollback();
-        if total == 0 {
-            screen.set_scrollback(0);
-            return;
-        }
+        let total = screen.scrollback_rows();
+        // The number of the first row the snapshot has.
+        let first = screen.scrolled_rows() - total as u64;
+        let mut marks = self.marks.iter().filter(|m| m.row >= first).peekable();
+        let mut cwd: Option<&str> = None;
+        // A `D` only ends a block whose `C` was kept; otherwise the app would
+        // end the block before it again.
+        let mut open = false;
+        let mut line = 0u64;
+        let mut row_out = |out: &mut Vec<u8>, row: Vec<u8>| {
+            if line > 0 {
+                out.extend_from_slice(b"\x1b[0m\r\n");
+            }
+            while let Some(m) = marks.next_if(|m| m.row == first + line) {
+                match m.mark {
+                    'C' => open = true,
+                    'D' if !open => continue,
+                    'D' => open = false,
+                    _ => {}
+                }
+                if let Some(dir) = m.cwd.as_deref().filter(|d| cwd != Some(*d)) {
+                    out.extend_from_slice(
+                        format!("\x1b]7;file://{}\x07", percent_encode(dir)).as_bytes(),
+                    );
+                    cwd = Some(dir);
+                }
+                let age =
+                    m.at.map_or(0, |at| now.saturating_duration_since(at).as_millis());
+                let exit = m.exit.map(|e| format!("{e};")).unwrap_or_default();
+                out.extend_from_slice(
+                    format!("\x1b]133;{};{exit}moonlet_age={age}\x07", m.mark).as_bytes(),
+                );
+            }
+            out.extend_from_slice(&row);
+            line += 1;
+        };
         let mut offset = total;
         while offset > 0 {
             screen.set_scrollback(offset);
             let take = offset.min(rows as usize);
             for row in screen.rows_formatted(0, cols).take(take) {
-                out.extend_from_slice(&row);
-                out.extend_from_slice(b"\x1b[0m\r\n");
+                row_out(out, row);
             }
             offset -= take;
         }
         screen.set_scrollback(0);
-        // Push everything printed so far off the visible area into scrollback;
-        // the screen redraw that follows starts with a clear.
-        for _ in 0..rows {
-            out.push(b'\n');
+        for row in screen.rows_formatted(0, cols) {
+            row_out(out, row);
         }
+        drop(row_out);
+        // The shell's directory now, which later commands start from.
+        let current = self.parser.callbacks().cwd.as_deref();
+        if let Some(dir) = current.filter(|d| cwd != Some(*d)) {
+            out.extend_from_slice(format!("\x1b]7;file://{}\x07", percent_encode(dir)).as_bytes());
+        }
+        out.extend_from_slice(b"\x1b[0m");
     }
 
     /// Plain-text lines of scrollback followed by the screen, oldest first.
@@ -418,5 +558,259 @@ mod tests {
                 Signal::NodePath("/n/node".into()),
             ]
         );
+    }
+
+    /// The OSC 133 and OSC 7 sequences of a snapshot, each with the line it
+    /// is written on (the `\n`s before it), as a client's buffer gets them.
+    fn marks_by_line(snapshot: &[u8]) -> Vec<(usize, String)> {
+        let text = String::from_utf8_lossy(snapshot);
+        let mut out = Vec::new();
+        for (at, _) in text.match_indices("\x1b]") {
+            let rest = &text[at + 2..];
+            let body = &rest[..rest.find('\x07').unwrap()];
+            if body.starts_with("133;") || body.starts_with("7;") {
+                out.push((text[..at].matches('\n').count(), body.to_string()));
+            }
+        }
+        out
+    }
+
+    /// S2: a shell's blocks come back on attach, with their marks on the
+    /// rows they were printed on, some in the scrollback, some on screen.
+    #[test]
+    fn snapshot_puts_prompt_marks_back_on_their_rows() {
+        let t0 = std::time::Instant::now();
+        let s = std::time::Duration::from_secs;
+        let mut t = TermState::new(4, 20);
+        // Blocks mode: the prompt is two empty rows, then the command.
+        t.process_at(b"\x1b]133;A\x07\r\n\r\necho hi\r\n", t0);
+        t.process_at(b"\x1b]133;C\x07hi\r\n", t0 + s(1));
+        t.process_at(b"\x1b]133;D;0\x07\x1b]133;A\x07\r\n\r\n", t0 + s(3));
+        assert_eq!(
+            marks_by_line(&t.snapshot_at(t0 + s(10))),
+            vec![
+                (0, "133;A;moonlet_age=10000".to_string()),
+                (3, "133;C;moonlet_age=9000".to_string()),
+                (4, "133;D;0;moonlet_age=7000".to_string()),
+                (4, "133;A;moonlet_age=7000".to_string()),
+            ]
+        );
+    }
+
+    /// S2: each block's directory comes back before its `C`, sent again only
+    /// when it changed, then the shell's current one.
+    #[test]
+    fn snapshot_gives_each_block_its_directory() {
+        let t0 = std::time::Instant::now();
+        let mut t = TermState::new(10, 30);
+        let cwd = |d: &str| format!("\x1b]7;file://host{d}\x07");
+        let block =
+            |cmd: &str| format!("\x1b]133;A\x07\r\n\r\n{cmd}\r\n\x1b]133;C\x07\x1b]133;D;0\x07");
+        t.process_at(
+            format!("{}{}{}", cwd("/Users/me/my app"), block("ls"), block("pwd")).as_bytes(),
+            t0,
+        );
+        t.process_at(
+            format!("{}{}", block("cd /tmp"), cwd("/tmp")).as_bytes(),
+            t0,
+        );
+        assert_eq!(
+            marks_by_line(&t.snapshot_at(t0)),
+            vec![
+                (0, "133;A;moonlet_age=0".to_string()),
+                (3, "7;file:///Users/me/my%20app".to_string()),
+                (3, "133;C;moonlet_age=0".to_string()),
+                (3, "133;D;0;moonlet_age=0".to_string()),
+                (3, "133;A;moonlet_age=0".to_string()),
+                (6, "133;C;moonlet_age=0".to_string()),
+                (6, "133;D;0;moonlet_age=0".to_string()),
+                (6, "133;A;moonlet_age=0".to_string()),
+                (9, "133;C;moonlet_age=0".to_string()),
+                (9, "133;D;0;moonlet_age=0".to_string()),
+                (9, "7;file:///tmp".to_string()),
+            ]
+        );
+    }
+
+    /// `A`, two prompt rows, the command, `C`, one output row, `D`: four rows.
+    fn block(cmd: &str) -> String {
+        format!("\x1b]133;A\x07\r\n\r\n{cmd}\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07")
+    }
+
+    /// S2: once the scrollback is full, marks still land on their rows, and
+    /// marks whose rows it dropped are gone.
+    #[test]
+    fn snapshot_marks_follow_a_full_scrollback() {
+        let t0 = std::time::Instant::now();
+        // Four blocks are 16 rows and the cursor's; 3 + 4 of them are kept.
+        let mut t = TermState::with_scrollback(4, 20, 3);
+        t.process_at(
+            format!("{}{}{}{}", block("a"), block("b"), block("c"), block("d")).as_bytes(),
+            t0,
+        );
+        assert_eq!(
+            marks_by_line(&t.snapshot_at(t0)),
+            vec![
+                (1, "133;C;moonlet_age=0".to_string()),
+                (2, "133;D;0;moonlet_age=0".to_string()),
+                (2, "133;A;moonlet_age=0".to_string()),
+                (5, "133;C;moonlet_age=0".to_string()),
+                (6, "133;D;0;moonlet_age=0".to_string()),
+            ]
+        );
+    }
+
+    /// S2: a full reset clears the screen and scrollback, and their marks.
+    #[test]
+    fn snapshot_drops_marks_after_a_full_reset() {
+        let t0 = std::time::Instant::now();
+        let mut t = TermState::new(10, 20);
+        t.process_at(
+            format!("{}\x1bcbanner\r\n{}", block("a"), block("b")).as_bytes(),
+            t0,
+        );
+        assert_eq!(
+            marks_by_line(&t.snapshot_at(t0)),
+            vec![
+                (1, "133;A;moonlet_age=0".to_string()),
+                (4, "133;C;moonlet_age=0".to_string()),
+                (5, "133;D;0;moonlet_age=0".to_string()),
+            ]
+        );
+    }
+
+    /// S2: marks printed while a full-screen program has the alternate
+    /// screen are not kept, and a snapshot of the alternate screen has none.
+    #[test]
+    fn snapshot_keeps_no_marks_from_the_alternate_screen() {
+        let t0 = std::time::Instant::now();
+        let mut t = TermState::new(10, 20);
+        t.process_at(format!("{}\x1b[?1049h", block("a")).as_bytes(), t0);
+        assert_eq!(marks_by_line(&t.snapshot_at(t0)), vec![]);
+        // Below block `a`'s rows, so a kept mark would show.
+        t.process_at(format!("\x1b[6;1H{}\x1b[?1049l", block("b")).as_bytes(), t0);
+        assert_eq!(
+            marks_by_line(&t.snapshot_at(t0)),
+            vec![
+                (0, "133;A;moonlet_age=0".to_string()),
+                (3, "133;C;moonlet_age=0".to_string()),
+                (4, "133;D;0;moonlet_age=0".to_string()),
+            ]
+        );
+    }
+
+    /// S2: `clear` homes the cursor and erases the screen, so the marks on
+    /// the erased rows go; the blocks before, in the scrollback, stay.
+    #[test]
+    fn snapshot_drops_marks_a_clear_erased() {
+        let t0 = std::time::Instant::now();
+        // Blocks `a` and `b` are rows 0 to 8; the screen is rows 3 to 8.
+        let mut t = TermState::new(6, 20);
+        t.process_at(format!("{}{}", block("a"), block("b")).as_bytes(), t0);
+        // `clear` runs from row 8; its erase leaves the screen at rows 6 to 11.
+        t.process_at(b"\x1b]133;A\x07\r\n\r\nclear\r\n\x1b]133;C\x07\x1b[H\x1b[2J\x1b]133;D;0\x07\x1b]133;A\x07\r\n\r\n", t0);
+        assert_eq!(
+            marks_by_line(&t.snapshot_at(t0)),
+            vec![
+                (0, "133;A;moonlet_age=0".to_string()),
+                (3, "133;C;moonlet_age=0".to_string()),
+                (4, "133;D;0;moonlet_age=0".to_string()),
+                (4, "133;A;moonlet_age=0".to_string()),
+                (6, "133;A;moonlet_age=0".to_string()),
+            ]
+        );
+    }
+
+    /// S2, S3: the live upgrade replays the snapshot into a new daemon's
+    /// state; the marks, their directories and their ages carry over.
+    #[test]
+    fn replayed_snapshot_keeps_marks_and_ages() {
+        let t0 = std::time::Instant::now();
+        let s = std::time::Duration::from_secs;
+        let mut t = TermState::new(4, 20);
+        t.process_at(
+            b"\x1b]7;file://host/srv/app\x07\x1b]133;A\x07\r\n\r\necho hi\r\n",
+            t0,
+        );
+        t.process_at(b"\x1b]133;C\x07hi\r\n", t0 + s(1));
+        t.process_at(b"\x1b]133;D;0\x07\x1b]133;A\x07\r\n\r\n", t0 + s(3));
+        let mut copy = TermState::new(4, 20);
+        copy.process_at(&t.snapshot_at(t0 + s(10)), t0 + s(10));
+        assert_eq!(
+            marks_by_line(&copy.snapshot_at(t0 + s(15))),
+            vec![
+                (0, "133;A;moonlet_age=15000".to_string()),
+                (3, "7;file:///srv/app".to_string()),
+                (3, "133;C;moonlet_age=14000".to_string()),
+                (4, "133;D;0;moonlet_age=12000".to_string()),
+                (4, "133;A;moonlet_age=12000".to_string()),
+            ]
+        );
+    }
+
+    /// S2: a client attaching with fewer rows (a smaller new window) still
+    /// gets the newest rows and their marks: the rows above the cursor go to
+    /// the scrollback, as in xterm, rather than the rows below being cut.
+    #[test]
+    fn shrinking_the_screen_keeps_the_newest_rows_and_marks() {
+        let t0 = std::time::Instant::now();
+        // Blocks `a` and `b` are rows 0 to 8, the cursor on row 8.
+        let mut t = TermState::new(10, 20);
+        t.process_at(format!("{}{}", block("a"), block("b")).as_bytes(), t0);
+        t.resize(4, 20);
+        assert_eq!(t.contents(), "\nb\nout");
+        assert_eq!(
+            marks_by_line(&t.snapshot_at(t0)),
+            vec![
+                (0, "133;A;moonlet_age=0".to_string()),
+                (3, "133;C;moonlet_age=0".to_string()),
+                (4, "133;D;0;moonlet_age=0".to_string()),
+                (4, "133;A;moonlet_age=0".to_string()),
+                (7, "133;C;moonlet_age=0".to_string()),
+                (8, "133;D;0;moonlet_age=0".to_string()),
+            ]
+        );
+    }
+
+    /// S2: a client attaching with more rows (a taller new window) gets the
+    /// rows from the scrollback back on screen, as in xterm, not empty rows
+    /// under the old ones; every mark keeps its line.
+    #[test]
+    fn growing_the_screen_brings_rows_back_from_the_scrollback() {
+        let t0 = std::time::Instant::now();
+        // Blocks `a` and `b` are rows 0 to 8; rows 0 to 4 are in the scrollback.
+        let mut t = TermState::new(4, 20);
+        t.process_at(format!("{}{}", block("a"), block("b")).as_bytes(), t0);
+        t.resize(10, 20);
+        assert_eq!(t.contents(), "\n\na\nout\n\n\nb\nout");
+        assert_eq!(t.screen().cursor_position(), (8, 0));
+        assert_eq!(
+            marks_by_line(&t.snapshot_at(t0)),
+            vec![
+                (0, "133;A;moonlet_age=0".to_string()),
+                (3, "133;C;moonlet_age=0".to_string()),
+                (4, "133;D;0;moonlet_age=0".to_string()),
+                (4, "133;A;moonlet_age=0".to_string()),
+                (7, "133;C;moonlet_age=0".to_string()),
+                (8, "133;D;0;moonlet_age=0".to_string()),
+            ]
+        );
+    }
+
+    /// S2: xterm drops the markers on rows it erases, so once the marks are
+    /// written the snapshot redraws the screen over its rows without an
+    /// erase-in-display, and the newest blocks, on screen, keep their marks.
+    #[test]
+    fn snapshot_never_erases_the_rows_its_marks_are_on() {
+        let mut t = TermState::new(10, 20);
+        t.process(format!("{}{}", block("a"), block("b")).as_bytes());
+        let snap = String::from_utf8_lossy(&t.snapshot()).into_owned();
+        let after = &snap[snap.rfind("\x1b]133;").unwrap()..];
+        assert!(
+            !after.contains("\x1b[J") && !after.contains("\x1b[2J"),
+            "{after:?}"
+        );
+        // The screen still comes back exactly.
+        assert_round_trip(&mut t);
     }
 }

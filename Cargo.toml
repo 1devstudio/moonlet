@@ -2,6 +2,7 @@
 resolver = "3"
 members = ["crates/*", "apps/desktop/src-tauri"]
 default-members = ["crates/*", "apps/desktop/src-tauri"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.13"
@@ -33,3 +34,7 @@ tempfile = "3"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# vt100 with a count of rows pushed into the scrollback (see vendor/vt100/PATCHES.md).
+[patch.crates-io]
+vt100 = { path = "vendor/vt100" }

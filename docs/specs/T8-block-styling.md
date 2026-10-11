@@ -31,7 +31,7 @@ Make shell terminals in Blocks mode look and feel like a block-based terminal, o
   - Duration: seconds with three decimals under 10 s (`0.032s`); one decimal under a minute (`12.3s`); then minutes and seconds (`2m 5s`).
   - A failed block adds a red `exit <code>` before the duration: `~ · exit 1 (0.300s)`.
   - A running block shows the cwd and branch with a spinner in place of the duration.
-  - A block replayed from before the app attached has no duration and no parentheses.
+  - A block replayed from before the app attached (a new window, a reconnect) keeps its duration when the daemon's snapshot gives the ages of its marks (S2); from an older daemon it has no duration and no parentheses. Its node version and changes are unknown, so those chips are left out.
 - [x] **Bold command:** the command line is drawn bold by the shell in Blocks mode. zsh adds `default:bold` to `zle_highlight` (the user's other entries are kept and restored in classic mode). bash ends the prompt with bold and resets it in the DEBUG trap before the command runs (`PS0` does not exist in macOS's bash 3.2). Output is not bold. fish is not bold yet: it colours every token itself, and fish is not installed to test with.
 - [x] **Separator:** a hairline through the middle of the gap row above the header, spanning the whole pane width including its padding.
 - [x] **Failed block:** the block's rows get a faint red background, drawn in a layer of its own over the grid (an xterm decoration disappears once its first row scrolls out of view). In Blocks mode the T4 gutter mark is left out; the overview ruler keeps its colours.
@@ -46,6 +46,7 @@ Make shell terminals in Blocks mode look and feel like a block-based terminal, o
 - [x] **Re-run:** the palette's "Re-run last command" re-runs the selected block's command when one is selected.
 - [x] **Send to agent:** ⌘↵ with a block selected pastes the block as text (`$ <command>` then the output, in a code fence longer than any fence in the output) into the input of the session's running agent (the focused one, else the first) and focuses that agent's tab; nothing is submitted. In a structured chat (X6) it goes into the composer, after anything already typed. ⇧⌘↵, or ⌘↵ when the session has no running agent, opens a new tab of the session's agent (Claude when the session has none) with the block as its draft; a TUI agent gets it once it has drawn its first screen. The selection clears. With no block selected and nothing typed, ⌘↵ sends the newest finished block. A hint under the editor always names the block ⌘↵ would send: ``⌘↵ send `<command>` to the agent · ⇧⌘↵ new agent tab``. Outside a selected block, ⌘↵ keeps its usual meaning.
 - [x] **Hover actions:** while a finished block is under the mouse or selected, the right end of its header shows **Copy to agent** (the same as ⌘↵: the block as a draft in the session's agent, or a new agent tab), **Copy** (command and output, as ⌘C) and **Re-run**. Blocks whose header sits at the end of the command line (no header row) show none. `blockActions()` in `lib/` decides.
+- [x] **Sticky header:** when a block's header row scrolls above the top of the terminal while its rows still fill the top of the screen (a long output, or a running command), its header is pinned to the top row, on a `bg` background with a hairline under it, so its hover actions (Copy to agent, Copy, Re-run) stay in reach. Hovering or selecting the block shows them there, as on the header itself. It goes once the top row is the gap after the block, or the block's own header is back on screen. A block without a header row of its own, or whose rows were trimmed from the scrollback, pins nothing. `stickyBlock()` in `lib/` decides (requested 2026-10-09).
 
 ### Context chips
 
@@ -101,7 +102,7 @@ None.
 
 ## Out of scope
 
-- Real per-command grids, collapsing, sticky headers ([T9](T9-real-command-blocks.md)).
+- Real per-command grids and collapsing ([T9](T9-real-command-blocks.md)).
 - Command descriptions on hover, AI command suggestions.
 - Flag and argument completion from command specs.
 
@@ -110,6 +111,7 @@ None.
 - TS (Vitest, `lib/`):
   - `blockHeader`: `~/src/app` with branch `main` and `(0.053s)`, `~ · exit 1 (0.300s)`, running, replayed, cwd outside the worktree has no branch.
   - Block selection: `blockAt(blocks, line)`, `selectStep` at both ends of the list.
+  - `stickyBlock`: header above the viewport with output below it, header on screen, gap row at the top, running block, no header row, trimmed block.
   - `chipModel`: node chip only with a version, branch only with a session branch, `± N` counts staged, unstaged and untracked files once each.
   - `tokenize`: `terraform init -upgrade`, `FOO=1 git commit -m "a b" && ls | wc -l`, `cd ~/src`, an unclosed quote.
   - `completionModel`: ordering, bold range, highlight wrap, live narrowing.
@@ -118,7 +120,7 @@ None.
   - zsh and bash in Blocks mode print exactly one newline as the prompt and no `USERPROMPT` (extends `blanks_and_restores`).
   - `shell.commands` lists an executable placed in a temporary `PATH` directory and skips a non-executable file.
   - The node version mark is emitted once, and again after `PATH` changes.
-- e2e (`e2e/specs/`): run `echo hi`, click its block, press ⌘C and read `$ echo hi` and `hi` from the clipboard; run `false` and see `exit 1` in its header.
+- e2e (`e2e/specs/`): run `echo hi`, click its block, press ⌘C and read `$ echo hi` and `hi` from the clipboard; run `false` and see `exit 1` in its header; run `seq 1 300`, see its header pinned at the top and send the block with the pinned Copy to agent.
 - In the app: compare against the reference screenshots of 2026-10-05; check that zsh keeps the command bold after it runs (first thing to check).
 
 ## Open questions
