@@ -346,6 +346,12 @@ async fn a_workspace_takes_sections_over_rpc() {
         .await
         .unwrap();
     assert_eq!(work.section_ids, vec![sections[0].id.clone()]);
+    // Only the design's five colours are accepted.
+    let err = c
+        .request::<_, Workspace>(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Lab", "color": "#ff0000"}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown variant `#ff0000`"), "{err}");
     let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
     assert_eq!(sessions[0].workspace_id.as_deref(), Some(work.id.as_str()));
 
