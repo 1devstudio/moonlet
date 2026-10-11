@@ -13,6 +13,7 @@ import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { isShown } from "../lib/workspaces";
+import { ProfileFooter } from "./WorkspaceDialogs";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
 // ------------------------------------------------------------------ helpers
@@ -716,9 +717,7 @@ export function Sidebar() {
         <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ dialog: { kind: "settings" } })}>
           <Settings size={14} />
         </IconButton>
-        <span className="ml-auto">
-          <Kbd>⌘K</Kbd>
-        </span>
+        <ProfileFooter />
       </div>
       {rowMenu && <RowContextMenu m={rowMenu} onClose={() => setRowMenu(null)} />}
     </aside>

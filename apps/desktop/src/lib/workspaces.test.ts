@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { composerOptions, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceInitial, workspacesNeedingYou } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
-const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay"): Workspace => ({ id, name, color, section_ids, created_at: 0 });
+const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
 const sec = (id: string, project_ids: string[] = []): Section => ({ id, name: id, project_ids, view: { group_by: "project", sort_by: "recent", filter: [] }, created_at: 0 });
 const s = (id: string, workspace_id: string, archived = false): Session => ({
   id,
@@ -29,15 +29,16 @@ describe("workspaceInitial", () => {
 
 describe("switcherRows", () => {
   const personal = w("personal", "Personal", ["a", "b"]);
-  const cipher = w("cipher", "CipherHealth", ["c"], "blue");
+  const cipher = w("cipher", "CipherHealth", ["c"], "blue", "pw");
+  const profiles = [{ id: "pw", name: "Work profile", path: "/Users/jane/.claude-work", created_at: 0, account: null, hooks_installed: true }];
   const sections = [sec("a"), sec("b"), sec("c")];
   const sessions = [s("1", "personal"), s("2", "personal"), s("3", "personal", true), s("4", "cipher")];
 
   it("summarises each workspace and numbers the first nine for ⌃⌘1–9", () => {
-    const rows = switcherRows([{ host: "local", label: "This Mac", workspaces: [personal, cipher], sections, sessions }]);
+    const rows = switcherRows([{ host: "local", label: "This Mac", workspaces: [personal, cipher], sections, sessions, profiles }]);
     expect(rows.map((r) => [r.host, r.ws.name, r.initial, r.summary, r.kbd])).toEqual([
-      ["local", "Personal", "P", "2 sections · 2 sessions", "⌃⌘1"],
-      ["local", "CipherHealth", "C", "1 section · 1 session", "⌃⌘2"],
+      ["local", "Personal", "P", "2 sections · 2 sessions · Default", "⌃⌘1"],
+      ["local", "CipherHealth", "C", "1 section · 1 session · Work profile", "⌃⌘2"],
     ]);
     expect(rows.every((r) => r.hostLabel === null)).toBe(true);
   });
@@ -52,7 +53,7 @@ describe("switcherRows", () => {
       ["This Mac", "Personal", "⌃⌘1"],
       ["devbox", "Lab", "⌃⌘2"],
     ]);
-    expect(rows[1].summary).toBe("0 sections · 0 sessions");
+    expect(rows[1].summary).toBe("0 sections · 0 sessions · Default");
   });
 });
 

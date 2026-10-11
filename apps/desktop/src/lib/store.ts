@@ -20,6 +20,7 @@ import {
   type PullRequest,
   type TerminalInfo,
   type Session,
+  type ProfileInfo,
   type Section,
   type Workspace,
 } from "./protocol";
@@ -167,6 +168,8 @@ interface State extends UiPersist {
   /** Sections (sets of projects) per host, in no particular order: a
    * workspace's `section_ids` orders its own. */
   sections: Record<string, Section[]>;
+  /** Claude profiles per host (X33). */
+  profiles: Record<string, ProfileInfo[]>;
   /** Pull request per session (`sesKey`), when known. */
   prs: Record<string, PullRequest | null>;
   /** Base branch against origin per project (`projKey`). */
@@ -227,6 +230,7 @@ function makeStore() {
   terminals: {},
   workspaces: {},
   sections: {},
+  profiles: {},
   prs: {},
   base: {},
   avatars: {},
@@ -334,9 +338,10 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     console.warn(`output channel for ${host} failed`, e);
   }
   try {
-    const [workspaces, sections, projects, sessions, terminals] = await Promise.all([
+    const [workspaces, sections, profiles, projects, sessions, terminals] = await Promise.all([
       rpc<Workspace[]>(host, M.workspaceList),
       rpc<Section[]>(host, M.sectionList),
+      rpc<ProfileInfo[]>(host, M.profileList),
       rpc<Project[]>(host, M.projectList),
       rpc<Session[]>(host, M.sessionList),
       rpc<TerminalInfo[]>(host, M.terminalList),
@@ -344,6 +349,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     set((s) => ({
       workspaces: { ...s.workspaces, [host]: workspaces },
       sections: { ...s.sections, [host]: sections },
+      profiles: { ...s.profiles, [host]: profiles },
       projects: { ...s.projects, [host]: projects },
       sessions: { ...s.sessions, [host]: sessions },
       terminals: { ...s.terminals, [host]: Object.fromEntries(terminals.map((x) => [x.id, x])) },
@@ -364,6 +370,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
         set((s) => ({ reads: { ...s.reads, [host]: requests }, readGrants: { ...s.readGrants, [host]: grants } })),
       )
       .catch(() => {});
+    for (const p of profiles) void refreshProfile(host, p.id);
   } catch (e) {
     console.warn(`loading ${host} failed (attempt ${attempt + 1})`, e);
     if (attempt < 8 && get().hosts[host]?.status === "connected") {
@@ -449,7 +456,17 @@ export function selectSession(host: string, id: string) {
 export function hostWorkspaces(s: State): HostWorkspaces[] {
   return Object.values(s.hosts)
     .sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id))
-    .map((h) => ({ host: h.id, label: h.label, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [], sessions: s.sessions[h.id] ?? [] }));
+    .map((h) => ({ host: h.id, label: h.label, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [], sessions: s.sessions[h.id] ?? [], profiles: s.profiles[h.id] ?? [] }));
+}
+
+/** Asks `claude auth status` who a profile is signed in as (X33); the
+ * daemon answers with `profiles.changed`. */
+export async function refreshProfile(host: string, id: string) {
+  try {
+    await rpc(host, M.profileStatus, { id });
+  } catch (e) {
+    console.warn(`profile status for ${id} failed`, e);
+  }
 }
 
 let fallback: WorkspaceRef | null = null;
@@ -760,6 +777,14 @@ function handleEvent(e: DaemonEvent) {
     case EV.sectionsChanged:
       set((s) => ({ sections: { ...s.sections, [host]: data as Section[] } }));
       break;
+    case EV.profilesChanged: {
+      // `profile.create` and friends send bare profiles; keep the last known
+      // account and hook state until `profile.status` reports again.
+      const prev = get().profiles[host] ?? [];
+      const list = (data as ProfileInfo[]).map((p) => ({ ...prev.find((x) => x.id === p.id), ...p, account: p.account ?? prev.find((x) => x.id === p.id)?.account ?? null }));
+      set((s) => ({ profiles: { ...s.profiles, [host]: list } }));
+      break;
+    }
     case EV.sessionsChanged: {
       const list = data as Session[];
       const notices = spawnedNotices(get().sessions[host], list, get().projects[host] ?? []);
