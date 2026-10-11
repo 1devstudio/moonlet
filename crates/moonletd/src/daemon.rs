@@ -70,8 +70,20 @@ impl Daemon {
         // A daemon with its own data folder (tests, e2e, a custom setup)
         // passes it on, so `moonlet` in its terminals uses the same one and
         // never moves the user's ~/.jaunt (X27).
-        if std::env::var_os("MOONLET_HOME").is_some() || std::env::var_os("JAUNT_HOME").is_some() {
+        let own_home = std::env::var_os("MOONLET_HOME").is_some() || std::env::var_os("JAUNT_HOME").is_some();
+        if own_home {
             base_env.insert("MOONLET_HOME".into(), moonlet_core::paths::home().display().to_string());
+        } else {
+            // A new moonlet teaches agents its new commands (X31). A daemon
+            // with its own data folder leaves the user's skills alone.
+            match hooks::refresh_skills(&HookPaths::default_paths()) {
+                Ok(updated) => {
+                    for path in updated {
+                        tracing::info!("updated the moonlet skill at {}", path.display());
+                    }
+                }
+                Err(e) => tracing::warn!("cannot update the moonlet skill: {e:#}"),
+            }
         }
         let (shutdown, _) = watch::channel(false);
         let terminals = TerminalManager::new(socket.clone(), base_env);
