@@ -208,12 +208,12 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
 
   // Projects of connected hosts; the preset (or current session's) project first.
   const options = useMemo(() => {
-    const out: { host: string; project: Project; workspace: string | null }[] = [];
+    const out: { host: string; project: Project; section: string | null }[] = [];
     for (const [h, list] of Object.entries(allProjects)) {
       if (hosts[h]?.status !== "connected") continue;
       for (const p of list) {
         const sec = (allSections[h] ?? []).find((s) => s.project_ids.includes(p.id));
-        out.push({ host: h, project: p, workspace: sec?.name ?? null });
+        out.push({ host: h, project: p, section: sec?.name ?? null });
       }
     }
     return out;
@@ -279,7 +279,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   const projectItems: MenuItem[] = [
     ...options.map((o) => ({
       label: o.project.name,
-      hint: [o.workspace, o.host !== "local" ? o.host : null].filter(Boolean).join(" · "),
+      hint: [o.section, o.host !== "local" ? o.host : null].filter(Boolean).join(" · "),
       checked: !!pick && pick.host === o.host && pick.id === o.project.id,
       onSelect: () => setPick({ host: o.host, id: o.project.id }),
     })),

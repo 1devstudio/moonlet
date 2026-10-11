@@ -67,6 +67,12 @@ export function workspaceSections(ws: Workspace, sections: Section[]): Section[]
   return ws.section_ids.flatMap((id) => byId.get(id) ?? []);
 }
 
+/** A host's sections in sidebar order, each with its workspace and the label
+ * pickers show ("Workspace › Section" once there are several workspaces). */
+export function hostSections(workspaces: Workspace[], sections: Section[]): { ws: Workspace; sec: Section; label: string }[] {
+  return workspaces.flatMap((ws) => workspaceSections(ws, sections).map((sec) => ({ ws, sec, label: workspaces.length > 1 ? `${ws.name} › ${sec.name}` : sec.name })));
+}
+
 /** Whether a section of `ws` holds `projectId`: its sessions may live there. */
 export function holdsProject(ws: Workspace, sections: Section[], projectId: string): boolean {
   return workspaceSections(ws, sections).some((s) => s.project_ids.includes(projectId));
@@ -84,8 +90,8 @@ export function compact(n: number): string {
  * drops a project no other section holds, so that case asks first.
  */
 export function projectRemoval(sections: Section[], secId: string, project: Project): { label: string; confirm: string | null } {
-  const sec = sections.find((w) => w.id === secId);
-  const elsewhere = sections.some((w) => w.id !== secId && w.project_ids.includes(project.id));
+  const sec = sections.find((s) => s.id === secId);
+  const elsewhere = sections.some((s) => s.id !== secId && s.project_ids.includes(project.id));
   return {
     label: `Remove from ${sec?.name ?? "section"}`,
     confirm: elsewhere ? null : `${project.name} is in no other section, so it will be removed from moonlet. The folder on disk is not touched.`,
