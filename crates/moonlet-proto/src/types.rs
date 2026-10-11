@@ -214,9 +214,6 @@ pub struct ProfileAccount {
     pub email: Option<String>,
     #[serde(default)]
     pub org_name: Option<String>,
-    /// `pro`, `max`, `team`… when the CLI reports it.
-    #[serde(default)]
-    pub subscription: Option<String>,
 }
 
 /// A profile as `profile.list` returns it.

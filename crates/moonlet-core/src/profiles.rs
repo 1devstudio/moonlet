@@ -14,7 +14,6 @@ struct AuthStatus {
     logged_in: bool,
     email: Option<String>,
     org_name: Option<String>,
-    subscription_type: Option<String>,
 }
 
 /// Parses `claude auth status --json`.
@@ -24,7 +23,6 @@ pub fn parse_auth_status(text: &str) -> Result<ProfileAccount> {
         logged_in: s.logged_in,
         email: s.email.filter(|_| s.logged_in),
         org_name: s.org_name.filter(|_| s.logged_in),
-        subscription: s.subscription_type.filter(|_| s.logged_in),
     })
 }
 
@@ -52,7 +50,7 @@ pub async fn account(env: &std::collections::BTreeMap<String, String>, dir: Opti
     if let Some(d) = dir {
         env.insert(CONFIG_DIR_VAR.into(), d.into());
     }
-    let exe = crate::chat::runtime::resolve("claude", &env).context("claude not found on PATH")?;
+    let exe = crate::paths::find_program("claude", &env).context("claude not found on PATH")?;
     let run = tokio::process::Command::new(exe)
         .args(["auth", "status", "--json"])
         .env_clear()
@@ -75,6 +73,27 @@ pub struct FolderRules<'a> {
     /// Project folders: a profile is never kept inside a repo.
     pub projects: &'a [PathBuf],
     pub exists: &'a dyn Fn(&Path) -> bool,
+    /// The path with symlinks resolved, as far as it exists ([`canonical`]).
+    pub canonical: &'a dyn Fn(&Path) -> PathBuf,
+}
+
+/// `path` with symlinks resolved in the part that exists, so a link to
+/// `~/.claude` or `/var` vs `/private/var` cannot slip past the checks.
+pub fn canonical(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut p = path.to_path_buf();
+    loop {
+        if let Ok(c) = p.canonicalize() {
+            return rest.iter().rev().fold(c, |acc, part| acc.join(part));
+        }
+        match (p.file_name().map(|n| n.to_os_string()), p.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                p = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// The folder for a new profile: `path` when given (`~` expands), else
@@ -82,14 +101,16 @@ pub struct FolderRules<'a> {
 pub fn profile_folder(path: Option<&str>, name: &str, r: &FolderRules) -> Result<PathBuf> {
     let dir = match path.map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => {
+            // `~` and `~/…` are the user's home; `~bob/…` is not supported.
             let p = match p.strip_prefix('~') {
-                Some(rest) => r.home.join(rest.trim_start_matches('/')),
-                None => PathBuf::from(p),
+                Some("") => r.home.to_path_buf(),
+                Some(rest) if rest.starts_with('/') => r.home.join(rest.trim_start_matches('/')),
+                _ => PathBuf::from(p),
             };
             if !p.is_absolute() {
                 bail!("the folder must be an absolute path");
             }
-            normalize(&p)
+            (r.canonical)(&normalize(&p))
         }
         None => {
             let slug = crate::git::slug(name);
@@ -104,13 +125,14 @@ pub fn profile_folder(path: Option<&str>, name: &str, r: &FolderRules) -> Result
             dir
         }
     };
-    if r.defaults.iter().any(|d| normalize(d) == dir) {
+    let same = |p: &PathBuf| (r.canonical)(&normalize(p));
+    if r.defaults.iter().any(|d| same(d) == dir) {
         bail!("{} is the default profile", dir.display());
     }
-    if r.taken.iter().any(|t| normalize(t) == dir) {
+    if r.taken.iter().any(|t| same(t) == dir) {
         bail!("another profile uses {}", dir.display());
     }
-    if r.projects.iter().any(|p| dir.starts_with(normalize(p))) {
+    if r.projects.iter().any(|p| dir.starts_with(same(p))) {
         bail!("{} is inside a project", dir.display());
     }
     Ok(dir)
@@ -164,12 +186,7 @@ mod tests {
     fn reads_the_account_of_a_signed_in_profile() {
         assert_eq!(
             parse_auth_status(SIGNED_IN).unwrap(),
-            ProfileAccount {
-                logged_in: true,
-                email: Some("jane@cipherhealth.com".into()),
-                org_name: Some("CipherHealth".into()),
-                subscription: Some("team".into()),
-            }
+            ProfileAccount { logged_in: true, email: Some("jane@cipherhealth.com".into()), org_name: Some("CipherHealth".into()) }
         );
     }
 
@@ -180,6 +197,12 @@ mod tests {
             taken,
             projects,
             exists: &|p: &Path| p == Path::new("/Users/jane/.claude-work"),
+            // /Users/jane/claude-link is a symlink to ~/.claude.
+            canonical: &|p: &Path| match p.strip_prefix("/Users/jane/claude-link") {
+                Ok(rest) if rest.as_os_str().is_empty() => PathBuf::from("/Users/jane/.claude"),
+                Ok(rest) => Path::new("/Users/jane/.claude").join(rest),
+                Err(_) => p.to_path_buf(),
+            },
         }
     }
 
@@ -207,13 +230,16 @@ mod tests {
         assert_eq!(err("/Users/jane/.claude-work"), "another profile uses /Users/jane/.claude-work");
         assert_eq!(err("/Users/jane/src/api/.claude"), "/Users/jane/src/api/.claude is inside a project");
         assert_eq!(err("claude-x"), "the folder must be an absolute path");
+        assert_eq!(err("~bob/claude"), "the folder must be an absolute path");
+        // The checks see through symlinks.
+        assert_eq!(err("/Users/jane/claude-link"), "/Users/jane/.claude is the default profile");
     }
 
     #[test]
     fn a_signed_out_profile_has_no_account() {
         assert_eq!(
             parse_auth_status(SIGNED_OUT).unwrap(),
-            ProfileAccount { logged_in: false, email: None, org_name: None, subscription: None }
+            ProfileAccount { logged_in: false, email: None, org_name: None }
         );
         assert!(parse_auth_status("not json").is_err());
     }

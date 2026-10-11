@@ -67,9 +67,16 @@ struct Chat {
     inner: Mutex<Inner>,
 }
 
-/// Variables a session's agents get on every start, looked up then rather
-/// than stored with the chat: the Claude profile (X33) can change.
-pub type SessionEnv = Box<dyn Fn(&str) -> BTreeMap<String, String> + Send + Sync>;
+/// What a session's agents start with, looked up at every start rather than
+/// stored with the chat: the Claude profile (X33) can change.
+#[derive(Debug, Clone, Default)]
+pub struct SessionLaunch {
+    pub env: BTreeMap<String, String>,
+    /// The Claude profile's name; `None` for the default profile.
+    pub profile: Option<String>,
+}
+
+pub type SessionEnv = Box<dyn Fn(&str) -> SessionLaunch + Send + Sync>;
 
 pub struct ChatManager {
     terms: Arc<TerminalManager>,
@@ -99,18 +106,6 @@ fn agent_state(status: &str) -> AgentState {
     }
 }
 
-/// Finds `program` on the PATH the agent will get (the login environment),
-/// not the daemon's own.
-pub(crate) fn resolve(program: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
-    if program.contains('/') {
-        return Some(PathBuf::from(program));
-    }
-    let path = env.get("PATH").cloned().or_else(|| std::env::var("PATH").ok())?;
-    std::env::split_paths(&path).map(|d| d.join(program)).find(|p| {
-        use std::os::unix::fs::PermissionsExt;
-        p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    })
-}
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
@@ -502,16 +497,18 @@ impl ChatManager {
 
     fn spawn(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
         let adapter = adapter_for(&inner.cfg.agent).context("unknown agent")?;
-        let session_env = match (&inner.info.session_id, self.session_env.get()) {
+        let launch = match (&inner.info.session_id, self.session_env.get()) {
             (Some(s), Some(f)) => f(s),
-            _ => BTreeMap::new(),
+            _ => SessionLaunch::default(),
         };
-        // A conversation lives in its profile's folder (X33): after the
-        // workspace switched profiles, start a new one.
-        let config_dir = session_env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
-        if inner.state.agent_session.is_some() && inner.cfg.config_dir != config_dir {
+        // A Claude conversation lives in its profile's folder (X33): after
+        // the workspace switched profiles, start a new one. Other agents keep
+        // their history elsewhere.
+        let config_dir = launch.env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
+        if inner.cfg.agent == "claude" && inner.state.agent_session.is_some() && inner.cfg.config_dir != config_dir {
             inner.state.agent_session = None;
-            let note = "Started a new conversation: this workspace now uses another Claude profile";
+            let now = launch.profile.clone().unwrap_or_else(|| "the default Claude profile".into());
+            let note = format!("Started a new conversation: this workspace now uses {now}");
             let o = upsert(&mut inner.state, item(super::local_id("system"), "system", note));
             self.apply(chat, inner, vec![o]);
         }
@@ -526,8 +523,8 @@ impl ChatManager {
             env.insert("MOONLET_SESSION".into(), s.clone());
         }
         env.extend(inner.env.clone());
-        env.extend(session_env);
-        let exe = resolve(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
+        env.extend(launch.env);
+        let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let mut child = tokio::process::Command::new(&exe)
             .args(&args)
             .current_dir(&cfg.cwd)
