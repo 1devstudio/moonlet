@@ -21,11 +21,12 @@ interface Session {
 
 let session: Session;
 let log = 0;
+let tall = 0;
 
 /** `moonlet term read` as the agent in the session's first terminal runs it;
  * it waits for the user's answer. */
-function read(args: string[] = []): Promise<{ code: number | null; out: string; err: string }> {
-  const child = spawn(join(BIN_DIR, "moonlet"), ["term", "read", String(log), ...args], {
+function read(args: string[] = [], id = log): Promise<{ code: number | null; out: string; err: string }> {
+  const child = spawn(join(BIN_DIR, "moonlet"), ["term", "read", String(id), ...args], {
     env: { ...w.env, MOONLET_TERMINAL_ID: String(session.terminals[0]) },
   });
   let out = "";
@@ -45,6 +46,12 @@ describe("an agent reads a terminal", () => {
       session_id: session.id,
       command: ["/bin/sh", "-c", "printf 'e2e build failed\\nexit code 2\\n'; exec sleep 600"],
       title: "e2e-log",
+    }).id;
+    tall = rpc<{ id: number }>(w, "terminal.create", {
+      cwd: session.path,
+      session_id: session.id,
+      command: ["/bin/sh", "-c", "seq 1 40; exec sleep 600"],
+      title: "e2e-tall",
     }).id;
     await $(sel.sessionRow(SESSION)).waitForDisplayed({ timeout: 15_000 });
     await $(sel.sessionRow(SESSION)).click();
@@ -68,6 +75,42 @@ describe("an agent reads a terminal", () => {
     await $(sel.confirmButton("Deny")).click();
     await expect(modal()).not.toBeExisting();
     expect(await result).toEqual({ code: 1, out: "", err: `moonlet: the user declined to share terminal ${log}\n` });
+  });
+
+  it("denies on Esc, on the close button and on a click outside", async () => {
+    const declined = { code: 1, out: "", err: `moonlet: the user declined to share terminal ${log}\n` };
+    const ways: (() => Promise<unknown>)[] = [
+      () => browser.keys(["Escape"]),
+      () => $(`${sel.confirm(TITLE)}//button[@title="Close"]`).click(),
+      // The embedded driver's click sends no mousedown, which the backdrop listens for.
+      () => browser.execute((title: string) => {
+        const dialog = document.querySelector(`[role="dialog"][aria-label="${title}"]`);
+        dialog?.parentElement?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      }, TITLE),
+    ];
+    for (const deny of ways) {
+      const result = read();
+      await expect(modal()).toBeDisplayed({ wait: 15_000 });
+      await deny();
+      await expect(modal()).not.toBeExisting();
+      expect(await result).toEqual(declined);
+    }
+  });
+
+  it("shows at most 16 lines of the text, in the terminal font", async () => {
+    const result = read(["--lines", "40"], tall);
+    await expect(modal()).toBeDisplayed({ wait: 15_000 });
+    const box = await browser.execute((title: string) => {
+      const pre = document.querySelector(`[role="dialog"][aria-label="${title}"] pre`) as HTMLElement;
+      const css = getComputedStyle(pre);
+      const padding = parseFloat(css.paddingTop) + parseFloat(css.paddingBottom);
+      return { rows: (pre.clientHeight - padding) / parseFloat(css.lineHeight), scrolls: pre.scrollHeight > pre.clientHeight, font: css.fontFamily };
+    }, TITLE);
+    expect(box.rows).toBe(16);
+    expect(box.scrolls).toBe(true);
+    expect(box.font).toContain("JetBrains Mono");
+    await $(sel.confirmButton("Deny")).click();
+    expect((await result).code).toBe(1);
   });
 
   it("marks the session as needing the user while it is not in view", async () => {
