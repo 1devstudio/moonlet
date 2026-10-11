@@ -1,4 +1,4 @@
-import { type Ref, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -58,11 +58,13 @@ import {
   tokens,
   transcript,
   turnFooter,
+  turnRunning,
   useChat,
 } from "../lib/chat";
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
-import { linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
+import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
+import { openFileTab } from "../lib/actions";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
@@ -85,8 +87,33 @@ function rel(text: string, cwd: string): string {
   return cwd.length > 1 ? text.split(cwd + "/").join("") : text;
 }
 
+/** Where a file link in a message opens (X30): the main window's editor tabs, under the agent's worktree. */
+export const FileLinks = createContext<{ host: string; wsId: string; cwd: string; exists: (path: string) => boolean } | null>(null);
+
+/**
+ * Whether a project-relative path is a file in `root` (X30), from the
+ * daemon's list of non-ignored files. Nothing exists until the list loads;
+ * a change of `reloadWhen` loads it again, so files an agent creates show up.
+ */
+export function useProjectFiles(host: string, root: string, reloadWhen: unknown): (path: string) => boolean {
+  const [files, setFiles] = useState<Set<string> | null>(null);
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (!root) return;
+    let live = true;
+    // The first load may reuse the @ list; later ones look at the disk again.
+    void projectFiles(host, root, loaded.current).then((list) => live && setFiles(new Set(list)));
+    loaded.current = true;
+    return () => {
+      live = false;
+    };
+  }, [host, root, reloadWhen]);
+  return useMemo(() => (path: string) => !!files?.has(path), [files]);
+}
+
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => renderChatMarkdown(text), [text]);
+  const files = useContext(FileLinks);
+  const html = useMemo(() => renderChatMarkdown(text, files?.exists), [text, files?.exists]);
   const [link, setLink] = useState<{ url: string; rect: DOMRect } | null>(null);
   const hideTimer = useRef<number>(undefined);
   const keep = () => window.clearTimeout(hideTimer.current);
@@ -122,6 +149,13 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           // Links never navigate the app window; ⌘-click or Enter (a click
           // with detail 0) opens the browser.
           e.preventDefault();
+          if (a.hasAttribute("data-file")) {
+            // A file opens on a plain click (X30).
+            const link = { file: a.getAttribute("data-file"), line: a.getAttribute("data-line") };
+            const target = files && fileToOpen(link, files.cwd, { selecting: window.getSelection()?.isCollapsed === false });
+            if (target) openFileTab(files.host, files.wsId, target.path, target.line);
+            return;
+          }
           const url = linkToOpen(a.getAttribute("href"), { metaKey: e.metaKey, keyboard: e.detail === 0 });
           if (url) open(url);
         }}
@@ -579,9 +613,9 @@ export function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: 
 // ------------------------------------------------------------ editor
 
 const fileCache = new Map<string, Promise<string[]>>();
-function projectFiles(host: string, root: string): Promise<string[]> {
+function projectFiles(host: string, root: string, fresh = false): Promise<string[]> {
   const key = `${host}|${root}`;
-  let p = fileCache.get(key);
+  let p = fresh ? undefined : fileCache.get(key);
   if (!p) {
     p = rpc<string[]>(host, M.fsFiles, { root }).catch(() => [] as string[]);
     fileCache.set(key, p);
@@ -914,6 +948,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const toolCalls = useStore((s) => s.settings.toolCalls);
   const blocks = useMemo(() => (st ? chatBlocks(st.items, toolCalls) : []), [st?.items, toolCalls]);
   const scroller = useRef<HTMLDivElement>(null);
+  const cwd = info?.cwd ?? "";
   const stick = useRef(true);
   const scale = useStore((s) => uiScale(s.settings.term.fontSize));
 
@@ -921,7 +956,9 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     if (!st) void loadChat(host, id).catch(errorToast);
   }, [host, id, st]);
 
-  const working = st?.status === "working" || st?.status === "blocked";
+  const working = turnRunning(st?.status);
+  const exists = useProjectFiles(host, cwd, working);
+  const fileLinks = useMemo(() => ({ host, wsId, cwd, exists }), [host, wsId, cwd, exists]);
   const now = useNow(working && visible);
 
   // Follow new output while the view is scrolled to the bottom.
@@ -1118,48 +1155,50 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        <div className="flex flex-col gap-0.5 px-6 pb-4 pt-5">
-          {!st ? (
-            <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
-          ) : st.items.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-16 text-center text-muted">
-              <AgentIcon agent={agent} size={22} />
-              <div className="ui-text-14">{agentLabel(agent)} is ready</div>
-              <div className="ui-text-12.5 text-faint">Describe a change, mention files with @, or run a / command.</div>
-            </div>
-          ) : (
-            blocks.map((b) => {
-              const view =
-                b.kind === "tools" ? <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} /> : <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />;
-              const hasPlan = plan?.itemId && (b.kind === "tools" ? b.tools.some((t) => t.id === plan.itemId) : b.item.id === plan.itemId);
-              return hasPlan ? [view, planCard] : view;
-            })
-          )}
-          {plan && !plan.itemId && planCard}
-          {st?.pending.map((ask) => {
-            if (planOf(ask)) return null;
-            return isQuestion(ask) ? (
-              <QuestionCard
-                key={ask.id}
-                ask={ask}
-                onAnswer={(decision, answers) => {
-                  stick.current = true;
-                  void call(M.chatPermission, { ask: ask.id, decision, answers, message: answers ? undefined : "The user declined to answer the questions." });
-                }}
-              />
+        <FileLinks.Provider value={fileLinks}>
+          <div className="flex flex-col gap-0.5 px-6 pb-4 pt-5">
+            {!st ? (
+              <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
+            ) : st.items.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-16 text-center text-muted">
+                <AgentIcon agent={agent} size={22} />
+                <div className="ui-text-14">{agentLabel(agent)} is ready</div>
+                <div className="ui-text-12.5 text-faint">Describe a change, mention files with @, or run a / command.</div>
+              </div>
             ) : (
-              <PermissionCard
-                key={ask.id}
-                ask={ask}
-                cwd={info?.cwd ?? ""}
-                onAnswer={(decision) => {
-                  stick.current = true;
-                  void call(M.chatPermission, { ask: ask.id, decision });
-                }}
-              />
-            );
-          })}
-        </div>
+              blocks.map((b) => {
+                const view =
+                  b.kind === "tools" ? <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} /> : <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />;
+                const hasPlan = plan?.itemId && (b.kind === "tools" ? b.tools.some((t) => t.id === plan.itemId) : b.item.id === plan.itemId);
+                return hasPlan ? [view, planCard] : view;
+              })
+            )}
+            {plan && !plan.itemId && planCard}
+            {st?.pending.map((ask) => {
+              if (planOf(ask)) return null;
+              return isQuestion(ask) ? (
+                <QuestionCard
+                  key={ask.id}
+                  ask={ask}
+                  onAnswer={(decision, answers) => {
+                    stick.current = true;
+                    void call(M.chatPermission, { ask: ask.id, decision, answers, message: answers ? undefined : "The user declined to answer the questions." });
+                  }}
+                />
+              ) : (
+                <PermissionCard
+                  key={ask.id}
+                  ask={ask}
+                  cwd={info?.cwd ?? ""}
+                  onAnswer={(decision) => {
+                    stick.current = true;
+                    void call(M.chatPermission, { ask: ask.id, decision });
+                  }}
+                />
+              );
+            })}
+          </div>
+        </FileLinks.Provider>
       </div>
       <div className="w-full shrink-0 px-6 pb-3">
         <ChatEditor

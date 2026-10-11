@@ -2,7 +2,7 @@
 // and shown in an iframe with an empty `sandbox` (no scripts, no same-origin
 // access, so no IPC) and a CSP that blocks every remote request.
 
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type Token } from "markdown-it";
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 
@@ -142,13 +142,143 @@ const chatMd = new MarkdownIt({
   },
 });
 
+// A path's directories, and its file name with an extension (dotfiles too).
+const PATH_DIR = String.raw`[\w.@-]+/`;
+const PATH_NAME = String.raw`\.?[\w@-][\w.@-]*\.([A-Za-z0-9]{1,8})`;
+
+// A bare name like `item.text` is more often code than a file, so a name
+// without a directory only counts with one of these extensions.
+const FILE_EXTENSIONS = new Set(
+  "md mdx txt json jsonc toml yaml yml lock ts tsx js jsx mjs cjs css scss html rs go py rb java kt swift c h cc cpp hpp sh zsh fish sql proto graphql vue svelte xml svg env".split(" "),
+);
+
+/** A file a chat message refers to, and the line it points at. */
+type FileRef = { path: string; line?: number };
+
+/**
+ * A file inside the project that chat text refers to (X30): a relative path
+ * with an extension, optionally `:line[:col]`. Absolute paths, `~/` and `..`
+ * stay plain, so agent output cannot point outside the session's worktree.
+ */
+function projectPath(text: string): FileRef | null {
+  const m = new RegExp(String.raw`^((?:\./)?(?:${PATH_DIR})*${PATH_NAME})(?::(\d+))?(?::\d+)?$`).exec(text);
+  if (!m || m[1].split("/").includes("..")) return null;
+  if (!m[1].includes("/") && !FILE_EXTENSIONS.has(m[2].toLowerCase())) return null;
+  return m[3] ? { path: m[1], line: Number(m[3]) } : { path: m[1] };
+}
+
+/** `./src/a.ts` as `src/a.ts`, the form the project's file list uses. */
+const withoutDotSlash = (path: string) => path.replace(/^\.\//, "");
+
+/**
+ * The file a click on a chat file link opens: its `data-file` and
+ * `data-line`, under the session's worktree. A click that ends a text
+ * selection opens nothing.
+ */
+export function fileToOpen(link: { file: string | null; line: string | null }, cwd: string, click: { selecting: boolean }): FileRef | null {
+  const file = link.file && projectPath(link.file);
+  if (!file || !cwd || click.selecting) return null;
+  const path = `${cwd.replace(/\/+$/, "")}/${withoutDotSlash(file.path)}`;
+  const line = Number(link.line);
+  return line > 0 ? { path, line } : { path };
+}
+
+/** Whether a project-relative path is a file in the project. */
+type FileCheck = (path: string) => boolean;
+
+/** A path in chat text that gets a file link: a project path the file list knows. */
+function linkedFile(text: string, env: unknown): FileRef | null {
+  const file = projectPath(text);
+  const exists = (env as { exists?: FileCheck } | undefined)?.exists;
+  return file && exists?.(withoutDotSlash(file.path)) ? file : null;
+}
+
+/** The attributes that mark a link as a file link. */
+function fileAttrs(file: FileRef): [string, string][] {
+  return file.line ? [["data-file", file.path], ["data-line", String(file.line)]] : [["data-file", file.path]];
+}
+
+// In prose only a path with a directory counts, so "Node.js" stays a word.
+// The look-behind keeps the match from starting inside `/abs`, `~/` or `../`.
+const PROSE_PATH_RE = new RegExp(String.raw`(?<![\w./~@-])(?:\./)?(?:${PATH_DIR})+${PATH_NAME}(?::\d+(?::\d+)?)?(?![\w/])`, "g");
+
+/**
+ * Undoes underscore emphasis that is really part of a path: in
+ * `pkg/__init__.py` the `__` pair parses as bold. Adjacent text is merged
+ * so the path is one text token again.
+ */
+function unwrapPathUnderscores(children: Token[], text: (content: string) => Token): Token[] {
+  const out: Token[] = [];
+  for (let i = 0; i < children.length; i++) {
+    const [open, inner, close, after] = children.slice(i, i + 4);
+    const before = out[out.length - 1];
+    const pathEmphasis =
+      (open.type === "strong_open" || open.type === "em_open") &&
+      open.markup.startsWith("_") &&
+      inner?.type === "text" &&
+      close?.type === open.type.replace("_open", "_close") &&
+      before?.type === "text" &&
+      before.content.endsWith("/") &&
+      after?.type === "text" &&
+      after.content.startsWith(".");
+    if (!pathEmphasis) {
+      out.push(open);
+      continue;
+    }
+    out[out.length - 1] = text(before.content + open.markup + inner.content + close.markup + after.content);
+    i += 3;
+  }
+  return out;
+}
+
+// Project paths in plain text become file links (X30). Runs last, so text
+// already inside a link (linkify URLs, Markdown links) is left alone.
+chatMd.core.ruler.push("file_links", (state) => {
+  for (const block of state.tokens) {
+    if (block.type !== "inline" || !block.children) continue;
+    const text = (content: string) => Object.assign(new state.Token("text", "", 0), { content });
+    const out = [];
+    let inLink = 0;
+    for (const tok of unwrapPathUnderscores(block.children, text)) {
+      if (tok.type === "link_open") {
+        inLink++;
+        const file = linkedFile(String(tok.attrGet("href") ?? ""), state.env);
+        if (file) fileAttrs(file).forEach(([name, value]) => tok.attrSet(name, value));
+      }
+      if (tok.type === "link_close") inLink--;
+      if (tok.type !== "text" || inLink > 0) {
+        out.push(tok);
+        continue;
+      }
+      let last = 0;
+      for (const m of tok.content.matchAll(PROSE_PATH_RE)) {
+        const file = linkedFile(m[0], state.env);
+        if (!file) continue;
+        if (m.index > last) out.push(text(tok.content.slice(last, m.index)));
+        const open = new state.Token("link_open", "a", 1);
+        open.attrs = [["href", file.path], ...fileAttrs(file)];
+        out.push(open, text(m[0]), new state.Token("link_close", "a", -1));
+        last = m.index + m[0].length;
+      }
+      if (last === 0) out.push(tok);
+      else if (last < tok.content.length) out.push(text(tok.content.slice(last)));
+    }
+    block.children = out;
+  }
+});
+
 // Linkify skips code, but agents often wrap a URL in backticks: an inline
-// code span that is exactly one URL becomes a link around the code.
+// code span that is exactly one URL becomes a link around the code, and so
+// does one that is exactly a project path (X30).
 const defaultCodeInline = chatMd.renderer.rules.code_inline!;
 chatMd.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
   const code = defaultCodeInline(tokens, idx, options, env, self);
-  const url = tokens[idx].content.trim();
-  return /^https?:\/\/\S+$/.test(url) ? `<a href="${escapeHtml(url)}">${code}</a>` : code;
+  const text = tokens[idx].content.trim();
+  if (/^https?:\/\/\S+$/.test(text)) return `<a href="${escapeHtml(text)}">${code}</a>`;
+  const file = linkedFile(text, env);
+  if (!file) return code;
+  const attrs = [["href", file.path], ...fileAttrs(file)].map(([name, value]) => `${name}="${escapeHtml(value)}"`);
+  return `<a ${attrs.join(" ")}>${code}</a>`;
 };
 
 /** The URL a chat link may open in the browser, or null for anything else. */
@@ -179,8 +309,9 @@ export function linkToolbarPosition(
   return link.top > 40 ? { left, bottom: win.height - link.top + 2 } : { left, top: link.bottom + 2 };
 }
 
-export function renderChatMarkdown(source: string): string {
-  return DOMPurify.sanitize(chatMd.render(source), {
+/** Agent message HTML; only paths `exists` accepts become file links (X30), none without it. */
+export function renderChatMarkdown(source: string, exists?: FileCheck): string {
+  return DOMPurify.sanitize(chatMd.render(source, { exists }), {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input", "button", "img", "style"],
     FORBID_ATTR: ["srcset", "ping", "style"],

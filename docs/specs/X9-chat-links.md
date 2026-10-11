@@ -45,7 +45,7 @@ Agent output is untrusted. Rendering stays markdown-it with HTML disabled plus D
 
 ## Out of scope
 
-- Opening file paths from agent messages in the code viewer.
+- Opening file paths from agent messages in the code viewer (done later in [X30](X30-file-links-in-chat.md)).
 - Links inside tool output and diffs.
 - Keyboard access to Copy: the toolbar is hover-only, so a keyboard user can open a link (Enter) but not copy it.
 

@@ -26,6 +26,7 @@ import {
   transcript,
   turnFooter,
   useChat,
+  turnRunning,
 } from "./chat";
 
 const rpcReply = vi.hoisted(() => ({ release: (_v: unknown) => {} }));
@@ -223,5 +224,13 @@ describe("plan approval (X20)", () => {
   it("labels the approve button with the mode it switches to (X24)", () => {
     expect(planApproveLabel("auto")).toBe("Approve, auto mode");
     expect(planApproveLabel("acceptEdits")).toBe("Approve, accept edits");
+  });
+});
+
+describe("turn running (X30)", () => {
+  it("counts a turn as running while the agent works or waits for a permission", () => {
+    expect(turnRunning("working")).toBe(true);
+    expect(turnRunning("blocked")).toBe(true);
+    for (const status of ["idle", "done", "error", undefined] as const) expect(turnRunning(status), String(status)).toBe(false);
   });
 });
