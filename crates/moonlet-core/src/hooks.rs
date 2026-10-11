@@ -118,6 +118,21 @@ fn write_skill(path: &Path) -> Result<()> {
     remove_skill(&jaunt_skill(path), JAUNT_SKILL_MARKER)
 }
 
+/// Rewrites each installed moonlet skill that differs from this version's
+/// (X31), so a new moonlet teaches agents its new commands. A missing file,
+/// or one without our marker, is left alone. Returns the files rewritten.
+pub fn refresh_skills(paths: &HookPaths) -> Result<Vec<PathBuf>> {
+    let mut rewritten = Vec::new();
+    for path in [&paths.claude_skill, &paths.codex_skill] {
+        let Ok(text) = std::fs::read_to_string(path) else { continue };
+        if text != SKILL && text.contains(SKILL_MARKER) {
+            write_atomic(path, SKILL).with_context(|| format!("cannot write {}", path.display()))?;
+            rewritten.push(path.clone());
+        }
+    }
+    Ok(rewritten)
+}
+
 /// `skills/jaunt/SKILL.md` next to `skills/moonlet/SKILL.md`.
 fn jaunt_skill(path: &Path) -> PathBuf {
     let skills = path.parent().and_then(Path::parent).unwrap_or(Path::new(""));
@@ -499,6 +514,29 @@ mod tests {
         assert!(!dir.path().join("claude/skills/moonlet").exists());
         assert!(!dir.path().join("codex/skills/moonlet").exists());
         assert_eq!(std::fs::read_to_string(&mine).unwrap(), "---\nname: mine\n---\n", "other skills kept");
+    }
+
+    /// X31: an installed skill from an older moonlet is brought up to date
+    /// when the daemon starts; nothing else is written.
+    #[test]
+    fn refresh_updates_only_outdated_skills_moonlet_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let old = "---\nname: moonlet\n---\n<!-- Installed by moonlet (`moonlet hooks install`); reinstalling overwrites this file. -->\nold text\n";
+        std::fs::create_dir_all(p.claude_skill.parent().unwrap()).unwrap();
+        std::fs::write(&p.claude_skill, old).unwrap();
+
+        assert_eq!(refresh_skills(&p).unwrap(), vec![p.claude_skill.clone()]);
+        let text = std::fs::read_to_string(&p.claude_skill).unwrap();
+        assert!(text.contains(r#""$MOONLET_BIN" term read <id>"#), "{text}");
+        assert!(!p.codex_skill.exists(), "a skill never installed stays absent");
+        assert_eq!(refresh_skills(&p).unwrap(), Vec::<PathBuf>::new(), "current skills are left alone");
+
+        let users = "---\nname: moonlet\n---\nmy own notes\n";
+        std::fs::create_dir_all(p.codex_skill.parent().unwrap()).unwrap();
+        std::fs::write(&p.codex_skill, users).unwrap();
+        assert_eq!(refresh_skills(&p).unwrap(), Vec::<PathBuf>::new());
+        assert_eq!(std::fs::read_to_string(&p.codex_skill).unwrap(), users, "a file without the marker is the user's");
     }
 
     #[test]
