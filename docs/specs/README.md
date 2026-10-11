@@ -71,3 +71,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X30 | Open project files from agent messages | P1 | 3 | implemented (click unchecked in app) | [X30-file-links-in-chat.md](X30-file-links-in-chat.md) |
 | X31 | The agent reads a terminal tab, with the user's approval | P1 | 3 | implemented (remote hosts and a live agent untried) | [X31-agent-reads-terminal.md](X31-agent-reads-terminal.md) |
 | X32 | Workspaces above sections (today's workspaces become sections) | P1 | 3 | implemented (switcher look unchecked in app) | [X32-workspaces-and-sections.md](X32-workspaces-and-sections.md) |
+| X33 | A Claude Code profile per workspace (separate subscriptions) | P1 | 3 | implemented in the daemon (app in the next part) | [X33-workspace-claude-profiles.md](X33-workspace-claude-profiles.md) |
