@@ -11,6 +11,7 @@ use moonlet_core::paths::{hostname, now_ms};
 use moonlet_core::chat::runtime::{ChatCreate, ChatManager, chats_dir};
 use moonlet_core::session::SessionManager;
 use moonlet_core::terminal::TerminalManager;
+use moonlet_core::terminal_read::{self, TerminalReads};
 use moonlet_core::{fs, git};
 use moonlet_proto::methods as m;
 use moonlet_proto::types::DaemonInfo;
@@ -26,6 +27,7 @@ pub struct Daemon {
     pub terminals: Arc<TerminalManager>,
     pub chats: Arc<ChatManager>,
     pub sessions: Arc<SessionManager>,
+    reads: TerminalReads,
     watchers: Arc<Watchers>,
     started_at: u64,
     shutdown: watch::Sender<bool>,
@@ -34,6 +36,10 @@ pub struct Daemon {
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
+
+/// The name the `moonlet` CLI gives in its hello; agents reach the daemon
+/// through it.
+pub const CLI_CLIENT: &str = "moonlet-cli";
 
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
     serde_json::from_value(v).map_err(|e| RpcError::new("invalid_params", e.to_string()))
@@ -78,10 +84,17 @@ impl Daemon {
         sessions.set_chats(chats.clone());
         let emitter = terminals.clone();
         let watchers = Watchers::new(Arc::new(move |m| emitter.emit(m)));
+        // Tests shorten how long a read waits for the user (X31).
+        let read_timeout = std::env::var("MOONLET_TERMINAL_READ_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map_or(terminal_read::DEFAULT_TIMEOUT, std::time::Duration::from_millis);
+        let reads = TerminalReads::new(terminals.clone(), read_timeout);
         Arc::new(Self {
             terminals,
             chats,
             sessions,
+            reads,
             watchers,
             started_at: now_ms(),
             shutdown,
@@ -251,6 +264,31 @@ impl Daemon {
                 ok(s.search(r.id, &r.query, r.regex, r.case_sensitive)
                     .map_err(internal)?)
             }
+            m::TERMINAL_READ => {
+                let r: m::TerminalRead = params(p)?;
+                ok(self.reads.read(r).await.map_err(internal)?)
+            }
+            m::TERMINAL_READ_LIST => {
+                let r: m::TerminalRef = params(p)?;
+                ok(self.reads.readable(r.id).map_err(internal)?.1)
+            }
+            m::TERMINAL_READ_ANSWER | m::TERMINAL_READ_REQUESTS if conn.client == CLI_CLIENT => {
+                // An agent must not approve its own read, nor see the waiting
+                // text, with `moonlet rpc` (X31).
+                Err(RpcError::new("forbidden", "only the moonlet app answers read requests"))
+            }
+            m::TERMINAL_READ_ANSWER => {
+                let r: m::ReadAnswer = params(p)?;
+                self.reads.answer(r).map_err(internal)?;
+                ok(true)
+            }
+            m::TERMINAL_READ_REQUESTS => ok(self.reads.requests()),
+            m::TERMINAL_READ_GRANTS => ok(self.reads.grants()),
+            m::TERMINAL_READ_GRANT_CLEAR => {
+                let r: m::ReadGrantClear = params(p)?;
+                self.reads.clear_grant(&r.session_id);
+                ok(true)
+            }
             m::AGENT_REPORT => {
                 let r: m::AgentReport = params(p)?;
                 s.report(r.terminal, r.state, r.source, r.message, r.agent)
@@ -357,7 +395,10 @@ impl Daemon {
             m::SESSION_CREATE => ok(w.create_session(params(p)?).await.map_err(internal)?),
             m::SESSION_LIST => ok(w.list_sessions()),
             m::SESSION_ARCHIVE => {
-                w.archive(params(p)?).await.map_err(internal)?;
+                let r: m::SessionArchive = params(p)?;
+                let id = r.id.clone();
+                w.archive(r).await.map_err(internal)?;
+                self.reads.clear_grant(&id);
                 ok(true)
             }
             m::SESSION_UNARCHIVE => {

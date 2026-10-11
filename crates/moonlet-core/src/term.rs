@@ -407,6 +407,47 @@ impl TermState {
         lines.extend(screen.rows(0, cols));
         lines
     }
+
+    /// Scrollback and screen as printed lines, oldest first: rows the
+    /// terminal wrapped are joined and trailing spaces dropped.
+    fn logical_lines(&mut self) -> Vec<String> {
+        let screen = self.parser.screen_mut();
+        let (rows, cols) = screen.size();
+        screen.set_scrollback(usize::MAX);
+        let mut offset = screen.scrollback();
+        let mut lines = vec![String::new()];
+        let mut push = |screen: &vt100::Screen, take: usize| {
+            for (i, row) in screen.rows(0, cols).take(take).enumerate() {
+                let last = lines.last_mut().expect("never empty");
+                last.push_str(&row);
+                if !screen.row_wrapped(i as u16) {
+                    let trimmed = last.trim_end().len();
+                    last.truncate(trimmed);
+                    lines.push(String::new());
+                }
+            }
+        };
+        while offset > 0 {
+            screen.set_scrollback(offset);
+            let take = offset.min(rows as usize);
+            push(screen, take);
+            offset -= take;
+        }
+        screen.set_scrollback(0);
+        push(screen, rows as usize);
+        lines
+    }
+
+    /// The last `n` printed lines as plain text (X31), and whether earlier
+    /// lines were left out. Trailing blank lines do not count.
+    pub fn tail_text(&mut self, n: usize) -> (String, bool) {
+        let mut lines = self.logical_lines();
+        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        let start = lines.len().saturating_sub(n);
+        (lines[start..].join("\n"), start > 0)
+    }
 }
 
 #[cfg(test)]
@@ -541,6 +582,31 @@ mod tests {
             ]
         );
         assert_eq!(t.title(), "my title");
+    }
+
+    /// X31: what an agent reads is the text as printed, not screen rows.
+    #[test]
+    fn tail_text_joins_wrapped_rows_and_drops_trailing_blanks() {
+        let mut t = TermState::new(4, 10);
+        t.process(b"\x1b[31mred\x1b[0m   \r\n0123456789abcdef\r\nlast\r\n\r\n");
+        assert_eq!(
+            t.tail_text(10),
+            ("red\n0123456789abcdef\nlast".to_string(), false)
+        );
+        assert_eq!(t.tail_text(2), ("0123456789abcdef\nlast".to_string(), true));
+    }
+
+    #[test]
+    fn tail_text_reaches_into_scrollback() {
+        let mut t = TermState::new(5, 20);
+        for i in 1..=300 {
+            t.process(format!("line {i}\r\n").as_bytes());
+        }
+        let (text, truncated) = t.tail_text(200);
+        assert!(truncated);
+        assert_eq!(text.lines().count(), 200);
+        assert_eq!(text.lines().next(), Some("line 101"));
+        assert_eq!(text.lines().last(), Some("line 300"));
     }
 
     /// X27: shells report with moonlet's markers; shells jaunt's

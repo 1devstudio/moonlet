@@ -693,6 +693,22 @@ impl TerminalManager {
             .collect())
     }
 
+    /// A terminal's last `lines` printed lines as plain text (X31).
+    pub fn read_text(&self, id: TerminalId, lines: usize) -> Result<methods::ReadResult> {
+        let t = self.get(id).context("no such terminal")?;
+        let mut st = t.state.lock().unwrap();
+        let (text, truncated) = st.term.tail_text(lines);
+        Ok(methods::ReadResult {
+            terminal: id,
+            title: st.info.title.clone(),
+            command: None,
+            exit: st.info.exit.as_ref().and_then(|e| e.code),
+            running: st.info.exit.is_none() && st.info.prompt == Some(false),
+            truncated,
+            text,
+        })
+    }
+
     /// Everything needed to hand live terminals to a new daemon process.
     /// Subscribers are dropped; clients reattach to the new daemon.
     pub fn export(&self) -> Vec<ExportedTerminal> {
