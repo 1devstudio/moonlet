@@ -3,8 +3,9 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { holdsProject } from "../lib/sidebar";
+import { composerProjects } from "../lib/workspaces";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
-import { errorToast, selectSession, useStore } from "../lib/store";
+import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, cx } from "./ui";
 import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
@@ -206,28 +207,33 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   const selected = useStore((s) => s.selected);
   const close = () => useStore.setState({ dialog: null });
 
+  // The session goes into the preset workspace, else the one the sidebar
+  // shows (X32), and the picker offers that workspace's projects.
+  const shown = useStore((s) => shownWorkspace(s));
+  const target = presetWorkspace ? { host: presetHost ?? shown?.host, id: presetWorkspace } : shown;
+  const targetWs = target ? (allWorkspaces[target.host ?? ""] ?? []).find((w) => w.id === target.id) : undefined;
+
   // Projects of connected hosts; the preset (or current session's) project first.
   const options = useMemo(() => {
     const out: { host: string; project: Project; section: string | null }[] = [];
-    for (const [h, list] of Object.entries(allProjects)) {
+    for (const [h, all] of Object.entries(allProjects)) {
       if (hosts[h]?.status !== "connected") continue;
+      const list = targetWs && target?.host === h ? composerProjects(targetWs, allSections[h] ?? [], all) : all;
       for (const p of list) {
         const sec = (allSections[h] ?? []).find((s) => s.project_ids.includes(p.id));
         out.push({ host: h, project: p, section: sec?.name ?? null });
       }
     }
     return out;
-  }, [allProjects, allSections, hosts]);
-  /** The preset workspace, when it holds the project (X32); else the daemon picks. */
-  const workspaceFor = (host: string, projectId: string) => {
-    const ws = (allWorkspaces[host] ?? []).find((w) => w.id === presetWorkspace);
-    return ws && holdsProject(ws, allSections[host] ?? [], projectId) ? ws.id : null;
-  };
+  }, [allProjects, allSections, hosts, targetWs, target?.host]);
+  /** The target workspace, when it holds the project; else the daemon picks. */
+  const workspaceFor = (host: string, projectId: string) =>
+    targetWs && target?.host === host && holdsProject(targetWs, allSections[host] ?? [], projectId) ? targetWs.id : null;
   const currentProject = useStore((s) => (s.selected ? s.sessions[s.selected.host]?.find((x) => x.id === s.selected!.session)?.project_id : undefined));
   const initial =
     options.find((o) => o.host === presetHost && o.project.id === presetProject) ??
     options.find((o) => o.host === selected?.host && o.project.id === currentProject) ??
-    options.find((o) => !presetWorkspace || workspaceFor(o.host, o.project.id)) ??
+    options.find((o) => workspaceFor(o.host, o.project.id)) ??
     options[0];
   const [pick, setPick] = useState(initial ? { host: initial.host, id: initial.project.id } : null);
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
