@@ -524,3 +524,42 @@ async fn lists_known_shell_commands() {
         assert!(names.iter().any(|n| n == name), "{name} missing");
     }
 }
+
+/// X31: a daemon started from the user's install brings the moonlet skill
+/// it installed up to date, so agents learn the new commands.
+#[tokio::test]
+async fn starting_refreshes_an_outdated_moonlet_skill() {
+    let home = tempfile::tempdir().unwrap();
+    let skill = home.path().join(".claude/skills/moonlet/SKILL.md");
+    std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    std::fs::write(&skill, "---\nname: moonlet\n---\n<!-- Installed by moonlet -->\nold\n").unwrap();
+    // No MOONLET_HOME, as when the app starts it: the home is $HOME/.moonlet.
+    let socket = home.path().join(".moonlet/run/moonletd.sock");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("daemon")
+        .env("HOME", home.path())
+        .env_remove("MOONLET_SOCK")
+        .env_remove("MOONLET_HOME")
+        .env_remove("JAUNT_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
+    // The socket listens before the daemon has finished starting.
+    let mut text = String::new();
+    for _ in 0..100 {
+        text = std::fs::read_to_string(&skill).unwrap();
+        if text.contains("term read") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(text.contains(r#""$MOONLET_BIN" term read <id>"#), "{text}");
+    assert!(!home.path().join(".codex/skills/moonlet/SKILL.md").exists());
+}
