@@ -430,6 +430,31 @@ pub struct SessionCreate {
     pub rows: u16,
 }
 
+impl SessionCreate {
+    /// A request for `project_id` with every option at its default.
+    pub fn new(project_id: impl Into<String>) -> Self {
+        Self {
+            project_id: project_id.into(),
+            name: None,
+            branch: None,
+            from: None,
+            existing_branch: false,
+            agent: None,
+            prompt: None,
+            model: None,
+            effort: None,
+            mode: None,
+            pr: None,
+            tui: false,
+            spawned_by: None,
+            add_dirs: Vec::new(),
+            workspace_id: None,
+            cols: default_cols(),
+            rows: default_rows(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionArchive {
     pub id: String,
@@ -456,7 +481,7 @@ pub struct SessionUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceCreate {
     pub name: String,
-    pub color: String,
+    pub color: crate::types::WorkspaceColor,
     /// Sections to move into the new workspace from the ones they are in.
     #[serde(default)]
     pub move_sections: Vec<String>,
@@ -468,9 +493,9 @@ pub struct WorkspaceUpdate {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub color: Option<String>,
-    /// The workspace's sections in their new order. Only reorders: moving a
-    /// section between workspaces is `section.move`.
+    pub color: Option<crate::types::WorkspaceColor>,
+    /// The workspace's sections in their new order. It must keep the
+    /// workspace's own; sections of other workspaces listed here move in.
     #[serde(default)]
     pub section_ids: Option<Vec<String>>,
 }

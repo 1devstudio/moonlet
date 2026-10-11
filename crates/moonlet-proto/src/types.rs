@@ -185,8 +185,7 @@ pub struct Session {
 pub struct Workspace {
     pub id: String,
     pub name: String,
-    /// One of [`WORKSPACE_COLORS`].
-    pub color: String,
+    pub color: WorkspaceColor,
     /// The workspace's sections, in sidebar order.
     #[serde(default)]
     pub section_ids: Vec<String>,
@@ -194,7 +193,15 @@ pub struct Workspace {
 }
 
 /// The colours a workspace can have, as the design names them.
-pub const WORKSPACE_COLORS: [&str; 5] = ["clay", "blue", "violet", "sand", "grey"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceColor {
+    Clay,
+    Blue,
+    Violet,
+    Sand,
+    Grey,
+}
 
 /// A named set of projects shown as one block in the sidebar (X5's
 /// workspace, renamed in X32).
