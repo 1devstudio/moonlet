@@ -1,6 +1,6 @@
 # X31 — The agent reads a terminal tab, with the user's approval
 
-- **Status:** draft (part 1 implemented: reading, approval, CLI and modal)
+- **Status:** draft (parts 1 and 2 implemented: reading, approval, CLI, modal and the last command)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** goal 2 (agent-first), A6 (CLI and socket API), journey J2
 - **Related:** [T3](T3-shell-integration.md) (shell integration), [T8](T8-block-styling.md) (copy a block to the agent), [T9](T9-real-command-blocks.md) (daemon-owned blocks, draft), [X22](X22-agent-opens-session.md) (moonlet skill), [X23](X23-confirm-modal.md) (confirm modal), [A3](A3-sidebar-and-notifications.md) (attention)
@@ -48,11 +48,11 @@ A command fails in a terminal tab and the user asks the session's agent to "chec
 
 ### The last command (stack part 2)
 
-- [ ] The daemon records each terminal's most recent command from its OSC 133 marks: where its output starts (`C`), where it ends (`D`), and its exit code. A command that has not finished yet counts as the last command, with `running: true`.
-- [ ] The zsh, bash and fish hooks also report the command line in their preexec hook as `OSC 1337;MoonletCommand=<percent-encoded command>`. The daemon keeps it with the last command. (`shell.rs` tests with real shells: `false` reports `MoonletCommand=false` then `133;D;1`)
-- [ ] `terminal.read` without `lines` returns the last command when the terminal has one: the line `$ <command>`, then its output. Without shell marks it returns the last 200 lines as before. `--lines N` always returns the last N lines.
-- [ ] Output longer than 2000 lines keeps the last 2000 lines, starts with `… <n> earlier lines omitted`, and sets `truncated`. Output whose start has already left the 10,000-line scrollback starts with `… earlier output is no longer in the scrollback`. (`term.rs` unit tests)
-- [ ] `moonlet term ls` shows the last command's exit code (`at prompt  exit 1`).
+- [x] The daemon keeps each terminal's most recent command from its OSC 133 marks: the output printed between `C` and `D`, rendered as the screen would show it (a progress line rewritten with `\r` reads as its last state), and the exit code from `D`. A command without its `D` yet is the last command, with `running: true`. The next `C` replaces it. It lives in the daemon's memory, so a daemon upgrade (S3) forgets it. (`term.rs` unit tests)
+- [x] The zsh, bash and fish hooks report the command line in their preexec hook as `OSC 1337;MoonletCommand=<percent-encoded command>`, just before the `C` mark. zsh and fish report the line as typed; bash reports `$BASH_COMMAND`, the first command of a pipeline. (`shell.rs` test with real zsh and bash: `false` reports `MoonletCommand=false` then `133;C`; fish is not installed on the test machine and is untested)
+- [x] `terminal.read` without `lines` returns the last command when the terminal has one: the line `$ <command>` (when the hook reported it), then its output, with `command`, `exit` and `running` set. Without shell marks it returns the last 200 lines as before. `--lines N` always returns the last N lines. (`terminal_read_e2e.rs` with a real zsh)
+- [x] Output longer than 2000 lines keeps the last 2000 lines, starts with `… <n> earlier lines omitted`, and sets `truncated`. The daemon keeps at most 8 MB of a command's raw output; past that its start is dropped and the text starts with `… earlier output was not kept`. (`term.rs` unit tests)
+- [x] `TerminalInfo` gets `last_exit`, and `moonlet term ls` shows it in a `LAST` column (`exit 1`), never the command line. (`terminal_read_e2e.rs`)
 
 ### Skill (stack part 3)
 
@@ -86,11 +86,12 @@ The modal is the X23 `ConfirmDialog` with a preview slot: the same overlay, pane
 - New event `terminal.read_request { request_id, session_id, caller, agent?, terminal_id, title, command?, exit?, lines, text }`, `terminal.read_done { request_id }` when a request is answered, withdrawn or times out, so every window closes its modal, and `terminal.read_grant { session_id, granted }` when a grant is given or cleared.
 - `MOONLET_TERMINAL_READ_TIMEOUT_MS` in the daemon's environment shortens the 5-minute wait, for tests.
 - Shell integration: `OSC 1337;MoonletCommand=<percent-encoded>` from the preexec hook.
+- `TerminalInfo.last_exit: i32?`, the exit code of the shell's last command.
 - CLI: `moonlet term ls [--json]`, `moonlet term read <id> [--lines N] [--json]`.
 
 ## Data and config
 
-Nothing new on disk except the rewritten skill files. Pending requests, the snapshot text and grants live in the daemon's memory.
+Nothing new on disk except the rewritten skill files. Pending requests, the snapshot text, grants and each terminal's last command (up to 8 MB of raw output) live in the daemon's memory.
 
 ## Security considerations
 
@@ -98,7 +99,7 @@ Nothing new on disk except the rewritten skill files. Pending requests, the snap
 - The approval guards against accidents and prompt injection, such as a README telling the agent to read every terminal. It is not a hard boundary against a hostile agent. An agent with shell access runs as the user, can call `moonlet rpc terminal.search` or `terminal.attach` directly, and can read the user's files. The socket is private to the user (S1), as in X22.
 - An agent cannot answer its own request or read the waiting text through `moonlet rpc`: the daemon refuses `terminal.read_answer` and `terminal.read_requests` from the CLI. A program that speaks the socket protocol itself, under another client name, still can; see the point above.
 - The session check uses the caller's terminal id, which the agent could change in its environment. A false id still only reaches terminals of an existing session, and still asks the user, whose modal names the session being read.
-- `term ls` shows titles, which shells often set to the running command. It shows no output and no command line.
+- `term ls` shows titles, which shells often set to the running command, and the last exit code. It shows no output and no command line.
 - A grant never outlives the daemon process or the session.
 
 ## Out of scope
