@@ -13,8 +13,8 @@ use moonlet_proto::methods::{
     WorkspaceUpdate,
 };
 use moonlet_proto::types::{
-    Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session, TerminalInfo,
-    TerminalKind, Workspace, WorkspaceColor,
+    ClaudeProfile, Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session,
+    TerminalInfo, TerminalKind, Workspace, WorkspaceColor,
 };
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,9 @@ pub struct State {
     pub workspaces: Vec<Workspace>,
     #[serde(default)]
     pub sections: Vec<Section>,
+    /// Claude profiles (X33).
+    #[serde(default)]
+    pub profiles: Vec<ClaudeProfile>,
     #[serde(default)]
     pub projects: Vec<Project>,
     #[serde(default)]
@@ -264,12 +267,23 @@ fn migrate_x5(obj: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
+/// A workspace's `claude_profile`: `None`/`""` is the default profile,
+/// anything else must be a known profile.
+fn check_profile(st: &State, id: Option<&str>) -> Result<Option<String>> {
+    match id.filter(|id| !id.is_empty()) {
+        None => Ok(None),
+        Some(id) if st.profiles.iter().any(|p| p.id == id) => Ok(Some(id.to_string())),
+        Some(_) => bail!("no such Claude profile"),
+    }
+}
+
 fn new_workspace(name: &str, color: WorkspaceColor) -> Workspace {
     Workspace {
         id: new_id(),
         name: name.into(),
         color,
         section_ids: Vec::new(),
+        claude_profile: None,
         created_at: now_ms(),
     }
 }
@@ -422,7 +436,9 @@ impl SessionManager {
         mgr
     }
 
-    pub fn set_chats(&self, chats: Arc<crate::chat::runtime::ChatManager>) {
+    pub fn set_chats(self: &Arc<Self>, chats: Arc<crate::chat::runtime::ChatManager>) {
+        let me = Arc::downgrade(self);
+        chats.set_session_env(Box::new(move |id| me.upgrade().map(|m| m.session_env(id)).unwrap_or_default()));
         let _ = self.chats.set(chats);
     }
 
@@ -537,9 +553,10 @@ impl SessionManager {
         if name.is_empty() {
             bail!("workspace name is empty");
         }
-        let ws = new_workspace(name, req.color);
+        let mut ws = new_workspace(name, req.color);
         let id = ws.id.clone();
         self.mutate(|st| {
+            ws.claude_profile = check_profile(st, req.claude_profile.as_deref())?;
             st.workspaces.push(ws);
             for sec in &req.move_sections {
                 st.move_section(sec, &id)?;
@@ -556,7 +573,14 @@ impl SessionManager {
 
     pub fn update_workspace(&self, req: WorkspaceUpdate) -> Result<Workspace> {
         let out = self.mutate(|st| {
+            let profile = match &req.claude_profile {
+                Some(p) => Some(check_profile(st, Some(p))?),
+                None => None,
+            };
             let w = st.workspace_mut(&req.id)?;
+            if let Some(p) = profile {
+                w.claude_profile = p;
+            }
             if let Some(n) = req.name {
                 if n.trim().is_empty() {
                     bail!("workspace name is empty");
@@ -864,12 +888,102 @@ impl SessionManager {
     }
 
     fn script_env(&self, ws: &Session, repo: &Project) -> BTreeMap<String, String> {
-        BTreeMap::from([
+        let mut env = BTreeMap::from([
             ("MOONLET_ROOT_PATH".into(), repo.path.clone()),
             ("MOONLET_SESSION_PATH".into(), ws.path.clone()),
             ("MOONLET_SESSION_NAME".into(), ws.name.clone()),
             ("MOONLET_BRANCH".into(), ws.branch.clone()),
-        ])
+        ]);
+        env.extend(self.session_env(&ws.id));
+        env
+    }
+
+    /// The Claude profile folder of a session's workspace (X33); `None` for
+    /// the default profile.
+    pub fn config_dir(&self, session: &str) -> Option<String> {
+        let st = self.state.lock().unwrap();
+        let ws = st.sessions.iter().find(|s| s.id == session)?.workspace_id.clone()?;
+        let profile = st.workspaces.iter().find(|w| w.id == ws)?.claude_profile.clone()?;
+        st.profiles.iter().find(|p| p.id == profile).map(|p| p.path.clone())
+    }
+
+    /// Variables every process of a session gets for its workspace's
+    /// profile, looked up at each start (X33).
+    pub fn session_env(&self, session: &str) -> BTreeMap<String, String> {
+        self.config_dir(session)
+            .map(|d| BTreeMap::from([(crate::profiles::CONFIG_DIR_VAR.to_string(), d)]))
+            .unwrap_or_default()
+    }
+
+    pub fn list_profiles(&self) -> Vec<ClaudeProfile> {
+        self.state.lock().unwrap().profiles.clone()
+    }
+
+    /// Adds a profile (X33): its folder is `path`, or `~/.claude-<name>`.
+    pub fn create_profile(&self, name: &str, path: Option<&str>) -> Result<ClaudeProfile> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("profile name is empty");
+        }
+        let home = dirs::home_dir().context("no home folder")?;
+        let (taken, projects): (Vec<PathBuf>, Vec<PathBuf>) = {
+            let st = self.state.lock().unwrap();
+            (
+                st.profiles.iter().map(|p| PathBuf::from(&p.path)).collect(),
+                st.projects.iter().map(|p| PathBuf::from(&p.path)).collect(),
+            )
+        };
+        let mut defaults = vec![home.join(".claude")];
+        if let Some(d) = self.terminals.base_env().get(crate::profiles::CONFIG_DIR_VAR) {
+            defaults.push(expand_home(d));
+        }
+        let rules = crate::profiles::FolderRules { home: &home, defaults, taken: &taken, projects: &projects, exists: &|p: &Path| p.exists() };
+        let dir = crate::profiles::profile_folder(path, name, &rules)?;
+        crate::profiles::ensure_folder(&dir)?;
+        let profile = ClaudeProfile { id: new_id(), name: name.to_string(), path: dir.display().to_string(), created_at: now_ms() };
+        let out = profile.clone();
+        self.mutate(|st| {
+            st.profiles.push(profile);
+            Ok(())
+        })?;
+        self.emit_profiles();
+        Ok(out)
+    }
+
+    pub fn update_profile(&self, id: &str, name: Option<&str>) -> Result<ClaudeProfile> {
+        let out = self.mutate(|st| {
+            let p = st.profiles.iter_mut().find(|p| p.id == id).context("no such Claude profile")?;
+            if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
+                p.name = n.to_string();
+            }
+            Ok(p.clone())
+        })?;
+        self.emit_profiles();
+        Ok(out)
+    }
+
+    /// Forgets a profile; its workspaces go back to the default. The folder
+    /// and its login stay on disk.
+    pub fn delete_profile(&self, id: &str) -> Result<()> {
+        self.mutate(|st| {
+            if !st.profiles.iter().any(|p| p.id == id) {
+                bail!("no such Claude profile");
+            }
+            st.profiles.retain(|p| p.id != id);
+            for w in &mut st.workspaces {
+                if w.claude_profile.as_deref() == Some(id) {
+                    w.claude_profile = None;
+                }
+            }
+            Ok(())
+        })?;
+        self.emit_profiles();
+        self.emit_workspaces();
+        Ok(())
+    }
+
+    fn emit_profiles(&self) {
+        self.terminals.emit(Message::event(methods::EV_PROFILES_CHANGED, self.list_profiles()));
     }
 
     /// Starts a session inside a workspace and remembers how to restart it.
@@ -908,7 +1022,8 @@ impl SessionManager {
                 name: ws.name.clone(),
                 title: req.title.clone(),
                 session_id: Some(ws.id.clone()),
-                env: req.env.clone(),
+                // The profile is looked up at each start instead (X33).
+                env: req.env.iter().filter(|(k, _)| *k != crate::profiles::CONFIG_DIR_VAR).map(|(k, v)| (k.clone(), v.clone())).collect(),
                 add_dirs: req.add_dirs.clone(),
             })?,
             None => self.terminals.create(req.clone())?,
@@ -922,6 +1037,7 @@ impl SessionManager {
                 command: info.command.clone(),
                 agent: info.agent.clone(),
                 terminal: Some(info.id),
+                config_dir: self.config_dir(&ws.id),
             };
             self.mutate(|st| {
                 if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
@@ -953,13 +1069,15 @@ impl SessionManager {
         cols: u16,
         rows: u16,
     ) -> TerminalCreate {
+        let mut cmd = self.agent_command(repo, agent, prompt, resume, Some(ws));
+        // After `-l -i` has run the user's rc files, so an export there of
+        // another profile cannot win (X33).
+        if let Some(dir) = self.config_dir(&ws.id) {
+            cmd = format!("export {}={}; {cmd}", crate::profiles::CONFIG_DIR_VAR, shell_quote(&dir));
+        }
         TerminalCreate {
             cwd: ws.path.clone(),
-            command: vec![
-                user_shell(),
-                "-lic".into(),
-                self.agent_command(repo, agent, prompt, resume, Some(ws)),
-            ],
+            command: vec![user_shell(), "-lic".into(), cmd],
             cols,
             rows,
             kind: TerminalKind::Agent,
@@ -1417,7 +1535,9 @@ impl SessionManager {
                 };
                 let req = match (&entry.kind, &entry.agent) {
                     (TerminalKind::Agent, Some(agent)) if known(agent) => {
-                        let mut r = self.agent_session(&ws, &repo, agent, None, true, 120, 32);
+                        // The conversation is in the profile it ran in (X33).
+                        let resume = entry.config_dir == self.config_dir(&ws.id);
+                        let mut r = self.agent_session(&ws, &repo, agent, None, resume, 120, 32);
                         r.title = Some(entry.title.clone());
                         r
                     }
@@ -1727,6 +1847,160 @@ mod tests {
             );
         }
         assert_eq!(mgr.list_sessions().len(), 3, "the rejected ones created nothing");
+    }
+
+    /// Polls for a file a process writes, and returns its last line.
+    async fn last_line(path: &Path) -> String {
+        for _ in 0..250 {
+            if let Some(l) = std::fs::read_to_string(path).ok().and_then(|t| t.lines().last().map(String::from)) {
+                return l;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("{} was never written", path.display());
+    }
+
+    fn set_profile(mgr: &SessionManager, ws: &str, profile: Option<&str>) {
+        mgr.update_workspace(WorkspaceUpdate {
+            id: ws.into(),
+            name: None,
+            color: None,
+            section_ids: None,
+            claude_profile: Some(profile.unwrap_or_default().into()),
+        })
+        .unwrap();
+    }
+
+    /// X33: a profile is a private folder, and a workspace using it sends it
+    /// to its sessions' shells and agent tabs as `CLAUDE_CONFIG_DIR`.
+    #[tokio::test]
+    async fn a_workspaces_profile_reaches_its_sessions_terminals() {
+        let (repo, home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let dir = home.path().join("claude-work");
+        let profile = mgr.create_profile("Work", Some(&dir.display().to_string())).unwrap();
+        assert_eq!(profile.path, dir.display().to_string());
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+
+        let personal = mgr.list_workspaces()[0].clone();
+        set_profile(&mgr, &personal.id, Some(&profile.id));
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        mgr.spawn_in(
+            &s,
+            TerminalCreate {
+                command: vec!["sh".into(), "-c".into(), "echo ${CLAUDE_CONFIG_DIR:-default} > config-dir; sleep 5".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(last_line(&Path::new(&s.path).join("config-dir")).await, dir.display().to_string());
+        // An agent tab names the folder in its own command, so a shell rc
+        // file exporting another one cannot win.
+        let agent = mgr
+            .spawn_in(&s, TerminalCreate { kind: TerminalKind::Agent, agent: Some("fake".into()), ..Default::default() })
+            .unwrap();
+        assert!(agent.command[2].starts_with(&format!("export CLAUDE_CONFIG_DIR='{}'; ", dir.display())), "{:?}", agent.command);
+
+        // Back on the default profile, nothing is set.
+        set_profile(&mgr, &personal.id, None);
+        let agent = mgr
+            .spawn_in(&s, TerminalCreate { kind: TerminalKind::Agent, agent: Some("fake".into()), ..Default::default() })
+            .unwrap();
+        assert!(!agent.command[2].contains("CLAUDE_CONFIG_DIR"), "{:?}", agent.command);
+    }
+
+    /// X33: the structured view's Claude gets the profile on every start, and
+    /// a conversation kept in another profile is not resumed.
+    #[tokio::test]
+    async fn the_structured_agent_starts_in_the_workspaces_profile() {
+        let (repo, home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let work = mgr.create_profile("Work", Some(&home.path().join("claude-work").display().to_string())).unwrap();
+        let private = mgr.create_profile("Private", Some(&home.path().join("claude-private").display().to_string())).unwrap();
+        let ws = mgr.list_workspaces()[0].clone();
+        set_profile(&mgr, &ws.id, Some(&work.id));
+        let mut req = new_session(&r.id, None);
+        req.agent = Some("claude".into());
+        req.prompt = Some("hi".into());
+        let s = mgr.create_session(req).await.unwrap();
+        let env = Path::new(&s.path).join("claude-env");
+        assert_eq!(last_line(&env).await, work.path);
+
+        // The conversation started; switch the workspace to another profile
+        // and restart the agent with a new message.
+        let chat = s.terminals[0];
+        for _ in 0..250 {
+            if chats.state(chat).unwrap().agent_session.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        set_profile(&mgr, &ws.id, Some(&private.id));
+        chats.settings(chat, Some("opus".into()), None, None).unwrap();
+        chats.send(chat, "again", &[]).unwrap();
+        for _ in 0..250 {
+            if std::fs::read_to_string(&env).unwrap().lines().count() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(std::fs::read_to_string(&env).unwrap().lines().last().unwrap(), private.path);
+        let args = std::fs::read_to_string(Path::new(&s.path).join("claude-args")).unwrap();
+        assert!(!args.lines().last().unwrap().contains("--resume"), "{args}");
+    }
+
+    /// X33: after a daemon restart, a Claude tab continues its conversation
+    /// only while the workspace still uses the profile it ran in. The login
+    /// shell gets a scratch HOME, so it finds the fake `claude`, never a real one.
+    #[tokio::test]
+    async fn a_restored_claude_tab_continues_only_in_the_same_profile() {
+        let repo = crate::git::tests::repo().await;
+        let home = tempfile::tempdir().unwrap();
+        let env = || {
+            let mut env = crate::chat::runtime::tests::fake_claude_env(home.path());
+            env.insert("HOME".into(), home.path().display().to_string());
+            env
+        };
+        let load = |sock: &str| SessionManager::load(home.path().join("state.json"), home.path().join("worktrees"), TerminalManager::new(home.path().join(sock), env()));
+        let mgr = load("s1.sock");
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let work = mgr.create_profile("Work", Some(&home.path().join("claude-work").display().to_string())).unwrap();
+        let private = mgr.create_profile("Private", Some(&home.path().join("claude-private").display().to_string())).unwrap();
+        let ws = mgr.list_workspaces()[0].id.clone();
+        set_profile(&mgr, &ws, Some(&work.id));
+        let mut req = new_session(&r.id, None);
+        req.agent = Some("claude".into());
+        req.prompt = None;
+        req.tui = true;
+        let s = mgr.create_session(req).await.unwrap();
+        let args = Path::new(&s.path).join("claude-args");
+        let starts = || std::fs::read_to_string(&args).map(|t| t.lines().map(String::from).collect::<Vec<_>>()).unwrap_or_default();
+        let wait_for = |n: usize| async move {
+            for _ in 0..500 {
+                if starts().len() >= n {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            panic!("claude started {} times, not {n}", starts().len());
+        };
+        wait_for(1).await;
+
+        // Same profile: the restored tab continues.
+        let mgr = load("s2.sock");
+        assert_eq!(mgr.restore_after_restart(), 1);
+        wait_for(2).await;
+        assert!(starts()[1].contains("--continue"), "{:?}", starts());
+
+        // Another profile: a new conversation, in the new folder.
+        set_profile(&mgr, &ws, Some(&private.id));
+        let mgr = load("s3.sock");
+        assert_eq!(mgr.restore_after_restart(), 1);
+        wait_for(3).await;
+        assert!(!starts()[2].contains("--continue"), "{:?}", starts());
+        let dirs = std::fs::read_to_string(Path::new(&s.path).join("claude-env")).unwrap();
+        assert_eq!(dirs.lines().last().unwrap(), private.path);
     }
 
     /// X32: an agent's new session joins the agent's workspace when that
@@ -2434,7 +2708,7 @@ mod tests {
     }
 
     fn workspace(mgr: &SessionManager, name: &str, move_sections: Vec<String>) -> Workspace {
-        mgr.create_workspace(WorkspaceCreate { name: name.into(), color: WorkspaceColor::Blue, move_sections })
+        mgr.create_workspace(WorkspaceCreate { name: name.into(), color: WorkspaceColor::Blue, move_sections, claude_profile: None })
             .unwrap()
     }
 
@@ -2608,7 +2882,7 @@ mod tests {
         let (_repo, home, mgr) = setup().await;
         let sec = mgr.list_sections()[0].id.clone();
         let err = mgr
-            .create_workspace(WorkspaceCreate { name: "CipherHealth".into(), color: WorkspaceColor::Blue, move_sections: vec![sec.clone(), "gone".into()] })
+            .create_workspace(WorkspaceCreate { name: "CipherHealth".into(), color: WorkspaceColor::Blue, move_sections: vec![sec.clone(), "gone".into()], claude_profile: None })
             .unwrap_err();
         assert_eq!(err.to_string(), "no such section");
         let names: Vec<String> = mgr.list_workspaces().into_iter().map(|w| w.name).collect();
@@ -2625,7 +2899,7 @@ mod tests {
     async fn workspace_names_cannot_be_emptied() {
         let (_repo, _home, mgr) = setup().await;
         let ws = mgr.list_workspaces()[0].id.clone();
-        let err = mgr.update_workspace(WorkspaceUpdate { id: ws, name: Some("  ".into()), color: None, section_ids: None }).unwrap_err();
+        let err = mgr.update_workspace(WorkspaceUpdate { id: ws, name: Some("  ".into()), color: None, section_ids: None, claude_profile: None }).unwrap_err();
         assert_eq!(err.to_string(), "workspace name is empty");
         assert_eq!(mgr.list_workspaces()[0].name, "Personal");
     }
@@ -2643,18 +2917,18 @@ mod tests {
         let ops = mgr.create_section(&work.id, "AI Operations").unwrap();
 
         let updated = mgr
-            .update_workspace(WorkspaceUpdate { id: work.id.clone(), name: None, color: None, section_ids: Some(vec![mine.clone(), ops.id.clone()]) })
+            .update_workspace(WorkspaceUpdate { id: work.id.clone(), name: None, color: None, section_ids: Some(vec![mine.clone(), ops.id.clone()]), claude_profile: None })
             .unwrap();
         assert_eq!(updated.section_ids, vec![mine.clone(), ops.id.clone()]);
         assert!(section_names(&mgr, &personal).is_empty());
         assert_eq!(mgr.session(&s.id).unwrap().workspace_id.as_deref(), Some(work.id.as_str()));
 
         let reordered = mgr
-            .update_workspace(WorkspaceUpdate { id: work.id.clone(), name: None, color: None, section_ids: Some(vec![ops.id.clone(), mine.clone()]) })
+            .update_workspace(WorkspaceUpdate { id: work.id.clone(), name: None, color: None, section_ids: Some(vec![ops.id.clone(), mine.clone()]), claude_profile: None })
             .unwrap();
         assert_eq!(reordered.section_ids, vec![ops.id.clone(), mine.clone()]);
         let err = mgr
-            .update_workspace(WorkspaceUpdate { id: work.id.clone(), name: None, color: None, section_ids: Some(vec![ops.id.clone()]) })
+            .update_workspace(WorkspaceUpdate { id: work.id.clone(), name: None, color: None, section_ids: Some(vec![ops.id.clone()]), claude_profile: None })
             .unwrap_err();
         assert_eq!(err.to_string(), "section_ids must keep this workspace's sections: move or delete a section instead");
     }
@@ -2713,11 +2987,11 @@ mod tests {
     #[tokio::test]
     async fn workspace_names_are_checked_and_colours_change() {
         let (_repo, _home, mgr) = setup().await;
-        let empty = mgr.create_workspace(WorkspaceCreate { name: "  ".into(), color: WorkspaceColor::Sand, move_sections: vec![] });
+        let empty = mgr.create_workspace(WorkspaceCreate { name: "  ".into(), color: WorkspaceColor::Sand, move_sections: vec![], claude_profile: None });
         assert_eq!(empty.unwrap_err().to_string(), "workspace name is empty");
         let w = workspace(&mgr, "CipherHealth", vec![]);
         let renamed = mgr
-            .update_workspace(WorkspaceUpdate { id: w.id.clone(), name: Some("Cipher".into()), color: Some(WorkspaceColor::Violet), section_ids: None })
+            .update_workspace(WorkspaceUpdate { id: w.id.clone(), name: Some("Cipher".into()), color: Some(WorkspaceColor::Violet), section_ids: None, claude_profile: None })
             .unwrap();
         assert_eq!((renamed.name.as_str(), renamed.color), ("Cipher", WorkspaceColor::Violet));
     }

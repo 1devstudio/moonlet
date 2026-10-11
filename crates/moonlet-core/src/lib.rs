@@ -11,6 +11,7 @@ pub mod history;
 pub mod hooks;
 pub mod node;
 pub mod paths;
+pub mod profiles;
 pub mod project_config;
 pub mod pty;
 pub mod session;

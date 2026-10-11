@@ -60,6 +60,9 @@ pub struct ChatConfig {
     pub cwd: String,
     /// Extra directories the agent may work in (X29).
     pub add_dirs: Vec<String>,
+    /// The `CLAUDE_CONFIG_DIR` of the last start (X33): a conversation kept
+    /// in another profile's folder cannot be resumed.
+    pub config_dir: Option<String>,
 }
 
 /// What an adapter asks the runtime to do.

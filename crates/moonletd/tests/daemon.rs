@@ -630,3 +630,43 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
     assert!(text.contains(r#""$MOONLET_BIN" term read <id>"#), "{text}");
     assert!(!home.path().join(".codex/skills/moonlet/SKILL.md").exists());
 }
+
+/// X33: a profile gets moonlet's hooks in its own folder; a workspace can
+/// use it; deleting it keeps the folder and puts the workspace back on the
+/// default profile. Only the profile's folder is written, never ~/.claude.
+#[tokio::test]
+async fn claude_profiles_over_rpc() {
+    use moonlet_proto::types::{ClaudeProfile, ProfileInfo, Workspace};
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let dir = d.home.path().join("claude-work");
+    let p: ClaudeProfile = c
+        .request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work profile", "path": dir}))
+        .await
+        .unwrap();
+    assert_eq!(p.name, "Work profile");
+    let settings = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+    assert!(settings.contains("hook claude"), "{settings}");
+    assert!(dir.join("skills/moonlet/SKILL.md").exists());
+    let list: Vec<ProfileInfo> = c.request(methods::PROFILE_LIST, ()).await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].hooks_installed);
+    assert_eq!(list[0].account, None, "unknown until profile.status runs");
+
+    let ws: Vec<Workspace> = c.request(methods::WORKSPACE_LIST, ()).await.unwrap();
+    let updated: Workspace = c
+        .request(methods::WORKSPACE_UPDATE, serde_json::json!({"id": ws[0].id, "claude_profile": p.id}))
+        .await
+        .unwrap();
+    assert_eq!(updated.claude_profile.as_deref(), Some(p.id.as_str()));
+    let err = c
+        .request::<_, Workspace>(methods::WORKSPACE_UPDATE, serde_json::json!({"id": ws[0].id, "claude_profile": "nope"}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no such Claude profile"), "{err}");
+
+    let _: bool = c.request(methods::PROFILE_DELETE, serde_json::json!({"id": p.id})).await.unwrap();
+    assert!(dir.join("settings.json").exists(), "the folder stays");
+    let ws: Vec<Workspace> = c.request(methods::WORKSPACE_LIST, ()).await.unwrap();
+    assert_eq!(ws[0].claude_profile, None);
+}

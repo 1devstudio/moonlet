@@ -173,6 +173,13 @@ impl HookPaths {
         }
     }
 
+    /// The same paths with Claude's in a profile folder (X33).
+    pub fn with_claude_dir(mut self, dir: &Path) -> Self {
+        self.claude_settings = dir.join("settings.json");
+        self.claude_skill = dir.join("skills/moonlet/SKILL.md");
+        self
+    }
+
     pub fn default_paths() -> Self {
         Self::for_home(&dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")))
     }
