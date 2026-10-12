@@ -7,6 +7,7 @@ import {
   chatBlocks,
   chatDraft,
   chatKey,
+  contextView,
   forgetChat,
   diffStat,
   fuzzyFilter,
@@ -24,6 +25,7 @@ import {
   toolGroupLabel,
   toolGroupStatus,
   transcript,
+  tokens,
   turnFooter,
   useChat,
   turnRunning,
@@ -232,5 +234,68 @@ describe("turn running (X30)", () => {
     expect(turnRunning("working")).toBe(true);
     expect(turnRunning("blocked")).toBe(true);
     for (const status of ["idle", "done", "error", undefined] as const) expect(turnRunning(status), String(status)).toBe(false);
+  });
+});
+
+describe("token counts (X34)", () => {
+  it("reads like the design: 297, 8.1k, 18.4k, 124k, 130.7M", () => {
+    expect([297, 8_100, 18_400, 8_000, 124_200, 297_000, 130_719_000, 2_000_000].map(tokens)).toEqual([
+      "297",
+      "8.1k",
+      "18.4k",
+      "8k",
+      "124k",
+      "297k",
+      "130.7M",
+      "2M",
+    ]);
+  });
+});
+
+describe("context window card (X34)", () => {
+  // The design's worked example: 124.2k of 200k, auto-compact at 95%.
+  const usage = {
+    used: 124_200,
+    max: 200_000,
+    auto_compact_at: 190_000,
+    categories: [
+      { name: "System prompt", tokens: 8_100 },
+      { name: "MCP tools", tokens: 18_400 },
+      { name: "Memory files", tokens: 5_600 },
+      { name: "Messages", tokens: 92_100 },
+    ],
+  };
+
+  it("shows the used share and the window size", () => {
+    const v = contextView(usage);
+    expect(v.percent).toBe(62);
+    expect(v.label).toBe("124k / 200k");
+    expect(v.free).toBe("75.8k");
+    expect(v.autoCompact).toBe("Auto-compacts at 95%");
+  });
+
+  it("lists each category with its count, colour and share of the window", () => {
+    const rows = contextView(usage).rows;
+    expect(rows.map((r) => [r.name, r.tokens, r.color])).toEqual([
+      ["System prompt", "8.1k", "#8c8c8c"],
+      ["MCP tools", "18.4k", "#b48ead"],
+      ["Memory files", "5.6k", "#f2c94c"],
+      ["Messages", "92.1k", "#d97757"],
+    ]);
+    expect(rows[0].width).toBeCloseTo(4.05);
+    expect(rows[3].width).toBeCloseTo(46.05);
+  });
+
+  it("gives other categories blue, green, cyan and pink in turn", () => {
+    const rows = contextView({
+      used: 5_000,
+      max: 200_000,
+      categories: ["System tools", "Custom agents", "Skills", "Hooks", "Plugins"].map((name) => ({ name, tokens: 1_000 })),
+    }).rows;
+    expect(rows.map((r) => r.color)).toEqual(["#8c8c8c", "#6ea8fe", "#3ecf6e", "#56c2d6", "#e58fb5"]);
+  });
+
+  it("says when auto-compact is off", () => {
+    expect(contextView({ ...usage, auto_compact_at: null }).autoCompact).toBe("Auto-compact is off");
   });
 });

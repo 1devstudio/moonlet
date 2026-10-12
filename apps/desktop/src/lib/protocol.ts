@@ -97,6 +97,17 @@ export interface ChatState {
   /** The agent's MCP servers; null until the agent has answered (X29). */
   mcp_servers?: McpServer[] | null;
   queued: string[];
+  /** How full the agent's context window is; null until it has said (X34). */
+  context?: ContextUsage | null;
+}
+
+/** The agent's context window, from Claude's `get_context_usage` (X34). */
+export interface ContextUsage {
+  used: number;
+  max: number;
+  /** Where the agent compacts on its own; null when auto-compact is off. */
+  auto_compact_at?: number | null;
+  categories: { name: string; tokens: number }[];
 }
 
 export interface McpServer {
