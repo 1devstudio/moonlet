@@ -60,3 +60,70 @@ describe("workspace shortcuts (X32)", () => {
     expect(useStore.getState().workspace).toEqual({ host: "local", id: "personal" });
   });
 });
+
+describe("font size shortcuts (X37)", () => {
+  const press = (key: string, shiftKey = false, target: Element = document.body) => target.dispatchEvent(new KeyboardEvent("keydown", { key, metaKey: true, shiftKey, bubbles: true }));
+  const fontSize = () => useStore.getState().settings.term.fontSize;
+  const givenFontSize = (size: number) => useStore.setState((s) => ({ settings: { ...s.settings, term: { ...s.settings.term, fontSize: size } } }));
+
+  beforeAll(() => installShortcuts());
+  beforeEach(() => {
+    useStore.setState({ confirm: null, dialog: null });
+    givenFontSize(13);
+  });
+
+  it("⌘= and ⌘+ make the text 1px bigger", () => {
+    press("=");
+    expect(fontSize()).toBe(14);
+    press("+", true);
+    expect(fontSize()).toBe(15);
+    press("+");
+    expect(fontSize()).toBe(16);
+  });
+
+  it("⌘− makes the text 1px smaller", () => {
+    press("-");
+    expect(fontSize()).toBe(12);
+  });
+
+  it("⌘0 goes back to the default 13px", () => {
+    givenFontSize(20);
+    press("0");
+    expect(fontSize()).toBe(13);
+  });
+
+  it("stop at 9px and 24px", () => {
+    givenFontSize(24);
+    press("=");
+    expect(fontSize()).toBe(24);
+    givenFontSize(9);
+    press("-");
+    expect(fontSize()).toBe(9);
+  });
+
+  it("work from a terminal, the chat input and an editor", () => {
+    document.body.innerHTML = '<div class="xterm"><textarea id="term"></textarea></div><textarea id="chat"></textarea><div class="monaco-editor"><textarea id="editor"></textarea></div>';
+    press("=", false, document.getElementById("term")!);
+    expect(fontSize()).toBe(14);
+    press("=", false, document.getElementById("chat")!);
+    expect(fontSize()).toBe(15);
+    press("-", false, document.getElementById("editor")!);
+    expect(fontSize()).toBe(14);
+    document.body.innerHTML = "";
+  });
+
+  it("are off while a dialog is open", () => {
+    useStore.setState({ dialog: { kind: "palette" } });
+    press("=");
+    expect(fontSize()).toBe(13);
+  });
+
+  it("are off while the confirm modal is open", () => {
+    givenFontSize(20);
+    void askConfirm({ title: "Close agent", message: "Stop the claude running in this tab?", action: "Stop agent" });
+    press("=");
+    expect(fontSize()).toBe(20);
+    press("0");
+    expect(fontSize()).toBe(20);
+  });
+});
