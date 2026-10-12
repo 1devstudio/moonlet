@@ -3,7 +3,7 @@ import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, FolderPlus, His
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, compact, hostSections, lastActive, projectRemoval, type Group } from "../lib/sidebar";
-import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, termKey, toast, useStore } from "../lib/store";
+import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
@@ -11,6 +11,8 @@ import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
 import { ArchiveLoader } from "./ArchiveLoader";
 import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { isShown } from "../lib/workspaces";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 
 // ------------------------------------------------------------------ helpers
@@ -650,6 +652,7 @@ export function Sidebar() {
   const hosts = useStore((s) => s.hosts);
   const workspaces = useStore((s) => s.workspaces);
   const sections = useStore((s) => s.sections);
+  const shown = useStore((s) => shownWorkspace(s));
   const showHistory = useStore((s) => s.showHistory);
   const [rowMenu, setRowMenu] = useState<RowMenuState | null>(null);
   const [creating, setCreating] = useState(false);
@@ -657,9 +660,12 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full flex-col bg-panel">
-      <div data-tauri-drag-region className="drag h-[52px] shrink-0" />
+      {/* The traffic lights sit on the left of the title bar (X32). */}
+      <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center pl-[78px] pr-2.5">
+        <WorkspaceSwitcher />
+      </div>
       <nav className="px-2 pb-3">
-        <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session" } })} />
+        <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session", host: shown?.host, workspace: shown?.id } })} />
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />
         <NavRow icon={<History size={15} strokeWidth={1.75} />} label="History" active={showHistory} onClick={() => useStore.setState({ showHistory: !showHistory })} />
       </nav>
@@ -670,7 +676,10 @@ export function Sidebar() {
           ordered.map((h) => (
             <div key={h.id}>
               <HostNotice host={h} />
-              {hostSections(workspaces[h.id] ?? [], sections[h.id] ?? []).map(({ ws, sec }) => (
+              {hostSections(
+                (workspaces[h.id] ?? []).filter((ws) => isShown(shown, h.id, ws.id)),
+                sections[h.id] ?? [],
+              ).map(({ ws, sec }) => (
                 <SectionBlock key={sec.id} host={h.id} ws={ws} sec={sec} onRowMenu={setRowMenu} />
               ))}
             </div>
@@ -686,11 +695,9 @@ export function Sidebar() {
                   onDone={async (name) => {
                     setCreating(false);
                     if (!name) return;
-                    const host = ordered.find((h) => h.status === "connected")?.id ?? "local";
-                    const ws = workspaces[host]?.[0];
-                    if (!ws) return;
+                    if (!shown) return;
                     try {
-                      await rpc(host, M.sectionCreate, { workspace_id: ws.id, name });
+                      await rpc(shown.host, M.sectionCreate, { workspace_id: shown.id, name });
                     } catch (e) {
                       errorToast(e);
                     }
