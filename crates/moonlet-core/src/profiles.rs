@@ -166,9 +166,9 @@ mod tests {
  "analyticsDisabled": false,
  "projectsDirectory": "/Users/jane/.claude-work/projects",
  "configDirectory": "/Users/jane/.claude-work",
- "email": "jane@cipherhealth.com",
+ "email": "jane@acme.example",
  "orgId": "00000000-0000-4000-8000-000000000000",
- "orgName": "CipherHealth",
+ "orgName": "Acme",
  "subscriptionType": "team"
 }"#;
 
@@ -186,7 +186,7 @@ mod tests {
     fn reads_the_account_of_a_signed_in_profile() {
         assert_eq!(
             parse_auth_status(SIGNED_IN).unwrap(),
-            ProfileAccount { logged_in: true, email: Some("jane@cipherhealth.com".into()), org_name: Some("CipherHealth".into()) }
+            ProfileAccount { logged_in: true, email: Some("jane@acme.example".into()), org_name: Some("Acme".into()) }
         );
     }
 

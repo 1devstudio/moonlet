@@ -93,7 +93,7 @@ describe("outputView", () => {
   });
 
   it("leaves output without any of these shapes plain", () => {
-    expect(outputView("[evolve] Uploading tarball of [.]\n45000 bytes written to file /tmp/x17.png\n")).toBeNull();
+    expect(outputView("[deploy] Uploading tarball of [.]\n45000 bytes written to file /tmp/x17.png\n")).toBeNull();
     expect(outputView("")).toBeNull();
   });
 });

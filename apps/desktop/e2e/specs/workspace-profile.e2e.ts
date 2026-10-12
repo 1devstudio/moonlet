@@ -18,7 +18,7 @@ describe("workspace Claude profile", () => {
     const folder = `${realpathSync(w.root)}/claude-work`;
     await $('button[aria-label="Switch workspace, current: Personal"]').click();
     await $(sel.button("New workspace…")).click();
-    await fill('//div[@role="dialog"]//input[@placeholder="CipherHealth"]', "CipherHealth");
+    await fill('//div[@role="dialog"]//input[@placeholder="Acme"]', "Acme");
     await choose('//select[@aria-label="Claude profile"]', "new");
     await fill('//input[@placeholder="Profile name, e.g. Work profile"]', "Work profile");
     await fill('//input[starts-with(@placeholder, "Folder (default")]', folder);
@@ -49,7 +49,7 @@ describe("workspace Claude profile", () => {
     expect(readFileSync(check, "utf8").trim()).toBe(folder);
 
     // Leave the shared world as the other specs expect it.
-    const work = rpc<{ id: string; name: string; section_ids: string[] }[]>(w, "workspace.list", {}).find((x) => x.name === "CipherHealth")!;
+    const work = rpc<{ id: string; name: string; section_ids: string[] }[]>(w, "workspace.list", {}).find((x) => x.name === "Acme")!;
     const personal = rpc<{ id: string; name: string }[]>(w, "workspace.list", {}).find((x) => x.name === "Personal")!;
     rpc(w, "session.archive", { id: created.id });
     rpc(w, "section.move", { id: work.section_ids[0], workspace_id: personal.id });

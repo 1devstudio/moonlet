@@ -17,9 +17,9 @@ beforeEach(() =>
   useStore.setState({
     hosts: { local: host },
     projects: { local: [{ id: "p", name: "jaunt", path: "/r", base_branch: "main" }] },
-    workspaces: { local: [ws("personal", "Personal", ["a"]), ws("cipher", "CipherHealth", ["c"])] },
+    workspaces: { local: [ws("personal", "Personal", ["a"]), ws("acme", "Acme", ["c"])] },
     sections: { local: [sec("a", ["p"]), sec("c", ["p"])] },
-    sessions: { local: [session("s1", "personal", 1), session("s2", "cipher", 2), session("s3", "cipher", 3)] },
+    sessions: { local: [session("s1", "personal", 1), session("s2", "acme", 2), session("s3", "acme", 3)] },
     terminals: { local: { 7: term(7, "s2"), 8: term(8, "s1", { agent_state: "blocked" }), 9: term(9, "s3", { kind: "shell", agent: undefined }) } },
     workspace: { host: "local", id: "personal" },
     selected: { host: "local", session: "s1" },
@@ -33,21 +33,21 @@ beforeEach(() =>
 describe("opening a session elsewhere (X32)", () => {
   it("a notification or the palette (focusTerminal) shows the terminal's workspace", () => {
     focusTerminal("local", 7);
-    expect(useStore.getState().workspace).toEqual({ host: "local", id: "cipher" });
+    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
     expect(useStore.getState().selected).toEqual({ host: "local", session: "s2" });
-    expect(useStore.getState().lastSession).toEqual({ "local/cipher": "s2" });
+    expect(useStore.getState().lastSession).toEqual({ "local/acme": "s2" });
   });
 
   it("selecting a session shows its workspace too", () => {
     selectSession("local", "s3");
-    expect(useStore.getState().workspace).toEqual({ host: "local", id: "cipher" });
+    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
   });
 });
 
 describe("⌘1–9 order", () => {
   it("covers only the sessions of the shown workspace", () => {
     expect(visibleSessionOrder().map((x) => x.id)).toEqual(["s1"]);
-    useStore.setState({ workspace: { host: "local", id: "cipher" } });
+    useStore.setState({ workspace: { host: "local", id: "acme" } });
     expect(visibleSessionOrder().map((x) => x.id)).toEqual(["s3", "s2"]);
   });
 });

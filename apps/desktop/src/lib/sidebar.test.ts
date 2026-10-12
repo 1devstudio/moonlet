@@ -51,9 +51,9 @@ describe("sidebar arrange", () => {
 
   it("shows only the sessions of its own workspace, for a project two workspaces share (X32)", () => {
     const mine = s("s1", "a");
-    const theirs = s("s2", "a", { workspace_id: "cipher" });
+    const theirs = s("s2", "a", { workspace_id: "acme" });
     expect(arrange("personal", sec(), projects, [mine, theirs], () => null, () => 0)[0].sessions.map((x) => x.id)).toEqual(["s1"]);
-    expect(arrange("cipher", sec(), projects, [mine, theirs], () => null, () => 0)[0].sessions.map((x) => x.id)).toEqual(["s2"]);
+    expect(arrange("acme", sec(), projects, [mine, theirs], () => null, () => 0)[0].sessions.map((x) => x.id)).toEqual(["s2"]);
   });
 
   it("sorts by recent activity", () => {
@@ -70,10 +70,10 @@ describe("sidebar arrange", () => {
 
 describe("projectRemoval", () => {
   const home = sec({}, { id: "w1", name: "1devstudio", project_ids: ["a", "b"] });
-  const other = sec({}, { id: "w2", name: "CipherHealth", project_ids: ["b"] });
+  const other = sec({}, { id: "w2", name: "Acme", project_ids: ["b"] });
 
   it("only detaches a project another section still holds", () => {
-    expect(projectRemoval([home, other], "w1", p("b", "cipher-paas"))).toEqual({ label: "Remove from 1devstudio", confirm: null });
+    expect(projectRemoval([home, other], "w1", p("b", "acme-api"))).toEqual({ label: "Remove from 1devstudio", confirm: null });
   });
 
   it("asks before dropping a project no other section holds", () => {
@@ -95,7 +95,7 @@ describe("workspaceSections", () => {
   it("tells whether a workspace holds a project in any of its sections", () => {
     const all = [sec({}, { id: "a", project_ids: ["p1"] }), sec({}, { id: "b", project_ids: ["p2"] })];
     expect(holdsProject(w("personal", ["a", "b"]), all, "p2")).toBe(true);
-    expect(holdsProject(w("cipher", ["a"]), all, "p2")).toBe(false);
+    expect(holdsProject(w("acme", ["a"]), all, "p2")).toBe(false);
   });
 });
 
@@ -111,6 +111,6 @@ describe("hostSections", () => {
   });
 
   it("names the workspace too when there are several", () => {
-    expect(hostSections([w("p", "Personal", ["a"]), w("c", "CipherHealth", ["c"])], all).map((x) => x.label)).toEqual(["Personal › 1devstudio", "CipherHealth › AI Operations"]);
+    expect(hostSections([w("p", "Personal", ["a"]), w("c", "Acme", ["c"])], all).map((x) => x.label)).toEqual(["Personal › 1devstudio", "Acme › AI Operations"]);
   });
 });

@@ -4,7 +4,7 @@ import type { Section, Session, TerminalInfo } from "./protocol";
 import type { ProfileInfo, Workspace } from "./protocol";
 
 const work: ProfileInfo = { id: "pw", name: "Work profile", path: "/Users/jane/.claude-work", created_at: 0, account: null, hooks_installed: true };
-const ws = (claude_profile: string | null): Workspace => ({ id: "w", name: "CipherHealth", color: "blue", section_ids: [], claude_profile, created_at: 0 });
+const ws = (claude_profile: string | null): Workspace => ({ id: "w", name: "Acme", color: "blue", section_ids: [], claude_profile, created_at: 0 });
 
 describe("tildePath", () => {
   it("shortens the home folder to ~", () => {
@@ -29,8 +29,8 @@ describe("footerLabel", () => {
     expect(footerLabel(ws(null), [work], null, null)).toEqual({ text: "Claude · Default", warn: false, title: "~/.claude" });
     expect(footerLabel(ws(null), [work], null, { logged_in: false, email: null, org_name: null })).toEqual({ text: "Claude · Default · not signed in", warn: true, title: "~/.claude" });
     expect(footerLabel(ws("pw"), [work], "/Users/jane", null)).toEqual({ text: "Claude · Work profile", warn: false, title: "~/.claude-work" });
-    const signedIn = { ...work, account: { logged_in: true, email: "jane@cipherhealth.com", org_name: "CipherHealth" } };
-    expect(footerLabel(ws("pw"), [signedIn], "/Users/jane", null)).toEqual({ text: "Claude · Work profile", warn: false, title: "jane@cipherhealth.com · CipherHealth · ~/.claude-work" });
+    const signedIn = { ...work, account: { logged_in: true, email: "jane@acme.example", org_name: "Acme" } };
+    expect(footerLabel(ws("pw"), [signedIn], "/Users/jane", null)).toEqual({ text: "Claude · Work profile", warn: false, title: "jane@acme.example · Acme · ~/.claude-work" });
     const signedOut = { ...work, account: { logged_in: false, email: null, org_name: null } };
     expect(footerLabel(ws("pw"), [signedOut], "/Users/jane", null)).toEqual({ text: "Claude · Work profile · not signed in", warn: true, title: "~/.claude-work" });
   });
@@ -54,7 +54,7 @@ describe("profileChangeConfirm", () => {
 
 describe("account labels", () => {
   it("names who a profile is signed in as, and whether it is known yet", () => {
-    expect(accountLabel({ logged_in: true, email: "jane@cipherhealth.com", org_name: "CipherHealth" })).toBe("jane@cipherhealth.com · CipherHealth");
+    expect(accountLabel({ logged_in: true, email: "jane@acme.example", org_name: "Acme" })).toBe("jane@acme.example · Acme");
     expect(accountLabel({ logged_in: true, email: null, org_name: null })).toBe("an account");
     expect(accountState(null)).toBe("checking");
     expect(accountState({ logged_in: false, email: null, org_name: null })).toBe("signed-out");
@@ -73,7 +73,7 @@ describe("defaultFolder", () => {
 describe("removeProfileConfirm", () => {
   it("says which workspaces fall back to the default and that the folder stays", () => {
     const workspaces = [ws("pw"), { ...ws("pw"), id: "w2", name: "Lab" }, { ...ws(null), id: "w3", name: "Personal" }];
-    expect(removeProfileConfirm(work, workspaces, "/Users/jane")).toBe("Forget Work profile? CipherHealth, Lab will use the default profile. The folder ~/.claude-work and its sign-in stay on disk.");
+    expect(removeProfileConfirm(work, workspaces, "/Users/jane")).toBe("Forget Work profile? Acme, Lab will use the default profile. The folder ~/.claude-work and its sign-in stay on disk.");
     expect(removeProfileConfirm(work, [], "/Users/jane")).toBe("Forget Work profile? The folder ~/.claude-work and its sign-in stay on disk.");
   });
 });

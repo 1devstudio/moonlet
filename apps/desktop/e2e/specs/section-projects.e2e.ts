@@ -11,7 +11,7 @@ describe("Section projects", () => {
     const id = projectId(w);
     const personal = rpc<{ id: string; section_ids: string[] }[]>(w, "workspace.list", {})[0];
     const first = rpc<{ id: string; name: string }[]>(w, "section.list", {}).find((s) => s.id === personal.section_ids[0])!;
-    const other = rpc<{ id: string }>(w, "section.create", { workspace_id: personal.id, name: "CipherHealth" });
+    const other = rpc<{ id: string }>(w, "section.create", { workspace_id: personal.id, name: "Acme" });
     rpc(w, "section.add_project", { id: other.id, path: w.repo });
     await expect(projectHeaders()).toBeElementsArrayOfSize(2);
 
@@ -26,7 +26,7 @@ describe("Section projects", () => {
     const holders = rpc<{ name: string; project_ids: string[] }[]>(w, "section.list", {})
       .filter((x) => x.project_ids.includes(id))
       .map((x) => x.name);
-    expect(holders).toEqual(["CipherHealth"]);
+    expect(holders).toEqual(["Acme"]);
 
     // Leave the shared world as the other specs expect it: deleting the
     // section hands its project back to the workspace's other section.

@@ -7,15 +7,15 @@
 
 ## Summary
 
-Today the sidebar stacks several **workspaces**, each a named set of projects. They are renamed **sections**. A new, larger **workspace** sits above them: a named, coloured scope such as "Personal" or "CipherHealth". It has its own sections, sessions and (X33) Claude account. The sidebar shows one workspace at a time, and a switcher in the title bar moves between them. The old "section" (a user-named group of sessions inside a workspace) is removed.
+Today the sidebar stacks several **workspaces**, each a named set of projects. They are renamed **sections**. A new, larger **workspace** sits above them: a named, coloured scope such as "Personal" or "Acme". It has its own sections, sessions and (X33) Claude account. The sidebar shows one workspace at a time, and a switcher in the title bar moves between them. The old "section" (a user-named group of sessions inside a workspace) is removed.
 
 The hierarchy becomes **Workspace › Section › Project › Session › Terminal**.
 
 ## User journey
 
-1. After the upgrade, the user sees the same sidebar as before, now under a workspace called "Personal". The old "1devstudio" and "CipherHealth" blocks are sections.
-2. The user clicks the switcher (`P Personal ⇅`) next to the traffic lights and picks **New workspace…**. The dialog asks for a name ("CipherHealth"), a colour, a Claude profile (X33), and what to start with: an empty workspace, or sections moved from the current one. The user ticks the "CipherHealth" section and clicks **Create workspace**.
-3. The sidebar now shows CipherHealth: its section, projects and sessions. The "Personal" workspace no longer shows them.
+1. After the upgrade, the user sees the same sidebar as before, now under a workspace called "Personal". The old "1devstudio" and "Acme" blocks are sections.
+2. The user clicks the switcher (`P Personal ⇅`) next to the traffic lights and picks **New workspace…**. The dialog asks for a name ("Acme"), a colour, a Claude profile (X33), and what to start with: an empty workspace, or sections moved from the current one. The user ticks the "Acme" section and clicks **Create workspace**.
+3. The sidebar now shows Acme: its section, projects and sessions. The "Personal" workspace no longer shows them.
 4. The user moves between workspaces with the switcher or ⌃⌘1 to ⌃⌘9. Each workspace remembers the session that was open in it.
 
 ## Behaviour and acceptance criteria
