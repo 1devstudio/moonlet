@@ -58,20 +58,20 @@ describe("workspaces", () => {
     // Workspace settings renames and recolours it.
     await switcher("Acme").click();
     await $(sel.button("Workspace settings…")).click();
-    await fill('//div[@role="dialog"]//input[@placeholder="Acme"]', "Acmeco");
+    await fill('//div[@role="dialog"]//input[@placeholder="Acme"]', "Acme Corp");
     await $('button[aria-label="Violet"]').click();
     await $(sel.button("Save")).click();
-    await expect(switcher("Acmeco")).toBeDisplayed();
+    await expect(switcher("Acme Corp")).toBeDisplayed();
     expect(rpc<(Workspace & { color: string })[]>(w, "workspace.list", {}).find((x) => x.id === work.id)?.color).toBe("violet");
 
     // A new session goes into the shown workspace.
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), project.id);
     await $('button[title="New session"]').click();
-    await fill('//textarea[@placeholder="What do you want to work on?"]', "Acmeco banner");
+    await fill('//textarea[@placeholder="What do you want to work on?"]', "Acme banner");
     await $(sel.button("Create")).click();
-    await expect($(sel.sessionRow("Acmeco banner"))).toBeDisplayed({ wait: 30_000 });
-    const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Acmeco banner")!;
+    await expect($(sel.sessionRow("Acme banner"))).toBeDisplayed({ wait: 30_000 });
+    const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Acme banner")!;
     expect(created.workspace_id).toBe(work.id);
 
     // Leave the shared world as the other specs expect it.

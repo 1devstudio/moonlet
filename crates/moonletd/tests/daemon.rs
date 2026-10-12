@@ -719,7 +719,7 @@ async fn claude_profiles_over_rpc() {
         .await
         .unwrap();
     let kept: Workspace = c
-        .request(methods::WORKSPACE_UPDATE, serde_json::json!({"id": created.id, "name": "Acmeco"}))
+        .request(methods::WORKSPACE_UPDATE, serde_json::json!({"id": created.id, "name": "Acme Corp"}))
         .await
         .unwrap();
     assert_eq!(kept.claude_profile, unchanged.claude_profile, "absent leaves it as it is");
@@ -784,7 +784,7 @@ async fn profile_status_reads_who_a_profile_is_signed_in_as() {
         &fake,
         r#"#!/bin/sh
 if [ "$1 $2" = "auth status" ] && [ -n "$CLAUDE_CONFIG_DIR" ]; then
-  echo '{"loggedIn": true, "authMethod": "claude.ai", "email": "jane@acme.com", "orgName": "Acme", "subscriptionType": "team"}'
+  echo '{"loggedIn": true, "authMethod": "claude.ai", "email": "jane@acme.example", "orgName": "Acme", "subscriptionType": "team"}'
 else
   echo '{"loggedIn": false, "authMethod": "none"}'
 fi
@@ -806,7 +806,7 @@ fi
         .await
         .unwrap();
     let account: ProfileAccount = c.request(methods::PROFILE_STATUS, serde_json::json!({"id": p.id})).await.unwrap();
-    assert_eq!(account, ProfileAccount { logged_in: true, email: Some("jane@acme.com".into()), org_name: Some("Acme".into()) });
+    assert_eq!(account, ProfileAccount { logged_in: true, email: Some("jane@acme.example".into()), org_name: Some("Acme".into()) });
     let list: Vec<ProfileInfo> = c.request(methods::PROFILE_LIST, ()).await.unwrap();
     assert_eq!(list[0].account.as_ref().map(|a| a.logged_in), Some(true));
     let default: ProfileAccount = c.request(methods::PROFILE_STATUS, serde_json::json!({})).await.unwrap();

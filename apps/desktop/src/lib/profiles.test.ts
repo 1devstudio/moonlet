@@ -29,8 +29,8 @@ describe("footerLabel", () => {
     expect(footerLabel(ws(null), [work], null, null)).toEqual({ text: "Claude · Default", warn: false, title: "~/.claude" });
     expect(footerLabel(ws(null), [work], null, { logged_in: false, email: null, org_name: null })).toEqual({ text: "Claude · Default · not signed in", warn: true, title: "~/.claude" });
     expect(footerLabel(ws("pw"), [work], "/Users/jane", null)).toEqual({ text: "Claude · Work profile", warn: false, title: "~/.claude-work" });
-    const signedIn = { ...work, account: { logged_in: true, email: "jane@acme.com", org_name: "Acme" } };
-    expect(footerLabel(ws("pw"), [signedIn], "/Users/jane", null)).toEqual({ text: "Claude · Work profile", warn: false, title: "jane@acme.com · Acme · ~/.claude-work" });
+    const signedIn = { ...work, account: { logged_in: true, email: "jane@acme.example", org_name: "Acme" } };
+    expect(footerLabel(ws("pw"), [signedIn], "/Users/jane", null)).toEqual({ text: "Claude · Work profile", warn: false, title: "jane@acme.example · Acme · ~/.claude-work" });
     const signedOut = { ...work, account: { logged_in: false, email: null, org_name: null } };
     expect(footerLabel(ws("pw"), [signedOut], "/Users/jane", null)).toEqual({ text: "Claude · Work profile · not signed in", warn: true, title: "~/.claude-work" });
   });
@@ -54,7 +54,7 @@ describe("profileChangeConfirm", () => {
 
 describe("account labels", () => {
   it("names who a profile is signed in as, and whether it is known yet", () => {
-    expect(accountLabel({ logged_in: true, email: "jane@acme.com", org_name: "Acme" })).toBe("jane@acme.com · Acme");
+    expect(accountLabel({ logged_in: true, email: "jane@acme.example", org_name: "Acme" })).toBe("jane@acme.example · Acme");
     expect(accountLabel({ logged_in: true, email: null, org_name: null })).toBe("an account");
     expect(accountState(null)).toBe("checking");
     expect(accountState({ logged_in: false, email: null, org_name: null })).toBe("signed-out");

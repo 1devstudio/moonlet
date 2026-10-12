@@ -21,7 +21,7 @@ const s = (id: string, workspace_id: string, archived = false): Session => ({
 
 describe("workspaceInitial", () => {
   it("is the name's first letter, upper case", () => {
-    expect(workspaceInitial("acme")).toBe("C");
+    expect(workspaceInitial("acme")).toBe("A");
     expect(workspaceInitial("  personal")).toBe("P");
     expect(workspaceInitial("")).toBe("?");
   });
@@ -29,16 +29,16 @@ describe("workspaceInitial", () => {
 
 describe("switcherRows", () => {
   const personal = w("personal", "Personal", ["a", "b"]);
-  const acmeco = w("acmeco", "Acme", ["c"], "blue", "pw");
+  const acme = w("acme", "Acme", ["c"], "blue", "pw");
   const profiles = [{ id: "pw", name: "Work profile", path: "/Users/jane/.claude-work", created_at: 0, account: null, hooks_installed: true }];
   const sections = [sec("a"), sec("b"), sec("c")];
-  const sessions = [s("1", "personal"), s("2", "personal"), s("3", "personal", true), s("4", "acmeco")];
+  const sessions = [s("1", "personal"), s("2", "personal"), s("3", "personal", true), s("4", "acme")];
 
   it("summarises each workspace and numbers the first nine for ⌃⌘1–9", () => {
-    const rows = switcherRows([{ host: "local", label: "This Mac", workspaces: [personal, acmeco], sections, sessions, profiles }]);
+    const rows = switcherRows([{ host: "local", label: "This Mac", workspaces: [personal, acme], sections, sessions, profiles }]);
     expect(rows.map((r) => [r.host, r.ws.name, r.initial, r.summary, r.kbd])).toEqual([
       ["local", "Personal", "P", "2 sections · 2 sessions · Default", "⌃⌘1"],
-      ["local", "Acme", "C", "1 section · 1 session · Work profile", "⌃⌘2"],
+      ["local", "Acme", "A", "1 section · 1 session · Work profile", "⌃⌘2"],
     ]);
     expect(rows.every((r) => r.hostLabel === null)).toBe(true);
   });
@@ -58,10 +58,10 @@ describe("switcherRows", () => {
 });
 
 describe("currentWorkspace", () => {
-  const hosts = [{ host: "local", label: "This Mac", workspaces: [w("personal", "Personal", []), w("acmeco", "Acme", [])], sections: [], sessions: [], profiles: [] }];
+  const hosts = [{ host: "local", label: "This Mac", workspaces: [w("personal", "Personal", []), w("acme", "Acme", [])], sections: [], sessions: [], profiles: [] }];
 
   it("keeps the remembered workspace while it exists, else falls back to the first", () => {
-    expect(currentWorkspace({ host: "local", id: "acmeco" }, hosts)).toEqual({ host: "local", id: "acmeco" });
+    expect(currentWorkspace({ host: "local", id: "acme" }, hosts)).toEqual({ host: "local", id: "acme" });
     expect(currentWorkspace({ host: "local", id: "deleted" }, hosts)).toEqual({ host: "local", id: "personal" });
     expect(currentWorkspace(null, hosts)).toEqual({ host: "local", id: "personal" });
     expect(currentWorkspace(null, [])).toBeNull();
@@ -70,20 +70,20 @@ describe("currentWorkspace", () => {
 
 describe("workspacesNeedingYou", () => {
   it("marks workspaces with a live session that needs input or is unread", () => {
-    const hosts = [{ host: "local", label: "This Mac", workspaces: [], sections: [], sessions: [s("1", "personal"), s("2", "acmeco"), s("3", "lab", true)], profiles: [] }];
+    const hosts = [{ host: "local", label: "This Mac", workspaces: [], sections: [], sessions: [s("1", "personal"), s("2", "acme"), s("3", "lab", true)], profiles: [] }];
     const needs = (_host: string, x: Session) => x.id !== "1";
-    expect([...workspacesNeedingYou(hosts, needs)]).toEqual(["local/acmeco"]);
+    expect([...workspacesNeedingYou(hosts, needs)]).toEqual(["local/acme"]);
   });
 });
 
 describe("sessionToRestore", () => {
-  const sessions = [s("1", "personal"), s("2", "acmeco"), s("3", "acmeco", true)];
+  const sessions = [s("1", "personal"), s("2", "acme"), s("3", "acme", true)];
 
   it("reopens the session last selected in that workspace while it is still there", () => {
-    expect(sessionToRestore("2", sessions, "acmeco")).toBe("2");
-    expect(sessionToRestore("3", sessions, "acmeco")).toBeNull();
-    expect(sessionToRestore("1", sessions, "acmeco")).toBeNull();
-    expect(sessionToRestore(undefined, sessions, "acmeco")).toBeNull();
+    expect(sessionToRestore("2", sessions, "acme")).toBe("2");
+    expect(sessionToRestore("3", sessions, "acme")).toBeNull();
+    expect(sessionToRestore("1", sessions, "acme")).toBeNull();
+    expect(sessionToRestore(undefined, sessions, "acme")).toBeNull();
   });
 });
 
@@ -108,9 +108,9 @@ describe("composerOptions", () => {
   const p = (id: string) => ({ id, name: id, path: `/${id}`, base_branch: "main" });
   const personal = w("personal", "Personal", ["a", "b"]);
   const lab = w("lab", "Lab", []);
-  const sections = [sec("a", ["jaunt"]), sec("b", ["revd", "jaunt"]), sec("c", ["acmeco-paas"])];
+  const sections = [sec("a", ["jaunt"]), sec("b", ["dotfiles", "jaunt"]), sec("c", ["acme-api"])];
   const hosts = {
-    local: { connected: true, workspaces: [personal, lab, w("acmeco", "Acme", ["c"])], sections, projects: [p("jaunt"), p("revd"), p("acmeco-paas")] },
+    local: { connected: true, workspaces: [personal, lab, w("acme", "Acme", ["c"])], sections, projects: [p("jaunt"), p("dotfiles"), p("acme-api")] },
     devbox: { connected: true, workspaces: [w("r", "Remote", ["x"])], sections: [{ ...sec("x", ["api"]), name: "Servers" }], projects: [p("api")] },
   };
   const rows = (target: { host: string; id: string } | null) => composerOptions(hosts, target).map((o) => [o.host, o.project.id, o.section]);
@@ -118,7 +118,7 @@ describe("composerOptions", () => {
   it("offers only the target workspace's projects once each, in section order, labelled with its sections", () => {
     expect(rows({ host: "local", id: "personal" })).toEqual([
       ["local", "jaunt", "a"],
-      ["local", "revd", "b"],
+      ["local", "dotfiles", "b"],
     ]);
   });
 
@@ -129,8 +129,8 @@ describe("composerOptions", () => {
   it("offers every connected host's projects without a target", () => {
     expect(rows(null)).toEqual([
       ["local", "jaunt", "a"],
-      ["local", "revd", "b"],
-      ["local", "acmeco-paas", "c"],
+      ["local", "dotfiles", "b"],
+      ["local", "acme-api", "c"],
       ["devbox", "api", "Servers"],
     ]);
     expect(composerOptions({ ...hosts, devbox: { ...hosts.devbox, connected: false } }, null).map((o) => o.host)).not.toContain("devbox");
@@ -140,17 +140,17 @@ describe("composerOptions", () => {
 describe("composerTarget", () => {
   it("is the workspace the composer was opened for, else the shown one", () => {
     expect(composerTarget("devbox", "r", { host: "local", id: "personal" })).toEqual({ host: "devbox", id: "r" });
-    expect(composerTarget(undefined, "acmeco", { host: "local", id: "personal" })).toEqual({ host: "local", id: "acmeco" });
+    expect(composerTarget(undefined, "acme", { host: "local", id: "personal" })).toEqual({ host: "local", id: "acme" });
     expect(composerTarget(undefined, undefined, { host: "local", id: "personal" })).toEqual({ host: "local", id: "personal" });
     expect(composerTarget(undefined, undefined, null)).toBeNull();
   });
 });
 
 describe("newSectionWorkspace", () => {
-  const workspaces = [w("personal", "Personal", []), w("acmeco", "Acme", [])];
+  const workspaces = [w("personal", "Personal", []), w("acme", "Acme", [])];
 
   it("is the shown workspace on its host, else the host's first", () => {
-    expect(newSectionWorkspace({ host: "local", id: "acmeco" }, "local", workspaces)).toBe("acmeco");
+    expect(newSectionWorkspace({ host: "local", id: "acme" }, "local", workspaces)).toBe("acme");
     expect(newSectionWorkspace({ host: "devbox", id: "r" }, "local", workspaces)).toBe("personal");
     expect(newSectionWorkspace(null, "local", [])).toBeNull();
   });

@@ -2794,7 +2794,7 @@ mod tests {
             "projects":[
               {"id":"p1","name":"jaunt","path":"/r/jaunt","base_branch":"main"},
               {"id":"p2","name":"shared","path":"/r/shared","base_branch":"main"},
-              {"id":"p3","name":"acmeco-paas","path":"/r/acmeco-paas","base_branch":"develop"}],
+              {"id":"p3","name":"acme-api","path":"/r/acme-api","base_branch":"develop"}],
             "sessions":[
               {"id":"s1","project_id":"p1","name":"Fix","branch":"moonlet/fix","base":"main","path":"/w/fix",
                "agent":"claude","archived":false,"created_at":3,"section":null},
@@ -3115,9 +3115,9 @@ mod tests {
         assert_eq!(empty.unwrap_err().to_string(), "workspace name is empty");
         let w = workspace(&mgr, "Acme", vec![]);
         let renamed = mgr
-            .update_workspace(WorkspaceUpdate { id: w.id.clone(), name: Some("Acmeco".into()), color: Some(WorkspaceColor::Violet), section_ids: None, claude_profile: None })
+            .update_workspace(WorkspaceUpdate { id: w.id.clone(), name: Some("Acme Corp".into()), color: Some(WorkspaceColor::Violet), section_ids: None, claude_profile: None })
             .unwrap();
-        assert_eq!((renamed.name.as_str(), renamed.color), ("Acmeco", WorkspaceColor::Violet));
+        assert_eq!((renamed.name.as_str(), renamed.color), ("Acme Corp", WorkspaceColor::Violet));
     }
 
     /// Deleting a section keeps its projects: they move to another section of

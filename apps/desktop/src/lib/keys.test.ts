@@ -38,17 +38,17 @@ describe("workspace shortcuts (X32)", () => {
       confirm: null,
       dialog: null,
       hosts: { local: host },
-      workspaces: { local: [ws("personal", "Personal"), ws("acmeco", "Acme")] },
-      sessions: { local: [session("s1", "personal"), session("s2", "acmeco")] },
+      workspaces: { local: [ws("personal", "Personal"), ws("acme", "Acme")] },
+      sessions: { local: [session("s1", "personal"), session("s2", "acme")] },
       workspace: { host: "local", id: "personal" },
       selected: { host: "local", session: "s1" },
-      lastSession: { "local/acmeco": "s2" },
+      lastSession: { "local/acme": "s2" },
     }),
   );
 
   it("⌃⌘2 switches to the second workspace and reopens its last session", () => {
     ctrlCmd("2");
-    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acmeco" });
+    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
     expect(useStore.getState().selected).toEqual({ host: "local", session: "s2" });
     ctrlCmd("1");
     expect(useStore.getState().workspace).toEqual({ host: "local", id: "personal" });

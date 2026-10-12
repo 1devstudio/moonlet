@@ -7,7 +7,7 @@
 
 ## Summary
 
-A **Claude profile** is a Claude Code config folder: its own login, settings, MCP servers, plugins, skills, memory and conversation history. moonlet points Claude Code at a profile with `CLAUDE_CONFIG_DIR`. Every workspace (X32) uses the **default profile** (`~/.claude`, the variable unset) unless the user picks another one for it. Every Claude process started for a session, whether a TUI tab or the structured view, uses the profile of the session's workspace. So "Acme" can run on the client's subscription and "Personal" on the user's own, with no logging out and in.
+A **Claude profile** is a Claude Code config folder: its own login, settings, MCP servers, plugins, skills, memory and conversation history. moonlet points Claude Code at a profile with `CLAUDE_CONFIG_DIR`. Every workspace (X32) uses the **default profile** (`~/.claude`, the variable unset) unless the user picks another one for it. Every Claude process started for a session, whether a TUI tab or the structured view, uses the profile of the session's workspace. So "Acme" can run on a work subscription and "Personal" on the user's own, with no logging out and in.
 
 Checked on Claude Code 2.1.292: with `CLAUDE_CONFIG_DIR` pointing at an empty folder, `claude auth status --json` reports `"loggedIn": false` while the default profile is signed in. So the login is kept per folder, and `.claude.json` (MCP servers) and `projects/` (transcripts) move into that folder too.
 
@@ -15,7 +15,7 @@ Checked on Claude Code 2.1.292: with `CLAUDE_CONFIG_DIR` pointing at an empty fo
 
 1. In **New workspace** or **Workspace settings…** (X32), the **Claude profile** select lists **Default — ~/.claude**, every profile moonlet knows (for example "Work profile — ~/.claude-work"), and **New profile…**.
 2. **New profile…** asks for a name ("Work profile") and a folder: either a new `~/.claude-<slug>` (default), or an existing folder the user already uses with `CLAUDE_CONFIG_DIR`. moonlet creates the folder if needed and installs its hooks and skill into it.
-3. The new profile is not signed in yet, so moonlet offers **Sign in…**. It opens a terminal running `claude auth login` with that profile's `CLAUDE_CONFIG_DIR`. The user finishes the browser login, and the profile then shows its account (for example `jane@acme.com`).
+3. The new profile is not signed in yet, so moonlet offers **Sign in…**. It opens a terminal running `claude auth login` with that profile's `CLAUDE_CONFIG_DIR`. The user finishes the browser login, and the profile then shows its account (for example `jane@acme.example`).
 4. The sidebar footer shows "Claude · Work profile" for the current workspace. Hovering it shows the account and the folder.
 5. Every new session in that workspace starts Claude signed in to the client's account. Sessions in "Personal" keep using `~/.claude`.
 
