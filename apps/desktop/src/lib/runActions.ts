@@ -150,6 +150,12 @@ const RESERVED: Record<string, string> = {
   "alt+cmd+arrowleft": "Focus previous pane",
   "shift+cmd+]": "Next tab",
   "shift+cmd+[": "Previous tab",
+  "cmd+=": "Bigger text",
+  "shift+cmd+=": "Bigger text",
+  "cmd++": "Bigger text",
+  "shift+cmd++": "Bigger text",
+  "cmd+-": "Smaller text",
+  "cmd+0": "Default text size",
 };
 
 function reservedFor(key: string): string | undefined {
