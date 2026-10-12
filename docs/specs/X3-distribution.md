@@ -1,6 +1,6 @@
 # X3: Signed, notarized app with auto-update
 
-- **Status:** partial: bundling done; signing, notarization and the updater need credentials
+- **Status:** partial: bundling and the updater done; signing and notarization need an Apple Developer ID
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** NFR distribution
 
@@ -10,6 +10,6 @@
 - [x] An app update never kills sessions: a version change triggers `moonletd upgrade` ([S3](S3-live-upgrade.md)).
 - [ ] Developer ID signing of the app and nested binaries (hardened runtime).
 - [ ] Notarization and stapling.
-- [ ] `tauri-plugin-updater` with a signed update feed.
+- [x] `tauri-plugin-updater` with a signed update feed ([X35](X35-in-app-update.md); untried until two releases are published). An app update does not restart the daemon: on the next connect the app sees the version change and runs the bundled `moonletd upgrade`.
 
 The steps for the open items are in [release.md](../release.md).
