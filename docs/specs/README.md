@@ -73,4 +73,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X32 | Workspaces above sections (today's workspaces become sections) | P1 | 3 | implemented (switcher look unchecked in app) | [X32-workspaces-and-sections.md](X32-workspaces-and-sections.md) |
 | X33 | A Claude Code profile per workspace (separate subscriptions) | P1 | 3 | implemented (real second sign-in unchecked) | [X33-workspace-claude-profiles.md](X33-workspace-claude-profiles.md) |
 | X34 | Context window meter and cost line in the chat footer | P1 | 3 | implemented | [X34-context-window.md](X34-context-window.md) |
-| X35 | Check for updates and install them in the app | P1 | 3 | in progress | [X35-in-app-update.md](X35-in-app-update.md) |
+| X35 | Check for updates and install them in the app | P1 | 3 | implemented (no real update tried yet) | [X35-in-app-update.md](X35-in-app-update.md) |
