@@ -168,7 +168,30 @@ export interface Workspace {
   color: WorkspaceColor;
   /** Its sections, in sidebar order. */
   section_ids: string[];
+  /** The Claude profile its sessions use (X33); null for the default. */
+  claude_profile?: string | null;
   created_at: number;
+}
+
+/** A Claude Code config folder (X33). */
+export interface ClaudeProfile {
+  id: string;
+  name: string;
+  path: string;
+  created_at: number;
+}
+
+/** Who a profile is signed in as (`claude auth status`). */
+export interface ProfileAccount {
+  logged_in: boolean;
+  email: string | null;
+  org_name: string | null;
+}
+
+export interface ProfileInfo extends ClaudeProfile {
+  /** Unknown until `profile.status` has run. */
+  account: ProfileAccount | null;
+  hooks_installed: boolean;
 }
 
 export type WorkspaceColor = "clay" | "blue" | "violet" | "sand" | "grey";
@@ -406,6 +429,11 @@ export const M = {
   workspaceCreate: "workspace.create",
   workspaceUpdate: "workspace.update",
   workspaceDelete: "workspace.delete",
+  profileList: "profile.list",
+  profileCreate: "profile.create",
+  profileUpdate: "profile.update",
+  profileDelete: "profile.delete",
+  profileStatus: "profile.status",
   sectionList: "section.list",
   sectionCreate: "section.create",
   sectionUpdate: "section.update",
@@ -445,6 +473,7 @@ export const EV = {
   sessionsChanged: "sessions.changed",
   workspacesChanged: "workspaces.changed",
   sectionsChanged: "sections.changed",
+  profilesChanged: "profiles.changed",
   fsChanged: "fs.changed",
   chatItem: "chat.item",
   chatState: "chat.state",

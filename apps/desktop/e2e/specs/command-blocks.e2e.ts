@@ -3,40 +3,11 @@
 
 import { execFileSync } from "node:child_process";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { PROJECT, fill, rpc, sel, world } from "../fixtures";
+import { PROJECT, commandInput as input, fill, rpc, run, sel, world } from "../fixtures";
 
 const w = world();
 const SESSION = "Check block headers";
-const input = '//textarea[@placeholder="Type a command…"]';
 
-/** Types `command` into the input editor and presses Enter there. Right
- *  after a terminal opens, typed text does not always reach React, so it is
- *  typed again until the editor's mirror layer (just before the textarea)
- *  shows it. Enter goes to the editor itself, since a new terminal can take
- *  focus back from it. */
-async function run(command: string) {
-  const shown = () =>
-    browser.execute(
-      (xp: string, c: string) => {
-        const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
-        return el?.previousElementSibling?.textContent?.startsWith(c) ?? false;
-      },
-      input,
-      command,
-    );
-  await browser.waitUntil(
-    async () => {
-      await fill(input, command);
-      await browser.pause(300);
-      return shown();
-    },
-    { timeout: 15_000, timeoutMsg: `the editor never showed ${command}` },
-  );
-  await browser.execute((xp: string) => {
-    const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-    el?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  }, input);
-}
 
 /** Sends a key to whatever has focus, as the app's shortcuts see it. */
 async function press(key: string, mods: { metaKey?: boolean; shiftKey?: boolean; altKey?: boolean } = {}) {
