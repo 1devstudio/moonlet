@@ -48,7 +48,8 @@ describe("workspaces", () => {
     await expect(switcher("Personal")).toBeDisplayed();
     await expect($(sel.sessionRow(SESSION))).not.toBeDisplayed();
     const seeded = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === SESSION)!;
-    const terms = rpc<{ session_id?: string; exit?: unknown }[]>(w, "terminal.list", {}).filter((t) => t.session_id === seeded.id);
+    // Its shell, that is: the setup script's tab ends on its own.
+    const terms = rpc<{ session_id?: string; kind: string; exit?: unknown }[]>(w, "terminal.list", {}).filter((t) => t.session_id === seeded.id && t.kind === "shell");
     expect(terms.length).toBeGreaterThan(0);
     expect(terms.every((t) => !t.exit)).toBe(true);
     await ctrlCmd("2");
