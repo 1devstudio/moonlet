@@ -3,7 +3,7 @@ import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, Download, Folde
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, compact, hostSections, lastActive, projectRemoval, type Group } from "../lib/sidebar";
-import { errorToast, installUpdate, projKey, pullBase, restartToUpdate, selectSession, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
+import { errorToast, projKey, pullBase, selectSession, updateActions, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
@@ -16,7 +16,7 @@ import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
-import { updateButtonLabel } from "../lib/updater";
+import { updateButton } from "../lib/updater";
 
 // ------------------------------------------------------------------ helpers
 
@@ -742,18 +742,20 @@ export function Sidebar() {
  *  then restart into it (X35). */
 function UpdateButton() {
   const update = useStore((s) => s.update);
-  const label = updateButtonLabel(update);
-  if (!label) return null;
-  const run = update.phase === "available" ? () => void installUpdate() : update.phase === "ready" ? restartToUpdate : undefined;
+  const b = updateButton(update);
+  if (!b) return null;
+  const Icon = b.action ? UPDATE_ICONS[b.action] : Loader2;
   return (
     <button
-      title={update.phase === "ready" ? "Restart moonlet into the new version. Terminals and agents keep running." : label}
-      disabled={!run}
-      onClick={run}
+      title={b.title}
+      disabled={!b.action}
+      onClick={b.action ? updateActions[b.action] : undefined}
       className="ml-auto flex shrink-0 items-center gap-1.5 rounded-md bg-accent/15 px-2 py-1 ui-text-11.5 text-accent hover:bg-accent/25 disabled:opacity-70"
     >
-      {update.phase === "ready" ? <RotateCw size={12} /> : update.phase === "available" ? <Download size={12} /> : <Loader2 size={12} className="animate-spin" />}
-      {label}
+      <Icon size={12} className={b.action ? undefined : "animate-spin"} />
+      {b.label}
     </button>
   );
 }
+
+const UPDATE_ICONS = { install: Download, restart: RotateCw };
