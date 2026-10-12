@@ -4,6 +4,9 @@
 import { create } from "zustand";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { afterCheck, onDownload, type UpdateState } from "./updater";
 import { hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
@@ -72,6 +75,8 @@ export interface Settings {
   planApproveMode: string;
   /** Shiki theme of the editor and diffs (X26). */
   editorTheme: string;
+  /** Look for a new moonlet release at launch and every six hours (X35). */
+  autoUpdateCheck: boolean;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -211,6 +216,9 @@ interface State extends UiPersist {
   readGrants: Record<string, string[]>;
   settings: Settings;
   toasts: Toast[];
+  /** A new moonlet release and how far its install got (X35). */
+  update: UpdateState;
+  updateChecking: boolean;
   lastAttention: { host: string; session: number; at: number } | null;
   /** When each agent session last started working (for "worked for 7s"). */
   workingSince: Record<string, number>;
@@ -249,8 +257,10 @@ function makeStore() {
   confirm: null,
   reads: {},
   readGrants: {},
-  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {}, planApproveMode: "auto", editorTheme: "dark-plus" }),
+  settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {}, planApproveMode: "auto", editorTheme: "dark-plus", autoUpdateCheck: true }),
   toasts: [],
+  update: { phase: "idle" },
+  updateChecking: false,
   lastAttention: null,
   workingSince: {},
   card: null,
@@ -295,6 +305,64 @@ export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast
 
 export function errorToast(e: unknown) {
   toast(e instanceof Error ? e.message : String(e), "error");
+}
+
+// ---------------------------------------------------------------- updates (X35)
+
+/** The update the last check found. It holds a Rust-side resource, so a
+ *  replaced one is closed. */
+let foundUpdate: Update | null = null;
+
+/** Asks the updater endpoint for a newer release. An automatic check fails
+ *  quietly, so being offline is not an error. */
+export async function checkForUpdates({ manual = false } = {}) {
+  if (get().updateChecking) return;
+  set({ updateChecking: true });
+  try {
+    const found = await check();
+    const prev = get().update;
+    const { state, announce } = afterCheck(prev, found?.version ?? null);
+    if (state === prev) {
+      void found?.close();
+    } else {
+      if (foundUpdate && foundUpdate !== found) void foundUpdate.close();
+      foundUpdate = found;
+    }
+    set({ update: state });
+    if (state.phase === "available" && (announce || manual)) {
+      toast(`moonlet ${state.version} is available`, "info", { label: "Install", run: () => void installUpdate() });
+    } else if (manual && state.phase === "current") {
+      toast(`moonlet ${(await hostsApi.appInfo()).version} is up to date`);
+    }
+  } catch (e) {
+    if (manual) errorToast(e);
+    else console.warn("update check failed", e);
+  } finally {
+    set({ updateChecking: false });
+  }
+}
+
+/** Downloads the found update, verifies its signature and installs it. The
+ *  app runs it after a restart. */
+export async function installUpdate() {
+  const u = foundUpdate;
+  const prev = get().update;
+  if (!u || prev.phase !== "available") return;
+  // Busy from the click on, so a check meanwhile keeps this update.
+  set({ update: { phase: "downloading", version: u.version, received: 0, total: null } });
+  try {
+    await u.downloadAndInstall((e) => set((s) => ({ update: onDownload(s.update, e) })));
+    set({ update: { phase: "ready", version: u.version } });
+  } catch (e) {
+    set({ update: prev });
+    errorToast(e);
+  }
+}
+
+/** Relaunches into the installed version. Sessions live in the daemon, which
+ *  the new app upgrades on connect (S3). */
+export function restartToUpdate() {
+  void relaunch().catch(errorToast);
 }
 
 // ---------------------------------------------------------------- selectors
@@ -844,6 +912,12 @@ export async function startStore() {
   const hosts = await hostsApi.list();
   set({ hosts: Object.fromEntries(hosts.map((h) => [h.id, h])) });
   for (const h of hosts) if (h.status === "connected") void loadHost(h.id);
+
+  const autoCheck = () => {
+    if (get().settings.autoUpdateCheck) void checkForUpdates();
+  };
+  setTimeout(autoCheck, 10_000);
+  setInterval(autoCheck, 6 * 3_600_000);
 
   // Tauri cannot tell a notification click from any other activation, so
   // coming back soon after one offers the jump instead of doing it (A3).

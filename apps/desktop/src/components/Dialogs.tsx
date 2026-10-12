@@ -4,7 +4,8 @@ import { askConfirm } from "../lib/confirm";
 import { CheckCircle2, Play, Server, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type Commit, type HookStatus, type PullRequest, type Project } from "../lib/protocol";
-import { errorToast, refreshGit, selectedSession, shownWorkspace, toast, updateSettings, useStore } from "../lib/store";
+import { checkForUpdates, errorToast, installUpdate, refreshGit, restartToUpdate, selectedSession, shownWorkspace, toast, updateSettings, useStore } from "../lib/store";
+import { updateButtonLabel } from "../lib/updater";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { hostSections } from "../lib/sidebar";
@@ -552,12 +553,53 @@ function DaemonSection() {
   );
 }
 
+/** The running version, a manual check and the automatic one (X35). */
+function UpdatesSection() {
+  const [version, setVersion] = useState<string | null>(null);
+  const update = useStore((s) => s.update);
+  const checking = useStore((s) => s.updateChecking);
+  const auto = useStore((s) => s.settings.autoUpdateCheck);
+  useEffect(() => {
+    void hostsApi.appInfo().then((i) => setVersion(i.version)).catch(() => setVersion(null));
+  }, []);
+  const label = updateButtonLabel(update);
+  const status = checking ? "Checking…" : update.phase === "current" ? "Up to date" : update.phase === "available" ? `${update.version} is available` : label;
+  return (
+    <section className="mb-5">
+      <h3 className="mb-1 ui-text-12 font-semibold">Updates</h3>
+      <div className="mb-2 flex items-center gap-2 ui-text-12.5">
+        <span>moonlet {version ?? "…"}</span>
+        {status && <span className="ui-text-12 text-muted">{status}</span>}
+        <span className="ml-auto flex gap-2">
+          {update.phase === "available" && (
+            <Button size="sm" onClick={() => void installUpdate()}>
+              Install
+            </Button>
+          )}
+          {update.phase === "ready" && (
+            <Button size="sm" onClick={restartToUpdate}>
+              Restart
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" disabled={checking} onClick={() => void checkForUpdates({ manual: true })}>
+            Check now
+          </Button>
+        </span>
+      </div>
+      <label className="flex items-center gap-2 ui-text-12.5">
+        <input type="checkbox" checked={auto} onChange={(e) => updateSettings({ autoUpdateCheck: e.target.checked })} /> Check for updates automatically
+      </label>
+    </section>
+  );
+}
+
 export function SettingsDialog() {
   return (
     <Dialog title="Settings" width={600} onClose={close}>
       <HooksSection />
       <ProfilesSection />
       <DaemonSection />
+      <UpdatesSection />
       <HostsSection />
       <AgentsSection />
       <EditorSection />

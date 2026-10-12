@@ -338,7 +338,12 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_wdio_webdriver::init())
         .plugin(tauri_plugin_wdio::init());
+    // Only release builds update themselves (X35): a dev or e2e build has no
+    // bundle to replace and must not pick up a published release.
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
