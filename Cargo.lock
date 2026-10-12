@@ -2559,6 +2559,8 @@ dependencies = [
  "libc",
  "moonlet-core",
  "moonlet-proto",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

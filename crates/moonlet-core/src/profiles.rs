@@ -50,13 +50,7 @@ pub async fn account(env: &std::collections::BTreeMap<String, String>, dir: Opti
     if let Some(d) = dir {
         env.insert(CONFIG_DIR_VAR.into(), d.into());
     }
-    let exe = crate::paths::find_program("claude", &env).context("claude not found on PATH")?;
-    let run = tokio::process::Command::new(exe)
-        .args(["auth", "status", "--json"])
-        .env_clear()
-        .envs(&env)
-        .stdin(std::process::Stdio::null())
-        .output();
+    let run = crate::claude_update::command(&env)?.args(["auth", "status", "--json"]).output();
     let out = tokio::time::timeout(std::time::Duration::from_secs(15), run)
         .await
         .context("`claude auth status` timed out")??;

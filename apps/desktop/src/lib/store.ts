@@ -7,6 +7,7 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { afterCheck, afterDownloadEvent, scheduleUpdateChecks, type CheckOutcome, type UpdateState } from "./updater";
+import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
 import { hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
@@ -77,6 +78,8 @@ export interface Settings {
   editorTheme: string;
   /** Look for a new moonlet release at launch and every six hours (X35). */
   autoUpdateCheck: boolean;
+  /** The Claude Code release the user said Later to (X36). */
+  claudeUpdateDismissed?: string | null;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -223,6 +226,11 @@ interface State extends UiPersist {
   updateError: string | null;
   /** This app's version, for Settings and the "up to date" toast. */
   appVersion: string | null;
+  /** The sidebar banner about a newer Claude Code (X36). */
+  claudeUpdate: ClaudeUpdateState;
+  /** The installed Claude Code and npm's newest, from the last check. */
+  claudeVersions: ClaudeVersions;
+  claudeChecking: boolean;
   lastAttention: { host: string; session: number; at: number } | null;
   /** When each agent session last started working (for "worked for 7s"). */
   workingSince: Record<string, number>;
@@ -267,6 +275,9 @@ function makeStore() {
   updateChecking: false,
   updateError: null,
   appVersion: null,
+  claudeUpdate: { phase: "idle" },
+  claudeVersions: { installed: null, latest: null },
+  claudeChecking: false,
   lastAttention: null,
   workingSince: {},
   card: null,
@@ -380,6 +391,71 @@ export function restartToUpdate() {
 
 /** What the update button's action (see `updateButton`) does. */
 export const updateActions = { install: () => void installUpdate(), restart: restartToUpdate };
+
+// ---------------------------------------------------------------- Claude Code updates (X36)
+
+/** Claude Code is checked and updated on this machine's daemon only. */
+const LOCAL = "local";
+
+const claudeVersion = () => rpc<{ version: string | null; updating: boolean }>(LOCAL, M.claudeVersion);
+
+/** Counts updates started or finished, so a check that began before one
+ *  does not put back the version from before it. */
+let claudeRuns = 0;
+
+/** Compares the installed Claude Code with npm's newest. A side that cannot
+ *  be read is unknown, which shows no banner: being offline is not an error. */
+export async function checkClaudeVersion() {
+  if (get().claudeChecking) return;
+  set({ claudeChecking: true });
+  const runs = claudeRuns;
+  const unknown = (what: string) => (e: unknown) => {
+    console.warn(`${what} failed`, e);
+    return null;
+  };
+  const [local, latest] = await Promise.all([claudeVersion().catch(unknown("claude --version")), hostsApi.claudeLatest().catch(unknown("Claude Code release check"))]);
+  if (runs !== claudeRuns) return set({ claudeChecking: false });
+  const versions = { installed: local?.version ?? null, latest };
+  const check = { ...versions, updating: local?.updating ?? false };
+  set((s) => ({ claudeChecking: false, claudeVersions: versions, claudeUpdate: afterClaudeCheck(s.claudeUpdate, check, s.settings.claudeUpdateDismissed ?? null) }));
+}
+
+/** Runs `claude update`; its lines move the banner's steps as they come. */
+export async function updateClaude() {
+  const { installed, latest } = get().claudeVersions;
+  if (!installed || !latest || get().claudeUpdate.phase === "updating") return;
+  claudeRuns++;
+  set({ claudeUpdate: { phase: "updating", installed, latest, step: "check" } });
+  let run: ClaudeUpdateRun;
+  try {
+    run = await rpc<{ ok: boolean; output: string }>(LOCAL, M.claudeUpdate);
+  } catch (e) {
+    run = { error: message(e) };
+  }
+  await finishClaudeUpdate(run);
+}
+
+/** Ends the banner's run, from this window's request or from the daemon's
+ *  `claude.update_done`, whichever comes first, and reads the version now
+ *  installed. */
+async function finishClaudeUpdate(run: ClaudeUpdateRun) {
+  const { state, dismiss } = afterClaudeUpdateExit(get().claudeUpdate, run);
+  // Already ended here, or another window ran it: catch up with its result.
+  if (state === get().claudeUpdate) return void checkClaudeVersion();
+  claudeRuns++;
+  set({ claudeUpdate: state });
+  if (dismiss) updateSettings({ claudeUpdateDismissed: dismiss });
+  const now = await claudeVersion().catch(() => null);
+  if (now?.version) set((s) => ({ claudeVersions: { ...s.claudeVersions, installed: now.version } }));
+}
+
+/** Later hides the announced release until a newer one is out; the close
+ *  button only hides the banner. */
+export function closeClaudeUpdate(how: "later" | "close") {
+  const { state, dismiss } = closeClaudeBanner(get().claudeUpdate, how);
+  if (dismiss) updateSettings({ claudeUpdateDismissed: dismiss });
+  set({ claudeUpdate: state });
+}
 
 // ---------------------------------------------------------------- selectors
 
@@ -866,6 +942,12 @@ function handleEvent(e: DaemonEvent) {
     case EV.sectionsChanged:
       set((s) => ({ sections: { ...s.sections, [host]: data as Section[] } }));
       break;
+    case EV.claudeUpdateOutput:
+      if (host === LOCAL) set((s) => ({ claudeUpdate: afterClaudeUpdateLine(s.claudeUpdate, (data as { line: string }).line) }));
+      break;
+    case EV.claudeUpdateDone:
+      if (host === LOCAL) void finishClaudeUpdate(data as { ok: boolean; output: string });
+      break;
     case EV.profilesChanged:
       // The full list, as profile.list returns it (X33).
       set((s) => ({ profiles: { ...s.profiles, [host]: data as ProfileInfo[] } }));
@@ -930,7 +1012,13 @@ export async function startStore() {
   for (const h of hosts) if (h.status === "connected") void loadHost(h.id);
 
   void hostsApi.appInfo().then(({ version }) => set({ appVersion: version }), () => {});
-  scheduleUpdateChecks(() => void checkForUpdates(), () => get().settings.autoUpdateCheck);
+  scheduleUpdateChecks(
+    () => {
+      void checkForUpdates();
+      void checkClaudeVersion();
+    },
+    () => get().settings.autoUpdateCheck,
+  );
 
   // Tauri cannot tell a notification click from any other activation, so
   // coming back soon after one offers the jump instead of doing it (A3).

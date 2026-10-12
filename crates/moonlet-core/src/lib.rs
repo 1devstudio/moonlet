@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod chat;
+pub mod claude_update;
 pub mod client;
 pub mod commands;
 pub mod fs;
