@@ -1,7 +1,8 @@
 // The workspace switcher (X32): one workspace is shown at a time, picked
 // from a menu in the title bar or with ⌃⌘1–9. Pure, so it is unit-tested.
 
-import type { Section, Session, Workspace, WorkspaceColor } from "./protocol";
+import type { ProfileInfo, Section, Session, Workspace, WorkspaceColor } from "./protocol";
+import { profileName } from "./profiles";
 
 /** The design's swatches, in the order the New workspace dialog shows them. */
 export const WORKSPACE_COLORS: { id: WorkspaceColor; label: string; hex: string }[] = [
@@ -26,6 +27,8 @@ export interface HostWorkspaces {
   workspaces: Workspace[];
   sections: Section[];
   sessions: Session[];
+  /** Claude profiles (X33), named at the end of each summary. */
+  profiles: ProfileInfo[];
 }
 
 export interface SwitcherRow {
@@ -54,7 +57,7 @@ export function switcherRows(hosts: HostWorkspaces[]): SwitcherRow[] {
         hostLabel: hosts.length > 1 && i === 0 ? h.label : null,
         ws,
         initial: workspaceInitial(ws.name),
-        summary: `${count(ws.section_ids.length, "section")} · ${count(live, "session")}`,
+        summary: `${count(ws.section_ids.length, "section")} · ${count(live, "session")} · ${profileName(ws, h.profiles)}`,
         kbd: n < 9 ? `⌃⌘${n + 1}` : null,
       });
     });

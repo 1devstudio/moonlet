@@ -1,4 +1,5 @@
-// New workspace and Workspace settings (X32).
+// New workspace and Workspace settings (X32), with the Claude profile its
+// sessions sign in with (X33).
 
 import { useMemo, useState } from "react";
 import { rpc } from "../lib/daemon";
@@ -7,8 +8,17 @@ import { askConfirm } from "../lib/confirm";
 import { workspaceSections } from "../lib/sidebar";
 import { errorToast, shownWorkspace, switchWorkspace, toast, useStore } from "../lib/store";
 import { WORKSPACE_COLORS, count, createRequest, deleteBlocked } from "../lib/workspaces";
+import { DEFAULT_PROFILE, movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { WorkspaceMark } from "./WorkspaceSwitcher";
+import { ProfileField } from "./Profiles";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
+
+/** The sessions and terminals of a host, for counting running Claude agents. */
+function useHostRuntime(host: string | undefined) {
+  const sessions = useStore((s) => (host ? s.sessions[host] : undefined));
+  const terminals = useStore((s) => (host ? s.terminals[host] : undefined));
+  return useMemo(() => ({ sessions: sessions ?? [], terminals: Object.values(terminals ?? {}) }), [sessions, terminals]);
+}
 
 const close = () => useStore.setState({ dialog: null });
 
@@ -49,11 +59,18 @@ export function NewWorkspaceDialog() {
   const [color, setColor] = useState<WorkspaceColor>("blue");
   const [start, setStart] = useState<"empty" | "move">("empty");
   const [moving, setMoving] = useState<string[]>([]);
+  const [profile, setProfile] = useState(DEFAULT_PROFILE);
+  const profiles = useStore((s) => (from ? s.profiles[from.host] : undefined));
+  const runtime = useHostRuntime(from?.host);
   const req = createRequest({ name, color, start, moving });
   const create = async () => {
-    if (!req || !from) return;
+    if (!req || !from || !fromWs) return;
+    // Sessions moving with their sections sign in with the new workspace's profile.
+    const ids = req.move_sections.flatMap((id) => movingSessions(fromWs, hostSections ?? [], runtime.sessions, id));
+    const message = switchConfirm(fromWs.claude_profile ?? null, profile || null, runningClaudeAgents(runtime.sessions, runtime.terminals, ids), profiles ?? []);
+    if (message && !(await askConfirm({ title: "Change Claude profile", message, action: "Create workspace" }))) return;
     try {
-      const ws = await rpc<Workspace>(from.host, M.workspaceCreate, req);
+      const ws = await rpc<Workspace>(from.host, M.workspaceCreate, { ...req, claude_profile: profile || null });
       close();
       switchWorkspace({ host: from.host, id: ws.id });
     } catch (e) {
@@ -80,6 +97,7 @@ export function NewWorkspaceDialog() {
       <Field label="Color">
         <ColorPicker value={color} onChange={setColor} />
       </Field>
+      {from && <ProfileField host={from.host} value={profile} onChange={setProfile} />}
       {fromWs && (
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-2 ui-text-12 text-muted">Start with</legend>
@@ -118,11 +136,17 @@ export function WorkspaceSettingsDialog({ host, workspace }: { host: string; wor
   const count = useStore((s) => (s.workspaces[host] ?? []).length);
   const [name, setName] = useState(ws?.name ?? "");
   const [color, setColor] = useState<WorkspaceColor>(ws?.color ?? "clay");
+  const [profile, setProfile] = useState(ws?.claude_profile ?? DEFAULT_PROFILE);
+  const profiles = useStore((s) => s.profiles[host]);
+  const runtime = useHostRuntime(host);
   if (!ws) return null;
   const blocked = deleteBlocked(ws, count);
   const save = async () => {
+    const ids = runtime.sessions.filter((x) => x.workspace_id === ws.id).map((x) => x.id);
+    const message = switchConfirm(ws.claude_profile ?? null, profile || null, runningClaudeAgents(runtime.sessions, runtime.terminals, ids), profiles ?? []);
+    if (message && !(await askConfirm({ title: "Change Claude profile", message, action: "Change profile" }))) return;
     try {
-      await rpc(host, M.workspaceUpdate, { id: ws.id, name: name.trim() || undefined, color });
+      await rpc(host, M.workspaceUpdate, { id: ws.id, name: name.trim() || undefined, color, claude_profile: profile || null });
       close();
     } catch (e) {
       errorToast(e);
@@ -163,6 +187,7 @@ export function WorkspaceSettingsDialog({ host, workspace }: { host: string; wor
       <Field label="Color">
         <ColorPicker value={color} onChange={setColor} />
       </Field>
+      <ProfileField host={host} value={profile} onChange={setProfile} />
       {blocked && <p className="ui-text-12 text-faint">{blocked}</p>}
     </Dialog>
   );
