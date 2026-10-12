@@ -38,6 +38,7 @@ import {
   chatBlocks,
   chatDraft,
   chatKey,
+  costLine,
   diffStat,
   elapsed,
   fuzzyFilter,
@@ -55,7 +56,6 @@ import {
   toolCommand,
   toolGroupLabel,
   toolGroupStatus,
-  tokens,
   transcript,
   turnFooter,
   turnRunning,
@@ -1017,6 +1017,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     void call(M.chatSend, { text, images });
   };
   const stop = () => void call(M.chatInterrupt, {});
+  const cost = st ? costLine(st) : null;
   const editor = useRef<EditorHandle>(null);
   // Attached images go with the next message, other files become @mentions (X29).
   const attach = async () => {
@@ -1234,14 +1235,12 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               onOpen={refreshMcp}
               mcp={mcpActions}
             />
-            {st?.context && <ContextMeter usage={st.context} onCompact={() => send("/compact", [])} />}
-            {st && (st.cost_usd > 0 || st.input_tokens > 0) && (
+            {/* Straight to the agent: while a plan is revised, send() answers the plan. */}
+            {st?.context && <ContextMeter usage={st.context} onCompact={() => void call(M.chatSend, { text: "/compact", images: [] })} />}
+            {cost && (
               <>
-                <span className="mx-1 h-3.5 w-px bg-border-strong" />
-                <span className="whitespace-nowrap">
-                  {st.cost_usd > 0 && `$${st.cost_usd.toFixed(st.cost_usd < 1 ? 3 : 2)} · `}
-                  {tokens(st.input_tokens)} in · {tokens(st.output_tokens)} out
-                </span>
+                {st?.context && <span className="mx-1 h-3.5 w-px bg-border-strong" />}
+                <span className="whitespace-nowrap">{cost}</span>
               </>
             )}
           </div>
