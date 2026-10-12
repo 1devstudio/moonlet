@@ -216,6 +216,32 @@ pub struct ProfileAccount {
     pub org_name: Option<String>,
 }
 
+/// What `claude.version` returns: `None` when `claude` is missing or its
+/// output is not a version (X36).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeVersion {
+    pub version: Option<String>,
+    /// A `claude.update` is running, perhaps started by another window.
+    #[serde(default)]
+    pub updating: bool,
+}
+
+/// What `claude.update` returns once `claude update` exits, also sent to
+/// every client as `claude.update_done` (X36).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeUpdateResult {
+    /// It exited with 0. Some failures, such as another Claude holding the
+    /// update lock, exit with 0 too: the output tells.
+    pub ok: bool,
+    pub output: String,
+}
+
+/// A line of `claude update`'s output, sent while it runs (X36).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeUpdateLine {
+    pub line: String,
+}
+
 /// A profile as `profile.list` returns it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProfileInfo {
