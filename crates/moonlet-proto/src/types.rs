@@ -586,6 +586,7 @@ pub struct ContextUsage {
     pub categories: Vec<ContextCategory>,
 }
 
+/// One part of the context, such as `System prompt` or `Messages` (X34).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ContextCategory {
     pub name: String,

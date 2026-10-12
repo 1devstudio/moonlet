@@ -321,7 +321,7 @@ impl Adapter for Claude {
                             .collect();
                     }
                     out.push(Out::State);
-                    out.push(self.control("context", json!({"subtype": "get_context_usage"})));
+                    out.push(self.control("context", json!({"subtype": "get_context_usage", "detail": "summary"})));
                 }
             }
             "control_request" => {
@@ -391,7 +391,7 @@ impl Adapter for Claude {
                     out.extend(finish_turn(st, started_at));
                 }
                 out.push(Out::State);
-                out.push(self.control("context", json!({"subtype": "get_context_usage"})));
+                out.push(self.control("context", json!({"subtype": "get_context_usage", "detail": "summary"})));
             }
             _ => {}
         }
@@ -896,10 +896,18 @@ mod tests {
         let mut a = Claude::default();
         let mut st = ChatState::default();
         a.start(&ChatConfig::default(), &mut st);
+        let asked = Some(json!({"subtype": "get_context_usage", "detail": "summary"}));
         let outs = a.on_line(r#"{"type":"control_response","response":{"subtype":"success","request_id":"init-1","response":{"commands":[]}}}"#, &mut st);
-        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), Some(json!({"subtype": "get_context_usage"})));
+        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), asked);
         let outs = a.on_line(r#"{"type":"result","subtype":"success","is_error":false,"usage":{}}"#, &mut st);
-        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), Some(json!({"subtype": "get_context_usage"})));
+        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), asked);
+        // A failed turn and a stopped one still used context.
+        let outs = a.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{}}"#, &mut st);
+        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), asked);
+        st.status = "working".into();
+        a.interrupt(&mut st);
+        let outs = a.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{}}"#, &mut st);
+        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), asked);
     }
 
     #[test]
