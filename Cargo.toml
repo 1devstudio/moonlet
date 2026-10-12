@@ -7,8 +7,8 @@ exclude = ["vendor"]
 [workspace.package]
 version = "0.1.16"
 edition = "2024"
-license = "UNLICENSED"
-repository = "https://github.com/1devstudio/jaunt"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/1devstudio/moonlet"
 
 [workspace.dependencies]
 moonlet-proto = { path = "crates/moonlet-proto" }
