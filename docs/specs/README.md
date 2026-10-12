@@ -75,3 +75,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X34 | Context window meter and cost line in the chat footer | P1 | 3 | implemented | [X34-context-window.md](X34-context-window.md) |
 | X35 | Check for updates and install them in the app | P1 | 3 | implemented (no real update tried yet) | [X35-in-app-update.md](X35-in-app-update.md) |
 | X36 | Tell the user about a new Claude Code and update it from the app | P2 | 3 | implemented (no real update tried yet) | [X36-claude-code-update.md](X36-claude-code-update.md) |
+| X37 | ⌘+, ⌘− and ⌘0 change the window's font size | P2 | 3 | implemented (keys unchecked in app) | [X37-font-size-shortcuts.md](X37-font-size-shortcuts.md) |
