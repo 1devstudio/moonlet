@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import { actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, recordKey } from "./runActions";
 
 describe("filtering", () => {
-  it("lists all 24 actions in catalogue order for an empty query", () => {
+  it("lists all 25 actions in catalogue order for an empty query", () => {
     const rows = filterActions("");
-    expect(rows).toHaveLength(24);
+    expect(rows).toHaveLength(25);
     expect(rows[0].action.label).toBe("New session…");
     expect(rows[1].action.label).toBe("New workspace…");
     expect(rows[23].action.label).toBe("Settings…");
+    expect(rows[24].action.label).toBe("Check for updates…");
+  });
+
+  it("finds the update check (X35)", () => {
+    expect(filterActions("update").map((r) => r.action.label)).toEqual(["Check for updates…"]);
   });
 
   it("ranks contiguous matches above scattered ones, earlier above later", () => {

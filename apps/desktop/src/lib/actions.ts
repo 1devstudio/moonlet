@@ -4,7 +4,7 @@
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeFile, cycleFocus, openFile, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
-import { errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
+import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
 import { arrange, hostSections, lastActive } from "./sidebar";
 import { isShown } from "./workspaces";
 import { findEntry, outputToCopy } from "./terminals";
@@ -394,6 +394,7 @@ const RUN: Record<string, () => void> = {
   rerun: () => focusedEntry()?.rerunLast(),
   history: () => useStore.setState({ showHistory: true }),
   settings: () => useStore.setState({ dialog: { kind: "settings" } }),
+  "check-updates": () => void checkForUpdates({ manual: true }),
 };
 
 export function runAction(id: string) {

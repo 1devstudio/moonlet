@@ -42,6 +42,7 @@ export const hostsApi = {
   openIn: (target: string, path: string, host?: string) => invoke("open_in", { target, path, host }),
   playSound: (name: string) => invoke("play_sound", { name }),
   service: (action: "install" | "uninstall" | "status") => invoke<{ installed: boolean; loaded: boolean; plist: string }>("daemon_service", { action }),
+  appInfo: () => invoke<{ version: string }>("app_info"),
 };
 
 /** Must match `RESET_FLAG` in src-tauri/src/hosts.rs. */

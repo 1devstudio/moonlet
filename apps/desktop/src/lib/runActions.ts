@@ -34,6 +34,7 @@ export const ACTIONS: ActionDef[] = [
   ["rerun", "Re-run last command", "Terminal", ""],
   ["history", "Show archived sessions", "Session", ""],
   ["settings", "Settings…", "App", "cmd+,"],
+  ["check-updates", "Check for updates…", "App", ""],
 ].map(([id, label, group, keys]) => ({ id, label, group, keys }));
 
 /** Scores `text` against `q`: a contiguous match ranks by position, letters
