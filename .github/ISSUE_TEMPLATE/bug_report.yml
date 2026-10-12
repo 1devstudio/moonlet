@@ -1,0 +1,76 @@
+name: Bug report
+description: Something in moonlet does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please search [existing issues](https://github.com/1devstudio/moonlet/issues) first.
+        Do not report security vulnerabilities here: follow [SECURITY.md](https://github.com/1devstudio/moonlet/blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. Screenshots or a screen recording help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a project
+        2. Start a session with Claude Code
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: moonlet version
+      description: Shown in Settings › Updates.
+      placeholder: "0.1.14"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "macOS 15.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Sessions and worktrees
+        - Agent view (Claude Code, Codex)
+        - Terminal and shell
+        - Changes, files and pull requests
+        - Remote hosts (SSH)
+        - CLI or daemon
+        - Updates and installation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and version
+      description: If the bug involves an agent, which one and which version (for example `claude --version`).
+      placeholder: "Claude Code 2.1.0"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Relevant lines from `~/.moonlet/logs/moonletd.log`, or any error message shown in the app.
+        Remove anything private (paths, repository names, tokens) before posting.
+      render: text
