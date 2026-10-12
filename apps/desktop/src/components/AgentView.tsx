@@ -75,6 +75,7 @@ import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../l
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
 import { uiScale } from "../lib/uiScale";
+import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
@@ -1219,7 +1220,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           onAttach={() => void attach()}
           handle={editor}
         />
-        {/* Under the input (X29): + on the left, status centred, settings on the right. */}
+        {/* Under the input (X29, X34): +, context ring and cost on the left, status centred, settings on the right. */}
         <div className="mt-1.5 grid h-[34px] grid-cols-[1fr_auto_1fr] items-center px-1 ui-text-12.5 text-muted">
           <div className="flex items-center gap-1">
             <PlusMenu
@@ -1233,6 +1234,16 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               onOpen={refreshMcp}
               mcp={mcpActions}
             />
+            {st?.context && <ContextMeter usage={st.context} onCompact={() => send("/compact", [])} />}
+            {st && (st.cost_usd > 0 || st.input_tokens > 0) && (
+              <>
+                <span className="mx-1 h-3.5 w-px bg-border-strong" />
+                <span className="whitespace-nowrap">
+                  {st.cost_usd > 0 && `$${st.cost_usd.toFixed(st.cost_usd < 1 ? 3 : 2)} · `}
+                  {tokens(st.input_tokens)} in · {tokens(st.output_tokens)} out
+                </span>
+              </>
+            )}
           </div>
           <div className="flex items-center gap-2 whitespace-nowrap">
             {st?.status === "working" ? (
@@ -1247,11 +1258,6 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                 <ShieldAlert size={12} className="text-blocked" />
                 <span>{st.pending.length > 0 && st.pending.every(isQuestion) ? "Waiting for your answer" : "Waiting for your approval"}</span>
               </>
-            ) : st && (st.cost_usd > 0 || st.input_tokens > 0) ? (
-              <span>
-                {st.cost_usd > 0 && `$${st.cost_usd.toFixed(st.cost_usd < 1 ? 3 : 2)} · `}
-                {tokens(st.input_tokens)} in · {tokens(st.output_tokens)} out
-              </span>
             ) : null}
           </div>
           <div className="flex items-center justify-end gap-1 ui-text-13">

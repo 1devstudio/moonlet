@@ -4,7 +4,7 @@
 import { create } from "zustand";
 import type { PlanApproveMode } from "./agents";
 import { rpc } from "./daemon";
-import { type ChatItem, type ChatState, M, type ToolCall, type TurnTime } from "./protocol";
+import { type ChatItem, type ChatState, type ContextUsage, M, type ToolCall, type TurnTime } from "./protocol";
 import { readStored, writeStored } from "./storage";
 
 export const chatKey = (host: string, id: number) => `${host}:${id}`;
@@ -223,8 +223,50 @@ export function elapsed(ms: number): string {
   return `${m}m ${String(s % 60).padStart(2, "0")}s`;
 }
 
+/** A token count in the footer's short form (X34): `297`, `8.1k`, `124k`, `130.7M`. */
 export function tokens(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
+  const short = (v: number, digits: number) => v.toFixed(digits).replace(/\.0$/, "");
+  if (n >= 1_000_000) return `${short(n / 1_000_000, 1)}M`;
+  if (n >= 1000) return `${short(n / 1000, n >= 100_000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+/** Fixed colours for Claude's own categories; the rest take OTHER in turn. */
+const CONTEXT_COLORS: Record<string, string> = {
+  "System prompt": "#8c8c8c",
+  "System tools": "#8c8c8c",
+  "MCP tools": "#b48ead",
+  "Memory files": "#f2c94c",
+  Messages: "#d97757",
+};
+const OTHER_COLORS = ["#6ea8fe", "#3ecf6e", "#56c2d6", "#e58fb5"];
+
+export interface ContextView {
+  /** Used share of the window, a whole percent. */
+  percent: number;
+  /** `124k / 200k` */
+  label: string;
+  /** One per category; `width` is its share of the window in percent. */
+  rows: { name: string; tokens: string; color: string; width: number }[];
+  free: string;
+  autoCompact: string;
+}
+
+/** What the context ring and its card show (X34). */
+export function contextView(c: ContextUsage): ContextView {
+  let other = 0;
+  return {
+    percent: c.max > 0 ? Math.round((c.used / c.max) * 100) : 0,
+    label: `${tokens(c.used)} / ${tokens(c.max)}`,
+    rows: c.categories.map((cat) => ({
+      name: cat.name,
+      tokens: tokens(cat.tokens),
+      color: CONTEXT_COLORS[cat.name] ?? OTHER_COLORS[other++ % OTHER_COLORS.length],
+      width: c.max > 0 ? (cat.tokens / c.max) * 100 : 0,
+    })),
+    free: tokens(Math.max(0, c.max - c.used)),
+    autoCompact: c.auto_compact_at && c.max > 0 ? `Auto-compacts at ${Math.round((c.auto_compact_at / c.max) * 100)}%` : "Auto-compact is off",
+  };
 }
 
 const DAY = 86_400_000;
