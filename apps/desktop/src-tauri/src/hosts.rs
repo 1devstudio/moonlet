@@ -115,12 +115,7 @@ impl Host {
                 return Err(RpcError::new("disconnected", "connection closed"));
             }
         }
-        let timeout = if method.starts_with("gh.") || method.starts_with("workspace.") {
-            180
-        } else {
-            60
-        };
-        match tokio::time::timeout(Duration::from_secs(timeout), rx).await {
+        match tokio::time::timeout(request_timeout(method), rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => {
                 self.forget_request(id);
@@ -677,5 +672,33 @@ fn dispatch(app: &AppHandle, host: &Arc<Host>, frame: Frame) {
             );
         }
         _ => {}
+    }
+}
+
+/// How long the app waits for a daemon reply. `claude update` gets ten
+/// minutes in the daemon (X36): wait a little longer, so its own timeout
+/// is the one reported.
+fn request_timeout(method: &str) -> Duration {
+    let secs = if method == moonlet_proto::methods::CLAUDE_UPDATE {
+        660
+    } else if method.starts_with("gh.") || method.starts_with("workspace.") {
+        180
+    } else {
+        60
+    };
+    Duration::from_secs(secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waits_longer_than_the_daemon_for_claude_update() {
+        // The daemon gives `claude update` ten minutes (X36); the app must
+        // not give up first.
+        assert_eq!(request_timeout("claude.update"), Duration::from_secs(660));
+        assert_eq!(request_timeout("gh.prs"), Duration::from_secs(180));
+        assert_eq!(request_timeout("claude.version"), Duration::from_secs(60));
     }
 }

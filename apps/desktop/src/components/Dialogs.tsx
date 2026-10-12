@@ -4,8 +4,9 @@ import { askConfirm } from "../lib/confirm";
 import { CheckCircle2, Play, Server, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type Commit, type HookStatus, type PullRequest, type Project } from "../lib/protocol";
-import { checkForUpdates, errorToast, refreshGit, selectedSession, shownWorkspace, toast, updateActions, updateSettings, useStore } from "../lib/store";
+import { checkClaudeVersion, checkForUpdates, errorToast, refreshGit, selectedSession, shownWorkspace, toast, updateActions, updateClaude, updateSettings, useStore } from "../lib/store";
 import { updateButton, updateStatus } from "../lib/updater";
+import { claudeOffer, claudeStatus } from "../lib/claudeUpdate";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { hostSections } from "../lib/sidebar";
@@ -553,6 +554,30 @@ function DaemonSection() {
   );
 }
 
+/** The installed Claude Code and its update (X36). */
+function ClaudeUpdateRow() {
+  const state = useStore((s) => s.claudeUpdate);
+  const versions = useStore((s) => s.claudeVersions);
+  const checking = useStore((s) => s.claudeChecking);
+  const status = claudeStatus(state, versions, checking);
+  const offer = claudeOffer(state, versions);
+  // Before the first automatic check, ten seconds after launch.
+  useEffect(() => {
+    if (!versions.installed && !versions.latest) void checkClaudeVersion();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="mb-2 flex items-center gap-2 ui-text-12.5">
+      <span>Claude Code {versions.installed ?? "…"}</span>
+      {status && <span className="ui-text-12 text-muted">{status}</span>}
+      {offer && (
+        <Button size="sm" className="ml-auto" onClick={() => void updateClaude()}>
+          Update to {offer}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** The running version, a manual check and the automatic one (X35). */
 function UpdatesSection() {
   const version = useStore((s) => s.appVersion);
@@ -574,11 +599,20 @@ function UpdatesSection() {
               {b.label}
             </Button>
           )}
-          <Button size="sm" variant="ghost" disabled={checking} onClick={() => void checkForUpdates({ manual: true })}>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={checking}
+            onClick={() => {
+              void checkForUpdates({ manual: true });
+              void checkClaudeVersion();
+            }}
+          >
             Check now
           </Button>
         </span>
       </div>
+      <ClaudeUpdateRow />
       <label className="flex items-center gap-2 ui-text-12.5">
         <input type="checkbox" checked={auto} onChange={(e) => updateSettings({ autoUpdateCheck: e.target.checked })} /> Check for updates automatically
       </label>
