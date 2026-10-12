@@ -151,7 +151,8 @@ export interface Session {
   agent: string | null;
   archived: boolean;
   created_at: number;
-  section?: string | null;
+  /** The workspace the session belongs to (X32). */
+  workspace_id?: string | null;
   model?: string | null;
   effort?: string | null;
   /** The session whose agent started this one (X22). */
@@ -160,22 +161,28 @@ export interface Session {
   layout: unknown;
 }
 
-/** A named set of projects shown as one sidebar block (X5). */
+/** A named, coloured scope with its own sections and sessions (X32). */
 export interface Workspace {
   id: string;
   name: string;
-  project_ids: string[];
-  sections: Section[];
-  view: WorkspaceView;
+  color: WorkspaceColor;
+  /** Its sections, in sidebar order. */
+  section_ids: string[];
   created_at: number;
 }
 
+export type WorkspaceColor = "clay" | "blue" | "violet" | "sand" | "grey";
+
+/** A named set of projects shown as one sidebar block (X5's workspace, X32). */
 export interface Section {
   id: string;
   name: string;
+  project_ids: string[];
+  view: SectionView;
+  created_at: number;
 }
 
-export interface WorkspaceView {
+export interface SectionView {
   group_by: "project" | "status" | "none";
   sort_by: "recent" | "created" | "name";
   filter: string[];
@@ -399,8 +406,13 @@ export const M = {
   workspaceCreate: "workspace.create",
   workspaceUpdate: "workspace.update",
   workspaceDelete: "workspace.delete",
-  workspaceAddProject: "workspace.add_project",
-  workspaceRemoveProject: "workspace.remove_project",
+  sectionList: "section.list",
+  sectionCreate: "section.create",
+  sectionUpdate: "section.update",
+  sectionDelete: "section.delete",
+  sectionMove: "section.move",
+  sectionAddProject: "section.add_project",
+  sectionRemoveProject: "section.remove_project",
   prStatus: "gh.pr_status",
   prStack: "gh.pr_stack",
   fsList: "fs.list",
@@ -432,6 +444,7 @@ export const EV = {
   projectsChanged: "projects.changed",
   sessionsChanged: "sessions.changed",
   workspacesChanged: "workspaces.changed",
+  sectionsChanged: "sections.changed",
   fsChanged: "fs.changed",
   chatItem: "chat.item",
   chatState: "chat.state",

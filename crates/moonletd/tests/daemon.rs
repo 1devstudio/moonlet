@@ -265,8 +265,8 @@ async fn workspace_lifecycle_over_rpc() {
 }
 
 #[tokio::test]
-async fn a_project_can_be_removed_from_a_workspace_over_rpc() {
-    use moonlet_proto::types::{Project, Workspace};
+async fn a_project_can_be_removed_from_a_section_over_rpc() {
+    use moonlet_proto::types::{Project, Section, Workspace};
     let d = TestDaemon::start().await;
     let repo = d.home.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
@@ -280,29 +280,96 @@ async fn a_project_can_be_removed_from_a_workspace_over_rpc() {
     );
 
     let mut c = d.client().await;
-    let ws: Workspace = c
+    let all: Vec<Workspace> = c.request(methods::WORKSPACE_LIST, ()).await.unwrap();
+    let sec: Section = c
         .request(
-            methods::WORKSPACE_CREATE,
-            serde_json::json!({"name": "CipherHealth"}),
+            methods::SECTION_CREATE,
+            serde_json::json!({"workspace_id": all[0].id, "name": "CipherHealth"}),
         )
         .await
         .unwrap();
     let p: Project = c
         .request(
-            methods::WORKSPACE_ADD_PROJECT,
-            serde_json::json!({"id": ws.id, "path": repo}),
+            methods::SECTION_ADD_PROJECT,
+            serde_json::json!({"id": sec.id, "path": repo}),
         )
         .await
         .unwrap();
     let _: bool = c
         .request(
-            "workspace.remove_project",
-            serde_json::json!({"id": ws.id, "project_id": p.id}),
+            "section.remove_project",
+            serde_json::json!({"id": sec.id, "project_id": p.id}),
         )
         .await
         .unwrap();
     let left: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
     assert!(left.is_empty());
+}
+
+/// X32: a new workspace takes a section from "Personal" with its sessions;
+/// the emptied workspace can then be deleted only once it has no sections.
+#[tokio::test]
+async fn a_workspace_takes_sections_over_rpc() {
+    use moonlet_proto::types::{Project, Section, Session, Workspace};
+    let d = TestDaemon::start().await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).status().unwrap().success());
+    }
+    let mut c = d.client().await;
+    let p: Project = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    let personal: Vec<Workspace> = c.request(methods::WORKSPACE_LIST, ()).await.unwrap();
+    assert_eq!(personal.len(), 1);
+    assert_eq!(personal[0].name, "Personal");
+    let sections: Vec<Section> = c.request(methods::SECTION_LIST, ()).await.unwrap();
+    let s: Session = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({"project_id": p.id, "name": "Deploy", "agent": "none"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(s.workspace_id.as_deref(), Some(personal[0].id.as_str()));
+
+    let work: Workspace = c
+        .request(
+            methods::WORKSPACE_CREATE,
+            serde_json::json!({"name": "CipherHealth", "color": "blue", "move_sections": [sections[0].id]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(work.section_ids, vec![sections[0].id.clone()]);
+    // Only the design's five colours are accepted.
+    let err = c
+        .request::<_, Workspace>(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Lab", "color": "#ff0000"}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown variant `#ff0000`"), "{err}");
+    let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    assert_eq!(sessions[0].workspace_id.as_deref(), Some(work.id.as_str()));
+
+    let err = c
+        .request::<_, bool>(methods::WORKSPACE_DELETE, serde_json::json!({"id": work.id}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("move or delete this workspace's sections first"), "{err}");
+    let _: bool = c
+        .request(methods::SECTION_MOVE, serde_json::json!({"id": sections[0].id, "workspace_id": personal[0].id}))
+        .await
+        .unwrap();
+    let _: bool = c
+        .request(methods::WORKSPACE_DELETE, serde_json::json!({"id": work.id}))
+        .await
+        .unwrap();
+    let left: Vec<Workspace> = c.request(methods::WORKSPACE_LIST, ()).await.unwrap();
+    assert_eq!(left.len(), 1);
 }
 
 #[tokio::test]
