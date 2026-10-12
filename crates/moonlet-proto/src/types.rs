@@ -566,6 +566,30 @@ pub struct ChatState {
     /// Messages sent while a turn was running, delivered in order.
     #[serde(default)]
     pub queued: Vec<String>,
+    /// How full the agent's context window is; `None` until it has said (X34).
+    #[serde(default)]
+    pub context: Option<ContextUsage>,
+}
+
+/// The agent's context window, from Claude's `get_context_usage` (X34).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ContextUsage {
+    /// Tokens in the context now.
+    pub used: u64,
+    /// The window size.
+    pub max: u64,
+    /// Where the agent compacts on its own; `None` when auto-compact is off.
+    #[serde(default)]
+    pub auto_compact_at: Option<u64>,
+    /// What fills the context, in the agent's order.
+    #[serde(default)]
+    pub categories: Vec<ContextCategory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ContextCategory {
+    pub name: String,
+    pub tokens: u64,
 }
 
 /// One of the agent's MCP servers (X29).
