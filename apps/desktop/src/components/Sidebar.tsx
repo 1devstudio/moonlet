@@ -673,8 +673,8 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full flex-col bg-panel">
-      {/* The traffic lights sit on the left of the title bar (X32). */}
-      <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center pl-[78px] pr-2.5">
+      {/* The traffic lights sit on the left of the title bar (X32), 16px before the switcher. */}
+      <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center pl-[86px] pr-2.5">
         <WorkspaceSwitcher />
       </div>
       <nav className="px-2 pb-3">
