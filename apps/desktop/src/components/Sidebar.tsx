@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, Settings, ShieldAlert } from "lucide-react";
+import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, compact, hostSections, lastActive, projectRemoval, type Group } from "../lib/sidebar";
-import { errorToast, projKey, pullBase, selectSession, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
+import { errorToast, projKey, pullBase, selectSession, updateActions, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
@@ -16,6 +16,7 @@ import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
+import { updateButton } from "../lib/updater";
 
 // ------------------------------------------------------------------ helpers
 
@@ -730,8 +731,31 @@ export function Sidebar() {
           <Settings size={14} />
         </IconButton>
         <ProfileFooter />
+        <UpdateButton />
       </div>
       {rowMenu && <RowContextMenu m={rowMenu} onClose={() => setRowMenu(null)} />}
     </aside>
   );
 }
+
+/** A new release in the sidebar footer: install it, follow the download,
+ *  then restart into it (X35). */
+function UpdateButton() {
+  const update = useStore((s) => s.update);
+  const b = updateButton(update);
+  if (!b) return null;
+  const Icon = b.action ? UPDATE_ICONS[b.action] : Loader2;
+  return (
+    <button
+      title={b.title}
+      disabled={!b.action}
+      onClick={b.action ? updateActions[b.action] : undefined}
+      className="ml-auto flex shrink-0 items-center gap-1.5 rounded-md bg-accent/15 px-2 py-1 ui-text-11.5 text-accent hover:bg-accent/25 disabled:opacity-70"
+    >
+      <Icon size={12} className={b.action ? undefined : "animate-spin"} />
+      {b.label}
+    </button>
+  );
+}
+
+const UPDATE_ICONS = { install: Download, restart: RotateCw };
