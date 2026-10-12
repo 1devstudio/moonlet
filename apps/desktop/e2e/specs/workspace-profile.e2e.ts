@@ -2,7 +2,7 @@
 // workspace dialog, and see a session's shell get it as CLAUDE_CONFIG_DIR.
 // Signing in is not exercised: the world's `claude` is a stub.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import type { ProfileInfo } from "../../src/lib/protocol";
@@ -14,7 +14,8 @@ type Profile = Pick<ProfileInfo, "id" | "name" | "path">;
 
 describe("workspace Claude profile", () => {
   it("creates a profile for a new workspace and starts its sessions with it", async () => {
-    const folder = `${w.root}/claude-work`;
+    // The daemon stores the folder with symlinks resolved (/var → /private/var).
+    const folder = `${realpathSync(w.root)}/claude-work`;
     await $('button[aria-label="Switch workspace, current: Personal"]').click();
     await $(sel.button("New workspace…")).click();
     await fill('//div[@role="dialog"]//input[@placeholder="Acme"]', "Acme");
