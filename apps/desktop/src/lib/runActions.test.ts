@@ -116,6 +116,12 @@ describe("shortcuts", () => {
     expect(recordKey("cmd+k", "setup", {})).toEqual({ kind: "error", message: "⌘K is reserved for Run action." });
     expect(recordKey("cmd+b", "setup", {})).toEqual({ kind: "error", message: "⌘B is reserved for Toggle sidebar." });
     expect(recordKey("cmd+3", "setup", {})).toEqual({ kind: "error", message: "⌘3 is reserved for Go to session 3." });
+    expect(recordKey("cmd+=", "setup", {})).toEqual({ kind: "error", message: "⌘= is reserved for Bigger text." });
+    expect(recordKey("shift+cmd++", "setup", {})).toEqual({ kind: "error", message: "⇧⌘+ is reserved for Bigger text." });
+    expect(recordKey("shift+cmd+=", "setup", {})).toEqual({ kind: "error", message: "⇧⌘= is reserved for Bigger text." });
+    expect(recordKey("cmd++", "setup", {})).toEqual({ kind: "error", message: "⌘+ is reserved for Bigger text." });
+    expect(recordKey("cmd+-", "setup", {})).toEqual({ kind: "error", message: "⌘- is reserved for Smaller text." });
+    expect(recordKey("cmd+0", "setup", {})).toEqual({ kind: "error", message: "⌘0 is reserved for Default text size." });
   });
 
   it("reports a key another action uses", () => {
