@@ -189,7 +189,44 @@ pub struct Workspace {
     /// The workspace's sections, in sidebar order.
     #[serde(default)]
     pub section_ids: Vec<String>,
+    /// The Claude profile its sessions use (X33); `None` is the default
+    /// profile, `~/.claude`.
+    #[serde(default)]
+    pub claude_profile: Option<String>,
     pub created_at: u64,
+}
+
+/// A Claude Code config folder, passed to Claude as `CLAUDE_CONFIG_DIR` (X33).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeProfile {
+    pub id: String,
+    pub name: String,
+    /// Absolute path of the folder.
+    pub path: String,
+    pub created_at: u64,
+}
+
+/// Who a profile is signed in as, from `claude auth status --json`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileAccount {
+    pub logged_in: bool,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub org_name: Option<String>,
+}
+
+/// A profile as `profile.list` returns it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProfileInfo {
+    #[serde(flatten)]
+    pub profile: ClaudeProfile,
+    /// Last known account; `None` until `profile.status` has run.
+    #[serde(default)]
+    pub account: Option<ProfileAccount>,
+    /// moonlet's hooks and skill are in the folder (A2).
+    #[serde(default)]
+    pub hooks_installed: bool,
 }
 
 /// The colours a workspace can have, as the design names them.
@@ -271,6 +308,10 @@ pub struct RestoreEntry {
     /// Live terminal this entry describes; reassigned on restore.
     #[serde(default, alias = "session")]
     pub terminal: Option<TerminalId>,
+    /// The Claude profile folder the agent ran in (X33); its conversation
+    /// can only be continued there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

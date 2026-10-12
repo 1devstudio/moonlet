@@ -51,6 +51,11 @@ pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
 pub const WORKSPACE_DELETE: &str = "workspace.delete";
+pub const PROFILE_LIST: &str = "profile.list";
+pub const PROFILE_CREATE: &str = "profile.create";
+pub const PROFILE_UPDATE: &str = "profile.update";
+pub const PROFILE_DELETE: &str = "profile.delete";
+pub const PROFILE_STATUS: &str = "profile.status";
 pub const SECTION_CREATE: &str = "section.create";
 pub const SECTION_LIST: &str = "section.list";
 pub const SECTION_UPDATE: &str = "section.update";
@@ -123,6 +128,7 @@ pub const EV_PROJECTS_CHANGED: &str = "projects.changed";
 pub const EV_SESSIONS_CHANGED: &str = "sessions.changed";
 pub const EV_WORKSPACES_CHANGED: &str = "workspaces.changed";
 pub const EV_SECTIONS_CHANGED: &str = "sections.changed";
+pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
 pub const EV_FS_CHANGED: &str = "fs.changed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -485,6 +491,9 @@ pub struct WorkspaceCreate {
     /// Sections to move into the new workspace from the ones they are in.
     #[serde(default)]
     pub move_sections: Vec<String>,
+    /// The Claude profile its sessions use (X33); absent for the default.
+    #[serde(default)]
+    pub claude_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -498,6 +507,36 @@ pub struct WorkspaceUpdate {
     /// workspace's own; sections of other workspaces listed here move in.
     #[serde(default)]
     pub section_ids: Option<Vec<String>>,
+    /// Absent: unchanged; `null`: the default profile; else a profile id (X33).
+    #[serde(default, deserialize_with = "present")]
+    pub claude_profile: Option<Option<String>>,
+}
+
+/// Tells a field sent as `null` (`Some(None)`) from one left out (`None`).
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileCreate {
+    pub name: String,
+    /// An existing or new folder; `~/.claude-<name>` when absent.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileUpdate {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// `id` absent: the default profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileStatus {
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
