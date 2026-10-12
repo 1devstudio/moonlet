@@ -1,0 +1,73 @@
+# Builds moonlet for Apple Silicon, signs the update archive and publishes a
+# GitHub release with latest.json, which installed apps check for (X35).
+#
+# Release: bump the version, merge, then push a tag that matches it:
+#   git tag v0.1.15 origin/main && git push origin v0.1.15
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Every action is pinned to a commit: the updater key below can ship code to
+# every installed app, so no action may change under a moved tag.
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Tag matches the app version
+        run: |
+          version=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match tauri.conf.json version $version"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: aarch64-unknown-linux-musl,x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Remote helpers (static Linux moonletd and moonlet)
+        run: |
+          brew install zig
+          cargo install cargo-zigbuild --locked
+          scripts/build-remote.sh
+
+      - run: pnpm install --frozen-lockfile
+
+      # Published only after every asset is uploaded, so releases/latest
+      # never points at a release without latest.json.
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: --config src-tauri/tauri.bundle.json --config src-tauri/tauri.release.json
+          tagName: ${{ github.ref_name }}
+          releaseName: moonlet __VERSION__
+          releaseBody: Apple Silicon build. It is not signed with a Developer ID yet, so a first install needs Open Anyway in System Settings › Privacy & Security. Installed apps update themselves from Settings › Updates.
+          releaseDraft: true
+          prerelease: false
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

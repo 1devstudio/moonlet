@@ -1,6 +1,6 @@
 # X35 — Check for updates and install them in the app
 
-- **Status:** in progress: the app side is done; the release workflow comes next
+- **Status:** implemented (2026-10-12). Unit tests pass; no real update has run yet, which needs two releases published by the workflow.
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** NFR distribution
 - **Related:** [X3](X3-distribution.md) (distribution), [S3](S3-live-upgrade.md) (daemon upgrade without killing sessions)
@@ -19,12 +19,12 @@ moonlet checks GitHub for a newer release, downloads it, verifies its signature 
 
 ## Behaviour and acceptance criteria
 
-- [ ] The app asks the updater endpoint ten seconds after launch and every six hours, while "Check for updates automatically" is on (the default). With it off, the app only checks when asked.
-- [ ] A found update shows the "Update to X.Y.Z" footer button and announces itself once per version with a toast and an **Install** action. A periodic check that finds the same version again does not toast again.
-- [ ] A check that runs while an update is downloading, installing or waiting for a restart leaves that state alone.
-- [ ] While downloading, the footer button shows the percentage when the size is known, and the downloaded megabytes when it isn't.
-- [ ] After the install, the footer button reads "Restart to update" and relaunches the app.
-- [ ] A check the user asked for reports "moonlet X.Y.Z is up to date" or the error. An automatic check fails quietly (only logged), so being offline is not an error.
+- [x] The app asks the updater endpoint ten seconds after launch and every six hours, while "Check for updates automatically" is on (the default). With it off, the app only checks when asked.
+- [x] A found update shows the "Update to X.Y.Z" footer button and announces itself once per version with a toast and an **Install** action. A periodic check that finds the same version again does not toast again.
+- [x] A check that runs while an update is downloading, installing or waiting for a restart leaves that state alone.
+- [x] While downloading, the footer button shows the percentage when the size is known, and the downloaded megabytes when it isn't.
+- [x] After the install, the footer button reads "Restart to update" and relaunches the app.
+- [x] A check the user asked for reports "moonlet X.Y.Z is up to date" or the error. An automatic check fails quietly (only logged), so being offline is not an error.
 - [ ] An update whose signature does not match the public key in `tauri.conf.json` is refused by the updater and reported as an error. Nothing is installed.
 - [ ] The release workflow publishes a non-draft, non-prerelease GitHub release for `v*` tags. It contains the DMG, `moonlet.app.tar.gz`, its `.sig` and `latest.json`, and fails when the tag does not match the app version.
 
@@ -71,6 +71,7 @@ None in the daemon. The app adds `tauri-plugin-updater` (check, download, instal
 
 - Unit (`lib/updater.test.ts`): the state after a check (found, not found, same version again, during a download or install), the once-per-version announcement, download progress from the updater's Started/Progress/Finished events, and the footer button's label for each state.
 - Unit (`lib/runActions.test.ts`): "Check for updates…" is in the Run action catalogue.
+- Not covered by unit tests: the launch and six-hour timers, the signature check (the updater plugin's own) and the workflow. They wait for the manual run below.
 - Manual, once the workflow has published two releases: install the older one, launch it, see the toast, install, restart, and check that the sessions survived and `moonlet rpc daemon.info` reports the new version.
 
 ## Open questions
