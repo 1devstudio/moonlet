@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an idea or an improvement for moonlet.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please search [existing issues](https://github.com/1devstudio/moonlet/issues) first, in case someone has asked for it already.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does it solve?
+      description: Describe the situation and what makes it hard today.
+      placeholder: When I run several agents at once, I cannot tell...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like to happen?
+      description: How you imagine it working, from your point of view as a user.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have considered
+      description: Workarounds you use today, or other ways to solve it.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would like to work on this myself.

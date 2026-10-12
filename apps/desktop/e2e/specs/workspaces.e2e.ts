@@ -29,16 +29,16 @@ describe("workspaces", () => {
 
     await switcher("Personal").click();
     await $(sel.button("New workspace…")).click();
-    await fill('//div[@role="dialog"]//input[@placeholder="CipherHealth"]', "CipherHealth");
+    await fill('//div[@role="dialog"]//input[@placeholder="Acme"]', "Acme");
     await $('//label[contains(normalize-space(), "Move sections from Personal")]/input').click();
     await $('//label[contains(normalize-space(), "My projects")]/input[@type="checkbox"]').click();
     await $(sel.button("Create workspace")).click();
 
     // The new workspace is shown, with the section and its session.
-    await expect(switcher("CipherHealth")).toBeDisplayed();
+    await expect(switcher("Acme")).toBeDisplayed();
     await expect($(sel.text(PROJECT))).toBeDisplayed();
     await expect($(sel.sessionRow(SESSION))).toBeDisplayed();
-    const work = rpc<Workspace[]>(w, "workspace.list", {}).find((x) => x.name === "CipherHealth")!;
+    const work = rpc<Workspace[]>(w, "workspace.list", {}).find((x) => x.name === "Acme")!;
     const personal = rpc<Workspace[]>(w, "workspace.list", {}).find((x) => x.name === "Personal")!;
     expect(personal.section_ids).toEqual([]);
 
@@ -53,25 +53,25 @@ describe("workspaces", () => {
     expect(terms.length).toBeGreaterThan(0);
     expect(terms.every((t) => !t.exit)).toBe(true);
     await ctrlCmd("2");
-    await expect(switcher("CipherHealth")).toBeDisplayed();
+    await expect(switcher("Acme")).toBeDisplayed();
 
     // Workspace settings renames and recolours it.
-    await switcher("CipherHealth").click();
+    await switcher("Acme").click();
     await $(sel.button("Workspace settings…")).click();
-    await fill('//div[@role="dialog"]//input[@placeholder="CipherHealth"]', "Cipher");
+    await fill('//div[@role="dialog"]//input[@placeholder="Acme"]', "Acme Corp");
     await $('button[aria-label="Violet"]').click();
     await $(sel.button("Save")).click();
-    await expect(switcher("Cipher")).toBeDisplayed();
+    await expect(switcher("Acme Corp")).toBeDisplayed();
     expect(rpc<(Workspace & { color: string })[]>(w, "workspace.list", {}).find((x) => x.id === work.id)?.color).toBe("violet");
 
     // A new session goes into the shown workspace.
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), project.id);
     await $('button[title="New session"]').click();
-    await fill('//textarea[@placeholder="What do you want to work on?"]', "Cipher banner");
+    await fill('//textarea[@placeholder="What do you want to work on?"]', "Acme banner");
     await $(sel.button("Create")).click();
-    await expect($(sel.sessionRow("Cipher banner"))).toBeDisplayed({ wait: 30_000 });
-    const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Cipher banner")!;
+    await expect($(sel.sessionRow("Acme banner"))).toBeDisplayed({ wait: 30_000 });
+    const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Acme banner")!;
     expect(created.workspace_id).toBe(work.id);
 
     // Leave the shared world as the other specs expect it.

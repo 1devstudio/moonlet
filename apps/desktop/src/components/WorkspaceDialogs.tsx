@@ -44,7 +44,7 @@ function NameField({ name, color, onChange, onEnter }: { name: string; color: Wo
       <WorkspaceMark name={name || "?"} color={color} size={36} />
       <label className="flex flex-1 flex-col gap-1.5">
         <span className="ui-text-12 text-muted">Name</span>
-        <input autoFocus className={inputCls} value={name} onChange={(e) => onChange(e.target.value)} placeholder="CipherHealth" onKeyDown={(e) => e.key === "Enter" && onEnter()} />
+        <input autoFocus className={inputCls} value={name} onChange={(e) => onChange(e.target.value)} placeholder="Acme" onKeyDown={(e) => e.key === "Enter" && onEnter()} />
       </label>
     </div>
   );

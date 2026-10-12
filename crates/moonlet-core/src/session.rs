@@ -1961,7 +1961,7 @@ mod tests {
         let path = repo.path().display().to_string();
         let r = mgr.add_project(&path).await.unwrap();
         let personal = mgr.list_workspaces()[0].id.clone();
-        let work = workspace(&mgr, "CipherHealth", vec![]);
+        let work = workspace(&mgr, "Acme", vec![]);
         let ops = mgr.create_section(&work.id, "AI Operations").unwrap();
         mgr.section_add_project(&ops.id, &path).await.unwrap();
         let profile = mgr.create_profile("Work", Some(&folder(&home, "claude-work"))).unwrap();
@@ -2134,7 +2134,7 @@ mod tests {
         let (repo, _home, mgr) = setup().await;
         let path = repo.path().display().to_string();
         let r = mgr.add_project(&path).await.unwrap();
-        let work = workspace(&mgr, "CipherHealth", vec![]);
+        let work = workspace(&mgr, "Acme", vec![]);
         let sec = mgr.create_section(&work.id, "AI Operations").unwrap();
         mgr.section_add_project(&sec.id, &path).await.unwrap();
         let mut req = spawn_req(&r.id, "Parent", None, None);
@@ -2789,12 +2789,12 @@ mod tests {
             "workspaces":[
               {"id":"w1","name":"1devstudio","project_ids":["p1","p2"],"sections":[],
                "view":{"group_by":"project","sort_by":"recent","filter":[]},"created_at":1},
-              {"id":"w2","name":"CipherHealth","project_ids":["p2","p3"],"sections":[{"id":"w2:a","name":"Today"}],
+              {"id":"w2","name":"Acme","project_ids":["p2","p3"],"sections":[{"id":"w2:a","name":"Today"}],
                "view":{"group_by":"status","sort_by":"name","filter":["p3"]},"created_at":2}],
             "projects":[
               {"id":"p1","name":"jaunt","path":"/r/jaunt","base_branch":"main"},
               {"id":"p2","name":"shared","path":"/r/shared","base_branch":"main"},
-              {"id":"p3","name":"cipher-paas","path":"/r/cipher-paas","base_branch":"develop"}],
+              {"id":"p3","name":"acme-api","path":"/r/acme-api","base_branch":"develop"}],
             "sessions":[
               {"id":"s1","project_id":"p1","name":"Fix","branch":"moonlet/fix","base":"main","path":"/w/fix",
                "agent":"claude","archived":false,"created_at":3,"section":null},
@@ -2809,7 +2809,7 @@ mod tests {
         assert_eq!(personal.section_ids, vec!["w1".to_string(), "w2".to_string()]);
         let secs = mgr.list_sections();
         let names: Vec<&str> = secs.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["1devstudio", "CipherHealth"]);
+        assert_eq!(names, vec!["1devstudio", "Acme"]);
         assert_eq!(secs[1].project_ids, vec!["p2".to_string(), "p3".to_string()]);
         assert_eq!(secs[1].view.group_by, "status");
         assert_eq!(secs[1].view.filter, vec!["p3".to_string()]);
@@ -2850,7 +2850,7 @@ mod tests {
         let (repo, _home, mgr) = setup().await;
         let first = mgr.list_sections()[0].clone();
         let ws = mgr.list_workspaces()[0].clone();
-        let work = mgr.create_section(&ws.id, "CipherHealth").unwrap();
+        let work = mgr.create_section(&ws.id, "Acme").unwrap();
         let r = mgr
             .section_add_project(&work.id, &repo.path().display().to_string())
             .await
@@ -2861,7 +2861,7 @@ mod tests {
             .filter(|s| s.project_ids.contains(&r.id))
             .map(|s| s.name)
             .collect();
-        assert_eq!(names, vec!["CipherHealth".to_string()]);
+        assert_eq!(names, vec!["Acme".to_string()]);
         assert_eq!(first.name, "My projects");
     }
 
@@ -2874,7 +2874,7 @@ mod tests {
             .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
-        let work = mgr.create_section(&ws.id, "CipherHealth").unwrap();
+        let work = mgr.create_section(&ws.id, "Acme").unwrap();
         mgr.section_add_project(&work.id, &repo.path().display().to_string())
             .await
             .unwrap();
@@ -2885,7 +2885,7 @@ mod tests {
             .filter(|s| s.project_ids.contains(&r.id))
             .map(|s| s.name)
             .collect();
-        assert_eq!(names, vec!["CipherHealth".to_string()]);
+        assert_eq!(names, vec!["Acme".to_string()]);
         assert_eq!(mgr.list_projects().len(), 1, "the project is kept");
     }
 
@@ -2910,7 +2910,7 @@ mod tests {
             .add_project(&repo.path().display().to_string())
             .await
             .unwrap();
-        let empty = mgr.create_section(&ws.id, "CipherHealth").unwrap();
+        let empty = mgr.create_section(&ws.id, "Acme").unwrap();
         let err = mgr.section_remove_project(&empty.id, &r.id).unwrap_err();
         assert_eq!(err.to_string(), "the project is not in this section");
         assert_eq!(mgr.list_projects().len(), 1);
@@ -2940,7 +2940,7 @@ mod tests {
         let personal = mgr.list_workspaces()[0].clone();
         let path = repo.path().display().to_string();
         let r = mgr.add_project(&path).await.unwrap();
-        let work = workspace(&mgr, "CipherHealth", vec![]);
+        let work = workspace(&mgr, "Acme", vec![]);
         let sec = mgr.create_section(&work.id, "AI Operations").unwrap();
         mgr.section_add_project(&sec.id, &path).await.unwrap();
 
@@ -2971,7 +2971,7 @@ mod tests {
         let alone = mgr.list_sections()[0].clone();
         let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
 
-        let work = workspace(&mgr, "CipherHealth", vec![alone.id.clone()]);
+        let work = workspace(&mgr, "Acme", vec![alone.id.clone()]);
         assert_eq!(section_names(&mgr, &work), vec!["My projects".to_string()]);
         assert!(section_names(&mgr, &personal).is_empty());
         assert_eq!(mgr.session(&s.id).unwrap().workspace_id.as_deref(), Some(work.id.as_str()));
@@ -2992,7 +2992,7 @@ mod tests {
         let err = mgr.delete_workspace(&personal.id).unwrap_err();
         assert_eq!(err.to_string(), "the last workspace cannot be deleted");
         let sec = mgr.list_sections()[0].clone();
-        let work = workspace(&mgr, "CipherHealth", vec![sec.id.clone()]);
+        let work = workspace(&mgr, "Acme", vec![sec.id.clone()]);
         let err = mgr.delete_workspace(&work.id).unwrap_err();
         assert_eq!(err.to_string(), "move or delete this workspace's sections first");
         mgr.move_section(&sec.id, &personal.id).unwrap();
@@ -3006,7 +3006,7 @@ mod tests {
         let (_repo, home, mgr) = setup().await;
         let sec = mgr.list_sections()[0].id.clone();
         let err = mgr
-            .create_workspace(WorkspaceCreate { name: "CipherHealth".into(), color: WorkspaceColor::Blue, move_sections: vec![sec.clone(), "gone".into()], claude_profile: None })
+            .create_workspace(WorkspaceCreate { name: "Acme".into(), color: WorkspaceColor::Blue, move_sections: vec![sec.clone(), "gone".into()], claude_profile: None })
             .unwrap_err();
         assert_eq!(err.to_string(), "no such section");
         let names: Vec<String> = mgr.list_workspaces().into_iter().map(|w| w.name).collect();
@@ -3037,7 +3037,7 @@ mod tests {
         let personal = mgr.list_workspaces()[0].clone();
         let mine = personal.section_ids[0].clone();
         let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
-        let work = workspace(&mgr, "CipherHealth", vec![]);
+        let work = workspace(&mgr, "Acme", vec![]);
         let ops = mgr.create_section(&work.id, "AI Operations").unwrap();
 
         let updated = mgr
@@ -3069,7 +3069,7 @@ mod tests {
         let path = repo.path().display().to_string();
         let r = mgr.add_project(&path).await.unwrap();
         let mine = mgr.list_sections()[0].clone();
-        let work = workspace(&mgr, "CipherHealth", vec![]);
+        let work = workspace(&mgr, "Acme", vec![]);
         let ops = mgr.create_section(&work.id, "AI Operations").unwrap();
         mgr.section_add_project(&ops.id, &path).await.unwrap();
         let s = mgr.create_session(new_session(&r.id, Some(&work.id))).await.unwrap();
@@ -3093,7 +3093,7 @@ mod tests {
         let r = mgr.add_project(&path).await.unwrap();
         let personal = mgr.list_workspaces()[0].clone();
         let mine = mgr.list_sections()[0].clone();
-        let work = workspace(&mgr, "CipherHealth", vec![]);
+        let work = workspace(&mgr, "Acme", vec![]);
         let ops = mgr.create_section(&work.id, "AI Operations").unwrap();
         mgr.section_add_project(&ops.id, &path).await.unwrap();
         let s = mgr.create_session(new_session(&r.id, Some(&work.id))).await.unwrap();
@@ -3113,11 +3113,11 @@ mod tests {
         let (_repo, _home, mgr) = setup().await;
         let empty = mgr.create_workspace(WorkspaceCreate { name: "  ".into(), color: WorkspaceColor::Sand, move_sections: vec![], claude_profile: None });
         assert_eq!(empty.unwrap_err().to_string(), "workspace name is empty");
-        let w = workspace(&mgr, "CipherHealth", vec![]);
+        let w = workspace(&mgr, "Acme", vec![]);
         let renamed = mgr
-            .update_workspace(WorkspaceUpdate { id: w.id.clone(), name: Some("Cipher".into()), color: Some(WorkspaceColor::Violet), section_ids: None, claude_profile: None })
+            .update_workspace(WorkspaceUpdate { id: w.id.clone(), name: Some("Acme Corp".into()), color: Some(WorkspaceColor::Violet), section_ids: None, claude_profile: None })
             .unwrap();
-        assert_eq!((renamed.name.as_str(), renamed.color), ("Cipher", WorkspaceColor::Violet));
+        assert_eq!((renamed.name.as_str(), renamed.color), ("Acme Corp", WorkspaceColor::Violet));
     }
 
     /// Deleting a section keeps its projects: they move to another section of
@@ -3127,7 +3127,7 @@ mod tests {
         let (repo, _home, mgr) = setup().await;
         let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
         let first = mgr.list_sections()[0].clone();
-        let work = workspace(&mgr, "CipherHealth", vec![first.id.clone()]);
+        let work = workspace(&mgr, "Acme", vec![first.id.clone()]);
         let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
         let err = mgr.delete_section(&first.id).unwrap_err();
         assert_eq!(err.to_string(), "archive the sessions of this section's projects first");

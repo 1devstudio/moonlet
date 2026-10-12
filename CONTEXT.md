@@ -4,7 +4,7 @@ These terms are used the same way in the UI, the code, the protocol and the docs
 
 | Term | Meaning | Code |
 |---|---|---|
-| **Workspace** | A named, coloured scope such as "Personal" or "CipherHealth", with its own sections, sessions and Claude profile. The sidebar shows one workspace at a time; the switcher moves between them. | `Workspace` |
+| **Workspace** | A named, coloured scope such as "Personal" or "Acme", with its own sections, sessions and Claude profile. The sidebar shows one workspace at a time; the switcher moves between them. | `Workspace` |
 | **Section** | A named set of projects inside a workspace, shown as one collapsible block in the sidebar (e.g. "1devstudio", "Side projects"). A project can be in more than one section, and in more than one workspace. | `Section` |
 | **Claude profile** | A Claude Code config folder with its own login, settings, MCP servers and history. Each workspace uses one; the default is `~/.claude`. | `ClaudeProfile` |
 | **Project** | A git repository folder on disk (local or on a remote host). | `Project` |

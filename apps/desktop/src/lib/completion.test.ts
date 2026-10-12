@@ -6,10 +6,10 @@ const file = (name: string) => ({ name, kind: "file" as const });
 
 describe("completion popup (T8)", () => {
   it("lists directories, then files, each alphabetically, with the typed prefix to bold", () => {
-    expect(completionModel([file("cipher.md"), dir("cipher-sdd"), dir("cipher-paas"), file("other")], "cipher")).toEqual([
-      { name: "cipher-paas", kind: "dir", label: "Directory", match: 6, insert: "cipher-paas/" },
-      { name: "cipher-sdd", kind: "dir", label: "Directory", match: 6, insert: "cipher-sdd/" },
-      { name: "cipher.md", kind: "file", label: "File", match: 6, insert: "cipher.md " },
+    expect(completionModel([file("acme.md"), dir("acme-web"), dir("acme-api"), file("other")], "acme")).toEqual([
+      { name: "acme-api", kind: "dir", label: "Directory", match: 4, insert: "acme-api/" },
+      { name: "acme-web", kind: "dir", label: "Directory", match: 4, insert: "acme-web/" },
+      { name: "acme.md", kind: "file", label: "File", match: 4, insert: "acme.md " },
     ]);
   });
 

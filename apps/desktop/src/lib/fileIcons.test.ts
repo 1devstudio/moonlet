@@ -18,7 +18,7 @@ describe("fileIcon (X25)", () => {
 
   it("has no icon for an unknown file, so it gets the plain one", () => {
     expect(fileIcon(".trivyignore")).toBeNull();
-    expect(fileIcon(".cipher-local-cli-digest")).toBeNull();
+    expect(fileIcon(".acme-local-cli-digest")).toBeNull();
     expect(fileIcon("notes.unknownext")).toBeNull();
   });
 });
