@@ -47,7 +47,7 @@ describe("Run action", () => {
   it("filters by the typed letters", async () => {
     await open();
     await fill(query, "set");
-    await expect($(sel.text("5 of 23"))).toBeDisplayed();
+    await expect($(sel.text("6 of 23"))).toBeDisplayed();
     await expect(row("Re-run setup script")).toBeDisplayed();
     await fill(query, "deploy");
     await expect($(sel.text("No actions match “deploy”."))).toBeDisplayed();

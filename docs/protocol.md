@@ -40,7 +40,7 @@ Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`;
 - `daemon.*`: info, shutdown, upgrade.
 - `terminal.*`: create, list, attach, detach, resize, kill, write, search.
 - `agent.report`: state reports from agent hooks (`moonlet hook …`).
-- `workspace.*`, `project.*` and `session.*`: workspaces, projects, worktree sessions, scripts.
+- `workspace.*`, `section.*`, `project.*` and `session.*`: workspaces, their sections, projects, worktree sessions, scripts (X32).
 - `chat.*`: state, send, permission, interrupt, settings (model, effort, permission mode) for structured agents (X6, X7). Events: `chat.item`, `chat.state`.
 - `git.*` and `gh.*`: status, diffs, staging, commit, log, PRs, issues.
 - `fs.*`: list, files, read, write, watch.

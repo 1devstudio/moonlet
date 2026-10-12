@@ -20,6 +20,7 @@ import {
   type PullRequest,
   type TerminalInfo,
   type Session,
+  type Section,
   type Workspace,
 } from "./protocol";
 import { sanitize } from "./sanitize";
@@ -154,8 +155,11 @@ interface State extends UiPersist {
   hosts: Record<string, HostInfo>;
   projects: Record<string, Project[]>;
   sessions: Record<string, Session[]>;
-  /** Workspaces (sets of projects) per host. */
+  /** Workspaces per host (X32). */
   workspaces: Record<string, Workspace[]>;
+  /** Sections (sets of projects) per host, in no particular order: a
+   * workspace's `section_ids` orders its own. */
+  sections: Record<string, Section[]>;
   /** Pull request per session (`sesKey`), when known. */
   prs: Record<string, PullRequest | null>;
   /** Base branch against origin per project (`projKey`). */
@@ -177,8 +181,8 @@ interface State extends UiPersist {
   dialog:
     | null
     | { kind: "new-session"; host?: string; project?: string; workspace?: string }
-    | { kind: "add-project"; host?: string; workspace?: string }
-    | { kind: "new-workspace" }
+    | { kind: "add-project"; host?: string; section?: string }
+    | { kind: "new-section" }
     | { kind: "create-pr" }
     | { kind: "settings" }
     | { kind: "project-settings"; host: string; project: string; focus?: "run" }
@@ -213,6 +217,7 @@ function makeStore() {
   sessions: {},
   terminals: {},
   workspaces: {},
+  sections: {},
   prs: {},
   base: {},
   avatars: {},
@@ -318,14 +323,16 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     console.warn(`output channel for ${host} failed`, e);
   }
   try {
-    const [workspaces, projects, sessions, terminals] = await Promise.all([
+    const [workspaces, sections, projects, sessions, terminals] = await Promise.all([
       rpc<Workspace[]>(host, M.workspaceList),
+      rpc<Section[]>(host, M.sectionList),
       rpc<Project[]>(host, M.projectList),
       rpc<Session[]>(host, M.sessionList),
       rpc<TerminalInfo[]>(host, M.terminalList),
     ]);
     set((s) => ({
       workspaces: { ...s.workspaces, [host]: workspaces },
+      sections: { ...s.sections, [host]: sections },
       projects: { ...s.projects, [host]: projects },
       sessions: { ...s.sessions, [host]: sessions },
       terminals: { ...s.terminals, [host]: Object.fromEntries(terminals.map((x) => [x.id, x])) },
@@ -688,6 +695,9 @@ function handleEvent(e: DaemonEvent) {
       break;
     case EV.workspacesChanged:
       set((s) => ({ workspaces: { ...s.workspaces, [host]: data as Workspace[] } }));
+      break;
+    case EV.sectionsChanged:
+      set((s) => ({ sections: { ...s.sections, [host]: data as Section[] } }));
       break;
     case EV.sessionsChanged: {
       const list = data as Session[];

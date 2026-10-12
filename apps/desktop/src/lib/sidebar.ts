@@ -1,14 +1,13 @@
-// How a workspace's sessions are grouped, filtered and sorted in the
-// sidebar (X5). Pure, so it is unit-tested.
+// How a section's sessions are grouped, filtered and sorted in the sidebar
+// (X5, X32). Pure, so it is unit-tested.
 
-import type { AgentState, Project, Session, Workspace } from "./protocol";
+import type { AgentState, Project, Section, Session, Workspace } from "./protocol";
 
 export interface Group {
   key: string;
-  kind: "section" | "project" | "status" | "all";
+  kind: "project" | "status" | "all";
   label: string;
   projectId?: string;
-  sectionId?: string;
   sessions: Session[];
 }
 
@@ -21,8 +20,11 @@ const STATUS_ORDER: { state: AgentState | null; label: string }[] = [
   { state: null, label: "No agent" },
 ];
 
+/** The groups of section `sec`, showing only the sessions of `workspaceId`,
+ * the workspace the section is in. */
 export function arrange(
-  ws: Workspace,
+  workspaceId: string,
+  sec: Section,
   projects: Project[],
   sessions: Session[],
   stateOf: (s: Session) => AgentState | null,
@@ -30,31 +32,25 @@ export function arrange(
   /** Archived sessions whose row still plays the archive loader (X21). */
   archiving: (s: Session) => boolean = () => false,
 ): Group[] {
-  const filter = ws.view.filter.filter((id) => ws.project_ids.includes(id));
-  const visible = ws.project_ids.filter((id) => filter.length === 0 || filter.includes(id));
+  const filter = sec.view.filter.filter((id) => sec.project_ids.includes(id));
+  const visible = sec.project_ids.filter((id) => filter.length === 0 || filter.includes(id));
   const byId = new Map(projects.map((p) => [p.id, p]));
-  const sorted = sessions
-    .filter((s) => (!s.archived || archiving(s)) && visible.includes(s.project_id))
+  const rest = sessions
+    .filter((s) => (!s.archived || archiving(s)) && s.workspace_id === workspaceId && visible.includes(s.project_id))
     .sort((a, b) => {
-      if (ws.view.sort_by === "name") return a.name.localeCompare(b.name);
-      if (ws.view.sort_by === "created") return b.created_at - a.created_at;
+      if (sec.view.sort_by === "name") return a.name.localeCompare(b.name);
+      if (sec.view.sort_by === "created") return b.created_at - a.created_at;
       return activeAt(b) - activeAt(a) || b.created_at - a.created_at;
     });
 
   const groups: Group[] = [];
-  const sectionIds = new Set(ws.sections.map((s) => s.id));
-  for (const sec of ws.sections) {
-    groups.push({ key: `sec:${sec.id}`, kind: "section", label: sec.name, sectionId: sec.id, sessions: sorted.filter((s) => s.section === sec.id) });
-  }
-  const rest = sorted.filter((s) => !s.section || !sectionIds.has(s.section));
-
-  if (ws.view.group_by === "project") {
+  if (sec.view.group_by === "project") {
     for (const id of visible) {
       const p = byId.get(id);
       if (!p) continue;
       groups.push({ key: `proj:${id}`, kind: "project", label: p.name, projectId: id, sessions: rest.filter((s) => s.project_id === id) });
     }
-  } else if (ws.view.group_by === "status") {
+  } else if (sec.view.group_by === "status") {
     for (const { state, label } of STATUS_ORDER) {
       const list = rest.filter((s) => stateOf(s) === state);
       if (list.length) groups.push({ key: `status:${state}`, kind: "status", label, sessions: list });
@@ -65,6 +61,23 @@ export function arrange(
   return groups;
 }
 
+/** A workspace's sections in its order (X32). */
+export function workspaceSections(ws: Workspace, sections: Section[]): Section[] {
+  const byId = new Map(sections.map((s) => [s.id, s]));
+  return ws.section_ids.flatMap((id) => byId.get(id) ?? []);
+}
+
+/** A host's sections in sidebar order, each with its workspace and the label
+ * pickers show ("Workspace › Section" once there are several workspaces). */
+export function hostSections(workspaces: Workspace[], sections: Section[]): { ws: Workspace; sec: Section; label: string }[] {
+  return workspaces.flatMap((ws) => workspaceSections(ws, sections).map((sec) => ({ ws, sec, label: workspaces.length > 1 ? `${ws.name} › ${sec.name}` : sec.name })));
+}
+
+/** Whether a section of `ws` holds `projectId`: its sessions may live there. */
+export function holdsProject(ws: Workspace, sections: Section[], projectId: string): boolean {
+  return workspaceSections(ws, sections).some((s) => s.project_ids.includes(projectId));
+}
+
 /** `5512` → `5.5k`, as in Conductor's sidebar. */
 export function compact(n: number): string {
   if (n < 1000) return String(n);
@@ -72,40 +85,16 @@ export function compact(n: number): string {
   return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`;
 }
 
-export interface Dragged {
-  sessionId: string;
-  projectId: string;
-  section: string | null | undefined;
-}
-
 /**
- * What dropping a session on a group does: `{ section }` to send to
- * `session.update` (`""` removes it from its section), or `null` when the
- * drop is not allowed or changes nothing.
+ * The project row's "Remove from <section>" item. `section.remove_project`
+ * drops a project no other section holds, so that case asks first.
  */
-export function dropResult(d: Dragged, target: Group): { section: string } | null {
-  const inSection = !!d.section;
-  switch (target.kind) {
-    case "section":
-      return target.sectionId && target.sectionId !== d.section ? { section: target.sectionId } : null;
-    case "project":
-      // A session can only go back to its own project.
-      return inSection && target.projectId === d.projectId ? { section: "" } : null;
-    default:
-      return inSection ? { section: "" } : null;
-  }
-}
-
-/**
- * The project row's "Remove from <workspace>" item. `workspace.remove_project`
- * drops a project no other workspace holds, so that case asks first.
- */
-export function projectRemoval(workspaces: Workspace[], wsId: string, project: Project): { label: string; confirm: string | null } {
-  const ws = workspaces.find((w) => w.id === wsId);
-  const elsewhere = workspaces.some((w) => w.id !== wsId && w.project_ids.includes(project.id));
+export function projectRemoval(sections: Section[], secId: string, project: Project): { label: string; confirm: string | null } {
+  const sec = sections.find((s) => s.id === secId);
+  const elsewhere = sections.some((s) => s.id !== secId && s.project_ids.includes(project.id));
   return {
-    label: `Remove from ${ws?.name ?? "workspace"}`,
-    confirm: elsewhere ? null : `${project.name} is in no other workspace, so it will be removed from moonlet. The folder on disk is not touched.`,
+    label: `Remove from ${sec?.name ?? "section"}`,
+    confirm: elsewhere ? null : `${project.name} is in no other section, so it will be removed from moonlet. The folder on disk is not touched.`,
   };
 }
 
