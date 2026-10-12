@@ -1,6 +1,6 @@
-// Collapsed tool calls and thinking rows in the agent view (X14) and the
-// footer under the final message (X16), with a fake `claude` that replays
-// one recorded-style turn.
+// Collapsed tool calls and thinking rows in the agent view (X14), the
+// footer under the final message (X16) and the context ring (X34), with a
+// fake `claude` that replays one recorded-style turn.
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
@@ -22,6 +22,9 @@ out() { printf '%s\n' "$1"; }
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) out '{"type":"system","subtype":"init","session_id":"e2e-1","model":"e2e-model","slash_commands":[]}' ;;
+    *'"subtype":"get_context_usage"'*)
+      id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      out '{"type":"control_response","response":{"subtype":"success","request_id":"'"$id"'","response":{"categories":[{"name":"System prompt","tokens":8100,"kind":"used"},{"name":"Messages","tokens":116100,"kind":"used"},{"name":"Free space","tokens":75800,"kind":"free"}],"totalTokens":124200,"maxTokens":200000,"autoCompactThreshold":190000,"isAutoCompactEnabled":true}}}' ;;
     *'"type":"user"'*)
       out '{"type":"assistant","message":{"id":"m1","content":[{"type":"thinking","thinking":"The resume URL is session-bound so I cannot fetch it.\nTry the probe with cookies kept."},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"echo first\necho the-tail-the-row-cuts-off"}}]}}'
       out '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","content":"first-output"}]}}'
@@ -123,5 +126,17 @@ describe("agent view", () => {
     await expect($(sel.button("2 tool calls"))).not.toBeExisting();
     await expect(bashRows()).toBeElementsArrayOfSize(2);
     await expect($(sel.text(ANSWER))).toBeDisplayed();
+  });
+
+  it("shows how full the context is and compacts it from the card", async () => {
+    const ring = $('button[title="Context window"]');
+    await expect(ring).toHaveText("62%", { wait: 10_000 });
+    await expect($(sel.text("$0.010 · 3 in · 2 out"))).toBeDisplayed();
+    await ring.click();
+    await expect($(sel.text("124k / 200k"))).toBeDisplayed();
+    await expect($(sel.text("Auto-compacts at 95%"))).toBeDisplayed();
+    await $(sel.button("Compact now")).click();
+    await expect($(sel.text("124k / 200k"))).not.toBeExisting();
+    await expect($(sel.text("/compact"))).toBeDisplayed();
   });
 });

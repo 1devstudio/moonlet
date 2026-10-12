@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatImage, ChatState, McpServer, NamedItem, PermissionAsk};
+use moonlet_proto::types::{ChatImage, ChatState, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, SignIns, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
@@ -68,6 +68,24 @@ fn mcp_server(v: &Value) -> Option<McpServer> {
         error: v["error"].as_str().map(String::from),
         tools: v["tools"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str().map(String::from)).collect(),
         auth_url: None,
+    })
+}
+
+/// Claude's `get_context_usage` reply (X34): the used categories only.
+fn context_usage(r: &Value) -> Option<ContextUsage> {
+    let categories = r["categories"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["kind"] == "used")
+        .filter_map(|c| Some(ContextCategory { name: c["name"].as_str()?.to_string(), tokens: c["tokens"].as_u64()? }))
+        .filter(|c| c.tokens > 0)
+        .collect();
+    Some(ContextUsage {
+        used: r["totalTokens"].as_u64()?,
+        max: r["maxTokens"].as_u64()?,
+        auto_compact_at: r["autoCompactThreshold"].as_u64().filter(|_| r["isAutoCompactEnabled"].as_bool().unwrap_or(false)),
+        categories,
     })
 }
 
@@ -267,7 +285,14 @@ impl Adapter for Claude {
             "control_response" => {
                 let resp = &v["response"];
                 let rid = resp["request_id"].as_str().unwrap_or_default();
-                if rid.starts_with("mcp-status-") && resp["subtype"] == "success" {
+                if rid.starts_with("context-") {
+                    if resp["subtype"] == "success"
+                        && let Some(c) = context_usage(&resp["response"])
+                    {
+                        st.context = Some(c);
+                        out.push(Out::State);
+                    }
+                } else if rid.starts_with("mcp-status-") && resp["subtype"] == "success" {
                     let mut rows: Vec<McpServer> = resp["response"]["mcpServers"].as_array().into_iter().flatten().filter_map(mcp_server).collect();
                     self.sign_ins.merge(&mut rows);
                     st.mcp_servers = Some(rows);
@@ -296,6 +321,7 @@ impl Adapter for Claude {
                             .collect();
                     }
                     out.push(Out::State);
+                    out.push(self.control("context", json!({"subtype": "get_context_usage", "detail": "summary"})));
                 }
             }
             "control_request" => {
@@ -365,6 +391,7 @@ impl Adapter for Claude {
                     out.extend(finish_turn(st, started_at));
                 }
                 out.push(Out::State);
+                out.push(self.control("context", json!({"subtype": "get_context_usage", "detail": "summary"})));
             }
             _ => {}
         }
@@ -458,7 +485,7 @@ impl Adapter for Claude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moonlet_proto::types::McpServer;
+    use moonlet_proto::types::{ContextCategory, ContextUsage, McpServer};
 
     fn replay(fixture: &str, a: &mut Claude, st: &mut ChatState) -> Vec<Out> {
         fixture.lines().flat_map(|l| a.on_line(l, st)).collect()
@@ -854,6 +881,79 @@ mod tests {
         // A mode the picker does not offer changes nothing.
         assert!(a.on_line(&status("dontAsk"), &mut st).is_empty());
         assert_eq!(st.mode.as_deref(), Some("manual"));
+    }
+
+    /// Captured from Claude Code 2.1.292 (`get_context_usage`, summary
+    /// detail; trimmed to the fields moonlet reads).
+    const CONTEXT_REPLY: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"context-1","response":{"categories":[{"name":"System prompt","tokens":2387,"color":"promptBorder","kind":"used"},{"name":"System tools","tokens":1096,"color":"inactive","kind":"used"},{"name":"System tools (deferred)","tokens":13287,"color":"inactive","isDeferred":true,"kind":"deferred"},{"name":"Custom agents","tokens":374,"color":"permission","kind":"used"},{"name":"Memory files","tokens":649,"color":"claude","kind":"used"},{"name":"Skills","tokens":8790,"color":"warning","kind":"used"},{"name":"Messages","tokens":1869,"color":"purple_FOR_SUBAGENTS_ONLY","kind":"used"},{"name":"Autocompact buffer","tokens":33000,"color":"inactive","kind":"buffer"},{"name":"Free space","tokens":951835,"color":"promptBorder","kind":"free"}],"totalTokens":15165,"maxTokens":1000000,"rawMaxTokens":1000000,"percentage":2,"model":"claude-opus-5-5","autoCompactThreshold":967000,"isAutoCompactEnabled":true}}}"#;
+
+    fn category(name: &str, tokens: u64) -> ContextCategory {
+        ContextCategory { name: name.into(), tokens }
+    }
+
+    #[test]
+    fn context_usage_is_asked_after_initialize_and_after_each_turn() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        let asked = Some(json!({"subtype": "get_context_usage", "detail": "summary"}));
+        let outs = a.on_line(r#"{"type":"control_response","response":{"subtype":"success","request_id":"init-1","response":{"commands":[]}}}"#, &mut st);
+        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), asked);
+        let outs = a.on_line(r#"{"type":"result","subtype":"success","is_error":false,"usage":{}}"#, &mut st);
+        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), asked);
+        // A failed turn and a stopped one still used context.
+        let outs = a.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{}}"#, &mut st);
+        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), asked);
+        st.status = "working".into();
+        a.interrupt(&mut st);
+        let outs = a.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{}}"#, &mut st);
+        assert_eq!(writes(&outs).last().map(|w| w["request"].clone()), asked);
+    }
+
+    #[test]
+    fn context_usage_reply_fills_the_state() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        let id = writes(&a.on_line(r#"{"type":"result","subtype":"success","is_error":false,"usage":{}}"#, &mut st)).last().unwrap()["request_id"].as_str().unwrap().to_string();
+        assert_eq!(a.on_line(&CONTEXT_REPLY.replace("context-1", &id), &mut st), [Out::State]);
+        assert_eq!(
+            st.context,
+            Some(ContextUsage {
+                used: 15165,
+                max: 1_000_000,
+                auto_compact_at: Some(967_000),
+                categories: vec![
+                    category("System prompt", 2387),
+                    category("System tools", 1096),
+                    category("Custom agents", 374),
+                    category("Memory files", 649),
+                    category("Skills", 8790),
+                    category("Messages", 1869),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn context_usage_drops_empty_categories_and_an_off_threshold() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        let reply = CONTEXT_REPLY.replace(r#""tokens":374"#, r#""tokens":0"#).replace(r#""isAutoCompactEnabled":true"#, r#""isAutoCompactEnabled":false"#);
+        a.on_line(&reply, &mut st);
+        let ctx = st.context.unwrap();
+        assert_eq!(ctx.auto_compact_at, None);
+        assert!(!ctx.categories.iter().any(|c| c.name == "Custom agents"), "{:?}", ctx.categories);
+    }
+
+    #[test]
+    fn a_failed_context_reply_keeps_the_last_reading() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.on_line(CONTEXT_REPLY, &mut st);
+        let before = st.context.clone();
+        let outs = a.on_line(r#"{"type":"control_response","response":{"subtype":"error","request_id":"context-2","error":"get_context_usage is not supported in this context"}}"#, &mut st);
+        assert!(outs.is_empty());
+        assert_eq!(st.context, before);
     }
 
     #[test]
