@@ -3,7 +3,7 @@
 
 import { draftToAgent, focusPane, focusedEntry, runAction, selectSessionByIndex, switchTab } from "./actions";
 import { actionForKey, keyId } from "./runActions";
-import { errorToast, toast, useStore } from "./store";
+import { errorToast, switchWorkspaceByIndex, toast, useStore } from "./store";
 import { pickBlockForAgent } from "./terminals";
 
 type Handler = () => void;
@@ -69,6 +69,11 @@ export function installShortcuts() {
         e.preventDefault();
         e.stopPropagation();
       }
+      return;
+    }
+    if (/^ctrl\+cmd\+[1-9]$/.test(id)) {
+      e.preventDefault();
+      switchWorkspaceByIndex(Number(id.slice(-1)) - 1);
       return;
     }
     if (/^cmd\+[1-9]$/.test(id)) {

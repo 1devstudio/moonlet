@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { holdsProject } from "../lib/sidebar";
+import { composerOptions, composerTarget } from "../lib/workspaces";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
-import { errorToast, selectSession, useStore } from "../lib/store";
+import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, cx } from "./ui";
 import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
@@ -206,28 +206,28 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   const selected = useStore((s) => s.selected);
   const close = () => useStore.setState({ dialog: null });
 
-  // Projects of connected hosts; the preset (or current session's) project first.
-  const options = useMemo(() => {
-    const out: { host: string; project: Project; section: string | null }[] = [];
-    for (const [h, list] of Object.entries(allProjects)) {
-      if (hosts[h]?.status !== "connected") continue;
-      for (const p of list) {
-        const sec = (allSections[h] ?? []).find((s) => s.project_ids.includes(p.id));
-        out.push({ host: h, project: p, section: sec?.name ?? null });
-      }
-    }
-    return out;
-  }, [allProjects, allSections, hosts]);
-  /** The preset workspace, when it holds the project (X32); else the daemon picks. */
-  const workspaceFor = (host: string, projectId: string) => {
-    const ws = (allWorkspaces[host] ?? []).find((w) => w.id === presetWorkspace);
-    return ws && holdsProject(ws, allSections[host] ?? [], projectId) ? ws.id : null;
-  };
+  // The session goes into the preset workspace, else the one the sidebar
+  // shows (X32), and the picker offers that workspace's projects.
+  const shown = useStore((s) => shownWorkspace(s));
+  const target = composerTarget(presetHost, presetWorkspace, shown);
+  const options = useMemo(
+    () =>
+      composerOptions<Project>(
+        Object.fromEntries(
+          Object.keys(allProjects).map((h) => [h, { connected: hosts[h]?.status === "connected", workspaces: allWorkspaces[h] ?? [], sections: allSections[h] ?? [], projects: allProjects[h] ?? [] }]),
+        ),
+        target,
+      ),
+    // `target` is rebuilt each render; its parts are what matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allProjects, allSections, allWorkspaces, hosts, target?.host, target?.id],
+  );
+  /** Every option is in the target workspace when there is one (X32). */
+  const workspaceFor = (host: string) => (target?.host === host ? target.id : null);
   const currentProject = useStore((s) => (s.selected ? s.sessions[s.selected.host]?.find((x) => x.id === s.selected!.session)?.project_id : undefined));
   const initial =
     options.find((o) => o.host === presetHost && o.project.id === presetProject) ??
     options.find((o) => o.host === selected?.host && o.project.id === currentProject) ??
-    options.find((o) => !presetWorkspace || workspaceFor(o.host, o.project.id)) ??
     options[0];
   const [pick, setPick] = useState(initial ? { host: initial.host, id: initial.project.id } : null);
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
@@ -325,7 +325,7 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
         branch: from?.existing ? from.ref : null,
         pr: pr?.number ?? null,
         add_dirs: choice.agent === "none" ? [] : addDirs,
-        workspace_id: workspaceFor(current.host, current.project.id),
+        workspace_id: workspaceFor(current.host),
         cols: 120,
         rows: 32,
       });

@@ -4,10 +4,12 @@ import { askConfirm } from "../lib/confirm";
 import { CheckCircle2, Play, Server, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type Commit, type HookStatus, type PullRequest, type Project } from "../lib/protocol";
-import { errorToast, refreshGit, selectedSession, toast, updateSettings, useStore } from "../lib/store";
+import { errorToast, refreshGit, selectedSession, shownWorkspace, toast, updateSettings, useStore } from "../lib/store";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { hostSections } from "../lib/sidebar";
+import { newSectionWorkspace } from "../lib/workspaces";
+import { NewWorkspaceDialog, WorkspaceSettingsDialog } from "./WorkspaceDialogs";
 import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../lib/agents";
 import type { ToolCallView } from "../lib/chat";
@@ -113,9 +115,10 @@ export function NewSectionDialog() {
   const [host, setHost] = useState(() => (connected.some((h) => h.id === "local") ? "local" : (connected[0]?.id ?? "local")));
   const create = async () => {
     try {
-      const ws = useStore.getState().workspaces[host]?.[0];
-      if (!ws) return;
-      await rpc(host, M.sectionCreate, { workspace_id: ws.id, name });
+      const st = useStore.getState();
+      const workspaceId = newSectionWorkspace(shownWorkspace(st), host, st.workspaces[host] ?? []);
+      if (!workspaceId) return;
+      await rpc(host, M.sectionCreate, { workspace_id: workspaceId, name });
       close();
     } catch (e) {
       errorToast(e);
@@ -568,6 +571,10 @@ export function Dialogs() {
       return <AddProjectDialog host={dialog.host} section={dialog.section} />;
     case "new-section":
       return <NewSectionDialog />;
+    case "new-workspace":
+      return <NewWorkspaceDialog />;
+    case "workspace-settings":
+      return <WorkspaceSettingsDialog host={dialog.host} workspace={dialog.workspace} />;
     case "new-session":
       return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} />;
     case "commit":
