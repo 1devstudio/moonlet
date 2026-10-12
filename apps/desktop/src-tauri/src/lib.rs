@@ -310,6 +310,35 @@ async fn play_sound(name: String) -> Result<(), RpcError> {
     Ok(())
 }
 
+/// The `latest` release in npm's dist-tags for Claude Code (X36).
+fn latest_from_dist_tags(body: &str) -> Option<String> {
+    let tags: Value = serde_json::from_str(body).ok()?;
+    Some(tags.get("latest")?.as_str()?.to_string())
+}
+
+/// The newest Claude Code release (X36). Asked here, not in the webview,
+/// so the CSP stays closed to the network.
+#[tauri::command]
+async fn claude_latest_version() -> Result<String, RpcError> {
+    // reqwest comes with the updater plugin, which installs the same provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("moonlet/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(err)?;
+    let body = client
+        .get("https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags")
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(err)?
+        .text()
+        .await
+        .map_err(err)?;
+    latest_from_dist_tags(&body).ok_or_else(|| err("npm did not name a latest Claude Code"))
+}
+
 #[tauri::command]
 fn app_info() -> Value {
     serde_json::json!({
@@ -369,6 +398,7 @@ pub fn run() {
             daemon_service,
             log_js,
             play_sound,
+            claude_latest_version,
             app_info
         ])
         .run(context)
@@ -388,6 +418,15 @@ mod tests {
         assert!(sound_path("../../tmp/x").is_err());
         assert!(sound_path("glass").is_err());
         assert!(sound_path("").is_err());
+    }
+
+    #[test]
+    fn reads_the_latest_claude_code_from_npm_dist_tags() {
+        // Captured from registry.npmjs.org on 2026-10-12.
+        let body = r#"{"stable":"2.1.287","next":"2.1.296","latest":"2.1.296"}"#;
+        assert_eq!(latest_from_dist_tags(body).as_deref(), Some("2.1.296"));
+        assert_eq!(latest_from_dist_tags(r#"{"error":"Not found"}"#), None);
+        assert_eq!(latest_from_dist_tags("<html>"), None);
     }
 
     #[test]

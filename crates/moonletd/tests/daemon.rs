@@ -674,6 +674,24 @@ impl Drop for HomeDaemon {
     }
 }
 
+/// A daemon whose terminals and agents find `script` as `claude`: it is
+/// first on the login shell's PATH, which the rc files set.
+async fn fake_claude_daemon(script: &str) -> HomeDaemon {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("claude");
+    std::fs::write(&fake, script).unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
+    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
+        std::fs::write(home.path().join(rc), &first).unwrap();
+    }
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    HomeDaemon::start(home, Some(&path)).await
+}
+
 const OLD_SKILL: &str = "---\nname: moonlet\n---\n<!-- Installed by moonlet -->\nold\n";
 
 /// X33: a profile gets moonlet's hooks in its own folder; it can be renamed;
@@ -775,13 +793,7 @@ async fn hooks_install_and_uninstall_cover_profile_folders() {
 #[tokio::test]
 async fn profile_status_reads_who_a_profile_is_signed_in_as() {
     use moonlet_proto::types::{ClaudeProfile, ProfileAccount, ProfileInfo};
-    use std::os::unix::fs::PermissionsExt;
-    let home = tempfile::tempdir().unwrap();
-    let bin = home.path().join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let fake = bin.join("claude");
-    std::fs::write(
-        &fake,
+    let d = fake_claude_daemon(
         r#"#!/bin/sh
 if [ "$1 $2" = "auth status" ] && [ -n "$CLAUDE_CONFIG_DIR" ]; then
   echo '{"loggedIn": true, "authMethod": "claude.ai", "email": "jane@acme.example", "orgName": "Acme", "subscriptionType": "team"}'
@@ -790,16 +802,7 @@ else
 fi
 "#,
     )
-    .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // Terminals and agents get a login shell's PATH, which starts from the
-    // system's and is set by the rc files: put the fake first there.
-    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
-    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
-        std::fs::write(home.path().join(rc), &first).unwrap();
-    }
-    let path = format!("{}:/usr/bin:/bin", bin.display());
-    let d = HomeDaemon::start(home, Some(&path)).await;
+    .await;
     let mut c = d.client().await;
     let p: ClaudeProfile = c
         .request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work", "path": d.home.path().join("claude-work")}))
@@ -835,4 +838,73 @@ async fn starting_refreshes_the_skill_of_every_profile() {
     }
     drop(d);
     assert!(text.contains("term read"), "{text}");
+}
+
+/// X36: claude.version asks the `claude` agents run for its version, and
+/// claude.update runs `claude update`, streaming its lines to every client
+/// and refusing a second run meanwhile. A fake `claude` answers.
+#[tokio::test]
+async fn claude_update_streams_the_lines_of_claude_update() {
+    // The lines `claude update` 2.1.292 prints for a native install.
+    let d = fake_claude_daemon(
+        r#"#!/bin/sh
+case "$1" in
+  --version) echo "2.1.292 (Claude Code)" ;;
+  update)
+    echo "Current version: 2.1.292"
+    echo "Checking for updates to latest version..."
+    echo "Updating to 2.1.296..."
+    sleep 1
+    echo "Successfully updated from 2.1.292 to version 2.1.296"
+    ;;
+esac
+"#,
+    )
+    .await;
+    let mut c = d.client().await;
+    let version: serde_json::Value = c.request(methods::CLAUDE_VERSION, ()).await.unwrap();
+    assert_eq!(version, serde_json::json!({"version": "2.1.292", "updating": false}));
+
+    let mut watcher = d.client().await;
+    let mut second = d.client().await;
+    let run = tokio::spawn(async move { c.request::<_, serde_json::Value>(methods::CLAUDE_UPDATE, ()).await.unwrap() });
+    let mut lines = Vec::new();
+    let mut done = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while done.is_none() {
+        let f = tokio::time::timeout_at(deadline, watcher.next_frame()).await.expect("timeout").unwrap().unwrap();
+        let Frame::Json(Message::Event { name, data }) = f else { continue };
+        if name == methods::EV_CLAUDE_UPDATE_OUTPUT {
+            let line = data["line"].as_str().unwrap().to_string();
+            // Mid-run, with the fake asleep: a second client sees the run
+            // and cannot start another.
+            if line == "Updating to 2.1.296..." {
+                let version: serde_json::Value = second.request(methods::CLAUDE_VERSION, ()).await.unwrap();
+                assert_eq!(version, serde_json::json!({"version": "2.1.292", "updating": true}));
+                let busy = second.request::<_, serde_json::Value>(methods::CLAUDE_UPDATE, ()).await.unwrap_err();
+                assert!(busy.to_string().contains("Claude Code is already updating"), "{busy}");
+            }
+            lines.push(line);
+        } else if name == methods::EV_CLAUDE_UPDATE_DONE {
+            done = Some(data);
+        }
+    }
+    assert_eq!(
+        lines,
+        [
+            "Current version: 2.1.292",
+            "Checking for updates to latest version...",
+            "Updating to 2.1.296...",
+            "Successfully updated from 2.1.292 to version 2.1.296"
+        ]
+    );
+    let result = serde_json::json!({
+        "ok": true,
+        "output": "Current version: 2.1.292\nChecking for updates to latest version...\nUpdating to 2.1.296...\nSuccessfully updated from 2.1.292 to version 2.1.296\n"
+    });
+    // Every window learns how it ended, not only the one that asked.
+    assert_eq!(done, Some(result.clone()));
+    assert_eq!(run.await.unwrap(), result);
+    let version: serde_json::Value = second.request(methods::CLAUDE_VERSION, ()).await.unwrap();
+    assert_eq!(version["updating"], false);
 }

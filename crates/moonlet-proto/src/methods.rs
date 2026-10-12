@@ -56,6 +56,9 @@ pub const PROFILE_CREATE: &str = "profile.create";
 pub const PROFILE_UPDATE: &str = "profile.update";
 pub const PROFILE_DELETE: &str = "profile.delete";
 pub const PROFILE_STATUS: &str = "profile.status";
+/// The installed Claude Code version, and `claude update` (X36).
+pub const CLAUDE_VERSION: &str = "claude.version";
+pub const CLAUDE_UPDATE: &str = "claude.update";
 pub const SECTION_CREATE: &str = "section.create";
 pub const SECTION_LIST: &str = "section.list";
 pub const SECTION_UPDATE: &str = "section.update";
@@ -129,6 +132,10 @@ pub const EV_SESSIONS_CHANGED: &str = "sessions.changed";
 pub const EV_WORKSPACES_CHANGED: &str = "workspaces.changed";
 pub const EV_SECTIONS_CHANGED: &str = "sections.changed";
 pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
+/// A line `claude update` printed (X36).
+pub const EV_CLAUDE_UPDATE_OUTPUT: &str = "claude.update_output";
+/// How a `claude update` ended, for every window (X36).
+pub const EV_CLAUDE_UPDATE_DONE: &str = "claude.update_done";
 pub const EV_FS_CHANGED: &str = "fs.changed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

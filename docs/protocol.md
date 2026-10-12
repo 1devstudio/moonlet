@@ -42,6 +42,7 @@ Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`;
 - `agent.report`: state reports from agent hooks (`moonlet hook …`).
 - `workspace.*`, `section.*`, `project.*` and `session.*`: workspaces, their sections, projects, worktree sessions, scripts (X32).
 - `profile.*`: Claude profiles, the config folders workspaces run Claude with (X33).
+- `claude.*`: version (the installed Claude Code, and whether an update runs) and update (runs `claude update`) (X36). Events: `claude.update_output` per line while it runs, `claude.update_done` when it ends.
 - `chat.*`: state, send, permission, interrupt, settings (model, effort, permission mode) for structured agents (X6, X7). Events: `chat.item`, `chat.state`.
 - `git.*` and `gh.*`: status, diffs, staging, commit, log, PRs, issues.
 - `fs.*`: list, files, read, write, watch.

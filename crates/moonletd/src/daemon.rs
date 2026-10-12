@@ -35,9 +35,28 @@ pub struct Daemon {
     upgrading: AtomicBool,
     /// Last `claude auth status` per profile id (`None`: the default), X33.
     accounts: Mutex<HashMap<Option<String>, moonlet_proto::types::ProfileAccount>>,
+    /// A `claude update` is running (X36).
+    claude_updating: AtomicBool,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
+
+/// A raised flag, lowered when dropped: also when the request that raised
+/// it ends early.
+struct Flag<'a>(&'a AtomicBool);
+
+impl<'a> Flag<'a> {
+    /// None when the flag is already up.
+    fn raise(flag: &'a AtomicBool) -> Option<Self> {
+        (!flag.swap(true, Ordering::SeqCst)).then_some(Flag(flag))
+    }
+}
+
+impl Drop for Flag<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
@@ -129,6 +148,7 @@ impl Daemon {
             handed_off: AtomicBool::new(false),
             upgrading: AtomicBool::new(false),
             accounts: Mutex::new(HashMap::new()),
+            claude_updating: AtomicBool::new(false),
         })
     }
 
@@ -408,6 +428,27 @@ impl Daemon {
                 self.accounts.lock().unwrap().insert(r.id, account.clone());
                 self.emit_profiles();
                 ok(account)
+            }
+            m::CLAUDE_VERSION => {
+                let version = moonlet_core::claude_update::installed(self.terminals.base_env()).await;
+                let updating = self.claude_updating.load(Ordering::SeqCst);
+                ok(moonlet_proto::types::ClaudeVersion { version, updating })
+            }
+            m::CLAUDE_UPDATE => {
+                let Some(_running) = Flag::raise(&self.claude_updating) else {
+                    return Err(RpcError::new("busy", "Claude Code is already updating"));
+                };
+                let run = moonlet_core::claude_update::update(self.terminals.base_env(), |line| {
+                    let line = moonlet_proto::types::ClaudeUpdateLine { line: line.into() };
+                    self.terminals.emit(Message::event(m::EV_CLAUDE_UPDATE_OUTPUT, line));
+                })
+                .await;
+                let result = match run {
+                    Ok((success, output)) => moonlet_proto::types::ClaudeUpdateResult { ok: success, output },
+                    Err(e) => moonlet_proto::types::ClaudeUpdateResult { ok: false, output: format!("Error: {e:#}\n") },
+                };
+                self.terminals.emit(Message::event(m::EV_CLAUDE_UPDATE_DONE, &result));
+                ok(result)
             }
             m::WORKSPACE_LIST => ok(w.list_workspaces()),
             m::WORKSPACE_CREATE => ok(w.create_workspace(params(p)?).map_err(internal)?),

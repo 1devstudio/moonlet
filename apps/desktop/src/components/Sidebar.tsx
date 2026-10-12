@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, ChevronDown, ChevronRight, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert } from "lucide-react";
+import { Archive, ArrowDown, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, compact, hostSections, lastActive, projectRemoval, type Group } from "../lib/sidebar";
-import { errorToast, projKey, pullBase, selectSession, updateActions, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
+import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
@@ -15,8 +15,9 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
-import { Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
+import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 import { updateButton } from "../lib/updater";
+import { claudeBanner, type ClaudeBanner, type StepState } from "../lib/claudeUpdate";
 
 // ------------------------------------------------------------------ helpers
 
@@ -726,6 +727,7 @@ export function Sidebar() {
           </div>
         )}
       </div>
+      <ClaudeUpdateBanner />
       <div className="flex items-center gap-1 px-3 py-2.5">
         <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ dialog: { kind: "settings" } })}>
           <Settings size={14} />
@@ -759,3 +761,63 @@ function UpdateButton() {
 }
 
 const UPDATE_ICONS = { install: Download, restart: RotateCw };
+
+const BANNER_TONES: Record<ClaudeBanner["tone"], { box: string; icon: ReactNode }> = {
+  info: { box: "border-accent/30 bg-accent/[0.06]", icon: <AgentIcon agent="claude" size={14} /> },
+  progress: { box: "border-accent/30 bg-accent/[0.06]", icon: <AgentIcon agent="claude" size={14} /> },
+  success: { box: "border-done/30 bg-done/[0.06]", icon: <CircleCheck size={14} className="shrink-0 text-done" /> },
+  error: { box: "border-error/30 bg-error/[0.06]", icon: <CircleAlert size={14} className="shrink-0 text-error" /> },
+};
+
+/** A newer Claude Code above the sidebar footer, and its `claude update`
+ *  run step by step (X36). */
+function ClaudeUpdateBanner() {
+  const state = useStore((s) => s.claudeUpdate);
+  const b = claudeBanner(state);
+  if (!b) return null;
+  const tone = BANNER_TONES[b.tone];
+  return (
+    <div className={cx("moonlet-card-in mx-3 mb-1 rounded-lg border px-3 py-2.5", tone.box)}>
+      <div className="flex items-start gap-2">
+        <span className="mt-[2px] flex">{tone.icon}</span>
+        <div className="min-w-0 flex-1">
+          <div className="ui-text-12.5 font-medium text-fg">{b.title}</div>
+          {b.detail && (
+            <div className={cx("selectable mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-words ui-text-11.5 text-muted", b.tone === "error" && "font-mono")}>{b.detail}</div>
+          )}
+        </div>
+        {b.closable && (
+          <IconButton title="Close" className="-mr-1.5 -mt-1 h-5 w-5" onClick={() => closeClaudeUpdate("close")}>
+            <X size={12} />
+          </IconButton>
+        )}
+      </div>
+      {b.steps && (
+        <ol className="mt-2 flex flex-col gap-1 pl-[22px]">
+          {b.steps.map((st) => (
+            <li key={st.label} className={cx("flex items-center gap-2 ui-text-11.5", st.state === "todo" ? "text-faint" : "text-fg")}>
+              <StepIcon state={st.state} />
+              {st.label}
+            </li>
+          ))}
+        </ol>
+      )}
+      {b.tone === "progress" && <div className="moonlet-indeterminate ml-[22px] mt-2.5" />}
+      {b.buttons.length > 0 && (
+        <div className="mt-2 flex justify-end gap-1.5">
+          {b.buttons.map((btn) => (
+            <Button key={btn.label} size="sm" variant={btn.action === "update" ? "primary" : "ghost"} onClick={() => (btn.action === "update" ? void updateClaude() : closeClaudeUpdate("later"))}>
+              {btn.label}
+            </Button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StepIcon({ state }: { state: StepState }) {
+  if (state === "done") return <Check size={12} className="shrink-0 text-done" />;
+  if (state === "active") return <Loader2 size={12} className="shrink-0 animate-spin text-accent" />;
+  return <Circle size={12} className="shrink-0" />;
+}

@@ -43,6 +43,7 @@ export const hostsApi = {
   playSound: (name: string) => invoke("play_sound", { name }),
   service: (action: "install" | "uninstall" | "status") => invoke<{ installed: boolean; loaded: boolean; plist: string }>("daemon_service", { action }),
   appInfo: () => invoke<{ version: string }>("app_info"),
+  claudeLatest: () => invoke<string>("claude_latest_version"),
 };
 
 /** Must match `RESET_FLAG` in src-tauri/src/hosts.rs. */
