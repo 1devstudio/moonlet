@@ -193,6 +193,17 @@ export const demoChat: ChatState = {
   output_tokens: 1_850,
   slash_commands: ["review", "compact", "init"],
   queued: [],
+  context: {
+    used: 124_200,
+    max: 200_000,
+    auto_compact_at: 190_000,
+    categories: [
+      { name: "System prompt", tokens: 8_100 },
+      { name: "MCP tools", tokens: 18_400 },
+      { name: "Memory files", tokens: 5_600 },
+      { name: "Messages", tokens: 92_100 },
+    ],
+  },
 };
 
 /** Daemon replies used by components that fetch on mount. */
