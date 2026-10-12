@@ -231,6 +231,13 @@ export function tokens(n: number): string {
   return String(n);
 }
 
+/** The footer's spend (X34): `$0.42 · 120k in · 3k out`; null before any. */
+export function costLine(st: Pick<ChatState, "cost_usd" | "input_tokens" | "output_tokens">): string | null {
+  if (st.cost_usd <= 0 && st.input_tokens <= 0) return null;
+  const cost = st.cost_usd > 0 ? `$${st.cost_usd.toFixed(st.cost_usd < 1 ? 3 : 2)} · ` : "";
+  return `${cost}${tokens(st.input_tokens)} in · ${tokens(st.output_tokens)} out`;
+}
+
 /** Fixed colours for Claude's own categories; the rest take OTHER in turn. */
 const CONTEXT_COLORS: Record<string, string> = {
   "System prompt": "#8c8c8c",

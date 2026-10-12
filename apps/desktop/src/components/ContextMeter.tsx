@@ -15,7 +15,7 @@ export function ContextMeter({ usage, onCompact }: { usage: ContextUsage; onComp
   const anchor = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const open = rect !== null;
-  const v = contextView(usage);
+  const view = contextView(usage);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -47,11 +47,11 @@ export function ContextMeter({ usage, onCompact }: { usage: ContextUsage; onComp
       >
         <span
           className="grid h-3.5 w-3.5 place-items-center rounded-full"
-          style={{ background: `conic-gradient(var(--color-accent) 0 ${v.percent}%, var(--color-border-strong) ${v.percent}% 100%)` }}
+          style={{ background: `conic-gradient(var(--color-accent) 0 ${view.percent}%, var(--color-border-strong) ${view.percent}% 100%)` }}
         >
           <span className="h-2 w-2 rounded-full bg-bg" />
         </span>
-        <span className="font-mono ui-text-12.5 text-muted">{v.percent}%</span>
+        <span className="font-mono ui-text-12.5 text-muted">{view.percent}%</span>
       </button>
       {rect &&
         createPortal(
@@ -62,21 +62,21 @@ export function ContextMeter({ usage, onCompact }: { usage: ContextUsage; onComp
           >
             <div className="flex items-baseline justify-between">
               <span className="ui-text-13 font-medium text-fg">Context window</span>
-              <span className="shrink-0 whitespace-nowrap font-mono ui-text-12 text-muted">{v.label}</span>
+              <span className="shrink-0 whitespace-nowrap font-mono ui-text-12 text-muted">{view.label}</span>
             </div>
             <div className="flex h-1.5 gap-px overflow-hidden rounded-[3px] bg-border-strong">
-              {v.rows.map((r) => (
+              {view.rows.map((r) => (
                 <span key={r.name} style={{ width: `${r.width}%`, background: r.color }} />
               ))}
             </div>
             <div className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5 ui-text-12 text-muted">
-              {v.rows.map((r) => (
+              {view.rows.map((r) => (
                 <Row key={r.name} swatch={<span className="h-2 w-2 rounded-[2px]" style={{ background: r.color }} />} name={r.name} tokens={r.tokens} />
               ))}
-              <Row swatch={<span className="h-2 w-2 rounded-[2px] border border-faint bg-border-strong" />} name="Free" tokens={v.free} />
+              <Row swatch={<span className="h-2 w-2 rounded-[2px] border border-faint bg-border-strong" />} name="Free" tokens={view.free} />
             </div>
             <div className="flex items-center justify-between gap-2 border-t border-border-strong pt-2.5">
-              <span className="whitespace-nowrap ui-text-11.5 text-faint">{v.autoCompact}</span>
+              <span className="whitespace-nowrap ui-text-11.5 text-faint">{view.autoCompact}</span>
               <Button
                 size="sm"
                 onClick={() => {

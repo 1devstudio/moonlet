@@ -8,6 +8,7 @@ import {
   chatDraft,
   chatKey,
   contextView,
+  costLine,
   forgetChat,
   diffStat,
   fuzzyFilter,
@@ -249,6 +250,21 @@ describe("token counts (X34)", () => {
       "130.7M",
       "2M",
     ]);
+  });
+});
+
+describe("cost line (X34)", () => {
+  it("is hidden until the session has a cost or tokens", () => {
+    expect(costLine({ cost_usd: 0, input_tokens: 0, output_tokens: 0 })).toBeNull();
+  });
+
+  it("shows the cost, then tokens in and out", () => {
+    expect(costLine({ cost_usd: 43.73, input_tokens: 130_719_000, output_tokens: 297_000 })).toBe("$43.73 · 130.7M in · 297k out");
+    expect(costLine({ cost_usd: 0.084, input_tokens: 41_200, output_tokens: 1_850 })).toBe("$0.084 · 41.2k in · 1.9k out");
+  });
+
+  it("leaves out a zero cost", () => {
+    expect(costLine({ cost_usd: 0, input_tokens: 100, output_tokens: 20 })).toBe("100 in · 20 out");
   });
 });
 
