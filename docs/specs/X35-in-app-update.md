@@ -33,15 +33,15 @@ moonlet checks GitHub for a newer release, downloads it, verifies its signature 
 Sidebar footer, next to the Settings gear and the profile:
 
     [⚙] [profile]          [↓ Update to 0.1.15]
-                           [↓ Downloading 42%]
+                           [◌ Downloading 42%]      (megabytes when the size is unknown)
+                           [◌ Installing…]
                            [↻ Restart to update]
 
-Settings › Updates:
+Settings › Updates. The status is the last error when a check the user asked for, or an install, failed. The action button is the footer's button while it has an action:
 
     Updates
-    moonlet 0.1.14                                [Check now]
+    moonlet 0.1.14  <Checking… | Up to date | 0.1.15 is available | Downloading 42% | 0.1.15 is installed | error>  [Update to 0.1.15 | Restart to update] [Check now]
     [x] Check for updates automatically
-    <status: Checking… | Up to date | 0.1.15 is available | error text>
 
 ## Protocol and RPCs
 

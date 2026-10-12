@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { afterCheck, onDownload, type UpdateState } from "./updater";
+import { afterCheck, afterDownloadEvent, scheduleUpdateChecks, type CheckOutcome, type UpdateState } from "./updater";
 import { hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
@@ -219,6 +219,10 @@ interface State extends UiPersist {
   /** A new moonlet release and how far its install got (X35). */
   update: UpdateState;
   updateChecking: boolean;
+  /** Why the last check the user asked for, or the last install, failed. */
+  updateError: string | null;
+  /** This app's version, for Settings and the "up to date" toast. */
+  appVersion: string | null;
   lastAttention: { host: string; session: number; at: number } | null;
   /** When each agent session last started working (for "worked for 7s"). */
   workingSince: Record<string, number>;
@@ -261,6 +265,8 @@ function makeStore() {
   toasts: [],
   update: { phase: "idle" },
   updateChecking: false,
+  updateError: null,
+  appVersion: null,
   lastAttention: null,
   workingSince: {},
   card: null,
@@ -313,33 +319,40 @@ export function errorToast(e: unknown) {
  *  replaced one is closed. */
 let foundUpdate: Update | null = null;
 
-/** Asks the updater endpoint for a newer release. An automatic check fails
- *  quietly, so being offline is not an error. */
+/** Set when the user asks while a check runs: that check reports to them. */
+let reportCheck = false;
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** Asks the updater endpoint for a newer release. `afterCheck` decides what
+ *  the user sees. */
 export async function checkForUpdates({ manual = false } = {}) {
-  if (get().updateChecking) return;
-  set({ updateChecking: true });
-  try {
-    const found = await check();
-    const prev = get().update;
-    const { state, announce } = afterCheck(prev, found?.version ?? null);
-    if (state === prev) {
-      void found?.close();
-    } else {
-      if (foundUpdate && foundUpdate !== found) void foundUpdate.close();
-      foundUpdate = found;
-    }
-    set({ update: state });
-    if (state.phase === "available" && (announce || manual)) {
-      toast(`moonlet ${state.version} is available`, "info", { label: "Install", run: () => void installUpdate() });
-    } else if (manual && state.phase === "current") {
-      toast(`moonlet ${(await hostsApi.appInfo()).version} is up to date`);
-    }
-  } catch (e) {
-    if (manual) errorToast(e);
-    else console.warn("update check failed", e);
-  } finally {
-    set({ updateChecking: false });
+  if (get().updateChecking) {
+    if (manual) reportCheck = true;
+    return;
   }
+  reportCheck = manual;
+  set({ updateChecking: true });
+  let found: Update | null = null;
+  let outcome: CheckOutcome;
+  try {
+    found = await check();
+    outcome = { found: found?.version ?? null };
+  } catch (e) {
+    console.warn("update check failed", e);
+    outcome = { error: message(e) };
+  }
+  const prev = get().update;
+  const { state, notice, error } = afterCheck(prev, outcome, { manual: reportCheck, running: get().appVersion });
+  reportCheck = false;
+  if (state === prev) {
+    void found?.close();
+  } else {
+    if (foundUpdate && foundUpdate !== found) void foundUpdate.close();
+    foundUpdate = found;
+  }
+  set({ update: state, updateError: error, updateChecking: false });
+  if (notice) toast(notice.text, notice.kind, notice.install ? { label: "Install", run: () => void installUpdate() } : undefined);
 }
 
 /** Downloads the found update, verifies its signature and installs it. The
@@ -349,12 +362,12 @@ export async function installUpdate() {
   const prev = get().update;
   if (!u || prev.phase !== "available") return;
   // Busy from the click on, so a check meanwhile keeps this update.
-  set({ update: { phase: "downloading", version: u.version, received: 0, total: null } });
+  set({ update: { phase: "downloading", version: u.version, received: 0, total: null }, updateError: null });
   try {
-    await u.downloadAndInstall((e) => set((s) => ({ update: onDownload(s.update, e) })));
+    await u.downloadAndInstall((e) => set((s) => ({ update: afterDownloadEvent(s.update, e) })));
     set({ update: { phase: "ready", version: u.version } });
   } catch (e) {
-    set({ update: prev });
+    set({ update: prev, updateError: message(e) });
     errorToast(e);
   }
 }
@@ -364,6 +377,9 @@ export async function installUpdate() {
 export function restartToUpdate() {
   void relaunch().catch(errorToast);
 }
+
+/** What the update button's action (see `updateButton`) does. */
+export const updateActions = { install: () => void installUpdate(), restart: restartToUpdate };
 
 // ---------------------------------------------------------------- selectors
 
@@ -913,11 +929,8 @@ export async function startStore() {
   set({ hosts: Object.fromEntries(hosts.map((h) => [h.id, h])) });
   for (const h of hosts) if (h.status === "connected") void loadHost(h.id);
 
-  const autoCheck = () => {
-    if (get().settings.autoUpdateCheck) void checkForUpdates();
-  };
-  setTimeout(autoCheck, 10_000);
-  setInterval(autoCheck, 6 * 3_600_000);
+  void hostsApi.appInfo().then(({ version }) => set({ appVersion: version }), () => {});
+  scheduleUpdateChecks(() => void checkForUpdates(), () => get().settings.autoUpdateCheck);
 
   // Tauri cannot tell a notification click from any other activation, so
   // coming back soon after one offers the jump instead of doing it (A3).

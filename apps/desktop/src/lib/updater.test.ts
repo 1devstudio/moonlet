@@ -1,57 +1,156 @@
-import { describe, expect, it } from "vitest";
-import { afterCheck, updateButtonLabel, onDownload } from "./updater";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterCheck, afterDownloadEvent, scheduleUpdateChecks, updateButton, updateStatus } from "./updater";
+
+const AUTO = { manual: false, running: "0.1.14" };
+const available = { text: "moonlet 0.1.15 is available", kind: "info", install: true } as const;
 
 describe("afterCheck", () => {
   it("offers a found version and announces it", () => {
-    expect(afterCheck({ phase: "idle" }, "0.1.15")).toEqual({ state: { phase: "available", version: "0.1.15" }, announce: true });
+    expect(afterCheck({ phase: "idle" }, { found: "0.1.15" }, AUTO)).toEqual({ state: { phase: "available", version: "0.1.15" }, notice: available, error: null });
   });
 
   it("is up to date when nothing newer was found", () => {
-    expect(afterCheck({ phase: "idle" }, null)).toEqual({ state: { phase: "current" }, announce: false });
+    expect(afterCheck({ phase: "idle" }, { found: null }, AUTO)).toEqual({ state: { phase: "current" }, notice: null, error: null });
   });
 
   it("announces a version once: the six-hour check finding it again stays quiet", () => {
-    expect(afterCheck({ phase: "available", version: "0.1.15" }, "0.1.15")).toEqual({ state: { phase: "available", version: "0.1.15" }, announce: false });
+    expect(afterCheck({ phase: "available", version: "0.1.15" }, { found: "0.1.15" }, AUTO)).toEqual({ state: { phase: "available", version: "0.1.15" }, notice: null, error: null });
   });
 
   it("announces a newer version that was published since the last check", () => {
-    expect(afterCheck({ phase: "available", version: "0.1.15" }, "0.1.16")).toEqual({ state: { phase: "available", version: "0.1.16" }, announce: true });
+    expect(afterCheck({ phase: "available", version: "0.1.15" }, { found: "0.1.16" }, AUTO)).toEqual({
+      state: { phase: "available", version: "0.1.16" },
+      notice: { text: "moonlet 0.1.16 is available", kind: "info", install: true },
+      error: null,
+    });
   });
 
   it("leaves an update that is downloading, installing or waiting for a restart alone", () => {
     const downloading = { phase: "downloading", version: "0.1.15", received: 10, total: 100 } as const;
-    expect(afterCheck(downloading, "0.1.16")).toEqual({ state: downloading, announce: false });
-    expect(afterCheck({ phase: "installing", version: "0.1.15" }, null)).toEqual({ state: { phase: "installing", version: "0.1.15" }, announce: false });
-    expect(afterCheck({ phase: "ready", version: "0.1.15" }, "0.1.15")).toEqual({ state: { phase: "ready", version: "0.1.15" }, announce: false });
+    expect(afterCheck(downloading, { found: "0.1.16" }, AUTO)).toEqual({ state: downloading, notice: null, error: null });
+    expect(afterCheck({ phase: "installing", version: "0.1.15" }, { found: null }, AUTO)).toEqual({ state: { phase: "installing", version: "0.1.15" }, notice: null, error: null });
+    expect(afterCheck({ phase: "ready", version: "0.1.15" }, { found: "0.1.15" }, AUTO)).toEqual({ state: { phase: "ready", version: "0.1.15" }, notice: null, error: null });
   });
 });
 
-describe("onDownload", () => {
+describe("afterCheck when the user asked", () => {
+  const MANUAL = { manual: true, running: "0.1.14" };
+
+  it("says the running version is up to date", () => {
+    expect(afterCheck({ phase: "idle" }, { found: null }, MANUAL)).toEqual({
+      state: { phase: "current" },
+      notice: { text: "moonlet 0.1.14 is up to date", kind: "info", install: false },
+      error: null,
+    });
+  });
+
+  it("repeats a version it already announced", () => {
+    expect(afterCheck({ phase: "available", version: "0.1.15" }, { found: "0.1.15" }, MANUAL).notice).toEqual({ text: "moonlet 0.1.15 is available", kind: "info", install: true });
+  });
+
+  it("reports a failed check, and Settings keeps the error", () => {
+    expect(afterCheck({ phase: "idle" }, { error: "error sending request for url" }, MANUAL)).toEqual({
+      state: { phase: "idle" },
+      notice: { text: "error sending request for url", kind: "error", install: false },
+      error: "error sending request for url",
+    });
+  });
+
+  it("says where an update in progress is instead of checking again", () => {
+    const downloading = { phase: "downloading", version: "0.1.15", received: 1_700_000, total: 4_000_000 } as const;
+    expect(afterCheck(downloading, { found: "0.1.16" }, MANUAL)).toEqual({ state: downloading, notice: { text: "moonlet 0.1.15: Downloading 42%", kind: "info", install: false }, error: null });
+    expect(afterCheck({ phase: "ready", version: "0.1.15" }, { found: null }, MANUAL).notice).toEqual({ text: "moonlet 0.1.15: Restart to update", kind: "info", install: false });
+  });
+
+  it("keeps a failed automatic check quiet", () => {
+    expect(afterCheck({ phase: "idle" }, { error: "error sending request for url" }, AUTO)).toEqual({ state: { phase: "idle" }, notice: null, error: null });
+  });
+});
+
+describe("afterDownloadEvent", () => {
   it("counts the downloaded bytes against the announced size, then installs", () => {
-    let s = onDownload({ phase: "available", version: "0.1.15" }, { event: "Started", data: { contentLength: 4_000_000 } });
+    let s = afterDownloadEvent({ phase: "available", version: "0.1.15" }, { event: "Started", data: { contentLength: 4_000_000 } });
     expect(s).toEqual({ phase: "downloading", version: "0.1.15", received: 0, total: 4_000_000 });
-    s = onDownload(s, { event: "Progress", data: { chunkLength: 1_500_000 } });
-    s = onDownload(s, { event: "Progress", data: { chunkLength: 200_000 } });
+    s = afterDownloadEvent(s, { event: "Progress", data: { chunkLength: 1_500_000 } });
+    s = afterDownloadEvent(s, { event: "Progress", data: { chunkLength: 200_000 } });
     expect(s).toEqual({ phase: "downloading", version: "0.1.15", received: 1_700_000, total: 4_000_000 });
-    expect(onDownload(s, { event: "Finished" })).toEqual({ phase: "installing", version: "0.1.15" });
+    expect(afterDownloadEvent(s, { event: "Finished" })).toEqual({ phase: "installing", version: "0.1.15" });
   });
 
   it("has no total when the server sends no size", () => {
-    expect(onDownload({ phase: "available", version: "0.1.15" }, { event: "Started", data: {} })).toEqual({ phase: "downloading", version: "0.1.15", received: 0, total: null });
+    expect(afterDownloadEvent({ phase: "available", version: "0.1.15" }, { event: "Started", data: {} })).toEqual({ phase: "downloading", version: "0.1.15", received: 0, total: null });
   });
 });
 
-describe("updateButtonLabel", () => {
-  it("names the step the update is at", () => {
-    expect(updateButtonLabel({ phase: "available", version: "0.1.15" })).toBe("Update to 0.1.15");
-    expect(updateButtonLabel({ phase: "downloading", version: "0.1.15", received: 1_700_000, total: 4_000_000 })).toBe("Downloading 42%");
-    expect(updateButtonLabel({ phase: "downloading", version: "0.1.15", received: 3_250_000, total: null })).toBe("Downloading 3.3 MB");
-    expect(updateButtonLabel({ phase: "installing", version: "0.1.15" })).toBe("Installing…");
-    expect(updateButtonLabel({ phase: "ready", version: "0.1.15" })).toBe("Restart to update");
+describe("updateButton", () => {
+  it("installs a found version", () => {
+    expect(updateButton({ phase: "available", version: "0.1.15" })).toEqual({ label: "Update to 0.1.15", action: "install", title: "Update to 0.1.15" });
+  });
+
+  it("shows the download and install without an action", () => {
+    expect(updateButton({ phase: "downloading", version: "0.1.15", received: 1_700_000, total: 4_000_000 })).toEqual({ label: "Downloading 42%", action: null, title: "Downloading 42%" });
+    expect(updateButton({ phase: "downloading", version: "0.1.15", received: 3_250_000, total: null })?.label).toBe("Downloading 3.3 MB");
+    expect(updateButton({ phase: "installing", version: "0.1.15" })).toEqual({ label: "Installing…", action: null, title: "Installing…" });
+  });
+
+  it("restarts into an installed update", () => {
+    expect(updateButton({ phase: "ready", version: "0.1.15" })).toEqual({
+      label: "Restart to update",
+      action: "restart",
+      title: "Restart moonlet into the new version. Terminals and agents keep running.",
+    });
   });
 
   it("shows nothing when there is no update", () => {
-    expect(updateButtonLabel({ phase: "idle" })).toBeNull();
-    expect(updateButtonLabel({ phase: "current" })).toBeNull();
+    expect(updateButton({ phase: "idle" })).toBeNull();
+    expect(updateButton({ phase: "current" })).toBeNull();
+  });
+});
+
+describe("updateStatus", () => {
+  it("names what the last check found", () => {
+    expect(updateStatus({ phase: "current" }, false, null)).toBe("Up to date");
+    expect(updateStatus({ phase: "available", version: "0.1.15" }, false, null)).toBe("0.1.15 is available");
+    expect(updateStatus({ phase: "downloading", version: "0.1.15", received: 1_700_000, total: 4_000_000 }, false, null)).toBe("Downloading 42%");
+    expect(updateStatus({ phase: "ready", version: "0.1.15" }, false, null)).toBe("0.1.15 is installed");
+  });
+
+  it("shows a running check, then the error of a failed one", () => {
+    expect(updateStatus({ phase: "current" }, true, "error sending request for url")).toBe("Checking…");
+    expect(updateStatus({ phase: "current" }, false, "error sending request for url")).toBe("error sending request for url");
+  });
+
+  it("is empty before the first check", () => {
+    expect(updateStatus({ phase: "idle" }, false, null)).toBeNull();
+  });
+});
+
+describe("scheduleUpdateChecks", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("checks ten seconds after launch, then every six hours", () => {
+    vi.useFakeTimers();
+    const check = vi.fn();
+    scheduleUpdateChecks(check, () => true);
+    vi.advanceTimersByTime(9_999);
+    expect(check).toHaveBeenCalledTimes(0);
+    vi.advanceTimersByTime(1);
+    expect(check).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+    expect(check).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+    expect(check).toHaveBeenCalledTimes(3);
+  });
+
+  it("skips the checks while automatic checking is off", () => {
+    vi.useFakeTimers();
+    const check = vi.fn();
+    let on = false;
+    scheduleUpdateChecks(check, () => on);
+    vi.advanceTimersByTime(10_000 + 6 * 60 * 60 * 1000);
+    expect(check).toHaveBeenCalledTimes(0);
+    on = true;
+    vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+    expect(check).toHaveBeenCalledTimes(1);
   });
 });
