@@ -2552,7 +2552,7 @@ dependencies = [
 
 [[package]]
 name = "moonlet-app"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -2579,7 +2579,7 @@ dependencies = [
 
 [[package]]
 name = "moonlet-cli"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "clap",
@@ -2593,7 +2593,7 @@ dependencies = [
 
 [[package]]
 name = "moonlet-core"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "moonlet-proto"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "serde",
  "serde_json",
@@ -2627,7 +2627,7 @@ dependencies = [
 
 [[package]]
 name = "moonletd"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "clap",
