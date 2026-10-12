@@ -630,3 +630,209 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
     assert!(text.contains(r#""$MOONLET_BIN" term read <id>"#), "{text}");
     assert!(!home.path().join(".codex/skills/moonlet/SKILL.md").exists());
 }
+
+/// A daemon whose HOME is a scratch folder, so hook installs and skill
+/// refreshes can never reach the user's ~/.claude. `path`: the PATH it starts
+/// with; its terminals get a login shell's PATH built from it.
+struct HomeDaemon {
+    home: tempfile::TempDir,
+    socket: PathBuf,
+    child: Child,
+}
+
+impl HomeDaemon {
+    async fn start(home: tempfile::TempDir, path: Option<&str>) -> HomeDaemon {
+        let socket = home.path().join(".moonlet/run/moonletd.sock");
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
+        cmd.arg("daemon")
+            .env("HOME", home.path())
+            .env_remove("MOONLET_SOCK")
+            .env_remove("MOONLET_HOME")
+            .env_remove("JAUNT_HOME")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(p) = path {
+            cmd.env("PATH", p);
+        }
+        let child = cmd.spawn().unwrap();
+        wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
+        HomeDaemon { home, socket, child }
+    }
+
+    async fn client(&self) -> Client {
+        Client::connect(&self.socket, "test").await.unwrap()
+    }
+}
+
+impl Drop for HomeDaemon {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+const OLD_SKILL: &str = "---\nname: moonlet\n---\n<!-- Installed by moonlet -->\nold\n";
+
+/// X33: a profile gets moonlet's hooks in its own folder; it can be renamed;
+/// a workspace can be created with it or switched to it and back; deleting
+/// it keeps the folder and puts the workspace back on the default.
+#[tokio::test]
+async fn claude_profiles_over_rpc() {
+    use moonlet_proto::types::{ClaudeProfile, ProfileInfo, Workspace};
+    let d = HomeDaemon::start(tempfile::tempdir().unwrap(), None).await;
+    let mut c = d.client().await;
+    let dir = d.home.path().join("claude-work");
+    let p: ClaudeProfile = c
+        .request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work profile", "path": dir}))
+        .await
+        .unwrap();
+    assert_eq!(p.name, "Work profile");
+    let settings = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+    assert!(settings.contains("hook claude"), "{settings}");
+    assert!(dir.join("skills/moonlet/SKILL.md").exists());
+    let renamed: ClaudeProfile = c
+        .request(methods::PROFILE_UPDATE, serde_json::json!({"id": p.id, "name": "Client"}))
+        .await
+        .unwrap();
+    assert_eq!(renamed.name, "Client");
+    let list: Vec<ProfileInfo> = c.request(methods::PROFILE_LIST, ()).await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].profile.name, "Client");
+    assert!(list[0].hooks_installed);
+    assert_eq!(list[0].account, None, "unknown until profile.status runs");
+
+    let created: Workspace = c
+        .request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "CipherHealth", "color": "blue", "claude_profile": p.id}))
+        .await
+        .unwrap();
+    assert_eq!(created.claude_profile.as_deref(), Some(p.id.as_str()));
+    let back: Workspace = c
+        .request(methods::WORKSPACE_UPDATE, serde_json::json!({"id": created.id, "claude_profile": null}))
+        .await
+        .unwrap();
+    assert_eq!(back.claude_profile, None);
+    let unchanged: Workspace = c
+        .request(methods::WORKSPACE_UPDATE, serde_json::json!({"id": created.id, "claude_profile": p.id}))
+        .await
+        .unwrap();
+    let kept: Workspace = c
+        .request(methods::WORKSPACE_UPDATE, serde_json::json!({"id": created.id, "name": "Cipher"}))
+        .await
+        .unwrap();
+    assert_eq!(kept.claude_profile, unchanged.claude_profile, "absent leaves it as it is");
+    let err = c
+        .request::<_, Workspace>(methods::WORKSPACE_UPDATE, serde_json::json!({"id": created.id, "claude_profile": "nope"}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no such Claude profile"), "{err}");
+
+    let _: bool = c.request(methods::PROFILE_DELETE, serde_json::json!({"id": p.id})).await.unwrap();
+    assert!(dir.join("settings.json").exists(), "the folder stays");
+    let ws: Vec<Workspace> = c.request(methods::WORKSPACE_LIST, ()).await.unwrap();
+    assert!(ws.iter().all(|w| w.claude_profile.is_none()));
+}
+
+/// X33: a profile whose hooks cannot be installed is not kept.
+#[tokio::test]
+async fn a_profile_whose_hooks_fail_is_not_created() {
+    use moonlet_proto::types::ProfileInfo;
+    let d = HomeDaemon::start(tempfile::tempdir().unwrap(), None).await;
+    let mut c = d.client().await;
+    let dir = d.home.path().join("claude-broken");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("settings.json"), "[]").unwrap();
+    let err = c
+        .request::<_, serde_json::Value>(methods::PROFILE_CREATE, serde_json::json!({"name": "Broken", "path": dir}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("is not a JSON object"), "{err}");
+    let list: Vec<ProfileInfo> = c.request(methods::PROFILE_LIST, ()).await.unwrap();
+    assert!(list.is_empty());
+}
+
+/// X33: hooks.install and hooks.uninstall cover every profile's folder.
+#[tokio::test]
+async fn hooks_install_and_uninstall_cover_profile_folders() {
+    let d = HomeDaemon::start(tempfile::tempdir().unwrap(), None).await;
+    let mut c = d.client().await;
+    let dir = d.home.path().join("claude-work");
+    let _: serde_json::Value = c.request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work", "path": dir})).await.unwrap();
+    // Take the profile's hooks out by hand, as an older moonlet would have left them.
+    std::fs::write(dir.join("settings.json"), "{}").unwrap();
+    let _: serde_json::Value = c.request(methods::HOOKS_INSTALL, serde_json::json!({"claude": true, "codex": false})).await.unwrap();
+    assert!(std::fs::read_to_string(dir.join("settings.json")).unwrap().contains("hook claude"));
+    assert!(std::fs::read_to_string(d.home.path().join(".claude/settings.json")).unwrap().contains("hook claude"));
+    let _: serde_json::Value = c.request(methods::HOOKS_UNINSTALL, ()).await.unwrap();
+    assert!(!std::fs::read_to_string(dir.join("settings.json")).unwrap().contains("hook claude"));
+    assert!(!dir.join("skills/moonlet/SKILL.md").exists());
+}
+
+/// X33: profile.status asks `claude auth status` with the profile's folder,
+/// and profile.list remembers the account. A fake `claude` answers.
+#[tokio::test]
+async fn profile_status_reads_who_a_profile_is_signed_in_as() {
+    use moonlet_proto::types::{ClaudeProfile, ProfileAccount, ProfileInfo};
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("claude");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+if [ "$1 $2" = "auth status" ] && [ -n "$CLAUDE_CONFIG_DIR" ]; then
+  echo '{"loggedIn": true, "authMethod": "claude.ai", "email": "jane@cipherhealth.com", "orgName": "CipherHealth", "subscriptionType": "team"}'
+else
+  echo '{"loggedIn": false, "authMethod": "none"}'
+fi
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Terminals and agents get a login shell's PATH, which starts from the
+    // system's and is set by the rc files: put the fake first there.
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
+    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
+        std::fs::write(home.path().join(rc), &first).unwrap();
+    }
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let d = HomeDaemon::start(home, Some(&path)).await;
+    let mut c = d.client().await;
+    let p: ClaudeProfile = c
+        .request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work", "path": d.home.path().join("claude-work")}))
+        .await
+        .unwrap();
+    let account: ProfileAccount = c.request(methods::PROFILE_STATUS, serde_json::json!({"id": p.id})).await.unwrap();
+    assert_eq!(account, ProfileAccount { logged_in: true, email: Some("jane@cipherhealth.com".into()), org_name: Some("CipherHealth".into()) });
+    let list: Vec<ProfileInfo> = c.request(methods::PROFILE_LIST, ()).await.unwrap();
+    assert_eq!(list[0].account.as_ref().map(|a| a.logged_in), Some(true));
+    let default: ProfileAccount = c.request(methods::PROFILE_STATUS, serde_json::json!({})).await.unwrap();
+    assert!(!default.logged_in);
+}
+
+/// X33: starting refreshes the moonlet skill in every profile's folder too.
+#[tokio::test]
+async fn starting_refreshes_the_skill_of_every_profile() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join("claude-work");
+    let skill = dir.join("skills/moonlet/SKILL.md");
+    std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    std::fs::write(&skill, OLD_SKILL).unwrap();
+    std::fs::create_dir_all(home.path().join(".moonlet")).unwrap();
+    let state = serde_json::json!({"version": 3, "profiles": [{"id": "p1", "name": "Work", "path": dir, "created_at": 0}]});
+    std::fs::write(home.path().join(".moonlet/state.json"), state.to_string()).unwrap();
+    let d = HomeDaemon::start(home, None).await;
+    let mut text = String::new();
+    for _ in 0..100 {
+        text = std::fs::read_to_string(&skill).unwrap();
+        if text != OLD_SKILL {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    drop(d);
+    assert!(text.contains("term read"), "{text}");
+}

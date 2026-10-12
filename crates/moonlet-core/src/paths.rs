@@ -3,6 +3,7 @@
 //! hosts. Before the rename it was `~/.jaunt`; [`migrate_legacy_home`] moves
 //! it (X27).
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -177,6 +178,19 @@ pub fn hostname() -> String {
         .unwrap_or_else(|| "localhost".into())
 }
 
+/// Finds `program` on the PATH the agent will get (the login environment),
+/// not the daemon's own.
+pub fn find_program(program: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    if program.contains('/') {
+        return Some(PathBuf::from(program));
+    }
+    let path = env.get("PATH").cloned().or_else(|| std::env::var("PATH").ok())?;
+    std::env::split_paths(&path).map(|d| d.join(program)).find(|p| {
+        use std::os::unix::fs::PermissionsExt;
+        p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -279,3 +293,4 @@ mod tests {
         unsafe { std::env::remove_var("MOONLET_HOME") };
     }
 }
+
