@@ -18,6 +18,7 @@ import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "
 import type { ToolCallView } from "../lib/chat";
 import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../lib/sounds";
 import { EDITOR_THEMES, resolveEditorTheme } from "../lib/editorThemes";
+import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "../lib/uiScale";
 
 const close = () => useStore.setState({ dialog: null });
 
@@ -493,7 +494,7 @@ function TerminalSection() {
           <input className={inputCls} value={t.fontFamily} onChange={(e) => setTerm({ fontFamily: e.target.value })} />
         </Field>
         <Field label="Size">
-          <input type="number" min={9} max={24} className={inputCls} value={t.fontSize} onChange={(e) => setTerm({ fontSize: Number(e.target.value) || 13 })} />
+          <input type="number" min={MIN_FONT_SIZE} max={MAX_FONT_SIZE} className={inputCls} value={t.fontSize} onChange={(e) => setTerm({ fontSize: Number(e.target.value) || 13 })} />
         </Field>
       </div>
       <div className="space-y-1.5 ui-text-12.5">

@@ -3,10 +3,18 @@
 
 import { draftToAgent, focusPane, focusedEntry, runAction, selectSessionByIndex, switchTab } from "./actions";
 import { actionForKey, keyId } from "./runActions";
-import { errorToast, switchWorkspaceByIndex, toast, useStore } from "./store";
-import { pickBlockForAgent } from "./terminals";
+import { errorToast, switchWorkspaceByIndex, toast, updateSettings, useStore } from "./store";
+import { defaultTermSettings, pickBlockForAgent } from "./terminals";
+import { stepFontSize } from "./uiScale";
 
 type Handler = () => void;
+
+/** ⌘+ and ⌘− change the window's one font size, ⌘0 resets it (X37). */
+function updateFontSize(next: (current: number) => number) {
+  const { term } = useStore.getState().settings;
+  updateSettings({ term: { ...term, fontSize: next(term.fontSize) } });
+}
+const biggerText = () => updateFontSize((s) => stepFontSize(s, 1));
 
 /** Shortcuts the user cannot change. The Run action modal's actions have
  * their own, user-assignable keys (X19). Key format: see keyId. */
@@ -18,6 +26,12 @@ const bindings: Record<string, Handler> = {
   "alt+cmd+arrowleft": () => focusPane(-1),
   "shift+cmd+]": () => switchTab(1),
   "shift+cmd+[": () => switchTab(-1),
+  "cmd+=": biggerText,
+  "shift+cmd+=": biggerText,
+  "cmd++": biggerText,
+  "shift+cmd++": biggerText,
+  "cmd+-": () => updateFontSize((s) => stepFontSize(s, -1)),
+  "cmd+0": () => updateFontSize(() => defaultTermSettings.fontSize),
   "alt+cmd+c": () => {
     const cmd = focusedEntry()?.copySelected("command");
     if (cmd) void navigator.clipboard.writeText(cmd).then(() => toast("Copied command"), errorToast);
