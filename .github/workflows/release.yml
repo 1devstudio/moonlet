@@ -67,6 +67,11 @@ jobs:
           releaseDraft: true
           prerelease: false
 
+      # Without a sealed signature Gatekeeper reports a downloaded app as
+      # damaged instead of offering Open Anyway.
+      - name: App bundle signature is sealed
+        run: codesign --verify --deep --strict --verbose=2 target/release/bundle/macos/moonlet.app
+
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
