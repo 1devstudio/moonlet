@@ -55,7 +55,7 @@ export type Screen =
   | { kind: "paired"; name: string }
   | { kind: "session"; host: string; id: string; tab: SessionTab }
   | { kind: "diff"; host: string; id: string; path: string }
-  | { kind: "plan"; host: string; terminal: number; ask: string };
+  | { kind: "plan"; host: string; terminal: number; ask: string; from?: Screen };
 
 export type NotifyKey = "blocked" | "done" | "error" | "checks";
 

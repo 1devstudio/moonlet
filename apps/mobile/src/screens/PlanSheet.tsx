@@ -4,14 +4,14 @@
 import { useState } from "react";
 import { ListChecks, X } from "lucide-react";
 import { planOf } from "@desktop/lib/chat";
-import { showScreen, useApp } from "../lib/app";
+import { type Screen, showScreen, useApp } from "../lib/app";
 import { answerPlan } from "../lib/answers";
 import { ageText } from "../lib/cards";
 import { Markdown } from "../components/Markdown";
 import { AgentIcon, Btn } from "../components/ui";
 import { useNow } from "./Inbox";
 
-export function PlanSheet({ host, terminal, ask: askId }: { host: string; terminal: number; ask: string }) {
+export function PlanSheet({ host, terminal, ask: askId, from }: { host: string; terminal: number; ask: string; from?: Screen }) {
   const d = useApp((s) => s.data[host]);
   const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
   const now = useNow();
@@ -22,7 +22,7 @@ export function PlanSheet({ host, terminal, ask: askId }: { host: string; termin
   const plan = ask && planOf(ask);
   const session = d?.sessions.find((s) => s.id === d.terminals[terminal]?.session_id) ?? null;
   const project = d?.projects.find((p) => p.id === session?.project_id)?.name;
-  const close = () => showScreen(null);
+  const close = () => showScreen(from ?? null);
 
   const choose = async (choice: "approve" | "ask" | "keepPlanning") => {
     setBusy(true);
