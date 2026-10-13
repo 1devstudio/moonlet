@@ -1,6 +1,6 @@
 # X40 — The moonlet phone app
 
-- **Status:** draft
+- **Status:** implemented (macOS build checked against a scratch daemon; the iPhone build, push notifications and pairing links opened from elsewhere not yet)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** goal 2 (agent-first), A3 (attention), A5 (approval inbox), D1–D3 (changes, review, comments to the agent), X2 (PR and checks)
 - **Related:** [X39](X39-phone-pairing-and-link.md) (pairing and the phone link), [X20](X20-plan-approval.md) / [X24](X24-plan-panel.md) (plans), [X31](X31-agent-reads-terminal.md) (terminal reads), [X32](X32-workspaces-and-sections.md) (workspaces), [T9](T9-real-command-blocks.md) (command blocks), [D3](D3-comment-to-agent.md) (comments to the agent)
@@ -30,7 +30,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 - [x] The workspace chip at the top of Inbox and Sessions lists workspace names across connected hosts, once each, with the first host's colour, plus "All workspaces". Each daemon has its own workspaces (X32) but every one starts with "Personal", so a name shows that workspace on every host. The choice is remembered. (`lib/workspaceChoices.test.ts`, `inbox.test.ts`)
 - [x] The app's logo is the desktop's ringed moon (`src/assets/moon.svg`): on the pairing screen, in the Inbox's title and, on a full-bleed dark square, as the iOS app icon (`src-tauri/icons/source/icon-ios.svg`). The ringed moon and "moonlet" on the dark background show from launch until the app has loaded: as the iOS launch screen, then as static HTML in `index.html`, then as the app's own splash, all three laid out alike, so starting has no flash and no jump. (`lib/splash.test.ts` checks the launch screen's layout against the splash's)
 - [x] Right after pairing, the app says "Paired with <Mac>" and goes on to the Inbox (after 1.5 seconds, or at once with **Continue**).
-- [ ] Colours, type and components follow the desktop's tokens: dark background `#121212`, the state colours of `StateGlyph`, `DiffStat`, `AgentIcon`.
+- [x] Colours, type and components follow the desktop's tokens (`moonlet.css`): dark background `#121212`, the state colours, and the desktop's `StateGlyph`, `DiffStat`, `AgentIcon`. (Not yet compared with the design by eye.)
 
 ### Inbox
 
@@ -71,7 +71,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 ### Session screen
 
 - [x] The header shows the back button, the state glyph and title, `<project> · <branch> · <host>`, and a ⋯ menu with Archive session. (`lib/chatView.test.ts`)
-- [ ] Tabs: **Chat**, **Terminal** (with the number of shell, run and setup terminals), **Changes** (with the number of changed files), **PR** (with a dot in the checks' colour). (The PR dot comes with the PR tab.)
+- [x] Tabs: **Chat**, **Terminal** (with the number of shell, run and setup terminals), **Changes** (with the number of changed files), **PR** (with a dot in the checks' colour: red with a failure, yellow while one runs, green). (`checksDot` in `lib/checks.test.ts`)
 
 ### Chat
 
@@ -96,10 +96,10 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### PR and checks
 
-- [ ] The PR tab shows the PR title and number, `<base> ← <branch>`, its state and review decision, the diff stat, and "Stacked on #141 …" for a stacked PR (X11).
-- [ ] "Checks" shows "<n> failing" or "all passing", "updated <n>s ago", and each check with its status mark, name, note and duration. It refreshes every 30 seconds while shown. (`lib/checks.test.ts`)
-- [ ] With a failing check, **Ask Claude to fix <check>** sends a message naming the check to the session's agent and opens Chat. **Open on GitHub** opens the PR in Safari.
-- [ ] Without a PR, the tab shows **Create PR**.
+- [x] The PR tab shows the PR title and number, `<base> ← <branch>`, its state and review decision, the diff stat, and "Stacked on #141 Search API endpoint · merged" for a stacked PR (X11). (`reviewText`, `stackedOn` in `checks.test.ts`)
+- [x] "Checks" shows "<n> failing", "<n> running" or "all passing", "updated <n>s ago", and each check with its status mark, name and note (passed, failed, running, skipped); a tap opens its run. It refreshes every 30 seconds while shown. GitHub's check list carries no durations, so none are shown. (`lib/checks.test.ts`)
+- [x] With a failing check, **Ask Claude to fix <check>** sends a message naming the check and its link to the session's agent and opens Chat. **Open on GitHub** opens the PR in the browser. (`fixPrompt` in `checks.test.ts`)
+- [x] Without a PR, the tab shows a form (title, description, draft) and **Create PR**, which pushes the branch and opens the PR against the session's base (`gh.pr_create`).
 
 ### Hosts
 

@@ -55,7 +55,7 @@ export function ChangesTab({ host, session }: { host: string; session: Session }
         {status && <DiffStat add={status.additions} del={status.deletions} />}
       </div>
       <main className="scroll min-h-0 flex-1 pb-3">
-        {status === null && <div className="p-6 text-[14px] text-muted">Loading changes…</div>}
+        {status === undefined && <div className="p-6 text-[14px] text-muted">Loading changes…</div>}
         {status && files.length === 0 && <div className="p-6 text-[14px] text-muted">No changes {against === "base" ? `against ${session.base}` : "since the last commit"}.</div>}
         {folderGroups(files).map((g) => (
           <div key={g.dir} className="flex flex-col">
