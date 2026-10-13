@@ -59,6 +59,8 @@ export interface ChatItem {
   partial?: boolean;
   /** On the final assistant message of a completed turn (X16). */
   turn?: TurnTime | null;
+  /** On an `error` item: the agent's code for the cause, e.g. `authentication_failed`. */
+  cause?: string | null;
 }
 
 /** When a turn started and ended, in ms since the epoch. */
