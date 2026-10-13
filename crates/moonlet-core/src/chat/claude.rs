@@ -23,6 +23,9 @@ pub struct Claude {
     /// `mcp_authenticate` requests: request id → server (X29).
     auth_ids: HashMap<String, String>,
     sign_ins: SignIns,
+    /// The code of an API error Claude Code reported as a message this turn,
+    /// e.g. `authentication_failed`; the turn's `result` repeats its text.
+    api_error: Option<String>,
 }
 
 impl Claude {
@@ -225,6 +228,10 @@ impl Adapter for Claude {
                     _ => {}
                 }
             }
+            // Its text comes again as the failed `result`: show it once, there.
+            "assistant" if v["is_api_error_message"].as_bool().unwrap_or(false) => {
+                self.api_error = v["error"].as_str().map(String::from);
+            }
             "assistant" => {
                 let msg = v["message"]["id"].as_str().unwrap_or_default().to_string();
                 for block in v["message"]["content"].as_array().into_iter().flatten() {
@@ -364,6 +371,7 @@ impl Adapter for Claude {
                     + v["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0);
                 st.output_tokens += v["usage"]["output_tokens"].as_u64().unwrap_or(0);
                 let started_at = st.turn_started_at.take();
+                let api_error = self.api_error.take();
                 st.pending.clear();
                 if std::mem::take(&mut self.interrupted) {
                     let id = super::local_id("system");
@@ -371,8 +379,9 @@ impl Adapter for Claude {
                     st.status = "idle".into();
                 } else if failed {
                     let msg = v["result"].as_str().or_else(|| v["errors"][0].as_str()).unwrap_or("The turn failed.").to_string();
-                    let id = super::local_id("error");
-                    out.push(upsert(st, item(id, "error", msg)));
+                    let mut it = item(super::local_id("error"), "error", msg);
+                    it.error = api_error;
+                    out.push(upsert(st, it));
                     st.status = "error".into();
                 } else {
                     st.status = "done".into();
@@ -750,6 +759,26 @@ mod tests {
         a.on_line(r#"{"type":"result","subtype":"success","is_error":false}"#, &mut st);
         assert_eq!(st.status, "idle");
         assert!(st.items.iter().all(|i| i.turn.is_none()));
+    }
+
+    #[test]
+    fn a_failed_sign_in_shows_one_error_that_names_its_cause() {
+        // Captured from Claude Code 2.1.296 with a signed-out CLAUDE_CONFIG_DIR.
+        let note = r#"{"type":"assistant","message":{"id":"cbeac51b-6451-489c-a86a-c94885f14004","model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message","content":[{"type":"text","text":"Not logged in · Please run /login"}]},"parent_tool_use_id":null,"session_id":"505d7650-5cda-4c14-8e58-2223baa10699","error":"authentication_failed","is_api_error_message":true}"#;
+        let result = r#"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","stop_reason":"stop_sequence","terminal_reason":"api_error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}"#;
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.send("hi", &[], &mut st);
+        a.on_line(note, &mut st);
+        a.on_line(result, &mut st);
+        let shown: Vec<_> = st.items.iter().filter(|i| i.kind != "user").map(|i| (i.kind.as_str(), i.text.as_str(), i.error.as_deref())).collect();
+        assert_eq!(shown, [("error", "Not logged in · Please run /login", Some("authentication_failed"))]);
+        assert_eq!(st.status, "error");
+
+        // A later failure for another reason names no cause.
+        a.send("again", &[], &mut st);
+        a.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true}"#, &mut st);
+        assert_eq!(st.items.last().map(|i| i.error.clone()), Some(None));
     }
 
     #[test]

@@ -507,6 +507,10 @@ pub struct ChatItem {
     /// On the final assistant message of a completed turn (X16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<TurnTime>,
+    /// On an `error` item: the agent's code for the cause, e.g.
+    /// `authentication_failed` when its login is missing or expired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// When a turn started and ended, in milliseconds since the epoch.

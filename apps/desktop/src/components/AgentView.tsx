@@ -72,6 +72,7 @@ import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
 import { callbackForward, isWebPage, pagesToOpen } from "../lib/oauthRedirect";
 import { invoke } from "@tauri-apps/api/core";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
+import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
 import { uiScale } from "../lib/uiScale";
@@ -80,6 +81,7 @@ import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { AgentIcon, Button, cx, inputCls } from "./ui";
+import { ClaudeAuthDialog } from "./Profiles";
 
 // ------------------------------------------------------------ messages
 
@@ -415,6 +417,27 @@ function TurnFooter({ turn, text }: { turn: TurnTime; text: string }) {
   );
 }
 
+/** An agent's error. A failed login offers Sign in… for the workspace's Claude profile (X33). */
+function ErrorItem({ item }: { item: ChatItem }) {
+  const where = useContext(FileLinks);
+  const host = where?.host ?? "";
+  const ws = useStore((s) => s.workspaces[host]?.find((w) => w.id === where?.wsId));
+  const profiles = useStore((s) => s.profiles[host]);
+  const [auth, setAuth] = useState(false);
+  const signIn = where ? signInFor(item, ws, profiles ?? []) : null;
+  return (
+    <div className="my-1 flex items-start gap-3 rounded-md border border-[#5a2a2e] bg-[#2a1416] px-3 py-2 ui-text-13 text-[#f2a7a7]">
+      <div className="selectable min-w-0 flex-1 whitespace-pre-wrap">{item.text}</div>
+      {signIn && (
+        <Button size="sm" className="shrink-0" onClick={() => setAuth(true)}>
+          Sign in…
+        </Button>
+      )}
+      {auth && signIn && <ClaudeAuthDialog host={host} profile={signIn.profile} onClose={() => setAuth(false)} />}
+    </div>
+  );
+}
+
 export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) {
   switch (item.kind) {
     case "user":
@@ -435,7 +458,7 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
     case "tool":
       return item.tool ? <ToolRow tool={item.tool} cwd={cwd} /> : null;
     case "error":
-      return <div className="selectable my-1 whitespace-pre-wrap rounded-md border border-[#5a2a2e] bg-[#2a1416] px-3 py-2 ui-text-13 text-[#f2a7a7]">{item.text}</div>;
+      return <ErrorItem item={item} />;
     default:
       return <div className="py-1 text-center ui-text-12 text-faint">{item.text}</div>;
   }
