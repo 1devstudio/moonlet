@@ -202,7 +202,7 @@ export async function draftToAgent(text: string, newTab = false) {
   if (!c) return;
   let target = newTab ? null : agentSession()?.session ?? null;
   if (!target) {
-    target = await newAgentTab(c.ws.agent ?? "claude");
+    target = await newAgentTab(tabAgent(c.ws.agent));
     if (!target) return;
     // A TUI agent reads its input once it has drawn its first screen.
     if (!target.chat && !(await waitForAgent(c.host, target.id))) {

@@ -462,6 +462,7 @@ export const M = {
   fsFiles: "fs.files",
   fsRead: "fs.read",
   fsWrite: "fs.write",
+  fsWriteInside: "fs.write_inside",
   fsWatch: "fs.watch",
   fsUnwatch: "fs.unwatch",
   chatState: "chat.state",
