@@ -6,7 +6,7 @@ import { Check, ChevronDown, ChevronRight, Folder, GitPullRequest, History } fro
 import { rpc } from "@desktop/lib/daemon";
 import { type Commit, M, type Session } from "@desktop/lib/protocol";
 import { showScreen } from "../lib/app";
-import { commitLabel, folderGroups, statusLetter } from "../lib/diffView";
+import { canStage, commitLabel, folderGroups, statusLetter } from "../lib/diffView";
 import { forget, useGitStatus } from "../lib/lazy";
 import { Btn, DiffStat, cx } from "../components/ui";
 
@@ -65,17 +65,21 @@ export function ChangesTab({ host, session }: { host: string; session: Session }
             </div>
             {g.files.map((f) => (
               <div key={f.path} className="flex items-center">
-                <button
-                  type="button"
-                  role="checkbox"
-                  aria-checked={f.staged}
-                  aria-label={`Stage ${f.name}`}
-                  disabled={busy}
-                  onClick={() => void run(() => rpc(host, f.staged ? M.gitUnstage : M.gitStage, { path: session.path, files: [f.path] }))}
-                  className="flex h-12 w-12 flex-none items-center justify-center"
-                >
-                  <span className={cx("flex h-5 w-5 items-center justify-center rounded-[6px] border", f.staged ? "border-accent bg-accent text-bg" : "border-border-strong")}>{f.staged && <Check size={12} strokeWidth={3} />}</span>
-                </button>
+                {canStage(f) ? (
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={f.staged}
+                    aria-label={`Stage ${f.name}`}
+                    disabled={busy}
+                    onClick={() => void run(() => rpc(host, f.staged ? M.gitUnstage : M.gitStage, { path: session.path, files: [f.path] }))}
+                    className="flex h-12 w-12 flex-none items-center justify-center"
+                  >
+                    <span className={cx("flex h-5 w-5 items-center justify-center rounded-[6px] border", f.staged ? "border-accent bg-accent text-bg" : "border-border-strong")}>{f.staged && <Check size={12} strokeWidth={3} />}</span>
+                  </button>
+                ) : (
+                  <span className="w-12 flex-none" aria-hidden="true" />
+                )}
                 <button type="button" onClick={() => showScreen({ kind: "diff", host, id: session.id, path: f.path, against })} className="flex min-h-12 min-w-0 flex-1 items-center gap-2.5 pr-4 text-left">
                   <span className={cx("w-3 font-mono text-[12px] font-semibold", LETTER_COLOR[statusLetter(f)])}>{statusLetter(f)}</span>
                   <span className="min-w-0 flex-1 truncate text-[14.5px]">{f.name}</span>
