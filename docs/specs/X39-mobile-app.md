@@ -1,0 +1,138 @@
+# X39 — The moonlet phone app
+
+- **Status:** draft
+- **Priority / phase:** P1 · phase 3
+- **PRD refs:** goal 2 (agent-first), A3 (attention), A5 (approval inbox), D1–D3 (changes, review, comments to the agent), X2 (PR and checks)
+- **Related:** [X38](X38-phone-pairing-and-link.md) (pairing and the phone link), [X20](X20-plan-approval.md) / [X24](X24-plan-panel.md) (plans), [X31](X31-agent-reads-terminal.md) (terminal reads), [X32](X32-workspaces-and-sections.md) (workspaces), [T9](T9-real-command-blocks.md) (command blocks), [D3](D3-comment-to-agent.md) (comments to the agent)
+- **Related ADRs:** [0008](../adr/0008-phone-link-over-tailscale.md)
+
+## Summary
+
+An iPhone app for following agents away from the desk. It pairs with the user's Mac (X38) and shows what needs the user across every session: tool permissions, plans, and terminal reads, each answerable in place. It lists the sessions of the current workspace, starts new ones, and opens any session with four tabs: Chat, Terminal, Changes (with a diff view and line comments to the agent) and PR (with checks). The app is a Tauri 2 app in `apps/mobile` that reuses the desktop's look and logic (ADR 0008). The design is the "Moonlet Mobile" board: Inbox, Sessions, New session, Hosts, Session · Chat, Plan approval sheet, Session · Terminal, Session · Changes, Diff review, Session · PR.
+
+## User journey
+
+1. The user pairs the phone with the Mac (X38). The app opens on the Inbox.
+2. The Inbox says "3 need you · 2 working · 2 ready to review · 2 hosts online". The first card asks "Allow Bash?" for `pnpm test --filter search` in "Add search to the product list". The user taps **Allow**, confirms with Face ID, and the card leaves.
+3. The next card says "Claude has a plan: Idempotent refund webhooks". The user taps **Review plan**, reads it in a sheet, and taps **Approve, auto mode**.
+4. Under "Ready to review", the user taps "Fix checkout button on mobile". The Changes tab lists 4 files. The user opens a file, long-presses line 15, writes "SKU match should be prefix and case-insensitive", and taps **Send to Claude**. The session's chat shows the comment as the user's message.
+5. In the Sessions tab the user taps **New**, types a task, picks the project, and taps **Start session**. The new session's chat opens.
+6. The PR tab of a session shows `#147 open · Review required` and "1 failing". The user taps **Ask Claude to fix ci / test**.
+
+## Behaviour and acceptance criteria
+
+### Shell and navigation
+
+- [ ] Before any Mac is paired, the app shows a pairing screen: **Scan QR code** (camera), **Paste link**, and the line "On the Mac: Settings › Mobile › Pair a phone". A `moonlet://pair` link opened from elsewhere starts pairing too. (`lib/pairLink.test.ts` parses the X38 link: hosts, several addresses, version, bad links.)
+- [ ] After pairing, a bottom tab bar has **Inbox**, **Sessions**, **New** and **Hosts**. The Inbox tab carries a badge with the number of items that need the user. (`lib/inbox.test.ts`)
+- [ ] The app keeps one connection per paired Mac and one per SSH host routed through it (X38). The Mac tries its addresses in order. A lost connection retries with backoff (1, 2, 4 … 30 s) and immediately when the app comes to the foreground.
+- [ ] The workspace switcher at the top of Inbox and Sessions lists the workspaces of all connected hosts (X32), with their colour dot; the choice is remembered.
+- [ ] Colours, type and components follow the desktop's tokens: dark background `#121212`, the state colours of `StateGlyph`, `DiffStat`, `AgentIcon`.
+
+### Inbox
+
+- [ ] The Inbox lists, newest first within each group:
+  - **Needs you**: every pending tool permission (`chat.state.pending` of every chat terminal), every plan (`ExitPlanMode` ask, X20), every waiting question (`AskUserQuestion`), and every terminal read request (X31), across all connected hosts in the current workspace.
+  - **Ready to review**: sessions whose agent is `done` and that have changes.
+- [ ] The summary line counts these: `<n> need you · <n> working · <n> ready to review · <n> hosts online`, leaving out zero counts except hosts. (`lib/inbox.test.ts`)
+- [ ] A permission card shows the session name, the agent, the project, the host, the age (`2m`), the tool's question ("Allow Bash?", "Allow Edit?", from the tool name) and its summary, plus **Allow**, **Always** (only when `can_always`) and **Deny**. These call `chat.permission` with `allow`, `always` or `deny`.
+- [ ] A plan card shows the plan's first heading and its first sentence, the project and the host, plus **Review plan** (opens the plan sheet) and **Approve, auto** (`chat.permission` with `allow` and mode `auto`).
+- [ ] A terminal read card shows the X31 message (`<agent> in <session> wants the output of <command> (exit <code>, <n> lines) from terminal <title>.`) with **Preview output** (a sheet with the exact text, **Allow** and **Deny**) and **Deny**.
+- [ ] A question card opens the session's chat, where the question is answered.
+- [ ] A card leaves the Inbox as soon as the daemon reports the ask answered, from the phone or from the Mac.
+- [ ] With nothing waiting, the Inbox says "Nothing needs you" and still shows Ready to review.
+
+### Face ID
+
+- [ ] Allow, Always and plan approvals ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`lib/approvalGate.test.ts` for which actions need the check)
+
+### Plan approval sheet
+
+- [ ] The sheet shows "Claude has a plan", the project, host and waiting time, the plan as Markdown, and the plan file's path.
+- [ ] **Approve, auto mode** answers `allow` with mode `auto`; **Ask before edits** answers `allow` with no mode; **Keep planning** shows a text box "What should change in the plan?" with **Back** and **Send feedback**, which answers `deny` with the text. (`planAnswer` in `lib/chat.ts`, already tested)
+
+### Sessions
+
+- [ ] Sessions lists the current workspace's sessions, grouped by section and project, as the desktop sidebar does (X32): a section label, then per project its avatar letter, name and host, then its sessions.
+- [ ] Each row shows the state glyph, the title, a state word (`needs you`, `working` with the time since its turn started, `done`, `failed`, `plan` for a waiting plan), the branch, the diff stat against the base, and the PR number with its state colour when there is a PR.
+- [ ] Filter chips: **All**, **Needs you**, **Working**, **Review**, each with its count. Search filters by title, branch and project. (`lib/sessionList.test.ts`)
+- [ ] A project whose base branch is behind `origin` shows "main 3 behind · Pull", which pulls (X13).
+- [ ] Tapping a row opens the session on the tab that matters: the plan sheet for a waiting plan, Changes for a done session, Chat otherwise.
+
+### New session
+
+- [ ] New session has the prompt box "What do you want to work on?" (with dictation from the keyboard), the branch name it will create (`moonlet/<slug>`, updated as the prompt changes), and rows for **Project**, **Host**, **Agent**, **Model** and **Base**, each opening a picker.
+- [ ] **Mode** has Auto, Manual, Edits and Plan, with one help line each (from the design). Manual is the default.
+- [ ] The footer says "Creates a worktree from <base> on <host> and runs setup: <setup command>" (no setup part without a setup command). **Start session** calls `session.create` and opens the new session's chat. (`lib/newSession.test.ts` for the branch name and the footer)
+
+### Session screen
+
+- [ ] The header shows the back button, the state glyph and title, `<project> · <branch> · <host>`, and a ⋯ menu (Archive, Open on GitHub when there is a PR).
+- [ ] Tabs: **Chat**, **Terminal** (with the number of terminals), **Changes** (with the number of changed files), **PR** (with a dot in the checks' colour).
+
+### Chat
+
+- [ ] The chat shows the conversation as the desktop does: user messages, thinking, tool calls folded into groups (X14), and Markdown replies.
+- [ ] A pending ask is docked at the bottom above the composer: the question, the command or summary, "Waiting 2m", and **Deny**, **Always**, **Allow**; under them "Deny and tell Claude what to do…", which opens a text box and answers `deny` with that message.
+- [ ] Without a pending ask, the composer sends a message (`chat.send`); while the agent works, a stop button interrupts it (`chat.interrupt`).
+- [ ] The footer shows the context meter (X34), the cost, the model and effort, and the permission mode; model, effort and mode open pickers that call `chat.settings`.
+
+### Terminal
+
+- [ ] A strip lists the session's shell, run and setup terminals by title, plus **+** for a new shell.
+- [ ] The terminal shows command blocks (T9): each with its directory, duration, exit status, the command and its output. A failed block offers **Send to Claude** (its text into the session's chat composer), **Re-run** and **Copy**.
+- [ ] The command line at the bottom shows the directory and branch and sends a command with ↵. A key bar above the keyboard has esc, tab, ctrl, ↑, ↓, ←, →, `|`, `~`. (`lib/keyBar.test.ts` for the bytes each key sends, ctrl+c as `\x03`)
+- [ ] **Blocks ▾** switches to the plain terminal (xterm) for full-screen programs.
+
+### Changes and diff review
+
+- [ ] Changes shows **vs main** / **vs HEAD**, the file count and diff stat, and the files grouped by folder, each with a staging checkbox, its status letter, name and diff stat. "2 commits on this branch" opens the log.
+- [ ] The bottom has the commit message box and **Commit <n> staged** (disabled with nothing staged) and **Create PR** (X2).
+- [ ] Tapping a file opens the diff: file name, folder, diff stat, `1 / 6` with previous and next file, and the hunks with old and new line numbers. Each hunk has **Stage hunk** and a discard button (asks first). The bottom has **Discard file** (asks first) and **Stage file**.
+- [ ] Long-pressing a line opens "Comment to Claude on line <n>" with **Cancel** and **Send to Claude**, which sends the comment to the session's agent in D3's format. (`lib/diffComment.test.ts` for the line numbers of added, removed and context lines)
+
+### PR and checks
+
+- [ ] The PR tab shows the PR title and number, `<base> ← <branch>`, its state and review decision, the diff stat, and "Stacked on #141 …" for a stacked PR (X11).
+- [ ] "Checks" shows "<n> failing" or "all passing", "updated <n>s ago", and each check with its status mark, name, note and duration. It refreshes every 30 seconds while shown. (`lib/checks.test.ts`)
+- [ ] With a failing check, **Ask Claude to fix <check>** sends a message naming the check to the session's agent and opens Chat. **Open on GitHub** opens the PR in Safari.
+- [ ] Without a PR, the tab shows **Create PR**.
+
+### Hosts
+
+- [ ] Hosts lists the paired Macs and the SSH hosts reached through them, each with its status (connected, connecting, offline), its route (`Paired · direct over Tailscale · 14 ms`, `Linux · reached through <Mac> over SSH`, `last seen 2 h ago · sessions keep running`), and `moonletd <version> · <n> sessions · <n> terminals`. An offline host has **Reconnect**. (`lib/hosts.test.ts` for the lines)
+- [ ] **Pair a Mac** starts pairing another Mac. Swiping a Mac offers **Forget**.
+- [ ] "Notify me when" has switches for an agent needs input, finishes, fails, and PR checks fail; and "Require Face ID to allow". The switches are kept on the phone; they take effect once push notifications exist (out of scope here).
+
+## UI
+
+The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe areas respected, dark theme only.
+
+## Protocol and RPCs
+
+The app uses the existing methods and events (`docs/protocol.md`) through the X38 link, plus X38's `mobile.hosts`. A new method `chat.summaries` returns every chat terminal's state without its items (`[{ id, state }]`), so the Inbox does not load every conversation.
+
+## Data and config
+
+On the phone, in the app's data folder: the paired Macs (name, addresses, device token) and the app settings. The token file is excluded from iCloud backup.
+
+## Security considerations
+
+- The device token gives full access to the Mac (X38). It is stored in the app's sandbox with iOS data protection; Face ID gates approvals.
+- Text from the daemon (chat, terminal output, file names) is rendered as text or through the desktop's sanitising Markdown renderer, never as raw HTML.
+
+## Out of scope
+
+- Push notifications and approving from a notification (needs APNs and a paid Apple Developer account).
+- iPad layouts, landscape, light theme.
+- Editing files, the file tree, MCP and subagent panels, the command palette.
+
+## Test plan
+
+- Vitest in `apps/mobile/src/lib/*.test.ts` for each `lib` function named above, with literals from this spec and the design.
+- Rust: `chat.summaries` in `crates/moonletd/tests`.
+- The phone app has no automated UI tests. Each stack part is checked by running the app's macOS build against a scratch daemon, and on the iPhone once Xcode is installed.
+
+## Open questions
+
+- None.

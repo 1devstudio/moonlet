@@ -76,3 +76,5 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X35 | Check for updates and install them in the app | P1 | 3 | implemented (no real update tried yet) | [X35-in-app-update.md](X35-in-app-update.md) |
 | X36 | Tell the user about a new Claude Code and update it from the app | P2 | 3 | implemented (no real update tried yet) | [X36-claude-code-update.md](X36-claude-code-update.md) |
 | X37 | ⌘+, ⌘− and ⌘0 change the window's font size | P2 | 3 | implemented (keys unchecked in app) | [X37-font-size-shortcuts.md](X37-font-size-shortcuts.md) |
+| X38 | Pair a phone and let it reach the daemon over Tailscale | P1 | 3 | draft | [X38-phone-pairing-and-link.md](X38-phone-pairing-and-link.md) |
+| X39 | The moonlet phone app | P1 | 3 | draft | [X39-mobile-app.md](X39-mobile-app.md) |
