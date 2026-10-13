@@ -1,193 +1,93 @@
 //! Connections from the app to `moonletd` instances: the local daemon over its
 //! Unix socket, remote daemons through `ssh <host> moonletd proxy` (R1, R3).
-//!
-//! Each host keeps one connection and reconnects with backoff on its own.
-//! The daemon keeps sessions alive meanwhile, so a dropped link only pauses
-//! output. PTY output is batched every 8 ms into one binary message per host
-//! for the webview: repeated `[u32 BE session][u32 BE len][bytes]` records.
-//! A session id with [`RESET_FLAG`] set carries an attach snapshot.
+//! Each connection is a [`moonlet_link::Host`] (ADR 0008); this module says
+//! how to reach each host and hands statuses and events to the webview.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use moonlet_proto::{
-    Frame, FrameDecoder, Message, PROTOCOL_VERSION, RpcError, TerminalId, encode_frame,
+pub use moonlet_link::HostInfo;
+use moonlet_link::{
+    BoxFuture, Connector, Events, Host, HostOptions, NEEDS_INSTALL, Reader, Writer,
 };
+use moonlet_proto::{Frame, Message, RpcError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub const LOCAL: &str = "local";
 
-/// High bit on a session id in the output stream: reset the terminal and
-/// treat the record as an attach snapshot.
-pub const RESET_FLAG: TerminalId = 0x8000_0000;
+/// The desktop app's name in `hello`.
+const CLIENT: &str = "moonlet-app";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum HostStatus {
-    Connecting,
-    Connected,
-    Reconnecting,
-    /// The remote helper is missing or a different version; needs consent to install.
-    NeedsInstall,
-    Error,
+/// Sends host statuses and daemon events to the webview.
+struct WebviewEvents(AppHandle);
+
+#[derive(Serialize, Clone)]
+struct DaemonEvent<'a> {
+    host: &'a str,
+    name: String,
+    data: Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct HostInfo {
-    pub id: String,
-    pub label: String,
-    pub remote: bool,
-    pub status: HostStatus,
-    pub message: Option<String>,
-    pub daemon_version: Option<String>,
-    pub hostname: Option<String>,
-    pub home: Option<String>,
-}
-
-type Pending = HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>;
-
-struct Link {
-    tx: mpsc::UnboundedSender<Vec<u8>>,
-}
-
-pub struct Host {
-    pub id: String,
-    remote: bool,
-    info: Mutex<HostInfo>,
-    link: Mutex<Option<Link>>,
-    pending: Mutex<Pending>,
-    /// Request id of each in-flight `session.attach`, with its session.
-    attaching: Mutex<HashMap<u64, TerminalId>>,
-    next_id: AtomicU64,
-    output: Mutex<Option<Channel<InvokeResponseBody>>>,
-    batch: Mutex<Vec<u8>>,
-    stop: watch::Sender<bool>,
-    /// Kicks the reconnect loop to retry immediately.
-    retry: tokio::sync::Notify,
-}
-
-impl Host {
-    pub fn info(&self) -> HostInfo {
-        self.info.lock().unwrap().clone()
+impl Events for WebviewEvents {
+    fn status(&self, info: &HostInfo) {
+        let _ = self.0.emit("host-status", info);
     }
 
-    pub fn set_output(&self, channel: Channel<InvokeResponseBody>) {
-        *self.output.lock().unwrap() = Some(channel);
+    fn event(&self, host: &str, name: String, data: Value) {
+        let _ = self
+            .0
+            .emit("daemon-event", DaemonEvent { host, name, data });
+    }
+}
+
+struct LocalDaemon;
+
+impl Connector for LocalDaemon {
+    fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
+        Box::pin(connect_local())
     }
 
-    pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        {
-            let link = self.link.lock().unwrap();
-            let Some(link) = link.as_ref() else {
-                return Err(RpcError::new(
-                    "disconnected",
-                    format!("{} is not connected", self.id),
-                ));
+    fn welcomed<'a>(&'a self, reply: &'a Frame) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let mismatch = match reply {
+                Frame::Json(Message::Welcome { daemon_version, .. }) => {
+                    daemon_version != env!("CARGO_PKG_VERSION")
+                }
+                Frame::Json(Message::Response { error: Some(e), .. }) => {
+                    e.code == "protocol_mismatch"
+                }
+                _ => false,
             };
-            self.pending.lock().unwrap().insert(id, tx);
-            if method == moonlet_proto::methods::TERMINAL_ATTACH
-                && let Some(sid) = params.get("id").and_then(Value::as_u64)
-            {
-                self.attaching.lock().unwrap().insert(id, sid as TerminalId);
+            if mismatch && !UPGRADE_TRIED.swap(true, Ordering::SeqCst) {
+                tracing::info!("local daemon is a different version; upgrading it in place");
+                upgrade_local().await?;
+                bail!("daemon upgraded; reconnecting");
             }
-            let frame = Frame::Json(Message::Request {
-                id,
-                method: method.into(),
-                params,
-            });
-            let bytes = encode_frame(&frame).map_err(|e| {
-                self.forget_request(id);
-                RpcError::new("too_large", e.to_string())
-            })?;
-            if link.tx.send(bytes).is_err() {
-                self.forget_request(id);
-                return Err(RpcError::new("disconnected", "connection closed"));
-            }
-        }
-        match tokio::time::timeout(request_timeout(method), rx).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(_)) => {
-                self.forget_request(id);
-                Err(RpcError::new(
-                    "disconnected",
-                    "connection lost before reply",
-                ))
-            }
-            Err(_) => {
-                self.forget_request(id);
-                Err(RpcError::new("timeout", format!("{method} timed out")))
-            }
-        }
-    }
-
-    /// Drops a request that will get no reply, including an attach's
-    /// pending snapshot routing.
-    fn forget_request(&self, id: u64) {
-        self.pending.lock().unwrap().remove(&id);
-        self.attaching.lock().unwrap().remove(&id);
-    }
-
-    pub fn input(&self, session: TerminalId, data: Vec<u8>) -> Result<(), RpcError> {
-        let link = self.link.lock().unwrap();
-        let link = link
-            .as_ref()
-            .ok_or_else(|| RpcError::new("disconnected", "not connected"))?;
-        let bytes = encode_frame(&Frame::Input {
-            terminal: session,
-            data,
+            Ok(())
         })
-        .map_err(|e| RpcError::new("too_large", e.to_string()))?;
-        link.tx
-            .send(bytes)
-            .map_err(|_| RpcError::new("disconnected", "connection closed"))
     }
+}
 
-    fn set_status(&self, app: &AppHandle, status: HostStatus, message: Option<String>) {
-        let info = {
-            let mut i = self.info.lock().unwrap();
-            i.status = status;
-            i.message = message;
-            i.clone()
-        };
-        let _ = app.emit("host-status", info);
-    }
+struct RemoteDaemon(String);
 
-    fn push_output(&self, session: TerminalId, data: &[u8]) {
-        let mut b = self.batch.lock().unwrap();
-        b.extend_from_slice(&session.to_be_bytes());
-        b.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        b.extend_from_slice(data);
+impl Connector for RemoteDaemon {
+    fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
+        Box::pin(connect_remote(&self.0))
     }
+}
 
-    fn flush_output(&self) {
-        let buf = {
-            let mut b = self.batch.lock().unwrap();
-            if b.is_empty() {
-                return;
-            }
-            std::mem::take(&mut *b)
-        };
-        if let Some(ch) = self.output.lock().unwrap().as_ref() {
-            let _ = ch.send(InvokeResponseBody::Raw(buf));
-        }
-    }
-
-    fn fail_pending(&self, why: &str) {
-        for (_, tx) in self.pending.lock().unwrap().drain() {
-            let _ = tx.send(Err(RpcError::new("disconnected", why)));
-        }
-    }
+/// Output for one host goes to the webview's channel.
+pub fn send_output(host: &Host, channel: Channel<InvokeResponseBody>) {
+    host.set_output(move |buf| {
+        let _ = channel.send(InvokeResponseBody::Raw(buf));
+    });
 }
 
 pub struct HostManager {
@@ -227,7 +127,7 @@ impl HostManager {
             .lock()
             .unwrap()
             .values()
-            .filter(|h| h.remote)
+            .filter(|h| h.remote())
             .map(|h| h.id.clone())
             .collect();
         let _ = moonlet_core::paths::ensure_private_dir(&moonlet_core::paths::home());
@@ -262,11 +162,13 @@ impl HostManager {
         if let Ok(h) = self.get(id) {
             return h.info();
         }
-        let (stop, stop_rx) = watch::channel(false);
-        let host = Arc::new(Host {
-            id: id.to_string(),
-            remote,
-            info: Mutex::new(HostInfo {
+        let connector: Arc<dyn Connector> = if remote {
+            Arc::new(RemoteDaemon(id.to_string()))
+        } else {
+            Arc::new(LocalDaemon)
+        };
+        let host = Host::start(
+            HostOptions {
                 id: id.to_string(),
                 label: if remote {
                     id.to_string()
@@ -274,21 +176,12 @@ impl HostManager {
                     "This Mac".into()
                 },
                 remote,
-                status: HostStatus::Connecting,
-                message: None,
-                daemon_version: None,
-                hostname: None,
-                home: None,
-            }),
-            link: Mutex::new(None),
-            pending: Mutex::new(HashMap::new()),
-            attaching: Mutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
-            output: Mutex::new(None),
-            batch: Mutex::new(Vec::new()),
-            stop,
-            retry: tokio::sync::Notify::new(),
-        });
+                client: CLIENT.into(),
+            },
+            connector,
+            Arc::new(WebviewEvents(self.app.clone())),
+            tauri::async_runtime::handle().inner().clone(),
+        );
         self.hosts
             .lock()
             .unwrap()
@@ -296,8 +189,6 @@ impl HostManager {
         if remote {
             self.persist();
         }
-        tauri::async_runtime::spawn(flush_loop(Arc::downgrade(&host)));
-        tauri::async_runtime::spawn(connection_loop(self.app.clone(), host.clone(), stop_rx));
         host.info()
     }
 
@@ -306,34 +197,16 @@ impl HostManager {
             return;
         }
         if let Some(h) = self.hosts.lock().unwrap().remove(id) {
-            let _ = h.stop.send(true);
-            h.link.lock().unwrap().take();
+            h.stop();
         }
         self.persist();
     }
 
     pub fn reconnect(&self, id: &str) -> Result<(), RpcError> {
-        let h = self.get(id)?;
-        h.link.lock().unwrap().take();
-        // Wake a waiting link loop only: a stored permit would drop the next
-        // fresh link right after its handshake.
-        h.retry.notify_waiters();
+        self.get(id)?.reconnect();
         Ok(())
     }
 }
-
-async fn flush_loop(host: std::sync::Weak<Host>) {
-    let mut tick = tokio::time::interval(Duration::from_millis(8));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
-        let Some(h) = host.upgrade() else { return };
-        h.flush_output();
-    }
-}
-
-type Reader = Box<dyn AsyncRead + Unpin + Send>;
-type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
 /// Finds a bundled binary: next to the app executable (bundle `Contents/MacOS`,
 /// or `target/<profile>` in development), or `$MOONLET_BIN_DIR`.
@@ -418,8 +291,8 @@ async fn connect_remote(alias: &str) -> Result<(Reader, Writer)> {
     let want = env!("CARGO_PKG_VERSION");
     match probe {
         Some(v) if v == want => {}
-        Some(v) => bail!("needs_install: remote helper is {v}, app expects {want}"),
-        None => bail!("needs_install: moonlet helper is not installed on {alias}"),
+        Some(v) => bail!("{NEEDS_INSTALL}remote helper is {v}, app expects {want}"),
+        None => bail!("{NEEDS_INSTALL}moonlet helper is not installed on {alias}"),
     }
     let mut child = tokio::process::Command::new("ssh")
         .args(ssh_base_args())
@@ -461,244 +334,5 @@ impl AsyncRead for ChildReader {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
-    }
-}
-
-async fn connection_loop(app: AppHandle, host: Arc<Host>, mut stop: watch::Receiver<bool>) {
-    let mut backoff = Duration::from_millis(300);
-    let mut attempt = 0u32;
-    loop {
-        if *stop.borrow() {
-            return;
-        }
-        let status = if attempt == 0 {
-            HostStatus::Connecting
-        } else {
-            HostStatus::Reconnecting
-        };
-        host.set_status(&app, status, None);
-        let connected = if host.remote {
-            connect_remote(&host.id).await
-        } else {
-            connect_local().await
-        };
-        match connected {
-            Ok((reader, writer)) => {
-                backoff = Duration::from_millis(300);
-                if let Err(e) = run_link(&app, &host, reader, writer, &mut stop).await {
-                    tracing::info!(host = %host.id, "link ended: {e:#}");
-                }
-                host.link.lock().unwrap().take();
-                host.fail_pending("connection lost");
-                if *stop.borrow() {
-                    return;
-                }
-            }
-            Err(e) => {
-                let msg = format!("{e:#}");
-                if let Some(m) = msg.strip_prefix("needs_install: ") {
-                    host.set_status(&app, HostStatus::NeedsInstall, Some(m.to_string()));
-                    // Wait for the user to install, then retry.
-                    tokio::select! {
-                        _ = host.retry.notified() => {}
-                        _ = stop.changed() => return,
-                    }
-                    attempt = 0;
-                    continue;
-                }
-                host.set_status(&app, HostStatus::Error, Some(msg));
-            }
-        }
-        attempt += 1;
-        tokio::select! {
-            _ = tokio::time::sleep(backoff) => {}
-            _ = host.retry.notified() => {}
-            _ = stop.changed() => return,
-        }
-        backoff = (backoff * 2).min(Duration::from_secs(5));
-    }
-}
-
-async fn run_link(
-    app: &AppHandle,
-    host: &Arc<Host>,
-    mut reader: Reader,
-    mut writer: Writer,
-    stop: &mut watch::Receiver<bool>,
-) -> Result<()> {
-    writer
-        .write_all(&encode_frame(&Frame::Json(Message::Hello {
-            protocol: PROTOCOL_VERSION,
-            client: "moonlet-app".into(),
-        }))?)
-        .await?;
-    writer.flush().await?;
-
-    let mut decoder = FrameDecoder::new();
-    let mut buf = vec![0u8; 256 * 1024];
-    // Handshake.
-    let welcome = loop {
-        let n = tokio::time::timeout(Duration::from_secs(15), reader.read(&mut buf))
-            .await
-            .context("handshake timed out")??;
-        if n == 0 {
-            bail!("daemon closed the connection during handshake");
-        }
-        decoder.push(&buf[..n]);
-        if let Some(frame) = decoder.next_frame()? {
-            break frame;
-        }
-    };
-    let mismatch = match &welcome {
-        Frame::Json(Message::Welcome { daemon_version, .. }) => {
-            daemon_version != env!("CARGO_PKG_VERSION")
-        }
-        Frame::Json(Message::Response { error: Some(e), .. }) => e.code == "protocol_mismatch",
-        _ => false,
-    };
-    if mismatch && !host.remote && !UPGRADE_TRIED.swap(true, Ordering::SeqCst) {
-        tracing::info!("local daemon is a different version; upgrading it in place");
-        upgrade_local().await?;
-        bail!("daemon upgraded; reconnecting");
-    }
-    match welcome {
-        Frame::Json(Message::Welcome {
-            daemon_version,
-            host: hostname,
-            ..
-        }) => {
-            let mut i = host.info.lock().unwrap();
-            i.daemon_version = Some(daemon_version);
-            i.hostname = Some(hostname);
-        }
-        Frame::Json(Message::Response { error: Some(e), .. }) => bail!("{}", e.message),
-        other => bail!("unexpected handshake reply {other:?}"),
-    }
-
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    *host.link.lock().unwrap() = Some(Link { tx });
-    // Fetch home for path display; ignore failures.
-    let h2 = host.clone();
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Ok(v) = h2
-            .request(moonlet_proto::methods::DAEMON_INFO, Value::Null)
-            .await
-        {
-            h2.info.lock().unwrap().home = v.get("home").and_then(Value::as_str).map(String::from);
-        }
-        h2.set_status(&app2, HostStatus::Connected, None);
-    });
-
-    let writer_task = tauri::async_runtime::spawn(async move {
-        while let Some(mut bytes) = rx.recv().await {
-            while let Ok(more) = rx.try_recv() {
-                bytes.extend_from_slice(&more);
-            }
-            if writer.write_all(&bytes).await.is_err() || writer.flush().await.is_err() {
-                break;
-            }
-        }
-    });
-
-    let result = loop {
-        // Frames already buffered alongside the handshake.
-        while let Some(frame) = decoder.next_frame()? {
-            dispatch(app, host, frame);
-        }
-        tokio::select! {
-            n = reader.read(&mut buf) => {
-                let n = n?;
-                if n == 0 {
-                    break Ok(());
-                }
-                decoder.push(&buf[..n]);
-            }
-            _ = stop.changed() => break Ok(()),
-            _ = host.retry.notified() => break Ok(()),
-        }
-    };
-    writer_task.abort();
-    result
-}
-
-#[derive(Serialize, Clone)]
-struct DaemonEvent<'a> {
-    host: &'a str,
-    name: String,
-    data: Value,
-}
-
-fn dispatch(app: &AppHandle, host: &Arc<Host>, frame: Frame) {
-    match frame {
-        Frame::Output { terminal, data } => host.push_output(terminal, &data),
-        Frame::Json(Message::Response {
-            id,
-            mut result,
-            error,
-        }) => {
-            // Attach snapshots travel on the output stream, flagged as a reset,
-            // so the webview sees them strictly before the live output after them.
-            if let Some(session) = host.attaching.lock().unwrap().remove(&id)
-                && let Some(snapshot) = result
-                    .as_mut()
-                    .and_then(|r| r.as_object_mut())
-                    .and_then(|o| o.remove("snapshot"))
-            {
-                host.push_output(
-                    session | RESET_FLAG,
-                    snapshot.as_str().unwrap_or("").as_bytes(),
-                );
-            }
-            if let Some(tx) = host.pending.lock().unwrap().remove(&id) {
-                let _ = tx.send(match error {
-                    Some(e) => Err(e),
-                    None => Ok(result.unwrap_or(Value::Null)),
-                });
-            }
-        }
-        Frame::Json(Message::Event { name, data }) => {
-            if name == moonlet_proto::methods::EV_AGENT_ATTENTION || name.starts_with("session.") {
-                // Make sure output that preceded the state change is on screen first.
-                host.flush_output();
-            }
-            let _ = app.emit(
-                "daemon-event",
-                DaemonEvent {
-                    host: &host.id,
-                    name,
-                    data,
-                },
-            );
-        }
-        _ => {}
-    }
-}
-
-/// How long the app waits for a daemon reply. `claude update` gets ten
-/// minutes in the daemon (X36): wait a little longer, so its own timeout
-/// is the one reported.
-fn request_timeout(method: &str) -> Duration {
-    let secs = if method == moonlet_proto::methods::CLAUDE_UPDATE {
-        660
-    } else if method.starts_with("gh.") || method.starts_with("workspace.") {
-        180
-    } else {
-        60
-    };
-    Duration::from_secs(secs)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn waits_longer_than_the_daemon_for_claude_update() {
-        // The daemon gives `claude update` ten minutes (X36); the app must
-        // not give up first.
-        assert_eq!(request_timeout("claude.update"), Duration::from_secs(660));
-        assert_eq!(request_timeout("gh.prs"), Duration::from_secs(180));
-        assert_eq!(request_timeout("claude.version"), Duration::from_secs(60));
     }
 }

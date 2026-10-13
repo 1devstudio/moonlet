@@ -55,7 +55,8 @@ fn host_subscribe(
     host: String,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<(), RpcError> {
-    hosts.get(&host)?.set_output(channel);
+    let h = hosts.get(&host)?;
+    hosts::send_output(&h, channel);
     Ok(())
 }
 

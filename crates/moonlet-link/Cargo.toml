@@ -1,0 +1,14 @@
+[package]
+name = "moonlet-link"
+description = "One app-side connection to a moonletd: requests, events and batched PTY output (desktop and phone apps)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+moonlet-proto.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
