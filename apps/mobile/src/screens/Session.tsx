@@ -7,12 +7,14 @@ import { M } from "@desktop/lib/protocol";
 import { type SessionTab, showScreen, useApp } from "../lib/app";
 import { sessionState } from "../lib/inbox";
 import { sessionLine, shellTerminals } from "../lib/chatView";
-import { useGitStatus } from "../lib/lazy";
+import { useGitStatus, usePr } from "../lib/lazy";
+import { checksDot } from "../lib/checks";
 import { Sheet } from "../components/Sheet";
 import { Btn, StateGlyph, cx } from "../components/ui";
 import { ChatTab } from "./Chat";
 import { TerminalTab } from "./Terminal";
 import { ChangesTab } from "./Changes";
+import { PrTab } from "./Pr";
 
 const TABS: { id: SessionTab; label: string }[] = [
   { id: "chat", label: "Chat" },
@@ -26,6 +28,8 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
   const session = d?.sessions.find((s) => s.id === id);
   const [git] = useGitStatus(host, session);
+  const [pr] = usePr(host, session);
+  const dot = pr ? checksDot(pr.checks) : null;
   const [menu, setMenu] = useState(false);
   if (!d || !session) {
     return (
@@ -41,6 +45,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const badge: Partial<Record<SessionTab, ReactNode>> = {
     terminal: shellTerminals(d, id).length || null,
     changes: git?.files.length || null,
+    pr: dot ? <span className="h-[7px] w-[7px] rounded-full" style={{ background: dot }} /> : null,
   };
   const go = (t: SessionTab) => showScreen({ kind: "session", host, id, tab: t });
 
@@ -65,7 +70,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
         {TABS.map((t) => (
           <button key={t.id} type="button" onClick={() => go(t.id)} className={cx("relative flex h-10 items-center justify-center gap-1.5 text-[14px]", tab === t.id ? "font-semibold text-fg" : "text-muted")}>
             {t.label}
-            {badge[t.id] && <span className="rounded-full bg-raised px-1.5 text-[11px] text-muted">{badge[t.id]}</span>}
+            {badge[t.id] && (t.id === "pr" ? badge[t.id] : <span className="rounded-full bg-raised px-1.5 text-[11px] text-muted">{badge[t.id]}</span>)}
             {tab === t.id && <span className="absolute right-3 bottom-0 left-3 h-[2px] rounded-full bg-accent" />}
           </button>
         ))}
@@ -74,7 +79,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
         {tab === "chat" && <ChatTab host={host} session={session} />}
         {tab === "terminal" && <TerminalTab host={host} session={session} />}
         {tab === "changes" && <ChangesTab host={host} session={session} />}
-        {tab === "pr" && <div className="p-6 text-muted">Coming in the next part of the stack.</div>}
+        {tab === "pr" && <PrTab host={host} session={session} />}
       </div>
       {menu && (
         <Sheet label="Session actions" onClose={() => setMenu(false)}>

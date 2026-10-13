@@ -9,13 +9,16 @@ import { type BaseStatus, type GitStatus, M, type Project, type PullRequest, typ
 
 const cache = detailsCache(60_000);
 
-function useLoaded<T>(key: string | null, f: () => Promise<T>): [T | null, () => void] {
-  const [value, setValue] = useState<T | null>(() => (key ? (cache.peek<T>(key) ?? null) : null));
+/** The value, or undefined until the first answer. */
+function useLoaded<T>(key: string | null, f: () => Promise<T>): [T | undefined, () => void] {
+  const [value, setValue] = useState<T | undefined>(() => (key ? cache.peek<T>(key) : undefined));
   const [tick, setTick] = useState(0);
   // A reply for an earlier key (another session, base or HEAD) is dropped.
   const [latest] = useState(latestOnly);
   useEffect(() => {
     if (!key) return;
+    // Another key (a session, base or HEAD): never show the last one's value.
+    setValue(cache.peek<T>(key));
     const isLatest = latest.start();
     cache
       .load(key, f, tick > 0)
