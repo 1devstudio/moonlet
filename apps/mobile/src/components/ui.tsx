@@ -39,12 +39,16 @@ export function Switch({ on, onChange, label, children }: { on: boolean; onChang
 }
 
 /** A screen title at the top of a tab. */
-export function Title({ children, right }: { children: ReactNode; right?: ReactNode }) {
+export function Title({ children, icon, right, below }: { children: ReactNode; icon?: ReactNode; right?: ReactNode; below?: ReactNode }) {
   return (
-    <div className="flex items-center gap-2.5 px-4 pb-0" style={{ paddingTop: "calc(var(--safe-top) + 14px)" }}>
-      <h1 className="m-0 text-[28px] font-semibold tracking-[-0.01em]">{children}</h1>
-      <span className="flex-1" />
-      {right}
+    <div className="flex flex-col gap-1.5 px-4" style={{ paddingTop: "calc(var(--safe-top) + 14px)" }}>
+      <div className="flex items-center gap-2.5">
+        {icon}
+        <h1 className="m-0 text-[28px] font-semibold tracking-[-0.01em]">{children}</h1>
+        <span className="flex-1" />
+        {right}
+      </div>
+      {below}
     </div>
   );
 }

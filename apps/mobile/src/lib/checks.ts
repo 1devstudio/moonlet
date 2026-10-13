@@ -27,11 +27,11 @@ export function checksSummary(checks: CheckRun[]): string {
   return running ? `${running} running` : "all passing";
 }
 
-/** The PR tab's dot: red with a failure, yellow while one runs, green. */
-export function checksDot(checks: CheckRun[]): string | null {
+/** The PR tab's dot: the worst check's state (a failure, then one running). */
+export function checksDot(checks: CheckRun[]): CheckMark | null {
   if (!checks.length) return null;
   const marks = checks.map(checkMark);
-  return marks.includes("error") ? "#ef5f5f" : marks.includes("running") ? "#f2c94c" : "#3ecf6e";
+  return marks.includes("error") ? "error" : marks.includes("running") ? "running" : "ok";
 }
 
 export function reviewText(decision: string | null): string | null {

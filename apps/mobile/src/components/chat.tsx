@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { type ChatBlock, diffStat, planOf, thinkingPreview, toolCommand, toolGroupLabel, toolGroupStatus } from "@desktop/lib/chat";
 import type { ChatItem, ToolCall } from "@desktop/lib/protocol";
+import { DIFF_LINE } from "../lib/palette";
 import { Markdown } from "./Markdown";
 import { cx } from "./ui";
 
@@ -50,14 +51,14 @@ export function StatusMark({ status }: { status: ToolCall["status"] }) {
 /** Unified diff lines, coloured. */
 export function DiffLines({ diff }: { diff: string }) {
   return (
-    <pre className="selectable scroll m-0 max-h-[320px] rounded-[8px] bg-[#161616] py-1 font-mono text-[11.5px] leading-[1.5]">
+    <pre className="selectable scroll m-0 max-h-[320px] rounded-[8px] bg-panel py-1 font-mono text-[11.5px] leading-[1.5]">
       {diff.split("\n").map((l, i) => (
         <div
           key={i}
           className={cx(
             "px-2 whitespace-pre-wrap break-all",
-            l.startsWith("+") && !l.startsWith("+++") && "bg-[#14301d] text-[#9fe0b0]",
-            l.startsWith("-") && !l.startsWith("---") && "bg-[#3a1719] text-[#f2a7a7]",
+            l.startsWith("+") && !l.startsWith("+++") && DIFF_LINE.add,
+            l.startsWith("-") && !l.startsWith("---") && DIFF_LINE.del,
             l.startsWith("@@") && "text-faint",
           )}
         >
@@ -97,11 +98,11 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
           {tool.diff ? (
             <DiffLines diff={tool.diff} />
           ) : plan ? (
-            <div className="rounded-[8px] bg-[#161616] p-3">
+            <div className="rounded-[8px] bg-panel p-3">
               <Markdown text={plan.plan} />
             </div>
           ) : (
-            <pre className="selectable scroll m-0 max-h-[300px] rounded-[8px] bg-[#161616] p-2.5 font-mono text-[11.5px] leading-[1.5] break-all whitespace-pre-wrap text-muted">
+            <pre className="selectable scroll m-0 max-h-[300px] rounded-[8px] bg-panel p-2.5 font-mono text-[11.5px] leading-[1.5] break-all whitespace-pre-wrap text-muted">
               {command && <span className="text-fg">$ {command}\n</span>}
               {tool.output?.trim()}
             </pre>

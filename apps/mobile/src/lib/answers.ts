@@ -13,36 +13,29 @@ async function gate(answer: Parameters<typeof needsFaceId>[0], reason: string): 
   return confirmWithFaceId(reason);
 }
 
-/** Allow, Always or Deny a tool; `message` tells the agent why on Deny. */
-export async function answerAsk(host: string, terminal: number, ask: string, decision: "allow" | "always" | "deny", message?: string): Promise<boolean> {
-  if (!(await gate(decision, "Allow the agent to use this tool"))) return false;
-  await rpc(host, M.chatPermission, { id: terminal, ask, decision, ...(message ? { message } : {}) });
-  void tap(decision === "deny" ? "warning" : "success");
+/** Asks for Face ID when `kind` needs it, sends the answer, and taps. */
+async function answer(kind: Parameters<typeof needsFaceId>[0], reason: string, send: () => Promise<unknown>, feel: "success" | "warning"): Promise<boolean> {
+  if (!(await gate(kind, reason))) return false;
+  await send();
+  void tap(feel);
   return true;
 }
+
+/** Allow, Always or Deny a tool; `message` tells the agent why on Deny. */
+export const answerAsk = (host: string, terminal: number, ask: string, decision: "allow" | "always" | "deny", message?: string) =>
+  answer(decision, "Allow the agent to use this tool", () => rpc(host, M.chatPermission, { id: terminal, ask, decision, ...(message ? { message } : {}) }), decision === "deny" ? "warning" : "success");
 
 /** A plan choice (X20, X24). Feedback must not be empty. */
 export async function answerPlan(host: string, terminal: number, ask: string, choice: PlanChoice, feedback = ""): Promise<boolean> {
   const params = planAnswer(choice, feedback, "auto");
   if (!params) return false;
-  if (!(await gate(choice === "keepPlanning" ? "feedback" : "approve", "Start the agent on its plan"))) return false;
-  await rpc(host, M.chatPermission, { id: terminal, ask, ...params });
-  void tap("success");
-  return true;
+  return answer(choice === "keepPlanning" ? "feedback" : "approve", "Start the agent on its plan", () => rpc(host, M.chatPermission, { id: terminal, ask, ...params }), "success");
 }
 
 /** Answers Claude's questions (`AskUserQuestion`); the answers steer it, so they wait for Face ID too. */
-export async function answerQuestion(host: string, terminal: number, ask: string, answers: Record<string, string>): Promise<boolean> {
-  if (!(await gate("question", "Answer the agent's question"))) return false;
-  await rpc(host, M.chatPermission, { id: terminal, ask, decision: "allow", answers });
-  void tap("success");
-  return true;
-}
+export const answerQuestion = (host: string, terminal: number, ask: string, answers: Record<string, string>) =>
+  answer("question", "Answer the agent's question", () => rpc(host, M.chatPermission, { id: terminal, ask, decision: "allow", answers }), "success");
 
 /** Answers an agent's request to read a terminal (X31). */
-export async function answerRead(host: string, requestId: number, allow: boolean): Promise<boolean> {
-  if (!(await gate(allow ? "read" : "deny", "Share the terminal's output with the agent"))) return false;
-  await rpc(host, M.terminalReadAnswer, { request_id: requestId, allow, remember: false });
-  void tap(allow ? "success" : "warning");
-  return true;
-}
+export const answerRead = (host: string, requestId: number, allow: boolean) =>
+  answer(allow ? "read" : "deny", "Share the terminal's output with the agent", () => rpc(host, M.terminalReadAnswer, { request_id: requestId, allow, remember: false }), allow ? "success" : "warning");

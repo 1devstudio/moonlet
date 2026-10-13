@@ -1,5 +1,6 @@
-// Per-row details loaded when a row shows: a session's diff stat and PR, a
-// project's base branch. Kept for a minute; events do not cover them.
+// Row details (X40): a session's diff stat and PR, a project's base
+// branch, loaded when a row shows and kept for a minute (detailsCache.ts):
+// the daemon sends no events about them.
 
 import { useEffect, useState } from "react";
 import { latestOnly } from "@desktop/lib/prStack";
