@@ -54,7 +54,7 @@ export type Screen =
   /** "Paired with <Mac>", right after pairing (X39). */
   | { kind: "paired"; name: string }
   | { kind: "session"; host: string; id: string; tab: SessionTab }
-  | { kind: "diff"; host: string; id: string; path: string }
+  | { kind: "diff"; host: string; id: string; path: string; against: "base" | "head" }
   | { kind: "plan"; host: string; terminal: number; ask: string; from?: Screen };
 
 export type NotifyKey = "blocked" | "done" | "error" | "checks";
