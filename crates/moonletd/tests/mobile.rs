@@ -439,6 +439,24 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
         ["devbox", "~/.moonlet/bin/moonletd proxy"]
     );
 
+    // Nor can it manage phones on the host: it could pair itself there and
+    // keep access after the Mac removes it.
+    for (id, method) in [
+        (1, "mobile.set_enabled"),
+        (2, "mobile.pair_start"),
+        (3, "mobile.status"),
+    ] {
+        let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
+            panic!("{method} worked through a route")
+        };
+        assert_eq!(e.message, "manage phones from the Mac", "{method}");
+    }
+    let hosts = call(&mut phone, 4, "mobile.hosts").await;
+    assert!(
+        matches!(hosts, Message::Response { error: None, .. }),
+        "{hosts:?}"
+    );
+
     // Only the desktop's hosts can be reached.
     let (_, r) = auth(
         &addr,

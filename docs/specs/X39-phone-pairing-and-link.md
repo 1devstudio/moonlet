@@ -46,7 +46,7 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 ### Devices
 
 - [x] `mobile.status` returns `{ enabled, port, tailscale, addresses, listening, host, devices: [{ id, name, created_at, last_seen, connected }] }`: `addresses` are the Tailscale addresses, `listening` the bound `ip:port`s (empty while off), devices in pairing order.
-- [x] `mobile.revoke { id }` removes the device from `mobile.json`, closes its open connections, and broadcasts `mobile.changed` with the new status. So do turning access on or off, the listener starting or stopping, and phones connecting and disconnecting. (`removing_a_phone_cuts_its_connection_and_its_token`)
+- [x] `mobile.revoke { id }` removes the device from `mobile.json`, closes its open connections, and broadcasts `mobile.changed` with the new status. A phone that authenticated just before its removal, or just before phone access was turned off, is dropped when it registers its connection, so a removal never misses a connection being set up. So do turning access on or off, the listener starting or stopping, and phones connecting and disconnecting. (`removing_a_phone_cuts_its_connection_and_its_token`)
 - [x] `mobile.json` is written with mode 0600, like the rest of `~/.moonlet`. (`mobile_json_round_trips_and_defaults_the_port`)
 - [x] The `mobile.*` methods except `mobile.hosts` are refused on phone connections (`forbidden: manage phones from the Mac`) and from the `moonlet` CLI (`forbidden: only the moonlet app manages phones`), so neither a phone nor an agent can pair another device. (`phones_and_agents_cannot_manage_phones`)
 
@@ -54,6 +54,7 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 
 - [x] `mobile.hosts` (allowed on phone connections) lists the SSH hosts the desktop app has added (`~/.moonlet/app-hosts.json`, R4) as `[{ id, label }]`.
 - [x] An `auth` with a valid `token` and `route: "<alias>"` for a host in that list makes the daemon run `ssh <the desktop's ssh options> <alias> ~/.moonlet/bin/moonletd proxy` and pipe frames both ways. The `authed` reply comes first, then everything the remote daemon sends, starting with its `welcome`. A `route` not in the list fails like a bad token. When ssh exits, the phone connection closes, and ssh's last stderr line is sent first as an error response with code `route_failed`. (`a_phone_reaches_an_ssh_host_through_the_mac`, with a fake `ssh` that runs `moonletd proxy` against a second daemon)
+- [x] On a routed connection the Mac reads the phone's frames and answers `mobile.*` requests other than `mobile.hosts` itself with `forbidden: manage phones from the Mac`. The host's daemon cannot tell the phone from the desktop app, and a phone that turned on phone access there and paired itself would keep access after the Mac removes it. (`a_phone_reaches_an_ssh_host_through_the_mac`)
 
 ### Desktop: Settings › Mobile
 
