@@ -2,6 +2,7 @@
 // sessions ready to review.
 
 import { planOf } from "@desktop/lib/chat";
+import { lastActive } from "@desktop/lib/sidebar";
 import type { AgentState, HostStatus, PermissionAsk, ReadRequest, Session } from "@desktop/lib/protocol";
 import type { HostData } from "./app";
 
@@ -111,6 +112,7 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
     }
   }
   needs.sort((a, b) => (b.askedAt ?? 0) - (a.askedAt ?? 0));
+  review.sort((a, b) => lastActive(data[b.host]!.terminals, b.session) - lastActive(data[a.host]!.terminals, a.session));
   return { needs, review, working, hostsOnline };
 }
 

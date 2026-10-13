@@ -79,6 +79,14 @@ describe("ready to review and the counts", () => {
     return w;
   };
 
+  it("lists the sessions ready to review most recently active first", () => {
+    const w = counted();
+    w.data.mac.sessions.push(session("later", "Later work"));
+    w.data.mac.terminals[43] = terminal(43, "later", { agent_state: "done", last_output_at: NOW });
+    w.data.mac.terminals[40] = terminal(40, "checkout", { agent_state: "done", last_output_at: NOW - 30 * MIN });
+    expect(buildInbox(w.hosts, w.data, null).review.map((r) => r.session.name)).toEqual(["Later work", "Fix checkout button on mobile"]);
+  });
+
   it("lists sessions whose agent is done, not archived ones", () => {
     const w = counted();
     expect(buildInbox(w.hosts, w.data, null).review.map((r) => [r.host, r.session.name, r.project])).toEqual([

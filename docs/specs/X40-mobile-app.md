@@ -36,7 +36,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 - [x] The Inbox lists, newest first within each group (`lib/inbox.test.ts`):
   - **Needs you**: every pending tool permission (`chat.state.pending` of every chat terminal), every plan (`ExitPlanMode` ask, X20), every waiting question (`AskUserQuestion`), and every terminal read request (X31), across all connected hosts in the current workspace.
-  - **Ready to review**: sessions whose agent is `done`, not archived, with their diff stat and file count once `git.status` answers.
+  - **Ready to review**: sessions whose agent is `done`, not archived, most recently active first, with their diff stat and file count once `git.status` answers.
 - [x] The summary line counts these: `<n> need you · <n> working · <n> ready to review · <n> hosts online`, leaving out zero counts except hosts. (`lib/inbox.test.ts`)
 - [x] A permission card shows the session name, the agent, the project, the host, the age (`now`, `2m`, `3h`, `2d`, from the ask's `asked_at`), the tool's question ("Allow Bash?"; an MCP tool reads "Allow linear · create_issue?") and its summary, plus **Allow**, **Always** (disabled unless `can_always`) and **Deny**. These call `chat.permission` with `allow`, `always` or `deny`. (`lib/cards.test.ts`)
 - [x] A plan card shows the plan's title (the ask's summary) and the first sentence after its heading, without Markdown and at most 140 characters, the project and the host, plus **Review plan** (opens the plan sheet) and **Approve, auto** (`chat.permission` with `allow` and mode `auto`). (`cards.test.ts`)
@@ -47,7 +47,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Face ID
 
-- [x] Allow, Always, plan approvals and allowing a terminal read ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`lib/approvalGate.test.ts` for which actions need the check)
+- [x] Allow, Always, plan approvals and allowing a terminal read ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`needsFaceId` in `lib/cards.test.ts` for which answers need the check)
 
 ### Plan approval sheet
 

@@ -218,7 +218,7 @@ export function InboxScreen() {
     <div className="scroll h-full">
       <div className="flex flex-col gap-1.5 px-4" style={{ paddingTop: "calc(var(--safe-top) + 14px)" }}>
         <div className="flex items-center gap-2.5">
-          <Moon />
+          <Moon size={28} />
           <h1 className="m-0 text-[28px] font-semibold tracking-[-0.01em]">Inbox</h1>
           <span className="flex-1" />
           <WorkspacePill />
