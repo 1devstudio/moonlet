@@ -8,6 +8,7 @@
 
 mod daemon;
 mod launch;
+mod mobile;
 mod server;
 mod service;
 mod upgrade;
@@ -211,6 +212,8 @@ fn run_daemon(
                 }
             }
         });
+        // Phones over Tailscale, when the user allows them (X39).
+        mobile::spawn(daemon.clone());
         server::serve(daemon, listener, socket).await
     })?;
     tracing::info!("moonletd stopped");

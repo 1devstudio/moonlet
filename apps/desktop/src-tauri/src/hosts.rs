@@ -14,7 +14,7 @@ use moonlet_link::{
     BoxFuture, Connector, Events, Host, HostOptions, NEEDS_INSTALL, Reader, Writer,
 };
 use moonlet_proto::{Frame, Message, RpcError};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
@@ -95,14 +95,6 @@ pub struct HostManager {
     hosts: Mutex<HashMap<String, Arc<Host>>>,
 }
 
-#[derive(Serialize, Deserialize, Default)]
-struct SavedHosts {
-    remotes: Vec<String>,
-}
-
-fn saved_hosts_file() -> PathBuf {
-    moonlet_core::paths::home().join("app-hosts.json")
-}
 
 impl HostManager {
     pub fn new(app: AppHandle) -> Arc<Self> {
@@ -111,11 +103,7 @@ impl HostManager {
             hosts: Mutex::new(HashMap::new()),
         });
         mgr.add(LOCAL, false);
-        let saved: SavedHosts = std::fs::read_to_string(saved_hosts_file())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        for r in saved.remotes {
+        for r in moonlet_core::ssh::saved_hosts().remotes {
             mgr.add(&r, true);
         }
         mgr
@@ -132,8 +120,8 @@ impl HostManager {
             .collect();
         let _ = moonlet_core::paths::ensure_private_dir(&moonlet_core::paths::home());
         let _ = std::fs::write(
-            saved_hosts_file(),
-            serde_json::to_vec_pretty(&SavedHosts { remotes }).unwrap(),
+            moonlet_core::ssh::saved_hosts_file(),
+            serde_json::to_vec_pretty(&moonlet_core::ssh::SavedHosts { remotes }).unwrap(),
         );
     }
 
@@ -261,28 +249,7 @@ async fn connect_local() -> Result<(Reader, Writer)> {
     Ok((Box::new(r), Box::new(w)))
 }
 
-pub fn ssh_base_args() -> Vec<String> {
-    let control = moonlet_core::paths::run_dir().join("ssh-%C");
-    vec![
-        "-T".into(),
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "ServerAliveInterval=10".into(),
-        "-o".into(),
-        "ServerAliveCountMax=3".into(),
-        "-o".into(),
-        "ConnectTimeout=10".into(),
-        "-o".into(),
-        "ControlMaster=auto".into(),
-        "-o".into(),
-        format!("ControlPath={}", control.display()),
-        "-o".into(),
-        "ControlPersist=10m".into(),
-    ]
-}
-
-pub const REMOTE_MOONLETD: &str = "~/.moonlet/bin/moonletd";
+pub use moonlet_core::ssh::{REMOTE_MOONLETD, base_args as ssh_base_args};
 
 async fn connect_remote(alias: &str) -> Result<(Reader, Writer)> {
     let _ = moonlet_core::paths::ensure_private_dir(&moonlet_core::paths::run_dir());

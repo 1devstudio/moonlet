@@ -62,7 +62,7 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
                 let daemon = daemon.clone();
                 tokio::spawn(async move {
                     let (r, w) = stream.into_split();
-                    if let Err(e) = handle_connection(daemon, r, w).await {
+                    if let Err(e) = handle_connection(daemon, r, w, None).await {
                         tracing::debug!("connection ended: {e:#}");
                     }
                 });
@@ -85,9 +85,17 @@ pub struct Conn {
     pub id: ClientId,
     pub tx: ClientTx,
     pub client: String,
+    /// The paired phone's device id on a phone connection (X39).
+    pub phone: Option<String>,
 }
 
-pub async fn handle_connection<R, W>(daemon: Arc<Daemon>, mut reader: R, writer: W) -> Result<()>
+/// Serves one client. `phone` is the device id of a phone connection (X39).
+pub async fn handle_connection<R, W>(
+    daemon: Arc<Daemon>,
+    mut reader: R,
+    writer: W,
+    phone: Option<String>,
+) -> Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -112,6 +120,16 @@ where
                 let _ = writer_task.await;
                 return Ok(());
             }
+            if phone.is_some() && client == crate::daemon::CLI_CLIENT {
+                // A phone is the app, never an agent's CLI (X39).
+                let _ = tx.send(Frame::Json(Message::err(
+                    0,
+                    RpcError::new("forbidden", "a phone cannot connect as the moonlet CLI"),
+                )));
+                drop(tx);
+                let _ = writer_task.await;
+                return Ok(());
+            }
             client
         }
         _ => bail!("expected hello"),
@@ -127,6 +145,7 @@ where
         id: daemon.terminals.new_client_id(),
         tx: tx.clone(),
         client,
+        phone,
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
 

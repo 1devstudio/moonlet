@@ -19,9 +19,10 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
-nix.workspace = true
+nix = { workspace = true, features = ["net"] }
 libc.workspace = true
 dirs.workspace = true
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile.workspace = true
