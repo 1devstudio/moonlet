@@ -8,7 +8,7 @@ import { askQuestions, chatBlocks, chatKey, loadChat, questionAnswers, turnRunni
 import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
 import { M, type PermissionAsk, type Session } from "@desktop/lib/protocol";
 import { showScreen, useApp } from "../lib/app";
-import { answerAsk } from "../lib/answers";
+import { answerAsk, answerQuestion } from "../lib/answers";
 import { ageText, askHeadline } from "../lib/cards";
 import { chatFooter, sessionChat } from "../lib/chatView";
 import { ChatBlockView } from "../components/chat";
@@ -107,7 +107,7 @@ function DockedQuestion({ host, terminal, ask }: { host: string; terminal: numbe
           />
         </div>
       ))}
-      <Btn tone="primary" disabled={!answers} onClick={() => answers && void rpc(host, M.chatPermission, { id: terminal, ask: ask.id, decision: "allow", answers }).catch(console.error)}>
+      <Btn tone="primary" disabled={!answers} onClick={() => answers && void answerQuestion(host, terminal, ask.id, answers).catch(console.error)}>
         Answer
       </Btn>
     </section>
