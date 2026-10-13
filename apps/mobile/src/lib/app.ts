@@ -20,6 +20,7 @@ import {
 } from "@desktop/lib/protocol";
 import { readStored, writeStored } from "@desktop/lib/storage";
 import type { HostSeen } from "./hosts";
+import { type Touched, mergeLoaded, touchedSince } from "./loadMerge";
 
 /** A host as the phone's core lists it (`host_list`). */
 export interface HostEntry extends HostInfo {
@@ -137,8 +138,25 @@ export async function measure(host: string) {
   }
 }
 
+/** Per host, what events changed while a load runs. */
+const loads = new Map<string, Touched>();
+
+function touch<K extends keyof Touched>(host: string, kind: K, id: number, value: Touched[K] extends Map<number, infer V> ? V : never) {
+  (loads.get(host)?.[kind] as Map<number, unknown> | undefined)?.set(id, value);
+}
+
 /** Loads everything a connected host's screens show. */
 export async function loadHost(host: string) {
+  const touched = touchedSince();
+  loads.set(host, touched);
+  try {
+    await load(host, touched);
+  } finally {
+    if (loads.get(host) === touched) loads.delete(host);
+  }
+}
+
+async function load(host: string, touched: Touched) {
   const call = <T>(method: string, params: object = {}) => rpc<T>(host, method, params);
   const [terminals, sessions, projects, workspaces, sections, reads, chats] = await Promise.all([
     call<TerminalInfo[]>(M.terminalList),
@@ -149,15 +167,19 @@ export async function loadHost(host: string) {
     call<ReadRequest[]>(M.terminalReadRequests).catch(() => []),
     call<{ id: number; state: ChatSummary }[]>(M.chatSummaries).catch(() => []),
   ]);
-  patchData(host, {
-    terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
-    sessions,
-    projects,
-    workspaces,
-    sections,
-    reads,
-    chats: Object.fromEntries(chats.map((c) => [c.id, c.state])),
-  });
+  const loaded = mergeLoaded(
+    {
+      terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
+      sessions,
+      projects,
+      workspaces,
+      sections,
+      reads,
+      chats: Object.fromEntries(chats.map((c) => [c.id, c.state])),
+    },
+    touched,
+  );
+  patchData(host, loaded);
 }
 
 function onEvent(e: DaemonEvent) {
@@ -167,11 +189,14 @@ function onEvent(e: DaemonEvent) {
     case EV.terminalUpdated:
     case EV.terminalExited: {
       const t = data as TerminalInfo;
+      touch(host, "terminals", t.id, t);
       patchData(host, (d) => ({ terminals: { ...d.terminals, [t.id]: t } }));
       break;
     }
     case EV.terminalRemoved: {
       const id = (data as { id: number }).id;
+      touch(host, "terminals", id, null);
+      touch(host, "chats", id, null);
       patchData(host, (d) => {
         const terminals = { ...d.terminals };
         delete terminals[id];
@@ -188,14 +213,17 @@ function onEvent(e: DaemonEvent) {
       void loadHost(host).catch(() => {});
       break;
     case EV.terminalReadRequest:
+      touch(host, "reads", (data as ReadRequest).request_id, data as ReadRequest);
       patchData(host, (d) => ({ reads: [...d.reads.filter((r) => r.request_id !== (data as ReadRequest).request_id), data as ReadRequest] }));
       break;
     case EV.terminalReadDone:
+      touch(host, "reads", (data as { request_id: number }).request_id, null);
       patchData(host, (d) => ({ reads: d.reads.filter((r) => r.request_id !== (data as { request_id: number }).request_id) }));
       break;
     case EV.chatState: {
       const { id, state } = data as { id: number; state: ChatState };
       const { items: _items, ...summary } = state;
+      touch(host, "chats", id, summary);
       patchData(host, (d) => ({ chats: { ...d.chats, [id]: summary } }));
       onChatState(host, id, state);
       break;

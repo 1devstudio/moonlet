@@ -286,7 +286,9 @@ impl Phone {
             Some(r) => format!("{}/{}", mac.id, r.id),
             None => mac.id.clone(),
         };
-        if self.hosts.lock().unwrap().contains_key(&id) {
+        let mut hosts = self.hosts.lock().unwrap();
+        // Not for a Mac forgotten meanwhile, such as while its routes loaded.
+        if hosts.contains_key(&id) || !self.macs.lock().unwrap().iter().any(|m| m.id == mac.id) {
             return;
         }
         let host = Host::start(
@@ -305,7 +307,7 @@ impl Phone {
             }),
             self.rt.clone(),
         );
-        self.hosts.lock().unwrap().insert(id, host);
+        hosts.insert(id, host);
     }
 
     /// Adds a Mac that just paired and connects to it.
