@@ -120,7 +120,8 @@ pub fn read(path: &str, max_bytes: Option<u64>) -> Result<FileContent> {
     })
 }
 
-/// Saves a text file atomically, keeping its permissions.
+/// Saves a text file atomically, keeping its permissions and creating
+/// missing folders.
 pub fn write(path: &str, content: &str) -> Result<()> {
     let mut p = expand_home(path);
     // Write through a symlink to its target instead of replacing the link.
@@ -133,6 +134,9 @@ pub fn write(path: &str, content: &str) -> Result<()> {
         p.file_name().context("not a file path")?.to_string_lossy()
     ));
     let result = (|| -> Result<()> {
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         std::fs::write(&tmp, content)?;
         if let Some(perms) = perms {
             std::fs::set_permissions(&tmp, perms)?;
@@ -282,6 +286,14 @@ mod tests {
         write(&link.display().to_string(), "new").unwrap();
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    #[test]
+    fn write_creates_missing_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".moonlet/context/chat-fix-login.md");
+        write(&file.display().to_string(), "# Chat\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "# Chat\n");
     }
 
     #[test]
