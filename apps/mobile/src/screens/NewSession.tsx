@@ -4,6 +4,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { ArrowRight, Check, ChevronRight, Mic } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
+import { latestOnly } from "@desktop/lib/prStack";
 import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
 import { M, type ProjectConfig, type Session } from "@desktop/lib/protocol";
 import { loadHost, showScreen, showTab, useApp } from "../lib/app";
@@ -66,6 +67,7 @@ export function NewSessionScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const choice = choices[Math.min(pick, choices.length - 1)];
+  const [latest] = useState(latestOnly);
 
   useEffect(() => {
     if (!choice) return;
@@ -73,16 +75,13 @@ export function NewSessionScreen() {
     setConfig(null);
     setBranches([]);
     // A reply for a project picked before this one is dropped.
-    let live = true;
+    const isLatest = latest.start();
     void rpc<ProjectConfig>(choice.host, M.projectConfig, { id: choice.project.id })
-      .then((c) => live && setConfig(c))
-      .catch(() => live && setConfig(null));
+      .then((c) => isLatest() && setConfig(c))
+      .catch(() => isLatest() && setConfig(null));
     void rpc<string[]>(choice.host, M.gitBranches, { path: choice.project.path })
-      .then((b) => live && setBranches(b))
-      .catch(() => live && setBranches([]));
-    return () => {
-      live = false;
-    };
+      .then((b) => isLatest() && setBranches(b))
+      .catch(() => isLatest() && setBranches([]));
   }, [choice?.host, choice?.project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const start = async () => {
