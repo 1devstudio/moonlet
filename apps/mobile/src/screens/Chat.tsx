@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, ListChecks, MessageCircleQuestion, Plus, Square, SquareTerminal } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { askQuestions, chatBlocks, chatKey, loadChat, questionAnswers, turnRunning, useChat } from "@desktop/lib/chat";
+import { askQuestions, chatBlocks, chatDraft, chatKey, loadChat, questionAnswers, saveChatDraft, turnRunning, useChat } from "@desktop/lib/chat";
 import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
 import { M, type PermissionAsk, type Session } from "@desktop/lib/protocol";
 import { showScreen, useApp } from "../lib/app";
@@ -115,7 +115,11 @@ function DockedQuestion({ host, terminal, ask }: { host: string; terminal: numbe
 }
 
 function Composer({ host, terminal, running }: { host: string; terminal: number; running: boolean }) {
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState(() => chatDraft(host, terminal));
+  const setText = (t: string) => {
+    setTextState(t);
+    saveChatDraft(host, terminal, t);
+  };
   const send = async () => {
     const t = text.trim();
     if (!t) return;
