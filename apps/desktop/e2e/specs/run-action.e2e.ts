@@ -33,7 +33,7 @@ async function close() {
 describe("Run action", () => {
   it("opens with ⌘K and lists every action", async () => {
     await open();
-    await expect($(sel.text("24 actions"))).toBeDisplayed();
+    await expect($(sel.text("26 actions"))).toBeDisplayed();
     await expect($(query)).toBeFocused();
     await close();
   });
@@ -47,7 +47,7 @@ describe("Run action", () => {
   it("filters by the typed letters", async () => {
     await open();
     await fill(query, "set");
-    await expect($(sel.text("6 of 24"))).toBeDisplayed();
+    await expect($(sel.text("6 of 26"))).toBeDisplayed();
     await expect(row("Re-run setup script")).toBeDisplayed();
     await fill(query, "deploy");
     await expect($(sel.text("No actions match “deploy”."))).toBeDisplayed();
@@ -76,18 +76,18 @@ describe("Run action", () => {
     await fill(query, "commit…");
     await $(`//div[@data-row][.//span[normalize-space()="Commit…"]]//button[normalize-space()="Set shortcut"]`).click();
     await press("t", "KeyT", { metaKey: true });
-    await expect($(sel.text("⌘T is already used by New terminal tab."))).toBeDisplayed();
+    await expect($(sel.text("⌘T is already used by New agent tab."))).toBeDisplayed();
     await $(sel.button("Replace")).click();
     await expect($(sel.text("⌘T now runs Commit"))).toBeDisplayed();
 
     // Give ⌘T back, so other specs keep the default.
-    await fill(query, "new terminal tab");
-    await expect(row("New terminal tab").$('.//button[normalize-space()="Set shortcut"]')).toBeDisplayed();
+    await fill(query, "new agent tab");
+    await expect(row("New agent tab").$('.//button[normalize-space()="Set shortcut"]')).toBeDisplayed();
     await press("Enter", "Enter", { altKey: true });
     await press("t", "KeyT", { metaKey: true });
     await expect($(sel.text("⌘T is already used by Commit."))).toBeDisplayed();
     await press("Enter", "Enter");
-    await expect(row("New terminal tab").$(".//kbd")).toHaveText("⌘T");
+    await expect(row("New agent tab").$(".//kbd")).toHaveText("⌘T");
     await close();
   });
 });
