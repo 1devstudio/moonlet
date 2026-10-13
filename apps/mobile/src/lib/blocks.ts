@@ -33,6 +33,9 @@ export class BlockReader {
   private term: Terminal;
   private marks: Marks[] = [];
   private cwd: string | null = null;
+  /** Writes, resets and resizes, in the order they were asked for: xterm
+   * parses writes later, and a reset must not land before earlier output. */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(cols: number, rows: number, private now: () => number = Date.now) {
     this.term = new Terminal({ cols, rows, scrollback: 5000, allowProposedApi: true });
@@ -47,23 +50,30 @@ export class BlockReader {
     });
   }
 
+  private then(f: () => void | Promise<void>): Promise<void> {
+    this.queue = this.queue.then(f);
+    return this.queue;
+  }
+
   write(data: string | Uint8Array): Promise<void> {
-    return new Promise((resolve) => this.term.write(data, resolve));
+    return this.then(() => new Promise((resolve) => this.term.write(data, resolve)));
   }
 
   /** Before an attach snapshot, which redraws everything. */
-  reset() {
-    for (const m of this.marks) {
-      m.prompt.dispose();
-      m.output?.dispose();
-      m.end?.dispose();
-    }
-    this.marks = [];
-    this.term.reset();
+  reset(): Promise<void> {
+    return this.then(() => {
+      for (const m of this.marks) {
+        m.prompt.dispose();
+        m.output?.dispose();
+        m.end?.dispose();
+      }
+      this.marks = [];
+      this.term.reset();
+    });
   }
 
-  resize(cols: number, rows: number) {
-    this.term.resize(cols, rows);
+  resize(cols: number, rows: number): Promise<void> {
+    return this.then(() => this.term.resize(cols, rows));
   }
 
   private onMark(data: string): boolean {

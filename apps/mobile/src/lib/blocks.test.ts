@@ -33,7 +33,16 @@ describe("BlockReader", () => {
     const last = r.blocks().at(-1)!;
     expect([last.command, last.output, last.running, last.exit]).toEqual(["sleep 9", "half", true, null]);
     expect(last.startedAt).toBe(NOW);
-    r.reset();
+    await r.reset();
     expect(r.blocks()).toEqual([]);
+  });
+
+  it("does not count output twice when a snapshot resets it while it is still parsed", async () => {
+    const r = new BlockReader(60, 16, () => NOW);
+    // Live output not yet parsed when the attach's snapshot arrives.
+    void r.write(SNAPSHOT);
+    r.reset();
+    await r.write(SNAPSHOT);
+    expect(r.blocks().map((b) => b.command)).toEqual(["printf 'one\\ntwo\\n'", "false", "echo done"]);
   });
 });
