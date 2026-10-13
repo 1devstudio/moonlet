@@ -100,6 +100,13 @@ describe("shortcuts", () => {
     expect(ACTIONS.find((a) => a.id === "new-terminal")?.label).toBe("New terminal tab");
   });
 
+  it("lets a key the user set win over another action's default (X38)", () => {
+    // ⇧⌘T was free before "New terminal tab" took it as its default.
+    expect(actionForKey("shift+cmd+t", { commit: "shift+cmd+t" })).toBe("commit");
+    expect(effectiveKeys({ commit: "shift+cmd+t" })["new-terminal"]).toBe("");
+    expect(effectiveKeys({ commit: "shift+cmd+t" }).commit).toBe("shift+cmd+t");
+  });
+
   it("gives each action its current key", () => {
     const keys = effectiveKeys({ setup: "alt+cmd+s", "new-tab": "" });
     expect(keys.setup).toBe("alt+cmd+s");
