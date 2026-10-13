@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { accountLabel, switchConfirm, accountState, defaultFolder, footerLabel, movingSessions, profileChangeConfirm, profileName, profileOptions, removeProfileConfirm, runningClaudeAgents, tildePath } from "./profiles";
-import type { Section, Session, TerminalInfo } from "./protocol";
+import { accountLabel, switchConfirm, accountState, defaultFolder, footerLabel, movingSessions, profileChangeConfirm, profileName, profileOptions, removeProfileConfirm, runningClaudeAgents, signInFor, tildePath } from "./profiles";
+import type { ChatItem, Section, Session, TerminalInfo } from "./protocol";
 import type { ProfileInfo, Workspace } from "./protocol";
 
 const work: ProfileInfo = { id: "pw", name: "Work profile", path: "/Users/jane/.claude-work", created_at: 0, account: null, hooks_installed: true };
@@ -106,5 +106,22 @@ describe("switchConfirm", () => {
     expect(switchConfirm("pw", null, 1, profiles)).toBe(profileChangeConfirm(1, "Default"));
     expect(switchConfirm("pw", "pw", 3, profiles)).toBeNull();
     expect(switchConfirm(null, "pw", 0, profiles)).toBeNull();
+  });
+});
+
+describe("signInFor", () => {
+  // The error item the daemon makes from Claude Code's failed login.
+  const expired: ChatItem = { id: "error-1", kind: "error", text: "Failed to authenticate: OAuth session expired and could not be refreshed", ts: 0, error: "authentication_failed" };
+
+  it("offers to sign in to the workspace's profile when the agent's login failed", () => {
+    expect(signInFor(expired, ws("pw"), [work])).toEqual({ profile: work });
+    expect(signInFor(expired, ws(null), [work])).toEqual({ profile: null });
+    // A deleted profile reads as the default.
+    expect(signInFor(expired, ws("gone"), [work])).toEqual({ profile: null });
+  });
+
+  it("offers nothing for other errors", () => {
+    expect(signInFor({ id: "error-2", kind: "error", text: "The turn failed.", ts: 0 }, ws("pw"), [work])).toBeNull();
+    expect(signInFor({ id: "m1:0", kind: "assistant", text: "Not logged in · Please run /login", ts: 0 }, ws("pw"), [work])).toBeNull();
   });
 });
