@@ -114,6 +114,22 @@ pub const FS_WRITE_INSIDE: &str = "fs.write_inside";
 pub const FS_WATCH: &str = "fs.watch";
 pub const FS_UNWATCH: &str = "fs.unwatch";
 
+// Phones (X39)
+/// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
+pub const MOBILE_STATUS: &str = "mobile.status";
+pub const MOBILE_SET_ENABLED: &str = "mobile.set_enabled";
+/// A one-time pairing code and its link: [`MobilePairing`].
+pub const MOBILE_PAIR_START: &str = "mobile.pair_start";
+pub const MOBILE_PAIR_CANCEL: &str = "mobile.pair_cancel";
+pub const MOBILE_REVOKE: &str = "mobile.revoke";
+/// The SSH hosts a phone can reach through this daemon: [`MobileHost`]s.
+pub const MOBILE_HOSTS: &str = "mobile.hosts";
+pub const EV_MOBILE_CHANGED: &str = "mobile.changed";
+/// A phone paired with the current code: `{ device }`.
+pub const EV_MOBILE_PAIRED: &str = "mobile.paired";
+/// The current code stopped working without a pairing: `{ reason }`.
+pub const EV_MOBILE_PAIR_ENDED: &str = "mobile.pair_ended";
+
 // Events
 pub const EV_TERMINAL_CREATED: &str = "terminal.created";
 pub const EV_TERMINAL_UPDATED: &str = "terminal.updated";
@@ -817,4 +833,49 @@ pub struct ChatItemEvent {
 pub struct ChatStateEvent {
     pub id: TerminalId,
     pub state: crate::types::ChatState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MobileSetEnabled {
+    pub enabled: bool,
+}
+
+/// A paired phone (X39).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MobileDevice {
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub last_seen: Option<u64>,
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MobileStatus {
+    pub enabled: bool,
+    pub port: u16,
+    /// The Mac has a Tailscale address.
+    pub tailscale: bool,
+    /// Its Tailscale addresses.
+    pub addresses: Vec<String>,
+    /// Where the listener is bound, `ip:port`; empty while off or without Tailscale.
+    pub listening: Vec<String>,
+    pub host: String,
+    pub devices: Vec<MobileDevice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MobilePairing {
+    pub code: String,
+    /// `moonlet://pair?v=1&host=…&addr=…&code=…`, what the QR code holds.
+    pub url: String,
+    pub expires_at: u64,
+    pub addresses: Vec<String>,
+    pub host: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MobileHost {
+    pub id: String,
+    pub label: String,
 }

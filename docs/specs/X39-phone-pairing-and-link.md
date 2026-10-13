@@ -1,6 +1,6 @@
 # X39 — Pair a phone and let it reach the daemon over Tailscale
 
-- **Status:** draft
+- **Status:** implemented (daemon; desktop Settings and the iPhone untried)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** goal 2 (agent-first), A5 (approval inbox), A6 (CLI and socket API)
 - **Related:** [X40](X40-mobile-app.md) (the phone app), [R1](R1-ssh-hosts.md)–[R4](R4-unified-hosts-sidebar.md) (remote hosts), [X31](X31-agent-reads-terminal.md) (who may answer read requests)
@@ -23,37 +23,37 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 
 ### Listener
 
-- [ ] Phone access is off by default. `mobile.set_enabled { enabled }` turns it on or off and is kept in `~/.moonlet/mobile.json`, so a daemon restart or upgrade keeps the choice.
-- [ ] While on, the daemon listens on TCP port 47428 (the `port` field of `mobile.json` changes it) on every local address in `100.64.0.0/10` or `fd7a:115c:a1e0::/48`, and on no other address. With no such address it listens nowhere and `mobile.status` reports `tailscale: false`. It looks again every 30 seconds, so starting Tailscale later starts the listener without a daemon restart. (Unit test for the address filter with real `ifconfig` addresses; daemon test that binds to an injected address.)
-- [ ] Turning phone access off closes the listener and every phone connection.
-- [ ] The listener is closed when the daemon hands over in a live upgrade (S3); the new daemon opens it from `mobile.json`.
+- [x] Phone access is off by default. `mobile.set_enabled { enabled }` turns it on or off and is kept in `~/.moonlet/mobile.json`, so a daemon restart or upgrade keeps the choice. (`tests/mobile.rs`: `phone_access_is_off_until_the_user_allows_it`)
+- [x] While on, the daemon listens on TCP port 47428 (the `port` field of `mobile.json` changes it) on every local address in `100.64.0.0/10` or `fd7a:115c:a1e0::/48`, and on no other address. With no such address it listens nowhere and `mobile.status` reports `tailscale: false`. It looks again every 30 seconds, so starting Tailscale later starts the listener without a daemon restart; a failed bind (a daemon handing over still holds the port) is retried after 2 seconds. `MOONLET_MOBILE_ADDRS` replaces the detected addresses for tests. (`mobile.rs` unit test `only_tailscale_addresses_count`; `tests/mobile.rs` binds to 127.0.0.1)
+- [x] Turning phone access off closes the listener and every phone connection. (`phone_access_is_off_until_the_user_allows_it`)
+- [x] The listener is closed when the daemon shuts down or hands over in a live upgrade (S3); the new daemon opens it from `mobile.json`.
 
 ### Auth exchange
 
-- [ ] The first frame on a phone connection must be `{"t":"auth", "token"?: string, "pair"?: string, "device"?: string, "route"?: string}`. Anything else, or no frame within 10 seconds, closes the connection.
-- [ ] With a valid `token`, the daemon answers `{"t":"authed","device_id":"…"}` and the connection continues with the normal `hello` and the rest of the protocol (`docs/protocol.md`). The device's `last_seen` is updated.
-- [ ] With a `pair` code that is current, the daemon creates a device named after `device` (cut to 60 characters, control characters removed, "Phone" when empty), answers `{"t":"authed","device_id":"…","token":"…"}`, and the code stops working. The token is 32 random bytes in hex, and only its SHA-256 is stored.
-- [ ] Any failure answers one error response `{"t":"response","id":0,"error":{"code":"unauthorized","message":"…"}}` and closes the connection: an unknown or revoked token, a used or expired code, both or neither of `token` and `pair`. The message does not say which of these it was.
-- [ ] Each failed attempt waits one second before the reply. After 5 failed `pair` attempts the current code is cancelled and the Mac's pairing dialog says "Too many wrong attempts. Start again."
-- [ ] A phone connection's `hello` may use any client name; the daemon treats the connection as the app (not the CLI), so the phone can answer X31 read requests. The CLI client name `moonlet-cli` is refused on phone connections.
+- [x] The first frame on a phone connection must be `{"t":"auth", "token"?: string, "pair"?: string, "device"?: string, "route"?: string}`. Anything else gets the `unauthorized` error below; no frame within 10 seconds closes the connection. (`bad_auth_is_refused_without_saying_why`)
+- [x] With a valid `token`, the daemon answers `{"t":"authed","device_id":"…"}` and the connection continues with the normal `hello` and the rest of the protocol (`docs/protocol.md`). The device's `last_seen` is updated. (`a_paired_phone_comes_back_with_its_token_and_uses_the_daemon`)
+- [x] With a `pair` code that is current, the daemon creates a device named after `device` (cut to 60 characters, control characters removed, "Phone" when empty), answers `{"t":"authed","device_id":"…","token":"…"}`, and the code stops working. The token is 32 random bytes in hex, and only its SHA-256 is stored. (`a_paired_phone_comes_back_with_its_token_and_uses_the_daemon`, `device_names_are_cleaned`)
+- [x] Any failure answers one error response `{"t":"response","id":0,"error":{"code":"unauthorized","message":"…"}}` and closes the connection: an unknown or revoked token, a used or expired code, both or neither of `token` and `pair`, `pair` with `route`. The message is always `this phone is not paired with this Mac`. (`bad_auth_is_refused_without_saying_why`)
+- [x] Each failed attempt waits one second before the reply. After 5 failed `pair` attempts the current code is cancelled, and the Mac's pairing dialog says "Too many wrong attempts. Start again." (`five_wrong_codes_end_the_pairing`, `five_wrong_codes_cancel_the_pairing`)
+- [x] A phone connection's `hello` may use any client name; the daemon treats the connection as the app (not the CLI), so the phone can answer X31 read requests. The CLI client name `moonlet-cli` is refused on phone connections with `forbidden`. (`phones_and_agents_cannot_manage_phones`)
 
 ### Pairing
 
-- [ ] `mobile.pair_start` returns `{ code, url, expires_at, addresses, port, host }`, where `code` is 16 random bytes in hex, valid for 5 minutes and for one pairing, and `url` is `moonlet://pair?v=1&host=<Mac name>&addr=<ip:port>[&addr=…]&code=<code>`. A new `pair_start` cancels the previous code. Fails with `mobile_off` while phone access is off and `no_tailscale` without a Tailscale address.
-- [ ] `mobile.pair_cancel` cancels the current code.
-- [ ] A successful pairing broadcasts `mobile.paired { device }`, and a cancelled or exhausted code broadcasts `mobile.pair_ended { reason }` with `reason` one of `expired`, `cancelled`, `too_many_attempts`.
+- [x] `mobile.pair_start` returns `{ code, url, expires_at, addresses, host }`, where `code` is 16 random bytes in hex, valid for 5 minutes and for one pairing, and `url` is `moonlet://pair?v=1&host=<Mac name>&addr=<ip:port>[&addr=…]&code=<code>`, every value percent-encoded, and `addresses` are the listener's `ip:port`s. The Mac name is its host name without `.local`. A new `pair_start` replaces the previous code. Fails with `mobile_off` while phone access is off and `no_tailscale` while nothing listens. (`the_pairing_link_carries_the_host_every_address_and_the_code`, `a_paired_phone_comes_back_with_its_token_and_uses_the_daemon`)
+- [x] `mobile.pair_cancel` cancels the current code.
+- [x] A successful pairing broadcasts `mobile.paired { device }`, and a cancelled or exhausted code broadcasts `mobile.pair_ended { reason }` with `reason` one of `expired`, `cancelled`, `too_many_attempts`.
 
 ### Devices
 
-- [ ] `mobile.status` returns `{ enabled, port, tailscale, addresses, host, listening, devices: [{ id, name, created_at, last_seen, connected }] }`, devices in pairing order.
-- [ ] `mobile.revoke { id }` removes the device from `mobile.json`, closes its open connections, and broadcasts `mobile.changed`. So do pairing, connecting and disconnecting.
-- [ ] `mobile.json` is written with mode 0600, like the rest of `~/.moonlet`.
-- [ ] The `mobile.*` methods are refused on phone connections (`forbidden: manage phones from the Mac`) and from the `moonlet` CLI (`forbidden: only the moonlet app manages phones`), so neither a phone nor an agent can pair another device.
+- [x] `mobile.status` returns `{ enabled, port, tailscale, addresses, listening, host, devices: [{ id, name, created_at, last_seen, connected }] }`: `addresses` are the Tailscale addresses, `listening` the bound `ip:port`s (empty while off), devices in pairing order.
+- [x] `mobile.revoke { id }` removes the device from `mobile.json`, closes its open connections, and broadcasts `mobile.changed` with the new status. So do turning access on or off, the listener starting or stopping, and phones connecting and disconnecting. (`removing_a_phone_cuts_its_connection_and_its_token`)
+- [x] `mobile.json` is written with mode 0600, like the rest of `~/.moonlet`. (`mobile_json_round_trips_and_defaults_the_port`)
+- [x] The `mobile.*` methods except `mobile.hosts` are refused on phone connections (`forbidden: manage phones from the Mac`) and from the `moonlet` CLI (`forbidden: only the moonlet app manages phones`), so neither a phone nor an agent can pair another device. (`phones_and_agents_cannot_manage_phones`)
 
 ### Routing to SSH hosts
 
-- [ ] `mobile.hosts` (allowed on phone connections) lists the SSH hosts the desktop app has added (`~/.moonlet/app-hosts.json`, R4) as `[{ id, label }]`.
-- [ ] An `auth` with a valid `token` and `route: "<alias>"` for a host in that list makes the daemon run `ssh <the desktop's ssh options> <alias> ~/.moonlet/bin/moonletd proxy` and pipe frames both ways. The `authed` reply comes first, then everything the remote daemon sends, starting with its `welcome`. A `route` not in the list fails like a bad token. When ssh exits, the phone connection closes, and ssh's last stderr line is sent first as an error response with code `route_failed`. (Daemon test with a fake `ssh` on `PATH`.)
+- [x] `mobile.hosts` (allowed on phone connections) lists the SSH hosts the desktop app has added (`~/.moonlet/app-hosts.json`, R4) as `[{ id, label }]`.
+- [x] An `auth` with a valid `token` and `route: "<alias>"` for a host in that list makes the daemon run `ssh <the desktop's ssh options> <alias> ~/.moonlet/bin/moonletd proxy` and pipe frames both ways. The `authed` reply comes first, then everything the remote daemon sends, starting with its `welcome`. A `route` not in the list fails like a bad token. When ssh exits, the phone connection closes, and ssh's last stderr line is sent first as an error response with code `route_failed`. (`a_phone_reaches_an_ssh_host_through_the_mac`, with a fake `ssh` that runs `moonletd proxy` against a second daemon)
 
 ### Desktop: Settings › Mobile
 
