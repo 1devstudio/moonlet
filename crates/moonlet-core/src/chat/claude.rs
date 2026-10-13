@@ -23,8 +23,8 @@ pub struct Claude {
     /// `mcp_authenticate` requests: request id → server (X29).
     auth_ids: HashMap<String, String>,
     sign_ins: SignIns,
-    /// The code of an API error Claude Code reported as a message this turn,
-    /// e.g. `authentication_failed`; the turn's `result` repeats its text.
+    /// The text of an API error Claude Code reported as a message this turn.
+    /// A failed `result` repeats it, and is then not shown again.
     api_error: Option<String>,
 }
 
@@ -228,9 +228,13 @@ impl Adapter for Claude {
                     _ => {}
                 }
             }
-            // Its text comes again as the failed `result`: show it once, there.
+            // An API error, e.g. a failed login, sent as a message.
             "assistant" if v["is_api_error_message"].as_bool().unwrap_or(false) => {
-                self.api_error = v["error"].as_str().map(String::from);
+                let text: String = v["message"]["content"].as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect();
+                let mut it = item(super::local_id("error"), "error", text.clone());
+                it.cause = v["error"].as_str().map(String::from);
+                out.push(upsert(st, it));
+                self.api_error = Some(text);
             }
             "assistant" => {
                 let msg = v["message"]["id"].as_str().unwrap_or_default().to_string();
@@ -379,9 +383,9 @@ impl Adapter for Claude {
                     st.status = "idle".into();
                 } else if failed {
                     let msg = v["result"].as_str().or_else(|| v["errors"][0].as_str()).unwrap_or("The turn failed.").to_string();
-                    let mut it = item(super::local_id("error"), "error", msg);
-                    it.error = api_error;
-                    out.push(upsert(st, it));
+                    if api_error.as_deref() != Some(msg.as_str()) {
+                        out.push(upsert(st, item(super::local_id("error"), "error", msg)));
+                    }
                     st.status = "error".into();
                 } else {
                     st.status = "done".into();
@@ -761,24 +765,60 @@ mod tests {
         assert!(st.items.iter().all(|i| i.turn.is_none()));
     }
 
+    // Captured from Claude Code 2.1.296 with a signed-out CLAUDE_CONFIG_DIR.
+    const NOT_SIGNED_IN: &str = r#"{"type":"assistant","message":{"id":"cbeac51b-6451-489c-a86a-c94885f14004","model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message","content":[{"type":"text","text":"Not logged in · Please run /login"}]},"parent_tool_use_id":null,"session_id":"505d7650-5cda-4c14-8e58-2223baa10699","error":"authentication_failed","is_api_error_message":true}"#;
+    const NOT_SIGNED_IN_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","stop_reason":"stop_sequence","terminal_reason":"api_error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}"#;
+
+    /// Every item but the user's, as (kind, text, cause).
+    fn shown(st: &ChatState) -> Vec<(String, String, Option<String>)> {
+        st.items.iter().filter(|i| i.kind != "user").map(|i| (i.kind.clone(), i.text.clone(), i.cause.clone())).collect()
+    }
+
     #[test]
     fn a_failed_sign_in_shows_one_error_that_names_its_cause() {
-        // Captured from Claude Code 2.1.296 with a signed-out CLAUDE_CONFIG_DIR.
-        let note = r#"{"type":"assistant","message":{"id":"cbeac51b-6451-489c-a86a-c94885f14004","model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message","content":[{"type":"text","text":"Not logged in · Please run /login"}]},"parent_tool_use_id":null,"session_id":"505d7650-5cda-4c14-8e58-2223baa10699","error":"authentication_failed","is_api_error_message":true}"#;
-        let result = r#"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","stop_reason":"stop_sequence","terminal_reason":"api_error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}"#;
         let mut a = Claude::default();
         let mut st = ChatState::default();
         a.send("hi", &[], &mut st);
-        a.on_line(note, &mut st);
-        a.on_line(result, &mut st);
-        let shown: Vec<_> = st.items.iter().filter(|i| i.kind != "user").map(|i| (i.kind.as_str(), i.text.as_str(), i.error.as_deref())).collect();
-        assert_eq!(shown, [("error", "Not logged in · Please run /login", Some("authentication_failed"))]);
+        a.on_line(NOT_SIGNED_IN, &mut st);
+        a.on_line(NOT_SIGNED_IN_RESULT, &mut st);
+        assert_eq!(shown(&st), [("error".into(), "Not logged in · Please run /login".into(), Some("authentication_failed".into()))]);
         assert_eq!(st.status, "error");
 
         // A later failure for another reason names no cause.
         a.send("again", &[], &mut st);
         a.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true}"#, &mut st);
-        assert_eq!(st.items.last().map(|i| i.error.clone()), Some(None));
+        assert_eq!(st.items.last().map(|i| (i.text.clone(), i.cause.clone())), Some(("The turn failed.".into(), None)));
+    }
+
+    #[test]
+    fn an_agent_error_stays_when_the_turn_does_not_repeat_it() {
+        // Stopped before the failed result came.
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.send("hi", &[], &mut st);
+        a.on_line(NOT_SIGNED_IN, &mut st);
+        a.interrupt(&mut st);
+        a.on_line(r#"{"type":"result","subtype":"success","is_error":false}"#, &mut st);
+        assert_eq!(
+            shown(&st),
+            [
+                ("error".into(), "Not logged in · Please run /login".into(), Some("authentication_failed".into())),
+                ("system".into(), "Interrupted".into(), None),
+            ]
+        );
+
+        // The turn went on and ended well.
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.send("hi", &[], &mut st);
+        a.on_line(NOT_SIGNED_IN, &mut st);
+        a.on_line(r#"{"type":"assistant","message":{"id":"m2","content":[{"type":"text","text":"Done."}]}}"#, &mut st);
+        a.on_line(r#"{"type":"result","subtype":"success","is_error":false}"#, &mut st);
+        assert_eq!(
+            shown(&st).into_iter().map(|(k, t, _)| (k, t)).collect::<Vec<_>>(),
+            [("error".to_string(), "Not logged in · Please run /login".to_string()), ("assistant".into(), "Done.".into())]
+        );
+        assert_eq!(st.status, "done");
     }
 
     #[test]

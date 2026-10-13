@@ -111,7 +111,7 @@ describe("switchConfirm", () => {
 
 describe("signInFor", () => {
   // The error item the daemon makes from Claude Code's failed login.
-  const expired: ChatItem = { id: "error-1", kind: "error", text: "Failed to authenticate: OAuth session expired and could not be refreshed", ts: 0, error: "authentication_failed" };
+  const expired: ChatItem = { id: "error-1", kind: "error", text: "Failed to authenticate: OAuth session expired and could not be refreshed", ts: 0, cause: "authentication_failed" };
 
   it("offers to sign in to the workspace's profile when the agent's login failed", () => {
     expect(signInFor(expired, ws("pw"), [work])).toEqual({ profile: work });
