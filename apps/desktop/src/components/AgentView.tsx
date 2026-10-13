@@ -76,6 +76,8 @@ import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
 import { uiScale } from "../lib/uiScale";
+import { type ContextFiles, chatContextFiles, chipSection, newChatContext, otherChats, planContextFiles } from "../lib/chatContext";
+import { shortPath } from "../lib/terminals";
 import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
@@ -924,6 +926,88 @@ export interface EditorHandle {
   addImages: (images: ChatImage[]) => void;
 }
 
+// ------------------------------------------------------------ new chat
+
+/** Chips in the empty-state block; four, then "+N more". */
+function ContextChips<T>({ label, rows, chip }: { label: string; rows: T[]; chip: (row: T) => React.ReactNode }) {
+  const [all, setAll] = useState(false);
+  const section = chipSection(rows, all);
+  if (!section) return null;
+  return (
+    <>
+      <div className="mt-2 ui-text-13">{label}</div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {section.shown.map(chip)}
+        {section.more > 0 && (
+          <button className="rounded-md px-2 py-1 ui-text-12.5 text-muted hover:bg-hover hover:text-fg" onClick={() => setAll(true)}>
+            +{section.more} more
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ContextChip({ icon, title, onClick }: { icon: React.ReactNode; title: string; onClick: () => void }) {
+  return (
+    <button title={title} className="flex max-w-[240px] items-center gap-1.5 rounded-md border border-border-strong px-2 py-1 ui-text-12.5 text-fg hover:bg-hover" onClick={onClick}>
+      <span className="shrink-0 text-muted">{icon}</span>
+      <span className="truncate">{title}</span>
+    </button>
+  );
+}
+
+/** An empty chat (X38): where it runs, and the session's other chats and
+ * plans to start from. A chip writes its file and mentions it in the input. */
+function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sessionId: string; self: number; cwd: string; onMention: (mention: string) => void }) {
+  const terminals = useStore((s) => s.terminals[host]);
+  const home = useStore((s) => s.hosts[host]?.home ?? null);
+  const chats = useChat((s) => s.chats);
+  const list = useMemo(() => Object.values(terminals ?? {}), [terminals]);
+  const byId = useMemo(() => Object.fromEntries(list.map((t) => [t.id, chats[chatKey(host, t.id)]])), [list, chats, host]);
+  const { transcripts, plans } = useMemo(() => newChatContext(list, byId, { session: sessionId, self, cwd }), [list, byId, sessionId, self, cwd]);
+
+  // The other chats' conversations, loaded here once each (a chat whose
+  // load fails isn't asked for again on every terminal update).
+  const asked = useRef(new Set<number>());
+  useEffect(() => {
+    for (const t of otherChats(list, sessionId, self)) {
+      if (asked.current.has(t.id) || useChat.getState().chats[chatKey(host, t.id)]) continue;
+      asked.current.add(t.id);
+      void loadChat(host, t.id).catch(() => {});
+    }
+  }, [list, host, sessionId, self]);
+
+  const add = async (files: ContextFiles) => {
+    try {
+      for (const w of files.writes) await rpc(host, M.fsWriteInside, w);
+      onMention(files.mention);
+    } catch (e) {
+      errorToast(e);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 py-2 text-muted">
+      {cwd && (
+        <div className="ui-text-13">
+          New chat in <span className="font-mono text-fg">{shortPath(cwd, home)}</span>.
+        </div>
+      )}
+      <ContextChips
+        label="Add chat transcripts:"
+        rows={transcripts}
+        chip={(c) => <ContextChip key={c.id} icon={<AgentIcon agent={c.agent} size={12} />} title={c.title} onClick={() => void add(chatContextFiles(cwd, c))} />}
+      />
+      <ContextChips
+        label="Add plans:"
+        rows={plans}
+        chip={(p) => <ContextChip key={p.key} icon={<ClipboardList size={12} />} title={p.title} onClick={() => void add(planContextFiles(cwd, p))} />}
+      />
+    </div>
+  );
+}
+
 // ------------------------------------------------------------ view
 
 function useNow(active: boolean) {
@@ -1185,11 +1269,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
             ) : st.items.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 py-16 text-center text-muted">
-                <AgentIcon agent={agent} size={22} />
-                <div className="ui-text-14">{agentLabel(agent)} is ready</div>
-                <div className="ui-text-12.5 text-faint">Describe a change, mention files with @, or run a / command.</div>
-              </div>
+              <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} onMention={(m) => editor.current?.mention(m)} />
             ) : (
               blocks.map((b) => {
                 const view =
