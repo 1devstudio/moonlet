@@ -1,6 +1,6 @@
 # X38 — A new tab is an agent, and it can pick up earlier chats and plans
 
-- **Status:** implemented (2026-10-13). Unit and e2e tests pass. The chips' look is not checked in the app yet.
+- **Status:** in progress (2026-10-13). ⌘T and ⇧⌘T are implemented; the empty chat's chips come with the next change.
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** agent-first sessions
 - **Related:** [T2](T2-tabs-splits-workspaces.md) (tabs and shortcuts), [X6](X6-structured-agent-view.md) (agent view), [X19](X19-run-action.md) (Run action shortcuts), [X24](X24-plan-panel.md) (plans), [X29](X29-chat-plus-menu-and-mcp.md) (mentions in the chat input)
@@ -22,14 +22,15 @@ moonlet is agent-first, but ⌘T and the tab strip's `+` opened a shell. They no
 - [x] ⌘T runs "New agent tab": it opens an agent tab with the session's agent, or Claude when the session has none (`agent` unset or "none").
 - [x] The tab strip's `+` button and the empty session's button open an agent tab too.
 - [x] ⇧⌘T runs "New terminal tab", which opens a shell as ⌘T did before. The `+` menu's **Terminal** item shows ⇧⌘T.
-- [x] A new agent chat with no messages shows "New chat in `<path>`.", with the path shortened to `~` under the home folder.
-- [x] "Add chat transcripts" lists the other structured agent chats of the same session that have at least one user message, running or exited, newest tab first. Each chip is named after the chat's first user message (its first line). The chat itself is not listed.
-- [x] "Add plans" lists the plans that agents of the session proposed with `ExitPlanMode`, newest first, one chip per plan file (or per plan text when there is no file). Each chip is named after the plan's first heading, or its first line.
-- [x] Each list shows four chips, then "+N more", which shows the rest.
-- [x] A section with nothing in it is not shown.
-- [x] Clicking a chat chip writes `<worktree>/.moonlet/context/chat-<slug>.md` with a heading and the chat's plain-text transcript (the same text as "Copy transcript"), and mentions it in the input.
-- [x] Clicking a plan chip writes `<worktree>/.moonlet/context/plan-<slug>.md` with the plan's text, and mentions it in the input.
-- [x] `<worktree>/.moonlet/context/.gitignore` holds `*`, so the files never show in Changes and are never committed.
+- [x] A key the user set for an action wins over another action's default: a user who had bound ⇧⌘T to another action keeps it, and "New terminal tab" then has no key until they give it one.
+- [ ] A new agent chat with no messages shows "New chat in `<path>`.", with the path shortened to `~` under the home folder.
+- [ ] "Add chat transcripts" lists the other structured agent chats of the same session that have at least one user message, running or exited, newest tab first. Each chip is named after the chat's first user message (its first line). The chat itself is not listed.
+- [ ] "Add plans" lists the plans that agents of the session proposed with `ExitPlanMode`, newest first, one chip per plan file (or per plan text when there is no file). Each chip is named after the plan's first heading, or its first line.
+- [ ] Each list shows four chips, then "+N more", which shows the rest.
+- [ ] A section with nothing in it is not shown.
+- [ ] Clicking a chat chip writes `<worktree>/.moonlet/context/chat-<slug>.md` with a heading and the chat's plain-text transcript (the same text as "Copy transcript"), and mentions it in the input.
+- [ ] Clicking a plan chip writes `<worktree>/.moonlet/context/plan-<slug>.md` with the plan's text, and mentions it in the input.
+- [ ] `<worktree>/.moonlet/context/.gitignore` holds `*`, so the files never show in Changes and are never committed.
 - [x] `fs.write` creates missing parent folders.
 
 ## UI
@@ -54,7 +55,7 @@ The `+` button's tooltip is "New agent (⌘T)". Its menu lists the agents, then 
 ## Data and config
 
 - `<worktree>/.moonlet/context/` holds the written context files and a `.gitignore` with `*`. Clicking the same chip again rewrites the same file with the chat's current transcript.
-- Run action shortcuts are stored by action id. The id `new-tab` keeps ⌘T and now opens an agent; a user who rebound it keeps their key. `new-terminal` is the new shell action.
+- Run action shortcuts are stored by action id. The id `new-tab` keeps ⌘T and now opens an agent; a user who rebound it keeps their key. `new-terminal` is the new shell action; its default ⇧⌘T gives way to a user's own ⇧⌘T for another action.
 
 ## Security considerations
 
@@ -70,7 +71,7 @@ The `+` button's tooltip is "New agent (⌘T)". Its menu lists the agents, then 
 ## Test plan
 
 - `apps/desktop/src/lib/agents.test.ts`: the agent a new tab opens.
-- `apps/desktop/src/lib/runActions.test.ts`: ⌘T and ⇧⌘T map to the two actions and their labels.
+- `apps/desktop/src/lib/runActions.test.ts`: ⌘T and ⇧⌘T map to the two actions and their labels; a key the user set wins over a default.
 - `apps/desktop/src/lib/chatContext.test.ts`: the chat and plan chips and their order, the file names, the files' text, the `.gitignore`.
 - `crates/moonlet-core/src/fs.rs`: `write` creates missing folders.
 - `apps/desktop/e2e/specs/run-action.e2e.ts`: the label ⌘T now shows.
