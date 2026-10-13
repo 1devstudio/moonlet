@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
     <title>moonlet</title>
+    <!-- Dark from the first frame, before the stylesheet loads. -->
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+        background: #121212;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

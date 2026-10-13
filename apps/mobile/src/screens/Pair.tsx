@@ -45,7 +45,7 @@ export function PairScreen({ first }: { first: boolean }) {
         </button>
       )}
       <div className="mt-6 flex flex-col items-center gap-3 text-center">
-        <Moon size={44} />
+        <Moon size={72} />
         <h1 className="m-0 text-[26px] font-semibold">{first ? "Pair with your Mac" : "Pair a Mac"}</h1>
         <p className="m-0 text-[14px] leading-snug text-muted">On the Mac: Settings › Mobile › Pair a phone. Your phone and the Mac must be on the same tailnet.</p>
       </div>

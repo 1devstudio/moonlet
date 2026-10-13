@@ -2,6 +2,7 @@
 
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cx } from "@desktop/components/ui";
+import moon from "../assets/moon.svg?raw";
 
 export { AgentIcon, DiffStat, StateGlyph, cx } from "@desktop/components/ui";
 
@@ -48,11 +49,7 @@ export function Title({ children, right }: { children: ReactNode; right?: ReactN
   );
 }
 
-/** Moonlet's crescent. */
+/** moonlet's ringed moon (src/assets/moon.svg), the desktop icon without its square. */
 export function Moon({ size = 22 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M15.5 3.2A9 9 0 1 0 20.8 15 7 7 0 0 1 15.5 3.2Z" fill="#d97757" />
-    </svg>
-  );
+  return <span aria-hidden="true" className="inline-block leading-none [&>svg]:h-full [&>svg]:w-full" style={{ width: size, height: size }} dangerouslySetInnerHTML={{ __html: moon }} />;
 }
