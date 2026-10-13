@@ -12,12 +12,12 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 
 ## User journey
 
-1. On the Mac, the user opens Settings › Mobile. It says "Phone access is off" and shows the Mac's Tailscale name and address, or "Tailscale is not running on this Mac".
+1. On the Mac, the user opens Settings and scrolls to Mobile. It says "Off".
 2. The user turns on **Allow phones on my tailnet**. The page shows "Listening on 100.101.102.103:47428".
-3. The user clicks **Pair a phone**. A dialog shows a QR code, the same link as text with a Copy button, and "Expires in 5:00".
+3. The user clicks **Pair a phone**. The section shows a QR code, the same link as text with a Copy button, and "Expires in 5:00".
 4. On the iPhone, which is on the same tailnet, the user opens the moonlet app, taps **Pair a Mac**, and scans the code (or pastes the link). The app shows "Paired with studio-mac".
-5. On the Mac the dialog closes and the list under "Paired phones" shows "iPhone · paired just now · connected".
-6. Later, the user loses the phone. In Settings › Mobile they click **Remove** next to it. The phone's open connection drops at once and its token no longer works.
+5. On the Mac the QR code goes away, the section says "Paired with iPhone", and the list under "Paired phones" shows "iPhone" with "paired just now · connected".
+6. Later, the user loses the phone. In Settings, under Mobile, they click **Remove** next to it. The phone's open connection drops at once and its token no longer works.
 
 ## Behaviour and acceptance criteria
 
@@ -56,11 +56,11 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 - [x] An `auth` with a valid `token` and `route: "<alias>"` for a host in that list makes the daemon run `ssh <the desktop's ssh options> <alias> ~/.moonlet/bin/moonletd proxy` and pipe frames both ways. The `authed` reply comes first, then everything the remote daemon sends, starting with its `welcome`. A `route` not in the list fails like a bad token. When ssh exits, the phone connection closes, and ssh's last stderr line is sent first as an error response with code `route_failed`. (`a_phone_reaches_an_ssh_host_through_the_mac`, with a fake `ssh` that runs `moonletd proxy` against a second daemon)
 - [x] On a routed connection the Mac reads the phone's frames and answers `mobile.*` requests other than `mobile.hosts` itself with `forbidden: manage phones from the Mac`. The host's daemon cannot tell the phone from the desktop app, and a phone that turned on phone access there and paired itself would keep access after the Mac removes it. (`a_phone_reaches_an_ssh_host_through_the_mac`)
 
-### Desktop: Settings › Mobile
+### Desktop: the Mobile section of Settings
 
-- [ ] Settings has a **Mobile** page: the switch **Allow phones on my tailnet**, a line with the Tailscale state (`Listening on <addr>:<port>`, `Tailscale is not running on this Mac`, or `Off`), the **Pair a phone** button (disabled while off or without Tailscale), and the list of paired phones with name, "paired <when>", "connected" or "last seen <when>", and **Remove**. (`lib/mobile.test.ts` for the lines; e2e for the switch and the dialog)
-- [ ] **Pair a phone** opens a dialog with the QR code of `url`, the link as text with Copy, and a countdown. It closes by itself with "Paired with <device>" when `mobile.paired` arrives, and shows the `pair_ended` reason otherwise. Closing the dialog calls `mobile.pair_cancel`.
-- [ ] **Remove** asks first (X23 confirm): "Remove <device>? It will need to be paired again."
+- [x] Settings has a **Mobile** section, after Remote hosts: the box **Allow phones on my tailnet**, a line with the state (`Off`, `Tailscale is not running on this Mac`, `Starting…`, `Listening on <ip:port>`), the **Pair a phone** button (disabled until it listens), and under "Paired phones" each phone's name, `paired <when> · connected` (or `last seen <when>`, `not seen since`) and **Remove**. (`lib/mobile.test.ts` for the lines; `mobile-pairing.e2e.ts`)
+- [x] **Pair a phone** shows, in the section, the QR code of `url`, the link as text with Copy, `Expires in m:ss` (rounded up), and Cancel. When `mobile.paired` arrives the code goes away and the section says `Paired with <device>`; on `mobile.pair_ended` it says why (`Too many wrong attempts. Start again.`, `The code expired. Start again.`, `Pairing was cancelled.`). Cancel, or closing Settings, calls `mobile.pair_cancel`. (`mobile.test.ts`; `mobile-pairing.e2e.ts` pairs a TCP "phone" with the code from the link)
+- [x] **Remove** asks first (X23 confirm): "Remove <device>?", "It will need to be paired again." (`mobile-pairing.e2e.ts`)
 
 ## Protocol and RPCs
 
@@ -105,7 +105,7 @@ New events: `mobile.changed`, `mobile.paired`, `mobile.pair_ended`.
 - `crates/moonletd` unit tests: Tailscale address filter, token hashing, pair code expiry and attempt limit, `mobile.json` round trip.
 - `crates/moonletd/tests/mobile.rs`: a daemon with an injected listen address; pair with a code, reconnect with the token, a wrong token, a reused code, an expired code, revoke cuts an open connection, `mobile.*` refused from a phone and from the CLI name, a route through a fake `ssh`.
 - `apps/desktop/src/lib/mobile.test.ts`: the status line and device lines.
-- `apps/desktop/e2e/specs/mobile-pairing.e2e.ts`: turn phone access on against a daemon with an injected address, open the pairing dialog, see the link, close it.
+- `apps/desktop/e2e/specs/mobile-pairing.e2e.ts`: turn phone access on against a daemon listening on 127.0.0.1, pair a TCP client with the code from the shown link, see it listed, remove it.
 - Manual: pair the real iPhone build over Tailscale.
 
 ## Open questions
