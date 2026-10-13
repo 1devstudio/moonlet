@@ -12,6 +12,7 @@ import { Sheet } from "../components/Sheet";
 import { Btn, StateGlyph, cx } from "../components/ui";
 import { ChatTab } from "./Chat";
 import { TerminalTab } from "./Terminal";
+import { ChangesTab } from "./Changes";
 
 const TABS: { id: SessionTab; label: string }[] = [
   { id: "chat", label: "Chat" },
@@ -72,7 +73,8 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
       <div className="min-h-0 flex-1">
         {tab === "chat" && <ChatTab host={host} session={session} />}
         {tab === "terminal" && <TerminalTab host={host} session={session} />}
-        {(tab === "changes" || tab === "pr") && <div className="p-6 text-muted">Coming in the next part of the stack.</div>}
+        {tab === "changes" && <ChangesTab host={host} session={session} />}
+        {tab === "pr" && <div className="p-6 text-muted">Coming in the next part of the stack.</div>}
       </div>
       {menu && (
         <Sheet label="Session actions" onClose={() => setMenu(false)}>
