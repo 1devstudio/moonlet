@@ -53,6 +53,10 @@ describe("needsFaceId", () => {
     expect(needsFaceId("feedback", true)).toBe(false);
   });
 
+  it("asks before letting an agent read a terminal", () => {
+    expect(needsFaceId("read", true)).toBe(true);
+  });
+
   it("never asks with the setting off", () => {
     expect(needsFaceId("allow", false)).toBe(false);
   });
