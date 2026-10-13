@@ -150,6 +150,39 @@ pub fn write(path: &str, content: &str) -> Result<()> {
     result
 }
 
+/// Saves a file the app creates inside `root`, such as a chat's context
+/// file (X38). The folders are created; a path that leaves `root` through a
+/// symlink, or a file that is a symlink, is refused, so a repository can't
+/// point the write at a file elsewhere.
+pub fn write_inside(root: &str, path: &str, content: &str) -> Result<()> {
+    use std::io::Write;
+    let root = expand_home(root).canonicalize().context("no such folder")?;
+    let p = expand_home(path);
+    let parent = p.parent().context("not a file path")?;
+    let name = p.file_name().context("not a file path")?.to_string_lossy().to_string();
+    let inside = |dir: &Path| dir.canonicalize().is_ok_and(|real| real.starts_with(&root));
+    // Before creating anything: the deepest folder that exists.
+    let existing = parent.ancestors().find(|a| a.exists()).context("not a file path")?;
+    if !inside(existing) {
+        bail!("{} is outside {}", parent.display(), root.display());
+    }
+    std::fs::create_dir_all(parent)?;
+    if !inside(parent) {
+        bail!("{} is outside {}", parent.display(), root.display());
+    }
+    if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!("{} is a symlink", p.display());
+    }
+    // create_new never follows a symlink left at the temporary name.
+    let tmp = parent.join(format!(".{name}.moonlet-tmp"));
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let result = f.write_all(content.as_bytes()).and_then(|_| std::fs::rename(&tmp, &p));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(result?)
+}
+
 struct Watch {
     _watcher: notify::RecommendedWatcher,
     clients: HashSet<u64>,
@@ -294,6 +327,41 @@ mod tests {
         let file = dir.path().join(".moonlet/context/chat-fix-login.md");
         write(&file.display().to_string(), "# Chat\n").unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "# Chat\n");
+    }
+
+    #[test]
+    fn write_inside_never_leaves_the_root_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("worktree");
+        let outside = dir.path().join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let s = |p: &Path| p.display().to_string();
+
+        // An ordinary write creates the folders.
+        let file = root.join(".moonlet/context/plan-x.md");
+        write_inside(&s(&root), &s(&file), "# Plan\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "# Plan\n");
+
+        // A file that is a symlink is refused, and its target is untouched.
+        std::fs::write(outside.join(".zshrc"), "export A=1\n").unwrap();
+        let link = root.join(".moonlet/context/.gitignore");
+        std::os::unix::fs::symlink(outside.join(".zshrc"), &link).unwrap();
+        assert!(write_inside(&s(&root), &s(&link), "*\n").is_err());
+        assert_eq!(std::fs::read_to_string(outside.join(".zshrc")).unwrap(), "export A=1\n");
+
+        // A folder that leads outside the root is refused, and nothing is written there.
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(other.join(".moonlet")).unwrap();
+        std::os::unix::fs::symlink(&outside, other.join(".moonlet/context")).unwrap();
+        assert!(write_inside(&s(&other), &s(&other.join(".moonlet/context/chat-x.md")), "x").is_err());
+        assert!(!outside.join("chat-x.md").exists());
+
+        // A leftover temporary file that is a symlink is not written through.
+        std::fs::write(outside.join("victim"), "keep").unwrap();
+        std::os::unix::fs::symlink(outside.join("victim"), root.join(".moonlet/context/.chat-y.md.moonlet-tmp")).unwrap();
+        assert!(write_inside(&s(&root), &s(&root.join(".moonlet/context/chat-y.md")), "x").is_err());
+        assert_eq!(std::fs::read_to_string(outside.join("victim")).unwrap(), "keep");
     }
 
     #[test]

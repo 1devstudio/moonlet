@@ -695,6 +695,9 @@ pub struct FsRead {
 pub struct FsWrite {
     pub path: String,
     pub content: String,
+    /// The file must stay inside this folder, never through a symlink (X38).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -672,7 +672,11 @@ impl Daemon {
             }
             m::FS_WRITE => {
                 let r: m::FsWrite = params(p)?;
-                blocking(move || fs::write(&r.path, &r.content)).await?;
+                blocking(move || match &r.root {
+                    Some(root) => fs::write_inside(root, &r.path, &r.content),
+                    None => fs::write(&r.path, &r.content),
+                })
+                .await?;
                 ok(true)
             }
             m::FS_WATCH => {

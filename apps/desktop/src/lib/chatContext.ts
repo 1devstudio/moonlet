@@ -59,7 +59,8 @@ function planTitle(plan: string): string {
 export interface ContextFiles {
   /** Relative to the worktree, without the `@`. */
   mention: string;
-  writes: { path: string; content: string }[];
+  /** `fs.write` parameters: each stays inside `root`, never through a symlink. */
+  writes: { root: string; path: string; content: string }[];
 }
 
 const DIR = ".moonlet/context";
@@ -71,13 +72,14 @@ function slug(title: string): string {
 }
 
 function contextFiles(root: string, name: string, content: string): ContextFiles {
-  const dir = `${root.replace(/\/+$/, "")}/${DIR}`;
+  const base = root.replace(/\/+$/, "");
+  const dir = `${base}/${DIR}`;
   return {
     mention: `${DIR}/${name}`,
     writes: [
       // Ignores itself and everything beside it: never in Changes, never committed.
-      { path: `${dir}/.gitignore`, content: "*\n" },
-      { path: `${dir}/${name}`, content },
+      { root: base, path: `${dir}/.gitignore`, content: "*\n" },
+      { root: base, path: `${dir}/${name}`, content },
     ],
   };
 }

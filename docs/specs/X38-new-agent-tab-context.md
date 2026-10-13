@@ -32,6 +32,7 @@ moonlet is agent-first, but ⌘T and the tab strip's `+` opened a shell. They no
 - [ ] Clicking a plan chip writes `<worktree>/.moonlet/context/plan-<slug>.md` with the plan's text, and mentions it in the input.
 - [ ] `<worktree>/.moonlet/context/.gitignore` holds `*`, so the files never show in Changes and are never committed.
 - [x] `fs.write` creates missing parent folders.
+- [x] A context file is never written through a symlink: when `.moonlet/context` leads outside the worktree, or a file in it is a symlink, the write is refused and the error shows as a toast.
 
 ## UI
 
@@ -50,6 +51,7 @@ The `+` button's tooltip is "New agent (⌘T)". Its menu lists the agents, then 
 ## Protocol and RPCs
 
 - `fs.write` creates the file's missing parent folders before writing.
+- `fs.write` takes an optional `root`. With it, the daemon refuses a path whose folder resolves outside `root`, a file that is a symlink, and a leftover temporary file at the write's temporary name; it never follows a symlink. The chips pass the worktree.
 - The chips use `chat.state` (to read other chats) and `fs.write`; nothing new.
 
 ## Data and config
@@ -60,6 +62,7 @@ The `+` button's tooltip is "New agent (⌘T)". Its menu lists the agents, then 
 ## Security considerations
 
 - File names come from chat and plan text: the slug keeps only `a-z`, `0-9` and `-`, so a name can't leave `.moonlet/context/`.
+- The worktree is repository content: a repository could commit `.moonlet/context` or `.moonlet/context/.gitignore` as a symlink to a file of the user's, such as `~/.zshrc`. The writes pass the worktree as `fs.write`'s `root`, so the daemon refuses them instead of overwriting the target.
 - The transcript holds what the chat showed, including tool summaries. It stays in the worktree and is git-ignored.
 
 ## Out of scope
@@ -73,7 +76,7 @@ The `+` button's tooltip is "New agent (⌘T)". Its menu lists the agents, then 
 - `apps/desktop/src/lib/agents.test.ts`: the agent a new tab opens.
 - `apps/desktop/src/lib/runActions.test.ts`: ⌘T and ⇧⌘T map to the two actions and their labels; a key the user set wins over a default.
 - `apps/desktop/src/lib/chatContext.test.ts`: the chat and plan chips and their order, the file names, the files' text, the `.gitignore`.
-- `crates/moonlet-core/src/fs.rs`: `write` creates missing folders.
+- `crates/moonlet-core/src/fs.rs`: `write` creates missing folders; `write_inside` refuses a symlinked folder or file and a symlinked temporary file, and leaves their targets untouched.
 - `apps/desktop/e2e/specs/run-action.e2e.ts`: the label ⌘T now shows.
 
 ## Open questions

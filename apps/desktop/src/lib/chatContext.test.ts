@@ -99,8 +99,9 @@ describe("context files", () => {
     expect(files).toEqual({
       mention: ".moonlet/context/chat-fix-the-login-redirect.md",
       writes: [
-        { path: "/Users/jane/code/app/.moonlet/context/.gitignore", content: "*\n" },
+        { root: "/Users/jane/code/app", path: "/Users/jane/code/app/.moonlet/context/.gitignore", content: "*\n" },
         {
+          root: "/Users/jane/code/app",
           path: "/Users/jane/code/app/.moonlet/context/chat-fix-the-login-redirect.md",
           content: "# Chat transcript: Fix the login redirect\n\n> Fix the login redirect\n> It loops on Safari.\n\n[Edit] src/auth.ts\n\nDone.\n",
         },
@@ -113,8 +114,8 @@ describe("context files", () => {
     expect(files).toEqual({
       mention: ".moonlet/context/plan-etc-passwd-n-code.md",
       writes: [
-        { path: "/Users/jane/code/app/.moonlet/context/.gitignore", content: "*\n" },
-        { path: "/Users/jane/code/app/.moonlet/context/plan-etc-passwd-n-code.md", content: "# Steps\n1. Go\n" },
+        { root: "/Users/jane/code/app", path: "/Users/jane/code/app/.moonlet/context/.gitignore", content: "*\n" },
+        { root: "/Users/jane/code/app", path: "/Users/jane/code/app/.moonlet/context/plan-etc-passwd-n-code.md", content: "# Steps\n1. Go\n" },
       ],
     });
     expect(planContextFiles("/r", { key: "k", title: "!!!", plan: "x" }).mention).toBe(".moonlet/context/plan-untitled.md");
