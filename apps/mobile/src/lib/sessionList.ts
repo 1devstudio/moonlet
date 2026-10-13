@@ -1,0 +1,125 @@
+// Sessions (X40): the current workspace's sessions on every connected host,
+// grouped by section and project as the desktop sidebar does (X32).
+
+import { planOf } from "@desktop/lib/chat";
+import { lastActive, workspaceSections } from "@desktop/lib/sidebar";
+import type { AgentState, Project, Session } from "@desktop/lib/protocol";
+import type { HostData, Screen } from "./app";
+import { type InboxHost, sessionState } from "./inbox";
+
+export interface SessionRow {
+  host: string;
+  session: Session;
+  state: AgentState;
+  /** `needs you`, `plan`, `3m` while working, `done`, `failed`, or nothing. */
+  word: string;
+  /** The waiting plan's chat and ask, if any. */
+  plan: { terminal: number; ask: string } | null;
+}
+
+export interface ProjectGroup {
+  key: string;
+  host: string;
+  hostLabel: string;
+  remote: boolean;
+  /** The section's name. */
+  section: string;
+  project: Project;
+  letter: string;
+  rows: SessionRow[];
+}
+
+function waitingPlan(d: HostData, s: Session): SessionRow["plan"] {
+  for (const t of Object.values(d.terminals)) {
+    if (t.session_id !== s.id) continue;
+    const ask = d.chats[t.id]?.pending.find((a) => planOf(a));
+    if (ask) return { terminal: t.id, ask: ask.id };
+  }
+  return null;
+}
+
+function workingFor(d: HostData, s: Session, now: number): string {
+  const started = Object.values(d.terminals)
+    .filter((t) => t.session_id === s.id)
+    .map((t) => d.chats[t.id]?.turn_started_at)
+    .find((x): x is number => typeof x === "number");
+  if (!started) return "working";
+  const m = Math.max(1, Math.floor((now - started) / 60_000));
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
+}
+
+function row(host: string, d: HostData, s: Session, now: number): SessionRow {
+  const state = sessionState(d, s);
+  const plan = state === "blocked" ? waitingPlan(d, s) : null;
+  const word = plan ? "plan" : { blocked: "needs you", working: workingFor(d, s, now), done: "done", error: "failed", idle: "" }[state];
+  return { host, session: s, state, word, plan };
+}
+
+export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<string, HostData>, workspace: string | null, now: number): ProjectGroup[] {
+  const groups: ProjectGroup[] = [];
+  for (const h of Object.values(hosts)) {
+    const d = data[h.id];
+    if (h.status !== "connected" || !d) continue;
+    for (const ws of d.workspaces) {
+      if (workspace !== null && ws.name !== workspace) continue;
+      for (const sec of workspaceSections(ws, d.sections)) {
+        for (const pid of sec.project_ids) {
+          const project = d.projects.find((p) => p.id === pid);
+          if (!project) continue;
+          const sessions = d.sessions
+            .filter((s) => !s.archived && s.workspace_id === ws.id && s.project_id === pid)
+            .sort((a, b) => lastActive(d.terminals, b) - lastActive(d.terminals, a) || b.created_at - a.created_at);
+          if (!sessions.length) continue;
+          groups.push({
+            key: `${h.id}:${ws.id}:${sec.id}:${pid}`,
+            host: h.id,
+            hostLabel: h.label,
+            remote: !!h.via,
+            section: sec.name,
+            project,
+            letter: project.name.charAt(0).toUpperCase(),
+            rows: sessions.map((s) => row(h.id, d, s, now)),
+          });
+        }
+      }
+    }
+  }
+  return groups;
+}
+
+export type ChipId = "all" | "needs" | "working" | "review";
+
+const CHIP_STATES: Record<ChipId, AgentState[] | null> = { all: null, needs: ["blocked"], working: ["working"], review: ["done"] };
+
+export function chips(groups: ProjectGroup[]): { id: ChipId; label: string; count: number }[] {
+  const rows = groups.flatMap((g) => g.rows);
+  const n = (id: ChipId) => rows.filter((r) => CHIP_STATES[id]?.includes(r.state) ?? true).length;
+  return [
+    { id: "all", label: "All", count: n("all") },
+    { id: "needs", label: "Needs you", count: n("needs") },
+    { id: "working", label: "Working", count: n("working") },
+    { id: "review", label: "Review", count: n("review") },
+  ];
+}
+
+/** The groups with only the rows of `chip` that match `query`; empty groups go. */
+export function filterGroups(groups: ProjectGroup[], chip: ChipId, query: string): ProjectGroup[] {
+  const q = query.trim().toLowerCase();
+  const states = CHIP_STATES[chip];
+  return groups
+    .map((g) => ({
+      ...g,
+      rows: g.rows.filter(
+        (r) =>
+          (!states || states.includes(r.state)) &&
+          (!q || [r.session.name, r.session.branch, g.project.name].some((x) => x.toLowerCase().includes(q))),
+      ),
+    }))
+    .filter((g) => g.rows.length);
+}
+
+/** Where a tap on a row goes. */
+export function rowTarget(r: SessionRow): Screen {
+  if (r.plan) return { kind: "plan", host: r.host, terminal: r.plan.terminal, ask: r.plan.ask };
+  return { kind: "session", host: r.host, id: r.session.id, tab: r.state === "done" ? "changes" : "chat" };
+}
