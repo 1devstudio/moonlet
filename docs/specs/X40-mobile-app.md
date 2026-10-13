@@ -132,9 +132,10 @@ On the phone: the paired Macs (id, name, addresses) in `macs.json` in the app's 
 
 ## Test plan
 
-- Vitest in `apps/mobile/src/lib/*.test.ts` for each `lib` function named above, with literals from this spec and the design.
-- Rust: `chat.summaries` in `crates/moonletd/tests`.
-- The phone app has no automated UI tests. Each stack part is checked by running the app's macOS build against a scratch daemon, and on the iPhone once Xcode is installed.
+- Vitest in `apps/mobile/src/lib/*.test.ts` for each `lib` function named above, with literals from this spec, the design, and output captured from a real daemon (the branch name, a zsh session's blocks).
+- Rust, phone core: `apps/mobile/src-tauri/tests/macs.rs` against a fake Mac on loopback (pairing, a dead address, a wrong code, the token on reconnect, routed SSH hosts, Forget); a Keychain round trip runs by hand with `--ignored`.
+- Rust, daemon: `chat.summaries` and `asked_at` in `moonlet-core`'s `summaries_carry_every_chats_asks_without_its_items`.
+- The phone app has no automated UI tests. Each part was checked in the app's macOS build and in the iOS simulator against a scratch daemon, with screenshots of the launch and pairing screens; not yet on a real iPhone.
 
 ## Open questions
 
