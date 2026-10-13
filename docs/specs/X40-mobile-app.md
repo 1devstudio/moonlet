@@ -64,8 +64,8 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### New session
 
-- [x] New session has the prompt box "What do you want to work on?" (dictation comes from the keyboard's microphone), the branch the daemon will create (`moonlet/<slug of the name>`, the daemon's own rule, updated as the prompt changes), and rows for **Project** (the workspace's projects on connected hosts; it also sets the host), **Host**, **Agent** (Claude Code, Codex), **Model** with effort (Claude only) and **Base** (the project's branches), each opening a picker. (`lib/newSession.test.ts`, with names captured from a real daemon)
-- [x] **Mode** has Auto, Manual, Edits and Plan, with one help line each (from the design). Manual is the default.
+- [x] New session has the prompt box "What do you want to work on?" (dictation comes from the keyboard's microphone), the branch the daemon will create (`moonlet/<slug of the name>`, the daemon's own rule, updated as the prompt changes), and rows for **Project** (the workspace's projects on connected hosts), **Host** (the project's host: tapping it opens the same project picker, since a project lives on one host), **Agent** (Claude Code, Codex), **Model** with effort (Claude only) and **Base** (the project's branches), each opening a picker. (`lib/newSession.test.ts`, with names captured from a real daemon)
+- [x] **Mode** has Auto, Manual, Edits and Plan, with one help line each (from the design). Manual is the default. It shows for Claude Code only: Codex has no such modes.
 - [x] The footer says "Creates a worktree from <base> on <host> and runs setup: <setup command>" (no setup part without a setup command). **Start session** calls `session.create` in the chosen workspace and opens the new session's chat. (`lib/newSession.test.ts` for the branch name and the footer)
 
 ### Session screen
