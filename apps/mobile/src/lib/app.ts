@@ -20,7 +20,7 @@ import {
 } from "@desktop/lib/protocol";
 import { readStored, writeStored } from "@desktop/lib/storage";
 import type { HostSeen } from "./hosts";
-import { type Touched, mergeLoaded, touchedSince } from "./loadMerge";
+import { type Change, applyChanges, eventChanges } from "./events";
 
 /** A host as the phone's core lists it (`host_list`). */
 export interface HostEntry extends HostInfo {
@@ -138,25 +138,23 @@ export async function measure(host: string) {
   }
 }
 
-/** Per host, what events changed while a load runs. */
-const loads = new Map<string, Touched>();
-
-function touch<K extends keyof Touched>(host: string, kind: K, id: number, value: Touched[K] extends Map<number, infer V> ? V : never) {
-  (loads.get(host)?.[kind] as Map<number, unknown> | undefined)?.set(id, value);
-}
+/** Per host, the changes events made while a load runs. */
+const loads = new Map<string, Change[]>();
 
 /** Loads everything a connected host's screens show. */
 export async function loadHost(host: string) {
-  const touched = touchedSince();
-  loads.set(host, touched);
+  const during: Change[] = [];
+  loads.set(host, during);
   try {
-    await load(host, touched);
+    const fetched = await fetchHostData(host);
+    // What events changed meanwhile wins over the replies they overtook.
+    patchData(host, applyChanges(fetched, during));
   } finally {
-    if (loads.get(host) === touched) loads.delete(host);
+    if (loads.get(host) === during) loads.delete(host);
   }
 }
 
-async function load(host: string, touched: Touched) {
+async function fetchHostData(host: string): Promise<HostData> {
   const call = <T>(method: string, params: object = {}) => rpc<T>(host, method, params);
   const [terminals, sessions, projects, workspaces, sections, reads, chats] = await Promise.all([
     call<TerminalInfo[]>(M.terminalList),
@@ -167,72 +165,33 @@ async function load(host: string, touched: Touched) {
     call<ReadRequest[]>(M.terminalReadRequests).catch(() => []),
     call<{ id: number; state: ChatSummary }[]>(M.chatSummaries).catch(() => []),
   ]);
-  const loaded = mergeLoaded(
-    {
-      terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
-      sessions,
-      projects,
-      workspaces,
-      sections,
-      reads,
-      chats: Object.fromEntries(chats.map((c) => [c.id, c.state])),
-    },
-    touched,
-  );
-  patchData(host, loaded);
+  return {
+    terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    sessions,
+    projects,
+    workspaces,
+    sections,
+    reads,
+    chats: Object.fromEntries(chats.map((c) => [c.id, c.state])),
+  };
 }
 
 function onEvent(e: DaemonEvent) {
   const { host, name, data } = e;
-  switch (name) {
-    case EV.terminalCreated:
-    case EV.terminalUpdated:
-    case EV.terminalExited: {
-      const t = data as TerminalInfo;
-      touch(host, "terminals", t.id, t);
-      patchData(host, (d) => ({ terminals: { ...d.terminals, [t.id]: t } }));
-      break;
-    }
-    case EV.terminalRemoved: {
-      const id = (data as { id: number }).id;
-      touch(host, "terminals", id, null);
-      touch(host, "chats", id, null);
-      patchData(host, (d) => {
-        const terminals = { ...d.terminals };
-        delete terminals[id];
-        const chats = { ...d.chats };
-        delete chats[id];
-        return { terminals, chats };
-      });
-      break;
-    }
-    case EV.sessionsChanged:
-    case EV.projectsChanged:
-    case EV.workspacesChanged:
-    case EV.sectionsChanged:
-      void loadHost(host).catch(() => {});
-      break;
-    case EV.terminalReadRequest:
-      touch(host, "reads", (data as ReadRequest).request_id, data as ReadRequest);
-      patchData(host, (d) => ({ reads: [...d.reads.filter((r) => r.request_id !== (data as ReadRequest).request_id), data as ReadRequest] }));
-      break;
-    case EV.terminalReadDone:
-      touch(host, "reads", (data as { request_id: number }).request_id, null);
-      patchData(host, (d) => ({ reads: d.reads.filter((r) => r.request_id !== (data as { request_id: number }).request_id) }));
-      break;
-    case EV.chatState: {
-      const { id, state } = data as { id: number; state: ChatState };
-      const { items: _items, ...summary } = state;
-      touch(host, "chats", id, summary);
-      patchData(host, (d) => ({ chats: { ...d.chats, [id]: summary } }));
-      onChatState(host, id, state);
-      break;
-    }
-    case EV.chatItem: {
-      const { id, item } = data as { id: number; item: ChatState["items"][number] };
-      onChatItem(host, id, item);
-      break;
-    }
+  const changes = eventChanges(name, data);
+  if (changes === "reload") {
+    void loadHost(host).catch(() => {});
+  } else if (changes.length) {
+    loads.get(host)?.push(...changes);
+    patchData(host, (d) => applyChanges(d, changes));
+  }
+  // The open conversation follows its chat (lib/chat.ts).
+  if (name === EV.chatState) {
+    const { id, state } = data as { id: number; state: ChatState };
+    onChatState(host, id, state);
+  } else if (name === EV.chatItem) {
+    const { id, item } = data as { id: number; item: ChatState["items"][number] };
+    onChatItem(host, id, item);
   }
 }
 
