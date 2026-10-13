@@ -32,6 +32,12 @@ describe("+ menu: subagents (X29)", () => {
   it("keeps the text after the caret", () => {
     expect(withMention("ask  to plan it", 4, "agent-Plan")).toEqual({ text: "ask @agent-Plan  to plan it", caret: 16 });
   });
+
+  it("doesn't add a mention the text already has, such as a chip clicked twice (X38)", () => {
+    expect(withMention("@.moonlet/context/plan-a-1.md fix it", 36, ".moonlet/context/plan-a-1.md")).toEqual({ text: "@.moonlet/context/plan-a-1.md fix it", caret: 36 });
+    // A longer mention that starts the same is a different file.
+    expect(withMention("@notes.md.bak ", 14, "notes.md")).toEqual({ text: "@notes.md.bak @notes.md ", caret: 24 });
+  });
 });
 
 describe("+ menu: entries (X29)", () => {

@@ -25,15 +25,16 @@ moonlet is agent-first, but ⌘T and the tab strip's `+` opened a shell. They no
 - [x] A key the user set for an action wins over another action's default: a user who had bound ⇧⌘T to another action keeps it, and "New terminal tab" then has no key until they give it one.
 - [x] A new agent chat with no messages shows "New chat in `<path>`.", with the path shortened to `~` under the home folder. A chat without a working directory shows neither the line nor any chips.
 - [x] "Add chat transcripts" lists the other structured agent chats of the same session that have at least one user message, running or exited, newest tab first. Each chip is named after the chat's first user message (its first line). The chat itself is not listed.
-- [x] "Add plans" lists the plans that agents of the session proposed with `ExitPlanMode`, newest first, one chip per plan file (or per plan text when there is no file). Each chip is named after the plan's first heading, or its first line.
+- [x] "Add plans" lists the plans that agents of the session proposed with `ExitPlanMode`, newest first, one chip per plan file (or per plan text when there is no file). Each chip is named as the Plan panel names the plan: its first heading, or its first line.
 - [x] Each list shows four chips, then "+N more", which shows the rest.
 - [x] A section with nothing in it is not shown.
-- [x] Clicking a chat chip writes `<worktree>/.moonlet/context/chat-<slug>-<terminal id>.md` with a heading and the chat's plain-text transcript (the same text as "Copy transcript"), and mentions it in the input.
+- [x] Clicking a chat chip writes `<worktree>/.moonlet/context/chat-<slug>-<terminal id>.md` with a heading and the chat's plain-text transcript (the same text as "Copy transcript"), and mentions it in the input. Clicking it again doesn't add the mention twice.
 - [x] Clicking a plan chip writes `<worktree>/.moonlet/context/plan-<slug>-<hash>.md` (an FNV-1a hash of the plan file's path, or of the text) with the plan's text, and mentions it in the input.
 - [x] Two chats or two plans with the same title, or titles with no `a-z`/`0-9`, still get files of their own.
 - [x] `<worktree>/.moonlet/context/.gitignore` holds `*`, so the files never show in Changes and are never committed.
 - [x] `fs.write` creates missing parent folders.
-- [x] A context file is never written through a symlink: when `.moonlet/context` leads outside the worktree, or a file in it is a symlink, the write is refused and the error shows as a toast. A leftover temporary file from an earlier write is replaced, never followed.
+- [x] A context file is never written through a symlink: when any folder between the worktree and the file is a symlink (even one that points inside the worktree), or the file is one, the write is refused and the error shows as a toast.
+- [x] Writes of the same file at once, such as two quick chip clicks, all succeed.
 
 ## UI
 
@@ -52,8 +53,8 @@ The `+` button's tooltip is "New agent (⌘T)". Its menu lists the agents, then 
 ## Protocol and RPCs
 
 - `fs.write` creates the file's missing parent folders before writing.
-- `fs.write` takes an optional `root`. With it, the daemon refuses a path whose folder resolves outside `root`, and a file that is a symlink; a leftover file at the write's temporary name is removed (a symlink itself, not its target) and the temporary file is created exclusively, so it never follows a symlink. The chips pass the worktree.
-- The chips use `chat.state` (to read other chats) and `fs.write`; nothing new.
+- New `fs.write_inside {root, path, content}`: writes a file inside `root`, creating missing folders. It refuses a path outside `root` or with `..`, and any symlink between `root` and the file, the file included. Each write uses a temporary name of its own, created exclusively. A daemon older than this answers `unknown_method`, so the chip shows an error instead of writing without these checks.
+- The chips use `chat.state` (to read other chats) and `fs.write_inside`.
 
 ## Data and config
 
@@ -63,7 +64,7 @@ The `+` button's tooltip is "New agent (⌘T)". Its menu lists the agents, then 
 ## Security considerations
 
 - File names come from chat and plan text: the slug keeps only `a-z`, `0-9` and `-`, so a name can't leave `.moonlet/context/`.
-- The worktree is repository content: a repository could commit `.moonlet/context` or `.moonlet/context/.gitignore` as a symlink to a file of the user's, such as `~/.zshrc`. The writes pass the worktree as `fs.write`'s `root`, so the daemon refuses them instead of overwriting the target.
+- The worktree is repository content: a repository could commit `.moonlet/context` or `.moonlet/context/.gitignore` as a symlink to a file of the user's, such as `~/.zshrc`. A symlink to a tracked file inside the worktree (`.moonlet/context -> ../src`) would overwrite that file. The chips write with `fs.write_inside`, which refuses any symlink on the way instead of following it.
 - The transcript holds what the chat showed, including tool summaries. It stays in the worktree and is git-ignored.
 
 ## Out of scope
@@ -78,7 +79,8 @@ The `+` button's tooltip is "New agent (⌘T)". Its menu lists the agents, then 
 - `apps/desktop/src/lib/runActions.test.ts`: ⌘T and ⇧⌘T map to the two actions and their labels; a key the user set wins over a default.
 - `apps/desktop/src/lib/chatContext.test.ts`: the chat and plan chips and their order, four chips then "+N more", an empty section hidden, no chips without a working directory, unique file names, the files' text, the `.gitignore`, the `root` on each write.
 - `apps/desktop/src/lib/terminals.test.ts`: the path shortened to `~`.
-- `crates/moonlet-core/src/fs.rs`: `write` creates missing folders; `write_inside` refuses a symlinked folder or file and a symlinked temporary file, and leaves their targets untouched; a leftover temporary file is replaced without being followed.
+- `crates/moonlet-core/src/fs.rs`: `write` creates missing folders. `write_inside` refuses a folder symlinked outside the root or inside it, and a symlinked file, leaving their targets untouched; a leftover temporary file never blocks or redirects a write; 8 threads writing one file at once all succeed.
+- `apps/desktop/src/lib/plusMenu.test.ts`: a mention the input already has isn't added again.
 - `apps/desktop/e2e/specs/run-action.e2e.ts`: the label ⌘T now shows.
 - `apps/desktop/e2e/specs/new-agent-tab.e2e.ts`: with a fake `claude`, ⌘T and the `+` button open an agent, the new chat shows its folder and offers the first chat and its plan, each chip writes its file and mentions it, a symlinked context folder is refused with a toast, and ⇧⌘T and the `+` menu's **Terminal ⇧⌘T** open a shell. The empty session's button calls the same action as `+` and is not clicked.
 

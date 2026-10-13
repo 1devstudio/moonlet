@@ -55,20 +55,21 @@ const captured = {
   plan: "1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`.\n2. Verify by reading file back. Confidence 90%: trivial edit, current content unread by choice.\n",
   planFilePath: "/Users/me/.claude/plans/plan-changing-a-txt-to-groovy-whale.md",
 };
-const planItem = (id: string, ts: number, input: unknown): ChatItem =>
-  item(id, "tool", "", { ts, tool: { name: "ExitPlanMode", summary: "", input, status: "ok" } });
+/** An ExitPlanMode call; `summary` is the daemon's title for it. */
+const planItem = (id: string, ts: number, input: unknown, summary = ""): ChatItem =>
+  item(id, "tool", "", { ts, tool: { name: "ExitPlanMode", summary, input, status: "ok" } });
 
 describe("contextPlans", () => {
-  it("lists the session's plans newest first, one per plan file, named by their heading or first line (X38)", () => {
+  it("lists the session's plans newest first, one per plan file, named as the Plan panel names them (X38)", () => {
     const terms = [term(1), term(2), term(3, { session_id: "other" })];
     const chats = {
       1: chat(
-        planItem("p1", 100, captured),
-        planItem("p2", 300, { plan: "# Add a dark theme\n\n1. Tokens\n", planFilePath: "/Users/me/.claude/plans/dark.md" }),
+        planItem("p1", 100, captured, "1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`."),
+        planItem("p2", 300, { plan: "# Add a dark theme\n\n1. Tokens\n", planFilePath: "/Users/me/.claude/plans/dark.md" }, "Add a dark theme"),
         item("r1", "tool", "", { ts: 350, tool: { name: "Read", summary: "a.txt", input: {}, status: "ok" } }),
       ),
       2: chat(
-        planItem("p3", 400, { plan: "# Add a dark theme, revised\n", planFilePath: "/Users/me/.claude/plans/dark.md" }),
+        planItem("p3", 400, { plan: "# Add a dark theme, revised\n", planFilePath: "/Users/me/.claude/plans/dark.md" }, "Add a dark theme, revised"),
         planItem("p4", 200, { plan: "## Split the settings page\nSteps\n" }),
         planItem("p5", 250, { plan: "   " }),
       ),
@@ -77,7 +78,7 @@ describe("contextPlans", () => {
     const rows = contextPlans(terms, chats, "s1");
     expect(rows.map((r) => r.title)).toEqual([
       "Add a dark theme, revised",
-      "Split the settings page",
+      "Plan",
       "1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`.",
     ]);
     expect(rows[0].plan).toBe("# Add a dark theme, revised\n");
@@ -146,7 +147,7 @@ describe("chipSection", () => {
 
 describe("newChatContext", () => {
   const terms = [term(1), term(7)];
-  const chats = { 1: chat(item("u1", "user", "Fix the login redirect"), planItem("p1", 100, captured)), 7: chat() };
+  const chats = { 1: chat(item("u1", "user", "Fix the login redirect"), planItem("p1", 100, captured, "1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`.")), 7: chat() };
 
   it("offers the session's other chats and plans (X38)", () => {
     const ctx = newChatContext(terms, chats, { session: "s1", self: 7, cwd: "/Users/jane/code/app" });

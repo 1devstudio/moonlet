@@ -151,32 +151,49 @@ pub fn write(path: &str, content: &str) -> Result<()> {
 }
 
 /// Saves a file the app creates inside `root`, such as a chat's context
-/// file (X38). The folders are created; a path that leaves `root` through a
-/// symlink, or a file that is a symlink, is refused, so a repository can't
-/// point the write at a file elsewhere.
+/// file (X38). Missing folders are created. A symlink anywhere between
+/// `root` and the file is refused, so a repository can't point the write at
+/// another file, inside the worktree or outside it.
 pub fn write_inside(root: &str, path: &str, content: &str) -> Result<()> {
     use std::io::Write;
-    let root = expand_home(root).canonicalize().context("no such folder")?;
+    use std::path::Component;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+
+    let root = expand_home(root);
+    if !root.is_dir() {
+        bail!("no such folder: {}", root.display());
+    }
     let p = expand_home(path);
-    let parent = p.parent().context("not a file path")?;
-    let name = p.file_name().context("not a file path")?.to_string_lossy().to_string();
-    let check = |dir: &Path| -> Result<()> {
-        if !dir.canonicalize().is_ok_and(|real| real.starts_with(&root)) {
-            bail!("{} is outside {}", parent.display(), root.display());
-        }
-        Ok(())
+    let Ok(rel) = p.strip_prefix(&root) else {
+        bail!("{} is outside {}", p.display(), root.display());
     };
-    // Before creating anything: the deepest folder that exists.
-    check(parent.ancestors().find(|a| a.exists()).context("not a file path")?)?;
-    std::fs::create_dir_all(parent)?;
-    check(parent)?;
+    if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
+        bail!("{} is outside {}", p.display(), root.display());
+    }
+    let name = p.file_name().context("not a file path")?.to_string_lossy().to_string();
+    // Each folder on the way is checked without following it, or created.
+    let mut dir = root.clone();
+    for c in rel.parent().into_iter().flat_map(Path::components) {
+        dir.push(c);
+        if let Err(e) = std::fs::create_dir(&dir) {
+            // Another write may have just created it: check what is there.
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(e.into());
+            }
+        }
+        let meta = std::fs::symlink_metadata(&dir)?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            bail!("{} is not a folder", dir.display());
+        }
+    }
     if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
         bail!("{} is a symlink", p.display());
     }
-    // A leftover temporary file is removed (a symlink itself, not its
-    // target), and create_new never follows one planted again meanwhile.
-    let tmp = parent.join(format!(".{name}.moonlet-tmp"));
-    let _ = std::fs::remove_file(&tmp);
+    // A temporary name of its own per write, created exclusively: writes of
+    // one file at once don't collide, and a planted symlink is never followed.
+    let n = WRITES.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}-{n}.moonlet-tmp", std::process::id()));
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let result = f.write_all(content.as_bytes()).and_then(|_| std::fs::rename(&tmp, &p));
     if result.is_err() {
@@ -369,6 +386,38 @@ mod tests {
         std::fs::write(root.join(".moonlet/context/.chat-z.md.moonlet-tmp"), "half").unwrap();
         write_inside(&s(&root), &s(&root.join(".moonlet/context/chat-z.md")), "z").unwrap();
         assert_eq!(std::fs::read_to_string(root.join(".moonlet/context/chat-z.md")).unwrap(), "z");
+    }
+
+    #[test]
+    fn write_inside_takes_writes_of_one_file_at_once() {
+        // Two quick chip clicks both rewrite .moonlet/context/.gitignore.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().display().to_string();
+        let file = dir.path().join(".moonlet/context/.gitignore").display().to_string();
+        let writers: Vec<_> = (0..8)
+            .map(|_| {
+                let (root, file) = (root.clone(), file.clone());
+                std::thread::spawn(move || (0..20).map(|_| write_inside(&root, &file, "*\n")).collect::<Result<Vec<_>>>())
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap().unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "*\n");
+    }
+
+    #[test]
+    fn write_inside_refuses_a_symlinked_folder_inside_the_root() {
+        // A committed `.moonlet/context -> ../src` would overwrite src/.gitignore.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join(".moonlet")).unwrap();
+        std::fs::write(root.join("src/.gitignore"), "target/\n").unwrap();
+        std::os::unix::fs::symlink("../src", root.join(".moonlet/context")).unwrap();
+        let file = root.join(".moonlet/context/.gitignore");
+        assert!(write_inside(&root.display().to_string(), &file.display().to_string(), "*\n").is_err());
+        assert_eq!(std::fs::read_to_string(root.join("src/.gitignore")).unwrap(), "target/\n");
     }
 
     #[test]
