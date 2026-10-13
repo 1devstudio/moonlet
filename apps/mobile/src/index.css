@@ -23,33 +23,39 @@ body,
   --safe-bottom: env(safe-area-inset-bottom);
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
+/* In the base layer, so Tailwind's utilities (text-bg, text-[14.5px]) win
+   over them: unlayered rules beat every layer. */
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  textarea::placeholder,
+  input::placeholder {
+    color: var(--color-faint);
+  }
 }
 
-button {
-  cursor: pointer;
-  touch-action: manipulation;
-}
+@layer components {
+  .scroll {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 
-textarea::placeholder,
-input::placeholder {
-  color: var(--color-faint);
-}
-
-.scroll {
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.eyebrow {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-faint);
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
 }
