@@ -26,7 +26,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 - [x] Before any Mac is paired, the app shows a pairing screen: **Scan QR code** (camera, on the phone only), a box to paste the link with **Pair**, and the line "On the Mac: Settings › Mobile › Pair a phone". A link that is not a version 1 pairing link says so; a failed pairing shows the Mac's message. (`lib/pairLink.test.ts`: name, several addresses, version, bad links; `src-tauri/tests/macs.rs`: pairing, a dead first address, a wrong code)
 - [ ] A `moonlet://pair` link opened from elsewhere starts pairing too. (Not yet: needs the deep-link plugin and an iOS build.)
 - [ ] After pairing, a bottom tab bar has **Inbox**, **Sessions**, **New** and **Hosts**. The Inbox tab carries a badge with the number of items that need the user. (`lib/inbox.test.ts`)
-- [x] The app keeps one connection per paired Mac and one per SSH host the Mac lists in `mobile.hosts`, routed through it (X39). It tries the Mac's addresses in order. A lost connection retries with the desktop's backoff (0.3 s doubling to 5 s), and at once when the app comes back to the foreground. Paired Macs, with their tokens, are kept in the app's data folder (`macs.json`); **Forget** removes one. (`src-tauri/tests/macs.rs`)
+- [x] The app keeps one connection per paired Mac and one per SSH host the Mac lists in `mobile.hosts`, routed through it (X39). It tries the Mac's addresses in order. A lost connection retries with the desktop's backoff (0.3 s doubling to 5 s), and at once when the app comes back to the foreground. Paired Macs are kept in the app's data folder (`macs.json`, mode 0600, names and addresses only) and their device tokens in the Keychain; **Forget** removes both. (`src-tauri/tests/macs.rs`: the file has no token, a restart connects with the stored one) (`src-tauri/tests/macs.rs`)
 - [ ] The workspace switcher at the top of Inbox and Sessions lists the workspaces of all connected hosts (X32), with their colour dot; the choice is remembered.
 - [ ] Colours, type and components follow the desktop's tokens: dark background `#121212`, the state colours of `StateGlyph`, `DiffStat`, `AgentIcon`.
 
@@ -115,11 +115,11 @@ The app uses the existing methods and events (`docs/protocol.md`) through the X3
 
 ## Data and config
 
-On the phone, in the app's data folder: the paired Macs (name, addresses, device token) and the app settings. The token file is excluded from iCloud backup.
+On the phone: the paired Macs (id, name, addresses) in `macs.json` in the app's data folder, mode 0600; each Mac's device token in the Keychain (service = the app's identifier, account = the Mac's device id), on iOS readable only while the phone is unlocked and never restored to another device; the app settings in the webview's storage.
 
 ## Security considerations
 
-- The device token gives full access to the Mac (X39). It is stored in the app's sandbox with iOS data protection; Face ID gates approvals.
+- The device token gives full access to the Mac (X39). It lives in the Keychain, this device only, never in a file or a backup; Face ID gates approvals.
 - Text from the daemon (chat, terminal output, file names) is rendered as text or through the desktop's sanitising Markdown renderer, never as raw HTML.
 
 ## Out of scope

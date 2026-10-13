@@ -22,7 +22,8 @@ pub const CLIENT: &str = "moonlet-mobile";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A paired Mac, as kept on the phone.
+/// A paired Mac. Its token is kept in the [`Tokens`] store, never in the
+/// app's file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SavedMac {
     /// The device id the Mac gave this phone; also the Mac's host id here.
@@ -30,7 +31,71 @@ pub struct SavedMac {
     pub name: String,
     /// `ip:port`s from the pairing link, tried in order.
     pub addrs: Vec<String>,
+    #[serde(skip)]
     pub token: String,
+}
+
+/// Where device tokens live: the Keychain in the app, memory in tests. A
+/// token gives full access to the Mac (X39).
+pub trait Tokens: Send + Sync + 'static {
+    fn get(&self, mac: &str) -> Option<String>;
+    fn set(&self, mac: &str, token: &str) -> Result<()>;
+    fn delete(&self, mac: &str);
+}
+
+#[derive(Default)]
+pub struct MemoryTokens(Mutex<HashMap<String, String>>);
+
+impl Tokens for MemoryTokens {
+    fn get(&self, mac: &str) -> Option<String> {
+        self.0.lock().unwrap().get(mac).cloned()
+    }
+    fn set(&self, mac: &str, token: &str) -> Result<()> {
+        self.0.lock().unwrap().insert(mac.into(), token.into());
+        Ok(())
+    }
+    fn delete(&self, mac: &str) {
+        self.0.lock().unwrap().remove(mac);
+    }
+}
+
+/// Tokens in the Keychain, one generic password per Mac. On iOS the item is
+/// readable while the phone is unlocked, and only on this device.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub struct Keychain {
+    pub service: String,
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+impl Tokens for Keychain {
+    fn get(&self, mac: &str) -> Option<String> {
+        use security_framework::passwords::{PasswordOptions, generic_password};
+        let bytes =
+            generic_password(PasswordOptions::new_generic_password(&self.service, mac)).ok()?;
+        String::from_utf8(bytes).ok()
+    }
+    fn set(&self, mac: &str, token: &str) -> Result<()> {
+        use security_framework::passwords::{PasswordOptions, set_generic_password_options};
+        #[allow(unused_mut)]
+        let mut opts = PasswordOptions::new_generic_password(&self.service, mac);
+        // Not in backups, not on another device. (A macOS build is for
+        // development; its unsigned binary has no data protection keychain.)
+        #[cfg(target_os = "ios")]
+        {
+            use security_framework::access_control::{ProtectionMode, SecAccessControl};
+            let ac = SecAccessControl::create_with_protection(
+                Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
+                0,
+            )
+            .map_err(|e| anyhow!("cannot protect the token: {e}"))?;
+            opts.set_access_control(ac);
+        }
+        set_generic_password_options(token.as_bytes(), opts)
+            .map_err(|e| anyhow!("cannot keep the token in the Keychain: {e}"))
+    }
+    fn delete(&self, mac: &str) {
+        let _ = security_framework::passwords::delete_generic_password(&self.service, mac);
+    }
 }
 
 /// A host as the webview lists it: the link's info plus how it is reached.
@@ -164,6 +229,7 @@ impl Events for PhoneEvents {
 
 pub struct Phone {
     file: PathBuf,
+    tokens: Arc<dyn Tokens>,
     macs: Mutex<Vec<SavedMac>>,
     hosts: Mutex<HashMap<String, Arc<Host>>>,
     sink: Box<dyn Sink>,
@@ -172,14 +238,29 @@ pub struct Phone {
 }
 
 impl Phone {
-    /// Loads the paired Macs from `file` and starts connecting to each.
-    pub fn start(file: PathBuf, sink: impl Sink, rt: tokio::runtime::Handle) -> Arc<Phone> {
+    /// Loads the paired Macs from `file`, their tokens from `tokens`, and
+    /// starts connecting to each. A Mac whose token is gone is dropped.
+    pub fn start(
+        file: PathBuf,
+        tokens: Arc<dyn Tokens>,
+        sink: impl Sink,
+        rt: tokio::runtime::Handle,
+    ) -> Arc<Phone> {
         let macs: Vec<SavedMac> = std::fs::read_to_string(&file)
             .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+            .and_then(|s| serde_json::from_str::<Vec<SavedMac>>(&s).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|m| {
+                Some(SavedMac {
+                    token: tokens.get(&m.id)?,
+                    ..m
+                })
+            })
+            .collect();
         let phone = Arc::new_cyclic(|me| Phone {
             file,
+            tokens,
             macs: Mutex::new(macs.clone()),
             hosts: Mutex::new(HashMap::new()),
             sink: Box::new(sink),
@@ -192,13 +273,11 @@ impl Phone {
         phone
     }
 
+    /// Writes the Macs, without tokens, readable by this user only.
     fn save(&self) {
         let macs = self.macs.lock().unwrap().clone();
-        if let Some(dir) = self.file.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Err(e) = std::fs::write(&self.file, serde_json::to_vec_pretty(&macs).unwrap()) {
-            tracing::warn!("cannot save paired Macs: {e}");
+        if let Err(e) = write_private(&self.file, &serde_json::to_vec_pretty(&macs).unwrap()) {
+            tracing::warn!("cannot save paired Macs: {e:#}");
         }
     }
 
@@ -230,7 +309,8 @@ impl Phone {
     }
 
     /// Adds a Mac that just paired and connects to it.
-    pub fn add(&self, mac: SavedMac) -> HostEntry {
+    pub fn add(&self, mac: SavedMac) -> Result<HostEntry> {
+        self.tokens.set(&mac.id, &mac.token)?;
         {
             let mut macs = self.macs.lock().unwrap();
             macs.retain(|m| m.id != mac.id);
@@ -238,13 +318,14 @@ impl Phone {
         }
         self.save();
         self.connect(&mac, None);
-        self.entry(&mac.id).expect("just added")
+        Ok(self.entry(&mac.id).expect("just added"))
     }
 
     /// Forgets a Mac and the hosts reached through it.
     pub fn forget(&self, id: &str) {
         self.macs.lock().unwrap().retain(|m| m.id != id);
         self.save();
+        self.tokens.delete(id);
         let prefix = format!("{id}/");
         let gone: Vec<Arc<Host>> = {
             let mut hosts = self.hosts.lock().unwrap();
@@ -341,4 +422,24 @@ impl Phone {
         });
         out
     }
+}
+
+/// Writes `bytes` to `path` with mode 0600, through a temporary file.
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
