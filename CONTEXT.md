@@ -14,8 +14,8 @@ These terms are used the same way in the UI, the code, the protocol and the docs
 | **Blocks mode** | How a shell terminal works by default: the shell draws no prompt, the input editor is the only input, and each command shows as a block. Its opposite is **Classic**, where the shell keeps its own prompt and you type into the terminal. | `blockMode` |
 | **Agent** | The program running in an agent terminal: Claude Code, Codex, or a custom command. | `agent` |
 | **Host** | A machine running `moonletd`: this Mac, or a remote host reached over SSH. Not "node" or "server". | `Host` |
-| **Central host** | The always-on host that owns your sessions and runs their agents. Other devices are windows onto it. | `central` |
-| **Worker** | A host linked to a central host that lends its CPU for heavy commands. A laptop, the central host itself or a cloud machine can be a worker. | `Worker` |
-| **Live copy** | A worker's copy of a session's files, kept in step with the central host both ways. Ignored files, such as dependencies, stay separate on each machine. | `LiveCopy` |
-| **Routed command** | A heavy command, such as a test run, that an agent on the central host runs and that is carried out on a worker's live copy, with its output and exit status coming back. | `exec` |
+| **Central host** | The always-on host that owns your sessions and runs their agents. Other devices are windows onto it. | `CentralHost` |
+| **Worker** | A host that lends its CPU to a central host for heavy commands. The central host itself counts as one. | `Worker` |
+| **Live copy** | A worker's copy of a session's files, kept in step with the central host both ways. | `LiveCopy` |
+| **Routed command** | A heavy command, such as a test run, that an agent on the central host runs and that is carried out on a worker's live copy, with its output and exit status coming back. | `RoutedCommand` |
 | **Project identity** | What makes two folders on different hosts the same project: the repository's origin and its first commit, never its path. | `ProjectIdentity` |
