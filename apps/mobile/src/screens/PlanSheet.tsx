@@ -7,6 +7,7 @@ import { planOf } from "@desktop/lib/chat";
 import { type Screen, showScreen, useApp } from "../lib/app";
 import { answerPlan } from "../lib/answers";
 import { ageText } from "../lib/cards";
+import { useBusy } from "../lib/busy";
 import { Markdown } from "../components/Markdown";
 import { AgentIcon, Btn } from "../components/ui";
 import { useNow } from "./Inbox";
@@ -17,23 +18,17 @@ export function PlanSheet({ host, terminal, ask: askId, from }: { host: string; 
   const now = useNow();
   const [revising, setRevising] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useBusy();
   const ask = d?.chats[terminal]?.pending.find((a) => a.id === askId);
   const plan = ask && planOf(ask);
   const session = d?.sessions.find((s) => s.id === d.terminals[terminal]?.session_id) ?? null;
   const project = d?.projects.find((p) => p.id === session?.project_id)?.name;
   const close = () => showScreen(from ?? null);
 
-  const choose = async (choice: "approve" | "ask" | "keepPlanning") => {
-    setBusy(true);
-    try {
+  const choose = (choice: "approve" | "ask" | "keepPlanning") =>
+    run(async () => {
       if (await answerPlan(host, terminal, askId, choice, feedback)) close();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   return (
     <div className="fixed inset-0 z-30 flex flex-col justify-end">

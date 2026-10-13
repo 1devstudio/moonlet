@@ -10,7 +10,8 @@ import { prTone } from "@desktop/components/ui";
 import { showScreen, useApp } from "../lib/app";
 import { checkMark, checkNote, checksSummary, fixPrompt, reviewText, stackedOn, updatedAgo } from "../lib/checks";
 import { sessionChat } from "../lib/chatView";
-import { forget, useGitStatus, usePr } from "../lib/lazy";
+import { forget, useGitStatus, usePr } from "../lib/rowDetails";
+import { useBusy } from "../lib/busy";
 import { StatusMark } from "../components/chat";
 import { AgentIcon, Btn, DiffStat, cx } from "../components/ui";
 import { useNow } from "./Inbox";
@@ -19,20 +20,12 @@ function CreatePr({ host, session, onCreated }: { host: string; session: Session
   const [title, setTitle] = useState(session.name);
   const [body, setBody] = useState("");
   const [draft, setDraft] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const create = async () => {
-    setBusy(true);
-    setError(null);
-    try {
+  const { busy, error, run } = useBusy();
+  const create = () =>
+    run(async () => {
       await rpc<PullRequest>(host, M.prCreate, { path: session.path, title: title.trim(), body, base: session.base, draft });
       onCreated();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
   return (
     <div className="scroll flex h-full flex-col gap-3 p-4">
       <p className="m-0 text-[14px] text-muted">

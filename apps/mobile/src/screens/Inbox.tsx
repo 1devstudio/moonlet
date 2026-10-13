@@ -3,14 +3,14 @@
 
 import { useEffect, useState } from "react";
 import { ChevronRight, ListChecks, MessageCircleQuestion, Server, SquareTerminal, Terminal } from "lucide-react";
-import { rpc } from "@desktop/lib/daemon";
 import { planOf } from "@desktop/lib/chat";
-import { type GitStatus, M } from "@desktop/lib/protocol";
 import { showScreen, useApp } from "../lib/app";
+import { useGitStatus } from "../lib/rowDetails";
 import { answerAsk, answerPlan, answerRead } from "../lib/answers";
 import { ageText, askHeadline, planBlurb, readMessage } from "../lib/cards";
 import { type InboxCard, buildInbox, summaryLine } from "../lib/inbox";
-import { AgentIcon, Btn, DiffStat, Moon, StateGlyph } from "../components/ui";
+import { useBusy } from "../lib/busy";
+import { AgentIcon, Btn, DiffStat, Moon, StateGlyph, Title } from "../components/ui";
 import { Sheet } from "../components/Sheet";
 import { WorkspacePill } from "../components/WorkspacePill";
 
@@ -47,24 +47,9 @@ function Meta({ card }: { card: InboxCard }) {
   );
 }
 
-function useBusy() {
-  const [busy, setBusy] = useState(false);
-  const run = async (f: () => Promise<unknown>) => {
-    setBusy(true);
-    try {
-      await f();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return [busy, run] as const;
-}
-
 function PermissionCard({ card, now }: { card: InboxCard; now: number }) {
   const ask = card.ask!;
-  const [busy, run] = useBusy();
+  const { busy, run } = useBusy();
   const answer = (d: "allow" | "always" | "deny") => run(() => answerAsk(card.host, card.terminal, ask.id, d));
   return (
     <div className="flex flex-col gap-3 rounded-[14px] border border-[rgba(242,201,76,0.28)] bg-panel p-3.5">
@@ -102,7 +87,7 @@ function PermissionCard({ card, now }: { card: InboxCard; now: number }) {
 function PlanCard({ card, now }: { card: InboxCard; now: number }) {
   const ask = card.ask!;
   const plan = planOf(ask);
-  const [busy, run] = useBusy();
+  const { busy, run } = useBusy();
   return (
     <div className="flex flex-col gap-2.5 rounded-[14px] border border-border-strong bg-panel p-3.5">
       <div className="flex items-center gap-2">
@@ -149,7 +134,7 @@ function QuestionCard({ card, now }: { card: InboxCard; now: number }) {
 
 function ReadCard({ card, now }: { card: InboxCard; now: number }) {
   const req = card.read!;
-  const [busy, run] = useBusy();
+  const { busy, run } = useBusy();
   const [preview, setPreview] = useState(false);
   const message = readMessage(req, card.title);
   return (
@@ -188,13 +173,8 @@ function ReadCard({ card, now }: { card: InboxCard; now: number }) {
 
 function ReviewRow({ host, id, title, project }: { host: string; id: string; title: string; project: string | null }) {
   const session = useApp((s) => s.data[host]?.sessions.find((x) => x.id === id));
-  const [stat, setStat] = useState<GitStatus | null>(null);
-  useEffect(() => {
-    if (!session) return;
-    void rpc<GitStatus>(host, M.gitStatus, { path: session.path, base: session.base })
-      .then(setStat)
-      .catch(() => {});
-  }, [host, session]);
+  // Through the shared cache, which drops a reply for another session.
+  const [stat] = useGitStatus(host, session);
   return (
     <button type="button" onClick={() => showScreen({ kind: "session", host, id, tab: "changes" })} className="flex min-h-[60px] items-center gap-2.5 rounded-[14px] bg-panel px-3.5 text-left">
       <StateGlyph state="done" />
@@ -216,15 +196,9 @@ export function InboxScreen() {
   const now = useNow();
   return (
     <div className="scroll h-full">
-      <div className="flex flex-col gap-1.5 px-4" style={{ paddingTop: "calc(var(--safe-top) + 14px)" }}>
-        <div className="flex items-center gap-2.5">
-          <Moon size={28} />
-          <h1 className="m-0 text-[28px] font-semibold tracking-[-0.01em]">Inbox</h1>
-          <span className="flex-1" />
-          <WorkspacePill />
-        </div>
-        <div className="text-[13px] text-muted">{summaryLine(inbox)}</div>
-      </div>
+      <Title icon={<Moon size={28} />} right={<WorkspacePill />} below={<div className="text-[13px] text-muted">{summaryLine(inbox)}</div>}>
+        Inbox
+      </Title>
       <div className="flex flex-col gap-2.5 px-4 pt-[18px] pb-6">
         {inbox.needs.length > 0 ? (
           <div className="flex items-center gap-2 text-[12px] font-semibold tracking-[0.08em] text-blocked uppercase">
