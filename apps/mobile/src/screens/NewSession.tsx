@@ -70,8 +70,19 @@ export function NewSessionScreen() {
   useEffect(() => {
     if (!choice) return;
     setBase(null);
-    void rpc<ProjectConfig>(choice.host, M.projectConfig, { id: choice.project.id }).then(setConfig).catch(() => setConfig(null));
-    void rpc<string[]>(choice.host, M.gitBranches, { path: choice.project.path }).then(setBranches).catch(() => setBranches([]));
+    setConfig(null);
+    setBranches([]);
+    // A reply for a project picked before this one is dropped.
+    let live = true;
+    void rpc<ProjectConfig>(choice.host, M.projectConfig, { id: choice.project.id })
+      .then((c) => live && setConfig(c))
+      .catch(() => live && setConfig(null));
+    void rpc<string[]>(choice.host, M.gitBranches, { path: choice.project.path })
+      .then((b) => live && setBranches(b))
+      .catch(() => live && setBranches([]));
+    return () => {
+      live = false;
+    };
   }, [choice?.host, choice?.project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const start = async () => {

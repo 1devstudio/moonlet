@@ -49,6 +49,19 @@ export const usePr = (host: string, s: Session | undefined) => useLoaded<PullReq
 export const useBase = (host: string, p: Project) =>
   useLoaded<BaseStatus | null>(`base:${host}:${p.id}`, () => rpc(host, M.gitBaseStatus, { path: p.path, branch: p.base_branch, fetch: false }));
 
+/** True once `el` has come near the screen; rows load their details then. */
+export function useSeen(): [(el: HTMLElement | null) => void, boolean] {
+  const [seen, setSeen] = useState(false);
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!el || seen) return;
+    const io = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && setSeen(true), { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [el, seen]);
+  return [setEl, seen];
+}
+
 /** Drops cached details of a session after the phone changed it. */
 export function forget(prefix: string) {
   for (const k of cache.keys()) if (k.startsWith(prefix)) cache.delete(k);
