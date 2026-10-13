@@ -228,6 +228,19 @@ impl Pairing {
     }
 }
 
+/// Checks `code` against the current pairing; a code that pairs is used up
+/// in the same step, so two phones can never both claim it. Returns the
+/// check and the code it was checked against; None without a pairing.
+pub fn claim(slot: &mut Option<Pairing>, code: &str, now: u64) -> Option<(PairCheck, String)> {
+    let p = slot.as_mut()?;
+    let check = p.check(code, now);
+    let current = p.code.clone();
+    if check == PairCheck::Paired {
+        slot.take();
+    }
+    Some((check, current))
+}
+
 /// An authenticated phone connection.
 pub struct Authed {
     pub device_id: String,
@@ -484,6 +497,9 @@ impl Mobile {
             (Some(token), None) => {
                 let hash = sha256_hex(token.as_bytes());
                 let mut data = self.data.lock().unwrap();
+                if !data.enabled {
+                    return None;
+                }
                 let d = data.devices.iter_mut().find(|d| d.token_sha256 == hash)?;
                 d.last_seen = Some(now_ms());
                 let device_id = d.id.clone();
@@ -495,13 +511,9 @@ impl Mobile {
                 })
             }
             (None, Some(code)) if route.is_none() => {
-                let check = match self.pairing.lock().unwrap().as_mut() {
-                    Some(p) => (p.check(code, now_ms()), p.code.clone()),
-                    None => return None,
-                };
+                let check = claim(&mut self.pairing.lock().unwrap(), code, now_ms())?;
                 match check {
                     (PairCheck::Paired, _) => {
-                        self.pairing.lock().unwrap().take();
                         let token = random_hex(32);
                         let now = now_ms();
                         let dev = StoredDevice {
@@ -663,7 +675,15 @@ async fn reconcile(daemon: &Arc<Daemon>) -> Duration {
         let daemon = daemon.clone();
         listening.tasks.push(tokio::spawn(accept_loop(daemon, l)));
     }
-    *mobile.listening.lock().unwrap() = listening;
+    {
+        // Phone access may have been turned off while binding.
+        let mut current = mobile.listening.lock().unwrap();
+        if !mobile.data.lock().unwrap().enabled {
+            listening.stop();
+            return RESCAN;
+        }
+        *current = listening;
+    }
     mobile.changed();
     RESCAN
 }
@@ -795,8 +815,14 @@ async fn route(stream: TcpStream, alias: &str, close: &mut watch::Receiver<bool>
         _ = close.changed() => false,
     };
     let mut tw = tw.lock().await;
+    drop(stdin);
     if ssh_ended {
-        let _ = child.wait().await;
+        if tokio::time::timeout(Duration::from_secs(2), child.wait())
+            .await
+            .is_err()
+        {
+            let _ = child.kill().await;
+        }
         let text = tokio::time::timeout(Duration::from_secs(1), errors)
             .await
             .ok()
@@ -904,6 +930,26 @@ mod tests {
         let mut p = Pairing::new("c0de".into(), 1_000);
         assert_eq!(p.check("c0de", 1_000 + PAIR_TTL_MS), PairCheck::Expired);
         assert_eq!(p.check("c0de", 1_000 + PAIR_TTL_MS - 1), PairCheck::Paired);
+    }
+
+    #[test]
+    fn a_code_pairs_one_phone_only() {
+        let mut slot = Some(Pairing::new("c0de".into(), 0));
+        assert_eq!(
+            claim(&mut slot, "c0de", 1).map(|c| c.0),
+            Some(PairCheck::Paired)
+        );
+        assert!(
+            slot.is_none(),
+            "the code is used up by the claim that paired"
+        );
+        assert_eq!(claim(&mut slot, "c0de", 2).map(|c| c.0), None);
+        let mut slot = Some(Pairing::new("c0de".into(), 0));
+        assert_eq!(
+            claim(&mut slot, "nope", 1).map(|c| c.0),
+            Some(PairCheck::Wrong)
+        );
+        assert!(slot.is_some());
     }
 
     #[test]
