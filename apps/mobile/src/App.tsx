@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { startApp, useApp } from "./lib/app";
+import { Splash } from "./components/Splash";
 import { TabBar } from "./components/TabBar";
 import { HostsScreen } from "./screens/Hosts";
 import { PairScreen } from "./screens/Pair";
@@ -13,7 +14,7 @@ export default function App() {
     void startApp();
   }, []);
 
-  if (!ready) return null;
+  if (!ready) return <Splash />;
   if (!paired) return <PairScreen first />;
   if (screen?.kind === "pair") return <PairScreen first={false} />;
   return (
