@@ -932,6 +932,34 @@ mod tests {
         assert_eq!(p.check("c0de", 1_000 + PAIR_TTL_MS - 1), PairCheck::Paired);
     }
 
+    /// A Mobile whose file holds one phone with token "tok".
+    fn with_phone(enabled: bool) -> (tempfile::TempDir, Mobile) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("mobile.json");
+        let json = serde_json::json!({
+            "enabled": enabled,
+            "devices": [{ "id": "d1", "name": "iPhone", "token_sha256": sha256_hex(b"tok"), "created_at": 1 }],
+        });
+        std::fs::write(&file, json.to_string()).unwrap();
+        (dir, Mobile::load(file, |_| {}))
+    }
+
+    #[test]
+    fn a_token_works_only_while_phone_access_is_on() {
+        let (_dir, mobile) = with_phone(false);
+        assert!(mobile.authenticate(Some("tok"), None, None, None).is_none());
+        mobile.set_enabled(true);
+        let authed = mobile
+            .authenticate(Some("tok"), None, None, None)
+            .expect("on again");
+        assert_eq!(authed.device_id, "d1");
+        assert!(
+            mobile
+                .authenticate(Some("other"), None, None, None)
+                .is_none()
+        );
+    }
+
     #[test]
     fn a_code_pairs_one_phone_only() {
         let mut slot = Some(Pairing::new("c0de".into(), 0));
