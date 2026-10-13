@@ -79,8 +79,8 @@ function BlocksView({ host, session, t }: { host: string; session: Session; t: T
     host,
     t,
     (data) => {
-      reader.reset();
-      reader.resize(t.cols, t.rows);
+      void reader.reset();
+      void reader.resize(t.cols, t.rows);
       void reader.write(data).then(refresh);
     },
     (data) => void reader.write(data).then(refresh),
@@ -117,24 +117,32 @@ function BlocksView({ host, session, t }: { host: string; session: Session; t: T
 
 function RawView({ host, t }: { host: string; t: TerminalInfo }) {
   const el = useRef<HTMLDivElement>(null);
-  const term = useMemo(() => new XTerm({ cols: t.cols, rows: t.rows, fontFamily: "JetBrains Mono, SF Mono, Menlo, monospace", fontSize: 10, theme: THEME, disableStdin: true, scrollback: 3000 }), [t.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Made and disposed by the effect, so a second mount (StrictMode) gets a
+  // fresh terminal instead of a disposed one.
+  const term = useRef<XTerm | null>(null);
   useEffect(() => {
     if (!el.current) return;
-    term.open(el.current);
+    const x = new XTerm({ cols: t.cols, rows: t.rows, fontFamily: "JetBrains Mono, SF Mono, Menlo, monospace", fontSize: 10, theme: THEME, disableStdin: true, scrollback: 3000 });
+    x.open(el.current);
     // The PTY keeps the Mac's size: fit its columns to the phone's width.
-    const width = el.current.clientWidth;
-    term.options.fontSize = Math.max(6, Math.min(12, Math.floor((width / t.cols) * 1.6)));
-    return () => term.dispose();
-  }, [term]); // eslint-disable-line react-hooks/exhaustive-deps
+    x.options.fontSize = Math.max(6, Math.min(12, Math.floor((el.current.clientWidth / t.cols) * 1.6)));
+    term.current = x;
+    return () => {
+      term.current = null;
+      x.dispose();
+    };
+  }, [t.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useAttach(
     host,
     t,
     (data) => {
-      term.reset();
-      term.resize(t.cols, t.rows);
-      term.write(data);
+      const x = term.current;
+      if (!x) return;
+      x.reset();
+      x.resize(t.cols, t.rows);
+      x.write(data);
     },
-    (data) => term.write(data),
+    (data) => term.current?.write(data),
   );
   return <div ref={el} className="h-full overflow-auto bg-bg px-1 pt-1" />;
 }
