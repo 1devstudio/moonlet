@@ -69,9 +69,15 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
     if (!session) return;
     setText(null);
     setComment(null);
+    // A reply for a file shown before this one is dropped: its hunks would
+    // show, and be staged or discarded, under this file's name.
+    let live = true;
     void rpc<string>(host, M.gitDiff, { path: session.path, file: path, ...(against === "base" ? { base: session.base } : {}) })
-      .then(setText)
-      .catch((e) => setText(`Cannot show this diff: ${e instanceof Error ? e.message : String(e)}`));
+      .then((t) => live && setText(t))
+      .catch((e) => live && setText(`Cannot show this diff: ${e instanceof Error ? e.message : String(e)}`));
+    return () => {
+      live = false;
+    };
   }, [host, session?.path, path, against, tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const diff = useMemo(() => (text ? parseFileDiff(text) : null), [text]);
