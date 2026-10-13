@@ -542,7 +542,11 @@ impl Mobile {
         }
     }
 
-    fn register(&self, device_id: &str) -> (u64, watch::Receiver<bool>) {
+    /// Records a live connection; None when the device was removed or phone
+    /// access turned off since it authenticated. Registering first and
+    /// checking after means a concurrent `revoke` or `set_enabled(false)`
+    /// either sees this connection and closes it, or is seen here.
+    fn register(&self, device_id: &str) -> Option<(u64, watch::Receiver<bool>)> {
         let id = self.next_conn.fetch_add(1, Ordering::Relaxed);
         let (close, rx) = watch::channel(false);
         self.conns.lock().unwrap().insert(
@@ -552,8 +556,16 @@ impl Mobile {
                 close,
             },
         );
+        let still_allowed = {
+            let data = self.data.lock().unwrap();
+            data.enabled && data.devices.iter().any(|d| d.id == device_id)
+        };
+        if !still_allowed {
+            self.conns.lock().unwrap().remove(&id);
+            return None;
+        }
         self.changed();
-        (id, rx)
+        Some((id, rx))
     }
 
     fn unregister(&self, conn: u64) {
@@ -712,7 +724,9 @@ async fn serve_phone(daemon: Arc<Daemon>, mut stream: TcpStream) -> Result<()> {
     )
     .await?;
 
-    let (conn, mut close) = daemon.mobile.register(&authed.device_id);
+    let Some((conn, mut close)) = daemon.mobile.register(&authed.device_id) else {
+        return Ok(());
+    };
     let result = match &authed.route {
         Some(alias) => route(stream, alias, &mut close).await,
         None => {
@@ -762,12 +776,25 @@ async fn route(stream: TcpStream, alias: &str, close: &mut watch::Receiver<bool>
         let _ = stderr.read_to_string(&mut buf).await;
         buf
     });
-    let (mut tr, mut tw) = stream.into_split();
+    let (mut tr, tw) = stream.into_split();
+    // Replies the Mac makes itself share the write half with the host's
+    // frames, whole frames at a time so they never interleave.
+    let tw = Arc::new(tokio::sync::Mutex::new(tw));
+    let down = {
+        let tw = tw.clone();
+        async move {
+            while let Some(frame) = read_frame(&mut stdout).await? {
+                write_frame(&mut *tw.lock().await, &frame).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+    };
     let ssh_ended = tokio::select! {
-        _ = tokio::io::copy(&mut tr, &mut stdin) => false,
-        _ = tokio::io::copy(&mut stdout, &mut tw) => true,
+        _ = forward_from_phone(&mut tr, &mut stdin, &tw) => false,
+        _ = down => true,
         _ = close.changed() => false,
     };
+    let mut tw = tw.lock().await;
     if ssh_ended {
         let _ = child.wait().await;
         let text = tokio::time::timeout(Duration::from_secs(1), errors)
@@ -784,6 +811,32 @@ async fn route(stream: TcpStream, alias: &str, close: &mut watch::Receiver<bool>
         }
     }
     let _ = tw.shutdown().await;
+    Ok(())
+}
+
+/// Copies a routed phone's frames to the host, except requests to manage
+/// phones: the host's daemon cannot tell the phone from the Mac's app, and
+/// a phone that paired itself there would keep access after the Mac
+/// removes it. The Mac answers those itself.
+async fn forward_from_phone(
+    from: &mut tokio::net::tcp::OwnedReadHalf,
+    to: &mut tokio::process::ChildStdin,
+    reply: &tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>,
+) -> Result<()> {
+    while let Some(frame) = read_frame(from).await? {
+        if let Frame::Json(Message::Request { id, method, .. }) = &frame
+            && method.starts_with("mobile.")
+            && method != m::MOBILE_HOSTS
+        {
+            let err = Message::err(
+                *id,
+                RpcError::new("forbidden", "manage phones from the Mac"),
+            );
+            write_frame(&mut *reply.lock().await, &Frame::Json(err)).await?;
+            continue;
+        }
+        write_frame(to, &frame).await?;
+    }
     Ok(())
 }
 
