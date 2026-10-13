@@ -31,12 +31,14 @@ impl Connector for Pipe {
 #[derive(Default)]
 struct Seen {
     statuses: Mutex<Vec<HostStatus>>,
+    messages: Mutex<Vec<Option<String>>>,
     events: Mutex<Vec<(String, String, Value)>>,
 }
 
 impl Events for Seen {
     fn status(&self, info: &HostInfo) {
         self.statuses.lock().unwrap().push(info.status.clone());
+        self.messages.lock().unwrap().push(info.message.clone());
     }
     fn event(&self, host: &str, name: String, data: Value) {
         self.events.lock().unwrap().push((host.into(), name, data));
@@ -305,6 +307,28 @@ async fn a_dropped_link_fails_waiting_requests_and_reconnects() {
             .lock()
             .unwrap()
             .contains(&HostStatus::Reconnecting)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_error_the_daemon_sends_unasked_becomes_the_hosts_message() {
+    // What the Mac sends a phone when the route's ssh fails (X39).
+    let (_host, seen, mut rx) = start();
+    let mut daemon = FakeDaemon::accept(&mut rx).await;
+    daemon
+        .send(Frame::Json(Message::err(
+            0,
+            RpcError::new("route_failed", "ssh: Could not resolve hostname devbox"),
+        )))
+        .await;
+    drop(daemon);
+    eventually("the message", || {
+        seen.messages
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.as_deref() == Some("ssh: Could not resolve hostname devbox"))
     })
     .await;
 }
