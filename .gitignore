@@ -13,3 +13,6 @@ ds-bundle/
 .design-sync/learnings/
 .design-sync/node_modules
 apps/desktop/ds/dist/
+
+# The phone app: generated schemas (gen/apple, made by `tauri ios init`, is kept).
+apps/mobile/src-tauri/gen/schemas/
