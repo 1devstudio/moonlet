@@ -160,21 +160,23 @@ pub fn write_inside(root: &str, path: &str, content: &str) -> Result<()> {
     let p = expand_home(path);
     let parent = p.parent().context("not a file path")?;
     let name = p.file_name().context("not a file path")?.to_string_lossy().to_string();
-    let inside = |dir: &Path| dir.canonicalize().is_ok_and(|real| real.starts_with(&root));
+    let check = |dir: &Path| -> Result<()> {
+        if !dir.canonicalize().is_ok_and(|real| real.starts_with(&root)) {
+            bail!("{} is outside {}", parent.display(), root.display());
+        }
+        Ok(())
+    };
     // Before creating anything: the deepest folder that exists.
-    let existing = parent.ancestors().find(|a| a.exists()).context("not a file path")?;
-    if !inside(existing) {
-        bail!("{} is outside {}", parent.display(), root.display());
-    }
+    check(parent.ancestors().find(|a| a.exists()).context("not a file path")?)?;
     std::fs::create_dir_all(parent)?;
-    if !inside(parent) {
-        bail!("{} is outside {}", parent.display(), root.display());
-    }
+    check(parent)?;
     if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
         bail!("{} is a symlink", p.display());
     }
-    // create_new never follows a symlink left at the temporary name.
+    // A leftover temporary file is removed (a symlink itself, not its
+    // target), and create_new never follows one planted again meanwhile.
     let tmp = parent.join(format!(".{name}.moonlet-tmp"));
+    let _ = std::fs::remove_file(&tmp);
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let result = f.write_all(content.as_bytes()).and_then(|_| std::fs::rename(&tmp, &p));
     if result.is_err() {
@@ -357,11 +359,16 @@ mod tests {
         assert!(write_inside(&s(&other), &s(&other.join(".moonlet/context/chat-x.md")), "x").is_err());
         assert!(!outside.join("chat-x.md").exists());
 
-        // A leftover temporary file that is a symlink is not written through.
+        // A leftover temporary file, from a crash or a planted symlink, is
+        // replaced: the write goes through and never follows it.
         std::fs::write(outside.join("victim"), "keep").unwrap();
         std::os::unix::fs::symlink(outside.join("victim"), root.join(".moonlet/context/.chat-y.md.moonlet-tmp")).unwrap();
-        assert!(write_inside(&s(&root), &s(&root.join(".moonlet/context/chat-y.md")), "x").is_err());
+        write_inside(&s(&root), &s(&root.join(".moonlet/context/chat-y.md")), "y").unwrap();
         assert_eq!(std::fs::read_to_string(outside.join("victim")).unwrap(), "keep");
+        assert_eq!(std::fs::read_to_string(root.join(".moonlet/context/chat-y.md")).unwrap(), "y");
+        std::fs::write(root.join(".moonlet/context/.chat-z.md.moonlet-tmp"), "half").unwrap();
+        write_inside(&s(&root), &s(&root.join(".moonlet/context/chat-z.md")), "z").unwrap();
+        assert_eq!(std::fs::read_to_string(root.join(".moonlet/context/chat-z.md")).unwrap(), "z");
     }
 
     #[test]
