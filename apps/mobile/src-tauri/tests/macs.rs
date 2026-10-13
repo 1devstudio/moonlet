@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use moonlet_link::HostStatus;
-use moonlet_mobile_lib::macs::{self, HostEntry, Phone, SavedMac, Sink};
+use moonlet_mobile_lib::macs::{self, HostEntry, MemoryTokens, Phone, SavedMac, Sink, Tokens};
 use moonlet_proto::{Frame, Message, RpcError, read_frame, write_frame};
 use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
@@ -155,8 +155,10 @@ async fn a_paired_mac_connects_with_its_token_and_brings_its_ssh_hosts() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("macs.json");
     let statuses = Arc::new(Statuses::default());
+    let tokens = Arc::new(MemoryTokens::default());
     let phone = Phone::start(
         file.clone(),
+        tokens.clone(),
         Rec(statuses.clone()),
         tokio::runtime::Handle::current(),
     );
@@ -165,7 +167,7 @@ async fn a_paired_mac_connects_with_its_token_and_brings_its_ssh_hosts() {
         name: "studio-mac".into(),
         addrs: vec![addr],
         token: "tok".into(),
-    });
+    }).unwrap();
 
     eventually("both hosts connected", || {
         let l = phone.list();
@@ -214,17 +216,40 @@ async fn a_paired_mac_connects_with_its_token_and_brings_its_ssh_hosts() {
             .contains(&("d1/devbox".to_string(), HostStatus::Connected))
     );
 
-    // The Mac is kept for the next start.
-    let saved: Vec<SavedMac> =
-        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    assert_eq!(saved.len(), 1);
-    assert_eq!(saved[0].token, "tok");
+    // The Mac is kept for the next start: its name and addresses in the
+    // app's file, which only this user can read, and the token apart.
+    let text = std::fs::read_to_string(&file).unwrap();
+    let saved: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(saved[0]["id"], "d1");
+    assert_eq!(saved[0]["name"], "studio-mac");
+    assert!(!text.contains("tok"), "the token is not in {text}");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(tokens.get("d1").as_deref(), Some("tok"));
+
+    // A new start connects with the stored token.
+    let again = Phone::start(
+        file.clone(),
+        tokens.clone(),
+        Rec(Arc::default()),
+        tokio::runtime::Handle::current(),
+    );
+    eventually("the Mac again", || {
+        again
+            .entry("d1")
+            .is_some_and(|e| e.info.status == HostStatus::Connected)
+    })
+    .await;
+    again.forget("d1");
 
     phone.forget("d1");
     assert!(phone.list().is_empty());
-    let saved: Vec<SavedMac> =
-        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let saved: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert!(saved.is_empty());
+    assert_eq!(tokens.get("d1"), None);
 }
 
 #[tokio::test]
@@ -233,6 +258,7 @@ async fn requests_reach_the_mac_through_the_host() {
     let dir = tempfile::tempdir().unwrap();
     let phone = Phone::start(
         dir.path().join("macs.json"),
+        Arc::new(MemoryTokens::default()),
         Rec(Arc::default()),
         tokio::runtime::Handle::current(),
     );
@@ -241,7 +267,7 @@ async fn requests_reach_the_mac_through_the_host() {
         name: "studio-mac".into(),
         addrs: vec![addr],
         token: "tok".into(),
-    });
+    }).unwrap();
     eventually("connected", || {
         phone
             .entry("d1")
@@ -255,4 +281,19 @@ async fn requests_reach_the_mac_through_the_host() {
         .await
         .unwrap();
     assert_eq!(info, json!({ "home": "/Users/alex" }));
+}
+
+/// Against the real Keychain, under a throwaway service; run by hand with
+/// `cargo test -p moonlet-mobile -- --ignored`.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore]
+fn the_keychain_keeps_and_forgets_a_token() {
+    let k = macs::Keychain { service: format!("dev.onedevstudio.moonlet.mobile.test-{}", std::process::id()) };
+    assert_eq!(k.get("d1"), None);
+    k.set("d1", "tok").unwrap();
+    k.set("d1", "tok2").unwrap();
+    assert_eq!(k.get("d1").as_deref(), Some("tok2"));
+    k.delete("d1");
+    assert_eq!(k.get("d1"), None);
 }

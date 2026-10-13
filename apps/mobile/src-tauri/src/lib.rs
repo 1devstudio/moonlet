@@ -98,7 +98,7 @@ async fn pair(
     let mac = macs::pair(&name, addrs, &code, &device)
         .await
         .map_err(|e| RpcError::new("pair_failed", format!("{e:#}")))?;
-    Ok(phone.add(mac))
+    phone.add(mac).map_err(err)
 }
 
 #[tauri::command]
@@ -133,8 +133,12 @@ pub fn run() {
     builder
         .setup(|app| {
             let file = app.path().app_data_dir().map_err(err)?.join("macs.json");
+            let tokens = Arc::new(macs::Keychain {
+                service: app.config().identifier.clone(),
+            });
             let phone = Phone::start(
                 file,
+                tokens,
                 Webview(app.handle().clone()),
                 tauri::async_runtime::handle().inner().clone(),
             );

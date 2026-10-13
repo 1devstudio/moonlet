@@ -2637,6 +2637,7 @@ dependencies = [
  "anyhow",
  "moonlet-link",
  "moonlet-proto",
+ "security-framework",
  "serde",
  "serde_json",
  "tauri",
