@@ -4,11 +4,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Check, ChevronDown, ChevronLeft, ChevronUp, Undo2 } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
+import { latestOnly } from "@desktop/lib/prStack";
 import { commentPrompt, hunkPatch, parseFileDiff } from "@desktop/lib/patch";
 import { M } from "@desktop/lib/protocol";
 import { showScreen, useApp } from "../lib/app";
 import { sessionChat } from "../lib/chatView";
-import { type DiffRow, diffRows, folderGroups } from "../lib/diffView";
+import { type DiffRow, diffRows, editsDiff, folderGroups } from "../lib/diffView";
 import { forget, useGitStatus } from "../lib/lazy";
 import { AgentIcon, Btn, DiffStat, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
@@ -61,6 +62,10 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
   const [comment, setComment] = useState<{ row: number; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<{ title: string; run: () => Promise<unknown> } | null>(null);
+  // Hunks against the base include committed lines (X40): staging and
+  // discarding happen in the diff against HEAD only.
+  const editable = editsDiff(against);
+  const [latest] = useState(latestOnly);
   const order = useMemo(() => folderGroups(status?.files ?? []).flatMap((g) => g.files), [status]);
   const index = order.findIndex((f) => f.path === path);
   const file = order[index];
@@ -71,13 +76,10 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
     setComment(null);
     // A reply for a file shown before this one is dropped: its hunks would
     // show, and be staged or discarded, under this file's name.
-    let live = true;
+    const isLatest = latest.start();
     void rpc<string>(host, M.gitDiff, { path: session.path, file: path, ...(against === "base" ? { base: session.base } : {}) })
-      .then((t) => live && setText(t))
-      .catch((e) => live && setText(`Cannot show this diff: ${e instanceof Error ? e.message : String(e)}`));
-    return () => {
-      live = false;
-    };
+      .then((t) => isLatest() && setText(t))
+      .catch((e) => isLatest() && setText(`Cannot show this diff: ${e instanceof Error ? e.message : String(e)}`));
   }, [host, session?.path, path, against, tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const diff = useMemo(() => (text ? parseFileDiff(text) : null), [text]);
@@ -139,18 +141,22 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
           r.kind === "hunk" ? (
             <div key={i} className="mt-2 flex items-center gap-2 border-y border-border bg-panel px-3 py-1.5">
               <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-faint">{r.header}</span>
-              <button type="button" disabled={busy || !diff} onClick={() => void act(() => rpc(host, M.gitApplyPatch, { path: session.path, patch: hunkPatch(diff!, r.index), cached: true }))} className="h-7 rounded-[7px] border border-border-strong px-2 text-[12px]">
-                Stage hunk
-              </button>
-              <button
-                type="button"
-                aria-label="Discard hunk"
-                disabled={busy || !diff}
-                onClick={() => setConfirm({ title: "Discard this hunk? The change is lost.", run: () => rpc(host, M.gitApplyPatch, { path: session.path, patch: hunkPatch(diff!, r.index), reverse: true }) })}
-                className="flex h-7 w-7 items-center justify-center text-muted"
-              >
-                <Undo2 size={15} />
-              </button>
+              {editable && (
+                <>
+                  <button type="button" disabled={busy || !diff} onClick={() => void act(() => rpc(host, M.gitApplyPatch, { path: session.path, patch: hunkPatch(diff!, r.index), cached: true }))} className="h-7 rounded-[7px] border border-border-strong px-2 text-[12px]">
+                    Stage hunk
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Discard hunk"
+                    disabled={busy || !diff}
+                    onClick={() => setConfirm({ title: "Discard this hunk? The change is lost.", run: () => rpc(host, M.gitApplyPatch, { path: session.path, patch: hunkPatch(diff!, r.index), reverse: true }) })}
+                    className="flex h-7 w-7 items-center justify-center text-muted"
+                  >
+                    <Undo2 size={15} />
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <div key={i}>
@@ -177,17 +183,23 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
       </main>
       <div className="flex items-center gap-2 border-t border-border px-4 pt-2.5" style={{ paddingBottom: "max(var(--safe-bottom), 10px)" }}>
         <span className="flex-1 text-[12px] text-faint">Long-press a line to comment</span>
-        <Btn tone="ghost" disabled={busy} onClick={() => setConfirm({ title: `Discard every change to ${name}?`, run: () => rpc(host, M.gitRevert, { path: session.path, files: [path] }) })}>
-          Discard file
-        </Btn>
-        {file?.staged && !file.unstaged ? (
-          <Btn disabled={busy} onClick={() => void act(() => rpc(host, M.gitUnstage, { path: session.path, files: [path] }))}>
-            <Check size={14} /> Staged
-          </Btn>
+        {!editable ? (
+          <Btn onClick={() => showScreen({ kind: "diff", host, id, path, against: "head" })}>Stage or discard vs HEAD</Btn>
         ) : (
-          <Btn tone="primary" disabled={busy} onClick={() => void act(() => rpc(host, M.gitStage, { path: session.path, files: [path] }))}>
-            Stage file
-          </Btn>
+          <>
+            <Btn tone="ghost" disabled={busy} onClick={() => setConfirm({ title: `Discard every change to ${name}?`, run: () => rpc(host, M.gitRevert, { path: session.path, files: [path] }) })}>
+              Discard file
+            </Btn>
+            {file?.staged && !file.unstaged ? (
+              <Btn disabled={busy} onClick={() => void act(() => rpc(host, M.gitUnstage, { path: session.path, files: [path] }))}>
+                <Check size={14} /> Staged
+              </Btn>
+            ) : (
+              <Btn tone="primary" disabled={busy} onClick={() => void act(() => rpc(host, M.gitStage, { path: session.path, files: [path] }))}>
+                Stage file
+              </Btn>
+            )}
+          </>
         )}
       </div>
       {confirm && (

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseFileDiff } from "@desktop/lib/patch";
 import type { FileChange } from "@desktop/lib/protocol";
-import { commitLabel, diffRows, folderGroups, statusLetter } from "./diffView";
+import { canStage, commitLabel, diffRows, editsDiff, folderGroups, statusLetter } from "./diffView";
 
 const file = (path: string, patch: Partial<FileChange> = {}): FileChange => ({
   path,
@@ -79,5 +79,22 @@ describe("diffRows", () => {
       "40 44    );",
       "- 45 +}",
     ]);
+  });
+});
+
+describe("what can be staged and discarded", () => {
+  it("stages only files with uncommitted changes", () => {
+    expect(canStage(file("a", { staged: false, unstaged: true }))).toBe(true);
+    expect(canStage(file("b", { staged: true, unstaged: false }))).toBe(true);
+    expect(canStage(file("c", { status: "untracked" }))).toBe(true);
+    // Against the base, a file can be changed only by the branch's commits.
+    expect(canStage(file("d", { staged: false, unstaged: false }))).toBe(false);
+  });
+
+  it("stages and discards hunks only in the diff against HEAD", () => {
+    // Hunks against the base include committed lines: staging them fails,
+    // and discarding them would undo commits in the work tree.
+    expect(editsDiff("head")).toBe(true);
+    expect(editsDiff("base")).toBe(false);
   });
 });

@@ -49,3 +49,11 @@ export function diffRows(diff: FileDiff): DiffRow[] {
   });
   return rows;
 }
+
+/** A file the staging box can act on: it has uncommitted changes. Against
+ * the base, a file can also be changed only by the branch's commits. */
+export const canStage = (f: FileChange) => f.staged || f.unstaged || f.status === "untracked";
+
+/** Whether a diff's hunks and files can be staged and discarded: only the
+ * diff against HEAD, whose hunks are all uncommitted (as on the desktop). */
+export const editsDiff = (against: "base" | "head") => against === "head";
