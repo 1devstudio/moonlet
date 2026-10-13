@@ -1,6 +1,6 @@
 # X38 — A new tab is an agent, and it can pick up earlier chats and plans
 
-- **Status:** in progress (2026-10-13). ⌘T and ⇧⌘T are implemented; the empty chat's chips come with the next change.
+- **Status:** implemented (2026-10-13). Unit and e2e tests pass. The chips' look is not checked in the app yet.
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** agent-first sessions
 - **Related:** [T2](T2-tabs-splits-workspaces.md) (tabs and shortcuts), [X6](X6-structured-agent-view.md) (agent view), [X19](X19-run-action.md) (Run action shortcuts), [X24](X24-plan-panel.md) (plans), [X29](X29-chat-plus-menu-and-mcp.md) (mentions in the chat input)
