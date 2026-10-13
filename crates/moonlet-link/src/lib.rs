@@ -102,6 +102,9 @@ pub struct Host {
     stop: watch::Sender<bool>,
     /// Kicks the reconnect loop to retry immediately.
     retry: tokio::sync::Notify,
+    /// Why the daemon (or the Mac routing to it) ended the last link, shown
+    /// while reconnecting.
+    failure: Mutex<Option<String>>,
     events: Arc<dyn Events>,
     rt: Handle,
 }
@@ -146,6 +149,7 @@ impl Host {
             batch: Mutex::new(Vec::new()),
             stop,
             retry: tokio::sync::Notify::new(),
+            failure: Mutex::new(None),
             events,
             rt: rt.clone(),
         });
@@ -313,7 +317,8 @@ async fn connection_loop(
         } else {
             HostStatus::Reconnecting
         };
-        host.set_status(status, None);
+        let failure = host.failure.lock().unwrap().take();
+        host.set_status(status, failure);
         match connector.connect().await {
             Ok((reader, writer)) => {
                 backoff = Duration::from_millis(300);
@@ -407,7 +412,10 @@ async fn run_link(
         {
             h2.info.lock().unwrap().home = v.get("home").and_then(Value::as_str).map(String::from);
         }
-        h2.set_status(HostStatus::Connected, None);
+        // Not when the link dropped meanwhile: the loop reports that.
+        if h2.link.lock().unwrap().is_some() {
+            h2.set_status(HostStatus::Connected, None);
+        }
     });
 
     let writer_task = host.rt.spawn(async move {
@@ -445,6 +453,15 @@ async fn run_link(
 fn dispatch(host: &Arc<Host>, frame: Frame) {
     match frame {
         Frame::Output { terminal, data } => host.push_output(terminal, &data),
+        // An error no request asked for: the daemon says why it ends the link.
+        Frame::Json(Message::Response {
+            id: 0,
+            error: Some(e),
+            ..
+        }) => {
+            *host.failure.lock().unwrap() = Some(e.message.clone());
+            host.set_status(HostStatus::Error, Some(e.message));
+        }
         Frame::Json(Message::Response {
             id,
             mut result,
