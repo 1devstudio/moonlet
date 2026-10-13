@@ -47,7 +47,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Face ID
 
-- [x] Allow, Always, plan approvals and allowing a terminal read ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`needsFaceId` in `lib/cards.test.ts` for which answers need the check)
+- [x] Allow, Always, plan approvals, answers to questions and allowing a terminal read ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`needsFaceId` in `lib/cards.test.ts` for which answers need the check)
 
 ### Plan approval sheet
 

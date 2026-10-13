@@ -31,6 +31,14 @@ export async function answerPlan(host: string, terminal: number, ask: string, ch
   return true;
 }
 
+/** Answers Claude's questions (`AskUserQuestion`); the answers steer it, so they wait for Face ID too. */
+export async function answerQuestion(host: string, terminal: number, ask: string, answers: Record<string, string>): Promise<boolean> {
+  if (!(await gate("allow", "Answer the agent's question"))) return false;
+  await rpc(host, M.chatPermission, { id: terminal, ask, decision: "allow", answers });
+  void tap("success");
+  return true;
+}
+
 /** Answers an agent's request to read a terminal (X31). */
 export async function answerRead(host: string, requestId: number, allow: boolean): Promise<boolean> {
   if (!(await gate(allow ? "read" : "deny", "Share the terminal's output with the agent"))) return false;
