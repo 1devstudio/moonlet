@@ -51,6 +51,8 @@ export type SessionTab = "chat" | "terminal" | "changes" | "pr";
 /** A screen over the tabs. */
 export type Screen =
   | { kind: "pair" }
+  /** "Paired with <Mac>", right after pairing (X39). */
+  | { kind: "paired"; name: string }
   | { kind: "session"; host: string; id: string; tab: SessionTab }
   | { kind: "diff"; host: string; id: string; path: string }
   | { kind: "plan"; host: string; terminal: number; ask: string };

@@ -1,12 +1,31 @@
 // Pair with a Mac (X39, X40): scan the QR code from Settings › Mobile on the
 // Mac, or paste its link.
 
-import { useState } from "react";
-import { ChevronLeft, ScanLine } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, ChevronLeft, ScanLine } from "lucide-react";
 import { pairMac, showScreen, showTab } from "../lib/app";
 import { deviceName, onPhone, scanQr, tap } from "../lib/native";
 import { parsePairLink } from "../lib/pairLink";
 import { Btn, Moon } from "../components/ui";
+
+/** "Paired with studio-mac", then on to the Inbox. */
+export function PairedScreen({ name }: { name: string }) {
+  useEffect(() => {
+    const t = setTimeout(() => showTab("inbox"), 1500);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+      <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[rgba(62,207,110,0.14)] text-done">
+        <Check size={28} />
+      </span>
+      <h1 className="m-0 text-[24px] font-semibold">Paired with {name}</h1>
+      <Btn tone="primary" className="w-full max-w-xs" onClick={() => showTab("inbox")}>
+        Continue
+      </Btn>
+    </div>
+  );
+}
 
 export function PairScreen({ first }: { first: boolean }) {
   const [text, setText] = useState("");
@@ -22,9 +41,9 @@ export function PairScreen({ first }: { first: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      await pairMac(link, deviceName());
+      const mac = await pairMac(link, deviceName());
       void tap("success");
-      showTab("inbox");
+      showScreen({ kind: "paired", name: mac.label });
     } catch (e) {
       setError(e && typeof e === "object" && "message" in e ? String(e.message) : String(e));
     } finally {
