@@ -2558,6 +2558,7 @@ dependencies = [
  "dirs 6.0.0",
  "libc",
  "moonlet-core",
+ "moonlet-link",
  "moonlet-proto",
  "reqwest",
  "rustls",
@@ -2615,6 +2616,18 @@ dependencies = [
  "tracing",
  "uuid",
  "vt100",
+]
+
+[[package]]
+name = "moonlet-link"
+version = "0.1.16"
+dependencies = [
+ "anyhow",
+ "moonlet-proto",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
