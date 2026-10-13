@@ -86,6 +86,7 @@ impl TerminalReads {
             exit: result.exit,
             lines: result.lines,
             text: result.text.clone(),
+            asked_at: Some(crate::paths::now_ms()),
         };
         // Subscribe before asking, so a tab closed right away is noticed.
         let mut events = self.terminals.subscribe_events();

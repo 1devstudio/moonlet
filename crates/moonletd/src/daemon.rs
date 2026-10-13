@@ -277,6 +277,12 @@ impl Daemon {
                 let r: m::TerminalRef = params(p)?;
                 ok(self.chats.state(r.id).map_err(internal)?)
             }
+            m::CHAT_SUMMARIES => ok(self
+                .chats
+                .summaries()
+                .into_iter()
+                .map(|(id, state)| serde_json::json!({ "id": id, "state": state }))
+                .collect::<Vec<_>>()),
             m::CHAT_SEND => {
                 let r: m::ChatSend = params(p)?;
                 self.chats.send(r.id, &r.text, &r.images).map_err(internal)?;

@@ -25,34 +25,34 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 - [x] Before any Mac is paired, the app shows a pairing screen: **Scan QR code** (camera, on the phone only), a box to paste the link with **Pair**, and the line "On the Mac: Settings › Mobile › Pair a phone". A link that is not a version 1 pairing link says so; a failed pairing shows the Mac's message. (`lib/pairLink.test.ts`: name, several addresses, version, bad links; `src-tauri/tests/macs.rs`: pairing, a dead first address, a wrong code)
 - [ ] A `moonlet://pair` link opened from elsewhere starts pairing too. (Not yet: needs the deep-link plugin and an iOS build.)
-- [ ] After pairing, a bottom tab bar has **Inbox**, **Sessions**, **New** and **Hosts**. The Inbox tab carries a badge with the number of items that need the user. (`lib/inbox.test.ts`)
+- [x] After pairing, a bottom tab bar has **Inbox**, **Sessions**, **New** and **Hosts**. The Inbox tab carries a badge with the number of items that need the user. (`lib/inbox.test.ts`)
 - [x] The app keeps one connection per paired Mac and one per SSH host the Mac lists in `mobile.hosts`, routed through it (X39). It tries the Mac's addresses in order. A lost connection retries with the desktop's backoff (0.3 s doubling to 5 s), and at once when the app comes back to the foreground. Paired Macs are kept in the app's data folder (`macs.json`, mode 0600, names and addresses only) and their device tokens in the Keychain; **Forget** removes both. (`src-tauri/tests/macs.rs`: the file has no token, a restart connects with the stored one) (`src-tauri/tests/macs.rs`)
-- [ ] The workspace switcher at the top of Inbox and Sessions lists the workspaces of all connected hosts (X32), with their colour dot; the choice is remembered.
+- [x] The workspace chip at the top of Inbox and Sessions lists workspace names across connected hosts, once each, with the first host's colour, plus "All workspaces". Each daemon has its own workspaces (X32) but every one starts with "Personal", so a name shows that workspace on every host. The choice is remembered. (`lib/workspaceChoices.test.ts`, `inbox.test.ts`)
 - [x] The app's logo is the desktop's ringed moon (`src/assets/moon.svg`): on the pairing screen, in the Inbox's title and, on a full-bleed dark square, as the iOS app icon (`src-tauri/icons/source/icon-ios.svg`). The ringed moon and "moonlet" on the dark background show from launch until the app has loaded: as the iOS launch screen, then as static HTML in `index.html`, then as the app's own splash, all three laid out alike, so starting has no flash and no jump. (`lib/splash.test.ts` checks the launch screen's layout against the splash's)
 - [x] Right after pairing, the app says "Paired with <Mac>" and goes on to the Inbox (after 1.5 seconds, or at once with **Continue**).
 - [ ] Colours, type and components follow the desktop's tokens: dark background `#121212`, the state colours of `StateGlyph`, `DiffStat`, `AgentIcon`.
 
 ### Inbox
 
-- [ ] The Inbox lists, newest first within each group:
+- [x] The Inbox lists, newest first within each group (`lib/inbox.test.ts`):
   - **Needs you**: every pending tool permission (`chat.state.pending` of every chat terminal), every plan (`ExitPlanMode` ask, X20), every waiting question (`AskUserQuestion`), and every terminal read request (X31), across all connected hosts in the current workspace.
-  - **Ready to review**: sessions whose agent is `done` and that have changes.
-- [ ] The summary line counts these: `<n> need you · <n> working · <n> ready to review · <n> hosts online`, leaving out zero counts except hosts. (`lib/inbox.test.ts`)
-- [ ] A permission card shows the session name, the agent, the project, the host, the age (`2m`), the tool's question ("Allow Bash?", "Allow Edit?", from the tool name) and its summary, plus **Allow**, **Always** (only when `can_always`) and **Deny**. These call `chat.permission` with `allow`, `always` or `deny`.
-- [ ] A plan card shows the plan's first heading and its first sentence, the project and the host, plus **Review plan** (opens the plan sheet) and **Approve, auto** (`chat.permission` with `allow` and mode `auto`).
-- [ ] A terminal read card shows the X31 message (`<agent> in <session> wants the output of <command> (exit <code>, <n> lines) from terminal <title>.`) with **Preview output** (a sheet with the exact text, **Allow** and **Deny**) and **Deny**.
-- [ ] A question card opens the session's chat, where the question is answered.
-- [ ] A card leaves the Inbox as soon as the daemon reports the ask answered, from the phone or from the Mac.
-- [ ] With nothing waiting, the Inbox says "Nothing needs you" and still shows Ready to review.
+  - **Ready to review**: sessions whose agent is `done`, not archived, with their diff stat and file count once `git.status` answers.
+- [x] The summary line counts these: `<n> need you · <n> working · <n> ready to review · <n> hosts online`, leaving out zero counts except hosts. (`lib/inbox.test.ts`)
+- [x] A permission card shows the session name, the agent, the project, the host, the age (`now`, `2m`, `3h`, `2d`, from the ask's `asked_at`), the tool's question ("Allow Bash?"; an MCP tool reads "Allow linear · create_issue?") and its summary, plus **Allow**, **Always** (disabled unless `can_always`) and **Deny**. These call `chat.permission` with `allow`, `always` or `deny`. (`lib/cards.test.ts`)
+- [x] A plan card shows the plan's title (the ask's summary) and the first sentence after its heading, without Markdown and at most 140 characters, the project and the host, plus **Review plan** (opens the plan sheet) and **Approve, auto** (`chat.permission` with `allow` and mode `auto`). (`cards.test.ts`)
+- [x] A terminal read card shows the X31 message (`<agent> in <session> wants the output of <command> (exit <code>, <n> lines) from terminal <title>.`) with **Preview output** (a sheet with the exact text, **Allow** and **Deny**) and **Deny**.
+- [x] A question card opens the session's chat, where the question is answered.
+- [x] A card leaves the Inbox as soon as the daemon reports the ask answered, from the phone or from the Mac (`chat.state`, `terminal.read_done`).
+- [x] With nothing waiting, the Inbox says "Nothing needs you." and still shows Ready to review.
 
 ### Face ID
 
-- [ ] Allow, Always and plan approvals ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`lib/approvalGate.test.ts` for which actions need the check)
+- [x] Allow, Always, plan approvals and allowing a terminal read ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`lib/approvalGate.test.ts` for which actions need the check)
 
 ### Plan approval sheet
 
-- [ ] The sheet shows "Claude has a plan", the project, host and waiting time, the plan as Markdown, and the plan file's path.
-- [ ] **Approve, auto mode** answers `allow` with mode `auto`; **Ask before edits** answers `allow` with no mode; **Keep planning** shows a text box "What should change in the plan?" with **Back** and **Send feedback**, which answers `deny` with the text. (`planAnswer` in `lib/chat.ts`, already tested)
+- [x] The sheet shows "Claude has a plan", the project, host and waiting time, the plan as Markdown, and the plan file's path.
+- [x] **Approve, auto mode** answers `allow` with mode `auto`; **Ask before edits** answers `allow` with no mode; **Keep planning** shows a text box "What should change in the plan?" with **Back** and **Send feedback**, which answers `deny` with the text. (`planAnswer` in `lib/chat.ts`, already tested)
 
 ### Sessions
 
@@ -113,7 +113,7 @@ The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe area
 
 ## Protocol and RPCs
 
-The app uses the existing methods and events (`docs/protocol.md`) through the X39 link, plus X39's `mobile.hosts`. A new method `chat.summaries` returns every chat terminal's state without its items (`[{ id, state }]`), so the Inbox does not load every conversation.
+The app uses the existing methods and events (`docs/protocol.md`) through the X39 link, plus X39's `mobile.hosts`. A new method `chat.summaries` returns every chat terminal's state without its items (`[{ id, state }]`), so the Inbox does not load every conversation. Pending asks and read requests carry `asked_at` (ms), for their age. (`summaries_carry_every_chats_asks_without_its_items` in `moonlet-core`)
 
 ## Data and config
 

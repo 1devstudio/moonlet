@@ -77,6 +77,8 @@ export interface PermissionAsk {
   reason?: string | null;
   can_always: boolean;
   diff?: string | null;
+  /** When the agent asked, ms (X40). */
+  asked_at?: number | null;
 }
 
 export interface ChatState {
@@ -359,6 +361,8 @@ export interface ReadRequest {
   exit?: number;
   lines: number;
   text: string;
+  /** When the agent asked, ms (X40). */
+  asked_at?: number | null;
 }
 
 export interface HookStatus {
