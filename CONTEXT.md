@@ -13,4 +13,9 @@ These terms are used the same way in the UI, the code, the protocol and the docs
 | **Block** | One command run in a shell terminal: the command line, its output, its exit status and timing. A shell terminal in Blocks mode is a list of blocks followed by the input editor. The block of a command still running is the *active block*; a full-screen program started by a command belongs to that command's block. Output from before shell integration started is not a block. | `Block` |
 | **Blocks mode** | How a shell terminal works by default: the shell draws no prompt, the input editor is the only input, and each command shows as a block. Its opposite is **Classic**, where the shell keeps its own prompt and you type into the terminal. | `blockMode` |
 | **Agent** | The program running in an agent terminal: Claude Code, Codex, or a custom command. | `agent` |
-| **Host** | A machine running `moonletd`: this Mac, or a remote host reached over SSH. | `Host` |
+| **Host** | A machine running `moonletd`: this Mac, or a remote host reached over SSH. Not "node" or "server". | `Host` |
+| **Central host** | The always-on host that owns your sessions and runs their agents. Other devices are windows onto it. | `central` |
+| **Worker** | A host linked to a central host that lends its CPU for heavy commands. A laptop, the central host itself or a cloud machine can be a worker. | `Worker` |
+| **Live copy** | A worker's copy of a session's files, kept in step with the central host both ways. Ignored files, such as dependencies, stay separate on each machine. | `LiveCopy` |
+| **Routed command** | A heavy command, such as a test run, that an agent on the central host runs and that is carried out on a worker's live copy, with its output and exit status coming back. | `exec` |
+| **Project identity** | What makes two folders on different hosts the same project: the repository's origin and its first commit, never its path. | `ProjectIdentity` |
