@@ -2,7 +2,7 @@
 // chats and plans as context (X38). A fake `claude` answers every message
 // with a plan; ⇧⌘T still opens a shell.
 
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { PROJECT, rpc, sel, world } from "../fixtures";
@@ -11,6 +11,8 @@ const w = world();
 const FAKE = join(w.root, "bin", "claude");
 const SESSION = "Theme work";
 const PROMPT = "Plan a dark theme";
+/** FNV-1a of the plan file's path, which names its context file. */
+const PLAN_FILE = "plan-add-a-dark-theme-8b63e294.md";
 
 /** Each message gets a plan through ExitPlanMode, already answered. printf,
  *  because /bin/sh's echo expands the \n in the JSON. */
@@ -57,6 +59,7 @@ describe("new agent tab", () => {
   let blocked = "";
   let sessionId = "";
   let path = "";
+  let firstChat = 0;
   const terms = () => rpc<Term[]>(w, "terminal.list", {}).filter((t) => t.session_id === sessionId);
 
   before(async () => {
@@ -72,6 +75,7 @@ describe("new agent tab", () => {
       () => {
         const chat = terms().find((t) => t.chat);
         const st = chat && rpc<{ items: { tool?: { name: string } }[] }>(w, "chat.state", { id: chat.id });
+        firstChat = chat?.id ?? 0;
         return !!st?.items.some((i) => i.tool?.name === "ExitPlanMode");
       },
       { timeout: 30_000, timeoutMsg: "the first chat never planned" },
@@ -92,7 +96,7 @@ describe("new agent tab", () => {
     const chats = terms().filter((t) => t.chat).length;
     await press("t", "KeyT", { metaKey: true });
     await browser.waitUntil(() => terms().filter((t) => t.chat).length === chats + 1, { timeoutMsg: "⌘T opened no agent" });
-    await expect($('//div[starts-with(normalize-space(), "New chat in")]')).toBeDisplayed();
+    await expect($(sel.text(`New chat in ${path}.`))).toBeDisplayed();
     await expect($(sel.text("Add chat transcripts:"))).toBeDisplayed();
     await expect($(`//button[@title="${PROMPT}"]`)).toBeDisplayed();
     await expect($(sel.text("Add plans:"))).toBeDisplayed();
@@ -101,22 +105,43 @@ describe("new agent tab", () => {
 
   it("writes the plan to a git-ignored file and mentions it", async () => {
     await $('//button[@title="Add a dark theme"]').click();
-    await browser.waitUntil(() => inputHas("@.moonlet/context/plan-add-a-dark-theme.md"), { timeoutMsg: "the plan was never mentioned" });
-    expect(readFileSync(join(path, ".moonlet/context/plan-add-a-dark-theme.md"), "utf8")).toBe("# Add a dark theme\n\n1. Add a theme setting\n");
+    await browser.waitUntil(() => inputHas(`@.moonlet/context/${PLAN_FILE}`), { timeoutMsg: "the plan was never mentioned" });
+    expect(readFileSync(join(path, ".moonlet/context", PLAN_FILE), "utf8")).toBe("# Add a dark theme\n\n1. Add a theme setting\n");
     expect(readFileSync(join(path, ".moonlet/context/.gitignore"), "utf8")).toBe("*\n");
   });
 
   it("writes the other chat's transcript and mentions it", async () => {
     await $(`//button[@title="${PROMPT}"]`).click();
-    await browser.waitUntil(() => inputHas("@.moonlet/context/chat-plan-a-dark-theme.md"), { timeoutMsg: "the chat was never mentioned" });
-    const text = readFileSync(join(path, ".moonlet/context/chat-plan-a-dark-theme.md"), "utf8");
+    const file = `chat-plan-a-dark-theme-${firstChat}.md`;
+    await browser.waitUntil(() => inputHas(`@.moonlet/context/${file}`), { timeoutMsg: "the chat was never mentioned" });
+    const text = readFileSync(join(path, ".moonlet/context", file), "utf8");
     expect(text.startsWith(`# Chat transcript: ${PROMPT}\n\n> ${PROMPT}\n\n`)).toBe(true);
     expect(text).toContain("Planned.");
+  });
+
+  it("refuses to write through a symlinked context folder, with a toast", async () => {
+    const outside = join(w.root, "outside");
+    mkdirSync(outside);
+    rmSync(join(path, ".moonlet/context"), { recursive: true });
+    symlinkSync(outside, join(path, ".moonlet/context"));
+    await $('//button[@title="Add a dark theme"]').click();
+    await expect($('//*[contains(text(), "is outside")]')).toBeDisplayed();
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it("opens a shell with ⇧⌘T", async () => {
     const shells = terms().filter((t) => t.kind === "shell").length;
     await press("T", "KeyT", { metaKey: true, shiftKey: true });
     await browser.waitUntil(() => terms().filter((t) => t.kind === "shell").length === shells + 1, { timeoutMsg: "⇧⌘T opened no shell" });
+  });
+
+  it("opens an agent with the + button, and a shell from its menu's Terminal ⇧⌘T", async () => {
+    const chats = terms().filter((t) => t.chat).length;
+    await $('button[title="New agent (⌘T)"]').click();
+    await browser.waitUntil(() => terms().filter((t) => t.chat).length === chats + 1, { timeoutMsg: "+ opened no agent" });
+    const shells = terms().filter((t) => t.kind === "shell").length;
+    await $('button[title="New agent or split"]').click();
+    await $('//button[starts-with(normalize-space(), "Terminal")][contains(., "⇧⌘T")]').click();
+    await browser.waitUntil(() => terms().filter((t) => t.kind === "shell").length === shells + 1, { timeoutMsg: "Terminal opened no shell" });
   });
 });

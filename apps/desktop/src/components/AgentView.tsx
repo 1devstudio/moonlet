@@ -76,7 +76,7 @@ import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
 import { uiScale } from "../lib/uiScale";
-import { type ContextFiles, chatContextFiles, contextChats, contextPlans, planContextFiles } from "../lib/chatContext";
+import { type ContextFiles, chatContextFiles, chipSection, newChatContext, otherChats, planContextFiles } from "../lib/chatContext";
 import { shortPath } from "../lib/terminals";
 import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
@@ -931,16 +931,16 @@ export interface EditorHandle {
 /** Chips in the empty-state block; four, then "+N more". */
 function ContextChips<T>({ label, rows, chip }: { label: string; rows: T[]; chip: (row: T) => React.ReactNode }) {
   const [all, setAll] = useState(false);
-  if (!rows.length) return null;
-  const shown = all ? rows : rows.slice(0, 4);
+  const section = chipSection(rows, all);
+  if (!section) return null;
   return (
     <>
       <div className="mt-2 ui-text-13">{label}</div>
       <div className="flex flex-wrap items-center gap-1.5">
-        {shown.map(chip)}
-        {shown.length < rows.length && (
+        {section.shown.map(chip)}
+        {section.more > 0 && (
           <button className="rounded-md px-2 py-1 ui-text-12.5 text-muted hover:bg-hover hover:text-fg" onClick={() => setAll(true)}>
-            +{rows.length - shown.length} more
+            +{section.more} more
           </button>
         )}
       </div>
@@ -959,21 +959,20 @@ function ContextChip({ icon, title, onClick }: { icon: React.ReactNode; title: s
 
 /** An empty chat (X38): where it runs, and the session's other chats and
  * plans to start from. A chip writes its file and mentions it in the input. */
-function NewChat({ host, wsId, self, cwd, onMention }: { host: string; wsId: string; self: number; cwd: string; onMention: (mention: string) => void }) {
+function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sessionId: string; self: number; cwd: string; onMention: (mention: string) => void }) {
   const terminals = useStore((s) => s.terminals[host]);
   const home = useStore((s) => s.hosts[host]?.home ?? null);
   const chats = useChat((s) => s.chats);
   const list = useMemo(() => Object.values(terminals ?? {}), [terminals]);
   const byId = useMemo(() => Object.fromEntries(list.map((t) => [t.id, chats[chatKey(host, t.id)]])), [list, chats, host]);
-  const transcripts = useMemo(() => contextChats(list, byId, { session: wsId, self }), [list, byId, wsId, self]);
-  const plans = useMemo(() => contextPlans(list, byId, wsId), [list, byId, wsId]);
+  const { transcripts, plans } = useMemo(() => newChatContext(list, byId, { session: sessionId, self, cwd }), [list, byId, sessionId, self, cwd]);
 
   // The other chats' conversations load when their tab is first shown.
   useEffect(() => {
-    for (const t of list) {
-      if (t.chat && t.session_id === wsId && t.id !== self && !useChat.getState().chats[chatKey(host, t.id)]) void loadChat(host, t.id).catch(() => {});
+    for (const t of otherChats(list, sessionId, self)) {
+      if (!useChat.getState().chats[chatKey(host, t.id)]) void loadChat(host, t.id).catch(() => {});
     }
-  }, [list, host, wsId, self]);
+  }, [list, host, sessionId, self]);
 
   const add = async (files: ContextFiles) => {
     try {
@@ -986,9 +985,11 @@ function NewChat({ host, wsId, self, cwd, onMention }: { host: string; wsId: str
 
   return (
     <div className="flex flex-col gap-1.5 py-2 text-muted">
-      <div className="ui-text-13">
-        New chat in <span className="font-mono text-fg">{shortPath(cwd, home)}</span>.
-      </div>
+      {cwd && (
+        <div className="ui-text-13">
+          New chat in <span className="font-mono text-fg">{shortPath(cwd, home)}</span>.
+        </div>
+      )}
       <ContextChips
         label="Add chat transcripts:"
         rows={transcripts}
@@ -1264,7 +1265,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
             ) : st.items.length === 0 ? (
-              <NewChat host={host} wsId={wsId} self={id} cwd={cwd} onMention={(m) => editor.current?.mention(m)} />
+              <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} onMention={(m) => editor.current?.mention(m)} />
             ) : (
               blocks.map((b) => {
                 const view =
