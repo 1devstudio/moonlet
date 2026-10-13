@@ -33,7 +33,7 @@ export async function answerPlan(host: string, terminal: number, ask: string, ch
 
 /** Answers Claude's questions (`AskUserQuestion`); the answers steer it, so they wait for Face ID too. */
 export async function answerQuestion(host: string, terminal: number, ask: string, answers: Record<string, string>): Promise<boolean> {
-  if (!(await gate("allow", "Answer the agent's question"))) return false;
+  if (!(await gate("question", "Answer the agent's question"))) return false;
   await rpc(host, M.chatPermission, { id: terminal, ask, decision: "allow", answers });
   void tap("success");
   return true;
