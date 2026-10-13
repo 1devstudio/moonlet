@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatContextFiles, contextChats, contextPlans, planContextFiles } from "./chatContext";
+import { chatContextFiles, chipSection, contextChats, contextPlans, newChatContext, planContextFiles } from "./chatContext";
 import type { ChatItem, ChatState, TerminalInfo } from "./protocol";
 
 const term = (id: number, over: Partial<TerminalInfo> = {}): TerminalInfo => ({
@@ -97,12 +97,12 @@ describe("context files", () => {
       ],
     });
     expect(files).toEqual({
-      mention: ".moonlet/context/chat-fix-the-login-redirect.md",
+      mention: ".moonlet/context/chat-fix-the-login-redirect-1.md",
       writes: [
         { root: "/Users/jane/code/app", path: "/Users/jane/code/app/.moonlet/context/.gitignore", content: "*\n" },
         {
           root: "/Users/jane/code/app",
-          path: "/Users/jane/code/app/.moonlet/context/chat-fix-the-login-redirect.md",
+          path: "/Users/jane/code/app/.moonlet/context/chat-fix-the-login-redirect-1.md",
           content: "# Chat transcript: Fix the login redirect\n\n> Fix the login redirect\n> It loops on Safari.\n\n[Edit] src/auth.ts\n\nDone.\n",
         },
       ],
@@ -112,13 +112,49 @@ describe("context files", () => {
   it("writes a plan's text and keeps file names inside the context folder (X38)", () => {
     const files = planContextFiles("/Users/jane/code/app/", { key: "k", title: "../../etc/passwd Ünïcode!!", plan: "# Steps\n1. Go\n" });
     expect(files).toEqual({
-      mention: ".moonlet/context/plan-etc-passwd-n-code.md",
+      mention: ".moonlet/context/plan-etc-passwd-n-code-ee0c38ea.md",
       writes: [
         { root: "/Users/jane/code/app", path: "/Users/jane/code/app/.moonlet/context/.gitignore", content: "*\n" },
-        { root: "/Users/jane/code/app", path: "/Users/jane/code/app/.moonlet/context/plan-etc-passwd-n-code.md", content: "# Steps\n1. Go\n" },
+        { root: "/Users/jane/code/app", path: "/Users/jane/code/app/.moonlet/context/plan-etc-passwd-n-code-ee0c38ea.md", content: "# Steps\n1. Go\n" },
       ],
     });
-    expect(planContextFiles("/r", { key: "k", title: "!!!", plan: "x" }).mention).toBe(".moonlet/context/plan-untitled.md");
-    expect(planContextFiles("/r", { key: "k", title: "a".repeat(80), plan: "x" }).mention).toBe(`.moonlet/context/plan-${"a".repeat(48)}.md`);
+    expect(planContextFiles("/r", { key: "k", title: "!!!", plan: "x" }).mention).toBe(".moonlet/context/plan-untitled-ee0c38ea.md");
+    expect(planContextFiles("/r", { key: "k", title: "a".repeat(80), plan: "x" }).mention).toBe(`.moonlet/context/plan-${"a".repeat(48)}-ee0c38ea.md`);
+  });
+
+  it("gives chats and plans with the same title their own files (X38)", () => {
+    const a = chatContextFiles("/r", { id: 1, title: "Fix it", items: [] });
+    const b = chatContextFiles("/r", { id: 2, title: "Fix it", items: [] });
+    expect([a.mention, b.mention]).toEqual([".moonlet/context/chat-fix-it-1.md", ".moonlet/context/chat-fix-it-2.md"]);
+    const p = planContextFiles("/r", { key: "k", title: "修复", plan: "x" });
+    const q = planContextFiles("/r", { key: "/Users/me/.claude/plans/dark.md", title: "修复", plan: "y" });
+    expect([p.mention, q.mention]).toEqual([".moonlet/context/plan-untitled-ee0c38ea.md", ".moonlet/context/plan-untitled-b7f59371.md"]);
+  });
+});
+
+describe("chipSection", () => {
+  it("shows four chips and counts the rest, or all of them once asked (X38)", () => {
+    expect(chipSection(["a", "b", "c", "d", "e", "f"], false)).toEqual({ shown: ["a", "b", "c", "d"], more: 2 });
+    expect(chipSection(["a", "b", "c", "d", "e", "f"], true)).toEqual({ shown: ["a", "b", "c", "d", "e", "f"], more: 0 });
+    expect(chipSection(["a", "b", "c"], false)).toEqual({ shown: ["a", "b", "c"], more: 0 });
+  });
+
+  it("hides a section with nothing in it (X38)", () => {
+    expect(chipSection([], false)).toBeNull();
+  });
+});
+
+describe("newChatContext", () => {
+  const terms = [term(1), term(7)];
+  const chats = { 1: chat(item("u1", "user", "Fix the login redirect"), planItem("p1", 100, captured)), 7: chat() };
+
+  it("offers the session's other chats and plans (X38)", () => {
+    const ctx = newChatContext(terms, chats, { session: "s1", self: 7, cwd: "/Users/jane/code/app" });
+    expect(ctx.transcripts.map((c) => c.title)).toEqual(["Fix the login redirect"]);
+    expect(ctx.plans.map((p) => p.title)).toEqual(["1. Overwrite `a.txt` (untracked, repo root) content with `goodbye`."]);
+  });
+
+  it("offers nothing while the chat has no folder to write to (X38)", () => {
+    expect(newChatContext(terms, chats, { session: "s1", self: 7, cwd: "" })).toEqual({ transcripts: [], plans: [] });
   });
 });
