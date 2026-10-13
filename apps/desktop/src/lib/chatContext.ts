@@ -15,8 +15,10 @@ export interface ContextChat {
 
 const firstLine = (text: string) => text.trim().split("\n")[0].trim();
 
+const sessionChats = (terminals: TerminalInfo[], session: string) => terminals.filter((t) => t.chat && t.session_id === session);
+
 /** The session's other structured chats, whose conversations the chips read. */
-export const otherChats = (terminals: TerminalInfo[], session: string, self: number) => terminals.filter((t) => t.chat && t.session_id === session && t.id !== self);
+export const otherChats = (terminals: TerminalInfo[], session: string, self: number) => sessionChats(terminals, session).filter((t) => t.id !== self);
 
 /** The session's other structured chats that have a user message, newest tab first. */
 export function contextChats(terminals: TerminalInfo[], chats: Record<number, ChatState | undefined>, where: { session: string; self: number }): ContextChat[] {
@@ -39,23 +41,18 @@ export interface ContextPlan {
 
 /** The session's plans, newest first, the latest version of each plan file. */
 export function contextPlans(terminals: TerminalInfo[], chats: Record<number, ChatState | undefined>, session: string): ContextPlan[] {
-  const found = terminals
-    .filter((t) => t.chat && t.session_id === session)
+  const found = sessionChats(terminals, session)
     .flatMap((t) => chats[t.id]?.items ?? [])
     .flatMap((i) => {
       const p = i.tool && planOf({ tool: i.tool.name, input: i.tool.input });
-      return p ? [{ ts: i.ts, key: p.file ?? p.plan, title: planTitle(p.plan), plan: p.plan }] : [];
+      // Named as the Plan panel names it: the daemon's summary (X24).
+      return p ? [{ ts: i.ts, key: p.file ?? p.plan, title: i.tool?.summary || "Plan", plan: p.plan }] : [];
     })
     .sort((a, b) => b.ts - a.ts);
   const seen = new Set<string>();
   return found.filter((p) => !seen.has(p.key) && seen.add(p.key)).map(({ key, title, plan }) => ({ key, title, plan }));
 }
 
-/** A plan's first heading, else its first line. */
-function planTitle(plan: string): string {
-  const heading = /^#{1,6}\s+(.+)$/m.exec(plan);
-  return heading ? heading[1].trim() : firstLine(plan);
-}
 
 /** What an empty chat offers: nothing while it has no folder to write to. */
 export function newChatContext(
@@ -79,7 +76,7 @@ export function chipSection<T>(rows: T[], all: boolean): { shown: T[]; more: num
 export interface ContextFiles {
   /** Relative to the worktree, without the `@`. */
   mention: string;
-  /** `fs.write` parameters: each stays inside `root`, never through a symlink. */
+  /** `fs.write_inside` parameters: each stays inside `root`, never through a symlink. */
   writes: { root: string; path: string; content: string }[];
 }
 

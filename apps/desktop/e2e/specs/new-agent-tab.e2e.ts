@@ -125,7 +125,7 @@ describe("new agent tab", () => {
     rmSync(join(path, ".moonlet/context"), { recursive: true });
     symlinkSync(outside, join(path, ".moonlet/context"));
     await $('//button[@title="Add a dark theme"]').click();
-    await expect($('//*[contains(text(), "is outside")]')).toBeDisplayed();
+    await expect($('//*[contains(text(), "is not a folder")]')).toBeDisplayed();
     expect(readdirSync(outside)).toEqual([]);
   });
 

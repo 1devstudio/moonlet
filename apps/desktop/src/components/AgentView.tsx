@@ -967,16 +967,20 @@ function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sess
   const byId = useMemo(() => Object.fromEntries(list.map((t) => [t.id, chats[chatKey(host, t.id)]])), [list, chats, host]);
   const { transcripts, plans } = useMemo(() => newChatContext(list, byId, { session: sessionId, self, cwd }), [list, byId, sessionId, self, cwd]);
 
-  // The other chats' conversations load when their tab is first shown.
+  // The other chats' conversations, loaded here once each (a chat whose
+  // load fails isn't asked for again on every terminal update).
+  const asked = useRef(new Set<number>());
   useEffect(() => {
     for (const t of otherChats(list, sessionId, self)) {
-      if (!useChat.getState().chats[chatKey(host, t.id)]) void loadChat(host, t.id).catch(() => {});
+      if (asked.current.has(t.id) || useChat.getState().chats[chatKey(host, t.id)]) continue;
+      asked.current.add(t.id);
+      void loadChat(host, t.id).catch(() => {});
     }
   }, [list, host, sessionId, self]);
 
   const add = async (files: ContextFiles) => {
     try {
-      for (const w of files.writes) await rpc(host, M.fsWrite, w);
+      for (const w of files.writes) await rpc(host, M.fsWriteInside, w);
       onMention(files.mention);
     } catch (e) {
       errorToast(e);

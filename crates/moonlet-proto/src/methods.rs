@@ -109,6 +109,8 @@ pub const FS_LIST: &str = "fs.list";
 pub const FS_FILES: &str = "fs.files";
 pub const FS_READ: &str = "fs.read";
 pub const FS_WRITE: &str = "fs.write";
+/// Like `fs.write`, but the file stays inside a folder, never through a symlink (X38).
+pub const FS_WRITE_INSIDE: &str = "fs.write_inside";
 pub const FS_WATCH: &str = "fs.watch";
 pub const FS_UNWATCH: &str = "fs.unwatch";
 
@@ -695,9 +697,14 @@ pub struct FsRead {
 pub struct FsWrite {
     pub path: String,
     pub content: String,
-    /// The file must stay inside this folder, never through a symlink (X38).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsWriteInside {
+    /// The folder the file must stay in, such as a session's worktree.
+    pub root: String,
+    pub path: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
