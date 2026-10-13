@@ -53,6 +53,10 @@ describe("needsFaceId", () => {
     expect(needsFaceId("feedback", true)).toBe(false);
   });
 
+  it("asks before answering Claude's questions, which steer it", () => {
+    expect(needsFaceId("question", true)).toBe(true);
+  });
+
   it("asks before letting an agent read a terminal", () => {
     expect(needsFaceId("read", true)).toBe(true);
   });
