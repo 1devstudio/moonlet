@@ -16,6 +16,7 @@ use tokio::net::TcpStream;
 struct Mac {
     home: tempfile::TempDir,
     socket: PathBuf,
+    path: Option<PathBuf>,
     child: Child,
 }
 
@@ -30,10 +31,20 @@ impl Mac {
         )
         .unwrap();
         let socket = home.path().join("run").join("d.sock");
+        let child = Mac::spawn(home.path(), &socket, path).await;
+        Mac {
+            home,
+            socket,
+            path: path.map(Path::to_path_buf),
+            child,
+        }
+    }
+
+    async fn spawn(home: &Path, socket: &Path, path: Option<&Path>) -> Child {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         cmd.arg("daemon")
-            .env("MOONLET_HOME", home.path())
-            .env("MOONLET_SOCK", &socket)
+            .env("MOONLET_HOME", home)
+            .env("MOONLET_SOCK", socket)
             .env("MOONLET_MOBILE_ADDRS", "127.0.0.1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -48,19 +59,22 @@ impl Mac {
                 ".zshrc",
                 ".bash_profile",
             ] {
-                std::fs::write(home.path().join(rc), &first).unwrap();
+                std::fs::write(home.join(rc), &first).unwrap();
             }
-            cmd.env("HOME", home.path());
+            cmd.env("HOME", home);
         }
         let child = cmd.spawn().unwrap();
-        wait_for_socket(&socket, Duration::from_secs(15))
+        wait_for_socket(&socket.to_path_buf(), Duration::from_secs(15))
             .await
             .unwrap();
-        Mac {
-            home,
-            socket,
-            child,
-        }
+        child
+    }
+
+    /// Stops the daemon and starts a new one on the same home.
+    async fn restart(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        self.child = Mac::spawn(self.home.path(), &self.socket, self.path.as_deref()).await;
     }
 
     async fn app(&self) -> Client {
@@ -74,6 +88,12 @@ impl Mac {
             .request("mobile.set_enabled", json!({ "enabled": true }))
             .await
             .unwrap();
+        self.listening().await
+    }
+
+    /// Waits for the phone listener, without turning phone access on.
+    async fn listening(&self) -> String {
+        let mut app = self.app().await;
         for _ in 0..100 {
             let st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
             if let Some(a) = st.listening.first() {
@@ -167,7 +187,7 @@ fn unauthorized(reply: &Option<Message>) -> bool {
 
 #[tokio::test]
 async fn phone_access_is_off_until_the_user_allows_it() {
-    let mac = Mac::start(None).await;
+    let mut mac = Mac::start(None).await;
     let mut app = mac.app().await;
     let st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
     assert!(!st.enabled);
@@ -178,12 +198,14 @@ async fn phone_access_is_off_until_the_user_allows_it() {
         .unwrap_err();
     assert_eq!(e.to_string(), "mobile_off: phone access is off");
 
-    let addr = mac.allow_phones().await;
-    let saved: Value = serde_json::from_str(
-        &std::fs::read_to_string(mac.home.path().join("mobile.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(saved["enabled"], true);
+    mac.allow_phones().await;
+
+    // A new daemon keeps the choice and listens again.
+    mac.restart().await;
+    let addr = mac.listening().await;
+    let mut app = mac.app().await;
+    let st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
+    assert!(st.enabled);
 
     // Off again: the port closes.
     let _: MobileStatus = app
