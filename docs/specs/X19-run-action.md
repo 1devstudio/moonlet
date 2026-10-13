@@ -16,7 +16,7 @@
 3. ↑↓ selects, ↵ runs the selected action, Esc closes.
 4. To give an action a shortcut, click **Set shortcut** on its row, or press ⌥↵ on the selected row. The row asks "Press keys…".
 5. Press a combination with ⌘. It is saved, and a toast says "⌥⌘S now runs Re-run setup script".
-6. If another action already uses it, the row says "⌘T is already used by New terminal tab." **Replace** (or ↵) moves the shortcut over; **Try another** records again. Esc cancels.
+6. If another action already uses it, the row says "⌘T is already used by New agent tab." **Replace** (or ↵) moves the shortcut over; **Try another** records again. Esc cancels.
 
 ## Behaviour and acceptance criteria
 

@@ -4,7 +4,7 @@ import { rpc } from "../lib/daemon";
 import { leaves } from "../lib/layout";
 import { M, type ProjectConfig, type Session } from "../lib/protocol";
 import { focusTerminal, getLayout, projectOf, termKey, setLayout, useStore, sesKey } from "../lib/store";
-import { closeFileTab, closeTab, newAgentTab, newTab, sendToAgent, split } from "../lib/actions";
+import { closeFileTab, closeTab, newAgentTab, newSessionAgentTab, newTab, sendToAgent, split } from "../lib/actions";
 import { FileIcon } from "./FileIcon";
 import { PaneTree } from "./PaneTree";
 import { AgentIcon, Kbd, cx } from "./ui";
@@ -40,7 +40,7 @@ function AddMenu({ host, ws }: { host: string; ws: Session }) {
   );
   return (
     <div className="no-drag relative flex items-center">
-      <button title="New terminal (⌘T)" className="flex h-8 items-center rounded-l-md pl-2.5 pr-1 text-muted hover:bg-raised hover:text-fg" onClick={() => void newTab()}>
+      <button title="New agent (⌘T)" className="flex h-8 items-center rounded-l-md pl-2.5 pr-1 text-muted hover:bg-raised hover:text-fg" onClick={() => void newSessionAgentTab()}>
         <Plus size={15} strokeWidth={1.75} />
       </button>
       <button title="New agent or split" className="flex h-8 items-center rounded-r-md pl-0.5 pr-2 text-muted hover:bg-raised hover:text-fg" onClick={() => setOpen(!open)}>
@@ -60,7 +60,7 @@ function AddMenu({ host, ws }: { host: string; ws: Session }) {
               ),
             )}
             <div className="my-1 border-t border-border" />
-            {item("term", <>Terminal</>, () => void newTab(), "⌘T")}
+            {item("term", <>Terminal</>, () => void newTab(), "⇧⌘T")}
             {item("split-r", <>Split right</>, () => void split("row"), "⌘D")}
             {item("split-d", <>Split down</>, () => void split("col"), "⌥⌘D")}
           </div>
@@ -273,9 +273,14 @@ export function SessionView({ host, ws }: { host: string; ws: Session }) {
         {(!layout || layout.tabs.length === 0) && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
             <div className="ui-text-14">No terminals in this session.</div>
-            <button className="rounded-md border border-border-strong px-3 py-1.5 ui-text-13 text-fg hover:bg-hover" onClick={() => void newTab()}>
-              New terminal <Kbd>⌘T</Kbd>
-            </button>
+            <div className="flex gap-2">
+              <button className="rounded-md border border-border-strong px-3 py-1.5 ui-text-13 text-fg hover:bg-hover" onClick={() => void newSessionAgentTab()}>
+                New agent <Kbd>⌘T</Kbd>
+              </button>
+              <button className="rounded-md border border-border-strong px-3 py-1.5 ui-text-13 text-fg hover:bg-hover" onClick={() => void newTab()}>
+                New terminal <Kbd>⇧⌘T</Kbd>
+              </button>
+            </div>
           </div>
         )}
         <AgentCard host={host} ws={ws} />
