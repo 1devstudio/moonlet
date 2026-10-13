@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, recordKey } from "./runActions";
+import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, recordKey } from "./runActions";
 
 describe("filtering", () => {
-  it("lists all 25 actions in catalogue order for an empty query", () => {
+  it("lists all 26 actions in catalogue order for an empty query", () => {
     const rows = filterActions("");
-    expect(rows).toHaveLength(25);
+    expect(rows).toHaveLength(26);
     expect(rows[0].action.label).toBe("New session…");
     expect(rows[1].action.label).toBe("New workspace…");
-    expect(rows[23].action.label).toBe("Settings…");
-    expect(rows[24].action.label).toBe("Check for updates…");
+    expect(rows[24].action.label).toBe("Settings…");
+    expect(rows[25].action.label).toBe("Check for updates…");
   });
 
   it("finds the update check (X35)", () => {
@@ -91,6 +91,13 @@ describe("shortcuts", () => {
     expect(actionForKey("cmd+t", { "new-tab": "" })).toBeUndefined();
     expect(actionForKey("cmd+t", { "new-tab": "alt+cmd+t" })).toBeUndefined();
     expect(actionForKey("alt+cmd+t", { "new-tab": "alt+cmd+t" })).toBe("new-tab");
+  });
+
+  it("opens an agent tab with ⌘T and a terminal tab with ⇧⌘T (X38)", () => {
+    expect(actionForKey("cmd+t", undefined)).toBe("new-tab");
+    expect(ACTIONS.find((a) => a.id === "new-tab")?.label).toBe("New agent tab");
+    expect(actionForKey("shift+cmd+t", undefined)).toBe("new-terminal");
+    expect(ACTIONS.find((a) => a.id === "new-terminal")?.label).toBe("New terminal tab");
   });
 
   it("gives each action its current key", () => {
