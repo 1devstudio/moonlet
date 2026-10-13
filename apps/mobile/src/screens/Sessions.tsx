@@ -7,7 +7,7 @@ import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
 import { showScreen, useApp } from "../lib/app";
-import { useBase, useGitStatus, usePr } from "../lib/lazy";
+import { useBase, useGitStatus, usePr, useSeen } from "../lib/lazy";
 import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups } from "../lib/sessionList";
 import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
 import { WorkspacePill } from "../components/WorkspacePill";
@@ -44,10 +44,12 @@ function BehindButton({ host, project }: { host: string; project: Project }) {
 }
 
 function Row({ r }: { r: SessionRow }) {
-  const [stat] = useGitStatus(r.host, r.session);
-  const [pr] = usePr(r.host, r.session);
+  // git and gh run on the host for each row: only for rows on screen.
+  const [ref, seen] = useSeen();
+  const [stat] = useGitStatus(r.host, seen ? r.session : undefined);
+  const [pr] = usePr(r.host, seen ? r.session : undefined);
   return (
-    <button type="button" onClick={() => showScreen(rowTarget(r))} className={cx("flex items-start gap-2.5 px-4 py-2.5 text-left", r.state === "blocked" && "bg-[rgba(242,201,76,0.035)]")}>
+    <button ref={ref} type="button" onClick={() => showScreen(rowTarget(r))} className={cx("flex items-start gap-2.5 px-4 py-2.5 text-left", r.state === "blocked" && "bg-[rgba(242,201,76,0.035)]")}>
       <span className="pt-[3px]">
         <StateGlyph state={r.state} />
       </span>
