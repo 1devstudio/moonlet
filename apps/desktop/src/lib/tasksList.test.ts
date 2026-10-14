@@ -72,7 +72,22 @@ describe("Tasks list (X45 List)", () => {
       ["In Progress", 2, "1 needs you"],
       ["In Review", 3, "1 out of sync"],
       ["Todo", 2, ""],
-      ["Done", 1, "1 done task still has an open session · Clean up"],
+      ["Done", 1, "1 needs clean-up"],
+    ]);
+  });
+
+  it("notes both what needs you and what is out of sync, in any group", () => {
+    const b = tasksBoard({
+      tasks: [task("MOON-153", "todo"), task("MOON-160", "in_review")],
+      sessions: [session("Guard", "moon-153-guard", { state: "working" }), session("Review fixes", "moon-160-fixes", { state: "blocked" })],
+      worktrees: [],
+      sessionStartRule: "suggest",
+    });
+    expect(listGroups(b).map((g) => [g.name, g.note, g.noteTone])).toEqual([
+      ["In Progress", "", "faint"],
+      ["In Review", "1 needs you", "blocked"],
+      ["Todo", "1 out of sync", "accent"],
+      ["Done", "", "faint"],
     ]);
   });
 

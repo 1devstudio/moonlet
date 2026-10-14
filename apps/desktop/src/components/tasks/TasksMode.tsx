@@ -11,7 +11,7 @@ import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks"
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
 import { activityOf, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, syncTasks, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
-import { listGroups, listRow } from "../../lib/tasksList";
+import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
@@ -442,17 +442,17 @@ export function TasksMode() {
                 </div>
               </section>
             ))}
-            <section
-              aria-label={`Done: ${shown.done.length} tasks`}
-              role="button"
+            <button
+              aria-label={`Done: ${shown.done.length} tasks${cleanUpCount(shown) ? `, ${cleanUpCount(shown)} needs clean-up` : ""}`}
               title="Open the list"
               onClick={() => setLayout("list")}
-              className="flex w-[64px] shrink-0 cursor-default flex-col items-center gap-2 pt-0.5 ui-text-13 text-muted hover:text-fg"
+              className="flex w-[64px] shrink-0 cursor-default flex-col items-center gap-2 self-start pt-0.5 ui-text-13 text-muted hover:text-fg"
             >
               <TaskGlyph column="done" />
               Done
               <span className="font-mono ui-text-12 text-faint">{shown.done.length}</span>
-            </section>
+              {cleanUpCount(shown) > 0 && <span className="text-center ui-text-11 text-accent">{cleanUpCount(shown)} needs clean-up</span>}
+            </button>
           </div>
         )}
       </div>
@@ -523,6 +523,7 @@ const NOTE_TONE = { blocked: "text-blocked", accent: "text-accent", faint: "text
 /** The List layout: groups by column, rows that open into their sessions and worktrees (X45). */
 function TasksList({ host, workspaceId, board }: { host: string; workspaceId: string; board: Board }) {
   const expanded = useTasks((t) => t.expanded);
+  const now = useNow(true);
   const groups = listGroups(board);
   const keyOf = (c: Card) => `${c.task.connection} ${c.task.key}`;
   const all = groups.flatMap((g) => (g.column === "done" ? [] : g.cards));
@@ -572,7 +573,7 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
                       {r.worktrees}
                     </span>
                     <span title="Updated" className="w-[80px] text-right ui-text-12 text-faint">
-                      {c.task.updatedMs ? ago(Date.now() - c.task.updatedMs) : ""}
+                      {c.task.updatedMs ? ago(now - c.task.updatedMs) : ""}
                     </span>
                   </div>
                   {open && (
