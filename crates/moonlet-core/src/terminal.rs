@@ -336,6 +336,7 @@ impl TerminalManager {
             exit: None,
             reported_cwd: None,
             node_version: None,
+            subagents: 0,
             prompt: None,
             last_exit: None,
             alt_screen: false,

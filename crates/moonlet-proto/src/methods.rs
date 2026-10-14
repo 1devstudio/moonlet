@@ -97,6 +97,8 @@ pub const CHAT_SEND: &str = "chat.send";
 pub const CHAT_SUMMARIES: &str = "chat.summaries";
 pub const CHAT_PERMISSION: &str = "chat.permission";
 pub const CHAT_INTERRUPT: &str = "chat.interrupt";
+/// Stops one running subagent: `{ id, agent }` (X42).
+pub const CHAT_STOP_AGENT: &str = "chat.stop_agent";
 pub const CHAT_SETTINGS: &str = "chat.settings";
 pub const CHAT_ADD_DIR: &str = "chat.add_dir";
 pub const CHAT_MCP: &str = "chat.mcp";
@@ -812,6 +814,13 @@ pub struct ChatPermission {
     /// Permission mode an approved plan switches to: `auto` or `acceptEdits` (X20, X24).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatStopAgent {
+    pub id: TerminalId,
+    /// The subagent's task id.
+    pub agent: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
