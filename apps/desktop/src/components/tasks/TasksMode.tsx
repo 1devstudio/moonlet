@@ -13,6 +13,7 @@ import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, ses
 import { activityOf, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, syncTasks, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, startAction, withoutPutOff } from "../../lib/keepInStep";
+import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
@@ -472,16 +473,19 @@ export function ModeSwitch() {
     return () => clearInterval(timer);
   }, [ws]);
   const drift = board ? outOfSync(board).length : 0;
+  // The switch's shortcut as the user has it (Settings › Shortcuts).
+  const key = keyLabel(effectiveKeys(useStore((s) => s.settings.shortcuts)).tasks ?? "");
+  const titled = (name: string) => (key ? `${name} ${key}` : name);
   const item = "no-drag relative flex h-[26px] w-[30px] items-center justify-center rounded-[5px]";
   return (
     <div role="group" aria-label="Mode" className="ml-auto flex shrink-0 items-center gap-0.5 rounded-md bg-panel-2 p-0.5">
-      <button aria-label="Sessions" aria-pressed={!tasks} title="Sessions  ⌃⌘T" onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
+      <button aria-label="Sessions" aria-pressed={!tasks} title={titled("Sessions")} onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
         <SquareTerminal size={14} />
       </button>
       <button
         aria-label={drift ? `Tasks, ${drift} out of sync` : "Tasks"}
         aria-pressed={tasks}
-        title="Tasks  ⌃⌘T"
+        title={titled("Tasks")}
         onClick={() => !tasks && toggleTasksMode()}
         className={cx(item, tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}
       >
