@@ -108,6 +108,14 @@ describe("Closes #N in a new PR (X46: a PR opens)", () => {
     expect(closesIssue(facts({}), "acme/web", [issue])).toBe(null);
   });
 
+  it("follows the link rules and the task's own comment rule", () => {
+    const noBranch = { branch: false, pr: true, title: true };
+    expect(closesIssue(facts({ branch: "7-fix" }), "acme/web", [issue], noBranch)).toBe(null);
+    // The Task tab's Keep in step switch, or the rule set to Off.
+    expect(closesIssue(facts({ branch: "7-fix" }), "acme/web", [issue], undefined, () => "off")).toBe(null);
+    expect(closesIssue(facts({ branch: "7-fix" }), "acme/web", [issue], undefined, () => "suggest")).toBe(7);
+  });
+
   it("adds the line once", () => {
     expect(withCloses("- Fix the button", 7)).toBe("- Fix the button\n\nCloses #7");
     expect(withCloses("", 7)).toBe("Closes #7");

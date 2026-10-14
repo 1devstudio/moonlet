@@ -1,7 +1,7 @@
 // Keep <tracker> in step (X46): what moonlet does in the tracker when the
 // work moves, and the fixes behind the out-of-sync chips (X45).
 
-import { type Column, type SessionLinkFacts, type Task, taskForSession } from "./tasks";
+import { type Column, DEFAULT_LINK, type LinkRules, type SessionLinkFacts, type Task, taskForSession } from "./tasks";
 import type { Board, Card } from "./tasksBoard";
 
 /** A rule's setting (X44 connection page; spec defaults until then). */
@@ -62,12 +62,22 @@ export function withoutPutOff(board: Board, notNow: Record<string, true>): Board
  * the `Closes #N` line of its PR: from the board's tasks when loaded, else
  * from the session's stored link.
  */
-export function closesIssue(s: SessionLinkFacts, originRepo: string | null, tasks: Task[]): number | null {
+export function closesIssue(
+  s: SessionLinkFacts,
+  originRepo: string | null,
+  tasks: Task[],
+  link: LinkRules = DEFAULT_LINK,
+  commentRule: (task: Pick<Task, "connection" | "key">) => RuleSetting = () => "auto",
+): number | null {
   if (!originRepo) return null;
-  const t = taskForSession(s, null, originRepo, tasks);
-  if (t?.github) return t.github.repo.toLowerCase() === originRepo.toLowerCase() ? t.github.number : null;
+  const t = taskForSession(s, null, originRepo, tasks, link);
+  if (t?.github) {
+    const same = t.github.repo.toLowerCase() === originRepo.toLowerCase();
+    return same && commentRule(t) !== "off" ? t.github.number : null;
+  }
   const m = s.task?.connection.startsWith("github:") ? /^(.+)#(\d+)$/.exec(s.task.key) : null;
-  return m && m[1].toLowerCase() === originRepo.toLowerCase() ? Number(m[2]) : null;
+  if (!m || m[1].toLowerCase() !== originRepo.toLowerCase() || commentRule(s.task!) === "off") return null;
+  return Number(m[2]);
 }
 
 /** A PR body with `Closes #N`, so merging the PR closes the issue; added once. */
