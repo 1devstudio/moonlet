@@ -130,37 +130,53 @@ const DOTS: AgentRowState[] = ["done", "running", "needs", "failed", "stopped"];
 
 /** The agents launched since the user's last message, unless × hid them
  *  (`dismissedAt`, the latest start then); `null` hides the strip. */
-export function stripView(
-  st: ChatState,
-  now: number,
-  git: { additions: number; deletions: number; files: number } | null,
-  dismissedAt: number,
-): StripView | null {
+export function stripView(st: ChatState, now: number, dismissedAt: number): StripView | null {
   const batch = batchOf(st);
   if (!batch.length || batch.every((a) => a.started_at <= dismissedAt)) return null;
   const rows = agentRows([{ id: 0, st: { ...st, subagents: batch } }], now);
   const n = (state: AgentRowState) => rows.filter((r) => r.state === state).length;
-  const active = n("running") + n("needs");
-  const count = batch.length === 1 ? "1 agent" : `${batch.length} agents`;
-  const finished = !active && !n("failed");
-  const detail = finished
-    ? git && (git.additions || git.deletions)
-      ? `+${git.additions} −${git.deletions} in ${git.files} ${git.files === 1 ? "file" : "files"}`
-      : ""
-    : (["running", "done", "stopped"] as const)
-        .filter((state) => n(state))
-        .map((state) => `${n(state)} ${state}`)
-        .join(" · ");
+  const ended = !rows.some((r) => isActive(r.state)) && !n("failed");
+  // Finished means every agent did its work; stopped ones did not.
+  const finished = ended && !n("stopped");
+  const counts = (["running", "done", "stopped"] as const)
+    .filter((state) => n(state))
+    .map((state) => `${n(state)} ${state}`)
+    .join(" · ");
   const alert = n("needs") ? { tone: "blocked" as const, text: `${n("needs")} needs you` } : n("failed") ? { tone: "error" as const, text: `${n("failed")} failed` } : null;
   return {
     dots: rows.map((r) => r.state).sort((x, y) => DOTS.indexOf(x) - DOTS.indexOf(y)),
-    title: `${count}${finished ? " finished" : ""}`,
-    detail,
+    title: `${agentCount(batch.length)}${finished ? " finished" : ""}`,
+    detail: finished ? diffLine(batchDiff(batch)) : counts,
     alert,
     clock: spanClock(batch, now),
-    button: finished ? "review" : !active && n("failed") ? "retry" : null,
-    dismissible: finished,
+    button: ended ? "review" : !rows.some((r) => isActive(r.state)) && n("failed") ? "retry" : null,
+    dismissible: ended,
   };
+}
+
+/** The strip's × hides it until an agent starts after this. */
+export const stripDismissAt = (st: ChatState) => Math.max(0, ...batchOf(st).map((a) => a.started_at));
+
+/** What the strip's Retry sends: the batch's failed agents, if any. */
+export function stripRetry(st: ChatState): string | null {
+  const failed = batchOf(st).filter((a) => a.status === "failed");
+  return failed.length ? retryMessage(failed) : null;
+}
+
+/** Lines the agents' edits added and removed, and the files they edited.
+ *  Only edits that went through count. */
+export function batchDiff(agents: Subagent[]): { additions: number; deletions: number; files: number } {
+  const edits = agents.flatMap((a) => a.tools).filter((t) => t.status === "ok" && t.added != null);
+  return {
+    additions: edits.reduce((n, t) => n + (t.added ?? 0), 0),
+    deletions: edits.reduce((n, t) => n + (t.removed ?? 0), 0),
+    files: new Set(edits.map((t) => t.summary)).size,
+  };
+}
+
+/** "+318 −41 in 9 files", or nothing without edits. */
+export function diffLine(d: { additions: number; deletions: number; files: number }): string {
+  return d.additions || d.deletions ? `+${d.additions} −${d.deletions} in ${d.files} ${d.files === 1 ? "file" : "files"}` : "";
 }
 
 /** "Haiku 5.5" for `claude-haiku-5-5`; other ids as they are. */

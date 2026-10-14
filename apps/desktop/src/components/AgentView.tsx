@@ -1299,7 +1299,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
         </FileLinks.Provider>
       </div>
       <div className="w-full shrink-0 px-6 pb-3">
-        {st && <AgentsStrip host={host} id={id} session={info?.session_id} st={st} onSend={(text) => send(text, [])} />}
+        {st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
         <ChatEditor
           host={host}
           id={id}
