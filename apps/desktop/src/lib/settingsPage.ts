@@ -45,6 +45,8 @@ export interface NavInput {
   remoteHosts: number;
   phones: number;
   profilesNeedSignIn: boolean;
+  /** Tracker connections whose token was rejected (X44). */
+  trackersNeedAttention?: number;
   workspaces: (NavItem & { color: WorkspaceColor })[];
   projects: NavItem[];
 }
@@ -53,11 +55,13 @@ const app = (page: AppPage, label: string, extra: Partial<NavEntry> = {}): NavEn
 const counted = (page: AppPage, label: string, n: number): NavEntry => app(page, label, n ? { count: n } : {});
 const onHost = (remote: string | null) => (remote ? { host: remote } : {});
 
+const trackerDot = (n: number): Partial<NavEntry> => (n ? { dot: n === 1 ? "1 connection needs attention" : `${n} connections need attention` } : {});
+
 export function settingsNav(input: NavInput): NavGroup[] {
   const groups: NavGroup[] = [
     {
       title: "App",
-      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications"), app("trackers", "Task trackers"), app("shortcuts", "Keyboard shortcuts")],
+      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications"), app("trackers", "Task trackers", trackerDot(input.trackersNeedAttention ?? 0)), app("shortcuts", "Keyboard shortcuts")],
     },
     {
       title: "Claude Code",
