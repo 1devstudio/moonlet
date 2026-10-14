@@ -326,7 +326,7 @@ export type ChatBlock = { kind: "item"; item: ChatItem } | { kind: "tools"; id: 
 export const isAgentCall = (it: ChatItem) => it.kind === "tool" && (it.tool?.name === "Agent" || it.tool?.name === "Task");
 
 /** Items that render nothing: no text yet, thinking that was redacted, or a tool item without its call. */
-const invisible = (it: ChatItem) => (it.kind === "assistant" && !it.text) || (it.kind === "thinking" && !it.partial && !it.text.trim()) || (it.kind === "tool" && !it.tool);
+export const invisible = (it: ChatItem) => (it.kind === "assistant" && !it.text) || (it.kind === "thinking" && !it.partial && !it.text.trim()) || (it.kind === "tool" && !it.tool);
 
 /**
  * The conversation's rows. Collapsed, each run of tool calls becomes one

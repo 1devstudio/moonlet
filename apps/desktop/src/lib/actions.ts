@@ -407,3 +407,9 @@ const RUN: Record<string, () => void> = {
 export function runAction(id: string) {
   RUN[id]?.();
 }
+
+/** Opens the Agents tab on its list, or on one agent (`agentKey`) (X42). */
+export const openAgents = (agentDetail: string | null = null) => useStore.setState({ rightOpen: true, rightTab: "agents", agentDetail });
+
+/** Opens the Changes tab, to review what the agents changed (X42). */
+export const openChanges = () => useStore.setState({ rightOpen: true, rightTab: "changes" });

@@ -2,8 +2,8 @@ import { ChevronRight, X } from "lucide-react";
 import type { ChatState } from "../lib/protocol";
 import { AGENT_STATE, stripDismissAt, stripRetry, stripView } from "../lib/subagents";
 import { termKey, useStore } from "../lib/store";
+import { openAgents, openChanges } from "../lib/actions";
 import { useNow } from "../lib/useNow";
-import { openAgents } from "./AgentsPanel";
 import { cx } from "./ui";
 
 /** Above the chat input (X42): the agents launched since the user's last message. */
@@ -27,7 +27,7 @@ export function AgentsStrip({ host, id, st, onSend }: { host: string; id: number
       </span>
       <span className="ml-auto shrink-0 font-mono ui-text-12 tabular-nums text-faint">{view.clock}</span>
       {view.button === "review" && (
-        <button className="shrink-0 text-accent hover:text-accent-2" onClick={() => useStore.setState({ rightOpen: true, rightTab: "changes" })}>
+        <button className="shrink-0 text-accent hover:text-accent-2" onClick={openChanges}>
           Review changes
         </button>
       )}

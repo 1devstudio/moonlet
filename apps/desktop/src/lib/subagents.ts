@@ -1,6 +1,6 @@
 // The subagents a chat's agent launched (X42): the Agents tab's rows.
 
-import { tokens } from "./chat";
+import { type ChatBlock, invisible, tokens } from "./chat";
 import type { AgentState, ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 
 /** An agent's state on screen: `needs` while one of its asks waits. */
@@ -212,28 +212,51 @@ export function askerName(ask: PermissionAsk, subagents: Subagent[]): string | n
   return a.description.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-export type AgentNote = { kind: "finished"; agent: Subagent } | { kind: "all"; count: number; clock: string };
+export type AgentNote = { kind: "finished"; agent: Subagent } | { kind: "all"; title: string; clock: string; diff: string };
+
+/** When an agent ended, or would have by Claude's duration. */
+const endedAt = (a: Subagent) => a.ended_at ?? a.started_at + (a.duration_ms ?? 0);
 
 /** Notes in the conversation (X42): each agent that finished or failed,
- *  after the last item from before it ended, and each batch of agents
- *  (launched after the same user message) once every one ended. `after`
- *  is null when no item came before. */
+ *  after the last message that shows from before it ended, and each batch
+ *  of agents (launched after the same user message) once every one ended.
+ *  `after` is null when no message came before. */
 export function agentNotes(items: ChatItem[], subagents: Subagent[]): { after: string | null; note: AgentNote }[] {
-  const anchor = (t: number) => items.reduce<ChatItem | null>((last, i) => (i.ts <= t ? i : last), null)?.id ?? null;
+  const shown = items.filter((i) => !invisible(i));
+  const anchor = (t: number) => shown.reduce<ChatItem | null>((last, i) => (i.ts <= t ? i : last), null)?.id ?? null;
   const userTimes = items.filter((i) => i.kind === "user").map((i) => i.ts);
   const batchOfAgent = (a: Subagent) => Math.max(0, ...userTimes.filter((t) => t <= a.started_at));
-  const end = (a: Subagent) => a.ended_at ?? a.started_at + agentMs(a, a.started_at);
   const notes: { at: number; after: string | null; note: AgentNote }[] = [];
   for (const a of subagents) {
-    if (a.status === "done" || a.status === "failed") notes.push({ at: end(a), after: anchor(end(a)), note: { kind: "finished", agent: a } });
+    if (a.status === "done" || a.status === "failed") notes.push({ at: endedAt(a), after: anchor(endedAt(a)), note: { kind: "finished", agent: a } });
   }
   const batches = new Map<number, Subagent[]>();
   for (const a of subagents) batches.set(batchOfAgent(a), [...(batches.get(batchOfAgent(a)) ?? []), a]);
   for (const batch of batches.values()) {
     if (batch.length < 2 || batch.some((a) => a.status === "running")) continue;
-    const last = Math.max(...batch.map(end));
+    const last = Math.max(...batch.map(endedAt));
+    const finished = batch.every((a) => a.status === "done");
+    const note: AgentNote = { kind: "all", title: `${agentCount(batch.length)} ${finished ? "finished" : "ended"}`, clock: spanClock(batch, last), diff: diffLine(batchDiff(batch)) };
     // After the last agent's own note.
-    notes.push({ at: last + 0.5, after: anchor(last), note: { kind: "all", count: batch.length, clock: spanClock(batch, last) } });
+    notes.push({ at: last + 0.5, after: anchor(last), note });
   }
   return notes.sort((x, y) => x.at - y.at).map(({ after, note }) => ({ after, note }));
+}
+
+/** Where the notes go among the conversation's blocks: before them all, or
+ *  after the block holding their message (by block id). */
+export function notesByBlock(blocks: ChatBlock[], notes: { after: string | null; note: AgentNote }[]): { lead: AgentNote[]; after: Record<string, AgentNote[]> } {
+  const blockOf = new Map<string, string>();
+  for (const b of blocks) {
+    if (b.kind === "item") blockOf.set(b.item.id, b.item.id);
+    else for (const t of b.tools) blockOf.set(t.id, b.id);
+  }
+  const lead: AgentNote[] = [];
+  const after: Record<string, AgentNote[]> = {};
+  for (const n of notes) {
+    const block = n.after === null ? undefined : blockOf.get(n.after);
+    if (block === undefined) lead.push(n.note);
+    else (after[block] ??= []).push(n.note);
+  }
+  return { lead, after };
 }
