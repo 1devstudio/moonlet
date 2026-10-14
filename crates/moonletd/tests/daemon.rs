@@ -1131,17 +1131,15 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
     assert!(err.to_string().contains("is used by session"), "{err}");
 }
 
-#[tokio::test]
-async fn task_updates_reach_github_through_gh() {
+/// A daemon whose `gh` is `script`. moonletd takes PATH from a login shell, so
+/// the fake goes first in every startup file of a scratch HOME (as the e2e
+/// world does). The temp dirs live as long as the daemon is used.
+async fn fake_gh_daemon(script: &str) -> (TestDaemon, Vec<tempfile::TempDir>) {
     use std::os::unix::fs::PermissionsExt;
-    // A fake gh that records what it was asked to do.
     let bin = tempfile::tempdir().unwrap();
-    let log = bin.path().join("gh.log");
     let gh = bin.path().join("gh");
-    std::fs::write(&gh, "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n").unwrap();
+    std::fs::write(&gh, script).unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // moonletd takes PATH from a login shell, so the fake goes first in every
-    // startup file of a scratch HOME (as the e2e world does).
     let home = tempfile::tempdir().unwrap();
     let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.path().display());
     for rc in [".profile", ".zshenv", ".zprofile", ".zshrc"] {
@@ -1150,9 +1148,17 @@ async fn task_updates_reach_github_through_gh() {
     let d = TestDaemon::start_with(&[
         ("HOME", home.path().display().to_string()),
         ("SHELL", "/bin/zsh".into()),
-        ("GH_LOG", log.display().to_string()),
+        ("GH_LOG", bin.path().join("gh.log").display().to_string()),
     ])
     .await;
+    (d, vec![bin, home])
+}
+
+#[tokio::test]
+async fn task_updates_reach_github_through_gh() {
+    // A fake gh that records what it was asked to do.
+    let (d, dirs) = fake_gh_daemon("#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n").await;
+    let log = dirs[0].path().join("gh.log");
     let mut c = d.client().await;
     let (repo, _) = project_with_repo(&d, &mut c).await;
 
@@ -1168,6 +1174,22 @@ async fn task_updates_reach_github_through_gh() {
         std::fs::read_to_string(&log).unwrap(),
         "issue edit 15 --add-assignee @me\nissue close 15 --reason completed\n"
     );
+}
+
+#[tokio::test]
+async fn the_github_login_comes_from_gh() {
+    let (d, _dirs) = fake_gh_daemon("#!/bin/sh\n[ \"$*\" = \"api user --jq .login\" ] && echo sam-rivera && exit 0\nexit 1\n").await;
+    let mut c = d.client().await;
+    let login: String = c.request(methods::GH_WHOAMI, serde_json::json!({})).await.unwrap();
+    assert_eq!(login, "sam-rivera");
+}
+
+#[tokio::test]
+async fn a_gh_without_a_login_says_so() {
+    let (d, _dirs) = fake_gh_daemon("#!/bin/sh\necho 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n").await;
+    let mut c = d.client().await;
+    let err = c.request::<_, String>(methods::GH_WHOAMI, serde_json::json!({})).await.unwrap_err();
+    assert!(err.to_string().contains("gh auth login"), "{err}");
 }
 
 #[tokio::test]

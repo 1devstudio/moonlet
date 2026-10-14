@@ -365,6 +365,38 @@ fn task_branch_name(
     branch::branch_name(&template, &vars, max_len.unwrap_or(branch::DEFAULT_MAX_LEN))
 }
 
+fn trackers_path() -> std::path::PathBuf {
+    moonlet_core::paths::home().join("trackers.toml")
+}
+
+/// `trackers.toml`, or the defaults when there is none (X44).
+fn read_trackers(path: &std::path::Path) -> Result<moonlet_trackers::config::TrackersConfig, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => moonlet_trackers::config::parse(&text).map_err(|e| format!("{}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// Writes `trackers.toml` whole, through a temp file so a crash never leaves half of it.
+fn write_trackers(path: &std::path::Path, config: &moonlet_trackers::config::TrackersConfig) -> Result<(), String> {
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, moonlet_trackers::config::to_toml(config)).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// The app's tracker settings (X44).
+#[tauri::command]
+fn trackers_config() -> Result<moonlet_trackers::config::TrackersConfig, RpcError> {
+    read_trackers(&trackers_path()).map_err(err)
+}
+
+#[tauri::command]
+fn trackers_save(config: moonlet_trackers::config::TrackersConfig) -> Result<(), RpcError> {
+    let _ = moonlet_core::paths::ensure_private_dir(&moonlet_core::paths::home());
+    write_trackers(&trackers_path(), &config).map_err(err)
+}
+
 /// A key or issue URL pasted into the link dialog (X46), or null.
 #[tauri::command]
 fn task_parse_pasted(input: String) -> Value {
@@ -435,6 +467,8 @@ pub fn run() {
             claude_latest_version,
             task_branch_name,
             task_parse_pasted,
+            trackers_config,
+            trackers_save,
             app_info
         ])
         .run(context)
@@ -444,6 +478,23 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracker_settings_are_read_and_saved_in_trackers_toml() {
+        use moonlet_trackers::config::{Rule, TrackersConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trackers.toml");
+        // No file yet: the defaults.
+        assert_eq!(read_trackers(&path).unwrap(), TrackersConfig::default());
+        let mut c = TrackersConfig::default();
+        c.github.rules.session_starts = Rule::Off;
+        write_trackers(&path, &c).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("session_starts = \"off\""));
+        assert_eq!(read_trackers(&path).unwrap(), c);
+        // A file the user broke says where.
+        std::fs::write(&path, "[sync]\ninterval = \"often\"\n").unwrap();
+        assert!(read_trackers(&path).unwrap_err().contains("interval"));
+    }
 
     #[test]
     fn a_pasted_issue_url_reaches_the_app_as_kind_key_and_site() {

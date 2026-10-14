@@ -5,6 +5,7 @@
 //! sessions and PRs are.
 
 pub mod branch;
+pub mod config;
 pub mod priority;
 pub mod refs;
 pub mod states;

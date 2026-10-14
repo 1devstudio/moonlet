@@ -2,12 +2,13 @@
 // between Sessions and Tasks (X44, X45).
 
 import { create } from "zustand";
-import { rpc } from "./daemon";
+import { hostsApi, rpc } from "./daemon";
 import { latestPerKey } from "./prPoll";
 import { type GhTask, M, type Project, type Worktree } from "./protocol";
 import { errorToast, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
-import { cleanUpMessage, driftFix, driftKey } from "./keepInStep";
+import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, type Rules } from "./keepInStep";
+import { readStored, writeStored } from "./storage";
 import { githubRepo, type Task, taskFromGh } from "./tasks";
 import type { BoardInput, BoardSession, BoardWorktree, Card } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
@@ -37,9 +38,50 @@ interface TasksState {
   selected: string | null;
   /** Out-of-sync chips put off with "Not now", by `driftKey` (X45). */
   notNow: Record<string, true>;
+  /** `trackers.toml`; null until read. */
+  config: TrackersConfig | null;
 }
 
-export const useTasks = create<TasksState>(() => ({ data: {}, view: "mine", selected: null, notNow: {} }));
+/** `~/.moonlet/trackers.toml` as `moonlet-trackers` reads it (X44). */
+export interface TrackersConfig {
+  sync: { interval: number };
+  github: { branch_template: string; max_length: number; rules: Rules };
+}
+
+export const DEFAULT_CONFIG: TrackersConfig = { sync: { interval: 60 }, github: { branch_template: "", max_length: 48, rules: DEFAULT_RULES } };
+
+export const useTasks = create<TasksState>(() => ({ data: {}, view: "mine", selected: null, notNow: {}, config: null }));
+
+/** The settings in effect: the file's, or the defaults before it is read. */
+export const trackersConfig = (t: { config: TrackersConfig | null }) => t.config ?? DEFAULT_CONFIG;
+
+/** Reads `trackers.toml` once; a broken file shows its error and the defaults apply. */
+export async function loadTrackersConfig(force = false) {
+  if (useTasks.getState().config && !force) return;
+  try {
+    useTasks.setState({ config: await hostsApi.trackersConfig() });
+  } catch (e) {
+    errorToast(e);
+  }
+}
+
+export async function saveTrackersConfig(config: TrackersConfig) {
+  await hostsApi.trackersSave(config);
+  useTasks.setState({ config });
+}
+
+/** Fixes moonlet already made by itself, by `driftKey`, so each happens once (X46). */
+const AUTO_KEY = "tasks.autoFixed";
+export function autoFixed(): Record<string, true> {
+  try {
+    return JSON.parse(readStored(AUTO_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+export function markAutoFixed(key: string) {
+  writeStored(AUTO_KEY, JSON.stringify({ ...autoFixed(), [key]: true }));
+}
 
 type StoreState = ReturnType<typeof useStore.getState>;
 
@@ -110,7 +152,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
 }
 
 /** What the board needs of a workspace's sessions (X45). */
-export function boardInput(s: StoreState, host: string, workspaceId: string, data: TasksData): BoardInput {
+export function boardInput(s: StoreState, host: string, workspaceId: string, data: TasksData, rules: Rules = DEFAULT_RULES): BoardInput {
   const sessions: BoardSession[] = (s.sessions[host] ?? [])
     .filter((x) => x.workspace_id === workspaceId)
     .map((x) => ({
@@ -127,7 +169,7 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       subagents: sessionTerminals(s, host, x.id).reduce((n, t) => n + (t.subagents ?? 0), 0),
       originRepo: data.repos[x.project_id] ?? null,
     }));
-  return { tasks: data.tasks, sessions, worktrees: data.worktrees, sessionStartRule: "auto" };
+  return { tasks: data.tasks, sessions, worktrees: data.worktrees, sessionStartRule: rules.session_starts };
 }
 
 /** The project path of a workspace project in GitHub repository `repo`. */

@@ -9,7 +9,7 @@ import { hostSections } from "../lib/sidebar";
 import { newSectionWorkspace, wsKey } from "../lib/workspaces";
 import { closesIssue, withCloses } from "../lib/keepInStep";
 import { githubRepo } from "../lib/tasks";
-import { useTasks } from "../lib/tasksStore";
+import { trackersConfig, useTasks } from "../lib/tasksStore";
 import { NewWorkspaceDialog } from "./WorkspaceDialogs";
 import { LinkTaskDialog } from "./tasks/SessionTask";
 
@@ -218,9 +218,12 @@ export function CreatePrDialog() {
     if (!ws) return;
     // The GitHub issue the session works on gets `Closes #N` (X46 Keep in step).
     const tasks = useTasks.getState().data[wsKey(host, ws.workspace_id ?? "")]?.tasks ?? [];
-    const issue = rpc<string | null>(host, M.gitOriginUrl, { path: ws.path })
-      .then((url) => closesIssue(ws, githubRepo(url), tasks))
-      .catch(() => null);
+    const closes = trackersConfig(useTasks.getState()).github.rules.pr_comment !== "off";
+    const issue = closes
+      ? rpc<string | null>(host, M.gitOriginUrl, { path: ws.path })
+          .then((url) => closesIssue(ws, githubRepo(url), tasks))
+          .catch(() => null)
+      : Promise.resolve(null);
     void rpc<Commit[]>(host, M.gitLog, { path: ws.path, base: ws.base })
       .then(async (log) => {
         if (log.length === 1) setTitle(log[0].subject);
