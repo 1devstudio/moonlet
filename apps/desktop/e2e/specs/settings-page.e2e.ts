@@ -3,7 +3,7 @@
 // or a dialog over the page has it.
 
 import { $, browser, expect } from "@wdio/globals";
-import { closeSettings, openSettings, sel } from "../fixtures";
+import { closeSettings, fill, openSettings, sel } from "../fixtures";
 
 const meta = sel.settingsSwitch("Use Option as Meta");
 const checked = async (xpath: string) => (await $(xpath).getAttribute("aria-checked")) === "true";
@@ -21,7 +21,7 @@ describe("settings page", () => {
   it("opens at General from the sidebar's gear", async () => {
     await $('button[title="Settings (⌘,)"]').click();
     await expect($(sel.settings)).toBeDisplayed();
-    await expect($('//nav[@aria-label="Settings"]//button[@aria-current="page"][normalize-space()="General"]')).toBeExisting();
+    await expect($(sel.navEntry("General", true))).toBeExisting();
     await expect($('//h1[normalize-space()="General"]')).toBeDisplayed();
     await expect($(sel.button("Check now"))).toBeDisplayed();
   });
@@ -48,6 +48,22 @@ describe("settings page", () => {
     await browser.keys(["Escape"]);
     await expect($(signIn)).not.toBeExisting();
     await expect($(sel.settings)).toBeDisplayed();
+    await closeSettings();
+  });
+
+  it("asks before leaving a workspace's unsaved changes, and Discard puts them back", async () => {
+    await openSettings("Personal");
+    await expect($(sel.settingsField("Name"))).toHaveValue("Personal");
+    await fill(sel.settingsField("Name"), "Personal stuff");
+    await expect($(sel.text("Unsaved changes to Personal stuff"))).toBeDisplayed();
+    await $(sel.navEntry("Hosts")).click();
+    await expect($(sel.text("Discard unsaved changes to Personal?"))).toBeDisplayed();
+    await $(sel.confirmButton("Keep editing")).click();
+    await expect($(sel.settingsField("Name"))).toHaveValue("Personal stuff");
+    await $(sel.settingsButton("Discard")).click();
+    await expect($(sel.settingsField("Name"))).toHaveValue("Personal");
+    await $(sel.navEntry("Hosts")).click();
+    await expect($(sel.navEntry("Hosts", true))).toBeExisting();
     await closeSettings();
   });
 

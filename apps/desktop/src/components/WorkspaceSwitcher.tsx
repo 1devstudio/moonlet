@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronsUpDown, Plus, Settings } from "lucide-react";
 import { hostWorkspaces, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "../lib/store";
+import { goSettings } from "../lib/settingsNavigation";
 import { colorHex, isShown, switcherRows, workspaceInitial, workspacesNeedingYou, wsKey } from "../lib/workspaces";
 import type { WorkspaceColor } from "../lib/protocol";
 import { cx } from "./ui";
@@ -108,7 +109,7 @@ export function WorkspaceSwitcher() {
               className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left ui-text-13 hover:bg-[#222]"
               onClick={() => {
                 setOpen(false);
-                useStore.setState({ dialog: { kind: "workspace-settings", host: cur.host, workspace: cur.ws.id } });
+                void goSettings({ page: "workspace", host: cur.host, id: cur.ws.id });
               }}
             >
               <Settings size={14} className="text-muted" /> Workspace settings…

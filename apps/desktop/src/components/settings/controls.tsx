@@ -186,3 +186,40 @@ export function Initial({ letter, className }: { letter: string; className?: str
     </span>
   );
 }
+
+/** A page's scrolling column, with an optional bar pinned under it. */
+export function PageBody({ children, bar }: { children: ReactNode; bar?: ReactNode }) {
+  return (
+    <>
+      <div data-settings-scroll className="min-h-0 flex-1 overflow-auto px-12 pb-16 pt-3">
+        <div className="mx-auto flex max-w-[680px] flex-col gap-8">{children}</div>
+      </div>
+      {bar}
+    </>
+  );
+}
+
+/** The bar under a workspace or project page: what is unsaved, Discard and
+ * Save (⌘↵). */
+export function SaveBar({ children, onDiscard, onSave, canSave, dirty }: { children: ReactNode; onDiscard: () => void; onSave: () => void; canSave: boolean; dirty: boolean }) {
+  return (
+    <div role="region" aria-label="Unsaved changes" className="shrink-0 border-t border-border bg-panel px-12 py-2.5">
+      <div className="mx-auto flex max-w-[680px] items-center gap-3">
+        <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+        {dirty && (
+          <button type="button" onClick={onDiscard} className="h-7 rounded-md px-2.5 ui-text-12.5 text-muted hover:bg-hover hover:text-fg">
+            Discard
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={!canSave}
+          onClick={onSave}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md bg-fg px-2.5 ui-text-12.5 font-medium text-bg hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Save <span className="font-sans ui-text-11 opacity-60">⌘↵</span>
+        </button>
+      </div>
+    </div>
+  );
+}

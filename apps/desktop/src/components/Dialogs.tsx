@@ -7,8 +7,7 @@ import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { hostSections } from "../lib/sidebar";
 import { newSectionWorkspace } from "../lib/workspaces";
-import { NewWorkspaceDialog, WorkspaceSettingsDialog } from "./WorkspaceDialogs";
-import { ProjectSettingsDialog } from "./ProjectSettings";
+import { NewWorkspaceDialog } from "./WorkspaceDialogs";
 
 const close = () => useStore.setState({ dialog: null });
 
@@ -277,16 +276,12 @@ export function Dialogs() {
       return <NewSectionDialog />;
     case "new-workspace":
       return <NewWorkspaceDialog />;
-    case "workspace-settings":
-      return <WorkspaceSettingsDialog host={dialog.host} workspace={dialog.workspace} />;
     case "new-session":
       return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} />;
     case "commit":
       return <CommitDialog />;
     case "create-pr":
       return <CreatePrDialog />;
-    case "project-settings":
-      return <ProjectSettingsDialog host={dialog.host} project={dialog.project} focus={dialog.focus} />;
     default:
       return null;
   }

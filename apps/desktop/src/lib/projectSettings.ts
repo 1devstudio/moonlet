@@ -2,6 +2,7 @@
 // editable fields, the same validation the daemon applies, and the way back.
 
 import type { ProjectConfig } from "./protocol";
+import type { StatusLine } from "./settingsPage";
 
 export const BUILTIN_AGENTS = ["claude", "codex"];
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -27,6 +28,8 @@ export interface Errors {
   agents: Record<number, { name?: string; cmd?: string }>;
   defaultAgent: string;
   any: boolean;
+  /** How many messages there are to fix. */
+  count: number;
 }
 
 /** Run runs the script when there is one; otherwise it opens Project
@@ -107,7 +110,8 @@ export function validate(f: Form): Errors {
   }
   const d = f.default_agent.trim();
   const defaultAgent = d && !BUILTIN_AGENTS.includes(d) && !f.agents.some((a) => a.name.trim() === d) ? `${d} is not an agent in this project.` : "";
-  return { agents, defaultAgent, any: Object.keys(agents).length > 0 || !!defaultAgent };
+  const count = Object.values(agents).reduce((n, e) => n + (e.name ? 1 : 0) + (e.cmd ? 1 : 0), 0) + (defaultAgent ? 1 : 0);
+  return { agents, defaultAgent, any: Object.keys(agents).length > 0 || !!defaultAgent, count };
 }
 
 /** Default agent choices: none, the built-ins, the valid custom names, and
@@ -128,4 +132,10 @@ export function agentOptions(f: Form): { value: string; label: string }[] {
  *  `.jaunt/config.toml` while only that one exists; saving moves it (X27). */
 export function configName(path: string | undefined): string {
   return path?.endsWith("/.jaunt/config.toml") ? ".jaunt/config.toml" : ".moonlet/config.toml";
+}
+
+/** The state in the project page's save bar (X43), under the file's path. */
+export function saveBarStatus(s: { dirty: boolean; errors: number }): StatusLine {
+  if (s.errors) return { tone: "error", text: `Fix ${s.errors} error${s.errors === 1 ? "" : "s"} to save` };
+  return s.dirty ? { tone: "accent", text: "Unsaved changes" } : { tone: "muted", text: "This file is part of the repository." };
 }

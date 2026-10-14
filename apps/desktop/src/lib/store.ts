@@ -206,9 +206,7 @@ interface State extends UiPersist {
     | { kind: "add-project"; host?: string; section?: string }
     | { kind: "new-section" }
     | { kind: "new-workspace" }
-    | { kind: "workspace-settings"; host: string; workspace: string }
     | { kind: "create-pr" }
-    | { kind: "project-settings"; host: string; project: string; focus?: "run" }
     | { kind: "palette" }
     | { kind: "commit" };
   /** The open confirm modal, above any dialog (X23). */
