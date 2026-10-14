@@ -129,6 +129,20 @@ export function githubRepo(remote: string | null): string | null {
 
 export type TrackerKind = "linear" | "jira" | "clickup" | "github";
 
+const TRACKER_NAMES: Record<TrackerKind, string> = { github: "GitHub", linear: "Linear", jira: "Jira", clickup: "ClickUp" };
+
+/** The tracker of a connection id (`jira:acme.atlassian.net` → `jira`). */
+export function trackerOf(connection: string): TrackerKind | null {
+  const kind = connection.split(":")[0];
+  return kind in TRACKER_NAMES ? (kind as TrackerKind) : null;
+}
+
+/** The tracker's name as the UI writes it, from a connection id or a kind. */
+export function trackerName(connectionOrKind: string): string {
+  const kind = trackerOf(connectionOrKind);
+  return kind ? TRACKER_NAMES[kind] : "tracker";
+}
+
 /** What the new-session composer starts with for a task (X46). */
 export interface TaskStart {
   ref: TaskRef;
@@ -162,7 +176,7 @@ export function taskStart(task: Task, repos: Record<string, string | null>, sour
   const repo = task.github?.repo.toLowerCase();
   return {
     ref: { connection: task.connection, key: task.key, url: task.url },
-    kind: task.connection.split(":")[0] as TrackerKind,
+    kind: trackerOf(task.connection) ?? "github",
     key: task.key,
     title: task.title,
     number: task.github?.number,

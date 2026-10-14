@@ -8,7 +8,7 @@ import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../.
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
-import { type Column, type Task, taskStart } from "../../lib/tasks";
+import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
 import { activityOf, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
@@ -112,9 +112,8 @@ export function TasksSidebar() {
   const trackers = useMemo(() => {
     if (!ws || !data) return [];
     const github = data.sources.filter((x) => !x.includes(":")).map((repo) => ({ name: `GitHub · ${repo}`, attention: undefined as string | undefined }));
-    const NAME = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
     const others = (config.connections ?? []).flatMap((c) =>
-      c.sources.filter((s) => s.workspace === wsKey(ws.host, ws.id)).map((s) => ({ name: `${NAME[c.kind]} · ${s.name}`, attention: attention[c.id] })),
+      c.sources.filter((s) => s.workspace === wsKey(ws.host, ws.id)).map((s) => ({ name: `${trackerName(c.kind)} · ${s.name}`, attention: attention[c.id] })),
     );
     return [...github, ...others];
   }, [ws, data, config, attention]);
@@ -270,7 +269,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
           <Copy size={13} />
         </IconButton>
         <a href={card.task.url} target="_blank" rel="noreferrer" className="ml-auto flex items-center gap-1 ui-text-12 text-muted hover:text-fg">
-          Open in GitHub <ExternalLink size={12} />
+          Open in {trackerName(card.task.connection)} <ExternalLink size={12} />
         </a>
         <IconButton title="Close detail" onClick={() => useTasks.setState({ selected: null })}>
           <X size={14} />
