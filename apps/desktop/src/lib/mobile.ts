@@ -1,4 +1,4 @@
-// Settings › Mobile (X39): phone access over Tailscale, pairing and the
+// Settings › Phones (X39, X43): phone access over Tailscale, pairing and the
 // paired phones, as the section shows them.
 
 import type { MobileDevice, MobileStatus } from "./protocol";

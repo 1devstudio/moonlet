@@ -7,13 +7,13 @@
 
 ## Summary
 
-The window has one font size: **Settings › Terminal › Size** sets the terminals' size, and every other text in the app scales with it. Changing it meant opening Settings. ⌘+ and ⌘− now make it one pixel bigger or smaller from anywhere in the window, and ⌘0 puts it back to the default, the way they zoom in a browser or an editor.
+The window has one font size: **Settings › Appearance › Font size** (Settings › Terminal › Size before X43) sets the terminals' size, and every other text in the app scales with it. Changing it meant opening Settings. ⌘+ and ⌘− now make it one pixel bigger or smaller from anywhere in the window, and ⌘0 puts it back to the default, the way they zoom in a browser or an editor.
 
 ## User journey
 
 1. The user presses ⌘+ (or ⌘=, the same key without ⇧). Terminals, the agent view, the sidebar and the editors grow by one step.
 2. ⌘− makes them smaller again, and ⌘0 goes back to the default 13px.
-3. The size is saved like any other setting and shows in **Settings › Terminal › Size**.
+3. The size is saved like any other setting and shows in **Settings › Appearance › Font size** (X43).
 
 ## Behaviour and acceptance criteria
 

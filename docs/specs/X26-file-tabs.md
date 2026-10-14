@@ -17,7 +17,7 @@ A file opened from the Files tab used to show in a read-only viewer squeezed und
 4. Closing the tab (its ×, or ⌘W) with unsaved changes asks "Discard unsaved changes to App.tsx?" first.
 5. An agent edits the file while its tab is open. With no unsaved changes the tab shows the new content; with unsaved changes it keeps the user's text.
 6. Clicking `src/App.tsx:42` in terminal output opens the file's tab at line 42. Markdown files open as source tabs too, with a Source / Preview switch in the tab's header. Preview shows the rendered page in the tab itself, from the editor's current text, unsaved edits included; Source goes back to the editor.
-7. In **Settings › Editor**, "Colour theme" lists the dark themes; picking one recolours every open editor and diff at once.
+7. In **Settings › Appearance › Editor and diffs** (Settings › Editor before X43), "Colour theme" lists the dark themes; picking one recolours every open editor and diff at once.
 
 ## Behaviour and acceptance criteria
 

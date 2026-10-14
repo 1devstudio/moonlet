@@ -722,7 +722,7 @@ export function Sidebar() {
       </div>
       <ClaudeUpdateBanner />
       <div className="flex items-center gap-1 px-3 py-2.5">
-        <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ dialog: { kind: "settings" } })}>
+        <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ settingsPage: { page: "general" } })}>
           <Settings size={14} />
         </IconButton>
         <ProfileFooter />

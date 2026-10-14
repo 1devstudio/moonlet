@@ -10,7 +10,7 @@ The same app builds for macOS in a 390 × 844 window, without Xcode:
 pnpm mobile
 ```
 
-To pair it, turn on Settings › Mobile in the desktop app (or a scratch daemon), click **Pair a phone**, copy the link and paste it into the app.
+To pair it, turn on Settings › Phones in the desktop app (or a scratch daemon), click **Pair a phone**, copy the link and paste it into the app.
 
 ## On the iPhone
 

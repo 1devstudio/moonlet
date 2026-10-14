@@ -1,4 +1,4 @@
-// Pair with a Mac (X39, X40): scan the QR code from Settings › Mobile on the
+// Pair with a Mac (X39, X40): scan the QR code from Settings › Phones on the
 // Mac, or paste its link.
 
 import { useEffect, useState } from "react";
@@ -35,7 +35,7 @@ export function PairScreen({ first }: { first: boolean }) {
   const pair = async (raw: string) => {
     const link = parsePairLink(raw);
     if (!link) {
-      setError("That is not a moonlet pairing link. On the Mac, open Settings › Mobile › Pair a phone.");
+      setError("That is not a moonlet pairing link. On the Mac, open Settings › Phones › Pair a phone.");
       return;
     }
     await run(async () => {
@@ -60,7 +60,7 @@ export function PairScreen({ first }: { first: boolean }) {
       <div className="mt-6 flex flex-col items-center gap-3 text-center">
         <Moon size={72} />
         <h1 className="m-0 text-[26px] font-semibold">{first ? "Pair with your Mac" : "Pair a Mac"}</h1>
-        <p className="m-0 text-[14px] leading-snug text-muted">On the Mac: Settings › Mobile › Pair a phone. Your phone and the Mac must be on the same tailnet.</p>
+        <p className="m-0 text-[14px] leading-snug text-muted">On the Mac: Settings › Phones › Pair a phone. Your phone and the Mac must be on the same tailnet.</p>
       </div>
       {onPhone && (
         <Btn tone="primary" disabled={busy} onClick={() => void scan()}>

@@ -66,11 +66,11 @@ function copyBlock(): boolean {
 export function installShortcuts() {
   const onKey = (e: KeyboardEvent) => {
     if (!e.metaKey) return;
-    // Dialogs handle their own keys, except the palette toggle; the confirm
-    // modal takes them all (X23).
-    const { dialog, confirm } = useStore.getState();
+    // Dialogs and the settings page (X43) handle their own keys, except the
+    // palette toggle; the confirm modal takes them all (X23).
+    const { dialog, confirm, settingsPage } = useStore.getState();
     const id = keyId(e);
-    if (confirm || (dialog && id !== "cmd+k")) return;
+    if (confirm || ((dialog || settingsPage) && id !== "cmd+k")) return;
     if (id === "cmd+c") {
       if (copyBlock()) e.preventDefault();
       return;

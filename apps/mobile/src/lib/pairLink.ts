@@ -1,4 +1,4 @@
-// The `moonlet://pair` link a Mac shows in Settings › Mobile (X39), as a QR
+// The `moonlet://pair` link a Mac shows in Settings › Phones (X39), as a QR
 // code or as text to paste.
 
 export interface PairLink {
