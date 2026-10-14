@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, compact, holdsProject, hostSections, projectRemoval, sessionBadge, workspaceSections } from "./sidebar";
+import { arrange, compact, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
@@ -146,5 +146,12 @@ describe("sessionBadge", () => {
   it("shows merged, and nothing without changes", () => {
     expect(sessionBadge({ ...base, merged: true })).toEqual({ text: "merged", tone: "merged" });
     expect(sessionBadge({ ...base, git: { additions: 0, deletions: 0 } })).toBeNull();
+  });
+});
+
+describe("groupHeading", () => {
+  it("gives project, status and task groups a heading, and the ungrouped list none", () => {
+    const g = (kind: "project" | "status" | "task" | "all") => ({ key: kind, kind, label: "MOON-142 Remote hosts", sessions: [] });
+    expect(["project", "status", "task", "all"].map((k) => groupHeading(g(k as "project")))).toEqual(["project", "label", "label", null]);
   });
 });

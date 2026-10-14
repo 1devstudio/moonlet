@@ -12,6 +12,12 @@ export interface Group {
   sessions: Session[];
 }
 
+/** How a group is headed: a project row (mark, settings, new session), a
+ * plain label (status, task), or nothing for the ungrouped list. */
+export function groupHeading(g: Group): "project" | "label" | null {
+  return g.kind === "project" ? "project" : g.kind === "all" ? null : "label";
+}
+
 const STATUS_ORDER: { state: AgentState | null; label: string }[] = [
   { state: "blocked", label: "Needs input" },
   { state: "working", label: "Working" },
