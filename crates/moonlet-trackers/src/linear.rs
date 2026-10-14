@@ -22,9 +22,11 @@ pub fn issues_query(mine: bool) -> String {
     } else {
         ""
     };
+    // Open issues, and the done and canceled ones of the last 14 days.
+    let recent = r#"or: [{ state: { type: { nin: ["completed", "canceled"] } } }, { updatedAt: { gt: "-P14D" } }]"#;
     format!(
         "query Issues($teams: [String!], $after: String) {{ issues(first: 100, after: $after, \
-         filter: {{ team: {{ key: {{ in: $teams }} }}{who} }}) {{ nodes {{ id identifier title description url \
+         filter: {{ team: {{ key: {{ in: $teams }} }}{who}, {recent} }}) {{ nodes {{ id identifier title description url \
          branchName priority updatedAt state {{ id name type }} assignee {{ id name }} labels {{ nodes {{ name }} }} \
          cycle {{ number }} team {{ key }} }} pageInfo {{ hasNextPage endCursor }} }} }}"
     )
@@ -60,6 +62,24 @@ pub fn parse_viewer(raw: &[u8]) -> Result<String, ApiError> {
         .as_str()
         .unwrap_or_default()
         .into())
+}
+
+/// The viewer's id, to assign issues to them.
+pub fn parse_viewer_id(raw: &[u8]) -> Result<String, ApiError> {
+    data(raw)?["viewer"]["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(String::from)
+        .ok_or_else(|| ApiError::new("Linear did not say who you are"))
+}
+
+/// The cursor of the next page of an `issues` answer, if there is one.
+pub fn next_page(raw: &[u8]) -> Option<String> {
+    let info = &data(raw).ok()?["issues"]["pageInfo"];
+    if info["hasNextPage"].as_bool() != Some(true) {
+        return None;
+    }
+    info["endCursor"].as_str().map(String::from)
 }
 
 pub const ISSUE_UPDATE: &str = "mutation Move($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }";
@@ -116,15 +136,22 @@ pub struct State {
     pub kind: String,
 }
 
+/// A team's states in board order (`position`), which the API does not
+/// promise to keep.
 pub fn parse_states(raw: &[u8]) -> Result<Vec<State>, ApiError> {
     let d = data(raw)?;
-    Ok(nodes(&d["workflowStates"])
-        .map(|s| State {
-            id: s["id"].as_str().unwrap_or_default().into(),
-            name: s["name"].as_str().unwrap_or_default().into(),
-            kind: s["type"].as_str().unwrap_or_default().into(),
+    let mut states: Vec<(f64, State)> = nodes(&d["workflowStates"])
+        .map(|s| {
+            let state = State {
+                id: s["id"].as_str().unwrap_or_default().into(),
+                name: s["name"].as_str().unwrap_or_default().into(),
+                kind: s["type"].as_str().unwrap_or_default().into(),
+            };
+            (s["position"].as_f64().unwrap_or(f64::MAX), state)
         })
-        .collect())
+        .collect();
+    states.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Ok(states.into_iter().map(|(_, s)| s).collect())
 }
 
 /// The issues of an `issues` query as tasks of `connection`.
@@ -138,7 +165,7 @@ pub fn parse_issues(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, Ap
                 connection: connection.into(),
                 key: i["identifier"].as_str().unwrap_or_default().into(),
                 title: i["title"].as_str().unwrap_or_default().into(),
-                url: i["url"].as_str().unwrap_or_default().into(),
+                url: crate::task::web_url(&i["url"]).unwrap_or_default(),
                 column: crate::states::default_column(
                     TrackerKind::Linear,
                     state["type"].as_str().unwrap_or_default(),
@@ -276,6 +303,41 @@ mod tests {
             state_for(&states, crate::states::Column::Done).map(|s| s.name.as_str()),
             Some("Done")
         );
+    }
+
+    #[test]
+    fn a_move_picks_the_first_state_of_the_column_by_position() {
+        // The API does not promise any order.
+        let raw = br#"{"data":{"workflowStates":{"nodes":[
+            {"id":"s2","name":"Doing","type":"started","position":3},
+            {"id":"s1","name":"In Progress","type":"started","position":2.5}
+        ]}}}"#;
+        let states = parse_states(raw).unwrap();
+        assert_eq!(
+            state_for(&states, crate::states::Column::InProgress).map(|s| s.name.as_str()),
+            Some("In Progress")
+        );
+    }
+
+    #[test]
+    fn the_viewer_id_or_an_error() {
+        assert_eq!(
+            parse_viewer_id(&fixture("linear-viewer.json")).unwrap(),
+            "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f"
+        );
+        assert!(parse_viewer_id(br#"{"data":{"viewer":null}}"#).is_err());
+    }
+
+    #[test]
+    fn issues_are_read_page_by_page() {
+        assert_eq!(next_page(&fixture("linear-issues.json")), None);
+        let more =
+            br#"{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c2"}}}}"#;
+        assert_eq!(next_page(more).as_deref(), Some("c2"));
+        // Open issues, and the done and canceled ones of the last 14 days.
+        assert!(issues_query(true).contains(
+            r#"or: [{ state: { type: { nin: ["completed", "canceled"] } } }, { updatedAt: { gt: "-P14D" } }]"#
+        ));
     }
 
     #[test]

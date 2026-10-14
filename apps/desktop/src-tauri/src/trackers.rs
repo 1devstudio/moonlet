@@ -278,8 +278,19 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
     }
     match s.conn.kind {
         TrackerKind::Linear => {
-            let raw = s.linear(&linear::issues_query(mine), json!({ "teams": keys })).await?;
-            Ok(linear::parse_issues(&raw, &s.conn.id)?)
+            let query = linear::issues_query(mine);
+            let mut out = Vec::new();
+            let mut after: Option<String> = None;
+            // At most 500 issues, as for Jira.
+            for _ in 0..5 {
+                let raw = s.linear(&query, json!({ "teams": keys, "after": after })).await?;
+                out.extend(linear::parse_issues(&raw, &s.conn.id)?);
+                after = linear::next_page(&raw);
+                if after.is_none() {
+                    break;
+                }
+            }
+            Ok(out)
         }
         TrackerKind::Jira => {
             // A token Jira no longer accepts makes searches come back empty, not
@@ -302,15 +313,22 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
             let me = if mine { clickup::parse_user_id(&s.clickup_send(s.clickup(reqwest::Method::GET, "/user")?).await?)? } else { String::new() };
             // Open tasks, and closed ones of the last 14 days for the Done column.
             let since = moonlet_core::paths::now_ms().saturating_sub(14 * 86_400_000);
-            let mut out = Vec::new();
+            let mut out: Vec<TrackerTask> = Vec::new();
             for list in &keys {
                 let list = safe_id(list)?;
-                for page in 0..5 {
-                    let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, since);
-                    let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &path)?).await?;
-                    out.extend(clickup::parse_tasks(&raw, &s.conn.id)?);
-                    if !clickup::more_pages(&raw) {
-                        break;
+                for closed_since in [None, Some(since)] {
+                    for page in 0..5 {
+                        let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, closed_since);
+                        let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &path)?).await?;
+                        for t in clickup::parse_tasks(&raw, &s.conn.id)? {
+                            // An open task updated lately comes in both passes.
+                            if !out.iter().any(|x| x.key == t.key) {
+                                out.push(t);
+                            }
+                        }
+                        if !clickup::more_pages(&raw) {
+                            break;
+                        }
                     }
                 }
             }
@@ -351,8 +369,7 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             }
             if req.assign_me {
                 let raw = s.linear(linear::VIEWER, json!({})).await?;
-                let v: Value = serde_json::from_slice(&raw).unwrap_or_default();
-                input["assigneeId"] = v["data"]["viewer"]["id"].clone();
+                input["assigneeId"] = json!(linear::parse_viewer_id(&raw)?);
             }
             if input.as_object().is_some_and(|o| !o.is_empty()) {
                 linear::parse_success(&s.linear(linear::ISSUE_UPDATE, json!({ "id": req.task, "input": input })).await?, "issueUpdate")?;
@@ -388,7 +405,8 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             }
             if req.assign_me {
                 let me = clickup::parse_user_id(&s.clickup_send(s.clickup(reqwest::Method::GET, "/user")?).await?)?;
-                body["assignees"] = json!({ "add": [me.parse::<u64>().unwrap_or_default()] });
+                let me: u64 = me.parse().map_err(|_| fail("ClickUp did not say who you are"))?;
+                body["assignees"] = json!({ "add": [me] });
             }
             if body.as_object().is_some_and(|o| !o.is_empty()) {
                 s.clickup_send(s.clickup(reqwest::Method::PUT, &format!("/task/{}", req.task))?.json(&body)).await?;

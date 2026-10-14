@@ -1,6 +1,6 @@
 //! ClickUp's API v2 (X44): requests and their answers as moonlet's tasks.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::states::Column;
 use crate::task::{TrackerRef, TrackerTask};
@@ -69,11 +69,20 @@ pub fn parse_folder_lists(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError>
         .collect())
 }
 
-/// A list's tasks for the user (or all), open or updated since `since_ms`.
-pub fn tasks_path(list: &str, assignee: Option<&str>, page: u32, since_ms: u64) -> String {
-    let mut p = format!(
-        "/list/{list}/task?include_markdown_description=true&include_closed=true&order_by=updated&page={page}&date_updated_gt={since_ms}"
-    );
+/// A page of a list's tasks for the user (or all): the open ones, or with
+/// `closed_since` (ms) the open and closed ones updated since then. ClickUp's
+/// date filter covers every task, so open ones come in their own pass.
+pub fn tasks_path(
+    list: &str,
+    assignee: Option<&str>,
+    page: u32,
+    closed_since: Option<u64>,
+) -> String {
+    let mut p =
+        format!("/list/{list}/task?include_markdown_description=true&order_by=updated&page={page}");
+    if let Some(since) = closed_since {
+        p.push_str(&format!("&include_closed=true&date_updated_gt={since}"));
+    }
     if let Some(a) = assignee {
         p.push_str(&format!("&assignees%5B%5D={a}"));
     }
@@ -110,9 +119,7 @@ pub fn parse_tasks(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, Api
                     .map(String::from)
                     .unwrap_or_else(|| format!("CU-{id}")),
                 title: t["name"].as_str().unwrap_or_default().into(),
-                url: t["url"]
-                    .as_str()
-                    .map(String::from)
+                url: crate::task::web_url(&t["url"])
                     .unwrap_or_else(|| format!("https://app.clickup.com/t/{id}")),
                 column: crate::states::default_column(
                     TrackerKind::Clickup,
@@ -188,9 +195,13 @@ pub fn parse_error(status: u16, raw: &[u8]) -> ApiError {
     if status == 401 || code.starts_with("OAUTH_") {
         return ApiError {
             auth: true,
-            message: format!(
-                "ClickUp no longer accepts this token ({code}). Create a new one and paste it here."
-            ),
+            message: if code.is_empty() {
+                "ClickUp no longer accepts this token. Create a new one and paste it here.".into()
+            } else {
+                format!(
+                    "ClickUp no longer accepts this token ({code}). Create a new one and paste it here."
+                )
+            },
         };
     }
     ApiError::new(format!(
@@ -274,10 +285,17 @@ mod tests {
 
     #[test]
     fn requests() {
+        // Open tasks of any age…
         assert_eq!(
-            tasks_path("15505202", Some("123"), 0, 1_790_000_000_000),
-            "/list/15505202/task?include_markdown_description=true&include_closed=true&order_by=updated&page=0\
-             &date_updated_gt=1790000000000&assignees%5B%5D=123"
+            tasks_path("15505202", Some("123"), 0, None),
+            "/list/15505202/task?include_markdown_description=true&order_by=updated&page=0\
+             &assignees%5B%5D=123"
+        );
+        // …and, in a second pass, closed ones updated since a time.
+        assert_eq!(
+            tasks_path("15505202", None, 1, Some(1_790_000_000_000)),
+            "/list/15505202/task?include_markdown_description=true&order_by=updated&page=1\
+             &include_closed=true&date_updated_gt=1790000000000"
         );
         assert_eq!(
             comment_body("Opened a pull request: https://github.com/acme/app/pull/57"),
@@ -293,6 +311,11 @@ mod tests {
         assert_eq!(
             e.message,
             "ClickUp no longer accepts this token (OAUTH_025). Create a new one and paste it here."
+        );
+        // Without a code the message has no empty brackets.
+        assert_eq!(
+            parse_error(401, b"").message,
+            "ClickUp no longer accepts this token. Create a new one and paste it here."
         );
         let other = parse_error(429, br#"{"err":"Rate limit reached","ECODE":"APP_002"}"#);
         assert_eq!(
