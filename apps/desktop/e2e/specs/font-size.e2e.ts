@@ -1,16 +1,16 @@
-// Terminal > Size scales the whole app's text, not only the terminals: the
+// Appearance › Font size scales the whole app's text, not only the terminals: the
 // Plan, Files, Changes and Review tabs here.
 
 import { $, browser, expect } from "@wdio/globals";
-import { SESSION, fill, sel } from "../fixtures";
+import { SESSION, closeSettings, fill, openSettings, sel } from "../fixtures";
 
-const sizeField = sel.field("Size");
+const sizeField = sel.settingsField("Font size");
 const tabs = ["Plan", "Files", "Changes", "Review"];
 
 async function setFontSize(size: string) {
-  await $('button[title="Settings (⌘,)"]').click();
+  await openSettings("Appearance");
   await fill(sizeField, size);
-  await $('[role="dialog"][aria-label="Settings"] button[title="Close"]').click();
+  await closeSettings();
 }
 
 const tabFontSizes = () =>

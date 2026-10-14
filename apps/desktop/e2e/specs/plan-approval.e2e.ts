@@ -6,7 +6,7 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { PROJECT, choose, fill, rpc, sel, world } from "../fixtures";
+import { PROJECT, choose, closeSettings, fill, openSettings, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
@@ -52,10 +52,11 @@ const modeChip = 'button[title="Permission mode"]';
 const composer = '//textarea[@placeholder="What should change in the plan?"]';
 
 /** Settings live in the webview's storage, which outlives the scratch world. */
-async function setPlanApproveMode(mode: "auto" | "acceptEdits") {
-  await $('button[title="Settings (⌘,)"]').click();
-  await choose('//div[@role="dialog"][@aria-label="Settings"]//label[span[normalize-space()="When a plan is approved, switch to"]]//select', mode);
-  await $('[role="dialog"][aria-label="Settings"] button[title="Close"]').click();
+async function setPlanApproveMode(mode: "Auto" | "Accept edits") {
+  await openSettings("Agents");
+  await $(sel.settingsOption("When a plan is approved, switch to", mode)).click();
+  await expect($(sel.settingsOption("When a plan is approved, switch to", mode))).toHaveAttribute("aria-checked", "true");
+  await closeSettings();
 }
 
 describe("plan approval", () => {
@@ -64,7 +65,7 @@ describe("plan approval", () => {
   const chatId = () => rpc<{ id: number; chat: boolean; session_id?: string }[]>(w, "terminal.list", {}).find((t) => t.chat && t.session_id === sessionId)!.id;
 
   before(async () => {
-    await setPlanApproveMode("auto");
+    await setPlanApproveMode("Auto");
     blocked = readFileSync(FAKE, "utf8");
     writeFileSync(FAKE, FAKE_CLAUDE);
     chmodSync(FAKE, 0o755);
@@ -100,7 +101,7 @@ describe("plan approval", () => {
 
   after(async () => {
     try {
-      await setPlanApproveMode("auto");
+      await setPlanApproveMode("Auto");
       rpc(w, "session.archive", { id: sessionId });
       await expect($(sel.sessionRow(SESSION))).not.toBeExisting();
     } finally {
@@ -158,7 +159,7 @@ describe("plan approval", () => {
   });
 
   it("switches to Accept edits when Settings say so", async () => {
-    await setPlanApproveMode("acceptEdits");
+    await setPlanApproveMode("Accept edits");
     rpc(w, "chat.send", { id: chatId(), text: "Plan once more" });
     await expect($(waiting)).toBeDisplayed();
     await $(sel.button("Approve, accept edits")).click();

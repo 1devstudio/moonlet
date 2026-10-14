@@ -8,7 +8,7 @@
 
 ## Summary
 
-The moonlet phone app (X40) needs to reach the daemon on the user's Mac while the user is away from the desk. X39 gives the daemon a second listener, a TCP port on the Mac's Tailscale addresses only, and a pairing flow: Settings › Mobile on the Mac shows a QR code, the phone scans it, and from then on the phone holds a device token that the daemon checks on every connection. The phone then speaks the daemon's normal protocol, so it can do what the desktop app does. Through the same connection it also reaches the Mac's SSH hosts: the daemon runs `ssh <host> moonletd proxy` for it, as the desktop does.
+The moonlet phone app (X40) needs to reach the daemon on the user's Mac while the user is away from the desk. X39 gives the daemon a second listener, a TCP port on the Mac's Tailscale addresses only, and a pairing flow: Settings › Phones on the Mac shows a QR code, the phone scans it, and from then on the phone holds a device token that the daemon checks on every connection. The phone then speaks the daemon's normal protocol, so it can do what the desktop app does. Through the same connection it also reaches the Mac's SSH hosts: the daemon runs `ssh <host> moonletd proxy` for it, as the desktop does.
 
 ## User journey
 

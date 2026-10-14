@@ -70,7 +70,7 @@ export function HostsScreen() {
           <QrCode size={20} className="text-muted" />
           <span className="flex flex-1 flex-col gap-0.5">
             <span className="text-[15px] font-medium">Pair a Mac</span>
-            <span className="text-[12.5px] text-muted">On the Mac: Settings › Mobile › Pair a phone</span>
+            <span className="text-[12.5px] text-muted">On the Mac: Settings › Phones › Pair a phone</span>
           </span>
         </button>
 

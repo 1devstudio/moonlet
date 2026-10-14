@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { browser } from "@wdio/globals";
+import { $, browser, expect } from "@wdio/globals";
 import type { ChainablePromiseElement } from "webdriverio";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -221,7 +221,29 @@ export const sel = {
   /** A button in the open confirm modal, by its visible text. */
   confirmButton: (text: string) => `//div[@role="dialog"][@aria-modal="true"]//button[normalize-space()=${lit(text)}]`,
   sessionRow: (name: string) => `//div[@role="button"][.//span[normalize-space()=${lit(name)}]]`,
+  /** The settings page (X43). */
+  settings: '[role="region"][aria-label="Settings"]',
+  /** A field on the settings page, by the text of its <label for>. */
+  settingsField: (label: string) => `//*[@aria-label="Settings"]//*[@id=//label[normalize-space()=${lit(label)}]/@for]`,
+  /** A switch on the settings page, by the text of the row that labels it. */
+  settingsSwitch: (label: string) => `//*[@aria-label="Settings"]//button[@role="switch"][@aria-labelledby=//*[normalize-space()=${lit(label)}]/@id]`,
+  /** An option of a radio group (segmented control or list) on the settings page. */
+  settingsOption: (group: string, option: string) =>
+    `//*[@aria-label="Settings"]//*[@role="radiogroup"][@aria-labelledby=//*[normalize-space()=${lit(group)}]/@id]//button[@role="radio"][starts-with(normalize-space(), ${lit(option)})]`,
 };
+
+/** Opens the settings page (X43) from the sidebar's gear, at `page` in its nav. */
+export async function openSettings(page: string) {
+  await $('button[title="Settings (⌘,)"]').click();
+  await expect($(sel.settings)).toBeDisplayed();
+  await $(`//nav[@aria-label="Settings"]//button[normalize-space()=${lit(page)}]`).click();
+  await expect($(`//nav[@aria-label="Settings"]//button[@aria-current="page"][normalize-space()=${lit(page)}]`)).toBeExisting();
+}
+
+export async function closeSettings() {
+  await $('button[title="Close settings (Esc)"]').click();
+  await expect($(sel.settings)).not.toBeExisting();
+}
 
 /** The shell input editor (T6). */
 export const commandInput = '//textarea[@placeholder="Type a command…"]';
