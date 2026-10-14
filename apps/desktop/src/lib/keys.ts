@@ -71,6 +71,8 @@ export function installShortcuts() {
     const { dialog, confirm, settingsPage } = useStore.getState();
     const id = keyId(e);
     if (confirm || ((dialog || settingsPage) && id !== "cmd+k")) return;
+    // A shortcut being recorded (X43) takes every key.
+    if (document.querySelector("[data-recording-shortcut]")) return;
     if (id === "cmd+c") {
       if (copyBlock()) e.preventDefault();
       return;

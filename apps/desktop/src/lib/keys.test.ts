@@ -137,6 +137,14 @@ describe("the settings page (X43)", () => {
     expect(useStore.getState().settingsPage).toEqual({ page: "general" });
   });
 
+  it("leaves every key, ⌘K too, to a shortcut being recorded", () => {
+    useStore.setState({ settingsPage: { page: "shortcuts" } });
+    document.body.innerHTML = '<button data-recording-shortcut="commit">Press a shortcut…</button>';
+    cmd("k");
+    expect(useStore.getState().dialog).toBeNull();
+    document.body.innerHTML = "";
+  });
+
   it("turns the other shortcuts off while it is open, except ⌘K", () => {
     useStore.setState({ settingsPage: { page: "agents" } });
     cmd("b");
