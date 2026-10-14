@@ -1,6 +1,6 @@
 //! Jira Cloud's REST API v3 (X44): requests and their answers as moonlet's tasks.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::states::Column;
 use crate::task::{TrackerRef, TrackerTask};
@@ -188,10 +188,15 @@ pub fn parse_transitions(raw: &[u8]) -> Result<Vec<Transition>, ApiError> {
 }
 
 /// The first transition whose status lands in `column`.
-pub fn transition_to(transitions: &[Transition], column: Column) -> Option<&Transition> {
-    transitions
-        .iter()
-        .find(|t| crate::states::default_column(TrackerKind::Jira, &t.to_category, &t.to) == column)
+pub fn transition_to<'a>(
+    transitions: &'a [Transition],
+    column: Column,
+    mapping: &crate::states::Mapping,
+) -> Option<&'a Transition> {
+    crate::states::pick(transitions, column, mapping, |t| {
+        let natural = crate::states::default_column(TrackerKind::Jira, &t.to_category, &t.to);
+        (natural, t.to.as_str())
+    })
 }
 
 pub fn transition_body(id: &str) -> Value {
@@ -309,15 +314,18 @@ mod tests {
     fn the_transition_that_reaches_a_column() {
         let t = parse_transitions(&fixture("jira-transitions.json")).unwrap();
         assert_eq!(
-            transition_to(&t, Column::InProgress).map(|t| t.id.as_str()),
+            transition_to(&t, Column::InProgress, &Default::default()).map(|t| t.id.as_str()),
             Some("21")
         );
         assert_eq!(
-            transition_to(&t, Column::Done).map(|t| t.id.as_str()),
+            transition_to(&t, Column::Done, &Default::default()).map(|t| t.id.as_str()),
             Some("31")
         );
         // This workflow has no review state.
-        assert_eq!(transition_to(&t, Column::InReview), None);
+        assert_eq!(
+            transition_to(&t, Column::InReview, &Default::default()),
+            None
+        );
     }
 
     #[test]

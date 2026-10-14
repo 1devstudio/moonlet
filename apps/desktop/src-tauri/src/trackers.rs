@@ -498,10 +498,6 @@ pub struct MoveRequest {
     /// Its team, project or list (`TrackerRef.source`).
     pub source: String,
     pub column: Option<Column>,
-    /// The state to move to, from the user's state mapping; else the first
-    /// state of `column`.
-    #[serde(default)]
-    pub state: Option<String>,
     #[serde(default)]
     pub assign_me: bool,
     #[serde(default)]
@@ -520,8 +516,7 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             let mut input = json!({});
             if let Some(column) = req.column {
                 let states = linear::parse_states(&s.linear(linear::STATES, json!({ "team": req.source })).await?)?;
-                let named = req.state.as_deref().and_then(|n| states.iter().find(|s| s.name == n));
-                let state = named.or_else(|| linear::state_for(&states, column)).ok_or_else(|| fail(format!("{} has no state for that column", req.source)))?;
+                let state = linear::state_for(&states, column, &s.conn.states).ok_or_else(|| fail(format!("{} has no state for that column", req.source)))?;
                 input["stateId"] = json!(state.id);
             }
             if req.assign_me {
@@ -540,8 +535,7 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             if let Some(column) = req.column {
                 let path = format!("/rest/api/3/issue/{}/transitions", req.task);
                 let ts = jira::parse_transitions(&s.jira_send(s.jira(reqwest::Method::GET, &path)?).await?)?;
-                let named = req.state.as_deref().and_then(|n| ts.iter().find(|t| t.to == n));
-                let t = named.or_else(|| jira::transition_to(&ts, column)).ok_or_else(|| fail("No Jira transition leads to that column from here"))?;
+                let t = jira::transition_to(&ts, column, &s.conn.states).ok_or_else(|| fail("No Jira transition leads to that column from here"))?;
                 s.jira_send(s.jira(reqwest::Method::POST, &path)?.json(&jira::transition_body(&t.id))).await?;
             }
             if req.assign_me {
@@ -558,8 +552,7 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             let mut body = json!({});
             if let Some(column) = req.column {
                 let list = clickup::parse_statuses(&s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/list/{}", req.source))?).await?)?;
-                let named = req.state.as_deref().and_then(|n| list.iter().find(|s| s.name == n));
-                let status = named.or_else(|| clickup::status_for(&list, column)).ok_or_else(|| fail("this list has no status for that column"))?;
+                let status = clickup::status_for(&list, column, &s.conn.states).ok_or_else(|| fail("this list has no status for that column"))?;
                 body["status"] = json!(status.name);
             }
             if req.assign_me {

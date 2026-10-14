@@ -95,11 +95,16 @@ pub fn parse_success(raw: &[u8], field: &str) -> Result<(), ApiError> {
     }
 }
 
-/// The state a move to `column` uses: the first state in that column.
-pub fn state_for(states: &[State], column: crate::states::Column) -> Option<&State> {
-    states
-        .iter()
-        .find(|s| crate::states::default_column(TrackerKind::Linear, &s.kind, &s.name) == column)
+/// The state a move to `column` uses, by the user's state mapping (X44).
+pub fn state_for<'a>(
+    states: &'a [State],
+    column: crate::states::Column,
+    mapping: &crate::states::Mapping,
+) -> Option<&'a State> {
+    crate::states::pick(states, column, mapping, |s| {
+        let natural = crate::states::default_column(TrackerKind::Linear, &s.kind, &s.name);
+        (natural, s.name.as_str())
+    })
 }
 
 /// `(organisation urlKey, viewer name)`.
@@ -200,6 +205,7 @@ pub fn parse_issues(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, Ap
 mod tests {
     use super::*;
     use crate::states::Column;
+    use crate::states::Mapping;
     use crate::task::{TrackerRef, TrackerTask};
 
     fn fixture(name: &str) -> Vec<u8> {
@@ -244,7 +250,10 @@ mod tests {
             (Column::Todo, 0, "")
         );
         assert_eq!((tasks[2].column, tasks[2].priority), (Column::Done, 1));
-        assert_eq!([tasks[0].cycle, tasks[1].cycle, tasks[2].cycle], [Some(42), None, Some(41)]);
+        assert_eq!(
+            [tasks[0].cycle, tasks[1].cycle, tasks[2].cycle],
+            [Some(42), None, Some(41)]
+        );
         // `priority` is a Float in Linear's schema.
         let float = br#"{"data":{"issues":{"nodes":[{"identifier":"ENG-1","priority":2.0,"state":{"type":"started","name":"In Progress"},"team":{"key":"ENG"}}]}}}"#;
         assert_eq!(parse_issues(float, "linear:acme").unwrap()[0].priority, 3);
@@ -299,11 +308,13 @@ mod tests {
         // The state a move to a column picks: the first of that column, by position.
         let states = parse_states(&fixture("linear-states.json")).unwrap();
         assert_eq!(
-            state_for(&states, crate::states::Column::InReview).map(|s| s.name.as_str()),
+            state_for(&states, crate::states::Column::InReview, &Mapping::new())
+                .map(|s| s.name.as_str()),
             Some("In Review")
         );
         assert_eq!(
-            state_for(&states, crate::states::Column::Done).map(|s| s.name.as_str()),
+            state_for(&states, crate::states::Column::Done, &Mapping::new())
+                .map(|s| s.name.as_str()),
             Some("Done")
         );
     }
@@ -317,9 +328,28 @@ mod tests {
         ]}}}"#;
         let states = parse_states(raw).unwrap();
         assert_eq!(
-            state_for(&states, crate::states::Column::InProgress).map(|s| s.name.as_str()),
+            state_for(&states, crate::states::Column::InProgress, &Mapping::new())
+                .map(|s| s.name.as_str()),
             Some("In Progress")
         );
+    }
+
+    #[test]
+    fn a_move_follows_the_users_state_mapping() {
+        let states = parse_states(&fixture("linear-states.json")).unwrap();
+        let name = |m: &Mapping, c| state_for(&states, c, m).map(|s| s.name.clone());
+        // Backlog mapped onto Todo: a move to Todo still lands on Todo.
+        let backlog = Mapping::from([("Backlog".to_string(), Column::Todo)]);
+        assert_eq!(name(&backlog, Column::Todo).as_deref(), Some("Todo"));
+        // In Progress mapped onto In Review: a move to In Progress has nowhere to go…
+        let moved = Mapping::from([("In Progress".to_string(), Column::InReview)]);
+        assert_eq!(name(&moved, Column::InProgress), None);
+        // …unless another state is mapped onto it.
+        let both = Mapping::from([
+            ("In Progress".to_string(), Column::InReview),
+            ("Backlog".to_string(), Column::InProgress),
+        ]);
+        assert_eq!(name(&both, Column::InProgress).as_deref(), Some("Backlog"));
     }
 
     #[test]

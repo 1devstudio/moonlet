@@ -192,10 +192,15 @@ pub fn parse_statuses(raw: &[u8]) -> Result<Vec<Status>, ApiError> {
 }
 
 /// The first status of a list in `column`.
-pub fn status_for(statuses: &[Status], column: Column) -> Option<&Status> {
-    statuses
-        .iter()
-        .find(|s| crate::states::default_column(TrackerKind::Clickup, &s.kind, &s.name) == column)
+pub fn status_for<'a>(
+    statuses: &'a [Status],
+    column: Column,
+    mapping: &crate::states::Mapping,
+) -> Option<&'a Status> {
+    crate::states::pick(statuses, column, mapping, |s| {
+        let natural = crate::states::default_column(TrackerKind::Clickup, &s.kind, &s.name);
+        (natural, s.name.as_str())
+    })
 }
 
 pub fn comment_body(text: &str) -> Value {
@@ -292,10 +297,13 @@ mod tests {
         );
         let statuses = parse_statuses(&fixture("clickup-list.json")).unwrap();
         assert_eq!(
-            status_for(&statuses, Column::Done).map(|s| s.name.as_str()),
+            status_for(&statuses, Column::Done, &Default::default()).map(|s| s.name.as_str()),
             Some("complete")
         );
-        assert_eq!(status_for(&statuses, Column::InReview), None);
+        assert_eq!(
+            status_for(&statuses, Column::InReview, &Default::default()),
+            None
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -276,8 +276,8 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
     await fixDrift("local", "personal", card({ kind: "pr_open", text: "#131 open", fix: "Move to In Review" }));
     await fixDrift("local", "personal", card({ kind: "merged", text: "#131 merged", fix: "Move to Done" }));
     expect(sent).toEqual([
-      { id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: null },
-      { id: "linear:acme", task: "issue-1", source: "MOON", column: "done", state: null },
+      { id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review" },
+      { id: "linear:acme", task: "issue-1", source: "MOON", column: "done" },
     ]);
   });
 
@@ -294,14 +294,14 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
 
     await runAutoFixes("local", "personal", board("MOON-143"), () => DEFAULT_RULES);
     await runAutoFixes("local", "personal", board("MOON-143"), () => DEFAULT_RULES);
-    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: null }]);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review" }]);
     expect(Object.keys(autoFixed())).toHaveLength(1);
   });
 
   it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
     sent.length = 0;
     await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } });
-    expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", state: null, assign_me: true }]);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
   });
 });
 
@@ -333,17 +333,10 @@ describe("moving a task from its state menu, and its activity (X45, X46)", () =>
   it("moves a tracker issue to the chosen column and records it", async () => {
     sent.length = 0;
     await moveTask("local", "personal", linearTask, "in_review", 5_000);
-    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: null }]);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review" }]);
     expect(activityOf(linearTask)[0]).toEqual({ at: 5_000, text: "moonlet moved it to In Review" });
   });
 
-  it("moves to the state the user mapped to the column (X44 Workflow states)", async () => {
-    sent.length = 0;
-    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Ada", auth: "api_key", sources: [], states: { QA: "in_review" } }] } });
-    await moveTask("local", "personal", linearTask, "in_review", 5_000);
-    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: "QA" }]);
-    useTasks.setState({ config: null });
-  });
 
   it("reopens a closed GitHub issue through gh", async () => {
     const asked: object[] = [];
@@ -383,7 +376,7 @@ describe("a failed action shows on its task with Retry (X46)", () => {
     expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["MOON-9: No Jira transition leads to that column from here"]);
     await retryTask(t);
     expect(failureOf(t)).toBe(undefined);
-    expect(sent).toEqual([{ id: "linear:acme", task: "issue-9", source: "MOON", column: "done", state: null }]);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-9", source: "MOON", column: "done" }]);
   });
 });
 
@@ -414,5 +407,15 @@ describe("Shows per source (X44)", () => {
     await refreshTasks("local", "personal", 1_000);
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2"]);
     useTasks.setState({ config: null });
+  });
+});
+
+describe("the state mapping (X44 Workflow states)", () => {
+  it("places tasks by the mapping saved now, without waiting for a sync", () => {
+    const qa = { connection: "linear:acme", key: "ENG-1", title: "x", url: "", column: "in_progress" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "i1", state: "QA", source: "ENG" } };
+    const data = { tasks: [qa], worktrees: [], sources: ["linear:acme"], repos: {}, sourceProjects: {}, syncedAt: 1, error: null };
+    const config = { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear" as const, site: "acme", account: "Ada", auth: "api_key", sources: [], states: { QA: "in_review" as const } }] };
+    expect(boardInput(useStore.getState(), "local", "personal", data, config).tasks.map((t) => t.column)).toEqual(["in_review"]);
+    expect(boardInput(useStore.getState(), "local", "personal", data, DEFAULT_CONFIG).tasks.map((t) => t.column)).toEqual(["in_progress"]);
   });
 });
