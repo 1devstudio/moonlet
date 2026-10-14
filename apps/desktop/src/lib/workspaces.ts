@@ -3,6 +3,7 @@
 
 import type { ProfileInfo, Section, Session, Workspace, WorkspaceColor } from "./protocol";
 import { profileName } from "./profiles";
+import { workspaceSections } from "./sidebar";
 
 /** The design's swatches, in the order the New workspace dialog shows them. */
 export const WORKSPACE_COLORS: { id: WorkspaceColor; label: string; hex: string }[] = [
@@ -167,4 +168,27 @@ export function composerTarget(host: string | undefined, workspace: string | und
 /** The workspace "New section" adds to: the shown one on `host`, else the host's first. */
 export function newSectionWorkspace(shown: WorkspaceRef | null, host: string, workspaces: Workspace[]): string | null {
   return shown?.host === host ? shown.id : (workspaces[0]?.id ?? null);
+}
+
+/** Under a workspace page's name (X43): "Workspace on this Mac · 2 sections ·
+ * 9 sessions". `remote`: the host's name, null for this Mac. */
+export function workspaceSummary(ws: Workspace, remote: string | null, sessions: Session[]): string {
+  const open = sessions.filter((s) => s.workspace_id === ws.id && !s.archived).length;
+  return `Workspace on ${remote ?? "this Mac"} · ${count(ws.section_ids.length, "section")} · ${count(open, "session")}`;
+}
+
+/** A workspace's sections in sidebar order, with their project counts. */
+export function sectionRows(ws: Workspace, sections: Section[]): { id: string; name: string; projects: string }[] {
+  return workspaceSections(ws, sections).map((sec) => ({ id: sec.id, name: sec.name, projects: count(sec.project_ids.length, "project") }));
+}
+
+/** The workspace page's fields; `profile` is "" for the default profile. */
+export interface WorkspaceForm {
+  name: string;
+  color: WorkspaceColor;
+  profile: string;
+}
+
+export function workspaceDirty(ws: Workspace, f: WorkspaceForm): boolean {
+  return f.name.trim() !== ws.name || f.color !== ws.color || f.profile !== (ws.claude_profile ?? "");
 }

@@ -1,6 +1,7 @@
 # X8: Project settings
 
 - **Status:** implemented (2026-10-04): daemon RPCs and the dialog. The RPCs were checked live against a dev daemon (scratch `MOONLET_HOME`). The dialog itself has not been checked in the app (manual check M10). Design: "Project settings dialog design" (Claude Design export, 2026-10-04).
+- **Since X43:** the dialog is a settings page, **Settings › Projects › <name>** ([X43](X43-settings-page.md)). Its footer became a bar under the page: the path (click copies it), the state ("This file is part of the repository.", "Unsaved changes" or "Fix N errors to save"), **Discard** and **Save** (⌘↵). Save keeps the page open. Leaving it with unsaved changes asks first, and invalid TOML offers **Check again**. The rest of this spec still holds; "the dialog" below means that page. Code: `components/settings/ProjectPage.tsx`.
 - **Priority / phase:** P1 · phase 3
 - **Related:** [X1](X1-repo-scripts.md) (repo scripts and Run button), [X5](X5-workspaces-projects-sessions.md) (projects in the sidebar), [glossary](../../CONTEXT.md)
 

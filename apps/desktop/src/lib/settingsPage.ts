@@ -3,7 +3,7 @@
 // components/settings/.
 
 import { accountLabel, accountState, tildePath } from "./profiles";
-import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
+import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
 import { updateButton, updateStatus, type UpdateState } from "./updater";
@@ -11,15 +11,21 @@ import { updateButton, updateStatus, type UpdateState } from "./updater";
 /** The app-wide pages, in nav order. */
 export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "profiles" | "hooks" | "hosts" | "phones";
 
-export type SettingsRoute = { page: AppPage };
+export type SettingsRoute = { page: AppPage } | { page: "workspace"; host: string; id: string } | { page: "project"; host: string; id: string; focus?: "run" };
 
 export interface NavEntry {
-  page: AppPage;
+  /** Unique within the nav. */
+  key: string;
+  route: SettingsRoute;
   label: string;
   /** A number on the right, such as the remote hosts. */
   count?: number;
   /** A warning dot on the right; the text is its accessible label. */
   dot?: string;
+  /** A workspace's colour square. */
+  mark?: WorkspaceColor;
+  /** The remote host a workspace or project is on. */
+  host?: string;
 }
 
 export interface NavGroup {
@@ -27,39 +33,66 @@ export interface NavGroup {
   entries: NavEntry[];
 }
 
+/** A workspace or project in the nav; `remote` names its host if remote. */
+export interface NavItem {
+  host: string;
+  id: string;
+  name: string;
+  remote: string | null;
+}
+
 export interface NavInput {
   remoteHosts: number;
   phones: number;
   profilesNeedSignIn: boolean;
+  workspaces: (NavItem & { color: WorkspaceColor })[];
+  projects: NavItem[];
 }
 
-const counted = (page: AppPage, label: string, n: number): NavEntry => (n ? { page, label, count: n } : { page, label });
+const app = (page: AppPage, label: string, extra: Partial<NavEntry> = {}): NavEntry => ({ key: page, route: { page }, label, ...extra });
+const counted = (page: AppPage, label: string, n: number): NavEntry => app(page, label, n ? { count: n } : {});
+const onHost = (remote: string | null) => (remote ? { host: remote } : {});
 
-export function settingsNav({ remoteHosts, phones, profilesNeedSignIn }: NavInput): NavGroup[] {
-  return [
+export function settingsNav(input: NavInput): NavGroup[] {
+  const groups: NavGroup[] = [
     {
       title: "App",
-      entries: [
-        { page: "general", label: "General" },
-        { page: "appearance", label: "Appearance" },
-        { page: "terminal", label: "Terminal" },
-        { page: "agents", label: "Agents" },
-        { page: "notifications", label: "Notifications" },
-      ],
+      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications")],
     },
     {
       title: "Claude Code",
-      entries: [profilesNeedSignIn ? { page: "profiles", label: "Profiles", dot: "a profile is not signed in" } : { page: "profiles", label: "Profiles" }, { page: "hooks", label: "Hooks" }],
+      entries: [app("profiles", "Profiles", input.profilesNeedSignIn ? { dot: "a profile is not signed in" } : {}), app("hooks", "Hooks")],
     },
-    { title: "Machines", entries: [counted("hosts", "Hosts", remoteHosts), counted("phones", "Phones", phones)] },
+    { title: "Machines", entries: [counted("hosts", "Hosts", input.remoteHosts), counted("phones", "Phones", input.phones)] },
   ];
+  if (input.workspaces.length)
+    groups.push({
+      title: "Workspaces",
+      entries: input.workspaces.map((w) => ({ key: routeKey({ page: "workspace", host: w.host, id: w.id }), route: { page: "workspace", host: w.host, id: w.id }, label: w.name, mark: w.color, ...onHost(w.remote) })),
+    });
+  if (input.projects.length)
+    groups.push({
+      title: "Projects",
+      entries: input.projects.map((p) => ({ key: routeKey({ page: "project", host: p.host, id: p.id }), route: { page: "project", host: p.host, id: p.id }, label: p.name, ...onHost(p.remote) })),
+    });
+  return groups;
 }
 
-/** The header's breadcrumb. App pages sit right under Settings. */
-export function settingsCrumbs(route: SettingsRoute): string[] {
-  const groups = settingsNav({ remoteHosts: 0, phones: 0, profilesNeedSignIn: false });
-  const group = groups.find((g) => g.entries.some((e) => e.page === route.page))!;
-  const label = group.entries.find((e) => e.page === route.page)!.label;
+/** The key of the nav entry for `route`. */
+export function routeKey(route: SettingsRoute): string {
+  if (route.page === "workspace") return `ws:${route.host}:${route.id}`;
+  if (route.page === "project") return `project:${route.host}:${route.id}`;
+  return route.page;
+}
+
+/** The header's breadcrumb. App pages sit right under Settings; a workspace
+ * or project page shows `name`. */
+export function settingsCrumbs(route: SettingsRoute, name = ""): string[] {
+  if (route.page === "workspace") return ["Settings", "Workspaces", name];
+  if (route.page === "project") return ["Settings", "Projects", name];
+  const groups = settingsNav({ remoteHosts: 0, phones: 0, profilesNeedSignIn: false, workspaces: [], projects: [] });
+  const group = groups.find((g) => g.entries.some((e) => e.key === route.page))!;
+  const label = group.entries.find((e) => e.key === route.page)!.label;
   return group.title === "App" ? ["Settings", label] : ["Settings", group.title, label];
 }
 

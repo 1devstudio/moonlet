@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentOptions, closeRequest, configName, fromForm, hasRunCommand, isDirty, loadFailure, toForm, validate, type Form } from "./projectSettings";
+import { agentOptions, closeRequest, configName, fromForm, hasRunCommand, isDirty, loadFailure, saveBarStatus, toForm, validate, type Form } from "./projectSettings";
 
 const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], ...patch });
 
@@ -117,5 +117,25 @@ describe("configName", () => {
     expect(configName("/Users/me/web/.moonlet/config.toml")).toBe(".moonlet/config.toml");
     expect(configName("/Users/me/web/.jaunt/config.toml")).toBe(".jaunt/config.toml");
     expect(configName(undefined)).toBe(".moonlet/config.toml");
+  });
+});
+
+describe("the project page's save bar (X43)", () => {
+  it("says the file is part of the repository while nothing changed", () => {
+    expect(saveBarStatus({ dirty: false, errors: 0 })).toEqual({ tone: "muted", text: "This file is part of the repository." });
+  });
+
+  it("says there are unsaved changes", () => {
+    expect(saveBarStatus({ dirty: true, errors: 0 })).toEqual({ tone: "accent", text: "Unsaved changes" });
+  });
+
+  it("counts the errors to fix before saving", () => {
+    expect(saveBarStatus({ dirty: true, errors: 1 })).toEqual({ tone: "error", text: "Fix 1 error to save" });
+    expect(saveBarStatus({ dirty: true, errors: 3 })).toEqual({ tone: "error", text: "Fix 3 errors to save" });
+  });
+
+  it("counts each invalid agent row and an unknown default agent once", () => {
+    const f = form({ default_agent: "nope", agents: [{ id: 901, name: "claude", cmd: "claude --x" }, { id: 902, name: "aider", cmd: "" }, { id: 903, name: "ok", cmd: "ok" }] });
+    expect(validate(f).count).toBe(3);
   });
 });
