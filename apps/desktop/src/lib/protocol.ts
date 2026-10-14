@@ -219,8 +219,28 @@ export interface Session {
   effort?: string | null;
   /** The session whose agent started this one (X22). */
   spawned_by?: string | null;
+  /** The tracker issue linked by hand or started from (X46). */
+  task?: TaskRef | null;
+  /** The user unlinked the task: no linking from the branch or PR either (X46). */
+  task_unlinked?: boolean;
   terminals: number[];
   layout: unknown;
+}
+
+/** A tracker issue a session is linked to (X46). */
+export interface TaskRef {
+  /** The app's id for the tracker connection (X44). */
+  connection: string;
+  key: string;
+  url: string;
+}
+
+/** A linked git work tree of a project (X45). */
+export interface Worktree {
+  path: string;
+  /** null on a detached HEAD. */
+  branch: string | null;
+  last_commit_ms: number;
 }
 
 /** A named, coloured scope with its own sections and sessions (X32). */
@@ -497,6 +517,7 @@ export const M = {
   projectConfig: "project.config",
   projectConfigFile: "project.config_file",
   projectSetConfig: "project.set_config",
+  projectWorktrees: "project.worktrees",
   sessionCreate: "session.create",
   sessionList: "session.list",
   sessionArchive: "session.archive",

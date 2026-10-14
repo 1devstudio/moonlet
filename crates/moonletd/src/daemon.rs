@@ -588,6 +588,10 @@ impl Daemon {
                 let r: m::ProjectSetConfig = params(p)?;
                 ok(w.set_project_config(&r.id, &r.version, &r.config).await.map_err(internal)?)
             }
+            m::PROJECT_WORKTREES => {
+                let r: m::IdRef = params(p)?;
+                ok(w.project_worktrees(&r.id).await.map_err(internal)?)
+            }
             m::SESSION_CREATE => ok(w.create_session(params(p)?).await.map_err(internal)?),
             m::SESSION_LIST => ok(w.list_sessions()),
             m::SESSION_ARCHIVE => {

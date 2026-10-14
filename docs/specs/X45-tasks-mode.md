@@ -82,7 +82,7 @@ Empty states: no tasks in the view ("Nothing assigned to you in Cycle 14"), a fa
 
 ## Protocol and RPCs
 
-- `project.worktrees {project_id}` (daemon) → `[{path, branch, head, last_commit_ms}]` from `git worktree list --porcelain`, so worktrees made outside moonlet show on their task.
+- `project.worktrees {id}` (daemon) → `[{path, branch, last_commit_ms}]`: the linked work trees from `git worktree list --porcelain` (not the main checkout; `branch` is `null` when detached), so worktrees made outside moonlet show on their task.
 - Tasks themselves come from the desktop's tracker commands (X44).
 
 ## Data and config

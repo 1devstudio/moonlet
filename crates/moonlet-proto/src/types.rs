@@ -172,6 +172,15 @@ pub struct Session {
     /// The session whose agent started this one (X22).
     #[serde(default)]
     pub spawned_by: Option<String>,
+    /// The tracker issue this session works on, when linked by hand or
+    /// started from it (X46). Links found from the branch name or the PR are
+    /// worked out by the app and not stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskRef>,
+    /// The user unlinked the session's task: the app no longer links it
+    /// from its branch name or PR either (X46).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub task_unlinked: bool,
     #[serde(default, alias = "sessions")]
     pub terminals: Vec<TerminalId>,
     /// Opaque UI layout (tabs, splits), owned by the client.
@@ -312,6 +321,24 @@ fn default_group() -> String {
 
 fn default_sort() -> String {
     "recent".into()
+}
+
+/// A linked git work tree of a project (X45).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Worktree {
+    pub path: String,
+    /// `None` when the work tree is on a detached HEAD.
+    pub branch: Option<String>,
+    pub last_commit_ms: u64,
+}
+
+/// A tracker issue a session is linked to (X46). `connection` is the app's
+/// id for the tracker connection (X44); the daemon never talks to trackers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskRef {
+    pub connection: String,
+    pub key: String,
+    pub url: String,
 }
 
 /// An issue or pull request a session can start from (composer source picker).

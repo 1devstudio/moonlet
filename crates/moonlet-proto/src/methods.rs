@@ -47,6 +47,8 @@ pub const PROJECT_REMOVE: &str = "project.remove";
 pub const PROJECT_CONFIG: &str = "project.config";
 pub const PROJECT_CONFIG_FILE: &str = "project.config_file";
 pub const PROJECT_SET_CONFIG: &str = "project.set_config";
+/// `{id}` → the project's linked work trees (X45).
+pub const PROJECT_WORKTREES: &str = "project.worktrees";
 pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
@@ -462,6 +464,13 @@ pub struct SessionCreate {
     /// agent's workspace, else the first workspace holding the project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
+    /// The tracker issue the session starts from (X46).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::types::TaskRef>,
+    /// Adopt this existing work tree of the project, and its branch,
+    /// instead of making a new one (X46).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
@@ -487,6 +496,8 @@ impl SessionCreate {
             spawned_by: None,
             add_dirs: Vec::new(),
             workspace_id: None,
+            task: None,
+            worktree: None,
             cols: default_cols(),
             rows: default_rows(),
         }
@@ -514,6 +525,14 @@ pub struct SessionUpdate {
     pub name: Option<String>,
     #[serde(default)]
     pub layout: Option<serde_json::Value>,
+    /// Absent: leave the task link alone. A task: link to it. `null`: unlink,
+    /// and stop linking from the branch name or PR too (X46).
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub task: Option<Option<crate::types::TaskRef>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
