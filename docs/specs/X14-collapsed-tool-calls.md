@@ -19,6 +19,7 @@ A long agent turn is mostly tool calls, which push the agent's answers off scree
 ## Behaviour and acceptance criteria
 
 - [x] With **Collapsed**, consecutive tool calls form one group row labelled `N tool call(s)`. A single call is a group too (`1 tool call`). (`chat.test.ts`, `agent-view.e2e.ts`)
+- [x] Since X42, calls of Claude's `Agent` (or `Task`) tool are never in a group. Each run of them is a "Launched N agents" card of its own, with **Collapsed** and **Expanded** alike. (`chat.test.ts`)
 - [x] Assistant text, thinking, user messages, errors and notes are never inside a group. They end a run, so `Thinking, Bash, Thinking, Bash` shows two groups. (`chat.test.ts`)
 - [x] Items that render nothing (assistant text not yet streamed, redacted thinking) do not split a run. (`chat.test.ts`)
 - [x] A group starts closed. Clicking it shows the tool rows, which work as in X6 (expand for output or diff). The group stays open while more calls stream into it. (`agent-view.e2e.ts`)
