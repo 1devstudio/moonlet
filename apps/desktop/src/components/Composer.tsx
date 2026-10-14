@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
-import { rpc } from "../lib/daemon";
+import { hostsApi, rpc } from "../lib/daemon";
+import type { TaskStart } from "../lib/tasks";
+import { leaveTasksMode } from "../lib/tasksStore";
 import { composerOptions, composerTarget } from "../lib/workspaces";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
@@ -198,7 +200,21 @@ function ModelPicker({ agents, choice, onChange, label, effortLabel }: { agents:
  * New session (X5): "What do you want to work on?" The name and branch come
  * from the prompt; the session is a fresh worktree of the chosen project.
  */
-export function Composer({ host: presetHost, project: presetProject, workspace: presetWorkspace }: { host?: string; project?: string; workspace?: string }) {
+export function Composer({
+  host: presetHost,
+  project: presetProject,
+  workspace: presetWorkspace,
+  task: presetTask,
+  worktree,
+}: {
+  host?: string;
+  project?: string;
+  workspace?: string;
+  /** Starting from a task (X46): the chip, the first message, the branch and the link. */
+  task?: TaskStart;
+  /** Adopting a worktree without a session, and its branch (X46). */
+  worktree?: { path: string; branch: string };
+}) {
   const hosts = useStore((s) => s.hosts);
   const allProjects = useStore((s) => s.projects);
   const allWorkspaces = useStore((s) => s.workspaces);
@@ -232,7 +248,9 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   const [pick, setPick] = useState(initial ? { host: initial.host, id: initial.project.id } : null);
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
 
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(presetTask?.firstMessage ?? "");
+  const [task, setTask] = useState(presetTask ?? null);
+  const [taskBranch, setTaskBranch] = useState<string | null>(null);
   // Starts at the Settings default every time; not remembered per project (X7).
   const [mode, setMode] = useState(() => resolveMode(useStore.getState().settings.defaultMode));
   const modeMenu = useModeMenu(mode, setMode);
@@ -259,6 +277,14 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
   }, [current?.host, current?.project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => ta.current?.focus(), []);
+
+  // The branch a task names (X44 template); an adopted worktree keeps its own.
+  useEffect(() => {
+    if (!task || worktree) return setTaskBranch(null);
+    void hostsApi
+      .taskBranch({ kind: task.kind, key: task.key, title: task.title, number: task.number })
+      .then(setTaskBranch, () => setTaskBranch(null));
+  }, [task, worktree]);
 
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
   const modelLabel =
@@ -315,14 +341,16 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
       const s = await rpc<Session>(current.host, M.sessionCreate, {
         project_id: current.project.id,
         prompt: prompt.trim() || null,
-        name: issue && !prompt.trim() ? issue.title : null,
+        name: task ? task.title : issue && !prompt.trim() ? issue.title : null,
+        task: task?.ref ?? null,
+        worktree: worktree?.path ?? null,
         agent: choice.agent,
         model: choice.agent === "none" ? null : choice.model,
         effort: choice.agent === "none" ? null : choice.effort,
         mode: choice.agent === "claude" ? mode : null,
         from: from && !from.existing ? from.ref : null,
         existing_branch: !!from?.existing,
-        branch: from?.existing ? from.ref : null,
+        branch: from?.existing ? from.ref : !worktree && task && taskBranch ? taskBranch : null,
         pr: pr?.number ?? null,
         add_dirs: choice.agent === "none" ? [] : addDirs,
         workspace_id: workspaceFor(current.host),
@@ -330,6 +358,8 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
         rows: 32,
       });
       close();
+      // Started from Tasks mode: work on it in Sessions mode (X46).
+      if (task || worktree) leaveTasksMode();
       selectSession(current.host, s.id);
     } catch (e) {
       errorToast(e);
@@ -382,8 +412,22 @@ export function Composer({ host: presetHost, project: presetProject, workspace: 
               </button>
             )}
           />
-          {(from || pr || issue || addDirs.length > 0) && (
+          {(from || pr || issue || task || worktree || addDirs.length > 0) && (
             <div className="flex min-w-0 items-center gap-1.5">
+              {task && (
+                <span className="flex min-w-0 items-center gap-1.5 rounded-md bg-hover px-2 py-1 ui-text-12 text-muted" title={task.title}>
+                  <span className="shrink-0 font-mono">For {task.key}</span>
+                  <span className="truncate text-fg">{task.title}</span>
+                  <button title="Remove the task link" onClick={() => setTask(null)} className="hover:text-fg">
+                    <X size={11} />
+                  </button>
+                </span>
+              )}
+              {(worktree || (task && taskBranch)) && (
+                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted" title={worktree ? worktree.path : undefined}>
+                  <GitBranch size={12} /> {worktree ? `${worktree.branch} · existing worktree` : taskBranch}
+                </span>
+              )}
               {from && (
                 <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
                   <GitBranch size={12} /> {from.existing ? from.ref : `from ${from.ref}`}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GhTask } from "./protocol";
-import { githubBranchNumber, githubRepo, mentionsKey, type Task, taskForSession, taskFromGh } from "./tasks";
+import { githubBranchNumber, githubRepo, mentionsKey, type Task, taskForSession, taskFromGh, taskStart } from "./tasks";
 
 describe("mentionsKey (X44 keys)", () => {
   it("finds the key in a branch or PR title, ignoring case", () => {
@@ -123,5 +123,25 @@ describe("githubRepo", () => {
     expect(githubRepo("ssh://git@github.com/acme/web.git")).toBe("acme/web");
     expect(githubRepo("https://gitlab.com/acme/web.git")).toBe(null);
     expect(githubRepo(null)).toBe(null);
+  });
+});
+
+describe("taskStart (X46 starting a session from a task)", () => {
+  it("prefills the composer: the link, the first message, the tracker and the project with the issue's repository", () => {
+    const t = taskFromGh({ ...ghIssue, body: "  ### Describe the bug\nSkills are not found.  " }, "github:github.com");
+    expect(taskStart(t, { web: "acme/web", cli: "cli/cli" })).toEqual({
+      ref: { connection: "github:github.com", key: "cli/cli#13876", url: "https://github.com/cli/cli/issues/13876" },
+      kind: "github",
+      key: "cli/cli#13876",
+      title: "`gh skill install` can't find skills",
+      number: 13876,
+      firstMessage: "cli/cli#13876 · `gh skill install` can't find skills\n### Describe the bug\nSkills are not found.",
+      project: "cli",
+    });
+  });
+
+  it("sends only the title line when the issue has no description, and names no project it can't place", () => {
+    const s = taskStart({ ...hosts, description: "" }, { web: "acme/web" });
+    expect([s.kind, s.firstMessage, s.project, s.number]).toEqual(["linear", "MOON-142 · Remote hosts sidebar", null, undefined]);
   });
 });

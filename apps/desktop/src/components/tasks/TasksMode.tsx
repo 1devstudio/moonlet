@@ -5,9 +5,9 @@ import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { focusThrottle } from "../../lib/prPoll";
 import { selectSession, shownWorkspace, useStore } from "../../lib/store";
-import type { Column } from "../../lib/tasks";
-import { type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { boardInput, isTasksMode, refreshTasks, toggleTasksMode, useTasks } from "../../lib/tasksStore";
+import { type Column, taskStart } from "../../lib/tasks";
+import { type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
+import { boardInput, isTasksMode, leaveTasksMode, refreshTasks, toggleTasksMode, useTasks } from "../../lib/tasksStore";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
@@ -116,13 +116,27 @@ export function TasksSidebar() {
 
 /** Leaves Tasks mode for one of its sessions (X45 journey step 4). */
 function openSession(host: string, sessionId: string) {
-  const s = useStore.getState();
-  const ws = shownWorkspace(s);
-  if (ws) useStore.setState({ tasksMode: { ...s.tasksMode, [wsKey(ws.host, ws.id)]: false } });
+  leaveTasksMode();
   selectSession(host, sessionId);
 }
 
-function TaskCard({ host, card, selected }: { host: string; card: Card; selected: boolean }) {
+/** Opens the new-session composer for a task, or for one of its worktrees without a session (X46). */
+function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
+  const data = useTasks.getState().data[wsKey(host, workspaceId)];
+  const start = taskStart(card.task, data?.repos ?? {});
+  useStore.setState({
+    dialog: {
+      kind: "new-session",
+      host,
+      project: start.project ?? undefined,
+      workspace: workspaceId,
+      task: start,
+      worktree: worktree?.branch ? { path: worktree.path, branch: worktree.branch } : undefined,
+    },
+  });
+}
+
+function TaskCard({ host, workspaceId, card, selected }: { host: string; workspaceId: string; card: Card; selected: boolean }) {
   const pick = () => useTasks.setState({ selected: `${card.task.connection} ${card.task.key}` });
   return (
     <article
@@ -149,7 +163,10 @@ function TaskCard({ host, card, selected }: { host: string; card: Card; selected
       ) : (
         <div className="mt-2 flex items-center gap-1.5 ui-text-12 text-faint">
           {card.orphans.length > 0 && <GitBranch size={12} />}
-          {card.empty}
+          <span>{card.empty}</span>
+          <button className="ml-auto font-medium text-accent hover:underline" onClick={() => startSession(host, workspaceId, card, card.orphans[0])}>
+            {card.orphans.length ? "Start session" : "Start"}
+          </button>
         </div>
       )}
       {card.drift && (
@@ -162,7 +179,7 @@ function TaskCard({ host, card, selected }: { host: string; card: Card; selected
   );
 }
 
-function TaskDetail({ host, card }: { host: string; card: Card }) {
+function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: string; card: Card }) {
   return (
     <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
@@ -183,8 +200,13 @@ function TaskDetail({ host, card }: { host: string; card: Card }) {
         </div>
         {card.task.description && <p className="selectable mt-3 line-clamp-4 whitespace-pre-wrap ui-text-12.5 text-muted">{card.task.description}</p>}
         {card.drift && <div className="mt-3 rounded-md border border-accent/30 bg-accent/[0.06] px-3 py-2 ui-text-12.5 text-accent">{card.drift.text}</div>}
-        <div className="mt-4 ui-text-11.5 font-medium text-faint">Sessions {card.rows.length}</div>
-        {card.rows.length === 0 && <p className="mt-1 ui-text-12.5 text-muted">No sessions yet.</p>}
+        <div className="mt-4 flex items-center ui-text-11.5 font-medium text-faint">
+          Sessions {card.rows.length}
+          <button className="ml-auto text-muted hover:text-fg" onClick={() => startSession(host, workspaceId, card)}>
+            + New session
+          </button>
+        </div>
+        {card.rows.length === 0 && <p className="mt-1 ui-text-12.5 text-muted">No sessions yet. Starting one names the branch after the issue.</p>}
         {card.rows.map((r) => (
           <div key={r.session.id} className="mt-2 flex items-center gap-2 rounded-lg border border-border px-3 py-2">
             <StateGlyph state={r.session.state} size={13} />
@@ -198,7 +220,10 @@ function TaskDetail({ host, card }: { host: string; card: Card }) {
         {card.orphans.map((w) => (
           <div key={w.path} className="mt-2 flex items-center gap-2 ui-text-12.5 text-muted">
             <GitBranch size={13} />
-            <span className="truncate font-mono">{w.branch}</span>
+            <span className="min-w-0 flex-1 truncate font-mono">{w.branch}</span>
+            <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => startSession(host, workspaceId, card, w)}>
+              Start session
+            </button>
           </div>
         ))}
       </div>
@@ -257,7 +282,7 @@ export function TasksMode() {
                 </div>
                 <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                   {shown[col.id].map((c) => (
-                    <TaskCard key={c.task.key} host={ws.host} card={c} selected={c === detail} />
+                    <TaskCard key={c.task.key} host={ws.host} workspaceId={ws.id} card={c} selected={c === detail} />
                   ))}
                 </div>
               </section>
@@ -270,7 +295,7 @@ export function TasksMode() {
           </div>
         )}
       </div>
-      {detail && <TaskDetail host={ws.host} card={detail} />}
+      {detail && <TaskDetail host={ws.host} workspaceId={ws.id} card={detail} />}
     </div>
   );
 }

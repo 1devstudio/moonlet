@@ -7,6 +7,13 @@ import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
 
+interface Session {
+  id: string;
+  name: string;
+  branch: string;
+  task?: { connection: string; key: string; url: string } | null;
+}
+
 const w = world();
 const fakeGh = join(w.root, "bin", "gh");
 const git = (...args: string[]) => execFileSync("git", args, { cwd: w.repo, env: w.env, stdio: "pipe" });
@@ -56,7 +63,8 @@ describe("Tasks mode", () => {
 
   after(async () => {
     if (await sessionsButton().isExisting()) await sessionsButton().click();
-    rpc(w, "session.archive", { id: linkedId });
+    await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId(w));
+    for (const s of rpc<Session[]>(w, "session.list", {}).filter((s) => s.id === linkedId || s.task)) rpc(w, "session.archive", { id: s.id });
     git("remote", "remove", "origin");
     rmSync(fakeGh, { force: true });
   });
@@ -83,5 +91,21 @@ describe("Tasks mode", () => {
     await expect(row).toBeDisplayed();
     await expect(row.$(sel.text("Looks like acme/storefront#12 Fix checkout button"))).toBeDisplayed();
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "My issues")]').click();
+  });
+
+  it("starts a session from a task with the issue as the first message, its branch and the link", async () => {
+    // "Terminal only", so no agent starts (the composer reads this each time it opens).
+    await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), projectId(w));
+    await card("acme/storefront#15", "Todo").$(sel.button("Start")).click();
+    await expect($(sel.text("For acme/storefront#15"))).toBeDisplayed();
+    await expect($(sel.text("15-gift-cards-at-checkout"))).toBeDisplayed({ wait: 10_000 });
+    await expect($('//textarea[@placeholder="What do you want to work on?"]')).toHaveValue("acme/storefront#15 · Gift cards at checkout");
+    await $(sel.button("Create")).click();
+
+    await expect($(sel.sessionRow("Gift cards at checkout"))).toBeDisplayed({ wait: 30_000 });
+    await expect(sessionsButton()).toHaveAttribute("aria-pressed", "true");
+    const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Gift cards at checkout");
+    expect(created?.branch).toBe("15-gift-cards-at-checkout");
+    expect(created?.task).toEqual({ connection: "github:github.com", key: "acme/storefront#15", url: "https://github.com/acme/storefront/issues/15" });
   });
 });
