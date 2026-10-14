@@ -1137,9 +1137,8 @@ impl SessionManager {
         git::worktrees(Path::new(&project.path)).await
     }
 
-    /// A linked work tree of the repo that no session uses, with its branch
-    /// (X46: start a session on a worktree made outside moonlet).
-    async fn adoptable_worktree(&self, repo: &Path, dir: &str) -> Result<(PathBuf, String)> {
+    /// A linked work tree of the repo that no session uses.
+    async fn free_worktree(&self, repo: &Path, dir: &str) -> Result<moonlet_proto::types::Worktree> {
         // Paths compare by where they lead: `/var/…` and `/private/var/…`
         // are the same worktree on macOS.
         let real = |p: &str| std::fs::canonicalize(p).ok();
@@ -1150,15 +1149,31 @@ impl SessionManager {
             .into_iter()
             .find(|w| real(&w.path).as_ref() == Some(&want))
             .with_context(not_ours)?;
-        let branch = found.branch.with_context(|| format!("{dir} is on a detached HEAD"))?;
         if let Some(s) = self
             .list_sessions()
             .into_iter()
             .find(|s| !s.archived && real(&s.path).as_ref() == Some(&want))
         {
-            anyhow::bail!("{dir} is already used by session {}", s.name);
+            anyhow::bail!("{dir} is used by session {}", s.name);
         }
+        Ok(found)
+    }
+
+    /// A free work tree of the repo, with its branch (X46: start a session on
+    /// a worktree made outside moonlet).
+    async fn adoptable_worktree(&self, repo: &Path, dir: &str) -> Result<(PathBuf, String)> {
+        let found = self.free_worktree(repo, dir).await?;
+        let branch = found.branch.with_context(|| format!("{dir} is on a detached HEAD"))?;
         Ok((PathBuf::from(found.path), branch))
+    }
+
+    /// Removes a free work tree of the project, uncommitted changes and all;
+    /// the app asks first (X45 Clean up). Its branch is kept.
+    pub async fn remove_worktree(&self, id: &str, dir: &str) -> Result<()> {
+        let project = self.project(id)?;
+        let repo = Path::new(&project.path);
+        let found = self.free_worktree(repo, dir).await?;
+        git::worktree_remove(repo, Path::new(&found.path)).await
     }
 
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
@@ -1242,7 +1257,9 @@ impl SessionManager {
             let name = unique(&slug, |n| base.join(n).exists());
             let dir = base.join(name);
             git::worktree_add(&repo_path, &dir, &branch, &from, req.existing_branch).await?;
-            dir
+            // The path as `git worktree list` prints it (no /var → /private/var
+            // symlink), so the session's worktree is recognised as its own (X45).
+            std::fs::canonicalize(&dir).unwrap_or(dir)
         };
 
         let config = read_config(&repo_path);

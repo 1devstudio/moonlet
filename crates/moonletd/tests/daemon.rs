@@ -17,10 +17,16 @@ pub struct TestDaemon {
 
 impl TestDaemon {
     pub async fn start() -> TestDaemon {
+        Self::start_with(&[]).await
+    }
+
+    /// A daemon with extra environment, such as a PATH with a fake `gh` first.
+    pub async fn start_with(env: &[(&str, String)]) -> TestDaemon {
         let home = tempfile::tempdir().unwrap();
         let socket = home.path().join("run").join("d.sock");
         let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
             .arg("daemon")
+            .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
             .stdin(Stdio::null())
@@ -1114,7 +1120,7 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
         )
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("already used by session"), "{err}");
+    assert!(err.to_string().contains("is used by session"), "{err}");
     let err = c
         .request::<_, Session>(
             methods::SESSION_CREATE,
@@ -1122,5 +1128,74 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
         )
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("already used by session"), "{err}");
+    assert!(err.to_string().contains("is used by session"), "{err}");
+}
+
+#[tokio::test]
+async fn task_updates_reach_github_through_gh() {
+    use std::os::unix::fs::PermissionsExt;
+    // A fake gh that records what it was asked to do.
+    let bin = tempfile::tempdir().unwrap();
+    let log = bin.path().join("gh.log");
+    let gh = bin.path().join("gh");
+    std::fs::write(&gh, "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n").unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // moonletd takes PATH from a login shell, so the fake goes first in every
+    // startup file of a scratch HOME (as the e2e world does).
+    let home = tempfile::tempdir().unwrap();
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.path().display());
+    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc"] {
+        std::fs::write(home.path().join(rc), &first).unwrap();
+    }
+    let d = TestDaemon::start_with(&[
+        ("HOME", home.path().display().to_string()),
+        ("SHELL", "/bin/zsh".into()),
+        ("GH_LOG", log.display().to_string()),
+    ])
+    .await;
+    let mut c = d.client().await;
+    let (repo, _) = project_with_repo(&d, &mut c).await;
+
+    let _: bool = c
+        .request(methods::GH_TASK_UPDATE, serde_json::json!({"path": repo, "number": 15, "assign_me": true}))
+        .await
+        .unwrap();
+    let _: bool = c
+        .request(methods::GH_TASK_UPDATE, serde_json::json!({"path": repo, "number": 15, "close": true}))
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "issue edit 15 --add-assignee @me\nissue close 15 --reason completed\n"
+    );
+}
+
+#[tokio::test]
+async fn a_worktree_without_a_session_can_be_removed() {
+    use moonlet_proto::types::{Session, Worktree};
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (repo, p) = project_with_repo(&d, &mut c).await;
+    let wt = add_worktree(&repo, &["-b", "moon-131-old"], &d.home.path().join("moon-131-old"));
+    let s: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": p.id, "name": "Codex hooks", "agent": "none"}))
+        .await
+        .unwrap();
+
+    // Neither the project's own checkout nor a session's worktree.
+    for (dir, why) in [(repo.display().to_string(), "is not a worktree of this project"), (s.path.clone(), "is used by session Codex hooks")] {
+        let err = c
+            .request::<_, bool>(methods::PROJECT_WORKTREE_REMOVE, serde_json::json!({"id": p.id, "path": dir}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains(why), "{err}");
+    }
+
+    let _: bool = c
+        .request(methods::PROJECT_WORKTREE_REMOVE, serde_json::json!({"id": p.id, "path": wt}))
+        .await
+        .unwrap();
+    assert!(!std::path::Path::new(&wt).exists());
+    let left: Vec<Worktree> = c.request(methods::PROJECT_WORKTREES, serde_json::json!({"id": p.id})).await.unwrap();
+    assert_eq!(left.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(), [s.path.as_str()]);
 }

@@ -127,6 +127,10 @@ export interface TaskStart {
   firstMessage: string;
   /** The project to start in: the one whose GitHub repository the issue is in. */
   project: string | null;
+  /** A GitHub issue's repository and number, for assigning it (X46). */
+  github?: { repo: string; number: number };
+  /** The composer's "session starts" checkbox (Keep in step), when it does anything. */
+  assign?: { label: string; checked: boolean } | null;
 }
 
 /** The composer's preset for starting a session from `task`; `repos` are the projects' `owner/repo` by id. */
@@ -141,5 +145,6 @@ export function taskStart(task: Task, repos: Record<string, string | null>): Tas
     number: task.github?.number,
     firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
     project: (repo && Object.keys(repos).find((id) => repos[id]?.toLowerCase() === repo)) || null,
+    ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
   };
 }
