@@ -1,7 +1,7 @@
 // The subagents a chat's agent launched (X42): the Agents tab's rows.
 
-import { tokens } from "./chat";
-import type { AgentState, ChatState, PermissionAsk, Subagent } from "./protocol";
+import { type ChatBlock, invisible, tokens } from "./chat";
+import type { AgentState, ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 
 /** An agent's state on screen: `needs` while one of its asks waits. */
 export type AgentRowState = "needs" | "running" | "failed" | "done" | "stopped";
@@ -187,3 +187,76 @@ export function modelLabel(id: string): string {
 
 /** Identifies one subagent across the session's chats. */
 export const agentKey = (chat: number, id: string) => `${chat}:${id}`;
+
+const STATE_LABEL: Record<AgentRowState, string> = { needs: "needs you", running: "running", failed: "failed", done: "done", stopped: "stopped" };
+
+/** The rows of a "Launched N agents" card, one per Agent call (X42). */
+export function launchedRows(
+  tools: ChatItem[],
+  rows: AgentRow[],
+): { key: string; description: string; state: AgentRowState | null; label: string; elapsed: string; agent: string | null }[] {
+  return tools.map((t) => {
+    const r = rows.find((x) => x.agent.tool_use_id === t.id);
+    if (!r) return { key: t.id, description: t.tool?.summary ?? "", state: null, label: "", elapsed: "", agent: null };
+    return { key: t.id, description: r.agent.description, state: r.state, label: STATE_LABEL[r.state], elapsed: r.elapsed, agent: agentKey(r.chat, r.agent.id) };
+  });
+}
+
+/** The subagent that asks, for the permission card's header; null for the
+ *  main agent. The name is the model's, so it stays on one line, apart from
+ *  the request it heads. */
+export function askerName(ask: PermissionAsk, subagents: Subagent[]): string | null {
+  const a = ask.agent ? subagents.find((x) => x.id === ask.agent) : undefined;
+  if (!a) return null;
+  // Line breaks and other control characters (C0, DEL, C1) become spaces.
+  return a.description.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export type AgentNote = { kind: "finished"; agent: Subagent } | { kind: "all"; title: string; clock: string; diff: string };
+
+/** When an agent ended, or would have by Claude's duration. */
+const endedAt = (a: Subagent) => a.ended_at ?? a.started_at + (a.duration_ms ?? 0);
+
+/** Notes in the conversation (X42): each agent that finished or failed,
+ *  after the last message that shows from before it ended, and each batch
+ *  of agents (launched after the same user message) once every one ended.
+ *  `after` is null when no message came before. */
+export function agentNotes(items: ChatItem[], subagents: Subagent[]): { after: string | null; note: AgentNote }[] {
+  const shown = items.filter((i) => !invisible(i));
+  const anchor = (t: number) => shown.reduce<ChatItem | null>((last, i) => (i.ts <= t ? i : last), null)?.id ?? null;
+  const userTimes = items.filter((i) => i.kind === "user").map((i) => i.ts);
+  const batchOfAgent = (a: Subagent) => Math.max(0, ...userTimes.filter((t) => t <= a.started_at));
+  const notes: { at: number; after: string | null; note: AgentNote }[] = [];
+  for (const a of subagents) {
+    if (a.status === "done" || a.status === "failed") notes.push({ at: endedAt(a), after: anchor(endedAt(a)), note: { kind: "finished", agent: a } });
+  }
+  const batches = new Map<number, Subagent[]>();
+  for (const a of subagents) batches.set(batchOfAgent(a), [...(batches.get(batchOfAgent(a)) ?? []), a]);
+  for (const batch of batches.values()) {
+    if (batch.length < 2 || batch.some((a) => a.status === "running")) continue;
+    const last = Math.max(...batch.map(endedAt));
+    const finished = batch.every((a) => a.status === "done");
+    const note: AgentNote = { kind: "all", title: `${agentCount(batch.length)} ${finished ? "finished" : "ended"}`, clock: spanClock(batch, last), diff: diffLine(batchDiff(batch)) };
+    // After the last agent's own note.
+    notes.push({ at: last + 0.5, after: anchor(last), note });
+  }
+  return notes.sort((x, y) => x.at - y.at).map(({ after, note }) => ({ after, note }));
+}
+
+/** Where the notes go among the conversation's blocks: before them all, or
+ *  after the block holding their message (by block id). */
+export function notesByBlock(blocks: ChatBlock[], notes: { after: string | null; note: AgentNote }[]): { lead: AgentNote[]; after: Record<string, AgentNote[]> } {
+  const blockOf = new Map<string, string>();
+  for (const b of blocks) {
+    if (b.kind === "item") blockOf.set(b.item.id, b.item.id);
+    else for (const t of b.tools) blockOf.set(t.id, b.id);
+  }
+  const lead: AgentNote[] = [];
+  const after: Record<string, AgentNote[]> = {};
+  for (const n of notes) {
+    const block = n.after === null ? undefined : blockOf.get(n.after);
+    if (block === undefined) lead.push(n.note);
+    else (after[block] ??= []).push(n.note);
+  }
+  return { lead, after };
+}

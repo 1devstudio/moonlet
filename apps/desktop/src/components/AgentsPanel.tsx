@@ -10,9 +10,6 @@ import { Button, Empty, StateGlyph, cx } from "./ui";
 
 const LINE = { fg: "text-fg", muted: "text-muted", error: "text-error" };
 
-/** Opens the Agents tab, on its list or on one agent (`agentKey`). */
-export const openAgents = (agentDetail: string | null = null) => useStore.setState({ rightOpen: true, rightTab: "agents", agentDetail });
-
 /** The session's agent actions, each against the chat the agent belongs to. */
 function actions(host: string) {
   const call = (chat: number, method: string, params: object) => rpc(host, method, { id: chat, ...params }).catch(errorToast);

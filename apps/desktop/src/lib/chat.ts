@@ -320,20 +320,31 @@ export function transcript(items: readonly ChatItem[]): string {
 export type ToolCallView = "collapsed" | "expanded";
 
 /** One row of the conversation: an item, or a run of tool calls folded into one. */
-export type ChatBlock = { kind: "item"; item: ChatItem } | { kind: "tools"; id: string; tools: ChatItem[] };
+export type ChatBlock = { kind: "item"; item: ChatItem } | { kind: "tools"; id: string; tools: ChatItem[] } | { kind: "agents"; id: string; tools: ChatItem[] };
+
+/** Claude's tool that launches a subagent (X42). */
+export const isAgentCall = (it: ChatItem) => it.kind === "tool" && (it.tool?.name === "Agent" || it.tool?.name === "Task");
 
 /** Items that render nothing: no text yet, thinking that was redacted, or a tool item without its call. */
-const invisible = (it: ChatItem) => (it.kind === "assistant" && !it.text) || (it.kind === "thinking" && !it.partial && !it.text.trim()) || (it.kind === "tool" && !it.tool);
+export const invisible = (it: ChatItem) => (it.kind === "assistant" && !it.text) || (it.kind === "thinking" && !it.partial && !it.text.trim()) || (it.kind === "tool" && !it.tool);
 
 /**
  * The conversation's rows. Collapsed, each run of tool calls becomes one
  * group; text and thinking are never folded, so they end a run. Items that
- * render nothing are dropped and do not split a run.
+ * render nothing are dropped and do not split a run. Runs of Agent calls
+ * are always a block of their own (X42).
  */
 export function chatBlocks(items: readonly ChatItem[], view: ToolCallView): ChatBlock[] {
   const blocks: ChatBlock[] = [];
   for (const it of items) {
     if (invisible(it)) continue;
+    // Subagent launches get their own card in either view (X42).
+    if (isAgentCall(it)) {
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === "agents") last.tools.push(it);
+      else blocks.push({ kind: "agents", id: it.id, tools: [it] });
+      continue;
+    }
     if (view === "collapsed" && it.kind === "tool") {
       const last = blocks[blocks.length - 1];
       if (last?.kind === "tools") last.tools.push(it);

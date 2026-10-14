@@ -64,7 +64,7 @@ import {
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
 import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
-import { openFileTab } from "../lib/actions";
+import { openAgents, openChanges, openFileTab } from "../lib/actions";
 import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
@@ -75,6 +75,7 @@ import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../l
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
+import { AGENT_STATE, type AgentNote, type AgentRow, agentCount, agentMs, agentNotes, agentRows, askerName, clock, launchedRows, notesByBlock } from "../lib/subagents";
 import { uiScale } from "../lib/uiScale";
 import { useNow } from "../lib/useNow";
 import { type ContextFiles, chatContextFiles, chipSection, newChatContext, otherChats, planContextFiles } from "../lib/chatContext";
@@ -84,7 +85,7 @@ import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
-import { AgentIcon, Button, cx, inputCls } from "./ui";
+import { AgentIcon, Button, StateGlyph, cx, inputCls } from "./ui";
 import { ClaudeAuthDialog } from "./Profiles";
 
 // ------------------------------------------------------------ messages
@@ -471,11 +472,19 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
 /** An AskUserQuestion with questions we can render; anything else gets the plain card. */
 const isQuestion = (ask: PermissionAsk) => ask.tool === "AskUserQuestion" && askQuestions(ask.input).length > 0;
 
-export function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd: string; onAnswer: (decision: "allow" | "always" | "deny") => void }) {
+/** `agent` names the subagent that asks (X42), on a line of its own. */
+export function PermissionCard({ ask, cwd, agent, onAnswer }: { ask: PermissionAsk; cwd: string; agent?: string | null; onAnswer: (decision: "allow" | "always" | "deny") => void }) {
   const Icon = toolIcon(ask.tool);
   const detail = ask.diff || ["Bash", "Write", "Edit", "MultiEdit", "Read"].includes(ask.tool) ? null : JSON.stringify(ask.input, null, 2);
   return (
     <div className="moonlet-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
+      {agent && (
+        <div className="mb-2 flex min-w-0 items-center gap-1.5 ui-text-12 text-muted" title={agent}>
+          <Bot size={13} className="shrink-0" />
+          <span className="shrink-0">Agent</span>
+          <span className="min-w-0 truncate text-fg">{agent}</span>
+        </div>
+      )}
       <div className="mb-2 flex items-center gap-2 ui-text-13">
         <ShieldAlert size={15} className="text-blocked" />
         <span className="font-medium">Allow {ask.tool}?</span>
@@ -500,6 +509,64 @@ export function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd
           Deny
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** "Launched N agents", one row per Agent call (X42). */
+function LaunchedCard({ tools, rows }: { tools: ChatItem[]; rows: AgentRow[] }) {
+  const list = launchedRows(tools, rows);
+  return (
+    <div className="my-2 overflow-hidden rounded-xl border border-border bg-panel">
+      <div className="flex h-9 items-center border-b border-border px-3.5 ui-text-13">
+        <span className="font-medium text-fg">Launched {agentCount(list.length)}</span>
+        <button className="ml-auto ui-text-12.5 text-accent hover:text-accent-2" onClick={() => openAgents()}>
+          Show in panel
+        </button>
+      </div>
+      {list.map((r) => (
+        <div key={r.key} role="button" className="flex h-8 cursor-default items-center gap-2.5 px-3.5 hover:bg-panel-2" onClick={() => r.agent && openAgents(r.agent)}>
+          <StateGlyph state={r.state ? AGENT_STATE[r.state].glyph : "idle"} size={12} />
+          <span className="min-w-0 flex-1 truncate ui-text-13 text-fg">{r.description}</span>
+          {r.state && <span className={cx("shrink-0 ui-text-12.5", AGENT_STATE[r.state].text)}>{r.label}</span>}
+          <span className="w-10 shrink-0 text-right font-mono ui-text-12 tabular-nums text-faint">{r.elapsed}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** An agent that finished or failed, or a whole batch that ended (X42). */
+function AgentNoteView({ note }: { note: AgentNote }) {
+  if (note.kind === "all") {
+    return (
+      <div className="my-2 flex h-10 items-center gap-2.5 rounded-xl border border-border bg-panel px-3.5 ui-text-13">
+        <StateGlyph state="done" size={12} />
+        <span className="text-fg">
+          {note.title} <span className="text-faint">in {note.clock}</span>
+        </span>
+        {note.diff && <span className="font-mono ui-text-12 tabular-nums text-muted">{note.diff}</span>}
+        <Button size="sm" className="ml-auto" onClick={openChanges}>
+          Review changes
+        </Button>
+      </div>
+    );
+  }
+  const a = note.agent;
+  const failed = a.status === "failed";
+  return (
+    <div className="my-2">
+      <div className="flex items-center gap-2.5 ui-text-13">
+        <StateGlyph state={failed ? "error" : "done"} size={12} />
+        <span className="min-w-0 truncate text-fg">{a.description}</span>
+        <span className={failed ? "text-error" : "text-faint"}>{failed ? "failed" : "finished"}</span>
+        <span className="ml-auto font-mono ui-text-12 tabular-nums text-faint">{clock(agentMs(a, Date.now()))}</span>
+      </div>
+      {(failed ? a.error : a.report) && (
+        <div className={cx("selectable ml-[5px] mt-1.5 border-l-2 border-border pl-4 ui-text-13 leading-[1.6]", failed && "text-error")}>
+          {failed ? a.error : <Markdown text={a.report ?? ""} />}
+        </div>
+      )}
     </div>
   );
 }
@@ -1061,6 +1128,11 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const exists = useProjectFiles(host, cwd, working);
   const fileLinks = useMemo(() => ({ host, wsId, cwd, exists }), [host, wsId, cwd, exists]);
   const now = useNow(working && visible);
+  // Subagents (X42): their launch cards, notes and asks.
+  const agentsRunning = (st?.subagents ?? []).some((a) => a.status === "running");
+  const agentNow = useNow(agentsRunning && visible);
+  const agentRowsHere = useMemo(() => agentRows([{ id, st }], agentNow), [id, st, agentNow]);
+  const placed = useMemo(() => notesByBlock(blocks, st ? agentNotes(st.items, st.subagents ?? []) : []), [blocks, st]);
 
   // Follow new output while the view is scrolled to the bottom.
   useLayoutEffect(() => {
@@ -1264,12 +1336,23 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
             ) : st.items.length === 0 ? (
               <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} onMention={(m) => editor.current?.mention(m)} />
             ) : (
-              blocks.map((b) => {
-                const view =
-                  b.kind === "tools" ? <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} /> : <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />;
-                const hasPlan = plan?.itemId && (b.kind === "tools" ? b.tools.some((t) => t.id === plan.itemId) : b.item.id === plan.itemId);
-                return hasPlan ? [view, planCard] : view;
-              })
+              [
+                ...placed.lead.map((n, i) => <AgentNoteView key={`lead-${i}`} note={n} />),
+                ...blocks.map((b) => {
+                  const view =
+                    b.kind === "agents" ? (
+                      <LaunchedCard key={b.id} tools={b.tools} rows={agentRowsHere} />
+                    ) : b.kind === "tools" ? (
+                      <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} />
+                    ) : (
+                      <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />
+                    );
+                  const ids = b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id);
+                  const hasPlan = plan?.itemId && ids.includes(plan.itemId);
+                  const after = (placed.after[b.kind === "item" ? b.item.id : b.id] ?? []).map((n, i) => <AgentNoteView key={`${b.kind === "item" ? b.item.id : b.id}-note-${i}`} note={n} />);
+                  return [view, ...(hasPlan ? [planCard] : []), ...after];
+                }),
+              ]
             )}
             {plan && !plan.itemId && planCard}
             {st?.pending.map((ask) => {
@@ -1288,6 +1371,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                   key={ask.id}
                   ask={ask}
                   cwd={info?.cwd ?? ""}
+                  agent={askerName(ask, st.subagents ?? [])}
                   onAnswer={(decision) => {
                     stick.current = true;
                     void call(M.chatPermission, { ask: ask.id, decision });

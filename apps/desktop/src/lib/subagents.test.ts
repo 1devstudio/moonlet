@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { agentCount, agentRows, agentsHeader, askLine, agentsTabDot, modelLabel, retryMessage, stoppable, stripDismissAt, stripRetry, stripView } from "./subagents";
+import { type AgentNote, agentCount, agentNotes, agentRows, agentsHeader, askLine, askerName, launchedRows, agentsTabDot, modelLabel, notesByBlock, retryMessage, stoppable, stripDismissAt, stripRetry, stripView } from "./subagents";
 import type { ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
+import { chatBlocks } from "./chat";
 
 const T0 = 1_791_970_430_000;
 
@@ -244,5 +245,78 @@ describe("stripView (X42)", () => {
     const st = { ...withItems([done("a1", T0 - 60_000, 10_000), running("a3", T0)]), items: [user(T0 - 90_000), user(T0 - 1_000)] };
     expect(stripView(st, T0 + 1_000, 0)).toMatchObject({ title: "1 agent", detail: "1 running" });
     expect(stripView({ ...st, items: [user(T0 + 500)] }, T0 + 1_000, 0)).toBeNull();
+  });
+});
+
+describe("launchedRows (X42)", () => {
+  const launch = (id: string, summary: string): ChatItem => ({ id, kind: "tool", text: "", ts: T0, tool: { name: "Agent", summary, input: {}, status: "ok" } });
+
+  it("shows each launched agent's state and time, by its Agent call", () => {
+    const rows = agentRows([{ id: 7, st: chat([write, list], [ask]) }], T0 + 62_000);
+    const shown = launchedRows([launch("toolu_01QNjAbPMDQiZwKyCqkmv2VD", "Write hello file"), launch("toolu_01BxCjWGafqjuD8gywbDsWV7", "List files")], rows);
+    expect(shown.map(({ description, state, label, elapsed }) => ({ description, state, label, elapsed }))).toEqual([
+      { description: "Write hello file", state: "needs", label: "needs you", elapsed: "1:02" },
+      { description: "List files", state: "done", label: "done", elapsed: "0:11" },
+    ]);
+  });
+
+  it("falls back to the call's summary for a launch the daemon never tracked", () => {
+    expect(launchedRows([launch("toolu_old", "Explore the protocol")], [])).toMatchObject([{ description: "Explore the protocol", state: null, label: "", elapsed: "", agent: null }]);
+  });
+});
+
+describe("askerName (X42)", () => {
+  it("names the subagent that asks, or nobody for the main agent", () => {
+    expect(askerName(ask, [list, write])).toBe("Write hello file");
+    expect(askerName({ ...ask, agent: null }, [write])).toBeNull();
+  });
+
+  it("keeps a model-written name on one line, so it cannot pass for the request", () => {
+    const sneaky = { ...write, description: "Tidy up\nwants to run ls\u0007" };
+    expect(askerName(ask, [sneaky])).toBe("Tidy up wants to run ls");
+  });
+});
+
+describe("agentNotes (X42)", () => {
+  const at = (id: string, ts: number, kind: ChatItem["kind"] = "assistant", text = id): ChatItem => ({ id, kind, text, ts });
+  const items = [at("u", T0 - 1_000, "user"), at("m1", T0 + 5_000), at("m2", T0 + 20_000)];
+  const shape = (n: { after: string | null; note: AgentNote }) => [n.after, n.note.kind === "all" ? `${n.note.title} in ${n.note.clock}|${n.note.diff}` : n.note.agent.description];
+
+  it("puts a finished or failed agent after the last message before it ended, then the batch once all ended", () => {
+    const notes = agentNotes(items, [list, { ...bench, started_at: T0 + 2_000 }, audit]);
+    expect(notes.map(shape)).toEqual([
+      ["m1", "List files"],
+      ["m2", "Audit SSH key handling"],
+      // One was stopped and one failed: they ended, they did not all finish.
+      ["m2", "3 agents ended in 0:52|"],
+    ]);
+  });
+
+  it("calls a batch finished when every agent is done, with their own edits", () => {
+    const edit = (id: string, added: number, removed: number) => ({ id, name: "Edit", summary: "/repo/a.ts", status: "ok" as const, added, removed });
+    const notes = agentNotes(items, [{ ...list, tools: [edit("e1", 2, 1)] }, { ...list, id: "a7", started_at: T0, tools: [edit("e2", 1, 0)] }]);
+    expect(notes.map(shape).at(-1)).toEqual(["m1", "2 agents finished in 0:12|+3 −1 in 1 file"]);
+  });
+
+  it("only follows messages that show", () => {
+    // An empty assistant item renders nothing, so a note after it would never show.
+    const notes = agentNotes([...items, at("blank", T0 + 10_000, "assistant", "")], [list]);
+    expect(notes.map(shape)).toEqual([["m1", "List files"]]);
+  });
+
+  it("waits for every agent of a batch before the batch note", () => {
+    const notes = agentNotes(items, [list, write]);
+    expect(notes.map((n) => n.note.kind)).toEqual(["finished"]);
+  });
+});
+
+describe("notesByBlock (X42)", () => {
+  it("places each note after the block holding its message", () => {
+    const tool = (id: string): ChatItem => ({ id, kind: "tool", text: "", ts: T0, tool: { name: "Bash", summary: id, input: {}, status: "ok" } });
+    const blocks = chatBlocks([{ id: "u", kind: "user", text: "Go", ts: T0 }, tool("b1"), tool("b2"), { id: "m", kind: "assistant", text: "Done.", ts: T0 }], "collapsed");
+    const note = (after: string | null, id: string) => ({ after, note: { kind: "finished" as const, agent: { ...list, id } } });
+    const placed = notesByBlock(blocks, [note(null, "x0"), note("b2", "x1"), note("m", "x2"), note("b1", "x3")]);
+    expect(placed.lead.map((n) => n.kind === "finished" && n.agent.id)).toEqual(["x0"]);
+    expect(Object.fromEntries(Object.entries(placed.after).map(([k, v]) => [k, v.map((n) => n.kind === "finished" && n.agent.id)]))).toEqual({ b1: ["x1", "x3"], m: ["x2"] });
   });
 });

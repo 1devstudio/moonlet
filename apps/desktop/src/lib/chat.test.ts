@@ -83,15 +83,23 @@ describe("chat helpers", () => {
     const tool = (id: string, status: "running" | "ok" | "error" | "denied" = "ok"): ChatItem => ({ ...item(id, "", "tool"), tool: { name: "Bash", summary: id, input: {}, status } });
     const items = [item("u", "check it", "user"), item("t1", "The resume URL is session-bound", "thinking"), tool("b1"), item("t2", "", "thinking"), tool("b2"), item("a1", "Found it."), tool("b3"), item("e", "", "assistant")];
 
-    expect(chatBlocks(items, "collapsed").map((b) => (b.kind === "tools" ? `[${b.tools.map((t) => t.id).join(",")}]` : b.item.id))).toEqual(["u", "t1", "[b1,b2]", "a1", "[b3]"]);
-    expect(chatBlocks(items, "expanded").map((b) => (b.kind === "tools" ? "group" : b.item.id))).toEqual(["u", "t1", "b1", "b2", "a1", "b3"]);
+    expect(chatBlocks(items, "collapsed").map((b) => (b.kind === "item" ? b.item.id : `[${b.tools.map((t) => t.id).join(",")}]`))).toEqual(["u", "t1", "[b1,b2]", "a1", "[b3]"]);
+    expect(chatBlocks(items, "expanded").map((b) => (b.kind === "item" ? b.item.id : "group"))).toEqual(["u", "t1", "b1", "b2", "a1", "b3"]);
+  });
+
+  it("gives each run of Agent calls its own Launched block (X42)", () => {
+    const call = (id: string, name: string): ChatItem => ({ ...item(id, "", "tool"), tool: { name, summary: id, input: {}, status: "ok" } });
+    const items = [item("u", "split it", "user"), call("b1", "Bash"), call("a1", "Agent"), call("a2", "Task"), call("b2", "Read"), item("m", "Both run.")];
+    const shape = (b: ReturnType<typeof chatBlocks>[number]) => (b.kind === "agents" ? `<${b.tools.map((t) => t.id).join(",")}>` : b.kind === "tools" ? `[${b.tools.map((t) => t.id).join(",")}]` : b.item.id);
+    expect(chatBlocks(items, "collapsed").map(shape)).toEqual(["u", "[b1]", "<a1,a2>", "[b2]", "m"]);
+    expect(chatBlocks(items, "expanded").map(shape)).toEqual(["u", "b1", "<a1,a2>", "b2", "m"]);
   });
 
   it("does not let a tool item without a call split a group", () => {
     const tool = (id: string): ChatItem => ({ ...item(id, "", "tool"), tool: { name: "Bash", summary: id, input: {}, status: "ok" } });
     const items = [tool("b1"), item("x", "", "tool"), tool("b2")];
-    expect(chatBlocks(items, "collapsed").map((b) => (b.kind === "tools" ? `[${b.tools.map((t) => t.id).join(",")}]` : b.item.id))).toEqual(["[b1,b2]"]);
-    expect(chatBlocks(items, "expanded").map((b) => (b.kind === "tools" ? "group" : b.item.id))).toEqual(["b1", "b2"]);
+    expect(chatBlocks(items, "collapsed").map((b) => (b.kind === "item" ? b.item.id : `[${b.tools.map((t) => t.id).join(",")}]`))).toEqual(["[b1,b2]"]);
+    expect(chatBlocks(items, "expanded").map((b) => (b.kind === "item" ? b.item.id : "group"))).toEqual(["b1", "b2"]);
   });
 
   it("labels a tool group and sums up its status", () => {

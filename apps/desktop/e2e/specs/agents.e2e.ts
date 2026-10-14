@@ -19,11 +19,11 @@ while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) out '{"type":"system","subtype":"init","session_id":"e2e-agents","model":"e2e-model","slash_commands":[]}' ;;
     *'"subtype":"stop_task"'*)
-      out '{"type":"system","subtype":"task_updated","task_id":"a2","patch":{"status":"killed","end_time":1791970412270}}'
+      out '{"type":"system","subtype":"task_updated","task_id":"a2","patch":{"status":"killed","end_time":'"$(date +%s)000"'}}'
       out '{"type":"system","subtype":"task_notification","task_id":"a2","tool_use_id":"toolu_a2","status":"stopped","summary":"List files"}' ;;
     *'"request_id":"q1"'*)
       out '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"w1","type":"tool_result","content":"File created successfully at: /repo/hello.txt"}]},"parent_tool_use_id":"toolu_a1","agent_id":"a1"}'
-      out '{"type":"system","subtype":"task_updated","task_id":"a1","patch":{"status":"completed","end_time":1791970434654}}'
+      out '{"type":"system","subtype":"task_updated","task_id":"a1","patch":{"status":"completed","end_time":'"$(date +%s)000"'}}'
       out '{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_a1","status":"completed","summary":"Created hello.txt with hi.","usage":{"total_tokens":10682,"tool_uses":1,"duration_ms":3175}}' ;;
     *'"type":"user"'*)
       out '{"type":"assistant","message":{"id":"m1","model":"claude-haiku-5-5","content":[{"type":"tool_use","id":"toolu_a1","name":"Agent","input":{"description":"Write hello file","prompt":"Create hello.txt containing hi.","subagent_type":"general-purpose"}},{"type":"tool_use","id":"toolu_a2","name":"Agent","input":{"description":"List files","prompt":"List the files.","subagent_type":"general-purpose"}}]}}'
@@ -109,6 +109,9 @@ describe("agents tab", () => {
     await expect($(`${strip}//span[normalize-space()="2 agents"]`)).toBeDisplayed();
     await expect($(`${strip}//span[normalize-space()="· 1 needs you"]`)).toBeDisplayed();
     await expect($(chip("needs input"))).toBeDisplayed();
+    // The conversation shows the launch and names the agent that asks.
+    await expect($('//span[normalize-space()="Launched 2 agents"]')).toBeDisplayed();
+    await expect($('//div[contains(@class, "moonlet-card-in")][.//span[normalize-space()="Write hello file"]][.//span[normalize-space()="Allow Write?"]]')).toBeDisplayed();
   });
 
   it("shows the asking agent's model, tokens, edits and permission card in its detail", async () => {
@@ -129,6 +132,8 @@ describe("agents tab", () => {
       timeoutMsg: "the row kept its Allow button",
     });
     await expect($(`${tab("Agents")}//span[@aria-label="agent waiting"]`)).not.toBeExisting();
+    // Its report shows in the conversation.
+    await expect($(text("Created hello.txt with hi."))).toBeDisplayed();
     // One agent still runs: the session row says so (X42).
     await expect($(chip("1 agent"))).toBeDisplayed();
   });
@@ -145,5 +150,11 @@ describe("agents tab", () => {
     // One was stopped, so they did not all finish.
     await expect($(`${strip}//span[contains(normalize-space(), "2 agents · 1 done · 1 stopped")]`)).toBeDisplayed();
     await expect($(chip("1 agent"))).not.toBeExisting();
+    // One was stopped: the batch ended without all finishing.
+    await expect($('//span[starts-with(normalize-space(), "2 agents ended in")]')).toBeDisplayed();
+    // A row of the Launched card opens that agent in the tab.
+    await jsClick('//div[@role="button"][.//span[normalize-space()="Write hello file"]][.//span[normalize-space()="done"]]');
+    await expect($('//*[@id="right-tabpanel"]//span[normalize-space()="Write hello file"]')).toBeDisplayed();
+    await expect($('//*[@id="right-tabpanel"]//button[normalize-space()="Agents"]')).toBeDisplayed();
   });
 });
