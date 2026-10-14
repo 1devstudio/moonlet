@@ -543,7 +543,9 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
     void refreshTasks(host, workspaceId);
   } catch (e) {
     movedByMoonlet.delete(id);
-    setFailure(task, (e as { message?: string }).message ?? message(e));
+    const why = (e as { message?: string }).message ?? message(e);
+    setFailure(task, why);
+    toast(`${task.key}: ${why}`, "error");
   }
 }
 
