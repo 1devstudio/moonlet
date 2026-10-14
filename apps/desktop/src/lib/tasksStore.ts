@@ -123,13 +123,33 @@ export const useTasks = create<TasksState>(() => ({
   config: null,
   configError: null,
   layout: storedLayout(),
-  expanded: {},
+  expanded: storedExpanded(),
   attention: {},
   activity: {},
   query: "",
   paused: storedPaused(),
   failures: {},
 }));
+
+function storedExpanded(): Record<string, boolean> {
+  try {
+    return JSON.parse(readStored("tasks.expanded") ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+/** The List layout's open rows by task id, kept across restarts (X45). */
+export function setExpanded(expanded: Record<string, boolean>) {
+  const open = Object.fromEntries(Object.entries(expanded).filter(([, on]) => on));
+  useTasks.setState({ expanded: open });
+  writeStored("tasks.expanded", JSON.stringify(open));
+}
+
+export function toggleExpanded(id: string) {
+  const now = useTasks.getState().expanded;
+  setExpanded({ ...now, [id]: !now[id] });
+}
 
 function storedLayout(): "board" | "list" {
   try {

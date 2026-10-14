@@ -10,7 +10,7 @@ import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, boardInput, ensureTasks, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, syncTasks, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, boardInput, ensureTasks, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, removeWorktreeAsk, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
@@ -528,10 +528,10 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
   const keyOf = (c: Card) => `${c.task.connection} ${c.task.key}`;
   const all = groups.flatMap((g) => (g.column === "done" ? [] : g.cards));
   const allOpen = all.length > 0 && all.every((c) => expanded[keyOf(c)]);
-  const toggle = (c: Card) => useTasks.setState((t) => ({ expanded: { ...t.expanded, [keyOf(c)]: !t.expanded[keyOf(c)] } }));
+  const toggle = (c: Card) => toggleExpanded(keyOf(c));
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
-      <button className="mb-2 ui-text-12 text-muted hover:text-fg" onClick={() => useTasks.setState({ expanded: allOpen ? {} : Object.fromEntries(all.map((c) => [keyOf(c), true])) })}>
+      <button className="mb-2 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(all.map((c) => [keyOf(c), true])))}>
         {allOpen ? "Collapse all" : "Expand all"}
       </button>
       {groups.map((g) => (
