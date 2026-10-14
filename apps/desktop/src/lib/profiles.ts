@@ -1,7 +1,8 @@
 // Claude profiles in the app (X33): labels for the profile select, the
-// sidebar footer and the confirm before a workspace switches accounts.
+// sidebar footer and the confirm before a workspace switches accounts, and
+// which profile a chat's failed login offers to sign in to.
 
-import type { ProfileAccount, ProfileInfo, Section, Session, TerminalInfo, Workspace } from "./protocol";
+import type { ChatItem, ProfileAccount, ProfileInfo, Section, Session, TerminalInfo, Workspace } from "./protocol";
 
 /** The profile select's value for the default profile (`~/.claude`). */
 export const DEFAULT_PROFILE = "";
@@ -32,6 +33,13 @@ const profileOf = (ws: Workspace, profiles: ProfileInfo[]) => profiles.find((p) 
 /** The workspace's profile name; a deleted one reads as the default. */
 export function profileName(ws: Workspace, profiles: ProfileInfo[]): string {
   return profileOf(ws, profiles)?.name ?? "Default";
+}
+
+/** The profile to sign in to from an agent's error, when its login failed
+ * (`profile: null`: the default); `null` for any other item. */
+export function signInFor(item: ChatItem, ws: Workspace | undefined, profiles: ProfileInfo[]): { profile: ProfileInfo | null } | null {
+  if (item.kind !== "error" || item.cause !== "authentication_failed") return null;
+  return { profile: (ws && profileOf(ws, profiles)) ?? null };
 }
 
 /** Who an account is: "jane@x.com · Acme". */

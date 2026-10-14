@@ -28,7 +28,7 @@ Agent tabs show a native conversation view instead of the agent's terminal UI: m
 
 Both agents map onto one normalized chat model in `moonlet-proto`.
 
-- **`ChatItem`**: id (stable; streaming deltas update the same item), kind (`user`, `assistant`, `thinking`, `tool`, `system`, `error`), text, an optional `ToolCall`, and a timestamp.
+- **`ChatItem`**: id (stable; streaming deltas update the same item), kind (`user`, `assistant`, `thinking`, `tool`, `system`, `error`), text, an optional `ToolCall`, a timestamp, and on an `error` item an optional `cause`: the agent's code for what went wrong, such as `authentication_failed` (X33).
   - `ToolCall` holds the name, a one-line summary, the input, the output, a status (`running`, `ok`, `error`, `denied`) and an optional unified diff.
 - **`PermissionAsk`**: id, tool, summary, input, reason, and whether "always allow" is offered.
 - **`ChatState`**: items, pending asks, status (idle, working, blocked, done, error), model, effort, cost, tokens, turn start time, the agent's own session/thread id, and slash commands.

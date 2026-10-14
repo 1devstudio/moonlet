@@ -14,7 +14,8 @@ export const ACTIONS: ActionDef[] = [
   ["new-ws", "New workspace…", "Workspace", ""],
   ["new-section", "New section…", "Section", ""],
   ["add-project", "Add project…", "Section", ""],
-  ["new-tab", "New terminal tab", "Terminal", "cmd+t"],
+  ["new-tab", "New agent tab", "Agent", "cmd+t"],
+  ["new-terminal", "New terminal tab", "Terminal", "shift+cmd+t"],
   ["split-r", "Split pane right", "Terminal", "cmd+d"],
   ["split-d", "Split pane down", "Terminal", "alt+cmd+d"],
   ["close", "Close pane", "Terminal", "cmd+w"],
@@ -118,9 +119,11 @@ export function keyLabel(id: string): string {
 /** Custom shortcuts, saved in settings: action id → key id, "" for none. */
 export type Shortcuts = Record<string, string>;
 
-/** Every action's current key id, "" for none. */
+/** Every action's current key id, "" for none. A key the user set wins
+ * over another action's default, such as one added later (X38). */
 export function effectiveKeys(custom: Shortcuts | undefined): Record<string, string> {
-  return Object.fromEntries(ACTIONS.map((a) => [a.id, custom?.[a.id] ?? a.keys]));
+  const taken = new Set(Object.values(custom ?? {}).filter(Boolean));
+  return Object.fromEntries(ACTIONS.map((a) => [a.id, custom?.[a.id] ?? (taken.has(a.keys) ? "" : a.keys)]));
 }
 
 /** The action `key` runs, if any. */

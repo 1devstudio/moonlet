@@ -208,7 +208,7 @@ pub(crate) fn local_id(prefix: &str) -> String {
 }
 
 pub(crate) fn item(id: impl Into<String>, kind: &str, text: impl Into<String>) -> ChatItem {
-    ChatItem { id: id.into(), kind: kind.into(), text: text.into(), tool: None, ts: now_ms(), partial: false, turn: None }
+    ChatItem { id: id.into(), kind: kind.into(), text: text.into(), tool: None, ts: now_ms(), partial: false, turn: None, cause: None }
 }
 
 /// Inserts or replaces by id and returns the stored copy.
