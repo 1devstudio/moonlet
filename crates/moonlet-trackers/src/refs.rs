@@ -41,6 +41,10 @@ fn parse_bare(input: &str) -> Option<Pasted> {
             Err(_) => None,
         };
     }
+    if let Some(key) = issue_key(input) {
+        // `CU-12` too: a Linear or Jira team may be keyed "CU".
+        return bare(None, key);
+    }
     let (prefix, id) = input.split_once('-')?;
     if prefix.eq_ignore_ascii_case("cu")
         && !id.is_empty()
@@ -48,13 +52,17 @@ fn parse_bare(input: &str) -> Option<Pasted> {
     {
         return bare(Some(TrackerKind::Clickup), clickup_key(id));
     }
+    None
+}
+
+/// `ABC-123` in upper case: letters and digits starting with a letter, `-`,
+/// then digits.
+fn issue_key(input: &str) -> Option<String> {
+    let (prefix, id) = input.split_once('-')?;
     let prefix_ok = prefix.starts_with(|c: char| c.is_ascii_alphabetic())
         && prefix.chars().all(|c| c.is_ascii_alphanumeric());
     let id_ok = !id.is_empty() && id.chars().all(|c| c.is_ascii_digit());
-    if prefix_ok && id_ok {
-        return bare(None, input.to_ascii_uppercase());
-    }
-    None
+    (prefix_ok && id_ok).then(|| input.to_ascii_uppercase())
 }
 
 /// A ClickUp task without a custom ID, keyed the way ClickUp's GitHub
@@ -83,7 +91,7 @@ fn parse_url(rest: &str) -> Option<Pasted> {
     let path = after.strip_prefix('/').unwrap_or("");
     let path = path.split('#').next().unwrap_or("");
     let (path, query) = path.split_once('?').unwrap_or((path, ""));
-    let segs: Vec<&str> = path.split('/').collect();
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let found = |kind, key: String, site: Option<&str>| {
         Some(Pasted {
             kind: Some(kind),
@@ -93,25 +101,25 @@ fn parse_url(rest: &str) -> Option<Pasted> {
     };
     match (host.as_str(), &segs[..]) {
         ("linear.app", [org, "issue", key, ..]) => {
-            found(TrackerKind::Linear, key.to_ascii_uppercase(), Some(org))
+            found(TrackerKind::Linear, issue_key(key)?, Some(org))
         }
-        (jira, segs) if jira.ends_with(".atlassian.net") => {
+        (jira, segs)
+            if jira
+                .strip_suffix(".atlassian.net")
+                .is_some_and(|name| !name.is_empty() && !name.starts_with('.')) =>
+        {
             let key = match segs {
                 ["browse", key, ..] => Some(*key),
                 _ => query
                     .split('&')
                     .find_map(|kv| kv.strip_prefix("selectedIssue=")),
             }?;
-            found(TrackerKind::Jira, key.to_ascii_uppercase(), Some(jira))
+            found(TrackerKind::Jira, issue_key(key)?, Some(jira))
         }
-        ("app.clickup.com", ["t", team, custom]) if !custom.is_empty() => found(
-            TrackerKind::Clickup,
-            custom.to_ascii_uppercase(),
-            Some(team),
-        ),
-        ("app.clickup.com", ["t", id, ..]) if !id.is_empty() => {
-            found(TrackerKind::Clickup, clickup_key(id), None)
+        ("app.clickup.com", ["t", team, custom]) => {
+            found(TrackerKind::Clickup, issue_key(custom)?, Some(team))
         }
+        ("app.clickup.com", ["t", id]) => found(TrackerKind::Clickup, clickup_key(id), None),
         ("github.com", [owner, repo, "issues", n, ..]) => {
             let n: u64 = n.parse().ok()?;
             found(TrackerKind::Github, format!("{owner}/{repo}#{n}"), None)
@@ -231,5 +239,45 @@ mod tests {
         assert_eq!(parse_pasted("MOON-"), None);
         assert_eq!(parse_pasted("142"), None);
         assert_eq!(parse_pasted("changelog themes"), None);
+    }
+
+    #[test]
+    fn a_digits_only_cu_key_could_be_any_tracker() {
+        // A Linear or Jira team keyed "CU" has keys like CU-12 too; ClickUp
+        // ids carry letters.
+        assert_eq!(
+            parse_pasted("cu-12"),
+            Some(Pasted {
+                kind: None,
+                key: "CU-12".into(),
+                site: None
+            })
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_keeps_the_clickup_custom_id() {
+        assert_eq!(
+            parse_pasted("https://app.clickup.com/t/9012345/MOON-12/"),
+            Some(Pasted {
+                kind: Some(TrackerKind::Clickup),
+                key: "MOON-12".into(),
+                site: Some("9012345".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn urls_without_a_key_are_not_tasks() {
+        for url in [
+            "https://acme.atlassian.net/browse/",
+            "https://acme.atlassian.net/jira/software/projects/OPS/boards/1?selectedIssue=",
+            "https://acme.atlassian.net/browse/not a key",
+            "https://linear.app/1devstudio/issue/",
+            "https://linear.app/1devstudio/issue/settings",
+            "https://.atlassian.net/browse/OPS-12",
+        ] {
+            assert_eq!(parse_pasted(url), None, "{url}");
+        }
     }
 }
