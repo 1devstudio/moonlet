@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, recordKey, resetShortcut, shortcutGroups } from "./runActions";
+import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups } from "./runActions";
 
 describe("filtering", () => {
   it("lists all 26 actions in catalogue order for an empty query", () => {
@@ -189,5 +189,17 @@ describe("the Keyboard shortcuts page (X43)", () => {
   it("puts one action's default key back, or every one", () => {
     expect(resetShortcut({ commit: "alt+cmd+g", pr: "" }, "pr")).toEqual({ commit: "alt+cmd+g" });
     expect(shortcutGroups(resetShortcut({ pr: "" }, "pr"), "pull").flatMap((g) => g.rows)).toEqual([{ id: "pr", label: "Create pull request…", keys: "⇧⌘P", custom: false }]);
+  });
+});
+
+describe("a shortcut's keys, one keycap each (X43)", () => {
+  it("splits the modifiers from the key, in key id order", () => {
+    expect(keyParts("shift+cmd+n")).toEqual(["⇧", "⌘", "N"]);
+    expect(keyParts("ctrl+shift+alt+cmd+arrowup")).toEqual(["⌃", "⇧", "⌥", "⌘", "↑"]);
+  });
+
+  it("keeps a named key whole", () => {
+    expect(keyParts("cmd+ ")).toEqual(["⌘", "Space"]);
+    expect(keyParts("cmd+,")).toEqual(["⌘", ","]);
   });
 });
