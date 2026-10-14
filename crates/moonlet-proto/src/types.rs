@@ -91,6 +91,9 @@ pub struct TerminalInfo {
     /// prompt hook when that `node` changes (T8 context chips).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_version: Option<String>,
+    /// Subagents of a chat terminal that are still running (X42).
+    #[serde(default)]
+    pub subagents: u32,
     pub created_at: u64,
     pub last_output_at: u64,
 }
@@ -555,6 +558,65 @@ pub struct PermissionAsk {
     /// When the agent asked (ms), for "waiting 2m" (X40).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_at: Option<u64>,
+    /// The task id of the subagent that asks; `None` for the main agent (X42).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+
+/// A subagent the main agent launched with its `Agent` tool (X42).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Subagent {
+    /// Claude's task id.
+    pub id: String,
+    /// The `Agent` tool call that launched it.
+    pub tool_use_id: String,
+    pub description: String,
+    /// The subagent type, e.g. `general-purpose`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The brief the main agent gave it.
+    #[serde(default)]
+    pub prompt: String,
+    /// `running`, `done`, `failed` or `stopped`.
+    pub status: String,
+    pub started_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<u64>,
+    /// How long it ran by Claude's count, once it ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// What it does now, e.g. "Running pnpm test".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
+    #[serde(default)]
+    pub tokens: u64,
+    #[serde(default)]
+    pub tool_uses: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Its final message, once done or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Its latest tool calls, without their output.
+    #[serde(default)]
+    pub tools: Vec<SubagentTool>,
+}
+
+/// One tool call of a subagent (X42).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SubagentTool {
+    pub id: String,
+    pub name: String,
+    pub summary: String,
+    /// `running`, `ok`, `error` or `denied`.
+    pub status: String,
+    /// Lines added and removed by an edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -602,6 +664,9 @@ pub struct ChatState {
     /// How full the agent's context window is; `None` until it has said (X34).
     #[serde(default)]
     pub context: Option<ContextUsage>,
+    /// Subagents the agent launched, oldest first (X42).
+    #[serde(default)]
+    pub subagents: Vec<Subagent>,
 }
 
 /// The agent's context window, from Claude's `get_context_usage` (X34).

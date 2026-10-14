@@ -91,6 +91,10 @@ pub trait Adapter: Send {
     fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>, st: &mut ChatState) -> Vec<Out>;
     /// Stop the running turn.
     fn interrupt(&mut self, st: &mut ChatState) -> Vec<Out>;
+    /// Stop one running subagent (X42); agents without subagents ignore it.
+    fn stop_agent(&mut self, _agent: &str, _st: &mut ChatState) -> Vec<Out> {
+        vec![]
+    }
     /// MCP servers (X29): `refresh` asks for their status, `reconnect`
     /// retries `server`, `auth` asks for its sign-in page and `cancel`
     /// gives up on that sign-in. Answers arrive later as state changes.
@@ -234,6 +238,18 @@ pub(crate) fn finish_turn(st: &mut ChatState, started_at: Option<u64>) -> Option
     let it = st.items.iter_mut().rev().take_while(|i| i.kind != "user" && i.ts >= started_at).find(|i| i.kind == "assistant" && !i.text.is_empty())?;
     it.turn = Some(TurnTime { started_at, ended_at: now_ms() });
     Some(Out::Item(Box::new(it.clone())))
+}
+
+/// Marks every running subagent stopped, when its agent process is gone
+/// (X42). Whether any was running.
+pub(crate) fn stop_subagents(st: &mut ChatState) -> bool {
+    let mut any = false;
+    for a in st.subagents.iter_mut().filter(|a| a.status == "running") {
+        a.status = "stopped".into();
+        a.ended_at.get_or_insert_with(now_ms);
+        any = true;
+    }
+    any
 }
 
 /// Mutates an existing item; `None` if it is unknown.

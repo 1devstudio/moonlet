@@ -26,16 +26,16 @@ Design: `Moonlet Subagents View.html` (Claude Design bundle with five boards: th
 
 Daemon (PR 1):
 
-- [ ] Claude's `system` `task_started` line adds a subagent to the chat's state: its task id, the id of the `Agent` tool call that launched it, its description, its type and its prompt, with status `running`. (`subagents_follow_task_events`)
-- [ ] A `task_progress` line sets the agent's activity (its `description`, such as "Running Create made.txt and echo made"), its tokens and its tool-call count. (`subagents_follow_task_events`)
-- [ ] A `task_notification` line ends the agent as `done` (`completed`), `failed` (`failed`) or `stopped` (`stopped`, `killed`), with the summary as its report, the final token count and the duration. (`subagents_follow_task_events`, `stopping_a_subagent_sends_stop_task`)
-- [ ] An `assistant` line from inside a subagent (`parent_tool_use_id` set) adds its tool calls to that agent's tool list, with name, one-line summary and `+a −r` counts for edits, and sets the agent's model. The matching `user` line marks each call `ok` or `error`. None of these lines reaches the main transcript. (`subagent_tool_calls_stay_with_their_agent`)
-- [ ] A `can_use_tool` request that carries an `agent_id` becomes a pending ask that names that agent. (`a_subagent_ask_names_its_agent`)
-- [ ] A `control_cancel_request` removes the pending ask with that id. (`stopping_a_subagent_sends_stop_task`)
-- [ ] When the main turn ends (`result`) while a subagent waits on an ask, that ask stays pending. (`a_subagent_ask_outlives_the_main_turn`)
-- [ ] `chat.stop_agent {id, agent}` sends Claude a `stop_task` control request for that task id. It fails for an agent that is not running, and for agents other than Claude. (`stopping_a_subagent_sends_stop_task`, runtime test)
-- [ ] When the agent process exits, or the daemon restarts, every agent still running becomes `stopped`. (runtime test)
-- [ ] The chat terminal's `TerminalInfo.subagents` counts its running subagents. (runtime test)
+- [x] Claude's `system` `task_started` line adds a subagent to the chat's state: its task id, the id of the `Agent` tool call that launched it, its description, its type and its prompt, with status `running`. (`subagents_follow_task_events`)
+- [x] A `task_progress` line sets the agent's activity (its `description`, such as "Running Create made.txt and echo made"), its tokens and its tool-call count. (`subagents_follow_task_events`)
+- [x] A `task_notification` line ends the agent as `done` (`completed`), `failed` (`failed`) or `stopped` (`stopped`, `killed`), with the summary as its report, the final token count and the duration. (`subagents_follow_task_events`, `stopping_a_subagent_sends_stop_task`)
+- [x] An `assistant` line from inside a subagent (`parent_tool_use_id` set) adds its tool calls to that agent's tool list, with name, one-line summary and `+a −r` counts for edits, and sets the agent's model. The matching `user` line marks each call `ok` or `error`. None of these lines reaches the main transcript. (`subagent_tool_calls_stay_with_their_agent`)
+- [x] A `can_use_tool` request that carries an `agent_id` becomes a pending ask that names that agent. (`a_subagent_ask_names_its_agent`)
+- [x] A `control_cancel_request` removes the pending ask with that id. (`stopping_a_subagent_sends_stop_task`)
+- [x] When the main turn ends (`result`) while a subagent waits on an ask, that ask stays pending. (`a_subagent_ask_outlives_the_main_turn`)
+- [x] `chat.stop_agent {id, agent}` sends Claude a `stop_task` control request for that task id. It fails for an agent that is not running, and for agents other than Claude. (`stopping_a_subagent_sends_stop_task`, runtime test)
+- [x] When the agent process exits, or the daemon restarts, every agent still running becomes `stopped`. (runtime test)
+- [x] The chat terminal's `TerminalInfo.subagents` counts its running subagents. (runtime test)
 
 Agents tab (PR 2):
 

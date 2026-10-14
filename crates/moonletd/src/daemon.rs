@@ -300,6 +300,11 @@ impl Daemon {
                 self.chats.interrupt(r.id).map_err(internal)?;
                 ok(true)
             }
+            m::CHAT_STOP_AGENT => {
+                let r: m::ChatStopAgent = params(p)?;
+                self.chats.stop_agent(r.id, &r.agent).map_err(internal)?;
+                ok(true)
+            }
             m::CHAT_SETTINGS => {
                 let r: m::ChatSettings = params(p)?;
                 ok(self.chats.settings(r.id, r.model, r.effort, r.mode).map_err(internal)?)
