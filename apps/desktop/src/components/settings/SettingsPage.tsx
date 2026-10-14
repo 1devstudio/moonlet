@@ -69,9 +69,9 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
         phones,
         profilesNeedSignIn: profilesNeedSignIn(workspaces ?? [], profiles ?? [], defaultAccount ?? null),
         workspaces: hostOrder(Object.keys(allWorkspaces)).flatMap((h) =>
-          (allWorkspaces[h] ?? []).map((w) => ({ host: h, id: w.id, name: w.name, color: w.color, remote: hosts[h]?.remote ? h : null })),
+          (allWorkspaces[h] ?? []).map((w) => ({ host: h, id: w.id, name: w.name, color: w.color, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null })),
         ),
-        projects: hostOrder(Object.keys(allProjects)).flatMap((h) => (allProjects[h] ?? []).map((p) => ({ host: h, id: p.id, name: p.name, remote: hosts[h]?.remote ? h : null }))),
+        projects: hostOrder(Object.keys(allProjects)).flatMap((h) => (allProjects[h] ?? []).map((p) => ({ host: h, id: p.id, name: p.name, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null }))),
       }),
     [hosts, phones, workspaces, profiles, defaultAccount, allWorkspaces, allProjects],
   );
@@ -194,9 +194,9 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
   const [selected, setSelected] = useState(0);
   const [flash, setFlash] = useState<{ setting: string; at: number } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const searchCtx = useSearchContext(mobile?.devices.length ?? 0);
-  const results = useMemo(() => searchSettings(query, searchCtx), [query, searchCtx]);
   const searching = !!query.trim();
+  const searchCtx = useSearchContext(mobile?.devices.length ?? 0, searching);
+  const results = useMemo(() => searchSettings(query, searchCtx), [query, searchCtx]);
   const crumbs = searching ? ["Settings", "Search"] : settingsCrumbs(route, name);
 
   const openResult = (r: SearchResult) => {
@@ -218,7 +218,7 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
         setQuery("");
         return;
       }
-      if (e.key === "Enter" && results[selected]) {
+      if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && results[selected]) {
         e.preventDefault();
         openResult(results[selected]);
         return;
@@ -305,7 +305,7 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
   }, [routeKey(route)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div ref={root} role="region" aria-label="Settings" className="fixed inset-0 z-40 flex bg-bg text-fg">
+    <div ref={root} role="region" aria-label="Settings" data-settings-searching={searching || undefined} className="fixed inset-0 z-40 flex bg-bg text-fg">
       <Nav route={route} phones={mobile?.devices.length ?? 0} search={search} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 pl-12 pr-4 ui-text-12.5 text-faint">

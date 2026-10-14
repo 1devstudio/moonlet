@@ -7,12 +7,13 @@ import { M, type ClaudeProfile, type WorkspaceColor } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { errorToast, refreshProfile, toast, useStore } from "../../lib/store";
 import { goSettings, setLeaveGuard } from "../../lib/settingsNavigation";
-import { WORKSPACE_COLORS, deleteBlocked, sectionRows, syncWorkspaceForm, workspaceDirty, workspaceSummary } from "../../lib/workspaces";
-import { DEFAULT_PROFILE, NEW_PROFILE, accountLabel, accountState, defaultFolder, profileOptions, runningClaudeAgents, switchConfirm } from "../../lib/profiles";
+import { WORKSPACE_COLORS, deleteBlocked, sectionRows, syncWorkspaceForm, workspaceCanSave, workspaceDirty, workspaceSummary } from "../../lib/workspaces";
+import { DEFAULT_PROFILE, NEW_PROFILE, accountState, defaultFolder, profileOptions, runningClaudeAgents, switchConfirm } from "../../lib/profiles";
+import { accountNote } from "../../lib/settingsPage";
 import { ClaudeAuthDialog } from "../Profiles";
 import { WorkspaceMark } from "../WorkspaceSwitcher";
 import { Button, cx } from "../ui";
-import { Card, PageBody, PageHeading, Row, SaveBar, Section, fieldCls, radioProps } from "./controls";
+import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, fieldCls, radioProps } from "./controls";
 import { useUnsaved } from "./useUnsaved";
 
 function Swatches({ value, onChange, labelledBy }: { value: WorkspaceColor; onChange: (c: WorkspaceColor) => void; labelledBy: string }) {
@@ -45,6 +46,7 @@ function ProfileRows({ host, value, onChange }: { host: string; value: string; o
   const picked = (profiles ?? []).find((p) => p.id === value) ?? null;
   const account = value === DEFAULT_PROFILE ? defaultAccount : picked?.account;
   const state = accountState(account);
+  const note = accountNote(picked?.name ?? "Default", account);
   const create = async () => {
     try {
       const p = await rpc<ClaudeProfile>(host, M.profileCreate, { name: name.trim(), path: folder.trim() || null });
@@ -96,11 +98,8 @@ function ProfileRows({ host, value, onChange }: { host: string; value: string; o
           </div>
         </div>
       ) : (
-        <div className={cx("flex items-center gap-2 px-4 py-2.5 ui-text-12", state === "signed-out" && "bg-[#1d1a12]")}>
-          {state === "signed-out" && <span className="h-1.5 w-1.5 rounded-full bg-blocked" />}
-          <span className={cx("flex-1", state === "signed-out" ? "text-blocked" : "text-muted")}>
-            {state === "signed-in" && account ? `Signed in as ${accountLabel(account)}` : state === "signed-out" ? `${picked?.name ?? "Default"} is not signed in` : "Checking…"}
-          </span>
+        <div className={cx("flex items-center gap-2 px-4 py-2.5", note.tone === "blocked" && "bg-[#1d1a12]")}>
+          <Status line={note} dot={note.tone === "blocked"} className="flex-1" />
           {state !== "signed-in" && (
             <Button size="sm" onClick={() => setAuth(true)}>
               Sign in…
@@ -125,7 +124,7 @@ export function WorkspacePage({ host, id }: { host: string; id: string }) {
   const sessions = useStore((s) => s.sessions[host]);
   const terminals = useStore((s) => s.terminals[host]);
   const profiles = useStore((s) => s.profiles[host]);
-  const remote = useStore((s) => (s.hosts[host]?.remote ? host : null));
+  const remote = useStore((s) => (s.hosts[host]?.remote ? (s.hosts[host]?.label ?? host) : null));
   const [name, setName] = useState(ws?.name ?? "");
   const [color, setColor] = useState<WorkspaceColor>(ws?.color ?? "clay");
   const [profile, setProfile] = useState(ws?.claude_profile ?? DEFAULT_PROFILE);
@@ -149,7 +148,7 @@ export function WorkspacePage({ host, id }: { host: string; id: string }) {
   const form = { name, color, profile };
   const dirty = !!ws && workspaceDirty(ws, form);
   const shown = name.trim() || ws?.name || "";
-  const canSave = dirty && !!name.trim() && !saving;
+  const canSave = !!ws && workspaceCanSave(ws, form, saving);
 
   const discard = () => {
     if (!ws) return;

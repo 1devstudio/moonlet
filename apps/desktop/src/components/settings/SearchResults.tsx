@@ -1,16 +1,19 @@
 // The settings search's results (X43): matching settings with their page and
 // value. ↑↓ and ↵ work from the search field; a click opens one too.
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { rpc } from "../../lib/daemon";
 import { profileName } from "../../lib/profiles";
+import { M, type ProjectConfig } from "../../lib/protocol";
 import type { SearchContext, SearchResult } from "../../lib/settingsSearch";
 import { useStore } from "../../lib/store";
 import { cx } from "../ui";
 import { PageBody, PageHeading } from "./controls";
 
-/** What the search needs from the store. */
-export function useSearchContext(phones: number): SearchContext {
+/** What the search needs from the store. Projects' configs are read when a
+ * search starts, for their scripts' values. */
+export function useSearchContext(phones: number, searching: boolean): SearchContext {
   const settings = useStore((s) => s.settings);
   const appVersion = useStore((s) => s.appVersion);
   const claudeInstalled = useStore((s) => s.claudeVersions.installed);
@@ -18,6 +21,18 @@ export function useSearchContext(phones: number): SearchContext {
   const workspaces = useStore((s) => s.workspaces);
   const projects = useStore((s) => s.projects);
   const profiles = useStore((s) => s.profiles);
+  const [configs, setConfigs] = useState<Record<string, ProjectConfig | null>>({});
+  useEffect(() => {
+    if (!searching) return;
+    // Read again for each search: a script saved since then shows its new value.
+    for (const [host, list] of Object.entries(projects))
+      for (const p of list) {
+        const key = `${host}/${p.id}`;
+        void rpc<ProjectConfig>(host, M.projectConfig, { id: p.id })
+          .then((cfg) => setConfigs((c) => ({ ...c, [key]: cfg })))
+          .catch(() => {});
+      }
+  }, [searching, projects]); // eslint-disable-line react-hooks/exhaustive-deps
   return useMemo(
     () => ({
       settings,
@@ -27,9 +42,9 @@ export function useSearchContext(phones: number): SearchContext {
       remoteHosts: Object.values(hosts).filter((h) => h.remote).length,
       phones,
       workspaces: Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ host, id: w.id, name: w.name, color: w.color, profile: profileName(w, profiles[host] ?? []) }))),
-      projects: Object.entries(projects).flatMap(([host, list]) => list.map((p) => ({ host, id: p.id, name: p.name, base_branch: p.base_branch }))),
+      projects: Object.entries(projects).flatMap(([host, list]) => list.map((p) => ({ host, id: p.id, name: p.name, base_branch: p.base_branch, config: configs[`${host}/${p.id}`] }))),
     }),
-    [settings, appVersion, claudeInstalled, hosts, workspaces, projects, profiles, phones],
+    [settings, appVersion, claudeInstalled, hosts, workspaces, projects, profiles, phones, configs],
   );
 }
 

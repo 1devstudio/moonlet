@@ -49,6 +49,13 @@ describe("moving around the settings page (X43)", () => {
     expect(useStore.getState().settingsPage).toEqual({ page: "workspace", host: "local", id: "acme" });
   });
 
+  it("doesn't ask when the page asked for is the one already open", async () => {
+    setLeaveGuard(() => ({ state: "ask", message: "Discard unsaved changes to Acme?" }));
+    await goSettings({ page: "workspace", host: "local", id: "acme" });
+    expect(useStore.getState().confirm).toBeNull();
+    expect(useStore.getState().settingsPage).toEqual({ page: "workspace", host: "local", id: "acme" });
+  });
+
   it("stays put while a save is running", async () => {
     setLeaveGuard(() => ({ state: "wait", message: "" }));
     await goSettings(null);
