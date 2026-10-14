@@ -1,0 +1,193 @@
+//! Keys and issue URLs a user pastes into the link dialog (X46).
+
+use crate::TrackerKind;
+
+/// What a pasted key or URL points at. `kind` is `None` for a bare
+/// `ABC-123`, which Linear and Jira share; `site` is the Linear organisation,
+/// the Jira host or the ClickUp workspace id when the URL names one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pasted {
+    pub kind: Option<TrackerKind>,
+    pub key: String,
+    pub site: Option<String>,
+}
+
+pub fn parse_pasted(input: &str) -> Option<Pasted> {
+    let input = input.trim();
+    match input
+        .strip_prefix("https://")
+        .or_else(|| input.strip_prefix("http://"))
+    {
+        Some(rest) => parse_url(rest),
+        None => parse_bare(input),
+    }
+}
+
+/// `#42` (GitHub), `CU-86abc123` (ClickUp) or `ABC-123` (Linear or Jira).
+fn parse_bare(input: &str) -> Option<Pasted> {
+    let bare = |kind, key: String| {
+        Some(Pasted {
+            kind,
+            key,
+            site: None,
+        })
+    };
+    if let Some(n) = input.strip_prefix('#') {
+        return match n.parse::<u64>() {
+            Ok(n) => bare(Some(TrackerKind::Github), format!("#{n}")),
+            Err(_) => None,
+        };
+    }
+    let (prefix, id) = input.split_once('-')?;
+    if prefix.eq_ignore_ascii_case("cu")
+        && !id.is_empty()
+        && id.chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        return bare(
+            Some(TrackerKind::Clickup),
+            format!("CU-{}", id.to_ascii_lowercase()),
+        );
+    }
+    let prefix_ok = prefix.starts_with(|c: char| c.is_ascii_alphabetic())
+        && prefix.chars().all(|c| c.is_ascii_alphanumeric());
+    let id_ok = !id.is_empty() && id.chars().all(|c| c.is_ascii_digit());
+    if prefix_ok && id_ok {
+        return bare(None, input.to_ascii_uppercase());
+    }
+    None
+}
+
+fn parse_url(rest: &str) -> Option<Pasted> {
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
+    let segs: Vec<&str> = path.split('#').next().unwrap_or("").split('/').collect();
+    let host = host.to_ascii_lowercase();
+    let found = |kind, key: String, site: Option<&str>| {
+        Some(Pasted {
+            kind: Some(kind),
+            key,
+            site: site.map(String::from),
+        })
+    };
+    match (host.as_str(), &segs[..]) {
+        ("linear.app", [org, "issue", key, ..]) => {
+            found(TrackerKind::Linear, key.to_ascii_uppercase(), Some(org))
+        }
+        (jira, segs) if jira.ends_with(".atlassian.net") => {
+            let key = match segs {
+                ["browse", key, ..] => Some(*key),
+                _ => query
+                    .split('&')
+                    .find_map(|kv| kv.strip_prefix("selectedIssue=")),
+            }?;
+            found(TrackerKind::Jira, key.to_ascii_uppercase(), Some(jira))
+        }
+        ("app.clickup.com", ["t", team, custom]) if !custom.is_empty() => found(
+            TrackerKind::Clickup,
+            custom.to_ascii_uppercase(),
+            Some(team),
+        ),
+        ("app.clickup.com", ["t", id, ..]) if !id.is_empty() => found(
+            TrackerKind::Clickup,
+            format!("CU-{}", id.to_ascii_lowercase()),
+            None,
+        ),
+        ("github.com", [owner, repo, "issues", n, ..]) => {
+            let n: u64 = n.parse().ok()?;
+            found(TrackerKind::Github, format!("{owner}/{repo}#{n}"), None)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_linear_issue_url() {
+        assert_eq!(
+            parse_pasted("https://linear.app/1devstudio/issue/MOON-142/remote-hosts-sidebar"),
+            Some(Pasted {
+                kind: Some(TrackerKind::Linear),
+                key: "MOON-142".into(),
+                site: Some("1devstudio".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn jira_browse_and_board_urls() {
+        let want = Some(Pasted {
+            kind: Some(TrackerKind::Jira),
+            key: "OPS-12".into(),
+            site: Some("acme.atlassian.net".into()),
+        });
+        assert_eq!(
+            parse_pasted("https://acme.atlassian.net/browse/OPS-12"),
+            want
+        );
+        assert_eq!(
+            parse_pasted(
+                "https://acme.atlassian.net/jira/software/projects/OPS/boards/1?selectedIssue=OPS-12"
+            ),
+            want
+        );
+    }
+
+    #[test]
+    fn clickup_task_urls_with_and_without_a_custom_id() {
+        assert_eq!(
+            parse_pasted("https://app.clickup.com/t/86abc123"),
+            Some(Pasted {
+                kind: Some(TrackerKind::Clickup),
+                key: "CU-86abc123".into(),
+                site: None
+            })
+        );
+        assert_eq!(
+            parse_pasted("https://app.clickup.com/t/9012345/MOON-12"),
+            Some(Pasted {
+                kind: Some(TrackerKind::Clickup),
+                key: "MOON-12".into(),
+                site: Some("9012345".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_github_issue_url() {
+        assert_eq!(
+            parse_pasted("https://github.com/1devstudio/moonlet/issues/42#issuecomment-1"),
+            Some(Pasted {
+                kind: Some(TrackerKind::Github),
+                key: "1devstudio/moonlet#42".into(),
+                site: None,
+            })
+        );
+        assert_eq!(
+            parse_pasted("https://github.com/1devstudio/moonlet/pull/42"),
+            None
+        );
+    }
+
+    #[test]
+    fn bare_keys() {
+        let bare = |kind, key: &str| {
+            Some(Pasted {
+                kind,
+                key: key.into(),
+                site: None,
+            })
+        };
+        assert_eq!(parse_pasted(" moon-142 "), bare(None, "MOON-142"));
+        assert_eq!(
+            parse_pasted("CU-86ABC123"),
+            bare(Some(TrackerKind::Clickup), "CU-86abc123")
+        );
+        assert_eq!(parse_pasted("#42"), bare(Some(TrackerKind::Github), "#42"));
+        assert_eq!(parse_pasted("MOON-"), None);
+        assert_eq!(parse_pasted("142"), None);
+        assert_eq!(parse_pasted("changelog themes"), None);
+    }
+}

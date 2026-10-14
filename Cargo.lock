@@ -2663,6 +2663,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "moonlet-trackers"
+version = "0.1.17"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "moonletd"
 version = "0.1.17"
 dependencies = [
