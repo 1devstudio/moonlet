@@ -159,6 +159,25 @@ describe("a linked task changed outside moonlet (X44 Sync)", () => {
     expect(shown).toHaveLength(1);
     useTasks.setState({ config: null });
   });
+
+  it("is not announced when moonlet closed it, even if a sync from before the close lands first", async () => {
+    shown.length = 0;
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.task_update"] = () => true;
+    useStore.setState({ sessions: { local: [{ id: "s1", project_id: "web", name: "Checkout", branch: "12-checkout", base: "main", path: "/w/12-checkout", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null }] } });
+    answers["gh.tasks"] = () => [issue];
+    await refreshTasks("local", "personal", 1_000);
+    const t = useTasks.getState().data["local/personal"].tasks[0];
+    const merged = { kind: "merged" as const, text: "#70 merged", fix: "Close the issue" };
+    // fixDrift's own refresh still sees the issue open (GitHub lags)…
+    await fixDrift("local", "personal", { task: t, column: "in_progress", rows: [], needsYou: false, orphans: [], empty: null, drift: merged });
+    // …and the next one sees it closed.
+    answers["gh.tasks"] = () => [{ ...issue, closed: true, state_reason: "completed" }];
+    await refreshTasks("local", "personal", 3_000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shown).toEqual([]);
+  });
 });
 
 describe("tasks from Linear, Jira and ClickUp (X44)", () => {
