@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, recordKey } from "./runActions";
+import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, recordKey, resetShortcut, shortcutGroups } from "./runActions";
 
 describe("filtering", () => {
   it("lists all 26 actions in catalogue order for an empty query", () => {
@@ -152,5 +152,42 @@ describe("shortcuts", () => {
   it("assigns a key, taking it from another action when replacing", () => {
     expect(assignShortcut({}, "setup", "alt+cmd+s")).toEqual({ setup: "alt+cmd+s" });
     expect(assignShortcut({ commit: "alt+cmd+c" }, "setup", "cmd+t", "new-tab")).toEqual({ commit: "alt+cmd+c", setup: "cmd+t", "new-tab": "" });
+  });
+});
+
+describe("the Keyboard shortcuts page (X43)", () => {
+  it("groups every action in catalogue order, with its key or none", () => {
+    const groups = shortcutGroups({}, "");
+    expect(groups.map((g) => g.name)).toEqual(["Session", "Workspace", "Section", "Agent", "Terminal", "Project", "Panels", "Git", "App"]);
+    expect(groups.find((g) => g.name === "Git")?.rows).toEqual([
+      { id: "commit", label: "Commit…", keys: "", custom: false },
+      { id: "pr", label: "Create pull request…", keys: "⇧⌘P", custom: false },
+    ]);
+  });
+
+  it("marks a key the user changed or cleared as custom", () => {
+    const git = shortcutGroups({ commit: "alt+cmd+g", pr: "" }, "").find((g) => g.name === "Git")!;
+    expect(git.rows).toEqual([
+      { id: "commit", label: "Commit…", keys: "⌥⌘G", custom: true },
+      { id: "pr", label: "Create pull request…", keys: "", custom: true },
+    ]);
+  });
+
+  it("filters by action name or by key, dropping empty groups", () => {
+    expect(shortcutGroups({}, "split")).toEqual([
+      {
+        name: "Terminal",
+        rows: [
+          { id: "split-r", label: "Split pane right", keys: "⌘D", custom: false },
+          { id: "split-d", label: "Split pane down", keys: "⌥⌘D", custom: false },
+        ],
+      },
+    ]);
+    expect(shortcutGroups({}, "⇧⌘P").flatMap((g) => g.rows.map((r) => r.id))).toEqual(["pr"]);
+  });
+
+  it("puts one action's default key back, or every one", () => {
+    expect(resetShortcut({ commit: "alt+cmd+g", pr: "" }, "pr")).toEqual({ commit: "alt+cmd+g" });
+    expect(shortcutGroups(resetShortcut({ pr: "" }, "pr"), "pull").flatMap((g) => g.rows)).toEqual([{ id: "pr", label: "Create pull request…", keys: "⇧⌘P", custom: false }]);
   });
 });
