@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
-import { latestPerKey } from "./prPoll";
+import { focusThrottle, latestPerKey } from "./prPoll";
 import { type GhTask, M, type Project, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
@@ -493,11 +493,40 @@ export async function runAutoFixes(host: string, workspaceId: string, board: Boa
   }
 }
 
+/**
+ * Keeps a workspace's tasks fresh while Tasks mode shows it (X44 Sync): now,
+ * every `interval` seconds and when the window comes to the front, at most
+ * every 15 s. Manual (0) refreshes only now and on demand. Returns the stop.
+ */
+export function syncTasks(host: string, workspaceId: string, interval: number): () => void {
+  const sync = () => void refreshTasks(host, workspaceId);
+  sync();
+  if (interval <= 0) return () => {};
+  const due = focusThrottle(15_000);
+  const onFocus = () => due(Date.now()) && sync();
+  window.addEventListener("focus", onFocus);
+  const timer = setInterval(sync, interval * 1000);
+  return () => {
+    window.removeEventListener("focus", onFocus);
+    clearInterval(timer);
+  };
+}
+
 /** Loads a workspace's tasks when a linked session opens outside Tasks mode, at most once a minute (X46). */
 export function ensureTasks(host: string, workspaceId: string, now = Date.now()) {
-  const d = useTasks.getState().data[wsKey(host, workspaceId)];
-  if (!d || d.syncedAt === null || now - d.syncedAt > 60_000) void refreshTasks(host, workspaceId, now);
+  const key = wsKey(host, workspaceId);
+  if (ensuring.has(key)) return;
+  const d = useTasks.getState().data[key];
+  // Once there is a list: never by itself under manual Sync, else at most a
+  // minute after the last try, whether or not it worked.
+  const last = Math.max(ensuredAt.get(key) ?? -Infinity, d?.syncedAt ?? -Infinity);
+  if (d && (trackersConfig(useTasks.getState()).sync.interval === 0 || now - last < 60_000)) return;
+  ensuring.add(key);
+  ensuredAt.set(key, now);
+  void refreshTasks(host, workspaceId, now).finally(() => ensuring.delete(key));
 }
+const ensuring = new Set<string>();
+const ensuredAt = new Map<string, number>();
 
 /** Links a session to a task, or unlinks it with null (X46). */
 export async function linkTask(host: string, sessionId: string, task: Task | null) {

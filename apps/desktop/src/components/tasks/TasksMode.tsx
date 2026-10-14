@@ -3,7 +3,6 @@
 import { Copy, ExternalLink, GitBranch, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { focusThrottle } from "../../lib/prPoll";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
@@ -11,7 +10,7 @@ import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, syncTasks, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
@@ -56,19 +55,7 @@ function useTaskSync() {
   // Settings › Task trackers › Sync; 0 is "manual" (X44).
   const interval = useTasks((t) => trackersConfig(t).sync.interval);
   useEffect(() => void loadTrackersConfig(), []);
-  useEffect(() => {
-    if (!ws) return;
-    const sync = () => void refreshTasks(ws.host, ws.id);
-    sync();
-    const due = focusThrottle(15_000);
-    const onFocus = () => due(Date.now()) && sync();
-    window.addEventListener("focus", onFocus);
-    const timer = interval > 0 ? setInterval(sync, interval * 1000) : undefined;
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      clearInterval(timer);
-    };
-  }, [ws, interval]);
+  useEffect(() => (ws ? syncTasks(ws.host, ws.id, interval) : undefined), [ws, interval]);
   // "Every session's PR is merged" at Automatically closes the issue, once (X46).
   const { board } = useWorkspaceBoard(ws);
   const config = useTasks((t) => trackersConfig(t));
