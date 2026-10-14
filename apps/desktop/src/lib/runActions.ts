@@ -187,3 +187,35 @@ export function recordKey(key: string, action: string, custom: Shortcuts | undef
 export function assignShortcut(custom: Shortcuts | undefined, action: string, keys: string, takeFrom?: string): Shortcuts {
   return { ...custom, [action]: keys, ...(takeFrom ? { [takeFrom]: "" } : {}) };
 }
+
+export interface ShortcutRow {
+  id: string;
+  label: string;
+  /** The key as shown ("⇧⌘P"), "" for none. */
+  keys: string;
+  /** The user changed or cleared the default (not: another action took it). */
+  custom: boolean;
+}
+
+/** Settings › Keyboard shortcuts (X43): every action by group, in catalogue
+ * order, matching `q` in its name or its key. Empty groups are left out. */
+export function shortcutGroups(custom: Shortcuts | undefined, q: string): { name: string; rows: ShortcutRow[] }[] {
+  const keys = effectiveKeys(custom);
+  const query = q.trim().toLowerCase();
+  const groups: { name: string; rows: ShortcutRow[] }[] = [];
+  for (const a of ACTIONS) {
+    const shown = keys[a.id] ? keyLabel(keys[a.id]) : "";
+    if (query && !a.label.toLowerCase().includes(query) && !shown.toLowerCase().includes(query)) continue;
+    let g = groups.find((x) => x.name === a.group);
+    if (!g) groups.push((g = { name: a.group, rows: [] }));
+    g.rows.push({ id: a.id, label: a.label, keys: shown, custom: custom?.[a.id] !== undefined && custom[a.id] !== a.keys });
+  }
+  return groups;
+}
+
+/** `action` goes back to its default key. */
+export function resetShortcut(custom: Shortcuts | undefined, action: string): Shortcuts {
+  const next = { ...custom };
+  delete next[action];
+  return next;
+}

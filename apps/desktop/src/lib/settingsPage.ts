@@ -9,7 +9,7 @@ import { mobileLine } from "./mobile";
 import { updateButton, updateStatus, type UpdateState } from "./updater";
 
 /** The app-wide pages, in nav order. */
-export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "profiles" | "hooks" | "hosts" | "phones";
+export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
 
 export type SettingsRoute = { page: AppPage } | { page: "workspace"; host: string; id: string } | { page: "project"; host: string; id: string; focus?: "run" };
 
@@ -57,7 +57,7 @@ export function settingsNav(input: NavInput): NavGroup[] {
   const groups: NavGroup[] = [
     {
       title: "App",
-      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications")],
+      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications"), app("shortcuts", "Keyboard shortcuts")],
     },
     {
       title: "Claude Code",
@@ -195,10 +195,11 @@ export function hookRows(st: HookStatus, home: string | null): HookRow[] {
 }
 
 /** Esc on the settings page. A dialog over it (sign-in, confirm, the
- * palette) has the key wherever focus is; a text field gives up focus
+ * palette) or a shortcut being recorded has the key wherever focus is;
+ * a text field gives up focus
  * first, after its own Esc handling; otherwise the page closes. */
-export function escapeAction(s: { dialogShown: boolean; editable: boolean }): "close" | "leave-field" | "ignore" {
-  if (s.dialogShown) return "ignore";
+export function escapeAction(s: { dialogShown: boolean; editable: boolean; recording: boolean }): "close" | "leave-field" | "ignore" {
+  if (s.dialogShown || s.recording) return "ignore";
   return s.editable ? "leave-field" : "close";
 }
 

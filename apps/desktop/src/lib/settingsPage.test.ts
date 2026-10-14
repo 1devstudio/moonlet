@@ -10,7 +10,7 @@ describe("settings nav (X43)", () => {
     expect(settingsNav({ ...none, remoteHosts: 2, phones: 1, profilesNeedSignIn: true })).toEqual([
       {
         title: "App",
-        entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications")],
+        entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications"), app("shortcuts", "Keyboard shortcuts")],
       },
       { title: "Claude Code", entries: [app("profiles", "Profiles", { dot: "a profile is not signed in" }), app("hooks", "Hooks")] },
       { title: "Machines", entries: [app("hosts", "Hosts", { count: 2 }), app("phones", "Phones", { count: 1 })] },
@@ -203,6 +203,7 @@ describe("the settings header's breadcrumb (X43)", () => {
   it("names an app page under Settings", () => {
     expect(settingsCrumbs({ page: "general" })).toEqual(["Settings", "General"]);
     expect(settingsCrumbs({ page: "notifications" })).toEqual(["Settings", "Notifications"]);
+    expect(settingsCrumbs({ page: "shortcuts" })).toEqual(["Settings", "Keyboard shortcuts"]);
   });
 
   it("puts the other pages under their group", () => {
@@ -219,16 +220,20 @@ describe("the settings header's breadcrumb (X43)", () => {
 
 describe("what Esc does on the settings page (X43)", () => {
   it("closes the page from anywhere else", () => {
-    expect(escapeAction({ dialogShown: false, editable: false })).toBe("close");
+    expect(escapeAction({ dialogShown: false, editable: false, recording: false })).toBe("close");
   });
 
   it("leaves a text field first, so its own Esc (such as cancelling a rename) runs", () => {
-    expect(escapeAction({ dialogShown: false, editable: true })).toBe("leave-field");
+    expect(escapeAction({ dialogShown: false, editable: true, recording: false })).toBe("leave-field");
+  });
+
+  it("leaves Esc to a shortcut being recorded, which it cancels", () => {
+    expect(escapeAction({ dialogShown: false, editable: false, recording: true })).toBe("ignore");
   });
 
   it("does nothing while a dialog or the confirm modal is over the page, wherever focus is", () => {
-    expect(escapeAction({ dialogShown: true, editable: false })).toBe("ignore");
-    expect(escapeAction({ dialogShown: true, editable: true })).toBe("ignore");
+    expect(escapeAction({ dialogShown: true, editable: false, recording: false })).toBe("ignore");
+    expect(escapeAction({ dialogShown: true, editable: true, recording: false })).toBe("ignore");
   });
 });
 
