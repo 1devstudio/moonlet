@@ -301,6 +301,83 @@ body:not(.kbd-nav) button:focus {
   animation: moonlet-card-in 0.18s ease-out;
 }
 
+/* The agents strip, the top row of the chat input (X42). A finished
+   agent's dot pops green, then shrinks away; once all are done the strip
+   holds "All N done" and folds up. */
+.agents-strip {
+  height: calc(34px * var(--ui-scale, 1));
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+  transition:
+    height 480ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 260ms ease,
+    border-color 480ms ease;
+}
+.agents-strip > div {
+  transition: transform 480ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.agents-strip.collapsed {
+  height: 0;
+  opacity: 0;
+  border-color: transparent;
+}
+.agents-strip.collapsed > div {
+  transform: translateY(-6px);
+}
+.agents-dot {
+  flex: none;
+  width: calc(6px * var(--ui-scale, 1));
+  height: calc(6px * var(--ui-scale, 1));
+  margin-right: calc(4px * var(--ui-scale, 1));
+  border-radius: 9px;
+  transition:
+    width 420ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-right 420ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 320ms ease,
+    transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 260ms ease;
+}
+.agents-dot.pop {
+  transform: scale(1.6);
+}
+.agents-dot.gone {
+  width: 0;
+  margin-right: 0;
+  opacity: 0;
+  transform: scale(0.2);
+}
+.agents-done-count {
+  transition: color 600ms ease;
+}
+@keyframes agents-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+.agents-fade-in {
+  animation: agents-fade-in 260ms ease;
+}
+@keyframes agents-check {
+  from {
+    stroke-dashoffset: 14;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.agents-check path {
+  stroke-dasharray: 14;
+  animation: agents-check 420ms 120ms ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agents-strip,
+  .agents-strip * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
 /* A progress bar without a percentage: a segment sweeping across (X36). */
 .moonlet-indeterminate {
   position: relative;

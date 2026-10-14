@@ -737,6 +737,7 @@ function ChatEditor({
   onCancel,
   onAttach,
   handle,
+  top,
 }: {
   host: string;
   /** The chat terminal, whose unsent text survives a session switch. */
@@ -758,6 +759,8 @@ function ChatEditor({
   focusSignal?: number;
   /** Escape in the empty editor, before it would stop the agent. */
   onCancel?: () => void;
+  /** A row inside the input's card, above the text: the agents strip (X42). */
+  top?: React.ReactNode;
   /** ⌘U: attach files (X29). */
   onAttach?: () => void;
   /** Lets the `+` menu edit the input (X29). */
@@ -955,32 +958,35 @@ function ChatEditor({
           ))}
         </div>
       )}
-      <div className="relative flex min-h-[52px] items-center gap-3 rounded-[14px] border border-border-strong bg-panel py-3 pl-4 pr-3.5 focus-within:border-[#3a3a3a]">
-        <div className="relative min-w-0 flex-1 ui-text-14 leading-[1.5]">
-          <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
-            {text}
-            {ghost && <span className="text-faint">{ghost}</span>}
+      <div className="rounded-[14px] border border-border-strong bg-panel has-[textarea:focus]:border-[#3a3a3a]">
+        {top}
+        <div className="relative flex min-h-[52px] items-center gap-3 py-3 pl-4 pr-3.5">
+          <div className="relative min-w-0 flex-1 ui-text-14 leading-[1.5]">
+            <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
+              {text}
+              {ghost && <span className="text-faint">{ghost}</span>}
+            </div>
+            <textarea
+              ref={ta}
+              rows={1}
+              spellCheck={false}
+              value={text}
+              placeholder={placeholder ?? (working ? "Queue a message…" : "Ask for a change, @ to mention a file, / for commands")}
+              onChange={(e) => {
+                setText(e.target.value);
+                setCaret(e.target.selectionStart);
+                setDismissed(null);
+                if (walk !== null) setWalk(null);
+              }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+              onKeyDown={onKeyDown}
+              className="relative block w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
+            />
           </div>
-          <textarea
-            ref={ta}
-            rows={1}
-            spellCheck={false}
-            value={text}
-            placeholder={placeholder ?? (working ? "Queue a message…" : "Ask for a change, @ to mention a file, / for commands")}
-            onChange={(e) => {
-              setText(e.target.value);
-              setCaret(e.target.selectionStart);
-              setDismissed(null);
-              if (walk !== null) setWalk(null);
-            }}
-            onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-            onKeyDown={onKeyDown}
-            className="relative block w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
-          />
+          <button title="Send (↵)" className="flex shrink-0 self-end pb-0.5 text-faint hover:text-fg" onClick={send}>
+            <CornerDownLeft size={18} strokeWidth={1.8} />
+          </button>
         </div>
-        <button title="Send (↵)" className="flex shrink-0 self-end pb-0.5 text-faint hover:text-fg" onClick={send}>
-          <CornerDownLeft size={18} strokeWidth={1.8} />
-        </button>
       </div>
     </div>
   );
@@ -1383,7 +1389,6 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
         </FileLinks.Provider>
       </div>
       <div className="w-full shrink-0 px-6 pb-3">
-        {st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
         <ChatEditor
           host={host}
           id={id}
@@ -1401,6 +1406,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           onCancel={revising ? () => setRevise(null) : undefined}
           onAttach={() => void attach()}
           handle={editor}
+          top={st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
         />
         {/* Under the input (X29, X34): +, context ring and cost on the left, status centred, settings on the right. */}
         <div className="mt-1.5 grid h-[34px] grid-cols-[1fr_auto_1fr] items-center px-1 ui-text-12.5 text-muted">

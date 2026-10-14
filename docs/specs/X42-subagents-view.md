@@ -9,7 +9,7 @@
 
 When Claude splits work across subagents (its `Agent` tool, formerly `Task`), moonlet shows one collapsed tool row per launch. It drops everything the subagents do afterwards, and when a subagent asks for permission, the card does not say which subagent is asking. X42 keeps each subagent's progress in the daemon. The UI then shows it in four places: an **Agents** tab in the right panel with a detail view per agent, a strip above the chat input, a "N agents" chip on the session row, and cards in the conversation.
 
-Design: `Moonlet Subagents View.html` (Claude Design bundle with five boards: the session with the Agents panel, the agent detail, the strip states, the row states and the in-conversation cards). Some parts of the design have no data behind them in Claude Code, so they were left out or replaced (see Out of scope).
+Design: `Moonlet Subagents View.html` (Claude Design bundle with five boards: the session with the Agents panel, the agent detail, the strip states, the row states and the in-conversation cards), and `Agents strip animation` (how the strip moves as agents finish). Some parts of the design have no data behind them in Claude Code, so they were left out or replaced (see Out of scope).
 
 ## User journey
 
@@ -18,7 +18,7 @@ Design: `Moonlet Subagents View.html` (Claude Design bundle with five boards: th
 3. The Agents tab lists every agent with its status, elapsed time and what it is doing now ("Running pnpm test"). The header shows the count, the elapsed time and the tokens used, plus **Stop all**.
 4. One agent asks to run a command. Its row and the strip turn yellow ("1 needs you"), and the row shows "Wants to run `pnpm add …`" with **Allow** and **Deny**. The conversation's permission card is headed by the name of the agent that asks.
 5. Clicking a row opens the agent's detail: its brief (the prompt Claude gave it), each tool call with `+a −r` for edits, the pending permission card, and **Stop**.
-6. An agent finishes. Its row turns green, and the conversation shows "Explore the host protocol · finished" with its report. When all agents are done, the strip reads "3 agents finished · +318 −41 in 9 files" (the lines and files the agents' own edits changed) with **Review changes**, which opens the Changes tab, and × hides the strip.
+6. An agent finishes. Its row turns green, and the conversation shows "Explore the host protocol · finished" with its report. In the strip its dot turns green with a small pop, the "N done" count flashes green, and the dot hides a moment later. When all agents are done, the strip reads "✓ All 3 done", holds for a moment, then folds away; the conversation's "3 agents finished" card keeps the diff and **Review changes**.
 7. An agent fails. Its row shows the error in red with **Retry**, and the strip reads "1 failed" with **Retry**. Retry asks Claude, in the chat, to run that agent again.
 8. While any agent runs, the session row in the sidebar shows "N agents".
 
@@ -50,7 +50,9 @@ Agents tab (PR 2):
 Strip and sidebar (PR 3):
 
 - [x] The strip shows the agents launched since the user's last message. It is hidden when there are none, and after × until a new agent starts. (`stripView`, `stripDismissAt`)
-- [x] The strip text for each state (working, one needs you, all finished, one failed, ended with some stopped) is as listed under UI. "Finished" means every agent is done; its diff counts the agents' own edits that went through, not the session's. Retry asks for the batch's failed agents. (`stripView`, `stripRetry`, `agents.e2e.ts`)
+- [x] The strip text for each state (working, one needs you, all finished, one failed, ended with some stopped) is as listed under UI. "Finished" means every agent is done. Retry asks for the batch's failed agents. (`stripView`, `stripRetry`, `agents.e2e.ts`)
+- [x] The strip is the top row of the chat input's card. Its dots keep launch order. A finished agent's dot turns green and pops for 0.28 s, the "N done" count shows green for 0.9 s, and 1.2 s after the agent ended its dot shrinks away; failed and stopped dots stay. Running dots pulse. (`stripView`, `agents.e2e.ts`)
+- [x] Once every agent is done the strip reads "✓ All N done" ("1 agent done" for one) with **Agents ›**, and 1.6 s after the last one ended it folds up, leaving the input. (`stripView`)
 - [x] The session row shows "N agents" while N of its chats' subagents run; "needs input" still wins. (`sessionBadge`)
 
 Conversation cards (PR 4):
@@ -93,17 +95,17 @@ Detail:
     ─────────────────────────────────────────────
                                             Stop
 
-Strip, above the chat input:
+Strip, the top row of the chat input's card:
 
 | State | Left | Right |
 |---|---|---|
 | working | `●●●●● 5 agents · 2 running · 2 done` | `1:48  Agents ›` |
 | one needs you | `… · 1 running · 2 done · 1 needs you` (yellow) | `2:14  Agents ›` |
-| all finished | `5 agents finished · +318 −41 in 9 files` | `3:40  Review changes  ×` |
+| all finished | `✓ All 5 done`, then the strip folds away after 1.6 s | `3:40  Agents ›` |
 | ended, some stopped | `5 agents · 4 done · 1 stopped` | `3:40  Review changes  ×` |
 | one failed | `5 agents · 4 done · 1 failed` (red) | `2:40  Retry  Agents ›` |
 
-Dot colours: running accent, needs you `blocked`, done `done`, failed `error`, stopped muted.
+Dot colours: running accent (pulsing), needs you `blocked`, done `done` (then hidden), failed `error`, stopped muted. With reduced motion the strip changes without animation (`moonlet.css`; WebDriver cannot emulate the setting, so no test covers it).
 
 ## Protocol and RPCs
 
@@ -146,7 +148,7 @@ Captured from claude 2.1.296 (haiku, `--permission-prompt-tool stdio`, hooks off
 - Unit (Rust, `crates/moonlet-core/src/chat/claude.rs`): replay the captured fixtures through the adapter, as listed under Behaviour.
 - Unit (Rust, `crates/moonlet-core/src/chat/runtime.rs`): `chat.stop_agent` and process exit with a fake `claude`.
 - Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `askLine`, `agentsHeader`, `agentsTabDot`, `modelLabel`, `retryMessage`, `stripView`, `stripDismissAt`, `stripRetry`, `launchedRows`, `askerName`, `agentNotes`, `notesByBlock`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
-- E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents. The tab, the strip, the session chip and the conversation cards show them. One asks and is allowed from its row. The detail shows the other's brief and tool calls, and Stop sends `stop_task`.
+- E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents. The tab, the strip (the top row of the input's card, its running dot pulsing), the session chip and the conversation cards show them. One asks and is allowed from its row. The detail shows the other's brief and tool calls, and Stop sends `stop_task`.
 
 ## Open questions
 

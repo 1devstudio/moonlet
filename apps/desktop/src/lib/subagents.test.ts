@@ -175,64 +175,104 @@ describe("stripView (X42)", () => {
   const running = (id: string, started: number): Subagent => ({ ...write, id, description: id, started_at: started, status: "running" });
   const done = (id: string, started: number, ms: number, tools: Subagent["tools"] = []): Subagent => ({ ...list, id, description: id, started_at: started, duration_ms: ms, ended_at: started + ms, status: "done", tools });
   const withItems = (subagents: Subagent[], pending: PermissionAsk[] = []) => ({ ...chat(subagents, pending), items: [user(T0 - 1_000)] });
-  const edit = (id: string, path: string, added: number, removed: number, status: "ok" | "denied" = "ok") => ({ id, name: "Edit", summary: path, status, added, removed });
 
   it("counts running and done agents while they work", () => {
     const st = withItems([done("a1", T0, 10_000), done("a2", T0, 20_000), running("a3", T0), running("a4", T0 + 5_000)]);
     expect(stripView(st, T0 + 108_000, 0)).toEqual({
-      dots: ["done", "done", "running", "running"],
+      dots: [
+        { key: "a1", state: "done", phase: "gone" },
+        { key: "a2", state: "done", phase: "gone" },
+        { key: "a3", state: "running", phase: "on" },
+        { key: "a4", state: "running", phase: "on" },
+      ],
       title: "4 agents",
-      detail: "2 running · 2 done",
+      counts: [
+        { state: "running", text: "2 running" },
+        { state: "done", text: "2 done" },
+      ],
+      flash: false,
+      finished: false,
+      collapsed: false,
       alert: null,
       clock: "1:48",
       button: null,
       dismissible: false,
+      wake: null,
     });
   });
 
   it("calls out an agent that needs the user", () => {
     const st = withItems([done("a1", T0, 10_000), running("a3", T0), running("a5", T0)], [ask2]);
     expect(stripView(st, T0 + 134_000, 0)).toMatchObject({
-      dots: ["done", "running", "needs"],
+      dots: [
+        { key: "a1", state: "done", phase: "gone" },
+        { key: "a3", state: "running", phase: "on" },
+        { key: "a5", state: "needs", phase: "on" },
+      ],
       title: "3 agents",
-      detail: "1 running · 1 done",
+      counts: [
+        { state: "running", text: "1 running" },
+        { state: "done", text: "1 done" },
+      ],
       alert: { tone: "blocked", text: "1 needs you" },
       clock: "2:14",
       button: null,
     });
   });
 
-  it("offers Review changes once all finished, with the agents' own edits, and can be dismissed", () => {
-    const st = withItems([
-      done("a1", T0, 100_000, [edit("e1", "/repo/a.ts", 10, 0), edit("e2", "/repo/b.ts", 3, 1), { id: "r1", name: "Read", summary: "/repo/c.ts", status: "ok" }]),
-      done("a2", T0 + 20_000, 200_000, [edit("e3", "/repo/b.ts", 2, 2), edit("e4", "/repo/d.ts", 5, 5, "denied")]),
-    ]);
-    expect(stripView(st, T0 + 999_000, 0)).toEqual({
-      dots: ["done", "done"],
-      title: "2 agents finished",
-      detail: "+15 −3 in 2 files",
+  it("reads All N done once all finished, then folds away", () => {
+    // a1 ends at T0 + 100_000, a2 at T0 + 220_000.
+    const st = withItems([done("a1", T0, 100_000), done("a2", T0 + 20_000, 200_000)]);
+    expect(stripView(st, T0 + 220_100, 0)).toEqual({
+      dots: [
+        { key: "a1", state: "done", phase: "gone" },
+        { key: "a2", state: "done", phase: "pop" },
+      ],
+      title: "All 2 done",
+      counts: [],
+      flash: true,
+      finished: true,
+      collapsed: false,
       alert: null,
       clock: "3:40",
+      button: null,
+      dismissible: false,
+      wake: T0 + 220_280,
+    });
+    expect(stripView(st, T0 + 221_200, 0)).toMatchObject({ dots: [{ phase: "gone" }, { phase: "gone" }], collapsed: false, wake: T0 + 221_600 });
+    expect(stripView(st, T0 + 221_600, 0)).toMatchObject({ title: "All 2 done", collapsed: true, wake: null });
+    expect(stripView(withItems([done("a1", T0, 1_000)]), T0 + 1_100, 0)).toMatchObject({ title: "1 agent done", finished: true, collapsed: false });
+  });
+
+  it("does not call stopped agents finished, and can be dismissed", () => {
+    const st = withItems([done("a1", T0, 10_000), { ...bench, started_at: T0 + 2_000 }]);
+    expect(stripView(st, T0 + 99_000, 0)).toMatchObject({
+      dots: [
+        { key: "a1", state: "done", phase: "gone" },
+        { key: bench.id, state: "stopped", phase: "on" },
+      ],
+      title: "2 agents",
+      counts: [{ state: "done", text: "1 done" }, { state: "stopped", text: "1 stopped" }],
+      finished: false,
+      collapsed: false,
+      alert: null,
       button: "review",
       dismissible: true,
     });
-    expect(stripView(withItems([done("a1", T0, 1_000)]), T0 + 9_000, 0)).toMatchObject({ title: "1 agent finished", detail: "" });
     // Dismissed after the last agent started: hidden until a new one starts.
-    expect(stripDismissAt(st)).toBe(T0 + 20_000);
-    expect(stripView(st, T0 + 999_000, stripDismissAt(st))).toBeNull();
-  });
-
-  it("does not call stopped agents finished", () => {
-    const st = withItems([done("a1", T0, 10_000), { ...bench, started_at: T0 }]);
-    expect(stripView(st, T0 + 99_000, 0)).toMatchObject({ title: "2 agents", detail: "1 done · 1 stopped", alert: null, button: "review", dismissible: true });
+    expect(stripDismissAt(st)).toBe(T0 + 2_000);
+    expect(stripView(st, T0 + 99_000, stripDismissAt(st))).toBeNull();
   });
 
   it("offers Retry for the failed agents once none still runs", () => {
     const st = withItems([done("a1", T0, 10_000), { ...audit, started_at: T0 }]);
     expect(stripView(st, T0 + 999_000, 0)).toMatchObject({
-      dots: ["done", "failed"],
+      dots: [
+        { key: "a1", state: "done", phase: "gone" },
+        { key: "a3", state: "failed", phase: "on" },
+      ],
       title: "2 agents",
-      detail: "1 done",
+      counts: [{ state: "done", text: "1 done" }],
       alert: { tone: "error", text: "1 failed" },
       clock: "0:52",
       button: "retry",
@@ -241,9 +281,33 @@ describe("stripView (X42)", () => {
     expect(stripRetry(withItems([done("a1", T0, 10_000)]))).toBeNull();
   });
 
+  it("pops a finished agent's dot green, then hides it, waking for each change", () => {
+    // a1 ends at T0 + 10_000; a2 still runs.
+    const st = withItems([done("a1", T0, 10_000), running("a2", T0)]);
+    const at = (now: number) => stripView(st, now, 0)!;
+    // The daemon's clock may run a little ahead of this one.
+    expect(at(T0 + 9_900)).toMatchObject({ dots: [{ key: "a1", state: "done", phase: "pop" }, { phase: "on" }], flash: true });
+    expect(at(T0 + 10_100)).toMatchObject({ dots: [{ key: "a1", state: "done", phase: "pop" }, { key: "a2", state: "running", phase: "on" }], wake: T0 + 10_280 });
+    expect(at(T0 + 10_500)).toMatchObject({ dots: [{ key: "a1", state: "done", phase: "on" }, { phase: "on" }], wake: T0 + 10_900 });
+    expect(at(T0 + 11_000)).toMatchObject({ dots: [{ key: "a1", state: "done", phase: "on" }, { phase: "on" }], wake: T0 + 11_200 });
+    expect(at(T0 + 11_200)).toMatchObject({ dots: [{ key: "a1", state: "done", phase: "gone" }, { phase: "on" }], wake: null });
+  });
+
+  it("shows the done count green for a moment after an agent finishes", () => {
+    const st = withItems([done("a1", T0, 10_000), running("a2", T0)]);
+    expect(stripView(st, T0 + 10_800, 0)).toMatchObject({
+      counts: [
+        { state: "running", text: "1 running" },
+        { state: "done", text: "1 done" },
+      ],
+      flash: true,
+    });
+    expect(stripView(st, T0 + 10_900, 0)).toMatchObject({ flash: false });
+  });
+
   it("shows only the agents launched since the user's last message", () => {
     const st = { ...withItems([done("a1", T0 - 60_000, 10_000), running("a3", T0)]), items: [user(T0 - 90_000), user(T0 - 1_000)] };
-    expect(stripView(st, T0 + 1_000, 0)).toMatchObject({ title: "1 agent", detail: "1 running" });
+    expect(stripView(st, T0 + 1_000, 0)).toMatchObject({ title: "1 agent", counts: [{ state: "running", text: "1 running" }] });
     expect(stripView({ ...st, items: [user(T0 + 500)] }, T0 + 1_000, 0)).toBeNull();
   });
 });
@@ -296,6 +360,15 @@ describe("agentNotes (X42)", () => {
     const edit = (id: string, added: number, removed: number) => ({ id, name: "Edit", summary: "/repo/a.ts", status: "ok" as const, added, removed });
     const notes = agentNotes(items, [{ ...list, tools: [edit("e1", 2, 1)] }, { ...list, id: "a7", started_at: T0, tools: [edit("e2", 1, 0)] }]);
     expect(notes.map(shape).at(-1)).toEqual(["m1", "2 agents finished in 0:12|+3 −1 in 1 file"]);
+  });
+
+  it("leaves reads and denied edits out of the batch's diff", () => {
+    const edit = (id: string, path: string, added: number, removed: number, status: "ok" | "denied" = "ok") => ({ id, name: "Edit", summary: path, status, added, removed });
+    const notes = agentNotes(items, [
+      { ...list, tools: [edit("e1", "/repo/a.ts", 10, 0), edit("e2", "/repo/b.ts", 3, 1), { id: "r1", name: "Read", summary: "/repo/c.ts", status: "ok" }] },
+      { ...list, id: "a7", started_at: T0, tools: [edit("e3", "/repo/b.ts", 2, 2), edit("e4", "/repo/d.ts", 5, 5, "denied")] },
+    ]);
+    expect(notes.map(shape).at(-1)).toEqual(["m1", "2 agents finished in 0:12|+15 −3 in 2 files"]);
   });
 
   it("only follows messages that show", () => {
