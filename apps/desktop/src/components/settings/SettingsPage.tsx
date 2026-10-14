@@ -3,7 +3,7 @@
 // underneath, so terminals and agents keep running.
 
 import { useEffect, useMemo, useRef } from "react";
-import { ArrowLeft, Bell, Bot, ChevronRight, Folder, Link2, Palette, Server, Settings, Smartphone, SquareTerminal, User, X } from "lucide-react";
+import { ArrowLeft, Bell, Bot, ChevronRight, Folder, Keyboard, Link2, Palette, Server, Settings, Smartphone, SquareTerminal, User, X } from "lucide-react";
 import { escapeAction, profilesNeedSignIn, routeKey, settingsCrumbs, settingsNav, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { updateStatus } from "../../lib/updater";
@@ -12,6 +12,7 @@ import { IconButton, Kbd, cx } from "../ui";
 import { WorkspaceMark } from "../WorkspaceSwitcher";
 import { PageBody } from "./controls";
 import { ProjectPage } from "./ProjectPage";
+import { ShortcutsPage } from "./ShortcutsPage";
 import { WorkspacePage } from "./WorkspacePage";
 import { AgentsPage, AppearancePage, GeneralPage, NotificationsPage, TerminalPage } from "./AppPages";
 import { HooksPage, ProfilesPage } from "./ClaudePages";
@@ -23,6 +24,7 @@ const ICONS: Record<AppPage, typeof Settings> = {
   terminal: SquareTerminal,
   agents: Bot,
   notifications: Bell,
+  shortcuts: Keyboard,
   profiles: User,
   hooks: Link2,
   hosts: Server,
@@ -125,6 +127,8 @@ function AppPageBody({ route, mobile }: { route: { page: AppPage }; mobile: Retu
       return <AgentsPage />;
     case "notifications":
       return <NotificationsPage />;
+    case "shortcuts":
+      return <ShortcutsPage />;
     case "profiles":
       return <ProfilesPage />;
     case "hooks":
@@ -169,7 +173,11 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
       const { dialog, confirm } = useStore.getState();
       const target = e.target instanceof HTMLElement ? e.target : null;
       const editable = !!target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable);
-      const action = escapeAction({ dialogShown: !!dialog || !!confirm || !!document.querySelector('[role="dialog"]:not([inert] *)'), editable });
+      const action = escapeAction({
+        dialogShown: !!dialog || !!confirm || !!document.querySelector('[role="dialog"]:not([inert] *)'),
+        editable,
+        recording: !!document.querySelector("[data-recording-shortcut]"),
+      });
       if (action === "ignore") return;
       if (action === "leave-field") {
         // After the field's own handler, which still gets this Esc.
