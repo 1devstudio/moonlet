@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
-import { type Connection, loadTrackersConfig, saveTrackersConfig, type Source, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { type Connection, loadTrackersConfig, reconnected, saveTrackersConfig, type Source, trackersConfig, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
 import { wsKey } from "../../lib/workspaces";
 import { Button, Dialog, Field, inputCls } from "../ui";
@@ -106,6 +106,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
     try {
       const r = await hostsApi.trackerOauthLinear();
       await loadTrackersConfig(true);
+      reconnected(r.connection.id);
       setDone(r);
     } catch (e) {
       setError(message(e));
@@ -119,6 +120,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
     try {
       const r = await hostsApi.trackerConnect({ kind, site, email, token });
       await loadTrackersConfig(true);
+      reconnected(r.connection.id);
       setDone(r);
     } catch (e) {
       setError(message(e));
