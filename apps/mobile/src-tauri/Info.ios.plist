@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSCameraUsageDescription</key>
+  <string>moonlet scans the pairing code your Mac shows in Settings › Mobile.</string>
+  <key>NSFaceIDUsageDescription</key>
+  <string>moonlet asks for Face ID before an agent is allowed to run a tool or start a plan.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>moonlet connects to your Mac over Tailscale.</string>
+</dict>
+</plist>

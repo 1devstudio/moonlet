@@ -1,0 +1,37 @@
+[package]
+name = "moonlet-mobile"
+description = "moonlet phone app (a client of the Mac's moonletd over Tailscale)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "moonlet_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+moonlet-proto.workspace = true
+moonlet-link.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+# Device tokens in the Keychain (X39).
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+security-framework = "3"
+
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
+tauri-plugin-biometric = "2"
+tauri-plugin-haptics = "2"
+
+[dev-dependencies]
+tempfile.workspace = true
