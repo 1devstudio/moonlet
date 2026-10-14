@@ -59,7 +59,7 @@ struct Inner {
     restart: bool,
     /// Asks kept from before a daemon restart; their answers go to the
     /// resumed agent as its next message.
-    carried: Vec<String>,
+    kept: Vec<String>,
     stderr: Vec<String>,
     saved_at: Instant,
     dirty: bool,
@@ -110,23 +110,28 @@ fn agent_state(status: &str) -> AgentState {
 }
 
 /// Asks that wait through a daemon restart.
-const CARRIED_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
+const KEPT_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 
 /// The tool call an ask is about: the same tool with the same input.
 fn asks_for(ask: &PermissionAsk, tool: &ToolCall) -> bool {
     ask.tool == tool.name && ask.input == tool.input
 }
 
-/// Ends the tool call a kept ask was about.
+/// Ends the running tool call a kept ask was about.
 fn close_tool(st: &mut ChatState, ask: &PermissionAsk, status: &str) -> Option<Out> {
-    let it = st.items.iter_mut().find(|i| i.tool.as_ref().is_some_and(|t| asks_for(ask, t)))?;
+    let it = st.items.iter_mut().find(|i| i.tool.as_ref().is_some_and(|t| t.status == "running" && asks_for(ask, t)))?;
     it.tool.as_mut()?.status = status.into();
     Some(Out::Item(Box::new(it.clone())))
 }
 
-/// Answers to a question asked before a daemon restart, as a message.
-fn answers_text(answers: &BTreeMap<String, String>) -> String {
-    let lines: Vec<String> = answers.iter().map(|(q, a)| format!("{q}\n{a}")).collect();
+/// Answers to a question asked before a daemon restart, as a message, in
+/// the order the agent asked them.
+fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> String {
+    let asked: Vec<&str> = ask.input["questions"].as_array().into_iter().flatten().filter_map(|q| q["question"].as_str()).collect();
+    let rank = |q: &str| asked.iter().position(|a| *a == q).unwrap_or(asked.len());
+    let mut pairs: Vec<(&String, &String)> = answers.iter().collect();
+    pairs.sort_by_key(|(q, _)| rank(q));
+    let lines: Vec<String> = pairs.iter().map(|(q, a)| format!("{q}\n{a}")).collect();
     format!("Answers to your questions:\n\n{}", lines.join("\n\n"))
 }
 
@@ -203,7 +208,7 @@ impl ChatManager {
                 pid: None,
                 generation: 0,
                 restart: false,
-                carried: Vec::new(),
+                kept: Vec::new(),
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
                 dirty: true,
@@ -250,17 +255,8 @@ impl ChatManager {
     /// Sends a user message, starting or restarting the agent first when needed.
     fn deliver(&self, chat: &Arc<Chat>, inner: &mut Inner, text: &str, images: &[ChatImage]) -> Result<()> {
         // A new message instead of an answer: the kept asks are moot.
-        if !inner.carried.is_empty() {
-            let carried = std::mem::take(&mut inner.carried);
-            let dropped: Vec<PermissionAsk> = inner.state.pending.iter().filter(|p| carried.contains(&p.id)).cloned().collect();
-            inner.state.pending.retain(|p| !carried.contains(&p.id));
-            let mut outs: Vec<Out> = dropped.iter().filter_map(|p| close_tool(&mut inner.state, p, "error")).collect();
-            if inner.state.pending.is_empty() {
-                inner.state.status = "idle".into();
-            }
-            outs.push(Out::State);
-            self.apply(chat, inner, outs);
-        }
+        let kept = inner.kept.clone();
+        self.close_kept(chat, inner, &kept, "error", None);
         if inner.restart || inner.stdin.is_none() {
             self.kill_process(inner);
             self.settle(chat, inner, "Stopped to apply new settings");
@@ -276,17 +272,35 @@ impl ChatManager {
         Ok(())
     }
 
+    /// Takes kept asks off the chat and ends their tool calls with
+    /// `status`. Returns the asks it closed.
+    fn close_kept(&self, chat: &Chat, inner: &mut Inner, ids: &[String], status: &str, note: Option<&str>) -> Vec<PermissionAsk> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        inner.kept.retain(|k| !ids.contains(k));
+        let (closed, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut inner.state.pending).into_iter().partition(|p| ids.contains(&p.id));
+        inner.state.pending = rest;
+        let mut outs: Vec<Out> = closed.iter().filter_map(|p| close_tool(&mut inner.state, p, status)).collect();
+        if inner.state.pending.is_empty() {
+            inner.state.status = "idle".into();
+        }
+        if let Some(n) = note {
+            outs.push(upsert(&mut inner.state, item(super::local_id("system"), "system", n)));
+        }
+        outs.push(Out::State);
+        self.apply(chat, inner, outs);
+        closed
+    }
+
     /// Answers an ask kept from before a daemon restart. Its agent process
     /// is gone, so the answer reaches the resumed agent as a message.
     #[allow(clippy::too_many_arguments)]
-    fn answer_carried(&self, chat: &Arc<Chat>, inner: &mut Inner, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>) -> Result<()> {
-        let Some(i) = inner.state.pending.iter().position(|p| p.id == ask) else { return Ok(()) };
-        let asked = inner.state.pending.remove(i);
-        inner.carried.retain(|c| c != ask);
+    fn answer_kept(&self, chat: &Arc<Chat>, inner: &mut Inner, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>) -> Result<()> {
         let allowed = decision != "deny";
-        let mut outs: Vec<Out> = close_tool(&mut inner.state, &asked, if allowed { "ok" } else { "denied" }).into_iter().collect();
+        let Some(asked) = self.close_kept(chat, inner, &[ask.to_string()], if allowed { "ok" } else { "denied" }, None).pop() else { return Ok(()) };
         let text = match asked.tool.as_str() {
-            "AskUserQuestion" if allowed => answers.map(answers_text),
+            "AskUserQuestion" if allowed => answers.map(|a| answers_text(&asked, a)),
             // The agent starts in the mode the plan was approved into (X20):
             // "ask before edits" carries no mode and means manual.
             "ExitPlanMode" if allowed => {
@@ -296,15 +310,10 @@ impl ChatManager {
                 inner.restart = true;
                 Some("I approve your plan. Go ahead with it.".to_string())
             }
-            // "Keep planning" sends the user's feedback.
-            "ExitPlanMode" => message.map(String::from),
+            // Skip, or "Keep planning" with the user's feedback.
+            _ if !allowed => message.map(String::from),
             _ => None,
         };
-        if inner.state.pending.is_empty() {
-            inner.state.status = "idle".into();
-        }
-        outs.push(Out::State);
-        self.apply(chat, inner, outs);
         match text {
             Some(t) => self.deliver(chat, inner, &t, &[]),
             None => Ok(()),
@@ -328,8 +337,8 @@ impl ChatManager {
         if mode.is_some() && !inner.state.pending.iter().any(|p| p.id == ask && p.tool == "ExitPlanMode") {
             bail!("only a plan approval can switch the mode");
         }
-        if inner.carried.iter().any(|c| c == ask) {
-            return self.answer_carried(&chat, &mut inner, ask, decision, message, answers, mode);
+        if inner.kept.iter().any(|c| c == ask) {
+            return self.answer_kept(&chat, &mut inner, ask, decision, message, answers, mode);
         }
         let Inner { adapter, state, .. } = &mut *inner;
         let outs = adapter.as_mut().context("agent not running")?.permission(ask, decision, message, answers, mode, state);
@@ -340,6 +349,12 @@ impl ChatManager {
     pub fn interrupt(&self, id: TerminalId) -> Result<()> {
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
+        // A kept ask's turn died with the old agent: nothing runs to stop.
+        if !inner.kept.is_empty() {
+            let kept = inner.kept.clone();
+            self.close_kept(&chat, &mut inner, &kept, "error", Some("Interrupted"));
+            return Ok(());
+        }
         let Inner { adapter, state, .. } = &mut *inner;
         let Some(a) = adapter.as_mut() else { return Ok(()) };
         let outs = a.interrupt(state);
@@ -476,16 +491,16 @@ impl ChatManager {
             };
             let mut state = saved.state;
             let mut interrupted = false;
-            let mut carried = Vec::new();
+            let mut kept = Vec::new();
             if matches!(state.status.as_str(), "working" | "blocked") {
                 // The main agent's questions and plans wait for their answer,
                 // which the resumed agent gets as a message. Tool permissions
                 // are asked again when the agent continues.
-                state.pending.retain(|p| p.agent.is_none() && CARRIED_TOOLS.contains(&p.tool.as_str()));
-                carried = state.pending.iter().map(|p| p.id.clone()).collect();
-                state.status = if carried.is_empty() { "idle" } else { "blocked" }.into();
+                state.pending.retain(|p| p.agent.is_none() && KEPT_TOOLS.contains(&p.tool.as_str()));
+                kept = state.pending.iter().map(|p| p.id.clone()).collect();
+                state.status = if kept.is_empty() { "idle" } else { "blocked" }.into();
                 state.turn_started_at = None;
-                interrupted = carried.is_empty();
+                interrupted = kept.is_empty();
             }
             super::stop_subagents(&mut state);
             let pending = state.pending.clone();
@@ -519,7 +534,7 @@ impl ChatManager {
                     pid: None,
                     generation: 0,
                     restart: false,
-                    carried,
+                    kept,
                     stderr: Vec::new(),
                     saved_at: Instant::now(),
                     dirty: true,
@@ -588,6 +603,7 @@ impl ChatManager {
         }
         inner.state.status = "idle".into();
         inner.state.pending.clear();
+        inner.kept.clear();
         inner.state.turn_started_at = None;
         let mut outs = Vec::new();
         for it in inner.state.items.iter_mut().filter(|i| i.partial || i.tool.as_ref().is_some_and(|t| t.status == "running")) {
@@ -610,6 +626,7 @@ impl ChatManager {
         inner.state.status = "error".into();
         inner.state.turn_started_at = None;
         inner.state.pending.clear();
+        inner.kept.clear();
         self.apply(chat, inner, vec![o, Out::State]);
     }
 
@@ -809,9 +826,15 @@ while IFS= read -r line; do
     *'propose a plan'*)
       echo '{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"t2","name":"ExitPlanMode","input":{"plan":"Add a theme"}}]}}'
       echo '{"type":"control_request","request_id":"p1","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","tool_use_id":"t2","input":{"plan":"Add a theme"}}}' ;;
+    *'propose it again'*)
+      echo '{"type":"assistant","message":{"id":"m4","content":[{"type":"tool_use","id":"t4","name":"ExitPlanMode","input":{"plan":"Add a theme"}}]}}'
+      echo '{"type":"control_request","request_id":"p2","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","tool_use_id":"t4","input":{"plan":"Add a theme"}}}' ;;
+    *'agent asks'*)
+      echo '{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_1","description":"Pick colours","subagent_type":"general-purpose","is_backgrounded":true,"prompt":"Ask for colours."}'
+      echo '{"type":"control_request","request_id":"q2","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"t5","agent_id":"a1","input":{"questions":[{"question":"Which colours?","header":"Colours","multiSelect":false,"options":[{"label":"GitHub","description":"Green and purple"}]}]}}}' ;;
     *'ask me'*)
-      echo '{"type":"assistant","message":{"id":"m3","content":[{"type":"tool_use","id":"t3","name":"AskUserQuestion","input":{"questions":[{"question":"Which colours?","header":"Colours","multiSelect":false,"options":[{"label":"GitHub","description":"Green and purple"},{"label":"Mono","description":"Greys"}]}]}}]}}'
-      echo '{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"t3","input":{"questions":[{"question":"Which colours?","header":"Colours","multiSelect":false,"options":[{"label":"GitHub","description":"Green and purple"},{"label":"Mono","description":"Greys"}]}]}}}' ;;
+      echo '{"type":"assistant","message":{"id":"m3","content":[{"type":"tool_use","id":"t3","name":"AskUserQuestion","input":{"questions":[{"question":"Which size?","header":"Size","multiSelect":false,"options":[{"label":"Large","description":"Roomy"},{"label":"Small","description":"Compact"}]},{"question":"Which colours?","header":"Colours","multiSelect":false,"options":[{"label":"GitHub","description":"Green and purple"},{"label":"Mono","description":"Greys"}]}]}}]}}'
+      echo '{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"t3","input":{"questions":[{"question":"Which size?","header":"Size","multiSelect":false,"options":[{"label":"Large","description":"Roomy"},{"label":"Small","description":"Compact"}]},{"question":"Which colours?","header":"Colours","multiSelect":false,"options":[{"label":"GitHub","description":"Green and purple"},{"label":"Mono","description":"Greys"}]}]}}}' ;;
     *'"mode":"auto"'*)
       echo '{"type":"system","subtype":"status","status":null,"permissionMode":"auto"}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
@@ -1175,6 +1198,24 @@ done
         chats2
     }
 
+    /// A new Claude chat, blocked on what `text` makes the fake agent ask.
+    async fn blocked_chat(dir: &Path, chats: &ChatManager, mode: Option<&str>, text: &str) -> TerminalId {
+        let info = chats.create(ChatCreate { cwd: dir.display().to_string(), agent: "claude".into(), mode: mode.map(String::from), ..Default::default() }).unwrap();
+        wait_for(chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, text, &[]).unwrap();
+        wait_for(chats, info.id, |s| s.status == "blocked").await;
+        info.id
+    }
+
+    /// The arguments of the fake agent's latest start.
+    fn last_start(dir: &Path) -> String {
+        std::fs::read_to_string(dir.join("claude-args")).unwrap().lines().last().unwrap().to_string()
+    }
+
+    fn last_user_text(st: &ChatState) -> &str {
+        &st.items.iter().rev().find(|i| i.kind == "user").unwrap().text
+    }
+
     fn tool_status(st: &ChatState, name: &str) -> String {
         st.items.iter().filter_map(|i| i.tool.as_ref()).find(|t| t.name == name).unwrap().status.clone()
     }
@@ -1182,113 +1223,169 @@ done
     #[tokio::test]
     async fn a_question_waits_through_a_daemon_restart_and_its_answer_resumes_claude() {
         let (dir, terms, chats) = setup().await;
-        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
-        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        chats.send(info.id, "ask me", &[]).unwrap();
-        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        let id = blocked_chat(dir.path(), &chats, None, "ask me").await;
         chats.shutdown();
 
         let chats2 = restarted(dir.path(), &terms);
-        let st = chats2.state(info.id).unwrap();
+        let st = chats2.state(id).unwrap();
         assert_eq!(st.status, "blocked");
-        assert_eq!(st.pending.iter().map(|p| (p.id.as_str(), p.summary.as_str())).collect::<Vec<_>>(), [("q1", "Which colours?")]);
+        assert_eq!(st.pending.iter().map(|p| (p.id.as_str(), p.summary.as_str())).collect::<Vec<_>>(), [("q1", "Which size?")]);
         assert_eq!(tool_status(&st, "AskUserQuestion"), "running");
         assert!(!st.items.iter().any(|i| i.text == "Interrupted by a daemon restart"));
 
-        let answers = BTreeMap::from([("Which colours?".to_string(), "GitHub".to_string())]);
-        chats2.permission(info.id, "q1", "allow", None, Some(&answers), None).unwrap();
-        let st = wait_for(&chats2, info.id, |s| s.status == "done").await;
+        let answers = BTreeMap::from([("Which colours?".to_string(), "GitHub".to_string()), ("Which size?".to_string(), "Large".to_string())]);
+        chats2.permission(id, "q1", "allow", None, Some(&answers), None).unwrap();
+        let st = wait_for(&chats2, id, |s| s.status == "done").await;
         assert!(st.pending.is_empty());
         assert_eq!(tool_status(&st, "AskUserQuestion"), "ok");
-        assert_eq!(st.items.iter().rev().find(|i| i.kind == "user").unwrap().text, "Answers to your questions:\n\nWhich colours?\nGitHub");
-        let last_start = std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().last().unwrap().to_string();
-        assert!(last_start.contains("--resume sess-1"), "{last_start}");
+        assert_eq!(last_user_text(&st), "Answers to your questions:\n\nWhich size?\nLarge\n\nWhich colours?\nGitHub");
+        let start = last_start(dir.path());
+        assert!(start.contains("--resume sess-1"), "{start}");
         chats2.shutdown();
     }
 
     #[tokio::test]
-    async fn skipping_a_question_after_a_daemon_restart_sends_nothing() {
+    async fn tool_permissions_and_subagent_asks_end_at_a_daemon_restart() {
         let (dir, terms, chats) = setup().await;
-        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
-        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        chats.send(info.id, "ask me", &[]).unwrap();
-        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        let a = blocked_chat(dir.path(), &chats, None, "run a command").await;
+        let b = blocked_chat(dir.path(), &chats, None, "agent asks").await;
         chats.shutdown();
 
         let chats2 = restarted(dir.path(), &terms);
-        chats2.permission(info.id, "q1", "deny", Some("The user declined to answer the questions."), None, None).unwrap();
-        let st = chats2.state(info.id).unwrap();
-        assert_eq!(st.status, "idle");
+        for id in [a, b] {
+            let st = chats2.state(id).unwrap();
+            assert_eq!(st.status, "idle");
+            assert!(st.pending.is_empty(), "{:?}", st.pending);
+            assert_eq!(st.items.last().unwrap().text, "Interrupted by a daemon restart");
+        }
+        chats2.shutdown();
+    }
+
+    #[tokio::test]
+    async fn skipping_a_question_after_a_daemon_restart_tells_claude() {
+        let (dir, terms, chats) = setup().await;
+        let id = blocked_chat(dir.path(), &chats, None, "ask me").await;
+        chats.shutdown();
+
+        let chats2 = restarted(dir.path(), &terms);
+        chats2.permission(id, "q1", "deny", Some("The user declined to answer the questions."), None, None).unwrap();
+        let st = wait_for(&chats2, id, |s| s.status == "done").await;
         assert!(st.pending.is_empty());
         assert_eq!(tool_status(&st, "AskUserQuestion"), "denied");
-        assert_eq!(st.items.iter().rev().find(|i| i.kind == "user").unwrap().text, "ask me");
-        // Claude was started once, before the restart.
-        assert_eq!(std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().count(), 1);
+        assert_eq!(last_user_text(&st), "The user declined to answer the questions.");
+        let start = last_start(dir.path());
+        assert!(start.contains("--resume sess-1"), "{start}");
+        chats2.shutdown();
+    }
+
+    #[tokio::test]
+    async fn stop_ends_a_question_kept_through_a_daemon_restart() {
+        let (dir, terms, chats) = setup().await;
+        let a = blocked_chat(dir.path(), &chats, None, "ask me").await;
+        let b = blocked_chat(dir.path(), &chats, None, "ask me").await;
+        chats.shutdown();
+
+        let chats2 = restarted(dir.path(), &terms);
+        // The + menu starts the agent of `b` while its question waits.
+        chats2.mcp(b, "refresh", None).unwrap();
+        wait_for(&chats2, b, |s| s.mcp_servers.is_some()).await;
+        for id in [a, b] {
+            chats2.interrupt(id).unwrap();
+            let st = chats2.state(id).unwrap();
+            assert_eq!(st.status, "idle");
+            assert!(st.pending.is_empty());
+            assert_eq!(tool_status(&st, "AskUserQuestion"), "error");
+            assert_eq!(st.items.last().unwrap().text, "Interrupted");
+        }
         chats2.shutdown();
     }
 
     #[tokio::test]
     async fn a_plan_approved_after_a_daemon_restart_resumes_claude_in_the_chosen_mode() {
         let (dir, terms, chats) = setup().await;
-        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
-        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        chats.send(info.id, "propose a plan", &[]).unwrap();
-        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        let id = blocked_chat(dir.path(), &chats, Some("plan"), "propose a plan").await;
         chats.shutdown();
 
         let chats2 = restarted(dir.path(), &terms);
-        let st = chats2.state(info.id).unwrap();
+        let st = chats2.state(id).unwrap();
         assert_eq!(st.status, "blocked");
         assert_eq!(st.pending.iter().map(|p| (p.id.as_str(), p.tool.as_str())).collect::<Vec<_>>(), [("p1", "ExitPlanMode")]);
 
-        chats2.permission(info.id, "p1", "allow", None, None, Some("acceptEdits")).unwrap();
-        let st = wait_for(&chats2, info.id, |s| s.status == "done").await;
+        chats2.permission(id, "p1", "allow", None, None, Some("acceptEdits")).unwrap();
+        let st = wait_for(&chats2, id, |s| s.status == "done").await;
         assert!(st.pending.is_empty());
         assert_eq!(st.mode.as_deref(), Some("acceptEdits"));
         assert_eq!(tool_status(&st, "ExitPlanMode"), "ok");
-        assert_eq!(st.items.iter().rev().find(|i| i.kind == "user").unwrap().text, "I approve your plan. Go ahead with it.");
-        let last_start = std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().last().unwrap().to_string();
-        assert!(last_start.contains("--permission-mode acceptEdits --resume sess-1"), "{last_start}");
+        assert_eq!(last_user_text(&st), "I approve your plan. Go ahead with it.");
+        let start = last_start(dir.path());
+        assert!(start.contains("--permission-mode acceptEdits --resume sess-1"), "{start}");
+        chats2.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_plan_approved_to_ask_before_edits_after_a_daemon_restart_resumes_claude_in_manual() {
+        let (dir, terms, chats) = setup().await;
+        let id = blocked_chat(dir.path(), &chats, Some("plan"), "propose a plan").await;
+        chats.shutdown();
+
+        let chats2 = restarted(dir.path(), &terms);
+        chats2.permission(id, "p1", "allow", None, None, None).unwrap();
+        let st = wait_for(&chats2, id, |s| s.status == "done").await;
+        assert_eq!(st.mode.as_deref(), Some("manual"));
+        let start = last_start(dir.path());
+        assert!(start.contains("--permission-mode manual --resume sess-1"), "{start}");
+        chats2.shutdown();
+    }
+
+    #[tokio::test]
+    async fn approving_a_plan_proposed_again_after_a_daemon_restart_closes_the_new_call() {
+        let (dir, terms, chats) = setup().await;
+        let id = blocked_chat(dir.path(), &chats, Some("plan"), "propose a plan").await;
+        chats.permission(id, "p1", "deny", Some("Think again"), None, None).unwrap();
+        // The same plan comes back as a new call.
+        chats.send(id, "propose it again", &[]).unwrap();
+        wait_for(&chats, id, |s| s.status == "blocked").await;
+        chats.shutdown();
+
+        let chats2 = restarted(dir.path(), &terms);
+        chats2.permission(id, "p2", "allow", None, None, Some("acceptEdits")).unwrap();
+        let st = wait_for(&chats2, id, |s| s.status == "done").await;
+        let status = |id: &str| st.items.iter().find(|i| i.id == id).and_then(|i| i.tool.as_ref()).unwrap().status.clone();
+        assert_eq!((status("t2").as_str(), status("t4").as_str()), ("denied", "ok"));
         chats2.shutdown();
     }
 
     #[tokio::test]
     async fn plan_feedback_after_a_daemon_restart_reaches_claude_still_in_plan_mode() {
         let (dir, terms, chats) = setup().await;
-        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
-        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        chats.send(info.id, "propose a plan", &[]).unwrap();
-        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        let id = blocked_chat(dir.path(), &chats, Some("plan"), "propose a plan").await;
         chats.shutdown();
 
         let chats2 = restarted(dir.path(), &terms);
-        chats2.permission(info.id, "p1", "deny", Some("Use a feature flag instead"), None, None).unwrap();
-        let st = wait_for(&chats2, info.id, |s| s.status == "done").await;
+        chats2.permission(id, "p1", "deny", Some("Use a feature flag instead"), None, None).unwrap();
+        let st = wait_for(&chats2, id, |s| s.status == "done").await;
         assert_eq!(st.mode.as_deref(), Some("plan"));
         assert_eq!(tool_status(&st, "ExitPlanMode"), "denied");
-        assert_eq!(st.items.iter().rev().find(|i| i.kind == "user").unwrap().text, "Use a feature flag instead");
-        let last_start = std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().last().unwrap().to_string();
-        assert!(last_start.contains("--permission-mode plan --resume sess-1"), "{last_start}");
+        assert_eq!(last_user_text(&st), "Use a feature flag instead");
+        let start = last_start(dir.path());
+        assert!(start.contains("--permission-mode plan --resume sess-1"), "{start}");
         chats2.shutdown();
     }
 
     #[tokio::test]
     async fn a_new_message_instead_of_an_answer_after_a_daemon_restart_drops_the_question() {
         let (dir, terms, chats) = setup().await;
-        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
-        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
-        chats.send(info.id, "ask me", &[]).unwrap();
-        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        let id = blocked_chat(dir.path(), &chats, None, "ask me").await;
         chats.shutdown();
 
         let chats2 = restarted(dir.path(), &terms);
-        chats2.send(info.id, "never mind, use Mono", &[]).unwrap();
-        let st = wait_for(&chats2, info.id, |s| s.status == "done").await;
+        chats2.send(id, "never mind, use Mono", &[]).unwrap();
+        let st = wait_for(&chats2, id, |s| s.status == "done").await;
         assert!(st.pending.is_empty());
         assert_eq!(tool_status(&st, "AskUserQuestion"), "error");
         let texts: Vec<&str> = st.items.iter().filter(|i| i.kind == "system").map(|i| i.text.as_str()).collect();
         assert!(texts.is_empty(), "{texts:?}");
-        assert_eq!(st.items.iter().rev().find(|i| i.kind == "user").unwrap().text, "never mind, use Mono");
+        assert_eq!(last_user_text(&st), "never mind, use Mono");
         chats2.shutdown();
     }
 
