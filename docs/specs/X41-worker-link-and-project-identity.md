@@ -36,7 +36,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ### The link
 
-- [ ] The link is a `moonlet-link` `Host` whose `Connector` runs `ssh <alias> ~/.moonlet/bin/moonletd proxy` with R1's options except connection sharing: `ControlMaster=no` and no `ControlPath`. A stale shared connection after sleep then cannot hang the link, and the link cannot hang the app's connection.
+- [ ] The link is a `moonlet-link` `Host` whose `Connector` runs `ssh <alias> ~/.moonlet/bin/moonletd proxy` with `moonlet_core::ssh::base_args()` minus connection sharing: `ControlMaster=no` and no `ControlPath`. A stale shared connection after sleep then cannot hang the link, and the link cannot hang the app's connection.
 - [ ] Over the link, the worker sends `Hello {client: "moonletd-worker"}` and then `worker.register`.
 - [ ] Before linking, the daemon checks the remote helper's version, as the app does (R2). A missing or different helper puts the link in state `needs_install`. It does not retry until `link.set` or `link.retry` is called.
 - [ ] A dropped link reconnects with `moonlet-link`'s backoff: 300 ms, doubling, capped at 5 s, as for the apps' host links.
@@ -55,6 +55,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   The worker registers again, with current values, every time it links.
 - [ ] `worker.list` returns every linked worker with those fields, plus `connected_since` and `rtt_ms`. The event `workers.changed` fires when a worker registers or disconnects.
 - [ ] The central host sends `worker.ping` over each worker's connection every 10 s. This is the first request that goes from the central host to a worker. `rtt_ms` is the last round trip in milliseconds.
+- [ ] Requests from the central host to a worker are numbered from 1. Id 0 stays reserved for an error that ends the link, which `moonlet-link` reports as the host's failure.
 - [ ] A worker that misses 3 pings in a row is disconnected and removed from `worker.list`, about 30 s after it stops answering. A sleeping laptop does not close its connection, so the pings are what notice a closed lid.
 - [ ] A worker whose connection closes is removed from `worker.list` at once.
 
@@ -161,8 +162,8 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
     - equal roots, one origin `null`: different;
     - both origins `null`: same;
     - a root that is `null`: different.
-  - `link_ssh_args("studio-mini")` contains `ControlMaster=no`, no `ControlPath`, and R1's other options.
-  - `moonlet-link`: a `Host` with a request handler answers a daemon's `request` with a `response` carrying the same id, tested against the fake daemon in `crates/moonlet-link/tests/link.rs`.
+  - `link_ssh_args("studio-mini")` is `moonlet_core::ssh::base_args()` with `ControlMaster=no` instead of `ControlMaster=auto`, and with no `ControlPath` or `ControlPersist`.
+  - `moonlet-link`: a `Host` with a request handler answers a daemon's `request` with a `response` carrying the same id, tested against the fake daemon in `crates/moonlet-link/tests/link.rs`. The central host's first request to a worker has id 1.
   - `link.json`:
     - the first load creates a worker id, and later loads return the same id;
     - `link.set` cannot change the id;
