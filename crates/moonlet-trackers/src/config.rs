@@ -78,7 +78,7 @@ pub struct Connection {
     pub sources: Vec<Source>,
     /// Tracker state name → column, where the user changed the default (X44).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub states: std::collections::BTreeMap<String, crate::states::Column>,
+    pub states: crate::states::Mapping,
 }
 
 /// A team, project or list the user shows tasks from, with where its

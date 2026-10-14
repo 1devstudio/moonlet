@@ -52,6 +52,30 @@ pub fn default_column(kind: TrackerKind, state_type: &str, name: &str) -> Column
 }
 
 /// "In Review", "Code review", "QA", "Ready for QA"; not "Preview".
+/// A connection's state mapping: state name → the column the user put it in,
+/// where that differs from [`default_column`] (`trackers.toml` `states`).
+pub type Mapping = std::collections::BTreeMap<String, Column>;
+
+/// The state a move to `column` lands on (X46): the first whose own column it
+/// is and that the user left there, else the first the user mapped onto it.
+/// `natural` gives a state's default column and its name.
+pub fn pick<'a, T>(
+    states: &'a [T],
+    column: Column,
+    mapping: &Mapping,
+    natural: impl Fn(&T) -> (Column, &str),
+) -> Option<&'a T> {
+    let left_alone = states.iter().find(|s| {
+        let (own, name) = natural(s);
+        own == column && !mapping.contains_key(name)
+    });
+    left_alone.or_else(|| {
+        states
+            .iter()
+            .find(|s| mapping.get(natural(s).1) == Some(&column))
+    })
+}
+
 fn looks_like_review(name: &str) -> bool {
     name.split(|c: char| !c.is_ascii_alphanumeric())
         .any(|w| w.eq_ignore_ascii_case("review") || w.eq_ignore_ascii_case("qa"))

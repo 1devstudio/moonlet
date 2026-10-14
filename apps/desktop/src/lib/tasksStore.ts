@@ -12,7 +12,7 @@ import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, trackerOf } from "./tasks";
 import { workspaceConnections } from "./trackerSources";
-import { applyStateMapping, targetState } from "./stateMapping";
+import { applyStateMapping } from "./stateMapping";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
@@ -250,10 +250,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
         const mine = c.all.length === 0;
         const fetched = await hostsApi.trackerTasks(c.id, mine);
         const list = mine ? fetched : fetched.filter((t) => c.all.includes(t.tracker?.source ?? "") || t.assignees.includes(c.account));
-        return applyStateMapping(
-          list.filter((t) => t.tracker && c.keys.includes(t.tracker.source)),
-          trackersConfig(useTasks.getState()).connections,
-        );
+        return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
       } catch (e) {
         const err = e as { auth?: boolean; message?: string };
         error = err.message ?? message(e);
@@ -332,7 +329,8 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       originRepo: data.repos[x.project_id] ?? null,
     }));
   return {
-    tasks: data.tasks,
+    // The mapping as saved now, so a change shows without a sync (X44).
+    tasks: applyStateMapping(data.tasks, config.connections),
     sessions,
     worktrees: data.worktrees,
     sessionStartRule: (t) => rulesFor(config, t).session_starts,
@@ -367,7 +365,6 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
       task: start.tracker.id,
       source: start.tracker.source,
       column: "in_progress",
-      state: stateFor(start.ref.connection, "in_progress"),
       assign_me: true,
     });
     recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you");
@@ -413,7 +410,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
       const t = card.task.tracker;
       if (!t) return false;
       movedByMoonlet.set(id, plan.column);
-      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column, state: stateFor(card.task.connection, plan.column) });
+      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column });
       recordActivity(card.task, `moonlet moved it to ${COLUMN_LABEL[plan.column]}`);
       toast(`Moved ${card.task.key} to ${COLUMN_LABEL[plan.column]}`);
     } else {
@@ -547,7 +544,7 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
       movedByMoonlet.set(id, column);
-      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, state: stateFor(task.connection, column) });
+      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column });
       recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
     } else return;
     setFailure(task, null);
@@ -581,11 +578,6 @@ export function failureOf(task: Pick<Task, "connection" | "key">): string | unde
 /** Retry on a task's failed action. */
 export async function retryTask(task: Pick<Task, "connection" | "key">) {
   await retries.get(`${task.connection} ${task.key}`)?.();
-}
-
-/** The state a move to `column` uses for a connection, from its state mapping (X44). */
-function stateFor(connection: string, column: Exclude<Column, "hidden">): string | null {
-  return targetState(trackersConfig(useTasks.getState()).connections?.find((c) => c.id === connection), column);
 }
 
 const OFF: Rules = { session_starts: "off", pr_opens: "off", all_merged: "off", pr_comment: "off", issue_done: "off" };
