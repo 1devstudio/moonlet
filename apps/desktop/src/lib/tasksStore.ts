@@ -468,8 +468,17 @@ const autoTried = new Set<string>();
  * The rules at Automatically, run once each (X46): chips' fixes and PR-link
  * comments. Each is remembered across restarts only when it worked.
  */
-export async function runAutoFixes(host: string, workspaceId: string, board: Board, rulesOf: (c: Card) => Rules) {
+export async function runAutoFixes(host: string, workspaceId: string, board: Board, rulesOf: (c: Card) => Rules, now = Date.now()) {
   const done = autoFixed();
+  // "PR opened" in each task's Activity, once per PR (X45).
+  for (const card of Object.values(board).flat())
+    for (const { session } of card.rows) {
+      const pr = session.pr;
+      const key = `opened ${card.task.connection} ${card.task.key} ${pr?.url}`;
+      if (pr?.state !== "open" || pr.draft || done[key]) continue;
+      markAutoFixed(key);
+      recordActivity(card.task, `PR #${pr.number} opened: ${pr.title}`, now);
+    }
   for (const card of autoFixes(board, rulesOf, done)) {
     const key = driftKey(card);
     if (autoTried.has(key)) continue;

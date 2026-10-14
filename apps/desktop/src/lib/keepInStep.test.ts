@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRules, autoFixes, cleanUpMessage, closesIssue, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, startAction, withCloses, withoutPutOff } from "./keepInStep";
+import { applyRules, autoFixes, cleanUpMessage, removeWorktreeAsk, closesIssue, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, startAction, withCloses, withoutPutOff } from "./keepInStep";
 import type { Task } from "./tasks";
 import type { BoardSession, Card } from "./tasksBoard";
 
@@ -56,6 +56,21 @@ describe("driftFix (X45 out of sync, X46 Keep in step)", () => {
       { path: "/w/old", branch: "moon-131-old", originRepo: null },
     ]);
     expect(driftFix(c)).toEqual({ kind: "clean_up", sessions: ["hooks"], worktrees: ["/w/old"] });
+  });
+});
+
+describe("removeWorktreeAsk (X45: remove a worktree from a task)", () => {
+  it("warns when uncommitted changes would be lost", () => {
+    expect(removeWorktreeAsk("/w/moon-131-old", "moon-131-old", false)).toEqual({
+      title: "Remove moon-131-old?",
+      message: "The worktree at /w/moon-131-old goes; its branch is kept.",
+      action: "Remove",
+      variant: "primary",
+    });
+    expect(removeWorktreeAsk("/w/moon-131-old", "moon-131-old", true)).toMatchObject({
+      message: "/w/moon-131-old has uncommitted changes, which will be lost. Its branch is kept.",
+      variant: "danger",
+    });
   });
 });
 

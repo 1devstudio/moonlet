@@ -10,9 +10,9 @@ import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, syncTasks, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, boardInput, ensureTasks, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, syncTasks, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
-import { applyRules, startAction, withoutPutOff } from "../../lib/keepInStep";
+import { applyRules, removeWorktreeAsk, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
@@ -248,7 +248,7 @@ function TaskCard({ host, workspaceId, card, selected, source }: { host: string;
 }
 
 function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: string; card: Card }) {
-  const failure = useTasks((t) => t.failures[`${card.task.connection} ${card.task.key}`]);
+  const failure = useTasks(() => failureOf(card.task));
   return (
     <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
@@ -677,12 +677,7 @@ async function removeWorktree(host: string, w: BoardWorktree) {
   if (!w.project) return;
   const st = await rpc<{ files: unknown[] }>(host, M.gitStatus, { path: w.path }).catch(() => null);
   const dirty = !!st?.files.length;
-  const ok = await askConfirm({
-    title: `Remove ${w.branch}?`,
-    message: dirty ? `${w.path} has uncommitted changes, which will be lost. Its branch is kept.` : `The worktree at ${w.path} goes; its branch is kept.`,
-    action: "Remove",
-    variant: dirty ? "danger" : "primary",
-  });
+  const ok = await askConfirm(removeWorktreeAsk(w.path, w.branch ?? w.path, dirty));
   if (!ok) return;
   try {
     await rpc(host, M.projectWorktreeRemove, { id: w.project, path: w.path });
