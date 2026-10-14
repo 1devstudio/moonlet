@@ -37,7 +37,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 - [ ] **Linear API key** is accepted instead of OAuth.
 - [ ] **Jira Cloud:** site, email and API token; requests use basic auth. Jira API tokens expire, and Jira's API does not say when, so moonlet does not warn ahead. When Jira answers 401 to a token that worked before, the connection shows `API token rejected · <workspace> issues are stale` and Reconnect explains: "Jira no longer accepts the API token for <site>. It may have expired or been revoked. Create a new token and paste it here." The Reconnect dialog keeps the site and email and only asks for the new token.
 - [ ] **ClickUp:** the personal token is sent as the raw `Authorization` header value.
-- [ ] **GitHub Issues:** connecting checks `gh auth status` on each project's host. A host without a login shows `gh is not signed in on <host>` with the `gh auth login` command to copy. Project boards need the `project` scope; without it the page shows `gh auth refresh -s project` to copy, and project sources are unavailable.
+- [ ] **GitHub Issues:** connecting checks `gh auth status` on each project's host. A host without a login shows `gh is not signed in on <host>` with the `gh auth login` command to copy. Reading a project board needs the `read:project` scope and moving its items the `project` scope; without them the page shows `gh auth refresh -s project` to copy, and project sources are unavailable.
 - [ ] **Test again** re-runs the check and shows the account name and the number of visible sources, or the tracker's error message.
 - [ ] A request answered with 401 marks the connection as needing attention and stops polling it until the user reconnects. The message names the tracker and what to do: Linear OAuth "Sign in to Linear again", an API key or token "<tracker> no longer accepts this token. Create a new one and paste it here."
 - [ ] The Jira and ClickUp connect dialogs say "The token is saved in the macOS Keychain." and, for Jira, "Tokens expire. moonlet tells you when Jira stops accepting it."
@@ -96,7 +96,7 @@ No daemon RPCs for Linear, Jira or ClickUp: the desktop app's Rust side makes th
 
 GitHub goes through the daemon, because `gh` runs on the project's host:
 
-- `gh.tasks {path, project?}` → open issues assigned to the user (or all), with assignees, labels, state reason, project status and the PRs that close them.
+- `gh.tasks {path, mine}` → the repository's 100 most recently updated issues, open and closed (so recently closed ones fill Done), only those assigned to the user when `mine`: `{repo, number, title, body, url, closed, state_reason, assignees, labels, updated_ms, closing_prs}`. `closing_prs` are the same repository's PRs that close the issue. Project board status needs the `read:project` scope (`gh` fails with "requires one of the following scopes: ['read:project']" without it) and comes with project board sources.
 - `gh.task_update {path, number, assign_me?, close?, project_status?}`.
 
 ## Data and config

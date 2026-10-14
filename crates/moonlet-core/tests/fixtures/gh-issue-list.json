@@ -1,0 +1,155 @@
+[
+  {
+    "assignees": [
+      {
+        "id": "U_fake1",
+        "login": "sam-rivera",
+        "name": "Sam Rivera",
+        "databaseId": 1001
+      }
+    ],
+    "body": "### Describe the bug\n\n`gh skill install` fails with `no skills found` for a repo that has no `skills/` directory and keeps its `SKILL.md` files in nested subdirectories like `<category>/<skill>/SKILL.md`.\n\n[android/skills](https://github.com/android/skills) is a public example. \nIts skills live unde",
+    "closedByPullRequestsReferences": [
+      {
+        "id": "PR_kwDODKw3uc7ydmf8",
+        "number": 13894,
+        "repository": {
+          "id": "MDEwOlJlcG9zaXRvcnkyMTI2MTMwNDk=",
+          "name": "cli",
+          "owner": {
+            "id": "MDEyOk9yZ2FuaXphdGlvbjU5NzA0NzEx",
+            "login": "cli"
+          }
+        },
+        "url": "https://github.com/cli/cli/pull/13894"
+      }
+    ],
+    "labels": [
+      {
+        "id": "MDU6TGFiZWwxNTkzNDg0NjIw",
+        "name": "bug",
+        "description": "Something isn't working",
+        "color": "d73a4a"
+      },
+      {
+        "id": "MDU6TGFiZWwxODI1MDc2ODcz",
+        "name": "priority-3",
+        "description": "Affects a small number of users or is largely cosmetic",
+        "color": "eded04"
+      },
+      {
+        "id": "LA_kwDODKw3uc8AAAACE8wBYA",
+        "name": "stale",
+        "description": "",
+        "color": "333333"
+      },
+      {
+        "id": "LA_kwDODKw3uc8AAAACfsf-xA",
+        "name": "gh-skill",
+        "description": "relating to the gh skill command",
+        "color": "f7481e"
+      }
+    ],
+    "number": 13876,
+    "state": "OPEN",
+    "stateReason": "",
+    "title": "`gh skill install` can't find skills when there's no `skills/` directory but the `SKILL.md` files are nested",
+    "updatedAt": "2026-09-16T03:11:35Z",
+    "url": "https://github.com/cli/cli/issues/13876"
+  },
+  {
+    "assignees": [],
+    "body": "### Workflow Failure\n\n**Workflow:** [Dependabot PR Triage (skills-driven)](https://github.com/cli/cli/blob/trunk/.github/workflows/dependabot-triage.md)  \n**Branch:** trunk  \n**Run:** https://github.com/cli/cli/actions/runs/38574557312\n\n\n> [!WARNING]\n> **Daily Workflow AIC Guardrail Exceeded**: The ",
+    "closedByPullRequestsReferences": [],
+    "labels": [
+      {
+        "id": "LA_kwDODKw3uc7QD3p7",
+        "name": "needs-triage",
+        "description": "needs to be reviewed",
+        "color": "D6393F"
+      },
+      {
+        "id": "LA_kwDODKw3uc8AAAACq9yTBg",
+        "name": "agentic-workflows",
+        "description": "",
+        "color": "ededed"
+      }
+    ],
+    "number": 14688,
+    "state": "OPEN",
+    "stateReason": "",
+    "title": "[aw] Dependabot PR Triage (skills-driven) exceeded daily AI credits budget",
+    "updatedAt": "2026-10-14T19:45:53Z",
+    "url": "https://github.com/cli/cli/issues/14688"
+  },
+  {
+    "assignees": [],
+    "body": "\n### Describe the bug\n\n`gh` checks the token type before it builds the upload request, and the allowlist excludes `ghu_`. The attachment endpoint accepts a `ghu_` token. So `--attach` refuses a credential that works.\n\n`internal/attachments/client.go`:\n\n```go\nvar uploadTokenTypes = []gh.TokenType{\n\tg",
+    "closedByPullRequestsReferences": [
+      {
+        "id": "PR_kwDODKw3uc8AAAABFBuv1w",
+        "number": 14516,
+        "repository": {
+          "id": "MDEwOlJlcG9zaXRvcnkyMTI2MTMwNDk=",
+          "name": "cli",
+          "owner": {
+            "id": "MDEyOk9yZ2FuaXphdGlvbjU5NzA0NzEx",
+            "login": "cli"
+          }
+        },
+        "url": "https://github.com/cli/cli/pull/14516"
+      }
+    ],
+    "labels": [
+      {
+        "id": "MDU6TGFiZWwxNTkzNDg0NjIw",
+        "name": "bug",
+        "description": "Something isn't working",
+        "color": "d73a4a"
+      },
+      {
+        "id": "MDU6TGFiZWwxNjk4MDc2MTcz",
+        "name": "enhancement",
+        "description": "a request to improve CLI",
+        "color": "0dd8ac"
+      },
+      {
+        "id": "MDU6TGFiZWwxODI1MDc2ODcz",
+        "name": "priority-3",
+        "description": "Affects a small number of users or is largely cosmetic",
+        "color": "eded04"
+      },
+      {
+        "id": "LA_kwDODKw3uc8AAAABZDqY9g",
+        "name": "gh-pr",
+        "description": "relating to the gh pr command",
+        "color": "DD04FD"
+      }
+    ],
+    "number": 14495,
+    "state": "CLOSED",
+    "stateReason": "COMPLETED",
+    "title": "`gh pr comment --attach` refuses `ghu_` tokens that the upload endpoint accepts",
+    "updatedAt": "2026-10-14T02:17:46Z",
+    "url": "https://github.com/cli/cli/issues/14495"
+  },
+  {
+    "assignees": [],
+    "body": "Spam.",
+    "closedByPullRequestsReferences": [],
+    "labels": [
+      {
+        "id": "LA_kwDODKw3uc8AAAACFc3YjA",
+        "name": "suspected-spam",
+        "description": "Issue is likely a spam",
+        "color": "c62946"
+      }
+    ],
+    "number": 14695,
+    "state": "CLOSED",
+    "stateReason": "NOT_PLANNED",
+    "title": "Buy cheap followers",
+    "updatedAt": "2026-10-14T18:35:56Z",
+    "url": "https://github.com/cli/cli/issues/14695"
+  }
+]
