@@ -1,7 +1,7 @@
 // The subagents a chat's agent launched (X42): the Agents tab's rows.
 
 import { tokens } from "./chat";
-import type { ChatState, PermissionAsk, Subagent } from "./protocol";
+import type { AgentState, ChatState, PermissionAsk, Subagent } from "./protocol";
 
 /** An agent's state on screen: `needs` while one of its asks waits. */
 export type AgentRowState = "needs" | "running" | "failed" | "done" | "stopped";
@@ -20,6 +20,21 @@ export interface AgentRow {
 }
 
 const ORDER: AgentRowState[] = ["needs", "running", "failed", "done", "stopped"];
+
+/** How each state shows, shared by every view of the agents. */
+export const AGENT_STATE: Record<AgentRowState, { label: string; glyph: AgentState; text: string; dot: string }> = {
+  needs: { label: "needs you", glyph: "blocked", text: "text-blocked", dot: "bg-blocked" },
+  running: { label: "running", glyph: "working", text: "text-muted", dot: "bg-accent" },
+  failed: { label: "failed", glyph: "error", text: "text-error", dot: "bg-error" },
+  done: { label: "done", glyph: "done", text: "text-muted", dot: "bg-done" },
+  stopped: { label: "stopped", glyph: "idle", text: "text-muted", dot: "bg-idle" },
+};
+
+/** Still at work: running, or waiting for the user. */
+export const isActive = (state: AgentRowState) => state === "running" || state === "needs";
+
+/** "1 agent", "5 agents". */
+export const agentCount = (n: number) => (n === 1 ? "1 agent" : `${n} agents`);
 
 /** `m:ss`, e.g. `1:02`. */
 export function clock(ms: number): string {
@@ -52,7 +67,7 @@ function rowLine(state: AgentRowState, a: Subagent, ask: PermissionAsk | null): 
 }
 
 /** Every subagent of the given chats, those that need the user first. */
-export function agentRows(chats: { id: number; st: ChatState | undefined }[], now: number): AgentRow[] {
+export function agentRows(chats: { id: number; st: Pick<ChatState, "subagents" | "pending"> | undefined }[], now: number): AgentRow[] {
   const rows: AgentRow[] = [];
   for (const { id, st } of chats) {
     for (const a of st?.subagents ?? []) {
@@ -67,12 +82,19 @@ export function agentRows(chats: { id: number; st: ChatState | undefined }[], no
 
 /** The tab's header: "5 agents · 2:14 · 156k tokens", and how many can be stopped. */
 export function agentsHeader(rows: AgentRow[], now: number): { text: string; running: number } {
-  const running = rows.filter((r) => r.state === "running" || r.state === "needs").length;
-  const start = Math.min(...rows.map((r) => r.agent.started_at));
-  const end = running ? now : Math.max(...rows.map((r) => r.agent.started_at + agentMs(r.agent, now)));
   const total = rows.reduce((n, r) => n + r.agent.tokens, 0);
-  const count = rows.length === 1 ? "1 agent" : `${rows.length} agents`;
-  return { text: `${count} · ${clock(end - start)} · ${tokens(total)} tokens`, running };
+  const agents = rows.map((r) => r.agent);
+  return { text: `${agentCount(rows.length)} · ${spanClock(agents, now)} · ${tokens(total)} tokens`, running: stoppable(rows).length };
+}
+
+/** The agents Stop all stops. */
+export const stoppable = (rows: AgentRow[]) => rows.filter((r) => isActive(r.state));
+
+/** From the first start to now while any runs, else to the last end. */
+export function spanClock(agents: Subagent[], now: number): string {
+  const start = Math.min(...agents.map((a) => a.started_at));
+  const end = agents.some((a) => a.status === "running") ? now : Math.max(...agents.map((a) => a.started_at + agentMs(a, now)));
+  return clock(end - start);
 }
 
 /** The Agents tab shows a dot while an agent needs the user elsewhere. */

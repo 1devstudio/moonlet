@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentRows, agentsHeader, agentsTabDot, modelLabel, retryMessage } from "./subagents";
+import { agentCount, agentRows, agentsHeader, agentsTabDot, modelLabel, retryMessage, stoppable } from "./subagents";
 import type { ChatState, PermissionAsk, Subagent } from "./protocol";
 
 const T0 = 1_791_970_430_000;
@@ -121,6 +121,19 @@ describe("agentsHeader (X42)", () => {
   it("stops the clock at the last end once none runs", () => {
     const rows = agentRows([{ id: 7, st: chat([list]) }], T0 + 99_000);
     expect(agentsHeader(rows, T0 + 99_000)).toEqual({ text: "1 agent · 0:11 · 10.8k tokens", running: 0 });
+  });
+});
+
+describe("stoppable (X42)", () => {
+  it("is every agent Stop all stops: those running or waiting for the user", () => {
+    const rows = agentRows([{ id: 7, st: chat([list, bench, audit, write, { ...write, id: "a6", description: "Measure" }], [ask]) }], T0 + 62_000);
+    expect(stoppable(rows).map((r) => r.agent.description)).toEqual(["Write hello file", "Measure"]);
+  });
+});
+
+describe("agentCount (X42)", () => {
+  it("counts agents in words", () => {
+    expect([agentCount(1), agentCount(5)]).toEqual(["1 agent", "5 agents"]);
   });
 });
 

@@ -1,22 +1,17 @@
 import { useState } from "react";
 import { Bot, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { M, type AgentState } from "../lib/protocol";
+import { M } from "../lib/protocol";
 import { errorToast, useStore } from "../lib/store";
 import { tokens } from "../lib/chat";
-import { type AgentRow, type AgentRowState, agentKey, agentsHeader, modelLabel, retryMessage } from "../lib/subagents";
+import { AGENT_STATE, type AgentRow, agentKey, agentsHeader, isActive, modelLabel, retryMessage, stoppable } from "../lib/subagents";
 import { Markdown, PermissionCard, StatusMark, rel, toolIcon } from "./AgentView";
 import { Button, Empty, StateGlyph, cx } from "./ui";
 
-const GLYPH: Record<AgentRowState, AgentState> = { needs: "blocked", running: "working", failed: "error", done: "done", stopped: "idle" };
-const LABEL: Record<AgentRowState, { text: string; cls: string }> = {
-  needs: { text: "Needs you", cls: "text-blocked" },
-  running: { text: "Running", cls: "text-accent" },
-  failed: { text: "Failed", cls: "text-error" },
-  done: { text: "Done", cls: "text-done" },
-  stopped: { text: "Stopped", cls: "text-muted" },
-};
 const LINE = { fg: "text-fg", muted: "text-muted", error: "text-error" };
+
+/** Opens the Agents tab, on its list or on one agent (`agentKey`). */
+export const openAgents = (agentDetail: string | null = null) => useStore.setState({ rightOpen: true, rightTab: "agents", agentDetail });
 
 /** The session's agent actions, each against the chat the agent belongs to. */
 function actions(host: string) {
@@ -47,7 +42,7 @@ export function AgentsPanel({ host, cwd, rows, now }: { host: string; cwd: strin
       <div className="flex h-10 shrink-0 items-center border-b border-border px-4 ui-text-12 text-muted">
         <span className="tabular-nums">{head.text}</span>
         {head.running > 0 && (
-          <button className="ml-auto hover:text-fg" onClick={() => rows.filter((r) => r.state === "running" || r.state === "needs").forEach(act.stop)}>
+          <button className="ml-auto hover:text-fg" onClick={() => stoppable(rows).forEach(act.stop)}>
             Stop all
           </button>
         )}
@@ -61,7 +56,7 @@ export function AgentsPanel({ host, cwd, rows, now }: { host: string; cwd: strin
           className="cursor-default border-b border-border px-4 py-3 hover:bg-panel-2"
         >
           <div className="flex items-center gap-2.5">
-            <StateGlyph state={GLYPH[r.state]} size={13} />
+            <StateGlyph state={AGENT_STATE[r.state].glyph} size={13} />
             <span className={cx("min-w-0 flex-1 truncate ui-text-13", r.state === "stopped" ? "text-muted" : "text-fg")}>{r.agent.description}</span>
             <span className="shrink-0 font-mono ui-text-12 tabular-nums text-faint">{r.elapsed}</span>
           </div>
@@ -100,7 +95,7 @@ export function AgentsPanel({ host, cwd, rows, now }: { host: string; cwd: strin
 function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: ReturnType<typeof actions> }) {
   const [brief, setBrief] = useState(false);
   const a = row.agent;
-  const label = LABEL[row.state];
+  const look = AGENT_STATE[row.state];
   const meta = [a.model && modelLabel(a.model), row.elapsed, a.tokens ? `${tokens(a.tokens)} tokens` : null].filter(Boolean);
   return (
     <div className="flex h-full flex-col">
@@ -110,11 +105,11 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
           Agents
         </button>
         <div className="mt-3 flex items-center gap-2.5">
-          <StateGlyph state={GLYPH[row.state]} size={13} />
+          <StateGlyph state={AGENT_STATE[row.state].glyph} size={13} />
           <span className="selectable min-w-0 flex-1 ui-text-14 font-medium text-fg">{a.description}</span>
         </div>
         <div className="mt-1 pl-[23px] ui-text-12.5 text-muted">
-          <span className={label.cls}>{label.text}</span>
+          <span className={cx("inline-block first-letter:uppercase", look.text)}>{look.label}</span>
           {meta.map((m) => ` · ${m}`)}
         </div>
         {a.prompt && (
@@ -161,7 +156,7 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
           </div>
         )}
       </div>
-      {(row.state === "running" || row.state === "needs") && (
+      {isActive(row.state) && (
         <div className="flex h-11 shrink-0 items-center justify-end border-t border-border px-4">
           <button className="ui-text-12.5 text-muted hover:text-fg" onClick={() => act.stop(row)}>
             Stop
