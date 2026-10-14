@@ -1170,9 +1170,13 @@ async fn task_updates_reach_github_through_gh() {
         .request(methods::GH_TASK_UPDATE, serde_json::json!({"path": repo, "number": 15, "close": true}))
         .await
         .unwrap();
+    let _: bool = c
+        .request(methods::GH_TASK_UPDATE, serde_json::json!({"path": repo, "number": 15, "reopen": true}))
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
-        "issue edit 15 --add-assignee @me\nissue close 15 --reason completed\n"
+        "issue edit 15 --add-assignee @me\nissue close 15 --reason completed\nissue reopen 15\n"
     );
 }
 
