@@ -85,6 +85,25 @@ export function compact(n: number): string {
   return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`;
 }
 
+/** The chip at the end of a session row, most urgent first; running
+ *  subagents (X42) come after needs input. */
+export function sessionBadge(o: {
+  creating: boolean;
+  state: AgentState | null;
+  merged: boolean;
+  git?: { additions: number; deletions: number };
+  agents: number;
+}): { text: string; tone: "muted" | "blocked" | "agents" | "merged" | "diff" } | null {
+  if (o.creating) return { text: "creating", tone: "muted" };
+  if (o.state === "blocked") return { text: "needs input", tone: "blocked" };
+  if (o.agents) return { text: o.agents === 1 ? "1 agent" : `${o.agents} agents`, tone: "agents" };
+  if (o.merged) return { text: "merged", tone: "merged" };
+  if (o.git && (o.git.additions || o.git.deletions)) {
+    return { text: `+${compact(o.git.additions)}${o.git.deletions ? ` -${compact(o.git.deletions)}` : ""}`, tone: "diff" };
+  }
+  return null;
+}
+
 /**
  * The project row's "Remove from <section>" item. `section.remove_project`
  * drops a project no other section holds, so that case asks first.

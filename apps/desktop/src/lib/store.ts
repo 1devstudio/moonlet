@@ -237,6 +237,8 @@ interface State extends UiPersist {
   card: AgentCard | null;
   /** The subagent the Agents tab shows in detail, `agentKey` (X42). */
   agentDetail: string | null;
+  /** Per chat (`termKey`): the latest agent start when × hid the strip (X42). */
+  stripDismissed: Record<string, number>;
   /** File shown in the Changes diff (set from the Files list). */
   diffFile: string | null;
   /** Sessions (`sesKey`) whose sidebar row plays the archive loader (X21). */
@@ -284,6 +286,7 @@ function makeStore() {
   workingSince: {},
   card: null,
   agentDetail: null,
+  stripDismissed: {},
   diffFile: null,
   archiving: {},
   }));

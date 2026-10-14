@@ -79,6 +79,7 @@ import { uiScale } from "../lib/uiScale";
 import { useNow } from "../lib/useNow";
 import { type ContextFiles, chatContextFiles, chipSection, newChatContext, otherChats, planContextFiles } from "../lib/chatContext";
 import { shortPath } from "../lib/terminals";
+import { AgentsStrip } from "./AgentsStrip";
 import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
@@ -1298,6 +1299,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
         </FileLinks.Provider>
       </div>
       <div className="w-full shrink-0 px-6 pb-3">
+        {st && <AgentsStrip host={host} id={id} session={info?.session_id} st={st} onSend={(text) => send(text, [])} />}
         <ChatEditor
           host={host}
           id={id}
