@@ -13,6 +13,7 @@ import { selectedSession, startStore, useStore } from "./lib/store";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
+import { SettingsPage } from "./components/settings/SettingsPage";
 
 function FindBar({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
@@ -143,24 +144,25 @@ export default function App() {
     <div className="flex h-full w-full">
       {s.sidebarOpen && (
         <>
-          <div style={{ width: s.sidebarWidth }} className="shrink-0">
+          <div style={{ width: s.sidebarWidth }} className="shrink-0" inert={!!s.settingsPage}>
             <Sidebar />
           </div>
           <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ sidebarWidth: clampSide(st.sidebarWidth + d) }))} />
         </>
       )}
-      <main className="relative min-w-0 flex-1">
+      <main className="relative min-w-0 flex-1" inert={!!s.settingsPage}>
         {ws && host && !ws.archived ? <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
         {finding && ws && <FindBar onClose={() => setFinding(false)} />}
       </main>
       {s.rightOpen && ws && host && !ws.archived && (
         <>
           <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ rightWidth: clampRight(st.rightWidth - d) }))} />
-          <div style={{ width: s.rightWidth }} className="shrink-0">
+          <div style={{ width: s.rightWidth }} className="shrink-0" inert={!!s.settingsPage}>
             <RightPanel host={host} ws={ws} />
           </div>
         </>
       )}
+      {s.settingsPage && <SettingsPage route={s.settingsPage} />}
       <Dialogs />
       {s.dialog?.kind === "palette" && <CommandPalette />}
       <ConfirmHost />

@@ -1,12 +1,13 @@
-// Settings › Mobile (X39): allow phones, pair one with the code from the QR
+// Settings › Phones (X39, X43): allow phones, pair one with the code from the QR
 // link, see it in the list, and remove it. The "phone" is a TCP client here,
 // speaking the daemon's framing.
 
 import { connect } from "node:net";
 import { $, browser, expect } from "@wdio/globals";
-import { sel } from "../fixtures";
+import { closeSettings, openSettings, sel } from "../fixtures";
 
-const allow = '//label[normalize-space()="Allow phones on my tailnet"]/input';
+const allow = sel.settingsSwitch("Allow phones on my tailnet");
+const allowed = async () => (await $(allow).getAttribute("aria-checked")) === "true";
 
 /** One `auth` frame, `[u32 len][u8 kind 1][json]`, and the daemon's first reply. */
 function phoneAuth(addr: string, fields: object): Promise<{ t: string; token?: string }> {
@@ -33,15 +34,14 @@ function phoneAuth(addr: string, fields: object): Promise<{ t: string; token?: s
 
 describe("mobile pairing", () => {
   before(async () => {
-    await $('button[title="Settings (⌘,)"]').click();
-    await expect($('[role="dialog"][aria-label="Settings"]')).toBeDisplayed();
+    await openSettings("Phones");
   });
 
   // Phone access is the daemon's setting, kept for the rest of the run:
   // turn it off again. (The CLI's `moonlet rpc` may not manage phones.)
   after(async () => {
-    if (await $(allow).isSelected()) await $(allow).click();
-    await $('[role="dialog"][aria-label="Settings"] button[title="Close"]').click();
+    if (await allowed()) await $(allow).click();
+    await closeSettings();
   });
 
   it("listens once phones are allowed", async () => {
@@ -51,8 +51,8 @@ describe("mobile pairing", () => {
     await browser
       .waitUntil(async () => (await $('//*[starts-with(normalize-space(), "Listening on 127.0.0.1:")]').isExisting()), { timeout: 15000 })
       .catch(async () => {
-        const text = await browser.execute(() => document.evaluate('//section[h3[normalize-space()="Mobile"]]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue?.textContent);
-        throw new Error(`the section never said it was listening: ${text}`);
+        const text = await browser.execute(() => document.evaluate('//*[@aria-label="Settings"]//main', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue?.textContent);
+        throw new Error(`the page never said it was listening: ${text}`);
       });
     await expect($(sel.button("Pair a phone"))).toBeEnabled();
   });
@@ -74,7 +74,7 @@ describe("mobile pairing", () => {
   });
 
   it("removes a phone after asking", async () => {
-    await $('//li[.//span[normalize-space()="e2e phone"]]//button[normalize-space()="Remove"]').click();
+    await $('//div[span/span[normalize-space()="e2e phone"]]/button[normalize-space()="Remove"]').click();
     await expect($(sel.confirm("Remove e2e phone?"))).toBeDisplayed();
     await $(sel.confirmButton("Remove")).click();
     await expect($(sel.text("e2e phone"))).not.toBeExisting();

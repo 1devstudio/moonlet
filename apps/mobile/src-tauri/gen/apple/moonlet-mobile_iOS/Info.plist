@@ -41,7 +41,7 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>moonlet scans the pairing code your Mac shows in Settings › Mobile.</string>
+	<string>moonlet scans the pairing code your Mac shows in Settings › Phones.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>moonlet asks for Face ID before an agent is allowed to run a tool or start a plan.</string>
 	<key>NSLocalNetworkUsageDescription</key>

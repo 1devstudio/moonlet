@@ -1,13 +1,12 @@
 // Claude profiles in the app (X33): the profile select, signing in and out,
-// the sidebar footer and Settings → Claude profiles.
+// and the sidebar footer. Settings › Profiles is in settings/ClaudePages.
 
 import { useEffect, useRef, useState } from "react";
 import { User } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ClaudeProfile, type ProfileAccount, type TerminalInfo } from "../lib/protocol";
-import { askConfirm } from "../lib/confirm";
 import { errorToast, refreshProfile, shownWorkspace, useStore } from "../lib/store";
-import { DEFAULT_PROFILE, NEW_PROFILE, accountLabel, accountState, defaultFolder, footerLabel, profileOptions, removeProfileConfirm, tildePath } from "../lib/profiles";
+import { DEFAULT_PROFILE, NEW_PROFILE, accountLabel, accountState, defaultFolder, footerLabel, profileOptions } from "../lib/profiles";
 import { TerminalPane } from "./TerminalPane";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 
@@ -192,94 +191,5 @@ export function ProfileFooter() {
       <User size={12} className="shrink-0" />
       <span className="truncate">{f.text}</span>
     </button>
-  );
-}
-
-/** One row of Settings → Claude profiles. */
-function ProfileRow({ profile, account, folder, usedBy, onRename, onRemove }: { profile: ClaudeProfile | null; account: ProfileAccount | null | undefined; folder: string; usedBy: string[]; onRename?: (name: string) => void; onRemove?: () => void }) {
-  const [renaming, setRenaming] = useState(false);
-  const [auth, setAuth] = useState<"in" | "out" | null>(null);
-  const state = accountState(account);
-  return (
-    <div className="flex items-center gap-2 rounded-md bg-panel-2 px-2.5 py-1.5 ui-text-12">
-      <div className="min-w-0 flex-1">
-        {renaming && profile ? (
-          <input
-            autoFocus
-            className={inputCls}
-            defaultValue={profile.name}
-            onBlur={(e) => {
-              setRenaming(false);
-              const name = e.target.value.trim();
-              if (name && name !== profile.name) onRename?.(name);
-            }}
-            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-          />
-        ) : (
-          <div className="font-medium">{profile?.name ?? "Default"}</div>
-        )}
-        <div className="truncate text-faint">
-          {folder} · {state === "signed-in" && account ? accountLabel(account) : state === "signed-out" ? "not signed in" : "checking…"}
-          {usedBy.length > 0 && ` · used by ${usedBy.join(", ")}`}
-        </div>
-      </div>
-      {state === "signed-in" ? (
-        <Button size="sm" variant="ghost" onClick={() => setAuth("out")}>
-          Sign out
-        </Button>
-      ) : (
-        <Button size="sm" onClick={() => setAuth("in")}>
-          Sign in…
-        </Button>
-      )}
-      {profile && (
-        <>
-          <Button size="sm" variant="ghost" onClick={() => setRenaming(true)}>
-            Rename
-          </Button>
-          <Button size="sm" variant="ghost" className="text-error" onClick={onRemove}>
-            Remove
-          </Button>
-        </>
-      )}
-      {auth && <ClaudeAuthDialog host="local" profile={profile} logout={auth === "out"} onClose={() => setAuth(null)} />}
-    </div>
-  );
-}
-
-/** Settings → Claude profiles (X33): this Mac's default profile and profiles. */
-export function ProfilesSection() {
-  const profiles = useStore((s) => s.profiles.local);
-  const defaultAccount = useStore((s) => s.defaultAccounts.local);
-  const workspaces = useStore((s) => s.workspaces.local);
-  const home = useStore((s) => s.hosts.local?.home ?? null);
-  const usedBy = (id: string | null) => (workspaces ?? []).filter((w) => (w.claude_profile ?? null) === id).map((w) => w.name);
-  const remove = async (p: ClaudeProfile) => {
-    if (!(await askConfirm({ title: "Remove profile", message: removeProfileConfirm({ ...p, account: null, hooks_installed: false }, workspaces ?? [], home), action: "Remove" }))) return;
-    try {
-      await rpc("local", M.profileDelete, { id: p.id });
-    } catch (e) {
-      errorToast(e);
-    }
-  };
-  return (
-    <section className="mb-5">
-      <h3 className="mb-1 ui-text-12 font-semibold">Claude profiles</h3>
-      <p className="mb-2 ui-text-12 text-muted">Each profile is a Claude Code config folder with its own sign-in. A workspace picks one in Workspace settings.</p>
-      <div className="space-y-1.5">
-        <ProfileRow profile={null} account={defaultAccount} folder="~/.claude" usedBy={usedBy(null)} />
-        {(profiles ?? []).map((p) => (
-          <ProfileRow
-            key={p.id}
-            profile={p}
-            account={p.account}
-            folder={tildePath(p.path, home)}
-            usedBy={usedBy(p.id)}
-            onRename={(name) => void rpc("local", M.profileUpdate, { id: p.id, name }).catch(errorToast)}
-            onRemove={() => void remove(p)}
-          />
-        ))}
-      </div>
-    </section>
   );
 }

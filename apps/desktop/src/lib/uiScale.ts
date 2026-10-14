@@ -1,9 +1,9 @@
-// One font size setting for the whole window: Terminal > Size sets the
+// One font size setting for the whole window: Appearance › Font size sets the
 // terminals' size, and every other text in the app scales with it.
 
 import { defaultTermSettings } from "./terminals";
 
-/** The font sizes Settings › Terminal › Size allows. */
+/** The font sizes Settings › Appearance › Font size allows. */
 export const MIN_FONT_SIZE = 9;
 export const MAX_FONT_SIZE = 24;
 

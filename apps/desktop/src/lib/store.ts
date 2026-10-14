@@ -43,6 +43,7 @@ import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
 import type { Shortcuts } from "./runActions";
+import type { SettingsRoute } from "./settingsPage";
 import { readStored, writeStored } from "./storage";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
@@ -207,12 +208,13 @@ interface State extends UiPersist {
     | { kind: "new-workspace" }
     | { kind: "workspace-settings"; host: string; workspace: string }
     | { kind: "create-pr" }
-    | { kind: "settings" }
     | { kind: "project-settings"; host: string; project: string; focus?: "run" }
     | { kind: "palette" }
     | { kind: "commit" };
   /** The open confirm modal, above any dialog (X23). */
   confirm: PendingConfirm | null;
+  /** The settings page over the window, when open (X43). */
+  settingsPage: SettingsRoute | null;
   /** Agents' requests to read a terminal, waiting for the user (X31). */
   reads: ReadQueue;
   /** Sessions per host whose terminal reads need no answer (X31). */
@@ -271,6 +273,7 @@ function makeStore() {
   showHistory: false,
   dialog: null,
   confirm: null,
+  settingsPage: null,
   reads: {},
   readGrants: {},
   settings: loadJson<Settings>(SETTINGS_KEY, { term: defaultTermSettings, notifyWhenFocused: false, defaultMode: DEFAULT_MODE, sounds: DEFAULT_SOUNDS, toolCalls: "collapsed", shortcuts: {}, planApproveMode: "auto", editorTheme: "dark-plus", autoUpdateCheck: true }),
