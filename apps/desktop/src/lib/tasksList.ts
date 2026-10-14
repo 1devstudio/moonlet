@@ -16,21 +16,25 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 /** In Progress, In Review, Todo, then Done (collapsed in the UI), with their notes. */
 export function listGroups(board: Board): ListGroup[] {
-  const needs = board.in_progress.filter((c) => c.needsYou).length;
-  const drift = board.in_review.filter((c) => c.drift).length;
-  const leftovers = board.done.filter((c) => c.drift?.kind === "done_open").length;
+  const group = (name: string, column: Card["column"]): ListGroup => {
+    const cards = board[column as keyof Board];
+    const needs = cards.filter((c) => c.needsYou).length;
+    const drift = cards.filter((c) => c.drift).length;
+    const note = [needs ? `${needs} needs you` : "", drift ? `${drift} out of sync` : ""].filter(Boolean).join(" · ");
+    return { name, column, cards, note, noteTone: needs ? "blocked" : drift ? "accent" : "faint" };
+  };
+  const leftovers = cleanUpCount(board);
   return [
-    { name: "In Progress", column: "in_progress", cards: board.in_progress, note: needs ? `${needs} needs you` : "", noteTone: "blocked" },
-    { name: "In Review", column: "in_review", cards: board.in_review, note: drift ? `${drift} out of sync` : "", noteTone: "accent" },
-    { name: "Todo", column: "todo", cards: board.todo, note: "", noteTone: "faint" },
-    {
-      name: "Done",
-      column: "done",
-      cards: board.done,
-      note: leftovers ? `${leftovers} done ${leftovers === 1 ? "task still has an open session" : "tasks still have open sessions"} · Clean up` : "",
-      noteTone: "accent",
-    },
+    group("In Progress", "in_progress"),
+    group("In Review", "in_review"),
+    group("Todo", "todo"),
+    { name: "Done", column: "done", cards: board.done, note: leftovers ? `${leftovers} needs clean-up` : "", noteTone: leftovers ? "accent" : "faint" },
   ];
+}
+
+/** Done tasks that still have sessions or worktrees: the Done column's badge (X45). */
+export function cleanUpCount(board: Board): number {
+  return board.done.filter((c) => c.drift?.kind === "done_open").length;
 }
 
 export interface ListRow {
