@@ -6,6 +6,7 @@ import { User } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ClaudeProfile, type ProfileAccount, type TerminalInfo } from "../lib/protocol";
 import { errorToast, refreshProfile, shownWorkspace, useStore } from "../lib/store";
+import { goSettings } from "../lib/settingsNavigation";
 import { DEFAULT_PROFILE, NEW_PROFILE, accountLabel, accountState, defaultFolder, footerLabel, profileOptions } from "../lib/profiles";
 import { TerminalPane } from "./TerminalPane";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
@@ -185,7 +186,7 @@ export function ProfileFooter() {
   return (
     <button
       title={f.title}
-      onClick={() => useStore.setState({ dialog: { kind: "workspace-settings", host: shown.host, workspace: ws.id } })}
+      onClick={() => void goSettings({ page: "workspace", host: shown.host, id: ws.id })}
       className={cx("flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 ui-text-11.5 hover:bg-panel-2", f.warn ? "text-blocked" : "text-faint hover:text-muted")}
     >
       <User size={12} className="shrink-0" />

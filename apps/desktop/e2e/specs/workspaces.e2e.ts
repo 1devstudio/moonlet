@@ -2,7 +2,7 @@
 // switch between workspaces, and start a session in the new one.
 
 import { $, browser, expect } from "@wdio/globals";
-import { PROJECT, SESSION, fill, rpc, sel, world } from "../fixtures";
+import { PROJECT, SESSION, closeSettings, fill, rpc, sel, world } from "../fixtures";
 
 const w = world();
 
@@ -55,12 +55,16 @@ describe("workspaces", () => {
     await ctrlCmd("2");
     await expect(switcher("Acme")).toBeDisplayed();
 
-    // Workspace settings renames and recolours it.
+    // Its settings page (X43) renames and recolours it.
     await switcher("Acme").click();
     await $(sel.button("Workspace settings…")).click();
-    await fill('//div[@role="dialog"]//input[@placeholder="Acme"]', "Acme Corp");
+    await expect($(sel.navEntry("Acme", true))).toBeExisting();
+    await fill(sel.settingsField("Name"), "Acme Corp");
     await $('button[aria-label="Violet"]').click();
-    await $(sel.button("Save")).click();
+    await expect($(sel.text("Unsaved changes to Acme Corp"))).toBeDisplayed();
+    await $(sel.settingsButton("Save")).click();
+    await expect($(sel.text("Unsaved changes to Acme Corp"))).not.toBeExisting();
+    await closeSettings();
     await expect(switcher("Acme Corp")).toBeDisplayed();
     expect(rpc<(Workspace & { color: string })[]>(w, "workspace.list", {}).find((x) => x.id === work.id)?.color).toBe("violet");
 

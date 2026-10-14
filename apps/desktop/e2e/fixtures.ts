@@ -208,11 +208,6 @@ export const writeConfig = (w: World, text: string) => writeFileSync(configPath(
 const lit = (s: string) => (!s.includes('"') ? `"${s}"` : !s.includes("'") ? `'${s}'` : `concat("${s.replace(/"/g, `", '"', "`)}")`);
 
 export const sel = {
-  dialog: '[role="dialog"][aria-label="Project settings"]',
-  /** A labelled field inside the Project settings dialog. */
-  field: (label: string) => `//div[@role="dialog"]//label[span[normalize-space()=${lit(label)}]]//*[self::input or self::select]`,
-  /** A button inside the Project settings dialog, by its visible text. */
-  dialogButton: (text: string) => `//div[@role="dialog"]//button[starts-with(normalize-space(), ${lit(text)})]`,
   /** A button by its visible text (ignoring nested hints such as ⌘↵). */
   button: (text: string) => `//button[starts-with(normalize-space(), ${lit(text)})]`,
   text: (text: string) => `//*[normalize-space()=${lit(text)}]`,
@@ -223,8 +218,12 @@ export const sel = {
   sessionRow: (name: string) => `//div[@role="button"][.//span[normalize-space()=${lit(name)}]]`,
   /** The settings page (X43). */
   settings: '[role="region"][aria-label="Settings"]',
+  /** An entry of the settings nav, by its label; `current` only while its page is open. */
+  navEntry: (label: string, current = false) => `//nav[@aria-label="Settings"]//button${current ? '[@aria-current="page"]' : ""}[span[normalize-space()=${lit(label)}]]`,
   /** A field on the settings page, by the text of its <label for>. */
   settingsField: (label: string) => `//*[@aria-label="Settings"]//*[@id=//label[normalize-space()=${lit(label)}]/@for]`,
+  /** A button on the settings page, by its visible text (ignoring hints such as ⌘↵). */
+  settingsButton: (text: string) => `//*[@aria-label="Settings"]//button[starts-with(normalize-space(), ${lit(text)})]`,
   /** A switch on the settings page, by the text of the row that labels it. */
   settingsSwitch: (label: string) => `//*[@aria-label="Settings"]//button[@role="switch"][@aria-labelledby=//*[normalize-space()=${lit(label)}]/@id]`,
   /** An option of a radio group (segmented control or list) on the settings page. */
@@ -236,8 +235,8 @@ export const sel = {
 export async function openSettings(page: string) {
   await $('button[title="Settings (⌘,)"]').click();
   await expect($(sel.settings)).toBeDisplayed();
-  await $(`//nav[@aria-label="Settings"]//button[normalize-space()=${lit(page)}]`).click();
-  await expect($(`//nav[@aria-label="Settings"]//button[@aria-current="page"][normalize-space()=${lit(page)}]`)).toBeExisting();
+  await $(sel.navEntry(page)).click();
+  await expect($(sel.navEntry(page, true))).toBeExisting();
 }
 
 export async function closeSettings() {

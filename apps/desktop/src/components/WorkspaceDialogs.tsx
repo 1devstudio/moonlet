@@ -1,13 +1,13 @@
-// New workspace and Workspace settings (X32), with the Claude profile its
-// sessions sign in with (X33).
+// New workspace (X32), with the Claude profile its sessions sign in with
+// (X33). Workspace settings are a settings page (settings/WorkspacePage).
 
 import { useMemo, useState } from "react";
 import { rpc } from "../lib/daemon";
 import { M, type Workspace, type WorkspaceColor } from "../lib/protocol";
 import { askConfirm } from "../lib/confirm";
 import { workspaceSections } from "../lib/sidebar";
-import { errorToast, shownWorkspace, switchWorkspace, toast, useStore } from "../lib/store";
-import { WORKSPACE_COLORS, count, createRequest, deleteBlocked } from "../lib/workspaces";
+import { errorToast, shownWorkspace, switchWorkspace, useStore } from "../lib/store";
+import { WORKSPACE_COLORS, count, createRequest } from "../lib/workspaces";
 import { DEFAULT_PROFILE, movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { WorkspaceMark } from "./WorkspaceSwitcher";
 import { ProfileField } from "./Profiles";
@@ -127,68 +127,6 @@ export function NewWorkspaceDialog() {
           )}
         </fieldset>
       )}
-    </Dialog>
-  );
-}
-
-export function WorkspaceSettingsDialog({ host, workspace }: { host: string; workspace: string }) {
-  const ws = useStore((s) => s.workspaces[host]?.find((w) => w.id === workspace));
-  const count = useStore((s) => (s.workspaces[host] ?? []).length);
-  const [name, setName] = useState(ws?.name ?? "");
-  const [color, setColor] = useState<WorkspaceColor>(ws?.color ?? "clay");
-  const [profile, setProfile] = useState(ws?.claude_profile ?? DEFAULT_PROFILE);
-  const profiles = useStore((s) => s.profiles[host]);
-  const runtime = useHostRuntime(host);
-  if (!ws) return null;
-  const blocked = deleteBlocked(ws, count);
-  const save = async () => {
-    const ids = runtime.sessions.filter((x) => x.workspace_id === ws.id).map((x) => x.id);
-    const message = switchConfirm(ws.claude_profile ?? null, profile || null, runningClaudeAgents(runtime.sessions, runtime.terminals, ids), profiles ?? []);
-    if (message && !(await askConfirm({ title: "Change Claude profile", message, action: "Change profile" }))) return;
-    try {
-      await rpc(host, M.workspaceUpdate, { id: ws.id, name: name.trim() || undefined, color, claude_profile: profile || null });
-      close();
-    } catch (e) {
-      errorToast(e);
-    }
-  };
-  const remove = async () => {
-    if (!(await askConfirm({ title: "Delete workspace", message: `Delete ${ws.name}? It has no sections left, and its archived sessions move to another workspace.`, action: "Delete" }))) return;
-    try {
-      await rpc(host, M.workspaceDelete, { id: ws.id });
-      close();
-      toast(`Deleted ${ws.name}`);
-    } catch (e) {
-      errorToast(e);
-    }
-  };
-  return (
-    <Dialog
-      title="Workspace settings"
-      width={440}
-      onClose={close}
-      footer={
-        <>
-          <span className="mr-auto" title={blocked ?? undefined}>
-            <Button variant="ghost" disabled={!!blocked} onClick={() => void remove()} className="text-error">
-              Delete workspace
-            </Button>
-          </span>
-          <Button variant="ghost" onClick={close}>
-            Cancel
-          </Button>
-          <Button variant="primary" disabled={!name.trim()} onClick={() => void save()}>
-            Save
-          </Button>
-        </>
-      }
-    >
-      <NameField name={name} color={color} onChange={setName} onEnter={() => void save()} />
-      <Field label="Color">
-        <ColorPicker value={color} onChange={setColor} />
-      </Field>
-      <ProfileField host={host} value={profile} onChange={setProfile} />
-      {blocked && <p className="ui-text-12 text-faint">{blocked}</p>}
     </Dialog>
   );
 }

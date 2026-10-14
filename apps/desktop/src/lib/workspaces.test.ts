@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerOptions, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceInitial, workspacesNeedingYou } from "./workspaces";
+import { composerOptions, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -153,5 +153,31 @@ describe("newSectionWorkspace", () => {
     expect(newSectionWorkspace({ host: "local", id: "acme" }, "local", workspaces)).toBe("acme");
     expect(newSectionWorkspace({ host: "devbox", id: "r" }, "local", workspaces)).toBe("personal");
     expect(newSectionWorkspace(null, "local", [])).toBeNull();
+  });
+});
+
+describe("the workspace settings page (X43)", () => {
+  const acme = w("acme", "Acme", ["client", "infra"], "blue", "work");
+
+  it("sums up where the workspace is and what it holds", () => {
+    const sessions = [s("s1", "acme"), s("s2", "acme"), s("s3", "acme", true), s("s4", "personal")];
+    expect(workspaceSummary(acme, null, sessions)).toBe("Workspace on this Mac · 2 sections · 2 sessions");
+    expect(workspaceSummary(w("x", "X", ["one"]), "devbox", [s("s1", "x")])).toBe("Workspace on devbox · 1 section · 1 session");
+  });
+
+  it("lists its sections in order with their project counts", () => {
+    expect(sectionRows(acme, [sec("infra", ["p3"]), sec("client", ["p1", "p2", "p4"])])).toEqual([
+      { id: "client", name: "client", projects: "3 projects" },
+      { id: "infra", name: "infra", projects: "1 project" },
+    ]);
+  });
+
+  it("has unsaved changes once the name, colour or profile differs", () => {
+    expect(workspaceDirty(acme, { name: "Acme", color: "blue", profile: "work" })).toBe(false);
+    expect(workspaceDirty(acme, { name: " Acme ", color: "blue", profile: "work" })).toBe(false);
+    expect(workspaceDirty(acme, { name: "Acme Inc", color: "blue", profile: "work" })).toBe(true);
+    expect(workspaceDirty(acme, { name: "Acme", color: "violet", profile: "work" })).toBe(true);
+    expect(workspaceDirty(acme, { name: "Acme", color: "blue", profile: "" })).toBe(true);
+    expect(workspaceDirty(w("p", "Personal", []), { name: "Personal", color: "clay", profile: "" })).toBe(false);
   });
 });
