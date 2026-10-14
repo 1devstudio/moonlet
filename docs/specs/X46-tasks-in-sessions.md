@@ -50,8 +50,8 @@ A session can belong to a task. The link is made when a session starts from a ta
 
 ### Session view
 
-- [ ] A linked session has a **task bar** above the conversation: `Tasks ⌃⌘T` (back to Tasks mode with the task selected), the tracker mark, key and title, a state menu, `Session <i> of <n>` with previous and next when the task has more than one session, and `<tracker> ↗`. (Partly: the state shows as a label, not a menu yet; `tasks-mode.e2e.ts`.)
-- [ ] The right panel has a **Task** tab, first, shown only for a linked session: tracker, key, priority and cycle; title; description; **Acceptance criteria · <done> of <n>** from the description's checklist items (`- [ ]` / `- [x]`, or a section titled "Acceptance criteria"); the **Keep <tracker> in step** switch with what it will do; **Sessions on this task**, with this session marked; the task's worktrees without a session; **Link to another task** and **Unlink**. (Partly: no priority, cycle or Keep in step switch yet; `taskLinking.test.ts` acceptanceCriteria, `tasks-mode.e2e.ts`.)
+- [x] A linked session has a **task bar** above the conversation: `Tasks ⌃⌘T` (back to Tasks mode with the task selected), the tracker mark, key and title, a state menu, `Session <i> of <n>` with previous and next when the task has more than one session, and `<tracker> ↗`. (`tasks-mode.e2e.ts`)
+- [ ] The right panel has a **Task** tab, first, shown only for a linked session: tracker, key, priority and cycle; title; description; **Acceptance criteria · <done> of <n>** from the description's checklist items (`- [ ]` / `- [x]`, or a section titled "Acceptance criteria"); the **Keep <tracker> in step** switch with what it will do; **Sessions on this task**, with this session marked; the task's worktrees without a session; **Link to another task** and **Unlink**. (Partly: no cycle or Keep in step switch yet; `taskLinking.test.ts` acceptanceCriteria, `tasks-mode.e2e.ts`.)
 - [x] The Sessions sidebar can group sessions by **Project** or **Task** ("Group by Project · Task"). In both, a linked session row shows a second line with the task glyph, key and state, in the accent colour with `· out of sync` when it is (X45). A session with no task shows `No task · Link` on hover. (Group by is the section's menu: Project, Task, Status, None. `sidebar.test.ts`, `tasksView.test.ts` sessionTaskLines, `tasks-mode.e2e.ts`.)
 
 ### Keep in step
@@ -68,7 +68,7 @@ Each rule is Automatically, Suggest or Off per connection (X44). Suggest shows t
 
 - [x] "Move" uses the tracker state mapped first onto that column (X44). For Jira it uses the workflow transition that leads to that state; with none, the action fails with "No Jira transition to <state> from <state>". (The default mapping until the state-mapping section exists. `linear.rs` state_for, `jira.rs` transition_to, `clickup.rs` status_for, `task-trackers.e2e.ts`.)
 - [x] For a GitHub repository source, "move to Done" closes the issue as completed and the other moves do nothing (the column follows the work). For a GitHub project board source, moves set the project's Status field. (`task_updates_reach_github_through_gh`, `keepInStep.test.ts`)
-- [ ] Each action moonlet takes is recorded in the task's activity (X45), and a failed action shows on the task with its error and a Retry.
+- [ ] Each action moonlet takes is recorded in the task's activity (X45), and a failed action shows on the task with its error and a Retry. (Partly: actions are recorded; a failed one shows as an error toast, not on the task.)
 - [x] Actions happen once per event: reopening the app or a repeated PR poll does not move or comment again. (`keepInStep.test.ts` autoFixes and prComments with the remembered keys)
 
 ## UI

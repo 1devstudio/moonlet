@@ -1008,14 +1008,17 @@ pub async fn gh_whoami() -> Result<String> {
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
 
-/// Assigns issue `number` to the user and/or closes it as completed (X46).
-pub async fn gh_task_update(repo: &Path, number: u64, assign_me: bool, close: bool) -> Result<()> {
+/// Assigns issue `number` to the user, closes it as completed or reopens it (X46).
+pub async fn gh_task_update(repo: &Path, number: u64, assign_me: bool, close: bool, reopen: bool) -> Result<()> {
     let n = number.to_string();
     if assign_me {
         gh(repo, &["issue", "edit", &n, "--add-assignee", "@me"]).await?;
     }
     if close {
         gh(repo, &["issue", "close", &n, "--reason", "completed"]).await?;
+    }
+    if reopen {
+        gh(repo, &["issue", "reopen", &n]).await?;
     }
     Ok(())
 }

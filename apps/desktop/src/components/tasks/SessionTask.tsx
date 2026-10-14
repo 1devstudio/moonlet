@@ -12,7 +12,7 @@ import type { Card } from "../../lib/tasksBoard";
 import { ensureTasks, linkTask, openInTasksMode, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Dialog, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
-import { startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
+import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
 
 const COLUMN_LABEL: Record<Card["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };
 const trackerName = (t: Task) => ({ github: "GitHub", linear: "Linear", jira: "Jira", clickup: "ClickUp" })[t.connection.split(":")[0]] ?? "tracker";
@@ -42,7 +42,7 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
       <TaskGlyph column={card.column} size={13} />
       <span className="font-mono text-muted">{card.task.key}</span>
       <span className="min-w-0 truncate text-fg">{card.task.title}</span>
-      <span className="shrink-0 text-faint">{COLUMN_LABEL[card.column]}</span>
+      {ws.workspace_id ? <StateMenu host={host} workspaceId={ws.workspace_id} task={card.task} /> : <span className="shrink-0 text-faint">{COLUMN_LABEL[card.column]}</span>}
       {card.rows.length > 1 && (
         <div role="group" aria-label="Sessions on this task" className="ml-2 flex items-center gap-0.5 text-muted">
           <IconButton title="Previous session on this task" onClick={() => go(-1)}>
@@ -75,6 +75,10 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
           {card.task.key}
         </div>
         <h2 className="mt-1 ui-text-15 font-medium text-fg">{card.task.title}</h2>
+        <div className="mt-1 ui-text-12 text-faint">
+          {["No priority", "Low priority", "Medium priority", "High priority"][card.task.priority] ?? "No priority"}
+          {card.task.assignees.length > 0 && ` · ${card.task.assignees.join(", ")}`}
+        </div>
         {card.task.description && <p className="selectable mt-2 line-clamp-6 whitespace-pre-wrap ui-text-12.5 text-muted">{card.task.description}</p>}
       </div>
       {criteria.length > 0 && (
@@ -187,7 +191,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
         )}
         {!pasted && !choices.suggested.length && !choices.recent.length && <p className="px-2 ui-text-12.5 text-muted">No tasks match.</p>}
       </div>
-      <p className="mt-3 ui-text-11.5 text-faint">Links live in moonlet.</p>
+      <p className="mt-3 ui-text-11.5 text-faint">Links live in moonlet. The issue gets a link back to the PR when one opens.</p>
     </Dialog>
   );
 }

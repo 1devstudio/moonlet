@@ -73,6 +73,15 @@ export function TrackersPage() {
               {trackerRules(kind).map((r) => (
                 <RuleRow key={r.id} rule={r} value={settings.rules[r.id]} onChange={(v) => setRules({ ...settings.rules, [r.id]: v })} />
               ))}
+              <Row label="Branch name for new sessions" hint="{key}, {title} · empty: {key}-{title}" setting={`branch-template-${kind}`}>
+                <input
+                  aria-label={`Branch name for ${NAME[kind]} sessions`}
+                  className={fieldCls}
+                  placeholder="{key}-{title}"
+                  defaultValue={settings.branch_template}
+                  onBlur={(e) => e.target.value.trim() !== settings.branch_template && save({ ...config, [kind]: { ...settings, branch_template: e.target.value.trim() } })}
+                />
+              </Row>
             </Card>
           </Section>
         );

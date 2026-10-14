@@ -9,7 +9,8 @@ import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorksp
 import { askConfirm } from "./confirm";
 import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
-import { githubRepo, type Task, type TaskStart, taskFromGh } from "./tasks";
+import { type ActivityEntry, appendActivity } from "./taskDetails";
+import { type Column, githubRepo, type Task, type TaskStart, taskFromGh } from "./tasks";
 import { workspaceConnections } from "./trackerSources";
 import { type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
@@ -49,6 +50,10 @@ interface TasksState {
   expanded: Record<string, boolean>;
   /** Connections whose token stopped working, with what to do (X44). */
   attention: Record<string, string>;
+  /** What moonlet did about each task, by `connection key` (X45 Activity). */
+  activity: Record<string, ActivityEntry[]>;
+  /** Find a task: the text the board is filtered by. */
+  query: string;
 }
 
 /** One tracker's branch names and rules. */
@@ -107,6 +112,8 @@ export const useTasks = create<TasksState>(() => ({
   layout: storedLayout(),
   expanded: {},
   attention: {},
+  activity: {},
+  query: "",
 }));
 
 function storedLayout(): "board" | "list" {
@@ -261,7 +268,11 @@ const movedByMoonlet = new Set<string>();
 function notifyOutsideMoves(host: string, workspaceId: string, before: Task[] | null, data: TasksData) {
   const board = tasksBoard(boardInput(useStore.getState(), host, workspaceId, data));
   const linked = new Set(Object.values(board).flat().filter((c) => c.rows.length).map((c) => `${c.task.connection} ${c.task.key}`));
-  for (const m of outsideMoves(before, data.tasks, linked, movedByMoonlet)) void notify(m.text, m.title);
+  for (const m of outsideMoves(before, data.tasks, linked, movedByMoonlet)) {
+    void notify(m.text, m.title);
+    const t = data.tasks.find((x) => x.key === m.key);
+    if (t) recordActivity(t, `Outside moonlet: ${m.text}`);
+  }
   movedByMoonlet.clear();
 }
 
@@ -308,6 +319,7 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
   try {
     await hostsApi.trackerUpdate({ id: start.ref.connection, task: start.tracker.id, source: start.tracker.source, column: "in_progress", assign_me: true });
     movedByMoonlet.add(`${start.ref.connection} ${start.key}`);
+    recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you");
   } catch (e) {
     errorToast((e as { message?: string }).message ?? e);
   }
@@ -319,6 +331,7 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
   if (!path) return;
   try {
     await rpc(host, M.ghTaskUpdate, { path, number: github.number, assign_me: true });
+    recordActivity({ connection: GITHUB, key: `${github.repo}#${github.number}` }, "moonlet assigned it to you");
   } catch (e) {
     errorToast(e);
   }
@@ -334,12 +347,14 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
       if (!path) return;
       await rpc(host, M.ghTaskUpdate, { path, number: plan.number, close: true });
       movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
+      recordActivity(card.task, "moonlet closed it: every session's PR is merged");
       toast(`Closed ${card.task.key}`);
     } else if (plan.kind === "move") {
       const t = card.task.tracker;
       if (!t) return;
       await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column });
       movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
+      recordActivity(card.task, `moonlet moved it to ${COLUMN_LABEL[plan.column]}`);
       toast(`Moved ${card.task.key} to ${COLUMN_LABEL[plan.column]}`);
     } else {
       const sessions = useStore.getState().sessions[host]?.filter((s) => plan.sessions.includes(s.id)) ?? [];
@@ -358,6 +373,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
       if (!ok) return;
       for (const s of sessions) await rpc(host, M.sessionArchive, { id: s.id, remove_worktree: true });
       for (const w of card.orphans) if (w.project) await rpc(host, M.projectWorktreeRemove, { id: w.project, path: w.path });
+      recordActivity(card.task, "moonlet archived its sessions and removed their worktrees");
     }
     await refreshTasks(host, workspaceId);
   } catch (e) {
@@ -388,4 +404,52 @@ export function openInTasksMode(task: Task) {
   if (!ws) return;
   useTasks.setState({ selected: `${task.connection} ${task.key}`, view: "mine" });
   useStore.setState({ tasksMode: { ...s.tasksMode, [wsKey(ws.host, ws.id)]: true }, showHistory: false });
+}
+
+const ACTIVITY_KEY = "tasks.activity";
+
+function readActivity(): Record<string, ActivityEntry[]> {
+  try {
+    return JSON.parse(readStored(ACTIVITY_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+/** What moonlet did about a task, newest first (the detail panel's Activity, X45). */
+export function activityOf(task: Pick<Task, "connection" | "key">): ActivityEntry[] {
+  return useTasks.getState().activity[`${task.connection} ${task.key}`] ?? readActivity()[`${task.connection} ${task.key}`] ?? [];
+}
+
+/** Records something moonlet did about a task, kept across restarts. */
+export function recordActivity(task: Pick<Task, "connection" | "key">, text: string, now = Date.now()) {
+  const id = `${task.connection} ${task.key}`;
+  const all = { ...readActivity(), ...useTasks.getState().activity };
+  const next = { ...all, [id]: appendActivity(all[id] ?? [], { at: now, text }) };
+  try {
+    writeStored(ACTIVITY_KEY, JSON.stringify(next));
+  } catch {
+    /* storage unavailable */
+  }
+  useTasks.setState({ activity: next });
+}
+
+/** The state menu (X45 detail, X46 task bar): move a tracker issue, or close or reopen a GitHub issue. */
+export async function moveTask(host: string, workspaceId: string, task: Task, column: Exclude<Column, "hidden"> | null, now = Date.now()) {
+  try {
+    if (task.github) {
+      const path = repoPath(host, workspaceId, task.github.repo);
+      if (!path) return;
+      const close = column === "done";
+      await rpc(host, M.ghTaskUpdate, close ? { path, number: task.github.number, close: true } : { path, number: task.github.number, reopen: true });
+      recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
+    } else if (task.tracker && column) {
+      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column });
+      recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
+    } else return;
+    movedByMoonlet.add(`${task.connection} ${task.key}`);
+    void refreshTasks(host, workspaceId);
+  } catch (e) {
+    errorToast((e as { message?: string }).message ?? e);
+  }
 }

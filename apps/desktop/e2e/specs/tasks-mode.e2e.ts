@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { fill, PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
+import { choose, fill, PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
 
 interface Session {
   id: string;
@@ -58,7 +58,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -170,5 +170,18 @@ describe("Tasks mode", () => {
     const row = $(sel.sessionRow("Gift cards at checkout"));
     await expect(row.$('//span[@title="acme/storefront#15 · Gift cards at checkout"]')).toBeDisplayed({ wait: 10_000 });
     await expect(row.$(sel.text("acme/storefront#15"))).toBeDisplayed();
+  });
+
+  it("finds a task by its title, and closes an issue from the detail's state menu", async () => {
+    await tasksButton().click();
+    await fill('//input[@placeholder="Find a task"]', "Gift");
+    await expect(card("acme/storefront#15", "In Progress")).toBeDisplayed({ wait: 10_000 });
+    await expect(card("acme/storefront#12", "In Progress")).not.toBeExisting();
+    await fill('//input[@placeholder="Find a task"]', "");
+    await card("acme/storefront#15", "In Progress").$('//button[normalize-space()="Gift cards at checkout"]').click();
+    await choose('//select[@aria-label="State of acme/storefront#15"]', "1");
+    await browser.waitUntil(() => asked().includes("issue close 15 --reason completed"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+    await expect($('//section[@aria-label="Activity"]').$(sel.text("moonlet closed it"))).toBeDisplayed({ wait: 10_000 });
+    await sessionsButton().click();
   });
 });

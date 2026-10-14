@@ -29,7 +29,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 ### Sidebar in Tasks mode
 
-- [ ] Rows: workspace switcher, mode switch, "Find a task ⌘K", **Views**, **Trackers**, and a footer `<tracker> synced <age>` with a refresh button.
+- [x] Rows: workspace switcher, mode switch, "Find a task ⌘K", **Views**, **Trackers**, and a footer `<tracker> synced <age>` with a refresh button. (Find a task is a filter field; ⌘K stays the Run action palette.)
 - [ ] Views, each with a count: My issues, Current cycle (Linear cycle, Jira active sprint; hidden when the source has neither), In review, Out of sync (count in the accent colour), Sessions without a task.
 - [ ] Trackers lists each source as `<tracker> · <source>` with its key prefix, and `Connect…` for a tracker not connected yet.
 
@@ -37,7 +37,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 - [ ] The header shows the view name and a line such as `Moonlet · Cycle 14 · Oct 7 – Oct 20 · 9 tasks · 6 sessions`, then filters (`Assignee: me`, `Hide empty Done`), the Board / List switch and Refresh.
 - [ ] Columns Todo, In Progress and In Review, each with its glyph and count. Done is a narrow collapsed column with its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`); clicking it opens List.
-- [ ] **Card:** key, priority bars, project (when different from the workspace's main one), assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`.
+- [ ] **Card:** key, priority bars, project (when different from the workspace's main one), assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`. (Partly: no project name yet. `taskDetails.test.ts` initials.)
 - [x] **Row meta**, first match wins: `needs you` (amber) when the session waits on the user; `#<n>` in its PR state colour, `#<n> merged` or `#<n> ✕` for failing checks; `◑ <n>` when the agent has running subagents (X42); otherwise `+<added>`. (`tasksBoard.test.ts`)
 - [x] The card is outlined amber when any session needs the user, and highlighted with the accent when selected. (`tasksBoard.test.ts`)
 - [x] Task state is shown by shape (empty ring Todo, half Progress, three-quarters Review, filled check Done); agent state by colour, the same `StateGlyph` as the Sessions sidebar.
@@ -55,12 +55,12 @@ A task is out of sync when the work and the tracker disagree. Each case has a ch
 ### Detail panel
 
 - [ ] Header: tracker mark, key, copy key, `Open in <tracker>`, more, close.
-- [ ] Title, then State (a menu listing the columns; picking one moves the issue), Assignee, Priority, Labels, and the description cut to four lines with **More**.
+- [x] Title, then State (a menu listing the columns; picking one moves the issue), Assignee, Priority, Labels, and the description cut to four lines with **More**. (`taskDetails.test.ts` stateOptions, `tasksStore.test.ts` moveTask, `tasks-mode.e2e.ts`)
 - [x] An out-of-sync block explains why and offers the fix and **Not now**.
 - [ ] **Sessions** with a count and `+ New session`. Each session card: glyph, name, **Open** (↵ on the first), `project/branch`, diff stat, one line per agent (icon, name, state with time), and the PR line (`#131 open · 7/7 checks · 1 approval`, or `No pull request · Create PR ⇧⌘P`).
 - [ ] With no session: "No sessions yet. Starting one names the branch after the issue and moves it to In Progress." and **Start a session** (X46).
 - [ ] **Worktrees without a session**: branch, how it was made or its last commit, **Start session** (adopts the worktree, X46) and remove (with confirm).
-- [ ] **Activity**: moonlet's own events for the task (session started from it, PR opened, moved by moonlet, worktree found), newest first.
+- [x] **Activity**: moonlet's own events for the task (session started from it, PR opened, moved by moonlet, worktree found), newest first. (`taskDetails.test.ts` appendActivity, `tasksStore.test.ts`, `tasks-mode.e2e.ts`)
 
 ### List
 
@@ -72,7 +72,7 @@ A task is out of sync when the work and the tracker disagree. Each case has a ch
 
 ### Find a task
 
-- [ ] ⌘K in Tasks mode searches tasks of the workspace by key and title, and accepts a pasted key or issue URL of any connected tracker.
+- [ ] ⌘K in Tasks mode searches tasks of the workspace by key and title, and accepts a pasted key or issue URL of any connected tracker. (Partly: "Find a task" filters by key and title, `taskDetails.test.ts` findTasks, `tasks-mode.e2e.ts`; pasted keys and URLs work in the link dialog.)
 
 ## UI
 
