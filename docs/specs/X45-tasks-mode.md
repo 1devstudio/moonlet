@@ -37,7 +37,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 - [ ] The header shows the view name and a line such as `Moonlet · Cycle 14 · Oct 7 – Oct 20 · 9 tasks · 6 sessions`, then filters (`Assignee: me`, `Hide empty Done`), the Board / List switch and Refresh.
 - [ ] Columns Todo, In Progress and In Review, each with its glyph and count. Done is a narrow collapsed column with its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`); clicking it opens List.
-- [ ] **Card:** key, priority bars, project (when different from the workspace's main one), assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`. (Partly: no project name yet. `taskDetails.test.ts` initials.)
+- [x] **Card:** key, priority bars, project (when different from the workspace's main one), assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`. (The source shows when a workspace has more than one. `taskDetails.test.ts` initials.)
 - [x] **Row meta**, first match wins: `needs you` (amber) when the session waits on the user; `#<n>` in its PR state colour, `#<n> merged` or `#<n> ✕` for failing checks; `◑ <n>` when the agent has running subagents (X42); otherwise `+<added>`. (`tasksBoard.test.ts`)
 - [x] The card is outlined amber when any session needs the user, and highlighted with the accent when selected. (`tasksBoard.test.ts`)
 - [x] Task state is shown by shape (empty ring Todo, half Progress, three-quarters Review, filled check Done); agent state by colour, the same `StateGlyph` as the Sessions sidebar.

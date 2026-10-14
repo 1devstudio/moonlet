@@ -33,7 +33,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 ### Signing in
 
-- [ ] **Linear OAuth:** moonlet opens Linear's authorize URL with a PKCE `S256` challenge and a loopback redirect `http://127.0.0.1:<port>/callback` on a port chosen at run time. The callback's `state` must match; the code is exchanged with the verifier and no client secret. The access and refresh tokens go to the Keychain; refresh happens before expiry. (Not yet: the PKCE parts are in `moonlet-trackers::oauth`, tested against RFC 7636; the flow needs a registered client ID and a fixed loopback port, which Linear's docs require to match exactly.)
+- [ ] **Linear OAuth:** moonlet opens Linear's authorize URL with a PKCE `S256` challenge and a loopback redirect `http://127.0.0.1:<port>/callback` on a port chosen at run time. The callback's `state` must match; the code is exchanged with the verifier and no client secret. The access and refresh tokens go to the Keychain; refresh happens before expiry. (Implemented on a fixed loopback port, 53682, since Linear's redirect must match exactly; the button shows when the app is built with `MOONLET_LINEAR_CLIENT_ID`, which needs the maintainer's registered OAuth app. Tokens refresh before they expire. `the_loopback_listener_waits_for_the_callback_with_its_state`, `moonlet-trackers::oauth`.)
 - [x] **Linear API key** is accepted instead of OAuth. (`task-trackers.e2e.ts` against a mock of Linear's API)
 - [x] **Jira Cloud:** site, email and API token; requests use basic auth. Jira API tokens expire, and Jira's API does not say when, so moonlet does not warn ahead. When Jira answers 401 to a token that worked before, the connection shows `API token rejected · <workspace> issues are stale` and Reconnect explains: "Jira no longer accepts the API token for <site>. It may have expired or been revoked. Create a new token and paste it here." The Reconnect dialog keeps the site and email and only asks for the new token. Only a `*.atlassian.net` or `*.jira.com` host gets the token. (`jira.rs`, `only_a_jira_cloud_host_gets_the_token`)
 - [x] **ClickUp:** the personal token is sent as the raw `Authorization` header value. (`clickup.rs`)
@@ -46,7 +46,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 ### Sources
 
 - [ ] A source is one Linear team, Jira project, ClickUp list (or folder, or space) or GitHub repository or project board.
-- [x] Each source has a **repository** (the moonlet project its sessions start in), a **workspace** (X32) and a **Shows** filter: `Assigned to me` (default) or `All open issues`. (Shows is Assigned to me for now. `trackerSources.test.ts`, `task-trackers.e2e.ts`)
+- [x] Each source has a **repository** (the moonlet project its sessions start in), a **workspace** (X32) and a **Shows** filter: `Assigned to me` (default) or `All open issues`. (`trackerSources.test.ts`, `tasksStore.test.ts` Shows, `task-trackers.e2e.ts`)
 - [ ] "Where each workspace gets its tasks" lists each workspace with its sources and the view Tasks mode opens on (`Current cycle`, `Active sprint`, `My issues`, or `Sessions mode` for a workspace with no sources). A source whose connection failed is outlined red with its reason. (Partly: a read-only list of each workspace's sources; no "Opens on" view yet.)
 - [ ] A GitHub repository source defaults to the project's own `origin` repository.
 
