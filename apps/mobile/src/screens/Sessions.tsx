@@ -7,34 +7,25 @@ import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
 import { showScreen, useApp } from "../lib/app";
-import { useBase, useGitStatus, usePr, useSeen } from "../lib/lazy";
+import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
 import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups } from "../lib/sessionList";
+import { useBusy } from "../lib/busy";
+import { STATE_COLOR } from "../lib/palette";
 import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
 import { WorkspacePill } from "../components/WorkspacePill";
 import { useNow } from "./Inbox";
 
-const WORD_COLOR: Record<string, string> = { blocked: "#f2c94c", working: "#d97757", done: "#3ecf6e", error: "#ef5f5f", idle: "#8c8c8c" };
 const AVATAR = ["#d97757", "#5aa9e6", "#a371f7", "#3ecf6e", "#f2c94c"];
 
 function BehindButton({ host, project }: { host: string; project: Project }) {
   const [base, reload] = useBase(host, project);
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useBusy();
   if (!base || base.behind === 0 || base.ahead > 0) return null;
   return (
     <button
       type="button"
       disabled={busy}
-      onClick={async () => {
-        setBusy(true);
-        try {
-          await rpc(host, M.gitPullBase, { path: project.path, branch: project.base_branch });
-        } catch (e) {
-          console.error(e);
-        } finally {
-          setBusy(false);
-          reload();
-        }
-      }}
+      onClick={() => void run(() => rpc(host, M.gitPullBase, { path: project.path, branch: project.base_branch }), reload)}
       className="flex h-7 items-center gap-1 rounded-full border border-border-strong px-2.5 text-[12px] text-muted"
     >
       <GitBranch size={12} />
@@ -56,7 +47,7 @@ function Row({ r }: { r: SessionRow }) {
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-[15px]">{r.session.name}</span>
-          <span className="text-[12px]" style={{ color: WORD_COLOR[r.state] }}>
+          <span className="text-[12px]" style={{ color: STATE_COLOR[r.state] }}>
             {r.word}
           </span>
         </span>

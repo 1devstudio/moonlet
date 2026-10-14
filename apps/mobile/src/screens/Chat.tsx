@@ -9,8 +9,10 @@ import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
 import { M, type PermissionAsk, type Session } from "@desktop/lib/protocol";
 import { showScreen, useApp } from "../lib/app";
 import { answerAsk, answerQuestion } from "../lib/answers";
+import { STATE_COLOR } from "../lib/palette";
 import { ageText, askHeadline } from "../lib/cards";
 import { chatFooter, sessionChat } from "../lib/chatView";
+import { useBusy } from "../lib/busy";
 import { ChatBlockView } from "../components/chat";
 import { Sheet } from "../components/Sheet";
 import { Btn, cx } from "../components/ui";
@@ -18,19 +20,10 @@ import { useNow } from "./Inbox";
 
 function DockedAsk({ host, terminal, ask }: { host: string; terminal: number; ask: PermissionAsk }) {
   const now = useNow();
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useBusy();
   const [telling, setTelling] = useState(false);
   const [message, setMessage] = useState("");
-  const answer = async (d: "allow" | "always" | "deny", msg?: string) => {
-    setBusy(true);
-    try {
-      await answerAsk(host, terminal, ask.id, d, msg);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const answer = (d: "allow" | "always" | "deny", msg?: string) => run(() => answerAsk(host, terminal, ask.id, d, msg));
   return (
     <section aria-label="Waiting for your approval" className="flex flex-col gap-2.5 border-t border-[rgba(242,201,76,0.28)] bg-panel px-4 pt-3 pb-2">
       <div className="flex items-center gap-2 text-[14px] font-medium">
@@ -149,8 +142,8 @@ function Ring({ percent }: { percent: number }) {
   const c = 2 * Math.PI * 7;
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <circle cx="9" cy="9" r="7" fill="none" stroke="#2e2e2e" strokeWidth="2.5" />
-      <circle cx="9" cy="9" r="7" fill="none" stroke={percent > 80 ? "#f2c94c" : "#d97757"} strokeWidth="2.5" strokeDasharray={`${(c * percent) / 100} ${c}`} transform="rotate(-90 9 9)" />
+      <circle cx="9" cy="9" r="7" fill="none" stroke="var(--color-border-strong)" strokeWidth="2.5" />
+      <circle cx="9" cy="9" r="7" fill="none" stroke={percent > 80 ? STATE_COLOR.blocked : STATE_COLOR.working} strokeWidth="2.5" strokeDasharray={`${(c * percent) / 100} ${c}`} transform="rotate(-90 9 9)" />
     </svg>
   );
 }

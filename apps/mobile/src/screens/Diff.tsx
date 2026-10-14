@@ -9,8 +9,10 @@ import { commentPrompt, hunkPatch, parseFileDiff } from "@desktop/lib/patch";
 import { M } from "@desktop/lib/protocol";
 import { showScreen, useApp } from "../lib/app";
 import { sessionChat } from "../lib/chatView";
+import { DIFF_LINE } from "../lib/palette";
 import { type DiffRow, diffRows, editsDiff, folderGroups } from "../lib/diffView";
-import { forget, useGitStatus } from "../lib/lazy";
+import { forget, useGitStatus } from "../lib/rowDetails";
+import { useBusy } from "../lib/busy";
 import { AgentIcon, Btn, DiffStat, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
 
@@ -40,8 +42,8 @@ function Line({ row, commenting, onComment }: { row: Extract<DiffRow, { kind: "l
       {...press}
       className={cx(
         "flex min-h-[22px] font-mono text-[12px] leading-[22px] select-none",
-        row.sign === "+" && "bg-[#14301d] text-[#9fe0b0]",
-        row.sign === "-" && "bg-[#3a1719] text-[#f2a7a7]",
+        row.sign === "+" && DIFF_LINE.add,
+        row.sign === "-" && DIFF_LINE.del,
         commenting && "outline outline-1 outline-accent",
       )}
     >
@@ -60,7 +62,7 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
   const [text, setText] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [comment, setComment] = useState<{ row: number; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useBusy();
   const [confirm, setConfirm] = useState<{ title: string; run: () => Promise<unknown> } | null>(null);
   // Hunks against the base include committed lines (X40): staging and
   // discarding happen in the diff against HEAD only.
@@ -89,19 +91,12 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
   const go = (i: number) => order[i] && showScreen({ kind: "diff", host, id, path: order[i].path, against });
   const name = path.slice(path.lastIndexOf("/") + 1);
   const dir = path.slice(0, Math.max(0, path.lastIndexOf("/")));
-  const act = async (f: () => Promise<unknown>) => {
-    setBusy(true);
-    try {
-      await f();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setBusy(false);
+  const act = (f: () => Promise<unknown>) =>
+    run(f, () => {
       forget(`git:${host}:${id}`);
       reloadStatus();
       setTick((t) => t + 1);
-    }
-  };
+    });
   const sendComment = async (row: Extract<DiffRow, { kind: "line" }>, body: string) => {
     const chat = d ? sessionChat(d, id) : null;
     if (chat === null) return;

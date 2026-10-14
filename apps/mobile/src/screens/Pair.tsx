@@ -6,6 +6,7 @@ import { Check, ChevronLeft, ScanLine } from "lucide-react";
 import { pairMac, showScreen, showTab } from "../lib/app";
 import { deviceName, onPhone, scanQr, tap } from "../lib/native";
 import { parsePairLink } from "../lib/pairLink";
+import { useBusy } from "../lib/busy";
 import { Btn, Moon } from "../components/ui";
 
 /** "Paired with studio-mac", then on to the Inbox. */
@@ -29,8 +30,7 @@ export function PairedScreen({ name }: { name: string }) {
 
 export function PairScreen({ first }: { first: boolean }) {
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, setError, run } = useBusy();
 
   const pair = async (raw: string) => {
     const link = parsePairLink(raw);
@@ -38,17 +38,11 @@ export function PairScreen({ first }: { first: boolean }) {
       setError("That is not a moonlet pairing link. On the Mac, open Settings › Mobile › Pair a phone.");
       return;
     }
-    setBusy(true);
-    setError(null);
-    try {
+    await run(async () => {
       const mac = await pairMac(link, deviceName());
       void tap("success");
       showScreen({ kind: "paired", name: mac.label });
-    } catch (e) {
-      setError(e && typeof e === "object" && "message" in e ? String(e.message) : String(e));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   const scan = async () => {

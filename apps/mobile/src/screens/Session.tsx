@@ -7,8 +7,9 @@ import { M } from "@desktop/lib/protocol";
 import { type SessionTab, showScreen, useApp } from "../lib/app";
 import { sessionState } from "../lib/inbox";
 import { sessionLine, shellTerminals } from "../lib/chatView";
-import { useGitStatus, usePr } from "../lib/lazy";
+import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
+import { CHECK_COLOR } from "../lib/palette";
 import { Sheet } from "../components/Sheet";
 import { Btn, StateGlyph, cx } from "../components/ui";
 import { ChatTab } from "./Chat";
@@ -45,7 +46,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const badge: Partial<Record<SessionTab, ReactNode>> = {
     terminal: shellTerminals(d, id).length || null,
     changes: git?.files.length || null,
-    pr: dot ? <span className="h-[7px] w-[7px] rounded-full" style={{ background: dot }} /> : null,
+    pr: dot ? <span className="h-[7px] w-[7px] rounded-full" style={{ background: CHECK_COLOR[dot] }} /> : null,
   };
   const go = (t: SessionTab) => showScreen({ kind: "session", host, id, tab: t });
 
