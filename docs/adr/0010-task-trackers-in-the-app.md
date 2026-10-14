@@ -8,10 +8,10 @@ Tasks mode shows issues from Linear, Jira Cloud, ClickUp and GitHub Issues besid
 **Decision.**
 
 - **Linear, Jira and ClickUp are called from the desktop app's Rust side**, through Tauri commands, the same way `claude_latest_version` reaches the npm registry. The webview's CSP stays closed to the network.
-- **Their tokens live in the macOS Keychain of the Mac running the app**, using the `Tokens` pattern of the phone app (`apps/mobile/src-tauri/src/macs.rs`). They are never written to `~/.moonlet`, never sent to a daemon, and never cross SSH.
+- **Their tokens live in the macOS Keychain of the Mac running the app**, using the `Tokens` pattern of the phone app (`apps/mobile/src-tauri/src/macs.rs`). They are never sent to a daemon and never cross SSH. Only e2e builds, and builds for other systems, which have no Keychain, keep them in `~/.moonlet/secrets.json`, readable only by the user.
 - **GitHub Issues goes through the daemon**, because it uses `gh`, and `gh` is signed in on the host that owns the project and opens its PRs (X2). moonlet holds no GitHub token.
-- **The daemon stores only links**: `Session.task = {connection, key, url}`. Links that can be derived (the key in the branch name, a PR that closes the issue) are computed in the app and never stored.
-- **Parsing and decisions are pure code** in a new crate, `crates/moonlet-trackers` (response parsing, state mapping, keys, URLs, branch templates), and in `apps/desktop/src/lib/` (the board, out of sync, Keep in step). Network and Keychain code stays thin.
+- **The daemon stores only links**: `Session.task = {connection, key, url}`, and `Session.task_unlinked` when the user unlinked a session, so derived links stop applying to it until it is linked again. Links that can be derived (the key in the branch name, a PR that closes the issue) are computed in the app and never stored.
+- **Parsing and decisions are pure code** in a new crate, `crates/moonlet-trackers` (response parsing, default columns and the state a move lands on, pasted keys and URLs, branch names, OAuth helpers, `trackers.toml`), and in `apps/desktop/src/lib/` (matching keys in branches and PR titles, the board, out of sync, Keep in step). Network and Keychain code stays thin.
 - **Sign-in:** OAuth only where it needs no client secret: Linear (PKCE with a loopback redirect) and GitHub (through `gh`'s own login). Jira Cloud and ClickUp use personal API tokens. Decided by the user on 2026-10-14.
 
 **Rejected.**
@@ -24,4 +24,5 @@ Tasks mode shows issues from Linear, Jira Cloud, ClickUp and GitHub Issues besid
 
 - The phone app does not show tasks. A later change could have the desktop push a task summary to the daemon.
 - Two Macs running the app each connect their own trackers; `trackers.toml` and the Keychain are per Mac. Session links are shared, because they live in the daemon, and resolve on both Macs because a connection's id is its tracker and site (`jira:acme.atlassian.net`), not a per-Mac random id.
+- Two Macs connected to the same tracker each run Keep in step on their own. Rules, and what was already done, are kept per Mac, so both may move the same issue or comment the same PR's link.
 - Keep in step actions (X46) run in the app, so they only happen while the app is open; an action missed while it was closed shows as out of sync on the next sync instead.

@@ -12,7 +12,7 @@ Settings move out of the 600 px modal into a full-window page with a left nav. A
 ## User journey
 
 1. The user presses ⌘, (or the sidebar's gear). The settings page covers the window, open at General. Sessions keep running underneath.
-2. The nav lists App (General, Appearance, Terminal, Agents, Notifications, Keyboard shortcuts), Claude Code (Profiles, Hooks), Machines (Hosts, Phones), Workspaces (one entry per workspace) and Projects (one entry per project).
+2. The nav lists App (General, Appearance, Terminal, Agents, Notifications, Task trackers, Keyboard shortcuts), Claude Code (Profiles, Hooks), Machines (Hosts, Phones), Workspaces (one entry per workspace) and Projects (one entry per project).
 3. App settings save as soon as they change. Workspace and project pages collect edits and show a bar at the bottom: Discard, or Save (⌘↵).
 4. The user types in "Search settings" (⌘F). The page lists matching settings; ↑↓ and ↵ open one, which shows its page and briefly highlights the row.
 5. Esc, "Back to sessions" or the close button returns to the sessions.
