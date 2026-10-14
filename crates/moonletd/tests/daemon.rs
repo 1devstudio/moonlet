@@ -908,3 +908,172 @@ esac
     let version: serde_json::Value = second.request(methods::CLAUDE_VERSION, ()).await.unwrap();
     assert_eq!(version["updating"], false);
 }
+
+/// A git repository with one commit, added as a project.
+async fn project_with_repo(
+    d: &TestDaemon,
+    c: &mut Client,
+) -> (PathBuf, moonlet_proto::types::Project) {
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    ] {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let p = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    (repo, p)
+}
+
+#[tokio::test]
+async fn a_session_started_from_a_task_keeps_its_link() {
+    use moonlet_proto::types::Session;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (_, p) = project_with_repo(&d, &mut c).await;
+    let task = serde_json::json!({
+        "connection": "linear-1",
+        "key": "MOON-151",
+        "url": "https://linear.app/acme/issue/MOON-151/drag-sessions"
+    });
+    let s: Session = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({
+                "project_id": p.id,
+                "name": "Drag sessions between sections",
+                "branch": "moon-151-drag-sessions-between-sections",
+                "task": task,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(&s.task).unwrap(), task);
+    let all: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    assert_eq!(serde_json::to_value(&all[0].task).unwrap(), task);
+}
+
+#[tokio::test]
+async fn a_session_can_be_linked_to_a_task_and_unlinked() {
+    use moonlet_proto::types::Session;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (_, p) = project_with_repo(&d, &mut c).await;
+    let s: Session = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({"project_id": p.id, "name": "Changelog themes", "branch": "themes"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(s.task, None);
+    let task = serde_json::json!({
+        "connection": "linear-1",
+        "key": "CDK-41",
+        "url": "https://linear.app/acme/issue/CDK-41/changelog-themes"
+    });
+    let linked: Session = c
+        .request(
+            methods::SESSION_UPDATE,
+            serde_json::json!({"id": s.id, "task": task}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(&linked.task).unwrap(), task);
+    assert!(!linked.task_unlinked);
+
+    // A rename leaves the link alone.
+    let renamed: Session = c
+        .request(
+            methods::SESSION_UPDATE,
+            serde_json::json!({"id": s.id, "name": "Themes"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(&renamed.task).unwrap(), task);
+
+    let unlinked: Session = c
+        .request(
+            methods::SESSION_UPDATE,
+            serde_json::json!({"id": s.id, "task": null}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unlinked.task, None);
+    assert!(unlinked.task_unlinked);
+}
+
+#[tokio::test]
+async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
+    use moonlet_proto::types::Session;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (repo, p) = project_with_repo(&d, &mut c).await;
+    let wt = d.home.path().join("moon-149-host-health");
+    assert!(
+        Command::new("git")
+            .args(["worktree", "add", "-q", "-b", "moon-149-host-health"])
+            .arg(&wt)
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let wt = std::fs::canonicalize(&wt).unwrap().display().to_string();
+
+    let list: serde_json::Value = c
+        .request(methods::PROJECT_WORKTREES, serde_json::json!({"id": p.id}))
+        .await
+        .unwrap();
+    let list = list.as_array().unwrap();
+    // The project's own checkout is not one of its worktrees.
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0]["path"], wt);
+    assert_eq!(list[0]["branch"], "moon-149-host-health");
+    assert!(list[0]["last_commit_ms"].as_u64().unwrap() > 1_600_000_000_000);
+
+    let s: Session = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({
+                "project_id": p.id,
+                "name": "Show remote host health in the sidebar footer",
+                "worktree": wt,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(s.path, wt);
+    assert_eq!(s.branch, "moon-149-host-health");
+
+    // A worktree a session already uses cannot be adopted twice.
+    let err = c
+        .request::<_, Session>(
+            methods::SESSION_CREATE,
+            serde_json::json!({"project_id": p.id, "name": "Again", "worktree": wt}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("already used by session"), "{err}");
+}

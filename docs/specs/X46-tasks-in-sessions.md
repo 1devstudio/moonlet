@@ -77,9 +77,9 @@ The designs are the "Session opened from a task" and "Link a session · Start fr
 
 ## Protocol and RPCs
 
-- `Session` gains `task: Option<TaskRef>`, `TaskRef {connection, key, url}`.
-- `session.create` gains `task` and `worktree` (an existing worktree path to adopt).
-- `session.update` gains `task` (`null` unlinks).
+- `Session` gains `task: Option<TaskRef>`, `TaskRef {connection, key, url}`, and `task_unlinked: bool` (set by an unlink, cleared by the next link).
+- `session.create` gains `task` and `worktree`: the path of a linked work tree of the project to adopt, with its branch. It fails when the path is not one of the project's work trees, is on a detached HEAD, or is used by a session that is not archived.
+- `session.update` gains `task`: a task links to it, `null` unlinks, absent leaves the link alone.
 - No new events: `sessions.changed` already carries sessions.
 
 ## Data and config
