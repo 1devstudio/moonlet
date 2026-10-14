@@ -155,6 +155,20 @@ fn task_event(v: &Value, st: &mut ChatState) -> bool {
     true
 }
 
+/// The status once an ask is answered or withdrawn: still blocked by
+/// another ask, else working, unless it was a subagent's ask after the main
+/// turn ended (X42).
+fn settle_asks(st: &mut ChatState, subagent: bool) {
+    st.status = if !st.pending.is_empty() {
+        "blocked"
+    } else if !subagent || st.turn_started_at.is_some() {
+        "working"
+    } else {
+        "done"
+    }
+    .into();
+}
+
 /// Tool calls kept per subagent (X42).
 const MAX_SUBAGENT_TOOLS: usize = 200;
 
@@ -470,10 +484,9 @@ impl Adapter for Claude {
             "control_cancel_request" => {
                 let rid = v["request_id"].as_str().unwrap_or_default();
                 if self.asks.remove(rid).is_some() {
+                    let subagent = st.pending.iter().any(|p| p.id == rid && p.agent.is_some());
                     st.pending.retain(|p| p.id != rid);
-                    if st.pending.is_empty() && st.status == "blocked" {
-                        st.status = "working".into();
-                    }
+                    settle_asks(st, subagent);
                     out.push(Out::State);
                 }
             }
@@ -572,6 +585,7 @@ impl Adapter for Claude {
 
     fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>, st: &mut ChatState) -> Vec<Out> {
         let Some((tool_use, suggestions, mut input)) = self.asks.remove(ask) else { return vec![] };
+        let subagent = st.pending.iter().any(|p| p.id == ask && p.agent.is_some());
         st.pending.retain(|p| p.id != ask);
         // AskUserQuestion is answered by allowing it with the answers in its input.
         if let (Some(a), Some(obj)) = (answers, input.as_object_mut()) {
@@ -602,7 +616,7 @@ impl Adapter for Claude {
             }
         };
         out.push(Out::Write(json!({"type": "control_response", "response": {"subtype": "success", "request_id": ask, "response": response}}).to_string()));
-        st.status = if st.pending.is_empty() { "working".into() } else { "blocked".into() };
+        settle_asks(st, subagent);
         out.push(Out::State);
         out
     }
@@ -1284,6 +1298,8 @@ mod tests {
         let outs = a.permission("eee7fb1b-453f-4303-8690-b9312d5f1b24", "allow", None, None, None, &mut st);
         assert!(outs.iter().any(|o| matches!(o, Out::Write(w) if w.contains(r#""request_id":"eee7fb1b-453f-4303-8690-b9312d5f1b24""#) && w.contains(r#""behavior":"allow""#))), "{outs:?}");
         assert!(st.pending.is_empty());
+        // The main agent is not working again: its turn had ended.
+        assert_eq!(st.status, "done");
     }
 
     #[test]
