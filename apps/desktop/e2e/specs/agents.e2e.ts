@@ -142,7 +142,8 @@ describe("agents tab", () => {
     await expect($('//*[@id="right-tabpanel"]//span[normalize-space()="stopped"]')).toBeDisplayed();
     await jsClick('//*[@id="right-tabpanel"]//button[normalize-space()="Agents"]');
     await expect($(row("List files") + text("Stopped"))).toBeExisting();
-    await expect($(`${strip}//span[normalize-space()="2 agents finished"]`)).toBeDisplayed();
+    // One was stopped, so they did not all finish.
+    await expect($(`${strip}//span[contains(normalize-space(), "2 agents · 1 done · 1 stopped")]`)).toBeDisplayed();
     await expect($(chip("1 agent"))).not.toBeExisting();
   });
 });
