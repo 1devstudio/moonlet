@@ -331,3 +331,13 @@ describe("the account under a workspace's Claude profile (X43)", () => {
     expect(accountNote("Default", null)).toEqual({ tone: "muted", text: "Checking…" });
   });
 });
+
+describe("Task trackers in the nav (X44)", () => {
+  it("shows a dot when a connection needs attention", () => {
+    const none = { remoteHosts: 0, phones: 0, profilesNeedSignIn: false, workspaces: [], projects: [] };
+    const trackers = (input: object) => settingsNav({ ...none, ...input })[0].entries.find((e) => e.key === "trackers");
+    expect(trackers({})?.dot).toBe(undefined);
+    expect(trackers({ trackersNeedAttention: 1 })?.dot).toBe("1 connection needs attention");
+    expect(trackers({ trackersNeedAttention: 2 })?.dot).toBe("2 connections need attention");
+  });
+});
