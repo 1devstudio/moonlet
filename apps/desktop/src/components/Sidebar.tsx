@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { Archive, ArrowDown, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrange, hostSections, lastActive, projectRemoval, sessionBadge, type Group } from "../lib/sidebar";
+import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, type Group } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -374,14 +374,15 @@ function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; wo
   const key = `${host}/${sec.id}/${g.key}`;
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const toggle = () => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }));
+  const heading = groupHeading(g);
   const header =
-    g.kind === "project" ? (
+    heading === "project" ? (
       <>
         <ProjectMark host={host} projectId={g.projectId!} />
         <span className="truncate ui-text-14 font-semibold text-[#d6d6d6]">{g.label}</span>
       </>
-    ) : g.kind === "status" ? (
-      <span className="truncate ui-text-11.5 font-medium uppercase tracking-[0.1em] text-muted">{g.label}</span>
+    ) : heading === "label" ? (
+      <span className={cx("truncate ui-text-11.5 font-medium text-muted", g.kind === "status" && "uppercase tracking-[0.1em]")}>{g.label}</span>
     ) : null;
   return (
     <div className="mb-1 rounded-md">
