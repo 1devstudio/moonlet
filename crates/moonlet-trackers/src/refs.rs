@@ -5,6 +5,9 @@ use crate::TrackerKind;
 /// What a pasted key or URL points at. `kind` is `None` for a bare
 /// `ABC-123`, which Linear and Jira share; `site` is the Linear organisation,
 /// the Jira host or the ClickUp workspace id when the URL names one.
+///
+/// `site` comes from the user's clipboard: use it only to pick one of the
+/// connections the user made, never as a host to send a token to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pasted {
     pub kind: Option<TrackerKind>,
@@ -58,10 +61,26 @@ fn parse_bare(input: &str) -> Option<Pasted> {
 }
 
 fn parse_url(rest: &str) -> Option<Pasted> {
-    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    // The authority ends where a URL parser would end it, so a pasted
+    // `user@evil.com#.atlassian.net` is never taken for a Jira site.
+    let end = rest.find(['/', '?', '#', '\\']).unwrap_or(rest.len());
+    let (authority, after) = rest.split_at(end);
+    let host = authority
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()))
+        .map_or(authority, |(host, _)| host)
+        .to_ascii_lowercase();
+    if host.is_empty()
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return None;
+    }
+    let path = after.strip_prefix('/').unwrap_or("");
+    let path = path.split('#').next().unwrap_or("");
     let (path, query) = path.split_once('?').unwrap_or((path, ""));
-    let segs: Vec<&str> = path.split('#').next().unwrap_or("").split('/').collect();
-    let host = host.to_ascii_lowercase();
+    let segs: Vec<&str> = path.split('/').collect();
     let found = |kind, key: String, site: Option<&str>| {
         Some(Pasted {
             kind: Some(kind),
@@ -168,6 +187,28 @@ mod tests {
         assert_eq!(
             parse_pasted("https://github.com/1devstudio/moonlet/pull/42"),
             None
+        );
+    }
+
+    #[test]
+    fn a_host_with_userinfo_or_odd_characters_is_not_a_tracker() {
+        // A URL parser would send these to evil.com; the suffix check must not
+        // name them a Jira site.
+        assert_eq!(
+            parse_pasted("https://user@evil.com#.atlassian.net/browse/OPS-12"),
+            None
+        );
+        assert_eq!(
+            parse_pasted("https://evil.com\\.atlassian.net/browse/OPS-12"),
+            None
+        );
+        assert_eq!(
+            parse_pasted("https://evil.com?.atlassian.net/browse/OPS-12"),
+            None
+        );
+        assert_eq!(
+            parse_pasted("https://ACME.atlassian.net:443/browse/OPS-12").map(|p| p.site),
+            Some(Some("acme.atlassian.net".into()))
         );
     }
 
