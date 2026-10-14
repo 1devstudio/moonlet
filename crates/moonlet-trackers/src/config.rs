@@ -94,6 +94,9 @@ pub struct Source {
     /// `host/workspaceId` of the workspace that shows it; empty until chosen.
     #[serde(default)]
     pub workspace: String,
+    /// All open issues, rather than only the account's (X44 Shows).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
 }
 
 /// A connection's stable id: its tracker and site, so session links survive
@@ -288,7 +291,8 @@ workspace = "local/acme"
                     key: "OPS".into(),
                     name: "Operations".into(),
                     project: "p1".into(),
-                    workspace: "local/acme".into()
+                    workspace: "local/acme".into(),
+                    all: false,
                 }],
                 states: Default::default(),
             }]

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { useStore } from "./store";
-import { activityOf, DEFAULT_CONFIG, ensureTasks, fixDrift, isTasksMode, loadTrackersConfig, moveTask, refreshTasks, rulesFor, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, refreshTasks, retryTask, rulesFor, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -12,9 +12,9 @@ vi.mock("./daemon", () => ({
   sendInput: vi.fn(),
   hostsApi: {
     trackersConfig: () => Promise.resolve({ sync: { interval: 300, notify: true } }),
-    trackerUpdate: (req: object) => (sent.push(req), Promise.resolve()),
-    trackerTasks: (id: string) => {
-      const answer = answers[`tracker_tasks ${id}`];
+    trackerUpdate: (req: object) => (failNext.length ? Promise.reject(failNext.shift()) : (sent.push(req), Promise.resolve())),
+    trackerTasks: (id: string, mine: boolean) => {
+      const answer = answers[`tracker_tasks ${id}${mine ? "" : " all"}`] ?? answers[`tracker_tasks ${id}`];
       return answer ? Promise.resolve().then(() => answer({})) : Promise.reject(new Error(`no tracker_tasks ${id}`));
     },
   },
@@ -22,6 +22,7 @@ vi.mock("./daemon", () => ({
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
 const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
 const sent = vi.hoisted(() => [] as object[]);
+const failNext = vi.hoisted(() => [] as object[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(true),
   requestPermission: () => Promise.resolve("granted"),
@@ -321,5 +322,48 @@ describe("the Task tab's Keep in step switch (X46)", () => {
     expect(rulesFor(DEFAULT_CONFIG, { connection: "linear:acme", key: "MOON-144" }).session_starts).toBe("auto");
     setKeepInStep(t, true);
     expect(rulesFor(DEFAULT_CONFIG, t).all_merged).toBe("suggest");
+  });
+});
+
+describe("a failed action shows on its task with Retry (X46)", () => {
+  it("keeps the error until a retry works", async () => {
+    sent.length = 0;
+    const t = { connection: "linear:acme", key: "MOON-9", title: "x", url: "", column: "todo" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "issue-9", state: "Todo", source: "MOON" } };
+    failNext.push({ message: "No Jira transition leads to that column from here" });
+    await moveTask("local", "personal", t, "done", 1_000);
+    expect(failureOf(t)).toBe("No Jira transition leads to that column from here");
+    await retryTask(t);
+    expect(failureOf(t)).toBe(undefined);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-9", source: "MOON", column: "done", state: null }]);
+  });
+});
+
+describe("Shows per source (X44)", () => {
+  it("shows all open issues of a source set to all, and only the account's issues of the others", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const lt = (key: string, source: string, who: string[]) => ({ connection: "linear:acme", key, title: key, url: "", column: "todo", priority: 0, assignees: who, labels: [], description: "", updatedMs: 0, tracker: { id: key, state: "Todo", source } });
+    answers["tracker_tasks linear:acme all"] = () => [lt("MOON-1", "MOON", ["Kim"]), lt("MOON-2", "MOON", ["Sam"]), lt("DES-1", "DES", ["Kim"]), lt("DES-2", "DES", ["Sam"])];
+    useTasks.setState({
+      config: {
+        ...DEFAULT_CONFIG,
+        connections: [
+          {
+            id: "linear:acme",
+            kind: "linear",
+            site: "acme",
+            account: "Sam",
+            auth: "api_key",
+            sources: [
+              { key: "MOON", name: "Moonlet", project: "", workspace: "local/personal", all: true },
+              { key: "DES", name: "Design", project: "", workspace: "local/personal" },
+            ],
+          },
+        ],
+      },
+    });
+    await refreshTasks("local", "personal", 1_000);
+    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2"]);
+    useTasks.setState({ config: null });
   });
 });

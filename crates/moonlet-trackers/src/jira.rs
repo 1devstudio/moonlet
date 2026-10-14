@@ -101,6 +101,7 @@ pub fn parse_search(
                     .as_str()
                     .and_then(crate::time::timestamp_ms)
                     .unwrap_or(0),
+                cycle: None,
                 tracker: TrackerRef {
                     id: i["id"].as_str().unwrap_or_default().into(),
                     state: name.into(),
@@ -261,6 +262,7 @@ mod tests {
                 labels: vec!["backend".into(), "checkout".into()],
                 description: "Orders fail at the payment step.\n\n- Happens on Safari only\n- Started after the 3.2 release".into(),
                 updated_ms: 1_791_969_164_512,
+                cycle: None,
                 tracker: TrackerRef { id: "10002".into(), state: "In Progress".into(), source: "EX".into() },
             }
         );

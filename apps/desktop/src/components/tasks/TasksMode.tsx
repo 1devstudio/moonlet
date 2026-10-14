@@ -8,7 +8,7 @@ import { errorToast, selectSession, shownWorkspace, useStore } from "../../lib/s
 import { type Column, type Task, taskStart } from "../../lib/tasks";
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, moveTask, putOffDrift, recordActivity, refreshTasks, rulesFor, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, moveTask, putOffDrift, recordActivity, refreshTasks, retryTask, rulesFor, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, autoFixes, driftKey, prComments, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { hostsApi } from "../../lib/daemon";
@@ -217,7 +217,7 @@ export function startSession(host: string, workspaceId: string, card: Card, work
   });
 }
 
-function TaskCard({ host, workspaceId, card, selected }: { host: string; workspaceId: string; card: Card; selected: boolean }) {
+function TaskCard({ host, workspaceId, card, selected, source }: { host: string; workspaceId: string; card: Card; selected: boolean; source?: string }) {
   const pick = () => useTasks.setState({ selected: `${card.task.connection} ${card.task.key}` });
   return (
     <article
@@ -230,6 +230,7 @@ function TaskCard({ host, workspaceId, card, selected }: { host: string; workspa
       <div className="flex items-center gap-2 font-mono ui-text-11.5 text-faint">
         {card.task.key}
         <PriorityBars n={card.task.priority} />
+        {source && <span className="truncate font-sans text-faint">{source}</span>}
         {card.task.assignees[0] && (
           <span title={`Assigned to ${card.task.assignees[0]}`} className="ml-auto rounded-full bg-panel-2 px-1.5 font-sans ui-text-10.5 text-muted">
             {initials(card.task.assignees[0])}
@@ -271,6 +272,7 @@ function TaskCard({ host, workspaceId, card, selected }: { host: string; workspa
 }
 
 function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: string; card: Card }) {
+  const failure = useTasks((t) => t.failures[`${card.task.connection} ${card.task.key}`]);
   return (
     <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
@@ -295,6 +297,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
           <dt className="text-faint">Priority</dt>
           <dd className="flex items-center gap-2 text-muted">
             <PriorityBars n={card.task.priority} /> {PRIORITY[card.task.priority] ?? "No priority"}
+            {card.task.cycle !== undefined && <span className="text-faint">· Cycle {card.task.cycle}</span>}
           </dd>
           {card.task.labels.length > 0 && (
             <>
@@ -304,6 +307,14 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
           )}
         </dl>
         {card.task.description && <p className="selectable mt-3 line-clamp-4 whitespace-pre-wrap ui-text-12.5 text-muted">{card.task.description}</p>}
+        {failure && (
+          <div role="alert" className="mt-3 flex items-start gap-2 rounded-md border border-error/30 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">
+            <span className="min-w-0 flex-1">{failure}</span>
+            <Button size="sm" variant="ghost" onClick={() => void retryTask(card.task)}>
+              Retry
+            </Button>
+          </div>
+        )}
         {card.drift && (
           <div className="mt-3 rounded-md border border-accent/30 bg-accent/[0.06] px-3 py-2 ui-text-12.5 text-accent">
             {card.drift.text}
@@ -439,7 +450,7 @@ export function TasksMode() {
                 </div>
                 <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                   {shown[col.id].map((c) => (
-                    <TaskCard key={c.task.key} host={ws.host} workspaceId={ws.id} card={c} selected={c === detail} />
+                    <TaskCard key={c.task.key} host={ws.host} workspaceId={ws.id} card={c} selected={c === detail} source={data.sources.length > 1 ? sourceLabel(c.task) : undefined} />
                   ))}
                 </div>
               </section>
@@ -657,4 +668,9 @@ function Activity({ task }: { task: Task }) {
       </ol>
     </section>
   );
+}
+
+/** Where a task comes from, on its card when a workspace has several sources: the repository or the team, project or list. */
+function sourceLabel(task: Task): string {
+  return task.github ? task.github.repo.split("/")[1] : (task.tracker?.source ?? "");
 }
