@@ -19,7 +19,7 @@ function actions(host: string) {
   return {
     answer: (r: AgentRow, decision: "allow" | "always" | "deny") => r.ask && void call(r.chat, M.chatPermission, { ask: r.ask.id, decision }),
     stop: (r: AgentRow) => void call(r.chat, M.chatStopAgent, { agent: r.agent.id }),
-    retry: (r: AgentRow) => void call(r.chat, M.chatSend, { text: retryMessage(r.agent), images: [] }),
+    retry: (r: AgentRow) => void call(r.chat, M.chatSend, { text: retryMessage([r.agent]), images: [] }),
   };
 }
 
@@ -62,7 +62,8 @@ export function AgentsPanel({ host, cwd, rows, now }: { host: string; cwd: strin
           </div>
           {r.line && (
             <div className="mt-1 flex items-center gap-2 pl-[23px]">
-              <span className={cx("min-w-0 flex-1 truncate ui-text-12.5", LINE[r.line.tone])}>{r.line.text}</span>
+              {/* An ask wraps in full: the user approves what they read. */}
+              <span className={cx("min-w-0 flex-1 ui-text-12.5", r.state === "needs" ? "selectable whitespace-pre-wrap break-all" : "truncate", LINE[r.line.tone])}>{r.line.text}</span>
               {r.state === "failed" && (
                 <button
                   className="shrink-0 ui-text-12.5 text-accent hover:text-accent-2"

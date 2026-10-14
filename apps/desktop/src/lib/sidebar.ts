@@ -2,6 +2,7 @@
 // (X5, X32). Pure, so it is unit-tested.
 
 import type { AgentState, Project, Section, Session, Workspace } from "./protocol";
+import { agentCount } from "./subagents";
 
 export interface Group {
   key: string;
@@ -83,6 +84,25 @@ export function compact(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
   return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`;
+}
+
+/** The chip at the end of a session row, most urgent first; running
+ *  subagents (X42) come after needs input. */
+export function sessionBadge(o: {
+  creating: boolean;
+  state: AgentState | null;
+  merged: boolean;
+  git?: { additions: number; deletions: number };
+  agents: number;
+}): { text: string; tone: "muted" | "blocked" | "agents" | "merged" | "diff" } | null {
+  if (o.creating) return { text: "creating", tone: "muted" };
+  if (o.state === "blocked") return { text: "needs input", tone: "blocked" };
+  if (o.agents) return { text: agentCount(o.agents), tone: "agents" };
+  if (o.merged) return { text: "merged", tone: "merged" };
+  if (o.git && (o.git.additions || o.git.deletions)) {
+    return { text: `+${compact(o.git.additions)}${o.git.deletions ? ` -${compact(o.git.deletions)}` : ""}`, tone: "diff" };
+  }
+  return null;
 }
 
 /**

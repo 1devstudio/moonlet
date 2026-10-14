@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, compact, holdsProject, hostSections, projectRemoval, workspaceSections } from "./sidebar";
+import { arrange, compact, holdsProject, hostSections, projectRemoval, sessionBadge, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
@@ -112,5 +112,29 @@ describe("hostSections", () => {
 
   it("names the workspace too when there are several", () => {
     expect(hostSections([w("p", "Personal", ["a"]), w("c", "Acme", ["c"])], all).map((x) => x.label)).toEqual(["Personal › 1devstudio", "Acme › AI Operations"]);
+  });
+});
+
+describe("sessionBadge", () => {
+  const git = { additions: 212, deletions: 30 };
+  const base = { creating: false, state: "working" as const, merged: false, git, agents: 0 };
+
+  it("shows the diff of a session at rest", () => {
+    expect(sessionBadge(base)).toEqual({ text: "+212 -30", tone: "diff" });
+  });
+
+  it("shows running subagents (X42) over the diff and a merged PR", () => {
+    expect(sessionBadge({ ...base, agents: 5, merged: true })).toEqual({ text: "5 agents", tone: "agents" });
+    expect(sessionBadge({ ...base, agents: 1 })).toEqual({ text: "1 agent", tone: "agents" });
+  });
+
+  it("lets needs input and creating win over agents", () => {
+    expect(sessionBadge({ ...base, agents: 5, state: "blocked" })).toEqual({ text: "needs input", tone: "blocked" });
+    expect(sessionBadge({ ...base, agents: 5, creating: true })).toEqual({ text: "creating", tone: "muted" });
+  });
+
+  it("shows merged, and nothing without changes", () => {
+    expect(sessionBadge({ ...base, merged: true })).toEqual({ text: "merged", tone: "merged" });
+    expect(sessionBadge({ ...base, git: { additions: 0, deletions: 0 } })).toBeNull();
   });
 });

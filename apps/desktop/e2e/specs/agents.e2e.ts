@@ -44,6 +44,8 @@ done
 const tab = (label: string) => `//button[@role="tab"][normalize-space()="${label}"]`;
 /** A row of the Agents tab, by the agent's description. */
 const row = (name: string) => `//div[@role="button"][@data-agent=${JSON.stringify(name)}]`;
+const strip = '//div[@aria-label="Agents"]';
+const chip = (t: string) => `${sel.sessionRow(SESSION)}//span[normalize-space()=${JSON.stringify(t)}]`;
 const text = (t: string) => `//*[normalize-space()=${JSON.stringify(t)}]`;
 
 /** Tabs and rows react to a JS click; the embedded driver's click is not always delivered. */
@@ -71,6 +73,18 @@ describe("agents tab", () => {
       document.head.append(style);
     });
     await $(sel.sessionRow(SESSION)).click();
+    // The repo's setup script opens first; the conversation is the next tab,
+    // which switches on mousedown. Retry until the strip shows.
+    await browser.waitUntil(
+      async () => {
+        await browser.execute(() => {
+          const tab = document.evaluate('//span[normalize-space()="claude"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+          tab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        });
+        return $(strip).isDisplayed();
+      },
+      { timeout: 30_000, timeoutMsg: "the agents strip never showed" },
+    );
   });
 
   after(() => {
@@ -92,6 +106,9 @@ describe("agents tab", () => {
     await expect($(row("Write hello file") + text("Wants to edit /repo/hello.txt"))).toBeExisting();
     await expect($(row("List files") + text("Finding *"))).toBeExisting();
     await expect($('//span[starts-with(normalize-space(), "2 agents ·")]')).toBeDisplayed();
+    await expect($(`${strip}//span[normalize-space()="2 agents"]`)).toBeDisplayed();
+    await expect($(`${strip}//span[normalize-space()="· 1 needs you"]`)).toBeDisplayed();
+    await expect($(chip("needs input"))).toBeDisplayed();
   });
 
   it("shows the asking agent's model, tokens, edits and permission card in its detail", async () => {
@@ -112,6 +129,8 @@ describe("agents tab", () => {
       timeoutMsg: "the row kept its Allow button",
     });
     await expect($(`${tab("Agents")}//span[@aria-label="agent waiting"]`)).not.toBeExisting();
+    // One agent still runs: the session row says so (X42).
+    await expect($(chip("1 agent"))).toBeDisplayed();
   });
 
   it("opens an agent's detail with its brief and tool calls, and stops it", async () => {
@@ -123,5 +142,8 @@ describe("agents tab", () => {
     await expect($('//*[@id="right-tabpanel"]//span[normalize-space()="stopped"]')).toBeDisplayed();
     await jsClick('//*[@id="right-tabpanel"]//button[normalize-space()="Agents"]');
     await expect($(row("List files") + text("Stopped"))).toBeExisting();
+    // One was stopped, so they did not all finish.
+    await expect($(`${strip}//span[contains(normalize-space(), "2 agents · 1 done · 1 stopped")]`)).toBeDisplayed();
+    await expect($(chip("1 agent"))).not.toBeExisting();
   });
 });
