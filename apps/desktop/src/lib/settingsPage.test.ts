@@ -1,44 +1,64 @@
 import { describe, expect, it } from "vitest";
-import { appUpdateLine, claudeUpdateLine, daemonLine, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { appUpdateLine, claudeUpdateLine, daemonLine, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
+  const app = (page: string, label: string, extra = {}) => ({ key: page, route: { page }, label, ...extra });
+  const none = { remoteHosts: 0, phones: 0, profilesNeedSignIn: false, workspaces: [], projects: [] };
+
   it("lists the app, Claude Code and machine pages with their counts", () => {
-    expect(settingsNav({ remoteHosts: 2, phones: 1, profilesNeedSignIn: true })).toEqual([
+    expect(settingsNav({ ...none, remoteHosts: 2, phones: 1, profilesNeedSignIn: true })).toEqual([
       {
         title: "App",
-        entries: [
-          { page: "general", label: "General" },
-          { page: "appearance", label: "Appearance" },
-          { page: "terminal", label: "Terminal" },
-          { page: "agents", label: "Agents" },
-          { page: "notifications", label: "Notifications" },
-        ],
+        entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications")],
       },
-      {
-        title: "Claude Code",
-        entries: [
-          { page: "profiles", label: "Profiles", dot: "a profile is not signed in" },
-          { page: "hooks", label: "Hooks" },
-        ],
-      },
-      {
-        title: "Machines",
-        entries: [
-          { page: "hosts", label: "Hosts", count: 2 },
-          { page: "phones", label: "Phones", count: 1 },
-        ],
-      },
+      { title: "Claude Code", entries: [app("profiles", "Profiles", { dot: "a profile is not signed in" }), app("hooks", "Hooks")] },
+      { title: "Machines", entries: [app("hosts", "Hosts", { count: 2 }), app("phones", "Phones", { count: 1 })] },
     ]);
   });
 
   it("shows no count of zero and no dot when every profile in use is signed in", () => {
-    const [, claude, machines] = settingsNav({ remoteHosts: 0, phones: 0, profilesNeedSignIn: false });
-    expect(claude.entries[0]).toEqual({ page: "profiles", label: "Profiles" });
-    expect(machines.entries).toEqual([
-      { page: "hosts", label: "Hosts" },
-      { page: "phones", label: "Phones" },
+    const [, claude, machines] = settingsNav(none);
+    expect(claude.entries[0]).toEqual(app("profiles", "Profiles"));
+    expect(machines.entries).toEqual([app("hosts", "Hosts"), app("phones", "Phones")]);
+  });
+
+  it("lists every workspace and project, naming the host of remote ones", () => {
+    const groups = settingsNav({
+      ...none,
+      workspaces: [
+        { host: "local", id: "personal", name: "Personal", color: "clay", remote: null },
+        { host: "devbox", id: "acme", name: "Acme", color: "blue", remote: "devbox" },
+      ],
+      projects: [
+        { host: "local", id: "p1", name: "storefront", remote: null },
+        { host: "devbox", id: "p2", name: "payments-api", remote: "devbox" },
+      ],
+    });
+    expect(groups.slice(3)).toEqual([
+      {
+        title: "Workspaces",
+        entries: [
+          { key: "ws:local:personal", route: { page: "workspace", host: "local", id: "personal" }, label: "Personal", mark: "clay" },
+          { key: "ws:devbox:acme", route: { page: "workspace", host: "devbox", id: "acme" }, label: "Acme", mark: "blue", host: "devbox" },
+        ],
+      },
+      {
+        title: "Projects",
+        entries: [
+          { key: "project:local:p1", route: { page: "project", host: "local", id: "p1" }, label: "storefront" },
+          { key: "project:devbox:p2", route: { page: "project", host: "devbox", id: "p2" }, label: "payments-api", host: "devbox" },
+        ],
+      },
     ]);
+  });
+});
+
+describe("the nav entry a page belongs to (X43)", () => {
+  it("is the entry with the route's key, whatever the focus", () => {
+    expect(routeKey({ page: "hooks" })).toBe("hooks");
+    expect(routeKey({ page: "workspace", host: "devbox", id: "acme" })).toBe("ws:devbox:acme");
+    expect(routeKey({ page: "project", host: "local", id: "p1", focus: "run" })).toBe("project:local:p1");
   });
 });
 
@@ -189,6 +209,11 @@ describe("the settings header's breadcrumb (X43)", () => {
     expect(settingsCrumbs({ page: "profiles" })).toEqual(["Settings", "Claude Code", "Profiles"]);
     expect(settingsCrumbs({ page: "hooks" })).toEqual(["Settings", "Claude Code", "Hooks"]);
     expect(settingsCrumbs({ page: "phones" })).toEqual(["Settings", "Machines", "Phones"]);
+  });
+
+  it("names the workspace or project of its page", () => {
+    expect(settingsCrumbs({ page: "workspace", host: "local", id: "acme" }, "Acme")).toEqual(["Settings", "Workspaces", "Acme"]);
+    expect(settingsCrumbs({ page: "project", host: "local", id: "p1" }, "storefront")).toEqual(["Settings", "Projects", "storefront"]);
   });
 });
 

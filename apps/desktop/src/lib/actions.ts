@@ -12,6 +12,7 @@ import { agentReadiness, isStructured, tabAgent } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 import { archivePrompt, askConfirm } from "./confirm";
+import { goSettings } from "./settingsNavigation";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -251,7 +252,7 @@ export async function setClassic(host: string, id: number, classic: boolean) {
 export function openProjectSettings(target?: { host: string; project: string }, focus?: "run") {
   const c = current();
   const t = target ?? (c && { host: c.host, project: c.ws.project_id });
-  if (t) useStore.setState({ dialog: { kind: "project-settings", ...t, focus } });
+  if (t) void goSettings(focus ? { page: "project", host: t.host, id: t.project, focus } : { page: "project", host: t.host, id: t.project });
 }
 
 export async function runScript(script: "run" | "setup") {
