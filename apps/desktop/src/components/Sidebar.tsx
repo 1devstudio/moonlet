@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, ArrowDown, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrange, compact, hostSections, lastActive, projectRemoval, type Group } from "../lib/sidebar";
+import { arrange, hostSections, lastActive, projectRemoval, sessionBadge, type Group } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -267,6 +267,8 @@ interface RowMenuState {
   projectId?: string;
 }
 
+const BADGE_TONE = { muted: "text-muted", blocked: "text-blocked", agents: "text-faint", merged: "text-merged", diff: "text-muted" };
+
 function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e: React.MouseEvent) => void }) {
   const selected = useStore((st) => !st.showHistory && st.selected?.host === host && st.selected.session === s.id);
   const state = useStore((st) => sessionState(st, host, s.id));
@@ -276,6 +278,9 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   const creating = useStore((st) => sessionTerminals(st, host, s.id).some((x) => x.kind === "setup" && !x.exit));
   const archiving = useStore((st) => st.archiving[sesKey(host, s.id)]);
   const from = useStore((st) => spawnedFrom(s, st.sessions[host] ?? []));
+  // Running subagents of the session's chats (X42).
+  const agents = useStore((st) => sessionTerminals(st, host, s.id).reduce((n, x) => n + (x.subagents ?? 0), 0));
+  const badge = sessionBadge({ creating, state, merged: pr?.state === "merged", git, agents });
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
   if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
@@ -311,19 +316,7 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
       ) : (
         <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
       )}
-      {!renaming &&
-        (creating ? (
-          <span className="shrink-0 font-mono ui-text-12 text-muted">creating</span>
-        ) : state === "blocked" ? (
-          <span className="shrink-0 font-mono ui-text-12 text-blocked">needs input</span>
-        ) : pr?.state === "merged" ? (
-          <span className="shrink-0 font-mono ui-text-12 text-merged">merged</span>
-        ) : git && (git.additions || git.deletions) ? (
-          <span className="shrink-0 font-mono ui-text-12 tabular-nums text-muted">
-            +{compact(git.additions)}
-            {git.deletions ? ` -${compact(git.deletions)}` : ""}
-          </span>
-        ) : null)}
+      {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-12 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
     </div>
   );
 }

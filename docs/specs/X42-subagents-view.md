@@ -44,13 +44,14 @@ Agents tab (PR 2):
 - [x] Each row shows the status dot, the description and the elapsed time (`m:ss`). Its second line depends on the state: the current activity while running; "Wants to run …" with Allow and Deny when it needs the user; the error in red with Retry when it failed; "Stopped" when stopped; nothing when done. (`agentRows`, `agents.e2e.ts`)
 - [x] The header reads "N agents · m:ss · 57k tokens", and **Stop all** stops every agent that runs or waits for the user. (`agentsHeader`, `stoppable`)
 - [x] The detail shows the agent's state, model, elapsed time and tokens; its brief, collapsed to one line; its tool calls with `+a −r` for edits; the pending ask as a full permission card; its report once done, or its error with Retry once failed; and **Stop** while it runs. (`agents.e2e.ts`)
-- [x] Retry sends the chat the message `Run the "<description>" agent again.` (`retryMessage`)
+- [x] Retry sends the chat the message `Run the "<description>" agent again.`; for several failed agents, `Run these agents again: "<a>", "<b>".` (`retryMessage`)
+- [x] An ask's row shows a command in full, wrapped, since Allow sits next to it. (`askLine`)
 
 Strip and sidebar (PR 3):
 
-- [ ] The strip shows the agents launched since the user's last message. It is hidden when there are none, and after × until a new agent starts. (`stripView`)
-- [ ] The strip text for each state (working, one needs you, all finished, one failed) is as listed under UI. (`stripView`)
-- [ ] The session row shows "N agents" while N of its chats' subagents run; "needs input" still wins. (`sessionBadge`)
+- [x] The strip shows the agents launched since the user's last message. It is hidden when there are none, and after × until a new agent starts. (`stripView`)
+- [x] The strip text for each state (working, one needs you, all finished, one failed) is as listed under UI. (`stripView`)
+- [x] The session row shows "N agents" while N of its chats' subagents run; "needs input" still wins. (`sessionBadge`)
 
 Conversation cards (PR 4):
 
