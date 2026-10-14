@@ -105,19 +105,45 @@ export function retryMessage(agents: Subagent[]): string {
   return names.length === 1 ? `Run the ${names[0]} agent again.` : `Run these agents again: ${names.join(", ")}.`;
 }
 
+/** When an agent ended, or would have by Claude's duration. */
+const endedAt = (a: Subagent) => a.ended_at ?? a.started_at + (a.duration_ms ?? 0);
+
+/** How long a finished agent's dot pops, its done count shows green, and
+ *  its dot stays before it hides, from when it ended (ms). */
+const STRIP_POP = 280;
+const STRIP_FLASH = 900;
+const STRIP_HIDE = 1200;
+/** How long "All N done" holds after the last agent ended before the strip folds (ms). */
+const STRIP_HOLD = 1600;
+
+/** One agent's dot in the strip: `pop` just after it finished, `gone` once hidden. */
+export interface StripDot {
+  key: string;
+  state: AgentRowState;
+  phase: "pop" | "on" | "gone";
+}
+
 /** The strip above the chat input (X42). */
 export interface StripView {
-  /** One per agent: done first, then running, needing the user, failed and stopped. */
-  dots: AgentRowState[];
-  /** "5 agents", or "5 agents finished". */
+  /** One per agent, in launch order. */
+  dots: StripDot[];
+  /** "5 agents", or "All 5 done". */
   title: string;
-  /** "2 running · 2 done", or the diff once finished. */
-  detail: string;
+  /** "2 running", "2 done", "1 stopped": the counts after the title. */
+  counts: { state: "running" | "done" | "stopped"; text: string }[];
+  /** An agent finished just now: the done count shows green. */
+  flash: boolean;
+  /** Every agent is done: the title gets a check. */
+  finished: boolean;
+  /** Finished a while ago: the strip folds away. */
+  collapsed: boolean;
   alert: { tone: "blocked" | "error"; text: string } | null;
   clock: string;
-  /** Review changes once all finished; Retry once one failed and none runs. */
+  /** Review changes once all ended, some stopped; Retry once one failed and none runs. */
   button: "review" | "retry" | null;
   dismissible: boolean;
+  /** When the view next changes with no new data, or null. */
+  wake: number | null;
 }
 
 /** The agents launched since the user's last message. */
@@ -125,8 +151,6 @@ export function batchOf(st: ChatState): Subagent[] {
   const since = st.items.reduce((t, i) => (i.kind === "user" ? Math.max(t, i.ts) : t), 0);
   return (st.subagents ?? []).filter((a) => a.started_at >= since);
 }
-
-const DOTS: AgentRowState[] = ["done", "running", "needs", "failed", "stopped"];
 
 /** The agents launched since the user's last message, unless × hid them
  *  (`dismissedAt`, the latest start then); `null` hides the strip. */
@@ -138,19 +162,28 @@ export function stripView(st: ChatState, now: number, dismissedAt: number): Stri
   const ended = !rows.some((r) => isActive(r.state)) && !n("failed");
   // Finished means every agent did its work; stopped ones did not.
   const finished = ended && !n("stopped");
-  const counts = (["running", "done", "stopped"] as const)
-    .filter((state) => n(state))
-    .map((state) => `${n(state)} ${state}`)
-    .join(" · ");
+  const counts = (["running", "done", "stopped"] as const).filter((state) => n(state)).map((state) => ({ state, text: `${n(state)} ${state}` }));
+  const ends = batch.filter((a) => a.status === "done").map(endedAt);
+  const last = finished ? Math.max(...ends) : NaN;
+  const wake = Math.min(...[...ends.flatMap((t) => [t + STRIP_POP, t + STRIP_FLASH, t + STRIP_HIDE]), last + STRIP_HOLD].filter((t) => t > now));
   const alert = n("needs") ? { tone: "blocked" as const, text: `${n("needs")} needs you` } : n("failed") ? { tone: "error" as const, text: `${n("failed")} failed` } : null;
   return {
-    dots: rows.map((r) => r.state).sort((x, y) => DOTS.indexOf(x) - DOTS.indexOf(y)),
-    title: `${agentCount(batch.length)}${finished ? " finished" : ""}`,
-    detail: finished ? diffLine(batchDiff(batch)) : counts,
+    dots: batch.map((a) => {
+      const state = rows.find((r) => r.agent === a)!.state;
+      // An end a little ahead of this clock (the daemon's) still pops.
+      const t = now - endedAt(a);
+      return { key: a.id, state, phase: state !== "done" ? "on" : t >= STRIP_HIDE ? "gone" : t < STRIP_POP ? "pop" : "on" };
+    }),
+    title: !finished ? agentCount(batch.length) : batch.length === 1 ? "1 agent done" : `All ${batch.length} done`,
+    counts: finished ? [] : counts,
+    flash: ends.some((t) => now < t + STRIP_FLASH),
+    finished,
+    collapsed: now >= last + STRIP_HOLD,
     alert,
     clock: spanClock(batch, now),
-    button: ended ? "review" : !rows.some((r) => isActive(r.state)) && n("failed") ? "retry" : null,
-    dismissible: ended,
+    button: ended && !finished ? "review" : !rows.some((r) => isActive(r.state)) && n("failed") ? "retry" : null,
+    dismissible: ended && !finished,
+    wake: Number.isFinite(wake) ? wake : null,
   };
 }
 
@@ -213,9 +246,6 @@ export function askerName(ask: PermissionAsk, subagents: Subagent[]): string | n
 }
 
 export type AgentNote = { kind: "finished"; agent: Subagent } | { kind: "all"; title: string; clock: string; diff: string };
-
-/** When an agent ended, or would have by Claude's duration. */
-const endedAt = (a: Subagent) => a.ended_at ?? a.started_at + (a.duration_ms ?? 0);
 
 /** Notes in the conversation (X42): each agent that finished or failed,
  *  after the last message that shows from before it ended, and each batch

@@ -66,10 +66,10 @@ describe("agents tab", () => {
     chmodSync(FAKE, 0o755);
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     sessionId = rpc<{ id: string }>(w, "session.create", { project_id: project.id, name: SESSION, agent: "claude", prompt: "Split the work across two agents" }).id;
-    // A window in the background never runs the permission card's entry animation.
+    // A window in the background never runs the permission card's or the strip's entry animations.
     await browser.execute(() => {
       const style = document.createElement("style");
-      style.textContent = ".moonlet-card-in { animation: none !important; }";
+      style.textContent = ".moonlet-card-in, .agents-fade-in { animation: none !important; }";
       document.head.append(style);
     });
     await $(sel.sessionRow(SESSION)).click();
