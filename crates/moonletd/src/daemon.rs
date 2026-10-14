@@ -561,6 +561,7 @@ impl Daemon {
                     .map_err(internal)?;
                 ok(names)
             }
+            m::GH_WHOAMI => ok(git::gh_whoami().await.map_err(internal)?),
             m::GH_TASK_UPDATE => {
                 let r: m::GhTaskUpdate = params(p)?;
                 git::gh_task_update(&path(&r.path), r.number, r.assign_me, r.close).await.map_err(internal)?;

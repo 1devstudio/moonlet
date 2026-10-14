@@ -9,7 +9,7 @@ import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
 
 /** The app-wide pages, in nav order. */
-export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
+export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
 
 export type SettingsRoute = { page: AppPage } | { page: "workspace"; host: string; id: string } | { page: "project"; host: string; id: string; focus?: "run" };
 
@@ -57,7 +57,7 @@ export function settingsNav(input: NavInput): NavGroup[] {
   const groups: NavGroup[] = [
     {
       title: "App",
-      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications"), app("shortcuts", "Keyboard shortcuts")],
+      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications"), app("trackers", "Task trackers"), app("shortcuts", "Keyboard shortcuts")],
     },
     {
       title: "Claude Code",
