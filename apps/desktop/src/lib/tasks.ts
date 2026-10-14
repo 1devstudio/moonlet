@@ -23,6 +23,8 @@ export interface Task {
   updatedMs: number;
   /** GitHub issues: what links a branch or PR to it. */
   github?: { repo: string; number: number; closingPrs: number[] };
+  /** Linear, Jira and ClickUp issues: their id, state name and team/project/list in the tracker. */
+  tracker?: { id: string; state: string; source: string };
 }
 
 /** A GitHub issue from `gh.tasks` as a task. */
@@ -136,8 +138,12 @@ export interface TaskStart {
   maxLen?: number;
 }
 
-/** The composer's preset for starting a session from `task`; `repos` are the projects' `owner/repo` by id. */
-export function taskStart(task: Task, repos: Record<string, string | null>): TaskStart {
+/**
+ * The composer's preset for starting a session from `task`. `repos` are the
+ * projects' `owner/repo` by id; `sourceProjects` the project a tracker source's
+ * sessions start in, by `connection source`.
+ */
+export function taskStart(task: Task, repos: Record<string, string | null>, sourceProjects: Record<string, string> = {}): TaskStart {
   const description = task.description.trim();
   const repo = task.github?.repo.toLowerCase();
   return {
@@ -147,7 +153,7 @@ export function taskStart(task: Task, repos: Record<string, string | null>): Tas
     title: task.title,
     number: task.github?.number,
     firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
-    project: (repo && Object.keys(repos).find((id) => repos[id]?.toLowerCase() === repo)) || null,
+    project: (repo && Object.keys(repos).find((id) => repos[id]?.toLowerCase() === repo)) || (task.tracker && sourceProjects[`${task.connection} ${task.tracker.source}`]) || null,
     ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
   };
 }

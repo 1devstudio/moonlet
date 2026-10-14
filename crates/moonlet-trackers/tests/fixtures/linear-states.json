@@ -1,0 +1,15 @@
+{
+  "data": {
+    "workflowStates": {
+      "nodes": [
+        { "id": "a1000000-0000-4000-8000-000000000000", "name": "Backlog", "type": "backlog", "position": 0 },
+        { "id": "a1000000-0000-4000-8000-000000000001", "name": "Todo", "type": "unstarted", "position": 1 },
+        { "id": "a1000000-0000-4000-8000-000000000002", "name": "In Progress", "type": "started", "position": 2 },
+        { "id": "a1000000-0000-4000-8000-000000000004", "name": "In Review", "type": "started", "position": 3 },
+        { "id": "a1000000-0000-4000-8000-000000000003", "name": "Done", "type": "completed", "position": 4 },
+        { "id": "a1000000-0000-4000-8000-000000000005", "name": "Canceled", "type": "canceled", "position": 5 },
+        { "id": "a1000000-0000-4000-8000-000000000006", "name": "Duplicate", "type": "canceled", "position": 6 }
+      ]
+    }
+  }
+}

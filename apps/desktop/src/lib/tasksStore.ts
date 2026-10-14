@@ -10,6 +10,7 @@ import { askConfirm } from "./confirm";
 import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { githubRepo, type Task, taskFromGh } from "./tasks";
+import { workspaceConnections } from "./trackerSources";
 import { type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
@@ -24,6 +25,8 @@ export interface TasksData {
   sources: string[];
   /** Each project's GitHub `owner/repo`, by project id. */
   repos: Record<string, string | null>;
+  /** The project a tracker source's sessions start in, by `connection source`. */
+  sourceProjects?: Record<string, string>;
   /** The last good sync; null before the first. */
   syncedAt: number | null;
   /** Why the last sync failed; the last good list stays. */
@@ -44,15 +47,56 @@ interface TasksState {
   layout: "board" | "list";
   /** List rows open, by `connection key`. */
   expanded: Record<string, boolean>;
+  /** Connections whose token stopped working, with what to do (X44). */
+  attention: Record<string, string>;
+}
+
+/** One tracker's branch names and rules. */
+export interface TrackerSettings {
+  branch_template: string;
+  max_length: number;
+  rules: Rules;
+}
+
+/** A team, project or list shown in a workspace (X44 Sources). */
+export interface Source {
+  key: string;
+  name: string;
+  /** The project its sessions start in. */
+  project: string;
+  /** `host/workspaceId`. */
+  workspace: string;
+}
+
+/** A signed-in Linear, Jira or ClickUp account (its token is in the Keychain). */
+export interface Connection {
+  id: string;
+  kind: "linear" | "jira" | "clickup";
+  site: string;
+  account: string;
+  auth: string;
+  sources: Source[];
 }
 
 /** `~/.moonlet/trackers.toml` as `moonlet-trackers` reads it (X44). */
 export interface TrackersConfig {
   sync: { interval: number; notify: boolean };
-  github: { branch_template: string; max_length: number; rules: Rules };
+  github: TrackerSettings;
+  linear?: TrackerSettings;
+  jira?: TrackerSettings;
+  clickup?: TrackerSettings;
+  connections?: Connection[];
 }
 
-export const DEFAULT_CONFIG: TrackersConfig = { sync: { interval: 60, notify: true }, github: { branch_template: "", max_length: 48, rules: DEFAULT_RULES } };
+const DEFAULT_TRACKER: TrackerSettings = { branch_template: "", max_length: 48, rules: DEFAULT_RULES };
+
+export const DEFAULT_CONFIG: TrackersConfig = { sync: { interval: 60, notify: true }, github: DEFAULT_TRACKER };
+
+/** A tracker's branch names and rules (GitHub's, or a connection's tracker). */
+export function trackerSettings(config: TrackersConfig, connection: string): TrackerSettings {
+  const kind = connection.split(":")[0] as "github" | "linear" | "jira" | "clickup";
+  return config[kind] ?? DEFAULT_TRACKER;
+}
 
 export const useTasks = create<TasksState>(() => ({
   data: {},
@@ -62,6 +106,7 @@ export const useTasks = create<TasksState>(() => ({
   config: null,
   layout: storedLayout(),
   expanded: {},
+  attention: {},
 }));
 
 function storedLayout(): "board" | "list" {
@@ -162,16 +207,34 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
       return { id: p.id, repo, issues, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo, project: p.id })) };
     }),
   );
+  // Linear, Jira and ClickUp sources of this workspace (X44).
+  const conns = workspaceConnections(trackersConfig(useTasks.getState()).connections, key);
+  const fromTrackers = await Promise.all(
+    conns.map(async (c) => {
+      try {
+        const list = await hostsApi.trackerTasks(c.id, true);
+        useTasks.setState((t) => (t.attention[c.id] ? { attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== c.id)) } : {}));
+        return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
+      } catch (e) {
+        const err = e as { auth?: boolean; message?: string };
+        error = err.message ?? message(e);
+        if (err.auth) useTasks.setState((t) => ({ attention: { ...t.attention, [c.id]: error ?? "" } }));
+        return [];
+      }
+    }),
+  );
   if (!isLatest()) return;
-  const sources = [...new Set(per.flatMap((x) => (x.repo ? [x.repo] : [])))];
+  const sources = [...new Set(per.flatMap((x) => (x.repo ? [x.repo] : []))), ...conns.map((c) => c.id)];
   const repos = Object.fromEntries(per.map((x) => [x.id, x.repo]));
+  const sourceProjects = Object.fromEntries(conns.flatMap((c) => Object.entries(c.projects).map(([k, p]) => [`${c.id} ${k}`, p])));
   const tasks = new Map<string, Task>();
-  for (const x of per) for (const gh of x.issues) tasks.set(`${gh.repo}#${gh.number}`, taskFromGh(gh, GITHUB));
+  for (const x of per) for (const gh of x.issues) tasks.set(`${GITHUB} ${gh.repo}#${gh.number}`, taskFromGh(gh, GITHUB));
+  for (const t of fromTrackers.flat()) tasks.set(`${t.connection} ${t.key}`, t);
   const prev = useTasks.getState().data[key];
   const next: TasksData =
     error && prev
-      ? { ...prev, sources, repos, error }
-      : { tasks: [...tasks.values()], worktrees: per.flatMap((x) => x.worktrees), sources, repos, syncedAt: error ? null : now, error };
+      ? { ...prev, sources, repos, sourceProjects, error }
+      : { tasks: [...tasks.values()], worktrees: per.flatMap((x) => x.worktrees), sources, repos, sourceProjects, syncedAt: error ? null : now, error };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next } }));
   if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev?.tasks ?? null, next);
 }
@@ -188,7 +251,7 @@ function notifyOutsideMoves(host: string, workspaceId: string, before: Task[] | 
 }
 
 /** What the board needs of a workspace's sessions (X45). */
-export function boardInput(s: StoreState, host: string, workspaceId: string, data: TasksData, rules: Rules = DEFAULT_RULES): BoardInput {
+export function boardInput(s: StoreState, host: string, workspaceId: string, data: TasksData, config: TrackersConfig = DEFAULT_CONFIG): BoardInput {
   const sessions: BoardSession[] = (s.sessions[host] ?? [])
     .filter((x) => x.workspace_id === workspaceId)
     .map((x) => ({
@@ -205,7 +268,7 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       subagents: sessionTerminals(s, host, x.id).reduce((n, t) => n + (t.subagents ?? 0), 0),
       originRepo: data.repos[x.project_id] ?? null,
     }));
-  return { tasks: data.tasks, sessions, worktrees: data.worktrees, sessionStartRule: rules.session_starts };
+  return { tasks: data.tasks, sessions, worktrees: data.worktrees, sessionStartRule: (t) => trackerSettings(config, t.connection).rules.session_starts };
 }
 
 /** The project path of a workspace project in GitHub repository `repo`. */

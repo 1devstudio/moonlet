@@ -10,6 +10,12 @@ vi.mock("./daemon", () => ({
     return answer ? Promise.resolve().then(() => answer(params)) : Promise.reject(new Error(`no ${method}`));
   }),
   sendInput: vi.fn(),
+  hostsApi: {
+    trackerTasks: (id: string) => {
+      const answer = answers[`tracker_tasks ${id}`];
+      return answer ? Promise.resolve().then(() => answer({})) : Promise.reject(new Error(`no tracker_tasks ${id}`));
+    },
+  },
 }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
 const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
@@ -147,5 +153,53 @@ describe("a linked task changed outside moonlet (X44 Sync)", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(shown).toHaveLength(1);
     useTasks.setState({ config: null });
+  });
+});
+
+describe("tasks from Linear, Jira and ClickUp (X44)", () => {
+  const linearTask = (key: string, source: string) => ({
+    connection: "linear:acme",
+    key,
+    title: key,
+    url: "",
+    column: "todo",
+    priority: 0,
+    assignees: [],
+    labels: [],
+    description: "",
+    updatedMs: 0,
+    tracker: { id: key, state: "Todo", source },
+  });
+  const config = (sources: { key: string; workspace: string; project: string }[]) => ({
+    ...DEFAULT_CONFIG,
+    connections: [{ id: "linear:acme", kind: "linear" as const, site: "acme", account: "Sam", auth: "api_key", sources: sources.map((x) => ({ ...x, name: x.key })) }],
+  });
+
+  it("adds the tasks of the workspace's sources, and where their sessions start", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [linearTask("MOON-1", "MOON"), linearTask("DES-2", "DES")];
+    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal", project: "web" }, { key: "DES", workspace: "local/acme", project: "" }]) });
+    await refreshTasks("local", "personal", 1_000);
+    const d = useTasks.getState().data["local/personal"];
+    expect(d.tasks.map((t) => t.key)).toEqual(["MOON-1"]);
+    expect(d.sources).toEqual(["linear:acme"]);
+    expect(d.sourceProjects).toEqual({ "linear:acme MOON": "web" });
+    useTasks.setState({ config: null });
+  });
+
+  it("marks a connection whose token stopped working, keeping the last list", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [linearTask("MOON-1", "MOON")];
+    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal", project: "" }]), attention: {} });
+    await refreshTasks("local", "personal", 1_000);
+    answers["tracker_tasks linear:acme"] = () => {
+      throw { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here." };
+    };
+    await refreshTasks("local", "personal", 2_000);
+    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key)).toEqual(["MOON-1"]);
+    expect(useTasks.getState().attention).toEqual({ "linear:acme": "Linear no longer accepts this token. Create a new one and paste it here." });
+    useTasks.setState({ config: null, attention: {} });
   });
 });

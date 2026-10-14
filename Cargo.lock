@@ -2563,6 +2563,7 @@ dependencies = [
  "moonlet-trackers",
  "reqwest",
  "rustls",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",
@@ -2668,6 +2669,8 @@ name = "moonlet-trackers"
 version = "0.1.17"
 dependencies = [
  "serde",
+ "serde_json",
+ "sha2",
  "toml 0.9.12+spec-1.1.0",
 ]
 

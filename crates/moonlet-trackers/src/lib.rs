@@ -4,11 +4,18 @@
 //! key happens in the app's board code (`apps/desktop/src/lib`), where the
 //! sessions and PRs are.
 
+pub mod adf;
 pub mod branch;
+pub mod clickup;
 pub mod config;
+pub mod jira;
+pub mod linear;
+pub mod oauth;
 pub mod priority;
 pub mod refs;
 pub mod states;
+pub mod task;
+pub mod time;
 
 use serde::{Deserialize, Serialize};
 
@@ -20,4 +27,27 @@ pub enum TrackerKind {
     Jira,
     Clickup,
     Github,
+}
+
+/// A tracker refused or failed a request. `auth` means the token or sign-in
+/// no longer works: the connection needs attention and polling stops (X44).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiError {
+    pub auth: bool,
+    pub message: String,
+}
+
+impl ApiError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            auth: false,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
 }
