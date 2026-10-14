@@ -12,7 +12,7 @@ export function mobileLine(st: MobileStatus): string {
 }
 
 /** "just now", "5 min ago", "2 h ago", "3 days ago". */
-function ago(ms: number): string {
+export function ago(ms: number): string {
   if (ms < 60_000) return "just now";
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min ago`;
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} h ago`;

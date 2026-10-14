@@ -13,6 +13,7 @@ import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 import { archivePrompt, askConfirm } from "./confirm";
 import { goSettings } from "./settingsNavigation";
+import { toggleTasksMode } from "./tasksStore";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -401,6 +402,7 @@ const RUN: Record<string, () => void> = {
   "copy-out": copyOutput,
   rerun: () => focusedEntry()?.rerunLast(),
   history: () => useStore.setState({ showHistory: true }),
+  tasks: () => toggleTasksMode(),
   settings: () => void goSettings({ page: "general" }),
   "check-updates": () => void checkForUpdates({ manual: true }),
 };

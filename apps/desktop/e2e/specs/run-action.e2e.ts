@@ -33,7 +33,7 @@ async function close() {
 describe("Run action", () => {
   it("opens with ⌘K and lists every action", async () => {
     await open();
-    await expect($(sel.text("26 actions"))).toBeDisplayed();
+    await expect($(sel.text("27 actions"))).toBeDisplayed();
     await expect($(query)).toBeFocused();
     await close();
   });
@@ -47,7 +47,7 @@ describe("Run action", () => {
   it("filters by the typed letters", async () => {
     await open();
     await fill(query, "set");
-    await expect($(sel.text("6 of 26"))).toBeDisplayed();
+    await expect($(sel.text("7 of 27"))).toBeDisplayed();
     await expect(row("Re-run setup script")).toBeDisplayed();
     await fill(query, "deploy");
     await expect($(sel.text("No actions match “deploy”."))).toBeDisplayed();

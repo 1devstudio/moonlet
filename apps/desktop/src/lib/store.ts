@@ -140,6 +140,8 @@ interface UiPersist {
   workspace: WorkspaceRef | null;
   /** The session last open in each workspace (`host/workspaceId`). */
   lastSession: Record<string, string>;
+  /** Workspaces (`host/workspaceId`) showing Tasks mode instead of Sessions (X45). */
+  tasksMode: Record<string, boolean>;
 }
 
 const uiDefaults: UiPersist = {
@@ -153,6 +155,7 @@ const uiDefaults: UiPersist = {
   changesView: "tree",
   workspace: null,
   lastSession: {},
+  tasksMode: {},
 };
 
 /** In-app card when an agent in the open workspace finishes or needs input. */
@@ -314,10 +317,11 @@ useStore.subscribe((s, prev) => {
     s.collapsed !== prev.collapsed ||
     s.changesView !== prev.changesView ||
     s.workspace !== prev.workspace ||
-    s.lastSession !== prev.lastSession
+    s.lastSession !== prev.lastSession ||
+    s.tasksMode !== prev.tasksMode
   ) {
-    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession } = s;
-    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession });
+    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, tasksMode } = s;
+    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, tasksMode });
   }
   if (s.settings !== prev.settings) {
     saveJson(SETTINGS_KEY, s.settings);
