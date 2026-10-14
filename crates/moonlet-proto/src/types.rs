@@ -552,6 +552,9 @@ pub struct PermissionAsk {
     /// Preview of a file change, when the request is an edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
+    /// When the agent asked (ms), for "waiting 2m" (X40).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

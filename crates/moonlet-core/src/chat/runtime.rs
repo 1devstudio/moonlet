@@ -199,6 +199,22 @@ impl ChatManager {
         Ok(self.get(id)?.inner.lock().unwrap().state.clone())
     }
 
+    /// Every chat's state without its items: what the phone's Inbox needs (X40).
+    pub fn summaries(&self) -> Vec<(TerminalId, ChatState)> {
+        let chats: Vec<(TerminalId, Arc<Chat>)> = self.chats.lock().unwrap().iter().map(|(id, c)| (*id, c.clone())).collect();
+        chats
+            .into_iter()
+            .map(|(id, c)| {
+                let mut inner = c.inner.lock().unwrap();
+                // The rest of the state is cloned; the items are not copied.
+                let items = std::mem::take(&mut inner.state.items);
+                let st = inner.state.clone();
+                inner.state.items = items;
+                (id, st)
+            })
+            .collect()
+    }
+
     pub fn send(&self, id: TerminalId, text: &str, images: &[ChatImage]) -> Result<()> {
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
@@ -759,6 +775,34 @@ done
         terms.kill(info.id, true).unwrap();
         assert!(!chats.is_chat(info.id));
         assert!(!dir.path().join("chats").join(format!("{}.json", info.id)).exists());
+    }
+
+    /// X40: the phone's Inbox reads every chat's pending asks at once,
+    /// without loading every conversation.
+    #[tokio::test]
+    async fn summaries_carry_every_chats_asks_without_its_items() {
+        let (dir, _terms, chats) = setup().await;
+        let cwd = dir.path().display().to_string();
+        let a = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), ..Default::default() }).unwrap();
+        let b = chats.create(ChatCreate { cwd, agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, a.id, |s| s.agent_session.is_some()).await;
+        let before = crate::paths::now_ms();
+        chats.send(a.id, "run a command", &[]).unwrap();
+        wait_for(&chats, a.id, |s| !s.pending.is_empty()).await;
+        let after = crate::paths::now_ms();
+
+        let mut sums = chats.summaries();
+        sums.sort_by_key(|(id, _)| *id);
+        assert_eq!(sums.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [a.id, b.id]);
+        let (_, sa) = &sums[0];
+        assert!(sa.items.is_empty(), "items are left out");
+        assert_eq!(sa.status, "blocked");
+        assert_eq!(sa.pending.len(), 1);
+        assert_eq!(sa.pending[0].tool, "Bash");
+        let asked = sa.pending[0].asked_at.expect("the ask says when it was asked");
+        assert!(before <= asked && asked <= after, "{before} <= {asked} <= {after}");
+        assert!(sums[1].1.pending.is_empty());
+        chats.shutdown();
     }
 
     #[tokio::test]
