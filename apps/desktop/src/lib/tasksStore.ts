@@ -40,6 +40,10 @@ interface TasksState {
   notNow: Record<string, true>;
   /** `trackers.toml`; null until read. */
   config: TrackersConfig | null;
+  /** Board or List (X45). */
+  layout: "board" | "list";
+  /** List rows open, by `connection key`. */
+  expanded: Record<string, boolean>;
 }
 
 /** `~/.moonlet/trackers.toml` as `moonlet-trackers` reads it (X44). */
@@ -50,7 +54,21 @@ export interface TrackersConfig {
 
 export const DEFAULT_CONFIG: TrackersConfig = { sync: { interval: 60 }, github: { branch_template: "", max_length: 48, rules: DEFAULT_RULES } };
 
-export const useTasks = create<TasksState>(() => ({ data: {}, view: "mine", selected: null, notNow: {}, config: null }));
+export const useTasks = create<TasksState>(() => ({
+  data: {},
+  view: "mine",
+  selected: null,
+  notNow: {},
+  config: null,
+  layout: readStored("tasks.layout") === "list" ? "list" : "board",
+  expanded: {},
+}));
+
+/** Board or List; remembered across restarts. */
+export function setLayout(layout: "board" | "list") {
+  writeStored("tasks.layout", layout);
+  useTasks.setState({ layout });
+}
 
 /** The settings in effect: the file's, or the defaults before it is read. */
 export const trackersConfig = (t: { config: TrackersConfig | null }) => t.config ?? DEFAULT_CONFIG;

@@ -23,7 +23,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 ### Mode switch
 
 - [x] The sidebar header has a two-button mode switch, Sessions and Tasks, titled `Sessions ⌃⌘T` and `Tasks ⌃⌘T`. ⌃⌘T toggles between them; it is a Run action (X19) and can be rebound. (`runActions.test.ts`, `tasksStore.test.ts`, `tasks-mode.e2e.ts`)
-- [ ] The Tasks button shows an accent dot and the label `Tasks, <n> out of sync` when tasks are out of sync.
+- [x] The Tasks button shows an accent dot and the label `Tasks, <n> out of sync` when tasks are out of sync. (The shown workspace's tasks are checked every 5 minutes in Sessions mode too; `tasksView.test.ts`.)
 - [ ] With no source in the current workspace, the Tasks button opens the "Connect a task tracker" popover instead: Linear, Jira Cloud, ClickUp and GitHub Issues rows (each opening its connect flow, X44), "Open Settings › Task trackers" and "Not now".
 - [ ] The mode is remembered per workspace across restarts.
 
@@ -64,10 +64,10 @@ A task is out of sync when the work and the tracker disagree. Each case has a ch
 
 ### List
 
-- [ ] Groups In Progress, In Review, Todo and Done with counts and a note (`1 needs you`, `1 out of sync`). Done is collapsed to a line.
-- [ ] A row: expand toggle, key, title, drift chip, session glyphs with a summary (`2 working`, `needs you`, `1 worktree`, `none`), PR summary, worktree count, updated time. A row with a session that needs the user has a faint amber background.
-- [ ] An expanded row lists sessions (glyph, name, agent with state, branch, diff stat, Open), worktrees (`worktree, no session`, Start session) and, when empty, `Start a session for <key>`.
-- [ ] "Expand all" toggles every row.
+- [x] Groups In Progress, In Review, Todo and Done with counts and a note (`1 needs you`, `1 out of sync`). Done is collapsed to a line. (`tasksList.test.ts`, `tasks-mode.e2e.ts`)
+- [x] A row: expand toggle, key, title, drift chip, session glyphs with a summary (`2 working`, `needs you`, `1 worktree`, `none`), PR summary, worktree count, updated time. A row with a session that needs the user has a faint amber background. (`tasksList.test.ts`)
+- [x] An expanded row lists sessions (glyph, name, agent with state, branch, diff stat, Open), worktrees (`worktree, no session`, Start session) and, when empty, `Start a session for <key>`. (`tasks-mode.e2e.ts`)
+- [x] "Expand all" toggles every row.
 - [ ] **Sessions without a task** lists sessions of the workspace with no task: glyph, name, `project/branch`, a hint (`Looks like CDK-41 Changelog themes`, or `No matching issue`) and **Link to task** (X46).
 
 ### Find a task
