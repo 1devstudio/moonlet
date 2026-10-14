@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
+import { fill, PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
 
 interface Session {
   id: string;
@@ -69,7 +69,11 @@ describe("Tasks mode", () => {
   after(async () => {
     if (await sessionsButton().isExisting()) await sessionsButton().click();
     await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId(w));
-    for (const s of rpc<Session[]>(w, "session.list", {}).filter((s) => s.id === linkedId || s.task)) rpc(w, "session.archive", { id: s.id });
+    for (const s of rpc<Session[]>(w, "session.list", {})) {
+      // The seeded session is shared with other specs: unlink it, don't archive it.
+      if (s.name === SESSION) rpc(w, "session.update", { id: s.id, task: null });
+      else if (s.id === linkedId || s.task) rpc(w, "session.archive", { id: s.id });
+    }
     git("remote", "remove", "origin");
     rmSync(fakeGh, { force: true });
   });
@@ -92,7 +96,7 @@ describe("Tasks mode", () => {
   it("lists sessions without a task, with the issue their name looks like", async () => {
     await tasksButton().click();
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "Sessions without a task")]').click();
-    const row = $(`//section[@aria-label="Sessions without a task"]//button[.//span[normalize-space()=${JSON.stringify(SESSION)}]]`);
+    const row = $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]`);
     await expect(row).toBeDisplayed();
     await expect(row.$(sel.text("Looks like acme/storefront#12 Fix checkout button"))).toBeDisplayed();
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "My issues")]').click();
@@ -122,5 +126,31 @@ describe("Tasks mode", () => {
     await browser.keys(["Shift", "Meta", "p"]);
     await expect($('//*[@role="dialog"]//textarea')).toHaveValue("Closes #15", { wait: 10_000 });
     await browser.keys(["Escape"]);
+  });
+
+  it("shows a linked session's task above the conversation and in the Task tab, and unlinks it", async () => {
+    await $(sel.sessionRow(LINKED)).click();
+    const bar = $('//*[@role="region"][@aria-label="Task"]');
+    await expect(bar.$(sel.text("acme/storefront#12"))).toBeDisplayed({ wait: 30_000 });
+    await expect(bar.$(sel.text("Fix checkout button"))).toBeDisplayed();
+    await $('//button[@role="tab"][normalize-space()="Task"]').click();
+    await expect($('//section[@aria-label="Sessions on this task"]').$(sel.text("this session"))).toBeDisplayed();
+    await $('//*[@role="tabpanel"]//button[normalize-space()="Unlink"]').click();
+    await expect(bar).not.toBeExisting({ wait: 10_000 });
+    const s = rpc<(Session & { task_unlinked?: boolean })[]>(w, "session.list", {}).find((x) => x.id === linkedId);
+    expect([s?.task ?? null, s?.task_unlinked]).toEqual([null, true]);
+  });
+
+  it("links a session to a task from a pasted key", async () => {
+    await tasksButton().click();
+    await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "Sessions without a task")]').click();
+    await $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]//button[normalize-space()="Link to task"]`).click();
+    await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "#12");
+    await $('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/storefront#12"]]').click();
+    await browser.waitUntil(() => rpc<Session[]>(w, "session.list", {}).find((x) => x.name === SESSION)?.task?.key === "acme/storefront#12", {
+      timeout: 10_000,
+      timeoutMsg: "the seeded session was not linked to acme/storefront#12",
+    });
+    await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "My issues")]').click();
   });
 });

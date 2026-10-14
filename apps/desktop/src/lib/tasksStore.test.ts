@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { useStore } from "./store";
-import { isTasksMode, refreshTasks, toggleTasksMode, useTasks } from "./tasksStore";
+import { ensureTasks, isTasksMode, refreshTasks, toggleTasksMode, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -85,5 +85,21 @@ describe("refreshTasks (X44 GitHub source)", () => {
     const d = useTasks.getState().data["local/personal"];
     expect(d.tasks.map((t) => t.key)).toEqual(["acme/web#12"]);
     expect([d.syncedAt, d.error]).toEqual([5_000, "gh: authentication required"]);
+  });
+});
+
+describe("ensureTasks (X46: a linked session outside Tasks mode)", () => {
+  it("loads a workspace's tasks once, then again only after a minute", async () => {
+    answers["git.origin_url"] = () => "https://github.com/acme/web.git";
+    answers["gh.tasks"] = () => [issue];
+    answers["project.worktrees"] = () => [];
+    const synced = () => useTasks.getState().data["local/personal"]?.syncedAt;
+    ensureTasks("local", "personal", 1_000);
+    await vi.waitFor(() => expect(synced()).toBe(1_000));
+    ensureTasks("local", "personal", 30_000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(synced()).toBe(1_000);
+    ensureTasks("local", "personal", 62_000);
+    await vi.waitFor(() => expect(synced()).toBe(62_000));
   });
 });

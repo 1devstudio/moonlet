@@ -8,7 +8,7 @@ use crate::TrackerKind;
 ///
 /// `site` comes from the user's clipboard: use it only to pick one of the
 /// connections the user made, never as a host to send a token to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Pasted {
     pub kind: Option<TrackerKind>,
     pub key: String,

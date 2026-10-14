@@ -365,6 +365,14 @@ fn task_branch_name(
     branch::branch_name(&template, &vars, max_len.unwrap_or(branch::DEFAULT_MAX_LEN))
 }
 
+/// A key or issue URL pasted into the link dialog (X46), or null.
+#[tauri::command]
+fn task_parse_pasted(input: String) -> Value {
+    moonlet_trackers::refs::parse_pasted(&input)
+        .and_then(|p| serde_json::to_value(p).ok())
+        .unwrap_or(Value::Null)
+}
+
 #[tauri::command]
 fn app_info() -> Value {
     serde_json::json!({
@@ -426,6 +434,7 @@ pub fn run() {
             play_sound,
             claude_latest_version,
             task_branch_name,
+            task_parse_pasted,
             app_info
         ])
         .run(context)
@@ -435,6 +444,16 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pasted_issue_url_reaches_the_app_as_kind_key_and_site() {
+        assert_eq!(
+            task_parse_pasted("https://acme.atlassian.net/browse/OPS-12".into()),
+            serde_json::json!({"kind": "jira", "key": "OPS-12", "site": "acme.atlassian.net"})
+        );
+        assert_eq!(task_parse_pasted("#42".into()), serde_json::json!({"kind": "github", "key": "#42", "site": null}));
+        assert_eq!(task_parse_pasted("changelog themes".into()), Value::Null);
+    }
 
     #[test]
     fn a_task_branch_follows_the_trackers_default_template() {
