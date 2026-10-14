@@ -11,10 +11,9 @@ import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart } from "../../lib/tasks";
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, moveTask, putOffDrift, recordActivity, refreshTasks, retryTask, rulesFor, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { listGroups, listRow } from "../../lib/tasksList";
-import { applyRules, autoFixes, driftKey, prComments, startAction, withoutPutOff } from "../../lib/keepInStep";
-import { hostsApi } from "../../lib/daemon";
+import { applyRules, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
@@ -76,20 +75,7 @@ function useTaskSync() {
   const paused = useTasks((t) => t.paused);
   useEffect(() => {
     if (!ws || !board) return;
-    const rulesOf = (c: Card) => rulesFor(config, c.task);
-    for (const card of autoFixes(board, rulesOf, autoFixed())) {
-      markAutoFixed(driftKey(card));
-      void fixDrift(ws.host, ws.id, card);
-    }
-    for (const c of prComments(board, rulesOf, autoFixed())) {
-      markAutoFixed(c.key);
-      const t = c.card.task.tracker;
-      if (t)
-        void hostsApi
-          .trackerUpdate({ id: c.card.task.connection, task: t.id, source: t.source, comment: c.text })
-          .then(() => recordActivity(c.card.task, "moonlet commented the pull request's link"))
-          .catch((e) => errorToast(e?.message ?? e));
-    }
+    void runAutoFixes(ws.host, ws.id, board, (c: Card) => rulesFor(config, c.task));
   }, [ws, board, config, paused]);
 }
 

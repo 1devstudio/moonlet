@@ -7,13 +7,13 @@ import { latestPerKey } from "./prPoll";
 import { type GhTask, M, type Project, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
-import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, type Rules } from "./keepInStep";
+import { autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh } from "./tasks";
 import { workspaceConnections } from "./trackerSources";
 import { applyStateMapping, targetState } from "./stateMapping";
-import { type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
+import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
 
@@ -369,21 +369,22 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
 }
 
 /** The chip's button (X45): close the issue, move it, or clean up after a done task. */
-export async function fixDrift(host: string, workspaceId: string, card: Card) {
+/** Runs a chip's fix; true when it was done (a declined Clean up is not). */
+export async function fixDrift(host: string, workspaceId: string, card: Card): Promise<boolean> {
   const plan = driftFix(card);
-  if (!plan) return;
-  retries.set(`${card.task.connection} ${card.task.key}`, () => fixDrift(host, workspaceId, card));
+  if (!plan) return false;
+  retries.set(`${card.task.connection} ${card.task.key}`, async () => void (await fixDrift(host, workspaceId, card)));
   try {
     if (plan.kind === "github") {
       const path = repoPath(host, workspaceId, plan.repo);
-      if (!path) return;
+      if (!path) throw new Error(`No project in this workspace has ${plan.repo} as its origin`);
       await rpc(host, M.ghTaskUpdate, { path, number: plan.number, close: true });
       movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
       recordActivity(card.task, "moonlet closed it: every session's PR is merged");
       toast(`Closed ${card.task.key}`);
     } else if (plan.kind === "move") {
       const t = card.task.tracker;
-      if (!t) return;
+      if (!t) return false;
       await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column, state: stateFor(card.task.connection, plan.column) });
       movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
       recordActivity(card.task, `moonlet moved it to ${COLUMN_LABEL[plan.column]}`);
@@ -402,15 +403,52 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
         action: "Clean up",
         variant: dirty.length ? "danger" : "primary",
       });
-      if (!ok) return;
+      if (!ok) return false;
       for (const s of sessions) await rpc(host, M.sessionArchive, { id: s.id, remove_worktree: true });
       for (const w of card.orphans) if (w.project) await rpc(host, M.projectWorktreeRemove, { id: w.project, path: w.path });
       recordActivity(card.task, "moonlet archived its sessions and removed their worktrees");
     }
     setFailure(card.task, null);
     await refreshTasks(host, workspaceId);
+    return true;
   } catch (e) {
     setFailure(card.task, (e as { message?: string }).message ?? message(e));
+    return false;
+  }
+}
+
+// Automatic fixes tried since the app started: a failure shows on its task
+// with Retry instead of being tried again on every board change.
+const autoTried = new Set<string>();
+
+/**
+ * The rules at Automatically, run once each (X46): chips' fixes and PR-link
+ * comments. Each is remembered across restarts only when it worked.
+ */
+export async function runAutoFixes(host: string, workspaceId: string, board: Board, rulesOf: (c: Card) => Rules) {
+  const done = autoFixed();
+  for (const card of autoFixes(board, rulesOf, done)) {
+    const key = driftKey(card);
+    if (autoTried.has(key)) continue;
+    autoTried.add(key);
+    if (await fixDrift(host, workspaceId, card)) markAutoFixed(key);
+  }
+  for (const c of prComments(board, rulesOf, done)) {
+    const t = c.card.task.tracker;
+    if (!t || autoTried.has(c.key)) continue;
+    autoTried.add(c.key);
+    const comment = async () => {
+      try {
+        await hostsApi.trackerUpdate({ id: c.card.task.connection, task: t.id, source: t.source, comment: c.text });
+        markAutoFixed(c.key);
+        setFailure(c.card.task, null);
+        recordActivity(c.card.task, "moonlet commented with the pull request's link");
+      } catch (e) {
+        setFailure(c.card.task, (e as { message?: string }).message ?? message(e));
+      }
+    };
+    retries.set(`${c.card.task.connection} ${c.card.task.key}`, comment);
+    await comment();
   }
 }
 
