@@ -64,6 +64,12 @@ describe("agents tab", () => {
     chmodSync(FAKE, 0o755);
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     sessionId = rpc<{ id: string }>(w, "session.create", { project_id: project.id, name: SESSION, agent: "claude", prompt: "Split the work across two agents" }).id;
+    // A window in the background never runs the permission card's entry animation.
+    await browser.execute(() => {
+      const style = document.createElement("style");
+      style.textContent = ".moonlet-card-in { animation: none !important; }";
+      document.head.append(style);
+    });
     await $(sel.sessionRow(SESSION)).click();
   });
 
@@ -88,6 +94,17 @@ describe("agents tab", () => {
     await expect($('//span[starts-with(normalize-space(), "2 agents ·")]')).toBeDisplayed();
   });
 
+  it("shows the asking agent's model, tokens, edits and permission card in its detail", async () => {
+    await jsClick(row("Write hello file"));
+    const panel = '//*[@id="right-tabpanel"]';
+    await expect($(`${panel}//div[contains(normalize-space(), "needs you · Haiku 5.5 ·") and contains(normalize-space(), "· 9.7k tokens")]`)).toBeDisplayed();
+    await expect($(`${panel}//span[normalize-space()="+1"]/following-sibling::span[normalize-space()="−0"]`)).toBeDisplayed();
+    await expect($(`${panel}//span[normalize-space()="Allow Write?"]`)).toBeDisplayed();
+    // The tab itself goes back to the list.
+    await jsClick(tab("Agents"));
+    await expect($(row("List files"))).toBeDisplayed();
+  });
+
   it("allows the ask from the row, and the agent finishes", async () => {
     await jsClick(`${row("Write hello file")}//button[normalize-space()="Allow"]`);
     await browser.waitUntil(async () => !(await $(`${row("Write hello file")}//button[normalize-space()="Allow"]`).isExisting()), {
@@ -101,9 +118,9 @@ describe("agents tab", () => {
     await jsClick(row("List files"));
     await expect($(text("Brief · List the files."))).toBeDisplayed();
     await expect($('//span[normalize-space()="Glob"]')).toBeDisplayed();
-    await expect($('//span[normalize-space()="Running"]')).toBeDisplayed();
+    await expect($('//*[@id="right-tabpanel"]//span[normalize-space()="running"]')).toBeDisplayed();
     await jsClick('//*[@id="right-tabpanel"]//button[normalize-space()="Stop"]');
-    await expect($('//span[normalize-space()="Stopped"]')).toBeDisplayed();
+    await expect($('//*[@id="right-tabpanel"]//span[normalize-space()="stopped"]')).toBeDisplayed();
     await jsClick('//*[@id="right-tabpanel"]//button[normalize-space()="Agents"]');
     await expect($(row("List files") + text("Stopped"))).toBeExisting();
   });
