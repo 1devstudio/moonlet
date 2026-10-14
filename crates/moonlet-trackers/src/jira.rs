@@ -136,6 +136,28 @@ pub fn parse_projects(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
         .collect())
 }
 
+/// `(name, category key)` of a project's statuses, each once, in the order
+/// of `GET /rest/api/3/project/{key}/statuses` (statuses per issue type).
+pub fn parse_project_statuses(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
+    let v = parse(raw)?;
+    let mut out: Vec<(String, String)> = Vec::new();
+    for t in v.as_array().into_iter().flatten() {
+        for s in t["statuses"].as_array().into_iter().flatten() {
+            let name = s["name"].as_str().unwrap_or_default().to_string();
+            if !out.iter().any(|(n, _)| *n == name) {
+                out.push((
+                    name,
+                    s["statusCategory"]["key"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A workflow transition available on an issue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transition {
@@ -294,6 +316,32 @@ mod tests {
         );
         // This workflow has no review state.
         assert_eq!(transition_to(&t, Column::InReview), None);
+    }
+
+    #[test]
+    fn a_projects_statuses() {
+        // `GET /rest/api/3/project/{key}/statuses`: statuses per issue type.
+        // Built from the documented schema (no example was captured).
+        let raw = br#"[
+            {"id": "10001", "name": "Task", "statuses": [
+                {"id": "10000", "name": "To Do", "statusCategory": {"key": "new"}},
+                {"id": "3", "name": "In Progress", "statusCategory": {"key": "indeterminate"}}
+            ]},
+            {"id": "10002", "name": "Bug", "statuses": [
+                {"id": "3", "name": "In Progress", "statusCategory": {"key": "indeterminate"}},
+                {"id": "10010", "name": "Code Review", "statusCategory": {"key": "indeterminate"}},
+                {"id": "10001", "name": "Done", "statusCategory": {"key": "done"}}
+            ]}
+        ]"#;
+        assert_eq!(
+            parse_project_statuses(raw).unwrap(),
+            [
+                ("To Do".to_string(), "new".to_string()),
+                ("In Progress".to_string(), "indeterminate".to_string()),
+                ("Code Review".to_string(), "indeterminate".to_string()),
+                ("Done".to_string(), "done".to_string())
+            ]
+        );
     }
 
     #[test]

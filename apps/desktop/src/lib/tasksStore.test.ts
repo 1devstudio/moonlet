@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { useStore } from "./store";
-import { activityOf, DEFAULT_CONFIG, ensureTasks, fixDrift, isTasksMode, loadTrackersConfig, moveTask, refreshTasks, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, DEFAULT_CONFIG, ensureTasks, fixDrift, isTasksMode, loadTrackersConfig, moveTask, refreshTasks, rulesFor, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -246,15 +246,15 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
     await fixDrift("local", "personal", card({ kind: "pr_open", text: "#131 open", fix: "Move to In Review" }));
     await fixDrift("local", "personal", card({ kind: "merged", text: "#131 merged", fix: "Move to Done" }));
     expect(sent).toEqual([
-      { id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review" },
-      { id: "linear:acme", task: "issue-1", source: "MOON", column: "done" },
+      { id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: null },
+      { id: "linear:acme", task: "issue-1", source: "MOON", column: "done", state: null },
     ]);
   });
 
   it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
     sent.length = 0;
     await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } });
-    expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", state: null, assign_me: true }]);
   });
 });
 
@@ -286,8 +286,16 @@ describe("moving a task from its state menu, and its activity (X45, X46)", () =>
   it("moves a tracker issue to the chosen column and records it", async () => {
     sent.length = 0;
     await moveTask("local", "personal", linearTask, "in_review", 5_000);
-    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review" }]);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: null }]);
     expect(activityOf(linearTask)[0]).toEqual({ at: 5_000, text: "moonlet moved it to In Review" });
+  });
+
+  it("moves to the state the user mapped to the column (X44 Workflow states)", async () => {
+    sent.length = 0;
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Ada", auth: "api_key", sources: [], states: { QA: "in_review" } }] } });
+    await moveTask("local", "personal", linearTask, "in_review", 5_000);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: "QA" }]);
+    useTasks.setState({ config: null });
   });
 
   it("reopens a closed GitHub issue through gh", async () => {
@@ -301,5 +309,17 @@ describe("moving a task from its state menu, and its activity (X45, X46)", () =>
     await moveTask("local", "personal", closed, null, 6_000);
     expect(asked).toEqual([{ path: "/r/web", number: 7, reopen: true }]);
     expect(activityOf(closed)[0].text).toBe("moonlet reopened it");
+  });
+});
+
+describe("the Task tab's Keep in step switch (X46)", () => {
+  it("turns every rule off for that task only, and back on", () => {
+    const t = { connection: "linear:acme", key: "MOON-142" };
+    expect(rulesFor(DEFAULT_CONFIG, t).session_starts).toBe("auto");
+    setKeepInStep(t, false);
+    expect(Object.values(rulesFor(DEFAULT_CONFIG, t))).toEqual(["off", "off", "off", "off", "off"]);
+    expect(rulesFor(DEFAULT_CONFIG, { connection: "linear:acme", key: "MOON-144" }).session_starts).toBe("auto");
+    setKeepInStep(t, true);
+    expect(rulesFor(DEFAULT_CONFIG, t).all_merged).toBe("suggest");
   });
 });

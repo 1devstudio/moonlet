@@ -2,7 +2,7 @@
 // working on them. Nothing here is stored; it is worked out on each render.
 
 import type { AgentState, PullRequest, TaskRef } from "./protocol";
-import { type Column, type Task, taskForSession } from "./tasks";
+import { type Column, DEFAULT_LINK, type LinkRules, type Task, taskForSession } from "./tasks";
 
 /** What the board needs of a session. */
 export interface BoardSession {
@@ -40,6 +40,8 @@ export interface BoardInput {
   worktrees: BoardWorktree[];
   /** The "session starts" Keep in step rule (X46), or each task's tracker's. */
   sessionStartRule: StartRule | ((task: Task) => StartRule);
+  /** What links a session to a task without a stored link (X44); all on when absent. */
+  link?: LinkRules;
 }
 
 export interface RowMeta {
@@ -124,9 +126,9 @@ export function tasksBoard(input: BoardInput): Board {
   const loose = input.worktrees.filter((w) => w.branch && !used.has(w.path));
   for (const task of input.tasks) {
     if (task.column === "hidden") continue;
-    const sessions = live.filter((s) => taskForSession(s, s.pr, s.originRepo, input.tasks) === task);
+    const sessions = live.filter((s) => taskForSession(s, s.pr, s.originRepo, input.tasks, input.link) === task);
     const column = task.column === "open" ? workColumn(sessions) : task.column;
-    const orphans = loose.filter((w) => taskForSession({ branch: w.branch ?? "" }, null, w.originRepo, input.tasks) === task);
+    const orphans = loose.filter((w) => taskForSession({ branch: w.branch ?? "" }, null, w.originRepo, input.tasks, input.link) === task);
     board[column].push({
       task,
       column,
@@ -154,10 +156,11 @@ const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
  * hint: a task whose title is the session's name, or "No matching issue".
  * The hint only ever suggests a link (X44 link rules).
  */
-export function sessionsWithoutTask(sessions: BoardSession[], tasks: Task[]): { session: BoardSession; hint: string }[] {
+export function sessionsWithoutTask(sessions: BoardSession[], tasks: Task[], link: LinkRules = DEFAULT_LINK): { session: BoardSession; hint: string }[] {
   return sessions
-    .filter((s) => !s.archived && !taskForSession(s, s.pr, s.originRepo, tasks))
+    .filter((s) => !s.archived && !taskForSession(s, s.pr, s.originRepo, tasks, link))
     .map((session) => {
+      if (!link.title) return { session, hint: "" };
       const like = tasks.find((t) => words(t.title) === words(session.name));
       return { session, hint: like ? `Looks like ${like.key} ${like.title}` : "No matching issue" };
     });

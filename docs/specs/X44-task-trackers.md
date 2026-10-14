@@ -47,13 +47,13 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 - [ ] A source is one Linear team, Jira project, ClickUp list (or folder, or space) or GitHub repository or project board.
 - [x] Each source has a **repository** (the moonlet project its sessions start in), a **workspace** (X32) and a **Shows** filter: `Assigned to me` (default) or `All open issues`. (Shows is Assigned to me for now. `trackerSources.test.ts`, `task-trackers.e2e.ts`)
-- [ ] "Where each workspace gets its tasks" lists each workspace with its sources and the view Tasks mode opens on (`Current cycle`, `Active sprint`, `My issues`, or `Sessions mode` for a workspace with no sources). A source whose connection failed is outlined red with its reason.
+- [ ] "Where each workspace gets its tasks" lists each workspace with its sources and the view Tasks mode opens on (`Current cycle`, `Active sprint`, `My issues`, or `Sessions mode` for a workspace with no sources). A source whose connection failed is outlined red with its reason. (Partly: a read-only list of each workspace's sources; no "Opens on" view yet.)
 - [ ] A GitHub repository source defaults to the project's own `origin` repository.
 
 ### States
 
 - [x] moonlet groups tasks into **Todo**, **In Progress**, **In Review** and **Done**, plus **Not shown**. (`states.rs`, `tasksBoard.test.ts`)
-- [ ] The page lists each column with the tracker states mapped onto it, removable chips and an add button. Defaults:
+- [x] The page lists each column with the tracker states mapped onto it, removable chips and an add button. Defaults: (Shipped as a States dialog per connection: each state of a source with the column it lands in; changes are kept under `[connections.states]` and moves use the first state mapped to a column. `stateMapping.test.ts`, `tasksStore.test.ts`, `task-trackers.e2e.ts`.)
 
 | Column | Linear (state type) | Jira (status category) | ClickUp (status type) | GitHub |
 |---|---|---|---|---|
@@ -70,7 +70,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 ### Branch names and linking
 
 - [ ] "Branch name for new sessions" is a template with `{key}`, `{title}`, `{number}`, `{user}` and `{type}`, cut to "Max length" (default 48). The preview shows the result for a real issue. Defaults: `{key}-{title}` for Linear, Jira and ClickUp, `{number}-{title}` for GitHub (the same as `gh issue develop`). Left empty, Linear uses the issue's own branch name.
-- [ ] "Link a session to an issue when": its branch name contains the issue key (on; for GitHub, its branch starts with `<number>-` and its project's `origin` is the issue's repository), its pull request mentions the key or closes the issue (on), its name looks like an issue title (off, and only ever a suggestion).
+- [x] "Link a session to an issue when": its branch name contains the issue key (on; for GitHub, its branch starts with `<number>-` and its project's `origin` is the issue's repository), its pull request mentions the key or closes the issue (on), its name looks like an issue title (off, and only ever a suggestion). The title suggestion is on by default, as in the design. (`tasks.test.ts`, `tasksBoard.test.ts`, `settingsSearch.test.ts`)
 - [x] Keys: Linear and Jira `ABC-123`; ClickUp the custom task ID when the workspace has them, otherwise `CU-<task id>`; GitHub `<owner>/<repo>#<number>` (a pasted `#42` means that number in the current project's repository). Matching is case-insensitive and needs no letter or digit right before or after the key, so `moon-142-x` and `feat_moon-142` match `MOON-142` and `moon-1420` does not. (`refs.rs`, `tasks.test.ts`)
 
 ### Sync

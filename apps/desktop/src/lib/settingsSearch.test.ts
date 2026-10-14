@@ -131,5 +131,6 @@ describe("Task trackers in the search (X44)", () => {
     expect(found("closes #")).toEqual([["A pull request opens → add Closes #<number> to it", "App › Task trackers", "Off"]]);
     expect(found("refresh issues")).toEqual([["Refresh issues", "App › Task trackers", "Every 5 minutes"]]);
     expect(found("changes state outside")).toEqual([["Notify when a task changes state outside moonlet", "App › Task trackers", "On"]]);
+    expect(found("pull request mentions")).toEqual([["Link a session when its pull request mentions the key or closes the issue", "App › Task trackers", "On"]]);
   });
 });
