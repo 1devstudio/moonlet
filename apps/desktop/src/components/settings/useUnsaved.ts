@@ -4,6 +4,7 @@
 import { useEffect, useRef } from "react";
 import { closeRequest } from "../../lib/projectSettings";
 import { setLeaveGuard } from "../../lib/settingsNavigation";
+import { saveKeySaves } from "../../lib/settingsPage";
 
 export function useUnsaved(state: { dirty: boolean; saving: boolean; message: string }, save: () => void) {
   const current = useRef(state);
@@ -14,9 +15,13 @@ export function useUnsaved(state: { dirty: boolean; saving: boolean; message: st
     setLeaveGuard(() => ({ state: closeRequest({ saving: current.current.saving, parseError: false, dirty: current.current.dirty }), message: current.current.message }));
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey)) return;
-      if (document.querySelector('[role="dialog"]:not([inert] *)')) return;
-      // A form inside the page, such as New profile, keeps its own Enter.
-      if (e.target instanceof Element && e.target.closest("[data-own-enter]")) return;
+      const ok = saveKeySaves({
+        dialogShown: !!document.querySelector('[role="dialog"]:not([inert] *)'),
+        // A form inside the page, such as New profile, keeps its own Enter.
+        inOwnForm: e.target instanceof Element && !!e.target.closest("[data-own-enter]"),
+        searching: !!document.querySelector("[data-settings-searching]"),
+      });
+      if (!ok) return;
       e.preventDefault();
       e.stopPropagation();
       saveNow.current();

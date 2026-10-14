@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hostOrder, appUpdateLine, claudeUpdateLine, daemonLine, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonLine, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -193,6 +193,18 @@ describe("the Hooks page's rows (X43)", () => {
     expect(hooksDone(null)).toBe(false);
   });
 
+  it("names the files Install hooks changes", () => {
+    expect(installHooksMessage(status({}))).toBe(
+      'moonlet will add its hooks to:\n• /Users/alex/.claude/settings.json\n• /Users/alex/.codex/config.toml\n\nand a "moonlet" skill to the skills folder next to each.\n\nA backup of each file is written first and your own settings are kept.',
+    );
+  });
+
+  it("names Claude Code's and Codex's settings when the status could not be read", () => {
+    expect(installHooksMessage(null)).toBe(
+      'moonlet will add its hooks to Claude Code\'s and Codex\'s settings, and a "moonlet" skill next to each.\n\nA backup of each file is written first and your own settings are kept.',
+    );
+  });
+
   it("lists Codex's notify hook and skill once installed", () => {
     const [, codex] = hookRows(status({ codex_installed: true, codex_skill: true }), "/Users/alex");
     expect(codex).toEqual({ agent: "codex", name: "Codex", state: { tone: "done", text: "Installed" }, path: "~/.codex/config.toml", parts: [{ label: "Notify hook", ok: true }, { label: "moonlet skill", ok: true }] });
@@ -297,5 +309,25 @@ describe("the Phones page's access line (X43)", () => {
 describe("the order of hosts in the nav (X43)", () => {
   it("puts this Mac first, then the remote hosts by name", () => {
     expect(hostOrder(["gpu-runner", "local", "devbox"])).toEqual(["local", "devbox", "gpu-runner"]);
+  });
+});
+
+describe("⌘↵ on a workspace or project page (X43)", () => {
+  it("saves from the page", () => {
+    expect(saveKeySaves({ dialogShown: false, inOwnForm: false, searching: false })).toBe(true);
+  });
+
+  it("doesn't save while the search hides the page, over a dialog, or from a form with its own Enter", () => {
+    expect(saveKeySaves({ dialogShown: false, inOwnForm: false, searching: true })).toBe(false);
+    expect(saveKeySaves({ dialogShown: true, inOwnForm: false, searching: false })).toBe(false);
+    expect(saveKeySaves({ dialogShown: false, inOwnForm: true, searching: false })).toBe(false);
+  });
+});
+
+describe("the account under a workspace's Claude profile (X43)", () => {
+  it("names the account, or warns that the profile is signed out", () => {
+    expect(accountNote("Work", { logged_in: true, email: "dev@example.com", org_name: null })).toEqual({ tone: "muted", text: "Signed in as dev@example.com" });
+    expect(accountNote("Work", { logged_in: false, email: null, org_name: null })).toEqual({ tone: "blocked", text: "Work is not signed in" });
+    expect(accountNote("Default", null)).toEqual({ tone: "muted", text: "Checking…" });
   });
 });

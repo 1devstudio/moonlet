@@ -3,7 +3,7 @@
 // discard confirm), from the nav, the close button, Esc or an entry point.
 
 import { askConfirm } from "./confirm";
-import type { SettingsRoute } from "./settingsPage";
+import { routeKey, type SettingsRoute } from "./settingsPage";
 import { useStore } from "./store";
 
 /** What leaving the current page does: go, ask with `message`, or wait for
@@ -18,6 +18,9 @@ export function setLeaveGuard(g: LeaveGuard | null) {
 
 /** Opens `next` (null closes the page) once unsaved edits are dealt with. */
 export async function goSettings(next: SettingsRoute | null): Promise<void> {
+  // The page already open: nothing is left, so nothing to ask.
+  const open = useStore.getState().settingsPage;
+  if (next && open && routeKey(next) === routeKey(open)) return;
   const g = guard?.();
   if (g?.state === "wait") return;
   if (g?.state === "ask") {

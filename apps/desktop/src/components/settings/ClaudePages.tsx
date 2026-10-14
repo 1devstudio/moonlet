@@ -8,7 +8,7 @@ import { rpc } from "../../lib/daemon";
 import { M, type ClaudeProfile, type HookStatus, type ProfileAccount, type Workspace } from "../../lib/protocol";
 import { errorToast, refreshProfile, toast, useStore } from "../../lib/store";
 import { accountState, defaultFolder, removeProfileConfirm, tildePath } from "../../lib/profiles";
-import { hookRows, hooksDone, profileLine } from "../../lib/settingsPage";
+import { hookRows, hooksDone, installHooksMessage, profileLine } from "../../lib/settingsPage";
 import { colorHex } from "../../lib/workspaces";
 import { ClaudeAuthDialog } from "../Profiles";
 import { AgentIcon, Button, IconButton, cx } from "../ui";
@@ -210,7 +210,7 @@ export function HooksPage() {
   const install = async () => {
     const ok = await askConfirm({
       title: "Install agent hooks",
-      message: `moonlet will add its hooks to:\n• ${status?.claude_settings}\n• ${status?.codex_config}\n\nand a "moonlet" skill to the skills folder next to each.\n\nA backup of each file is written first and your own settings are kept.`,
+      message: installHooksMessage(status),
       action: "Install",
     });
     if (!ok) return;

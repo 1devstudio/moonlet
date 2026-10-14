@@ -3,7 +3,7 @@
 
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "./agents";
 import { EDITOR_THEMES, resolveEditorTheme } from "./editorThemes";
-import type { WorkspaceColor } from "./protocol";
+import type { ProjectConfig, WorkspaceColor } from "./protocol";
 import { routeKey, type SettingsRoute } from "./settingsPage";
 import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
@@ -20,7 +20,8 @@ export interface SearchContext {
   phones: number;
   /** `profile`: the name of the profile the workspace uses. */
   workspaces: { host: string; id: string; name: string; color: WorkspaceColor; profile: string }[];
-  projects: { host: string; id: string; name: string; base_branch: string }[];
+  /** `config`: the project's `.moonlet/config.toml`, once read. */
+  projects: { host: string; id: string; name: string; base_branch: string; config?: ProjectConfig | null }[];
 }
 
 interface Entry {
@@ -47,6 +48,11 @@ export interface SearchResult {
 }
 
 const onOff = (on: boolean) => (on ? "On" : "Off");
+const DEFAULT_AGENTS = [
+  { id: "", label: "None (ask each time)" },
+  { id: "claude", label: "Claude" },
+  { id: "codex", label: "Codex" },
+];
 const n = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
 const labelOf = (list: readonly { id: string; label: string }[], id: string) => list.find((x) => x.id === id)?.label ?? id;
 
@@ -101,13 +107,17 @@ function index(c: SearchContext): Entry[] {
     ...c.projects.flatMap((p): Entry[] => {
       const route: SettingsRoute = { page: "project", host: p.host, id: p.id };
       const path = `Projects › ${p.name}`;
+      const cfg = p.config;
+      // Unknown until the config has been read: no value rather than a wrong one.
+      const script = (v: string | null | undefined) => (cfg ? v?.trim() || "Not set" : "");
+      const agents = cfg ? Object.keys(cfg.agents ?? {}).length : 0;
       return [
-        { label: "Setup script", path, route, setting: "project-setup", value: "" },
-        { label: "Run script", path, route, setting: "project-run", value: "" },
-        { label: "Archive script", path, route, setting: "project-archive", value: "" },
-        { label: "Default agent", path, route, setting: "project-default-agent", value: "" },
-        { label: "Custom agents", path, route, setting: "project-agents", value: "" },
-        { label: "Base branch", path, route, setting: "project-base", value: p.base_branch },
+        { label: "Setup script", path, route, setting: "project-setup", value: script(cfg?.setup) },
+        { label: "Run script", path, route, setting: "project-run", value: script(cfg?.run) },
+        { label: "Archive script", path, route, setting: "project-archive", value: script(cfg?.archive) },
+        { label: "Default agent", path, route, setting: "project-default-agent", value: cfg ? labelOf(DEFAULT_AGENTS, cfg.default_agent ?? "") : "" },
+        { label: "Custom agents", path, route, setting: "project-agents", value: cfg ? (agents ? n(agents, "agent") : "None") : "" },
+        { label: "Base branch", path, route, setting: "project-base", value: cfg?.base_branch?.trim() || p.base_branch },
       ];
     }),
   ];

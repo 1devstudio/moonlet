@@ -72,6 +72,23 @@ describe("searching settings (X43)", () => {
     expect(shown("split pane right")).toEqual([["Split pane right", "App › Keyboard shortcuts", "⌘D"]]);
   });
 
+  it("shows a project's scripts and agents once its config is known", () => {
+    const withConfig: SearchContext = {
+      ...ctx,
+      projects: [{ host: "local", id: "p1", name: "storefront", base_branch: "main", config: { setup: "pnpm install", run: "pnpm dev --port 4000", archive: null, default_agent: "aider", base_branch: "develop", agents: { aider: "aider --model sonnet" } } }],
+    };
+    expect(searchSettings("script", withConfig).filter((r) => r.path === "Projects › storefront").map((r) => [r.before + r.hit + r.after, r.value])).toEqual([
+      ["Setup script", "pnpm install"],
+      ["Run script", "pnpm dev --port 4000"],
+      ["Archive script", "Not set"],
+    ]);
+    expect(searchSettings("agent", withConfig).filter((r) => r.path === "Projects › storefront").map((r) => [r.before + r.hit + r.after, r.value])).toEqual([
+      ["Default agent", "aider"],
+      ["Custom agents", "1 agent"],
+    ]);
+    expect(searchSettings("base branch", withConfig)[0].value).toBe("develop");
+  });
+
   it("finds nothing for a blank query", () => {
     expect(searchSettings("  ", ctx)).toEqual([]);
   });

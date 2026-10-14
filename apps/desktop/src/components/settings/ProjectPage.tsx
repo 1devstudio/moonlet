@@ -30,7 +30,7 @@ function ProjectIcon() {
 
 export function ProjectPage({ host, id, focus }: { host: string; id: string; focus?: "run" }) {
   const project = useStore((s) => s.projects[host]?.find((p) => p.id === id));
-  const remote = useStore((s) => (s.hosts[host]?.remote ? host : null));
+  const remote = useStore((s) => (s.hosts[host]?.remote ? (s.hosts[host]?.label ?? host) : null));
   const home = useStore((s) => s.hosts[host]?.home ?? null);
   const [file, setFile] = useState<ProjectConfigFile | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
