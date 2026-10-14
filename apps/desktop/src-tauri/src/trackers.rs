@@ -30,15 +30,38 @@ fn fail(message: impl std::fmt::Display) -> TrackerError {
 
 type Res<T> = Result<T, TrackerError>;
 
-/// The API base of a tracker; e2e builds point every tracker at a mock server.
+/// A Jira Cloud host as the user typed it, or why it can't be one. Only such
+/// a host ever receives the Jira token.
+fn jira_site(input: &str) -> Res<String> {
+    let site = input.trim().trim_start_matches("https://").trim_end_matches('/').to_ascii_lowercase();
+    let plain = !site.is_empty() && site.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    let label = site.strip_suffix(".atlassian.net").or_else(|| site.strip_suffix(".jira.com"));
+    match label {
+        Some(l) if plain && !l.is_empty() && !l.starts_with('.') && !l.contains("..") => Ok(site),
+        _ => Err(fail(format!("{} is not a Jira Cloud site, such as acme.atlassian.net", input.trim()))),
+    }
+}
+
+/// An issue, list or team id that goes into a URL path: letters, digits, `-` and `_` only.
+fn safe_id(id: &str) -> Res<&str> {
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        Ok(id)
+    } else {
+        Err(fail(format!("unexpected id from the tracker: {id}")))
+    }
+}
+
+/// The API base of a tracker. Only an e2e build can point trackers at a mock
+/// server, so no environment variable can send a token elsewhere.
 fn base(kind: TrackerKind, site: &str) -> String {
-    let name = match kind {
-        TrackerKind::Linear => "linear",
-        TrackerKind::Jira => "jira",
-        TrackerKind::Clickup => "clickup",
-        TrackerKind::Github => "github",
-    };
+    #[cfg(feature = "e2e")]
     if let Ok(mock) = std::env::var("MOONLET_TRACKER_BASE") {
+        let name = match kind {
+            TrackerKind::Linear => "linear",
+            TrackerKind::Jira => "jira",
+            TrackerKind::Clickup => "clickup",
+            TrackerKind::Github => "github",
+        };
         return format!("{}/{name}", mock.trim_end_matches('/'));
     }
     match kind {
@@ -86,8 +109,10 @@ impl Session {
 
     fn jira(&self, method: reqwest::Method, path: &str) -> Res<reqwest::RequestBuilder> {
         let (email, token) = self.token.split_once(':').ok_or_else(|| fail("the saved Jira token is broken; reconnect"))?;
+        // The site comes from trackers.toml, which can be edited: check it again.
+        let site = jira_site(&self.conn.site)?;
         Ok(client()?
-            .request(method, format!("{}{path}", base(TrackerKind::Jira, &self.conn.site)))
+            .request(method, format!("{}{path}", base(TrackerKind::Jira, &site)))
             .basic_auth(email, Some(token))
             .header("Accept", "application/json"))
     }
@@ -174,10 +199,10 @@ pub async fn tracker_connect(req: ConnectRequest) -> Res<Connected> {
             (org, name, token.clone(), "api_key")
         }
         TrackerKind::Jira => {
-            let site = req.site.trim().trim_start_matches("https://").trim_end_matches('/').to_ascii_lowercase();
-            if site.is_empty() || req.email.trim().is_empty() {
+            if req.email.trim().is_empty() {
                 return Err(fail("Jira needs the site, your email and an API token"));
             }
+            let site = jira_site(&req.site)?;
             let s = Session { conn: placeholder(TrackerKind::Jira, &site), token: format!("{}:{token}", req.email.trim()) };
             let raw = s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
             let (_, name) = jira::parse_myself(&raw)?;
@@ -227,9 +252,11 @@ pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
         TrackerKind::Linear => pairs(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?)?),
         TrackerKind::Jira => pairs(jira::parse_projects(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/project/search?maxResults=100")?).await?)?),
         TrackerKind::Clickup => {
-            let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/team/{}/space", s.conn.site))?).await?;
+            let team = safe_id(&s.conn.site)?;
+            let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/team/{team}/space"))?).await?;
             let mut lists = Vec::new();
             for (space, _) in clickup::parse_spaces(&raw)? {
+                let space = safe_id(&space)?;
                 let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/space/{space}/list"))?).await?;
                 lists.extend(clickup::parse_lists(&raw)?);
                 let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/space/{space}/folder"))?).await?;
@@ -277,6 +304,7 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
             let since = moonlet_core::paths::now_ms().saturating_sub(14 * 86_400_000);
             let mut out = Vec::new();
             for list in &keys {
+                let list = safe_id(list)?;
                 for page in 0..5 {
                     let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, since);
                     let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &path)?).await?;
@@ -311,6 +339,8 @@ pub struct MoveRequest {
 #[tauri::command]
 pub async fn tracker_update(req: MoveRequest) -> Res<()> {
     let s = Session::load(&req.id)?;
+    safe_id(&req.task)?;
+    safe_id(&req.source)?;
     match s.conn.kind {
         TrackerKind::Linear => {
             let mut input = json!({});
@@ -371,4 +401,27 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
         TrackerKind::Github => return Err(fail("GitHub goes through gh")),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_jira_cloud_host_gets_the_token() {
+        assert_eq!(jira_site(" https://ACME.atlassian.net/ ").unwrap(), "acme.atlassian.net");
+        assert_eq!(jira_site("acme.jira.com").unwrap(), "acme.jira.com");
+        for bad in ["evil.com", "user@evil.com#.atlassian.net", "evil.com/.atlassian.net", "acme.atlassian.net.evil.com", ".atlassian.net"] {
+            assert!(jira_site(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn ids_in_a_url_path_are_plain() {
+        assert_eq!(safe_id("10002").unwrap(), "10002");
+        assert_eq!(safe_id("ENG-42").unwrap(), "ENG-42");
+        for bad in ["../myself", "1/transitions", "a?b", ""] {
+            assert!(safe_id(bad).is_err(), "{bad}");
+        }
+    }
 }
