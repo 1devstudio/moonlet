@@ -82,10 +82,10 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Terminal
 
-- [ ] A strip lists the session's shell, run and setup terminals by title, plus **+** for a new shell.
-- [ ] The terminal shows command blocks (T9): each with its directory, duration, exit status, the command and its output. A failed block offers **Send to Claude** (its text into the session's chat composer), **Re-run** and **Copy**.
-- [ ] The command line at the bottom shows the directory and branch and sends a command with ↵. A key bar above the keyboard has esc, tab, ctrl, ↑, ↓, ←, →, `|`, `~`. (`lib/keyBar.test.ts` for the bytes each key sends, ctrl+c as `\x03`)
-- [ ] **Blocks ▾** switches to the plain terminal (xterm) for full-screen programs.
+- [x] A strip lists the session's shell, run and setup terminals by title, plus **+** for a new shell. (`shellTerminals` in `chatView.test.ts`)
+- [x] The terminal shows command blocks: the phone feeds the shell's output to a headless terminal of the PTY's size (it never resizes the PTY, which the Mac's window shares) and splits it by the OSC 133 marks, as the desktop's Blocks mode does (T8). Each block shows its directory, duration, exit status, the command and its last 300 lines of output. A failed block offers **Send to Claude** (the block, fenced, into the session's chat composer), **Re-run** and **Copy**. (`lib/blocks.test.ts` with a real zsh snapshot)
+- [x] The command line at the bottom shows the directory and branch and sends a command with ↵. A key bar has esc, tab, ctrl, ↑, ↓, ←, →, `|`, `~`; ctrl turns the next letter typed into its control character. (`lib/keyBar.test.ts` for the bytes each key sends, ctrl+c as `\x03`)
+- [x] **Blocks ▾** switches to the raw terminal (xterm, read-only, scaled to fit the PTY's columns) for full-screen programs.
 
 ### Changes and diff review
 
