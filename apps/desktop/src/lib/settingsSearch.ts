@@ -71,6 +71,9 @@ function trackerEntries(t: TrackersConfig | undefined): [string | undefined, str
     ["branch-max", "Max length of branch names", String(t.github.max_length)],
     ["sync-interval", "Refresh issues", SYNC_INTERVALS.find((i) => i.value === t.sync.interval)?.label ?? `Every ${t.sync.interval} s`, "sync"],
     ["sync-notify", "Notify when a task changes state outside moonlet", onOff(t.sync.notify), "notification"],
+    ["link-branch", "Link a session when its branch name contains the issue key", onOff(t.link?.branch ?? true), "linking"],
+    ["link-pr", "Link a session when its pull request mentions the key or closes the issue", onOff(t.link?.pr ?? true), "linking"],
+    ["link-title", "Suggest a task whose title is a session's name", onOff(t.link?.title ?? true), "linking"],
   ];
 }
 

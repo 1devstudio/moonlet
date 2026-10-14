@@ -8,7 +8,7 @@ import { errorToast, selectSession, shownWorkspace, useStore } from "../../lib/s
 import { type Column, type Task, taskStart } from "../../lib/tasks";
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, moveTask, putOffDrift, recordActivity, refreshTasks, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, moveTask, putOffDrift, recordActivity, refreshTasks, rulesFor, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, autoFixes, driftKey, prComments, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { hostsApi } from "../../lib/daemon";
@@ -70,9 +70,10 @@ function useTaskSync() {
   // "Every session's PR is merged" at Automatically closes the issue, once (X46).
   const { board } = useWorkspaceBoard(ws);
   const config = useTasks((t) => trackersConfig(t));
+  const paused = useTasks((t) => t.paused);
   useEffect(() => {
     if (!ws || !board) return;
-    const rulesOf = (c: Card) => trackerSettings(config, c.task.connection).rules;
+    const rulesOf = (c: Card) => rulesFor(config, c.task);
     for (const card of autoFixes(board, rulesOf, autoFixed())) {
       markAutoFixed(driftKey(card));
       void fixDrift(ws.host, ws.id, card);
@@ -86,7 +87,7 @@ function useTaskSync() {
           .then(() => recordActivity(c.card.task, "moonlet commented the pull request's link"))
           .catch((e) => errorToast(e?.message ?? e));
     }
-  }, [ws, board, config]);
+  }, [ws, board, config, paused]);
 }
 
 /** The shown workspace's tasks and their board. */
@@ -100,14 +101,15 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
   const data = useTasks((t) => (ws ? t.data[wsKey(ws.host, ws.id)] : undefined));
   const notNow = useTasks((t) => t.notNow);
   const config = useTasks((t) => trackersConfig(t));
+  const paused = useTasks((t) => t.paused);
   // What the board reads of the main store; other changes (terminal output) don't rebuild it.
   const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads]));
   return useMemo(() => {
     if (!ws || !data) return { ws, data, board: null, unlinked: [] };
     const input = boardInput(useStore.getState(), ws.host, ws.id, data, config);
-    const board = applyRules(tasksBoard(input), (c) => trackerSettings(config, c.task.connection).rules);
-    return { ws, data, board: withoutPutOff(board, notNow), unlinked: sessionsWithoutTask(input.sessions, data.tasks) };
-  }, [ws, data, notNow, config, ...deps]);
+    const board = applyRules(tasksBoard(input), (c) => rulesFor(config, c.task));
+    return { ws, data, board: withoutPutOff(board, notNow), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link) };
+  }, [ws, data, notNow, config, paused, ...deps]);
 }
 
 /** The sidebar body in Tasks mode: views with counts, then the sync line. */
@@ -199,7 +201,7 @@ export function startSession(host: string, workspaceId: string, card: Card, work
   const settings = trackerSettings(trackersConfig(useTasks.getState()), card.task.connection);
   const start = {
     ...taskStart(card.task, data?.repos ?? {}, data?.sourceProjects ?? {}),
-    assign: startAction(card.task, settings.rules.session_starts),
+    assign: startAction(card.task, rulesFor(trackersConfig(useTasks.getState()), card.task).session_starts),
     template: settings.branch_template || undefined,
     maxLen: settings.max_length,
   };

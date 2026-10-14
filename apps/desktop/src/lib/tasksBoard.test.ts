@@ -174,6 +174,16 @@ describe("sessions without a task (X45 list)", () => {
   });
 });
 
+describe("link rules on the board (X44)", () => {
+  it("suggests by title only with the title rule on, and links by branch only with the branch rule on", () => {
+    const tasks = [task("CDK-41", "todo", { title: "Changelog themes" })];
+    const off = { branch: false, pr: true, title: false };
+    expect(sessionsWithoutTask([session("Changelog themes", "themes")], tasks, off).map((u) => u.hint)).toEqual([""]);
+    const b = tasksBoard({ tasks, sessions: [session("Themes", "cdk-41-themes")], worktrees: [], sessionStartRule: "auto", link: off });
+    expect(b.todo[0].rows).toEqual([]);
+  });
+});
+
 describe("outOfSync", () => {
   it("counts the cards with a drift chip, for the Tasks button and its view", () => {
     const b = tasksBoard({

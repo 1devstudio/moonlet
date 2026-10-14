@@ -81,19 +81,29 @@ export interface SessionLinkFacts {
  * closes the GitHub issue). Nothing once the user unlinked it.
  * `originRepo` is the project's `owner/repo` on GitHub, if any.
  */
+/** "Link a session to an issue when…" (X44); `title` only ever suggests. */
+export interface LinkRules {
+  branch: boolean;
+  pr: boolean;
+  title: boolean;
+}
+
+export const DEFAULT_LINK: LinkRules = { branch: true, pr: true, title: true };
+
 export function taskForSession(
   s: SessionLinkFacts,
   pr: PullRequest | null | undefined,
   originRepo: string | null,
   tasks: Task[],
+  rules: LinkRules = DEFAULT_LINK,
 ): Task | null {
   if (s.task) return tasks.find((t) => t.connection === s.task?.connection && t.key === s.task.key) ?? null;
   if (s.task_unlinked) return null;
   const sameRepo = (t: Task) => !!t.github && !!originRepo && t.github.repo.toLowerCase() === originRepo.toLowerCase();
   const number = githubBranchNumber(s.branch);
-  const byBranch = tasks.find((t) => (t.github ? sameRepo(t) && t.github.number === number : mentionsKey(s.branch, t.key)));
+  const byBranch = rules.branch ? tasks.find((t) => (t.github ? sameRepo(t) && t.github.number === number : mentionsKey(s.branch, t.key))) : undefined;
   if (byBranch) return byBranch;
-  if (!pr) return null;
+  if (!pr || !rules.pr) return null;
   return (
     tasks.find((t) => (t.github ? sameRepo(t) && t.github.closingPrs.includes(pr.number) : mentionsKey(pr.title, t.key))) ?? null
   );

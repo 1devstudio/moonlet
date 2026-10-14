@@ -9,7 +9,7 @@ import { selectSession, useStore } from "../../lib/store";
 import { acceptanceCriteria, findPasted, linkChoices } from "../../lib/taskLinking";
 import type { Task } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
-import { ensureTasks, linkTask, openInTasksMode, useTasks } from "../../lib/tasksStore";
+import { ensureTasks, linkTask, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Dialog, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
@@ -121,6 +121,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
           </div>
         ))}
       </section>
+      <KeepInStep task={card.task} />
       <div className="flex gap-2">
         <Button size="sm" variant="ghost" onClick={() => useStore.setState({ dialog: { kind: "link-task", host, session: ws.id } })}>
           Link to another task
@@ -193,5 +194,21 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
       </div>
       <p className="mt-3 ui-text-11.5 text-faint">Links live in moonlet. The issue gets a link back to the PR when one opens.</p>
     </Dialog>
+  );
+}
+
+/** "Keep <tracker> in step" for this one task: off stops every rule for it (X46). */
+function KeepInStep({ task }: { task: Task }) {
+  const on = useTasks((t) => !t.paused[`${task.connection} ${task.key}`]);
+  return (
+    <label className="flex items-start gap-2 rounded-lg border border-border px-3 py-2 ui-text-12.5">
+      <input type="checkbox" role="switch" aria-label={`Keep ${trackerName(task)} in step`} checked={on} onChange={(e) => setKeepInStep(task, e.target.checked)} className="mt-0.5" />
+      <span>
+        <span className="text-fg">Keep {trackerName(task)} in step</span>
+        <span className="block text-muted">
+          {on ? "Starting sessions, opening and merging their PRs move this issue as Settings › Task trackers says." : "moonlet leaves this issue alone, and shows no out-of-sync chips for it."}
+        </span>
+      </span>
+    </label>
   );
 }
