@@ -22,7 +22,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 ### Mode switch
 
-- [ ] The sidebar header has a two-button mode switch, Sessions and Tasks, titled `Sessions ⌃⌘T` and `Tasks ⌃⌘T`. ⌃⌘T toggles between them; it is a Run action (X19) and can be rebound.
+- [x] The sidebar header has a two-button mode switch, Sessions and Tasks, titled `Sessions ⌃⌘T` and `Tasks ⌃⌘T`. ⌃⌘T toggles between them; it is a Run action (X19) and can be rebound. (`runActions.test.ts`, `tasksStore.test.ts`, `tasks-mode.e2e.ts`)
 - [ ] The Tasks button shows an accent dot and the label `Tasks, <n> out of sync` when tasks are out of sync.
 - [ ] With no source in the current workspace, the Tasks button opens the "Connect a task tracker" popover instead: Linear, Jira Cloud, ClickUp and GitHub Issues rows (each opening its connect flow, X44), "Open Settings › Task trackers" and "Not now".
 - [ ] The mode is remembered per workspace across restarts.
@@ -38,9 +38,9 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 - [ ] The header shows the view name and a line such as `Moonlet · Cycle 14 · Oct 7 – Oct 20 · 9 tasks · 6 sessions`, then filters (`Assignee: me`, `Hide empty Done`), the Board / List switch and Refresh.
 - [ ] Columns Todo, In Progress and In Review, each with its glyph and count. Done is a narrow collapsed column with its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`); clicking it opens List.
 - [ ] **Card:** key, priority bars, project (when different from the workspace's main one), assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`.
-- [ ] **Row meta**, first match wins: `needs you` (amber) when the session waits on the user; `#<n>` in its PR state colour, `#<n> merged` or `#<n> ✕` for failing checks; `◑ <n>` when the agent has running subagents (X42); otherwise `+<added>`.
-- [ ] The card is outlined amber when any session needs the user, and highlighted with the accent when selected.
-- [ ] Task state is shown by shape (empty ring Todo, half Progress, three-quarters Review, filled check Done); agent state by colour, the same `StateGlyph` as the Sessions sidebar.
+- [x] **Row meta**, first match wins: `needs you` (amber) when the session waits on the user; `#<n>` in its PR state colour, `#<n> merged` or `#<n> ✕` for failing checks; `◑ <n>` when the agent has running subagents (X42); otherwise `+<added>`. (`tasksBoard.test.ts`)
+- [x] The card is outlined amber when any session needs the user, and highlighted with the accent when selected. (`tasksBoard.test.ts`)
+- [x] Task state is shown by shape (empty ring Todo, half Progress, three-quarters Review, filled check Done); agent state by colour, the same `StateGlyph` as the Sessions sidebar.
 
 ### Out of sync
 
@@ -78,7 +78,7 @@ A task is out of sync when the work and the tracker disagree. Each case has a ch
 
 The designs are the "Tasks mode · Board", "Tasks mode · List", "Task card states" and "Tasks with no tracker connected" boards. Colours: accent `#d97757` for selection and out of sync, amber `#f2c94c` for needs you, green, purple and red for PR open, merged and failing, the same as X2.
 
-Empty states: no tasks in the view ("Nothing assigned to you in Cycle 14"), a failed sync (last good list with `Linear sync failed 3 min ago · Retry`), loading (skeleton cards).
+Empty states: a workspace with no source shows "No task tracker in this workspace" in the centre (until X44's Settings page and the connect popover ship, a source is a project with a GitHub origin); no tasks in the view ("Nothing assigned to you in Cycle 14"), a failed sync (last good list with `Linear sync failed 3 min ago · Retry`), loading (skeleton cards).
 
 ## Protocol and RPCs
 
