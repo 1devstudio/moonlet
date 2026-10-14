@@ -350,7 +350,9 @@ async fn save_connection(kind: TrackerKind, site: String, account: String, secre
     let old = config.connections.iter().find(|c| c.id == id).cloned();
     let (sources, states) = old.map(|c| (c.sources, c.states)).unwrap_or_default();
     config.connections.retain(|c| c.id != id);
-    let connection = Connection { id: id.clone(), kind, site, account, auth: auth.into(), sources, states };
+    // Jira's secret is `email:token`; the email is not secret and fills Reconnect.
+    let email = (kind == TrackerKind::Jira).then(|| secret.split_once(':').map(|(e, _)| e.to_string())).flatten();
+    let connection = Connection { id: id.clone(), kind, site, account, auth: auth.into(), email, sources, states };
     config.connections.push(connection.clone());
     crate::write_trackers(&path, &config).map_err(fail)?;
     let sources = tracker_sources(id).await?;
@@ -364,6 +366,7 @@ fn placeholder(kind: TrackerKind, site: &str) -> Connection {
         site: site.into(),
         account: String::new(),
         auth: "token".into(),
+        email: None,
         sources: vec![],
         states: Default::default(),
     }
