@@ -1,0 +1,74 @@
+//! A tracker issue in the shape the app's board reads (`Task` in
+//! `apps/desktop/src/lib/tasks.ts`), whichever tracker it came from.
+
+use serde::Serialize;
+
+use crate::states::Column;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerTask {
+    /// The connection id (`jira:acme.atlassian.net`).
+    pub connection: String,
+    /// `MOON-142`, `OPS-12`, a ClickUp custom id or `CU-<id>`.
+    pub key: String,
+    pub title: String,
+    pub url: String,
+    pub column: Column,
+    /// 0–3 bars.
+    pub priority: u8,
+    pub assignees: Vec<String>,
+    pub labels: Vec<String>,
+    /// Markdown.
+    pub description: String,
+    pub updated_ms: u64,
+    /// What moves and comments need: the tracker's own ids and state.
+    pub tracker: TrackerRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerRef {
+    /// The issue's id in the tracker (Linear's UUID, Jira's id, ClickUp's task id).
+    pub id: String,
+    /// The state's name as the tracker shows it ("In Review").
+    pub state: String,
+    /// The team, project or list the issue is in.
+    pub source: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_serialises_as_the_apps_task() {
+        let t = TrackerTask {
+            connection: "linear:acme".into(),
+            key: "MOON-142".into(),
+            title: "Remote hosts sidebar".into(),
+            url: "https://linear.app/acme/issue/MOON-142".into(),
+            column: Column::InProgress,
+            priority: 3,
+            assignees: vec!["Sam Rivera".into()],
+            labels: vec!["sidebar".into()],
+            description: "Add a Hosts section.".into(),
+            updated_ms: 1_789_528_295_000,
+            tracker: TrackerRef {
+                id: "a1b2".into(),
+                state: "In Progress".into(),
+                source: "MOON".into(),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            serde_json::json!({
+                "connection": "linear:acme", "key": "MOON-142", "title": "Remote hosts sidebar",
+                "url": "https://linear.app/acme/issue/MOON-142", "column": "in_progress", "priority": 3,
+                "assignees": ["Sam Rivera"], "labels": ["sidebar"], "description": "Add a Hosts section.",
+                "updatedMs": 1_789_528_295_000u64,
+                "tracker": {"id": "a1b2", "state": "In Progress", "source": "MOON"}
+            })
+        );
+    }
+}

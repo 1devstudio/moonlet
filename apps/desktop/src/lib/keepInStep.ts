@@ -18,7 +18,7 @@ export function driftFix(card: Card): FixPlan | null {
   const d = card.drift;
   if (!d) return null;
   if (d.kind === "done_open") return { kind: "clean_up", sessions: card.rows.map((r) => r.session.id), worktrees: card.orphans.map((w) => w.path) };
-  const column = d.kind === "merged" ? "done" : "in_progress";
+  const column = d.kind === "merged" ? "done" : d.kind === "pr_open" ? "in_review" : "in_progress";
   const gh = card.task.github;
   if (gh) return column === "done" ? { kind: "github", repo: gh.repo, number: gh.number, close: true } : null;
   return { kind: "move", column };
@@ -88,9 +88,17 @@ export interface Rules {
 /** The spec's defaults, as `moonlet-trackers` writes them for an empty file. */
 export const DEFAULT_RULES: Rules = { session_starts: "auto", pr_opens: "auto", all_merged: "suggest", pr_comment: "auto", issue_done: "suggest" };
 
-/** The board with the chips of rules turned Off removed. */
-export function applyRules(board: Board, rules: Rules): Board {
-  const off = (c: Card) => (c.drift?.kind === "merged" && rules.all_merged === "off") || (c.drift?.kind === "done_open" && rules.issue_done === "off");
+/** The rule each kind of chip follows. */
+const RULE_OF: Record<NonNullable<Card["drift"]>["kind"], keyof Rules> = {
+  merged: "all_merged",
+  started: "session_starts",
+  pr_open: "pr_opens",
+  done_open: "issue_done",
+};
+
+/** The board with the chips of rules turned Off removed; `rulesOf` gives a card's tracker's rules. */
+export function applyRules(board: Board, rulesOf: (c: Card) => Rules): Board {
+  const off = (c: Card) => !!c.drift && c.drift.kind !== "started" && rulesOf(c)[RULE_OF[c.drift.kind]] === "off";
   const strip = (cards: Card[]) => cards.map((c) => (off(c) ? { ...c, drift: null } : c));
   return { todo: strip(board.todo), in_progress: strip(board.in_progress), in_review: strip(board.in_review), done: strip(board.done) };
 }
@@ -100,11 +108,15 @@ export function applyRules(board: Board, rules: Rules): Board {
  * "every session's PR is merged" is Automatically, once per situation
  * (`done` holds the `driftKey`s already acted on).
  */
-export function autoFixes(board: Board, rules: Rules, done: Record<string, true>): Card[] {
-  if (rules.all_merged !== "auto") return [];
+export function autoFixes(board: Board, rulesOf: (c: Card) => Rules, done: Record<string, true>): Card[] {
   return Object.values(board)
     .flat()
-    .filter((c) => c.drift?.kind === "merged" && c.task.github && !done[driftKey(c)]);
+    .filter((c) => {
+      if (!c.drift || done[driftKey(c)]) return false;
+      if (c.drift.kind === "merged") return rulesOf(c).all_merged === "auto";
+      if (c.drift.kind === "pr_open") return !c.task.github && rulesOf(c).pr_opens === "auto";
+      return false;
+    });
 }
 
 const COLUMN_TEXT: Record<Exclude<Column, "hidden">, string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };

@@ -1,0 +1,118 @@
+{
+  "tasks": [
+    {
+      "id": "9hx",
+      "custom_id": null,
+      "name": "Fix login bug",
+      "text_content": "Users are unable to log in when SSO is enabled.",
+      "description": "Users are unable to log in when SSO is enabled.",
+      "markdown_description": "Users are unable to log in when **SSO** is enabled.",
+      "status": {
+        "id": "p7001234_FxGmgrnk",
+        "status": "in progress",
+        "color": "#d3d3d3",
+        "orderindex": 1,
+        "type": "custom"
+      },
+      "date_updated": "1567780450202",
+      "assignees": [
+        {
+          "id": 2772463,
+          "username": "Alex Johnson",
+          "color": "#FC575E",
+          "initials": "AJ",
+          "email": "user@company.com",
+          "profilePicture": null
+        }
+      ],
+      "tags": [
+        {
+          "name": "bug",
+          "tag_fg": "#EA80FC",
+          "tag_bg": "#EA80FC",
+          "creator": 183
+        }
+      ],
+      "priority": {
+        "color": "#f8ae00",
+        "id": "3",
+        "orderindex": "3",
+        "priority": "normal"
+      },
+      "team_id": "7002367",
+      "url": "https://app.clickup.com/t/9hx",
+      "list": {
+        "id": "15505202",
+        "name": "Sprint Backlog",
+        "access": true
+      }
+    },
+    {
+      "id": "9hz",
+      "custom_id": "ENG-42",
+      "name": "Update onboarding docs",
+      "text_content": "",
+      "description": "",
+      "markdown_description": "",
+      "status": {
+        "id": "p7002367_HxJmgqni",
+        "status": "to do",
+        "color": "#f8ae00",
+        "orderindex": 0,
+        "type": "open"
+      },
+      "date_updated": "1567780450202",
+      "assignees": [],
+      "tags": [],
+      "priority": null,
+      "team_id": "7002367",
+      "url": "https://app.clickup.com/t/9hz",
+      "list": {
+        "id": "15505202",
+        "name": "Sprint Backlog",
+        "access": true
+      }
+    },
+    {
+      "id": "86d2m1awy",
+      "custom_id": null,
+      "name": "Reproduce the issue on staging",
+      "text_content": "Done on staging-2.",
+      "description": "Done on staging-2.",
+      "markdown_description": "Done on `staging-2`.",
+      "status": {
+        "id": "p7002367_Kc0mpl3t",
+        "status": "complete",
+        "color": "#6bc950",
+        "orderindex": 2,
+        "type": "closed"
+      },
+      "date_updated": "1775848408603",
+      "assignees": [
+        {
+          "id": 183,
+          "username": "Alex Johnson",
+          "color": "#595d66",
+          "initials": "AJ",
+          "email": "user@company.com",
+          "profilePicture": null
+        }
+      ],
+      "tags": [],
+      "priority": {
+        "color": "#f50000",
+        "id": "1",
+        "orderindex": "1",
+        "priority": "urgent"
+      },
+      "team_id": "7002367",
+      "url": "https://app.clickup.com/t/86d2m1awy",
+      "list": {
+        "id": "15505202",
+        "name": "Sprint Backlog",
+        "access": true
+      }
+    }
+  ],
+  "last_page": true
+}

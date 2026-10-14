@@ -42,6 +42,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tauri-plugin-wdio = { version = "1", optional = true }
 
+# Tracker tokens in the Keychain (X44).
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
 [features]
 e2e = ["dep:tauri-plugin-wdio-webdriver", "dep:tauri-plugin-wdio"]
 

@@ -16,7 +16,62 @@ pub enum Rule {
 #[serde(default)]
 pub struct TrackersConfig {
     pub sync: Sync,
+    // A tracker left at its defaults is not written out.
+    #[serde(skip_serializing_if = "TrackerSettings::is_default")]
     pub github: TrackerSettings,
+    #[serde(skip_serializing_if = "TrackerSettings::is_default")]
+    pub linear: TrackerSettings,
+    #[serde(skip_serializing_if = "TrackerSettings::is_default")]
+    pub jira: TrackerSettings,
+    #[serde(skip_serializing_if = "TrackerSettings::is_default")]
+    pub clickup: TrackerSettings,
+    /// Signed-in accounts of Linear, Jira and ClickUp (GitHub uses `gh`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<Connection>,
+}
+
+/// One signed-in account of a tracker on one site; its token is in the Keychain
+/// under `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Connection {
+    /// `kind:site`, see [`connection_id`].
+    pub id: String,
+    pub kind: crate::TrackerKind,
+    /// The Linear organisation, the Jira host or the ClickUp workspace id.
+    pub site: String,
+    /// Who it is signed in as, for the Settings row.
+    pub account: String,
+    /// `api_key`, `token` or `oauth`.
+    pub auth: String,
+    #[serde(default)]
+    pub sources: Vec<Source>,
+}
+
+/// A team, project or list the user shows tasks from, with where its
+/// sessions start (X44 Sources).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Source {
+    /// The team key, project key or list id.
+    pub key: String,
+    pub name: String,
+    /// The moonlet project its sessions start in; empty until chosen.
+    #[serde(default)]
+    pub project: String,
+    /// `host/workspaceId` of the workspace that shows it; empty until chosen.
+    #[serde(default)]
+    pub workspace: String,
+}
+
+/// A connection's stable id: its tracker and site, so session links survive
+/// reconnecting and resolve on another Mac (X44).
+pub fn connection_id(kind: crate::TrackerKind, site: &str) -> String {
+    let kind = match kind {
+        crate::TrackerKind::Linear => "linear",
+        crate::TrackerKind::Jira => "jira",
+        crate::TrackerKind::Clickup => "clickup",
+        crate::TrackerKind::Github => "github",
+    };
+    format!("{kind}:{}", site.to_ascii_lowercase())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,6 +115,12 @@ impl Default for Sync {
             interval: 60,
             notify: true,
         }
+    }
+}
+
+impl TrackerSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -162,5 +223,47 @@ mod tests {
     fn a_bad_rule_names_its_key() {
         let err = parse("[github.rules]\nall_merged = \"always\"\n").unwrap_err();
         assert!(err.contains("all_merged"), "{err}");
+    }
+
+    #[test]
+    fn connections_with_their_sources() {
+        let text = r#"
+[[connections]]
+id = "jira:acme.atlassian.net"
+kind = "jira"
+site = "acme.atlassian.net"
+account = "Sam Rivera"
+auth = "token"
+
+[[connections.sources]]
+key = "OPS"
+name = "Operations"
+project = "p1"
+workspace = "local/acme"
+"#;
+        let c = parse(text).unwrap();
+        assert_eq!(
+            c.connections,
+            [Connection {
+                id: "jira:acme.atlassian.net".into(),
+                kind: crate::TrackerKind::Jira,
+                site: "acme.atlassian.net".into(),
+                account: "Sam Rivera".into(),
+                auth: "token".into(),
+                sources: vec![Source {
+                    key: "OPS".into(),
+                    name: "Operations".into(),
+                    project: "p1".into(),
+                    workspace: "local/acme".into()
+                }],
+            }]
+        );
+        assert_eq!(parse(&to_toml(&c)).unwrap(), c);
+        assert_eq!(
+            connection_id(crate::TrackerKind::Jira, "ACME.atlassian.net"),
+            "jira:acme.atlassian.net"
+        );
+        // Each tracker has its own branch names and rules.
+        assert_eq!(c.jira.rules.session_starts, Rule::Auto);
     }
 }

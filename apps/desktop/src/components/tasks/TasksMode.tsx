@@ -7,7 +7,7 @@ import { focusThrottle } from "../../lib/prPoll";
 import { selectSession, shownWorkspace, useStore } from "../../lib/store";
 import { type Column, taskStart } from "../../lib/tasks";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, putOffDrift, refreshTasks, setLayout, toggleTasksMode, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, putOffDrift, refreshTasks, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, autoFixes, driftKey, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
@@ -67,14 +67,14 @@ function useTaskSync() {
   }, [ws, interval]);
   // "Every session's PR is merged" at Automatically closes the issue, once (X46).
   const { board } = useWorkspaceBoard(ws);
-  const rules = useTasks((t) => trackersConfig(t).github.rules);
+  const config = useTasks((t) => trackersConfig(t));
   useEffect(() => {
     if (!ws || !board) return;
-    for (const card of autoFixes(board, rules, autoFixed())) {
+    for (const card of autoFixes(board, (c) => trackerSettings(config, c.task.connection).rules, autoFixed())) {
       markAutoFixed(driftKey(card));
       void fixDrift(ws.host, ws.id, card);
     }
-  }, [ws, board, rules]);
+  }, [ws, board, config]);
 }
 
 /** The shown workspace's tasks and their board. */
@@ -87,14 +87,15 @@ function useWorkspaceTasks() {
 export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
   const data = useTasks((t) => (ws ? t.data[wsKey(ws.host, ws.id)] : undefined));
   const notNow = useTasks((t) => t.notNow);
-  const rules = useTasks((t) => trackersConfig(t).github.rules);
+  const config = useTasks((t) => trackersConfig(t));
   // What the board reads of the main store; other changes (terminal output) don't rebuild it.
   const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads]));
   return useMemo(() => {
     if (!ws || !data) return { ws, data, board: null, unlinked: [] };
-    const input = boardInput(useStore.getState(), ws.host, ws.id, data, rules);
-    return { ws, data, board: withoutPutOff(applyRules(tasksBoard(input), rules), notNow), unlinked: sessionsWithoutTask(input.sessions, data.tasks) };
-  }, [ws, data, notNow, rules, ...deps]);
+    const input = boardInput(useStore.getState(), ws.host, ws.id, data, config);
+    const board = applyRules(tasksBoard(input), (c) => trackerSettings(config, c.task.connection).rules);
+    return { ws, data, board: withoutPutOff(board, notNow), unlinked: sessionsWithoutTask(input.sessions, data.tasks) };
+  }, [ws, data, notNow, config, ...deps]);
 }
 
 /** The sidebar body in Tasks mode: views with counts, then the sync line. */
@@ -147,12 +148,12 @@ function openSession(host: string, sessionId: string) {
 /** Opens the new-session composer for a task, or for one of its worktrees without a session (X46). */
 export function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
-  const github = trackersConfig(useTasks.getState()).github;
+  const settings = trackerSettings(trackersConfig(useTasks.getState()), card.task.connection);
   const start = {
-    ...taskStart(card.task, data?.repos ?? {}),
-    assign: startAction(card.task, github.rules.session_starts),
-    template: github.branch_template || undefined,
-    maxLen: github.max_length,
+    ...taskStart(card.task, data?.repos ?? {}, data?.sourceProjects ?? {}),
+    assign: startAction(card.task, settings.rules.session_starts),
+    template: settings.branch_template || undefined,
+    maxLen: settings.max_length,
   };
   useStore.setState({
     dialog: {
