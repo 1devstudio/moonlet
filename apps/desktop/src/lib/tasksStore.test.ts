@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setKeepInStep, startedFromTask, syncTasks, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setExpanded, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -528,5 +528,18 @@ describe("the state mapping (X44 Workflow states)", () => {
     const config = { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear" as const, site: "acme", account: "Ada", auth: "api_key", sources: [], states: { QA: "in_review" as const } }] };
     expect(boardInput(useStore.getState(), "local", "personal", data, config).tasks.map((t) => t.column)).toEqual(["in_review"]);
     expect(boardInput(useStore.getState(), "local", "personal", data, DEFAULT_CONFIG).tasks.map((t) => t.column)).toEqual(["in_progress"]);
+  });
+});
+
+describe("the List layout's open rows (X45)", () => {
+  it("are remembered across restarts", async () => {
+    setExpanded({});
+    toggleExpanded("linear:acme MOON-1");
+    toggleExpanded("linear:acme MOON-2");
+    toggleExpanded("linear:acme MOON-2");
+    vi.resetModules();
+    const restarted = await import("./tasksStore");
+    expect(restarted.useTasks.getState().expanded).toEqual({ "linear:acme MOON-1": true });
+    setExpanded({});
   });
 });
