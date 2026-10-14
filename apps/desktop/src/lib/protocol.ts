@@ -406,6 +406,7 @@ export interface PullRequest {
   title: string;
   checks: CheckRun[];
   review_decision: string | null;
+  draft?: boolean;
 }
 
 /** A GitHub stack of dependent PRs (spec X11); `prs` is bottom first. */

@@ -138,6 +138,13 @@ describe("rules from Settings › Task trackers (X44, X46)", () => {
     expect(Object.values(on).flat().map((c) => c.drift?.kind)).toEqual(["merged", "done_open"]);
   });
 
+  it("drops the work-started chip too when its rule is Off, as the Keep in step switch does", () => {
+    const started = card(task("MOON-153", "todo"), { kind: "started", text: "Session running", fix: "In Progress" }, [session("guard", "/w/guard")]);
+    const b = { todo: [started], in_progress: [], in_review: [], done: [] };
+    expect(applyRules(b, () => ({ ...DEFAULT_RULES, session_starts: "off" })).todo[0].drift).toBe(null);
+    expect(applyRules(b, () => DEFAULT_RULES).todo[0].drift?.kind).toBe("started");
+  });
+
   it("closes merged GitHub issues by itself when the rule is Automatically, once per situation", () => {
     expect(autoFixes(board, () => DEFAULT_RULES, {})).toEqual([]);
     const auto = () => ({ ...DEFAULT_RULES, all_merged: "auto" as const });
@@ -197,9 +204,12 @@ describe("prComments (X46: a pull request opens → comment its link)", () => {
     const ghCard = card(task("acme/web#7", "open", { repo: "acme/web", number: 7, closingPrs: [] }), null, [{ ...session("fix", "/w/fix"), pr: open(70, "u") }]);
     const board = { todo: [], in_progress: [ghCard], in_review: [hosts], done: [] };
     expect(prComments(board, () => DEFAULT_RULES, {})).toEqual([
-      { card: hosts, key: "comment linear:acme MOON-142 #131", text: "Opened a pull request: Hosts section https://github.com/acme/app/pull/131" },
+      { card: hosts, key: "comment linear:acme MOON-142 https://github.com/acme/app/pull/131", text: "Opened a pull request: Hosts section https://github.com/acme/app/pull/131" },
     ]);
-    expect(prComments(board, () => DEFAULT_RULES, { "comment linear:acme MOON-142 #131": true })).toEqual([]);
+    expect(prComments(board, () => DEFAULT_RULES, { "comment linear:acme MOON-142 https://github.com/acme/app/pull/131": true })).toEqual([]);
     expect(prComments(board, () => ({ ...DEFAULT_RULES, pr_comment: "off" }), {})).toEqual([]);
+    // A draft is not opened yet.
+    const draft = card(linearTask, null, [{ ...session("hosts", "/w/hosts"), pr: { ...open(131, "https://github.com/acme/app/pull/131"), draft: true } }]);
+    expect(prComments({ todo: [], in_progress: [], in_review: [draft], done: [] }, () => DEFAULT_RULES, {})).toEqual([]);
   });
 });

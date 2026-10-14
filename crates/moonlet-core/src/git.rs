@@ -1147,7 +1147,7 @@ pub async fn pr_list_head(path: &Path, branch: &str) -> Result<serde_json::Value
 }
 
 /// Fields `parse_pr` reads, plus `createdAt` for `session_pr`.
-const PR_FIELDS: &str = "number,url,state,title,reviewDecision,statusCheckRollup,createdAt";
+const PR_FIELDS: &str = "number,url,state,title,isDraft,reviewDecision,statusCheckRollup,createdAt";
 
 /// Maps one PR object from `gh pr view` or `gh pr list`.
 fn parse_pr(v: &serde_json::Value) -> PullRequest {
@@ -1167,6 +1167,7 @@ fn parse_pr(v: &serde_json::Value) -> PullRequest {
             .as_str()
             .filter(|s| !s.is_empty())
             .map(String::from),
+        draft: v["isDraft"].as_bool().unwrap_or(false),
     }
 }
 
@@ -1784,6 +1785,16 @@ pub(crate) mod tests {
         // A session created at 06:00 that day did open #25.
         let pr = session_pr(&merged_pr_25(), 1791093600000, 0).unwrap();
         assert_eq!((pr.number, pr.state.as_str()), (25, "merged"));
+    }
+
+    #[test]
+    fn a_draft_pr_says_so() {
+        let list = serde_json::json!([
+            {"createdAt": "2026-10-04T18:20:00Z", "number": 31, "state": "OPEN", "isDraft": true,
+             "title": "fix: lowercase paths", "url": "https://github.com/1devstudio/jaunt/pull/31"}
+        ]);
+        assert!(session_pr(&list, 0, 0).unwrap().draft);
+        assert!(!session_pr(&merged_pr_25(), 0, 0).unwrap().draft);
     }
 
     #[test]

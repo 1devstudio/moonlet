@@ -108,7 +108,7 @@ const RULE_OF: Record<NonNullable<Card["drift"]>["kind"], keyof Rules> = {
 
 /** The board with the chips of rules turned Off removed; `rulesOf` gives a card's tracker's rules. */
 export function applyRules(board: Board, rulesOf: (c: Card) => Rules): Board {
-  const off = (c: Card) => !!c.drift && c.drift.kind !== "started" && rulesOf(c)[RULE_OF[c.drift.kind]] === "off";
+  const off = (c: Card) => !!c.drift && rulesOf(c)[RULE_OF[c.drift.kind]] === "off";
   const strip = (cards: Card[]) => cards.map((c) => (off(c) ? { ...c, drift: null } : c));
   return { todo: strip(board.todo), in_progress: strip(board.in_progress), in_review: strip(board.in_review), done: strip(board.done) };
 }
@@ -167,8 +167,9 @@ export function prComments(board: Board, rulesOf: (c: Card) => Rules, done: Reco
       if (card.task.github || !card.task.tracker || rulesOf(card).pr_comment !== "auto") return [];
       return card.rows.flatMap(({ session }) => {
         const pr = session.pr;
-        const key = `comment ${card.task.connection} ${card.task.key} #${pr?.number}`;
-        if (pr?.state !== "open" || done[key]) return [];
+        // Keyed by the PR's URL: two repositories can both have a #12.
+        const key = `comment ${card.task.connection} ${card.task.key} ${pr?.url}`;
+        if (pr?.state !== "open" || pr.draft || done[key]) return [];
         return [{ card, key, text: `Opened a pull request: ${pr.title} ${pr.url}` }];
       });
     });

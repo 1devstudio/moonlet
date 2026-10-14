@@ -498,6 +498,9 @@ pub struct PullRequest {
     pub checks: Vec<CheckRun>,
     #[serde(default)]
     pub review_decision: Option<String>,
+    /// A draft does not count as opened for Keep in step (X46).
+    #[serde(default)]
+    pub draft: bool,
 }
 
 /// A GitHub stack of dependent pull requests (spec X11).
