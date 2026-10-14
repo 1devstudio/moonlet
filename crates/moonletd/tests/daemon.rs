@@ -936,7 +936,8 @@ async fn project_with_repo(
                 .current_dir(&repo)
                 .status()
                 .unwrap()
-                .success()
+                .success(),
+            "git {args:?}"
         );
     }
     let p = c
@@ -953,7 +954,7 @@ async fn a_session_started_from_a_task_keeps_its_link() {
     let mut c = d.client().await;
     let (_, p) = project_with_repo(&d, &mut c).await;
     let task = serde_json::json!({
-        "connection": "linear-1",
+        "connection": "linear:acme",
         "key": "MOON-151",
         "url": "https://linear.app/acme/issue/MOON-151/drag-sessions"
     });
@@ -989,7 +990,7 @@ async fn a_session_can_be_linked_to_a_task_and_unlinked() {
         .unwrap();
     assert_eq!(s.task, None);
     let task = serde_json::json!({
-        "connection": "linear-1",
+        "connection": "linear:acme",
         "key": "CDK-41",
         "url": "https://linear.app/acme/issue/CDK-41/changelog-themes"
     });
@@ -1066,6 +1067,30 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
         .unwrap();
     assert_eq!(s.path, wt);
     assert_eq!(s.branch, "moon-149-host-health");
+
+    // Only a worktree of the project, on a branch, can be adopted.
+    let adopt = |dir: String| serde_json::json!({"project_id": p.id, "name": "Adopt", "worktree": dir});
+    let err = c
+        .request::<_, Session>(methods::SESSION_CREATE, adopt(repo.display().to_string()))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("is not a worktree of this project"), "{err}");
+    let detached = d.home.path().join("detached");
+    assert!(
+        Command::new("git")
+            .args(["worktree", "add", "-q", "--detach"])
+            .arg(&detached)
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let detached = std::fs::canonicalize(&detached).unwrap().display().to_string();
+    let err = c
+        .request::<_, Session>(methods::SESSION_CREATE, adopt(detached))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("is on a detached HEAD"), "{err}");
 
     // A worktree a session already uses cannot be adopted twice.
     let err = c
