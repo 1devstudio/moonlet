@@ -63,6 +63,10 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
                   </option>
                 ))}
               </select>
+              <select aria-label={`What ${r.name} shows`} className={`${inputCls} w-[130px]`} value={r.all ? "all" : "mine"} disabled={!on[r.key]} onChange={(e) => set(r.key, { all: e.target.value === "all" })}>
+                <option value="mine">Assigned to me</option>
+                <option value="all">All open issues</option>
+              </select>
               <select aria-label={`Project for ${r.name}`} className={`${inputCls} w-[130px]`} value={r.project} disabled={!on[r.key] || !r.workspace} onChange={(e) => set(r.key, { project: e.target.value })}>
                 <option value="">Project…</option>
                 {(projects[host] ?? []).map((p) => (
@@ -92,6 +96,23 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ connection: Connection; sources: { key: string; name: string }[] } | null>(null);
+  const [oauth, setOauth] = useState(false);
+  useEffect(() => {
+    if (kind === "linear") hostsApi.trackerOauthAvailable().then(setOauth, () => setOauth(false));
+  }, [kind]);
+  const signIn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await hostsApi.trackerOauthLinear();
+      await loadTrackersConfig(true);
+      setDone(r);
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   const connect = async () => {
     setBusy(true);
     setError(null);
@@ -116,6 +137,14 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
         </>
       ) : (
         <div className="flex flex-col gap-3">
+          {oauth && (
+            <>
+              <Button variant="primary" disabled={busy} onClick={() => void signIn()}>
+                Sign in with Linear
+              </Button>
+              <p className="ui-text-12 text-muted">Opens the browser. Or use an API key:</p>
+            </>
+          )}
           {kind === "jira" && (
             <>
               <Field label="Site">

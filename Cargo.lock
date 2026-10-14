@@ -2556,6 +2556,7 @@ version = "0.1.17"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
+ "getrandom 0.3.4",
  "libc",
  "moonlet-core",
  "moonlet-link",

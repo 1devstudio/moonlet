@@ -147,6 +147,7 @@ pub fn parse_tasks(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, Api
                 labels: names(&t["tags"], "name"),
                 description: desc.into(),
                 updated_ms: str_of(&t["date_updated"]).parse().unwrap_or(0),
+                cycle: None,
                 tracker: TrackerRef {
                     id,
                     state: name.into(),
@@ -254,6 +255,7 @@ mod tests {
                 labels: vec!["bug".into()],
                 description: "Users are unable to log in when **SSO** is enabled.".into(),
                 updated_ms: 1_567_780_450_202,
+                cycle: None,
                 tracker: TrackerRef {
                     id: "9hx".into(),
                     state: "in progress".into(),

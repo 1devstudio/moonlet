@@ -96,11 +96,33 @@ struct Session {
 }
 
 impl Session {
-    fn load(id: &str) -> Res<Self> {
+    async fn load(id: &str) -> Res<Self> {
         let config = crate::read_trackers(&crate::trackers_path()).map_err(fail)?;
         let conn = config.connections.into_iter().find(|c| c.id == id).ok_or_else(|| fail(format!("no connection {id}")))?;
-        let token = secrets::store().get(id).ok_or_else(|| TrackerError { auth: true, message: format!("Sign in to {} again", conn.site) })?;
-        Ok(Self { conn, token })
+        let again = || TrackerError { auth: true, message: format!("Sign in to {} again", conn.site) };
+        let secret = secrets::store().get(id).ok_or_else(again)?;
+        if conn.auth != "oauth" {
+            return Ok(Self { conn, token: secret });
+        }
+        // OAuth: the access token, refreshed shortly before it expires.
+        let mut tokens: moonlet_trackers::oauth::Tokens = serde_json::from_str(&secret).map_err(|_| again())?;
+        let now = moonlet_core::paths::now_ms();
+        if now + 60_000 >= tokens.expires_ms {
+            let (Some(client_id), Some(refresh)) = (LINEAR_CLIENT_ID, tokens.refresh.clone()) else { return Err(again()) };
+            let (status, body) = send(
+                client()?
+                    .post(linear::TOKEN)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .body(moonlet_trackers::oauth::refresh_body(client_id, &refresh)),
+            )
+            .await?;
+            if !(200..300).contains(&status) {
+                return Err(again());
+            }
+            tokens = moonlet_trackers::oauth::parse_tokens(&body, now)?;
+            secrets::store().set(id, &serde_json::to_string(&tokens).map_err(fail)?).map_err(fail)?;
+        }
+        Ok(Self { conn, token: tokens.access })
     }
 
     async fn linear(&self, query: &str, variables: Value) -> Res<Vec<u8>> {
@@ -154,6 +176,87 @@ async fn linear_request(token: &str, auth: &str, query: &str, variables: Value) 
         return Err(TrackerError { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here.".into() });
     }
     Ok(body)
+}
+
+/// Linear's OAuth app, when this build has one (X44). Without it the app
+/// signs in with an API key.
+const LINEAR_CLIENT_ID: Option<&str> = option_env!("MOONLET_LINEAR_CLIENT_ID");
+/// Linear's redirect must match the registered one exactly, so the port is fixed.
+const LINEAR_REDIRECT_PORT: u16 = 53682;
+
+/// Whether "Sign in with Linear" is available in this build.
+#[tauri::command]
+pub fn tracker_oauth_available() -> bool {
+    LINEAR_CLIENT_ID.is_some()
+}
+
+/// Serves the loopback redirect until the browser comes back with this
+/// request's `state`, then gives the code. Other requests (a favicon) get a
+/// plain answer and are ignored; the wait ends after `timeout`.
+async fn wait_for_callback(listener: tokio::net::TcpListener, state: String, timeout: std::time::Duration) -> Res<String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let serve = async {
+        loop {
+            let (mut sock, _) = listener.accept().await.map_err(fail)?;
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let path = req.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("");
+            let result = moonlet_trackers::oauth::parse_callback(path, &state);
+            let body = match &result {
+                Ok(_) => "Signed in to Linear. You can close this tab and go back to moonlet.",
+                Err(e) if e == "not the sign-in callback" => "",
+                Err(e) => e.as_str(),
+            };
+            let _ = sock
+                .write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes())
+                .await;
+            match result {
+                Ok(code) => return Ok(code),
+                Err(e) if e == "not the sign-in callback" => continue,
+                Err(e) => return Err(fail(e)),
+            }
+        }
+    };
+    tokio::time::timeout(timeout, serve).await.map_err(|_| fail("the Linear sign-in timed out"))?
+}
+
+/// "Sign in with Linear": PKCE in the browser, the code back on 127.0.0.1,
+/// tokens in the Keychain (X44).
+#[tauri::command]
+pub async fn tracker_oauth_linear(app: tauri::AppHandle) -> Res<Connected> {
+    use moonlet_trackers::oauth;
+    let client_id = LINEAR_CLIENT_ID.ok_or_else(|| fail("Linear sign-in isn't set up in this build; use an API key"))?;
+    let verifier = oauth::pkce_verifier(random32()?);
+    let state = oauth::pkce_verifier(random32()?);
+    let redirect = format!("http://127.0.0.1:{LINEAR_REDIRECT_PORT}/callback");
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", LINEAR_REDIRECT_PORT))
+        .await
+        .map_err(|e| fail(format!("cannot listen for the sign-in on port {LINEAR_REDIRECT_PORT}: {e}")))?;
+    let url = oauth::authorize_url(linear::AUTHORIZE, client_id, &redirect, &state, &oauth::pkce_challenge(&verifier), "read,write");
+    tauri_plugin_opener::OpenerExt::opener(&app).open_url(url, None::<&str>).map_err(fail)?;
+    let code = wait_for_callback(listener, state, std::time::Duration::from_secs(300)).await?;
+    let (status, body) = send(
+        client()?
+            .post(linear::TOKEN)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(oauth::token_body(client_id, &code, &redirect, &verifier)),
+    )
+    .await?;
+    if !(200..300).contains(&status) {
+        return Err(fail(format!("Linear refused the sign-in ({status})")));
+    }
+    let tokens = oauth::parse_tokens(&body, moonlet_core::paths::now_ms())?;
+    let raw = linear_request(&tokens.access, "oauth", linear::ACCOUNT, json!({})).await?;
+    let (org, name) = linear::parse_account(&raw)?;
+    save_connection(TrackerKind::Linear, org, name, serde_json::to_string(&tokens).map_err(fail)?, "oauth").await
+}
+
+/// 32 random bytes from the OS, for the PKCE verifier and the state.
+fn random32() -> Res<[u8; 32]> {
+    let mut b = [0u8; 32];
+    getrandom::fill(&mut b).map_err(|e| fail(format!("no randomness for the sign-in: {e}")))?;
+    Ok(b)
 }
 
 /// A team, project or list a connection can show.
@@ -217,15 +320,20 @@ pub async fn tracker_connect(req: ConnectRequest) -> Res<Connected> {
         }
         TrackerKind::Github => return Err(fail("GitHub uses gh's own login")),
     };
-    let id = connection_id(req.kind, &site);
+    save_connection(req.kind, site, account, secret, auth).await
+}
+
+/// Keeps the token in the Keychain and adds (or replaces) the connection in
+/// `trackers.toml`, keeping what the user picked (sources, state mapping).
+async fn save_connection(kind: TrackerKind, site: String, account: String, secret: String, auth: &str) -> Res<Connected> {
+    let id = connection_id(kind, &site);
     secrets::store().set(&id, &secret).map_err(fail)?;
     let path = crate::trackers_path();
     let mut config: TrackersConfig = crate::read_trackers(&path).map_err(fail)?;
-    // Reconnecting keeps what the user picked: sources and state mapping.
     let old = config.connections.iter().find(|c| c.id == id).cloned();
     let (sources, states) = old.map(|c| (c.sources, c.states)).unwrap_or_default();
     config.connections.retain(|c| c.id != id);
-    let connection = Connection { id: id.clone(), kind: req.kind, site, account, auth: auth.into(), sources, states };
+    let connection = Connection { id: id.clone(), kind, site, account, auth: auth.into(), sources, states };
     config.connections.push(connection.clone());
     crate::write_trackers(&path, &config).map_err(fail)?;
     let sources = tracker_sources(id).await?;
@@ -257,7 +365,7 @@ pub fn tracker_disconnect(id: String) -> Res<()> {
 /// The teams, projects or lists a connection can show.
 #[tauri::command]
 pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
-    let s = Session::load(&id)?;
+    let s = Session::load(&id).await?;
     Ok(match s.conn.kind {
         TrackerKind::Linear => pairs(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?)?),
         TrackerKind::Jira => pairs(jira::parse_projects(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/project/search?maxResults=100")?).await?)?),
@@ -281,7 +389,7 @@ pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
 /// The tasks of a connection's sources: the user's, or all open ones.
 #[tauri::command]
 pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
-    let s = Session::load(&id)?;
+    let s = Session::load(&id).await?;
     let keys: Vec<String> = s.conn.sources.iter().map(|x| x.key.clone()).collect();
     if keys.is_empty() {
         return Ok(vec![]);
@@ -356,7 +464,7 @@ pub struct StateChoice {
 /// The states of a source, for the state mapping (X44 Workflow states).
 #[tauri::command]
 pub async fn tracker_states(id: String, source: String) -> Res<Vec<StateChoice>> {
-    let s = Session::load(&id)?;
+    let s = Session::load(&id).await?;
     let source = safe_id(&source)?.to_string();
     let named = |kind, list: Vec<(String, String)>| -> Vec<StateChoice> {
         list.into_iter()
@@ -402,7 +510,7 @@ pub struct MoveRequest {
 /// (X46 Keep in step).
 #[tauri::command]
 pub async fn tracker_update(req: MoveRequest) -> Res<()> {
-    let s = Session::load(&req.id)?;
+    let s = Session::load(&req.id).await?;
     safe_id(&req.task)?;
     safe_id(&req.source)?;
     match s.conn.kind {
@@ -473,6 +581,23 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_loopback_listener_waits_for_the_callback_with_its_state() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let waiting = tokio::spawn(wait_for_callback(listener, "st4te".into(), std::time::Duration::from_secs(5)));
+        // A browser asks for the favicon first; that is not the callback.
+        for path in ["/favicon.ico", "/callback?code=abc&state=st4te"] {
+            let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+            c.write_all(format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes()).await.unwrap();
+            let mut answer = String::new();
+            c.read_to_string(&mut answer).await.unwrap();
+            assert!(answer.starts_with("HTTP/1.1"), "{answer}");
+        }
+        assert_eq!(waiting.await.unwrap().unwrap(), "abc");
+    }
 
     #[test]
     fn only_a_jira_cloud_host_gets_the_token() {

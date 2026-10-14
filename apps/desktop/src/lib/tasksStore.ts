@@ -57,6 +57,8 @@ interface TasksState {
   query: string;
   /** Tasks whose Keep in step switch is off, by `connection key` (X46 Task tab). */
   paused: Record<string, true>;
+  /** The last action on a task that failed, with its error (X46), by `connection key`. */
+  failures: Record<string, string>;
 }
 
 /** One tracker's branch names and rules. */
@@ -74,6 +76,8 @@ export interface Source {
   project: string;
   /** `host/workspaceId`. */
   workspace: string;
+  /** All open issues rather than only the account's (X44 Shows). */
+  all?: boolean;
 }
 
 /** A signed-in Linear, Jira or ClickUp account (its token is in the Keychain). */
@@ -121,6 +125,7 @@ export const useTasks = create<TasksState>(() => ({
   activity: {},
   query: "",
   paused: storedPaused(),
+  failures: {},
 }));
 
 function storedLayout(): "board" | "list" {
@@ -234,7 +239,10 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const fromTrackers = await Promise.all(
     conns.map(async (c) => {
       try {
-        const list = await hostsApi.trackerTasks(c.id, true);
+        // A source set to "All open issues" needs everyone's; the others keep the account's.
+        const mine = c.all.length === 0;
+        const fetched = await hostsApi.trackerTasks(c.id, mine);
+        const list = mine ? fetched : fetched.filter((t) => c.all.includes(t.tracker?.source ?? "") || t.assignees.includes(c.account));
         useTasks.setState((t) => (t.attention[c.id] ? { attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== c.id)) } : {}));
         return applyStateMapping(
           list.filter((t) => t.tracker && c.keys.includes(t.tracker.source)),
@@ -364,6 +372,7 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
 export async function fixDrift(host: string, workspaceId: string, card: Card) {
   const plan = driftFix(card);
   if (!plan) return;
+  retries.set(`${card.task.connection} ${card.task.key}`, () => fixDrift(host, workspaceId, card));
   try {
     if (plan.kind === "github") {
       const path = repoPath(host, workspaceId, plan.repo);
@@ -398,9 +407,10 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
       for (const w of card.orphans) if (w.project) await rpc(host, M.projectWorktreeRemove, { id: w.project, path: w.path });
       recordActivity(card.task, "moonlet archived its sessions and removed their worktrees");
     }
+    setFailure(card.task, null);
     await refreshTasks(host, workspaceId);
   } catch (e) {
-    errorToast(e);
+    setFailure(card.task, (e as { message?: string }).message ?? message(e));
   }
 }
 
@@ -459,6 +469,7 @@ export function recordActivity(task: Pick<Task, "connection" | "key">, text: str
 
 /** The state menu (X45 detail, X46 task bar): move a tracker issue, or close or reopen a GitHub issue. */
 export async function moveTask(host: string, workspaceId: string, task: Task, column: Exclude<Column, "hidden"> | null, now = Date.now()) {
+  retries.set(`${task.connection} ${task.key}`, () => moveTask(host, workspaceId, task, column));
   try {
     if (task.github) {
       const path = repoPath(host, workspaceId, task.github.repo);
@@ -471,10 +482,34 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
     } else return;
     movedByMoonlet.add(`${task.connection} ${task.key}`);
+    setFailure(task, null);
     void refreshTasks(host, workspaceId);
   } catch (e) {
-    errorToast((e as { message?: string }).message ?? e);
+    setFailure(task, (e as { message?: string }).message ?? message(e));
   }
+}
+
+/** What to run again for a task whose last action failed. */
+const retries = new Map<string, () => Promise<void>>();
+
+function setFailure(task: Pick<Task, "connection" | "key">, error: string | null) {
+  const id = `${task.connection} ${task.key}`;
+  useTasks.setState((t) => {
+    const failures = { ...t.failures };
+    if (error) failures[id] = error;
+    else delete failures[id];
+    return { failures };
+  });
+}
+
+/** The error of a task's last failed action, if it failed. */
+export function failureOf(task: Pick<Task, "connection" | "key">): string | undefined {
+  return useTasks.getState().failures[`${task.connection} ${task.key}`];
+}
+
+/** Retry on a task's failed action. */
+export async function retryTask(task: Pick<Task, "connection" | "key">) {
+  await retries.get(`${task.connection} ${task.key}`)?.();
 }
 
 /** The state a move to `column` uses for a connection, from its state mapping (X44). */

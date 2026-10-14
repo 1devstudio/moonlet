@@ -21,6 +21,8 @@ export interface Task {
   /** Markdown. */
   description: string;
   updatedMs: number;
+  /** Linear's cycle number, when the issue is in one. */
+  cycle?: number;
   /** GitHub issues: what links a branch or PR to it. */
   github?: { repo: string; number: number; closingPrs: number[] };
   /** Linear, Jira and ClickUp issues: their id, state name and team/project/list in the tracker. */
