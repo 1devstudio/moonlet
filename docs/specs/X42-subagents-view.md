@@ -28,12 +28,12 @@ Daemon (PR 1):
 
 - [x] Claude's `system` `task_started` line adds a subagent to the chat's state: its task id, the id of the `Agent` tool call that launched it, its description, its type and its prompt, with status `running`. (`subagents_follow_task_events`)
 - [x] A `task_progress` line sets the agent's activity (its `description`, such as "Running Create made.txt and echo made"), its tokens and its tool-call count. (`subagents_follow_task_events`)
-- [x] A `task_notification` line ends the agent as `done` (`completed`), `failed` (`failed`) or `stopped` (`stopped`, `killed`), with the summary as its report, the final token count and the duration. (`subagents_follow_task_events`, `stopping_a_subagent_sends_stop_task`)
+- [x] A `task_notification` line ends the agent as `done` (`completed`), `failed` (`failed`) or `stopped` (`stopped`, `killed`), with the final token count and the duration. A done agent keeps the summary as its report; a failed one keeps the error from `task_updated`, else the summary. (`subagents_follow_task_events`, `a_failed_subagent_keeps_its_error`, `stopping_a_subagent_sends_stop_task`)
 - [x] An `assistant` line from inside a subagent (`parent_tool_use_id` set) adds its tool calls to that agent's tool list, with name, one-line summary and `+a −r` counts for edits, and sets the agent's model. The matching `user` line marks each call `ok` or `error`. None of these lines reaches the main transcript. (`subagent_tool_calls_stay_with_their_agent`)
 - [x] A `can_use_tool` request that carries an `agent_id` becomes a pending ask that names that agent. (`a_subagent_ask_names_its_agent`)
 - [x] A `control_cancel_request` removes the pending ask with that id. (`stopping_a_subagent_sends_stop_task`)
 - [x] When the main turn ends (`result`) while a subagent waits on an ask, that ask stays pending. (`a_subagent_ask_outlives_the_main_turn`)
-- [x] `chat.stop_agent {id, agent}` sends Claude a `stop_task` control request for that task id. It fails for an agent that is not running, and for agents other than Claude. (`stopping_a_subagent_sends_stop_task`, runtime test)
+- [x] `chat.stop_agent {id, agent}` sends Claude a `stop_task` control request for that task id. It fails unless that id is a running subagent of that chat; Codex chats have none. (`stopping_a_subagent_sends_stop_task`, `a_running_subagent_can_be_stopped`)
 - [x] When the agent process exits, or the daemon restarts, every agent still running becomes `stopped`. (runtime test)
 - [x] The chat terminal's `TerminalInfo.subagents` counts its running subagents. (runtime test)
 
@@ -124,7 +124,7 @@ Captured from claude 2.1.296 (haiku, `--permission-prompt-tool stdio`, hooks off
 ## Data and config
 
 - Subagents are part of the chat's saved state (`~/.moonlet/chats/<id>.json`), so they survive a daemon restart as history.
-- An agent keeps at most its last 200 tool calls, without their output.
+- An agent keeps at most its last 200 tool calls, without their output (`a_subagent_keeps_its_last_200_tool_calls`).
 
 ## Security considerations
 

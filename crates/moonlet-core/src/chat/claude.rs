@@ -155,10 +155,12 @@ fn task_event(v: &Value, st: &mut ChatState) -> bool {
     true
 }
 
-/// The status once an ask is answered or withdrawn: still blocked by
-/// another ask, else working, unless it was a subagent's ask after the main
-/// turn ended (X42).
-fn settle_asks(st: &mut ChatState, subagent: bool) {
+/// Drops an answered or withdrawn ask. The chat stays blocked by another
+/// ask, else works on, unless it was a subagent's ask after the main turn
+/// ended (X42).
+fn close_ask(st: &mut ChatState, id: &str) {
+    let subagent = st.pending.iter().any(|p| p.id == id && p.agent.is_some());
+    st.pending.retain(|p| p.id != id);
     st.status = if !st.pending.is_empty() {
         "blocked"
     } else if !subagent || st.turn_started_at.is_some() {
@@ -484,9 +486,7 @@ impl Adapter for Claude {
             "control_cancel_request" => {
                 let rid = v["request_id"].as_str().unwrap_or_default();
                 if self.asks.remove(rid).is_some() {
-                    let subagent = st.pending.iter().any(|p| p.id == rid && p.agent.is_some());
-                    st.pending.retain(|p| p.id != rid);
-                    settle_asks(st, subagent);
+                    close_ask(st, rid);
                     out.push(Out::State);
                 }
             }
@@ -585,8 +585,7 @@ impl Adapter for Claude {
 
     fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>, st: &mut ChatState) -> Vec<Out> {
         let Some((tool_use, suggestions, mut input)) = self.asks.remove(ask) else { return vec![] };
-        let subagent = st.pending.iter().any(|p| p.id == ask && p.agent.is_some());
-        st.pending.retain(|p| p.id != ask);
+        close_ask(st, ask);
         // AskUserQuestion is answered by allowing it with the answers in its input.
         if let (Some(a), Some(obj)) = (answers, input.as_object_mut()) {
             obj.insert("answers".into(), json!(a));
@@ -616,7 +615,6 @@ impl Adapter for Claude {
             }
         };
         out.push(Out::Write(json!({"type": "control_response", "response": {"subtype": "success", "request_id": ask, "response": response}}).to_string()));
-        settle_asks(st, subagent);
         out.push(Out::State);
         out
     }
@@ -1328,5 +1326,33 @@ mod tests {
         a.permission("eee7fb1b-453f-4303-8690-b9312d5f1b24", "deny", None, None, None, &mut st);
         let t = &st.subagents[0].tools[0];
         assert_eq!((t.name.as_str(), t.status.as_str()), ("Write", "denied"));
+    }
+
+    #[test]
+    fn a_failed_subagent_keeps_its_error() {
+        let (mut a, mut st) = started();
+        let before = until(SUBAGENTS, r#""subtype": "task_progress", "task_id": "a69ffa893ad4d346c""#);
+        replay(&before, &mut a, &mut st);
+        // The captured run had no failure: these are its lines for the first
+        // agent's end, with the status Claude Code reports for a failed task.
+        a.on_line(r#"{"type": "system", "subtype": "task_updated", "task_id": "a98344134013d8227", "run_id": "0mv7wxe60-b32ba561", "patch": {"status": "failed", "end_time": 1791970434654, "error": "API Error: 529 overloaded"}}"#, &mut st);
+        a.on_line(r#"{"type": "system", "subtype": "task_notification", "task_id": "a98344134013d8227", "run_id": "0mv7wxe60-b32ba561", "tool_use_id": "toolu_01QNjAbPMDQiZwKyCqkmv2VD", "status": "failed", "summary": "Write hello file", "usage": {"total_tokens": 10682, "tool_uses": 1, "duration_ms": 3175}}"#, &mut st);
+        let s = &st.subagents[0];
+        assert_eq!((s.status.as_str(), s.error.as_deref(), s.report.as_deref()), ("failed", Some("API Error: 529 overloaded"), None));
+        assert_eq!(s.ended_at, Some(1791970434654));
+    }
+
+    #[test]
+    fn a_subagent_keeps_its_last_200_tool_calls() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "task_started", "task_id": "a98344134013d8227""#), &mut a, &mut st);
+        // The captured Write call of the first agent, sent 205 times with fresh ids.
+        let call = SUBAGENTS.lines().find(|l| l.contains(r#""id": "toolu_01HCnwCanjJxRH3wTnuE1cGa""#) && l.contains(r#""type": "assistant""#)).unwrap();
+        for n in 0..205 {
+            a.on_line(&call.replace("toolu_01HCnwCanjJxRH3wTnuE1cGa", &format!("toolu_{n:03}")), &mut st);
+        }
+        let ids: Vec<&str> = st.subagents[0].tools.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids.len(), 200);
+        assert_eq!((ids[0], ids[199]), ("toolu_005", "toolu_204"));
     }
 }
