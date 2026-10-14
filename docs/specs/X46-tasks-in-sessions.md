@@ -44,9 +44,9 @@ A session can belong to a task. The link is made when a session starts from a ta
 
 - [x] Title `Link "<session name>" to a task`; a search field "Search tasks, or paste a key or URL". (Naming the connected trackers comes with X44's connections.)
 - [x] **Suggested**: tasks whose title matches the session name or whose key is in its branch, with the reason (`Title matches the session name · In Progress · no sessions`). ↵ links the first. (`taskLinking.test.ts` linkChoices)
-- [ ] **Recent in <source>**: the source's recently updated tasks.
+- [ ] **Recent in <source>**: the source's recently updated tasks. (Partly: one "Recent" list across the workspace's sources, newest first.)
 - [x] Pasting a key (`MOON-142`, `#42`, `CU-86abc`) or an issue URL of any connected tracker finds that task, even outside the workspace's sources. (`a_pasted_issue_url_reaches_the_app_as_kind_key_and_site`, `taskLinking.test.ts` findPasted, `tasks-mode.e2e.ts`)
-- [ ] Linking sets the stored link. The footer says "Links live in moonlet. <tracker> gets a link back to the PR when one opens."
+- [x] Linking sets the stored link. The footer says "Links live in moonlet. <tracker> gets a link back to the PR when one opens." (The footer reads "Links live in moonlet. The issue gets a link back to the PR when one opens." `tasks-mode.e2e.ts`)
 
 ### Session view
 
