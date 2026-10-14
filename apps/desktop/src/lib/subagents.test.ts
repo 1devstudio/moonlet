@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCount, agentRows, agentsHeader, askLine, agentsTabDot, modelLabel, retryMessage, stoppable, stripDismissAt, stripRetry, stripView } from "./subagents";
+import { agentAskTitle, agentCount, agentNotes, agentRows, agentsHeader, askLine, launchedRows, agentsTabDot, modelLabel, retryMessage, stoppable, stripDismissAt, stripRetry, stripView } from "./subagents";
 import type { ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 
 const T0 = 1_791_970_430_000;
@@ -244,5 +244,46 @@ describe("stripView (X42)", () => {
     const st = { ...withItems([done("a1", T0 - 60_000, 10_000), running("a3", T0)]), items: [user(T0 - 90_000), user(T0 - 1_000)] };
     expect(stripView(st, T0 + 1_000, 0)).toMatchObject({ title: "1 agent", detail: "1 running" });
     expect(stripView({ ...st, items: [user(T0 + 500)] }, T0 + 1_000, 0)).toBeNull();
+  });
+});
+
+describe("launchedRows (X42)", () => {
+  const launch = (id: string, summary: string): ChatItem => ({ id, kind: "tool", text: "", ts: T0, tool: { name: "Agent", summary, input: {}, status: "ok" } });
+
+  it("shows each launched agent's state and time, by its Agent call", () => {
+    const rows = agentRows([{ id: 7, st: chat([write, list], [ask]) }], T0 + 62_000);
+    expect(launchedRows([launch("toolu_01QNjAbPMDQiZwKyCqkmv2VD", "Write hello file"), launch("toolu_01BxCjWGafqjuD8gywbDsWV7", "List files")], rows)).toEqual([
+      { key: "toolu_01QNjAbPMDQiZwKyCqkmv2VD", description: "Write hello file", state: "needs", label: "needs you", elapsed: "1:02", agent: "7:a98344134013d8227" },
+      { key: "toolu_01BxCjWGafqjuD8gywbDsWV7", description: "List files", state: "done", label: "done", elapsed: "0:11", agent: "7:a69ffa893ad4d346c" },
+    ]);
+  });
+
+  it("falls back to the call's summary for a launch the daemon never tracked", () => {
+    expect(launchedRows([launch("toolu_old", "Explore the protocol")], [])).toEqual([{ key: "toolu_old", description: "Explore the protocol", state: null, label: "", elapsed: "", agent: null }]);
+  });
+});
+
+describe("agentAskTitle (X42)", () => {
+  it("names the agent that asks", () => {
+    expect(agentAskTitle(ask, "Write hello file")).toBe("Write hello file wants to edit /repo/hello.txt");
+  });
+});
+
+describe("agentNotes (X42)", () => {
+  const at = (id: string, ts: number, kind: ChatItem["kind"] = "assistant"): ChatItem => ({ id, kind, text: id, ts });
+  const items = [at("u", T0 - 1_000, "user"), at("m1", T0 + 5_000), at("m2", T0 + 20_000)];
+
+  it("puts a finished or failed agent after the last message before it ended, then the batch once all ended", () => {
+    const notes = agentNotes(items, [list, { ...bench, started_at: T0 + 2_000 }, audit]);
+    expect(notes.map((n) => [n.after, n.note.kind === "all" ? `all ${n.note.count} ${n.note.clock}` : n.note.agent.description])).toEqual([
+      ["m1", "List files"],
+      ["m2", "Audit SSH key handling"],
+      ["m2", "all 3 0:52"],
+    ]);
+  });
+
+  it("waits for every agent of a batch before the batch note", () => {
+    const notes = agentNotes(items, [list, write]);
+    expect(notes.map((n) => n.note.kind)).toEqual(["finished"]);
   });
 });
