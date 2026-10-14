@@ -5,6 +5,7 @@ import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "
 import { EDITOR_THEMES, resolveEditorTheme } from "./editorThemes";
 import type { WorkspaceColor } from "./protocol";
 import { routeKey, type SettingsRoute } from "./settingsPage";
+import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
 import type { Settings } from "./store";
 import { WORKSPACE_COLORS } from "./workspaces";
@@ -61,6 +62,7 @@ function index(c: SearchContext): Entry[] {
     value,
   });
   const custom = Object.keys(s.shortcuts ?? {}).length;
+  const keys = effectiveKeys(s.shortcuts);
   return [
     app("general", "App › General › Updates", "updates", "moonlet version and updates", c.appVersion ?? "", "check now update"),
     app("general", "App › General › Updates", "claude-update", "Claude Code version", c.claudeInstalled ?? ""),
@@ -81,6 +83,7 @@ function index(c: SearchContext): Entry[] {
     app("notifications", "App › Notifications", "sound-done", "Sound when an agent is done", soundFor(s.sounds, "done") ?? "Off"),
     app("notifications", "App › Notifications", "sound-error", "Sound when an agent fails", soundFor(s.sounds, "error") ?? "Off"),
     app("shortcuts", "App › Keyboard shortcuts", undefined, "Keyboard shortcuts", custom ? `${custom} custom` : "", "keys bindings"),
+    ...ACTIONS.map((a) => app("shortcuts", "App › Keyboard shortcuts", `shortcut-${a.id}`, a.label, keys[a.id] ? keyLabel(keys[a.id]) : "Not set", "shortcut key")),
     app("profiles", "Claude Code › Profiles", undefined, "Claude profiles", n(c.profiles, "profile"), "sign in account"),
     app("hooks", "Claude Code › Hooks", undefined, "Claude Code hooks", "", "Codex skill install"),
     app("hosts", "Machines › Hosts", undefined, "Remote hosts", n(c.remoteHosts, "host"), "ssh helper"),

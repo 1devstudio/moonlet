@@ -56,6 +56,11 @@ describe("settings page", () => {
     await expect($(sel.settingsField("Name"))).toHaveValue("Personal");
     await fill(sel.settingsField("Name"), "Personal stuff");
     await expect($(sel.text("Unsaved changes to Personal stuff"))).toBeDisplayed();
+    // Searching keeps the edits, and opening another page from it asks.
+    await fill('//input[@aria-label="Search settings"]', "gpu");
+    await expect($(sel.text("1 setting matches “gpu”"))).toBeDisplayed();
+    await fill('//input[@aria-label="Search settings"]', "");
+    await expect($(sel.settingsField("Name"))).toHaveValue("Personal stuff");
     await $(sel.navEntry("Hosts")).click();
     await expect($(sel.text("Discard unsaved changes to Personal?"))).toBeDisplayed();
     await $(sel.confirmButton("Keep editing")).click();

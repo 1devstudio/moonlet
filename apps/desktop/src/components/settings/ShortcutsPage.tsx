@@ -25,7 +25,7 @@ export function ShortcutsPage() {
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (e.key === "Escape") return setRecording(null);
+      if (e.key === "Escape" || e.key === "Tab") return setRecording(null);
       const current = useStore.getState().settings.shortcuts;
       const r = recordKey(keyId(e), recording, current);
       if (r.kind === "wait") return;
@@ -110,14 +110,18 @@ export function ShortcutsPage() {
                       {rec ? "Press a shortcut…" : r.keys || "Not set"}
                     </button>
                   </div>
-                  {refusal?.id === r.id && <span className="px-4 pb-2.5 ui-text-12 text-error">{refusal.message}</span>}
+                  {refusal?.id === r.id && (
+                    <span role="alert" className="px-4 pb-2.5 ui-text-12 text-error">
+                      {refusal.message}
+                    </span>
+                  )}
                 </div>
               );
             })}
           </Card>
         </Section>
       ))}
-      <p className="m-0 px-0.5 ui-text-12 text-muted">⌘K, ⌘C, ⌘V, ⌘Q and the other editing and window keys are fixed. Taking a key another action uses asks before moving it. Esc cancels recording.</p>
+      <p className="m-0 px-0.5 ui-text-12 text-muted">⌘K, ⌘C, ⌘V, ⌘Q and the other editing and window keys are fixed. Taking a key another action uses asks before moving it. Esc or Tab cancels recording.</p>
     </>
   );
 }

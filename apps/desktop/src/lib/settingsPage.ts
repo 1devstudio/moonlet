@@ -252,3 +252,8 @@ export function phoneAccessLine(st: MobileStatus): StatusLine {
 export function hooksDone(st: HookStatus | null): boolean {
   return !!st?.claude_installed && (st.codex_installed || !!st.codex_conflict);
 }
+
+/** Hosts as the nav lists their workspaces and projects: this Mac first. */
+export function hostOrder(ids: string[]): string[] {
+  return [...ids].sort((a, b) => (a === "local" ? -1 : b === "local" ? 1 : a.localeCompare(b)));
+}

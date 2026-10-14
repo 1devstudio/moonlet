@@ -15,6 +15,8 @@ export function useUnsaved(state: { dirty: boolean; saving: boolean; message: st
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey)) return;
       if (document.querySelector('[role="dialog"]:not([inert] *)')) return;
+      // A form inside the page, such as New profile, keeps its own Enter.
+      if (e.target instanceof Element && e.target.closest("[data-own-enter]")) return;
       e.preventDefault();
       e.stopPropagation();
       saveNow.current();

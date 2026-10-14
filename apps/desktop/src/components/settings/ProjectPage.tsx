@@ -42,7 +42,10 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   const rowRefs = useRef(new Map<number, HTMLInputElement>());
   const [pendingFocus, setPendingFocus] = useState<number | null>(null);
 
+  // The file's path, for a failed reload's message (`load` is memoised).
+  const loadedPath = useRef<string | undefined>(undefined);
   const show = (f: ProjectConfigFile) => {
+    loadedPath.current = f.path;
     const next = toForm(f.config);
     setFile(f);
     setForm(next);
@@ -58,12 +61,11 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
         return true;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        // Nothing to edit yet: the page says why, with Check again.
-        if (!reload || !file) setLoadError(message);
-        else {
-          const failure = loadFailure(true, message, file.path);
-          if (!failure.close) setSaveErr(failure.saveErr);
-        }
+        // Nothing to edit yet: the page says why, with Check again. A
+        // failed reload keeps the form and says so in the bar.
+        const failure = loadFailure(reload, message, loadedPath.current);
+        if (failure.close) setLoadError(message);
+        else setSaveErr(failure.saveErr);
         return false;
       }
     },
