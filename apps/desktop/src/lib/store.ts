@@ -808,7 +808,7 @@ function updateBadge() {
     .catch(() => {});
 }
 
-async function notify(title: string, body: string) {
+export async function notify(title: string, body: string) {
   try {
     let ok = await isPermissionGranted();
     if (!ok) ok = (await requestPermission()) === "granted";

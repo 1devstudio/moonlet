@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, ArrowDown, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
@@ -12,7 +12,8 @@ import { ArchiveLoader } from "./ArchiveLoader";
 import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
-import { ModeSwitch, TasksSidebar } from "./tasks/TasksMode";
+import { ModeSwitch, TaskGlyph, TasksSidebar, useWorkspaceBoard } from "./tasks/TasksMode";
+import { sessionTaskLines, type SessionTaskLine } from "../lib/tasksView";
 import { isTasksMode } from "../lib/tasksStore";
 import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
@@ -283,6 +284,8 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   // Running subagents of the session's chats (X42).
   const agents = useStore((st) => sessionTerminals(st, host, s.id).reduce((n, x) => n + (x.subagents ?? 0), 0));
   const badge = sessionBadge({ creating, state, merged: pr?.state === "merged", git, agents });
+  const { lines, sources } = useContext(TaskLines);
+  const line = lines[s.id];
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
   if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
@@ -301,7 +304,8 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
         onMenu(e);
       }}
       className={cx(
-        "group relative flex h-[38px] w-full cursor-default items-center gap-3 pl-[30px] pr-4 text-left transition-colors",
+        "group relative flex w-full cursor-default items-center gap-3 pl-[30px] pr-4 text-left transition-colors",
+        line ? "h-[50px]" : "h-[38px]",
         selected ? "bg-selected" : "hover:bg-panel-2",
       )}
     >
@@ -316,7 +320,27 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
           }}
         />
       ) : (
-        <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className={cx("truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+          {line && (
+            <span title={`${line.key} · ${line.title}`} className={cx("flex items-center gap-1.5 truncate ui-text-11.5", line.outOfSync ? "text-accent-2" : "text-faint")}>
+              <TaskGlyph column={line.column} size={10} />
+              <span className="font-mono">{line.key}</span>
+              <span className="truncate">{line.text}</span>
+            </span>
+          )}
+        </span>
+      )}
+      {!renaming && !line && sources && (
+        <button
+          className="hidden shrink-0 ui-text-11.5 text-faint hover:text-fg group-hover:block"
+          onClick={(e) => {
+            e.stopPropagation();
+            useStore.setState({ dialog: { kind: "link-task", host, session: s.id } });
+          }}
+        >
+          No task · Link
+        </button>
       )}
       {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-12 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
     </div>
@@ -412,11 +436,22 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
   const others = useMemo(() => (allWorkspaces ?? []).filter((w) => w.id !== ws.id), [allWorkspaces, ws.id]);
   const multiHost = useStore((s) => Object.keys(s.hosts).length > 1);
   const [renaming, setRenaming] = useState(false);
+  const { lines } = useContext(TaskLines);
   const groups = useMemo(
-    () => arrange(ws.id, sec, projects, sessions, (s) => sessionState(useStore.getState(), host, s.id), (s) => activeAt(host, s), (s) => !!archiving[sesKey(host, s.id)]),
+    () =>
+      arrange(
+        ws.id,
+        sec,
+        projects,
+        sessions,
+        (s) => sessionState(useStore.getState(), host, s.id),
+        (s) => activeAt(host, s),
+        (s) => !!archiving[sesKey(host, s.id)],
+        (s) => lines[s.id] ?? null,
+      ),
     // `terminals` changes agent states and activity times.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ws.id, sec, projects, sessions, terminals, archiving, host],
+    [ws.id, sec, projects, sessions, terminals, archiving, host, lines],
   );
   const v = sec.view;
   const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
@@ -433,6 +468,7 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
       items: (
         [
           ["project", "Project"],
+          ["task", "Task"],
           ["status", "Status"],
           ["none", "None"],
         ] as const
@@ -658,7 +694,13 @@ function NavRow({ icon, label, active, onClick, hint }: { icon: ReactNode; label
   );
 }
 
+/** Each linked session's task line, and whether the workspace has a task source (X46). */
+const TaskLines = createContext<{ lines: Record<string, SessionTaskLine>; sources: boolean }>({ lines: {}, sources: false });
+
 export function Sidebar() {
+  const shownWs = useStore((s) => shownWorkspace(s));
+  const { data: taskData, board: taskBoard } = useWorkspaceBoard(shownWs);
+  const taskLines = useMemo(() => ({ lines: taskBoard ? sessionTaskLines(taskBoard) : {}, sources: !!taskData?.sources.length }), [taskBoard, taskData]);
   const hosts = useStore((s) => s.hosts);
   const workspaces = useStore((s) => s.workspaces);
   const sections = useStore((s) => s.sections);
@@ -670,6 +712,7 @@ export function Sidebar() {
   const ordered = useMemo(() => Object.values(hosts).sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id)), [hosts]);
 
   return (
+    <TaskLines.Provider value={taskLines}>
     <aside className="flex h-full flex-col bg-panel">
       {/* The traffic lights sit on the left of the title bar (X32), 16px before the switcher. */}
       <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center pl-[86px] pr-2.5">
@@ -741,6 +784,7 @@ export function Sidebar() {
       </div>
       {rowMenu && <RowContextMenu m={rowMenu} onClose={() => setRowMenu(null)} />}
     </aside>
+    </TaskLines.Provider>
   );
 }
 

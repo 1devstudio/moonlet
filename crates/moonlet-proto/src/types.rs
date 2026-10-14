@@ -294,7 +294,7 @@ pub struct Section {
 /// Sidebar presentation of a section, persisted with it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SectionView {
-    /// `project` (default), `status` or `none`.
+    /// `project` (default), `task` (X46), `status` or `none`.
     #[serde(default = "default_group")]
     pub group_by: String,
     /// `recent` (default), `created` or `name`.

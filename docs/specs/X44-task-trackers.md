@@ -77,7 +77,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 - [x] Issues refresh every minute by default (options: 30 s, 1 min, 5 min, manual), and when the window comes to the front at most every 15 s. (`task-trackers.e2e.ts` saves it; the interval is read by Tasks mode.)
 - [x] Sync failures keep the last good list and show its age; they never empty the board. (`tasksStore.test.ts`)
-- [ ] "Notify when a task changes state outside moonlet" (on by default) sends a notification when a task with a session moves to another column and moonlet did not move it.
+- [x] "Notify when a task changes state outside moonlet" (on by default) sends a notification when a task with a session moves to another column and moonlet did not move it. (`keepInStep.test.ts` outsideMoves, `tasksStore.test.ts`, `settingsSearch.test.ts`)
 - [ ] A line at the bottom of the page reads: "Tokens are kept in the macOS Keychain on this Mac and never sent to remote hosts. moonletd only stores which issue each session is linked to."
 
 ## UI
@@ -104,7 +104,7 @@ GitHub goes through the daemon, because `gh` runs on the project's host:
 ## Data and config
 
 - A connection's id is its tracker and site: `linear:<organisation>`, `jira:<host>`, `clickup:<workspace id>`, `github:<host>`. It is what session links store, so a link survives reconnecting and resolves on another Mac that connects the same account.
-- `~/.moonlet/trackers.toml` on the Mac running the app: connections (id, kind, site, account name, auth kind, never the token), sources, state mapping, rules, branch template, sync interval. The app owns the file and rewrites it whole (a header comment says so), so comments added by hand do not survive. Today it holds `[sync] interval` and `[github]` `branch_template`, `max_length` and `rules`; connections, sources and state mapping join with the other trackers.
+- `~/.moonlet/trackers.toml` on the Mac running the app: connections (id, kind, site, account name, auth kind, never the token), sources, state mapping, rules, branch template, sync interval. The app owns the file and rewrites it whole (a header comment says so), so comments added by hand do not survive. Today it holds `[sync] interval` and `notify`, and `[github]` `branch_template`, `max_length` and `rules`; connections, sources and state mapping join with the other trackers.
 - Tokens: Keychain generic passwords, service `dev.onedevstudio.moonlet.trackers`, account `<connection id>`.
 - A cache of the last good task list per connection in `~/.moonlet/cache/tasks-<id>.json`, so Tasks mode opens instantly.
 - Optional per project in `.moonlet/config.toml`: `[tasks] sources = ["linear:MOON"]`, which pre-fills the repository of a matching source.

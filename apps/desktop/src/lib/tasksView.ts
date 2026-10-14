@@ -48,3 +48,31 @@ export function boardSummary(board: Board): string {
 export function syncedLabel(tracker: string, syncedAt: number | null, now: number): string {
   return syncedAt === null ? `Syncing ${tracker}…` : `${tracker} synced ${ago(now - syncedAt)}`;
 }
+
+const COLUMN_TEXT = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" } as const;
+
+export interface SessionTaskLine {
+  key: string;
+  title: string;
+  column: keyof typeof COLUMN_TEXT;
+  /** "In Progress", or "In Review · out of sync". */
+  text: string;
+  outOfSync: boolean;
+}
+
+/** The second line of each linked session's sidebar row, by session id (X46). */
+export function sessionTaskLines(board: Board): Record<string, SessionTaskLine> {
+  const out: Record<string, SessionTaskLine> = {};
+  for (const c of Object.values(board).flat()) {
+    for (const r of c.rows) {
+      out[r.session.id] = {
+        key: c.task.key,
+        title: c.task.title,
+        column: c.column,
+        text: `${COLUMN_TEXT[c.column]}${c.drift ? " · out of sync" : ""}`,
+        outOfSync: !!c.drift,
+      };
+    }
+  }
+  return out;
+}

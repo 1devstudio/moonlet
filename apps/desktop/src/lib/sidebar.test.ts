@@ -31,6 +31,16 @@ const projects = [p("a", "api"), p("b", "web"), p("c", "other")];
 const sessions = [s("s1", "a"), s("s2", "a"), s("s3", "b", { archived: true }), s("s4", "c"), s("s5", "b")];
 
 describe("sidebar arrange", () => {
+  it("groups by task, one group per task in order of the newest session, then sessions with no task (X46)", () => {
+    const task = (x: Session) => (x.id === "s1" || x.id === "s5" ? { key: "MOON-142", title: "Remote hosts" } : x.id === "s2" ? { key: "MOON-144", title: "File tabs" } : null);
+    const g = arrange("personal", sec({ group_by: "task" }), projects, [...sessions, s("s6", "a")], () => null, () => 0, () => false, task);
+    expect(g.map((x) => [x.kind, x.label, x.sessions.map((y) => y.id)])).toEqual([
+      ["task", "MOON-142 Remote hosts", ["s5", "s1"]],
+      ["task", "MOON-144 File tabs", ["s2"]],
+      ["task", "No task", ["s6"]],
+    ]);
+  });
+
   it("groups by project in section order, newest first, without archived or foreign projects", () => {
     const g = arrange("personal", sec(), projects, sessions, () => null, () => 0);
     expect(g.map((x) => x.label)).toEqual(["api", "web"]);
