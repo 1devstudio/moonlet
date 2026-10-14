@@ -41,10 +41,11 @@ export function SearchResults({ query, results, selected, onOpen }: { query: str
       </PageHeading>
       {results.length > 0 && (
         <>
-          <div role="listbox" aria-label="Matching settings" className="flex flex-col overflow-hidden rounded-[10px] border border-border bg-panel [&>*+*]:border-t [&>*+*]:border-border">
+          <div id="settings-search-results" role="listbox" aria-label="Matching settings" className="flex flex-col overflow-hidden rounded-[10px] border border-border bg-panel [&>*+*]:border-t [&>*+*]:border-border">
             {results.map((r, i) => (
               <button
                 key={r.key}
+                id={`settings-result-${i}`}
                 type="button"
                 role="option"
                 aria-selected={i === selected}

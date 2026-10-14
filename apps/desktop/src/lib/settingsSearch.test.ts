@@ -65,6 +65,13 @@ describe("searching settings (X43)", () => {
     expect(shown("notify even")).toEqual([["Notify even while moonlet is focused", "App › Notifications", "Off"]]);
   });
 
+  it("finds an action's shortcut, with its key", () => {
+    expect(searchSettings("commit…", ctx)).toEqual([
+      { key: "shortcuts:shortcut-commit", before: "", hit: "Commit…", after: "", path: "App › Keyboard shortcuts", value: "⌥⌘G", route: { page: "shortcuts" }, setting: "shortcut-commit" },
+    ]);
+    expect(shown("split pane right")).toEqual([["Split pane right", "App › Keyboard shortcuts", "⌘D"]]);
+  });
+
   it("finds nothing for a blank query", () => {
     expect(searchSettings("  ", ctx)).toEqual([]);
   });

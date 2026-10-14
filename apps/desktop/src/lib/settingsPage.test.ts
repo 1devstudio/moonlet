@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appUpdateLine, claudeUpdateLine, daemonLine, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { hostOrder, appUpdateLine, claudeUpdateLine, daemonLine, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -287,5 +287,11 @@ describe("the Phones page's access line (X43)", () => {
     expect(phoneAccessLine(st({ tailscale: false, listening: [] }))).toEqual({ tone: "blocked", text: "Tailscale is not running on this Mac" });
     expect(phoneAccessLine(st({ enabled: false, listening: [] }))).toEqual({ tone: "muted", text: "Off" });
     expect(phoneAccessLine(st({ listening: [] }))).toEqual({ tone: "muted", text: "Starting…" });
+  });
+});
+
+describe("the order of hosts in the nav (X43)", () => {
+  it("puts this Mac first, then the remote hosts by name", () => {
+    expect(hostOrder(["gpu-runner", "local", "devbox"])).toEqual(["local", "devbox", "gpu-runner"]);
   });
 });

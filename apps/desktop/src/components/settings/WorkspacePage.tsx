@@ -1,13 +1,13 @@
 // Settings › Workspaces › <name> (X43): name, colour and Claude profile
 // (X32, X33), its sections, and Delete. Edits wait for Save in the bar.
 
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { rpc } from "../../lib/daemon";
 import { M, type ClaudeProfile, type WorkspaceColor } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { errorToast, refreshProfile, toast, useStore } from "../../lib/store";
 import { goSettings, setLeaveGuard } from "../../lib/settingsNavigation";
-import { WORKSPACE_COLORS, deleteBlocked, sectionRows, workspaceDirty, workspaceSummary } from "../../lib/workspaces";
+import { WORKSPACE_COLORS, deleteBlocked, sectionRows, syncWorkspaceForm, workspaceDirty, workspaceSummary } from "../../lib/workspaces";
 import { DEFAULT_PROFILE, NEW_PROFILE, accountLabel, accountState, defaultFolder, profileOptions, runningClaudeAgents, switchConfirm } from "../../lib/profiles";
 import { ClaudeAuthDialog } from "../Profiles";
 import { WorkspaceMark } from "../WorkspaceSwitcher";
@@ -81,7 +81,7 @@ function ProfileRows({ host, value, onChange }: { host: string; value: string; o
         </select>
       </Row>
       {creating ? (
-        <div className="flex flex-col gap-2.5 px-4 py-3.5">
+        <div data-own-enter className="flex flex-col gap-2.5 px-4 py-3.5">
           <div className="flex gap-2.5">
             <input autoFocus className={cx(fieldCls, "flex-1")} value={name} onChange={(e) => setName(e.target.value)} placeholder="Profile name, e.g. Work profile" />
             <input className={cx(fieldCls, "flex-1 font-mono")} spellCheck={false} value={folder} onChange={(e) => setFolder(e.target.value)} placeholder={`Folder (default ${defaultFolder(name)})`} />
@@ -131,6 +131,20 @@ export function WorkspacePage({ host, id }: { host: string; id: string }) {
   const [profile, setProfile] = useState(ws?.claude_profile ?? DEFAULT_PROFILE);
   const [saving, setSaving] = useState(false);
   const colorId = useId();
+  const nameHint = useId();
+
+  // A change made elsewhere (another window, the CLI) shows here unless the
+  // form has edits of its own.
+  const seen = useRef(ws);
+  useEffect(() => {
+    const before = seen.current;
+    seen.current = ws;
+    if (!ws || !before || ws === before) return;
+    const next = syncWorkspaceForm(before, ws, { name, color, profile });
+    setName(next.name);
+    setColor(next.color);
+    setProfile(next.profile);
+  }, [ws]); // eslint-disable-line react-hooks/exhaustive-deps
   const runtime = useMemo(() => ({ sessions: sessions ?? [], terminals: Object.values(terminals ?? {}) }), [sessions, terminals]);
   const form = { name, color, profile };
   const dirty = !!ws && workspaceDirty(ws, form);
@@ -145,10 +159,14 @@ export function WorkspacePage({ host, id }: { host: string; id: string }) {
   };
   const save = async () => {
     if (!ws || !canSave) return;
+    // Busy from here, so ⌘↵ can't ask twice while the confirm is open.
+    setSaving(true);
     const ids = runtime.sessions.filter((x) => x.workspace_id === ws.id).map((x) => x.id);
     const message = switchConfirm(ws.claude_profile ?? null, profile || null, runningClaudeAgents(runtime.sessions, runtime.terminals, ids), profiles ?? []);
-    if (message && !(await askConfirm({ title: "Change Claude profile", message, action: "Change profile" }))) return;
-    setSaving(true);
+    if (message && !(await askConfirm({ title: "Change Claude profile", message, action: "Change profile" }))) {
+      setSaving(false);
+      return;
+    }
     try {
       await rpc(host, M.workspaceUpdate, { id: ws.id, name: name.trim(), color, claude_profile: profile || null });
       setName(name.trim());
@@ -200,8 +218,28 @@ export function WorkspacePage({ host, id }: { host: string; id: string }) {
       </PageHeading>
       <Section title="Name and colour">
         <Card>
-          <Row setting="ws-name" label="Name" htmlFor="settings-ws-name">
-            <input id="settings-ws-name" className={cx(fieldCls, "w-[260px]")} value={name} placeholder="Acme" aria-invalid={!name.trim()} onChange={(e) => setName(e.target.value)} />
+          <Row
+            setting="ws-name"
+            label="Name"
+            htmlFor="settings-ws-name"
+            hint={
+              !name.trim() && (
+                <span id={nameHint} className="text-error">
+                  Enter a name.
+                </span>
+              )
+            }
+          >
+            <input
+              id="settings-ws-name"
+              className={cx(fieldCls, "w-[260px]")}
+              value={name}
+              placeholder="Acme"
+              aria-invalid={!name.trim()}
+              aria-describedby={!name.trim() ? nameHint : undefined}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void save()}
+            />
           </Row>
           <Row setting="ws-color" label="Colour" labelId={colorId}>
             <Swatches value={color} onChange={setColor} labelledBy={colorId} />

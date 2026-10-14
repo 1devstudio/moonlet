@@ -192,3 +192,9 @@ export interface WorkspaceForm {
 export function workspaceDirty(ws: Workspace, f: WorkspaceForm): boolean {
   return f.name.trim() !== ws.name || f.color !== ws.color || f.profile !== (ws.claude_profile ?? "");
 }
+
+/** The form after the workspace changed from `before` to `after` elsewhere:
+ * an untouched form follows it, edits are kept. */
+export function syncWorkspaceForm(before: Workspace, after: Workspace, f: WorkspaceForm): WorkspaceForm {
+  return workspaceDirty(before, f) ? f : { name: after.name, color: after.color, profile: after.claude_profile ?? "" };
+}

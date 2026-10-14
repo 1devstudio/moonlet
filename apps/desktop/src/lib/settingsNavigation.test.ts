@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { answerConfirm } from "./confirm";
 import { goSettings, setLeaveGuard } from "./settingsNavigation";
-import { openProjectSettings } from "./actions";
+import { openProjectSettings, runAction } from "./actions";
 import { useStore } from "./store";
 
 vi.mock("./daemon", () => ({ rpc: vi.fn(), sendInput: vi.fn() }));
@@ -37,6 +37,16 @@ describe("moving around the settings page (X43)", () => {
     answerConfirm(true, false);
     await going;
     expect(useStore.getState().settingsPage).toEqual({ page: "hosts" });
+  });
+
+  it("asks before Settings… from the palette leaves unsaved changes", async () => {
+    setLeaveGuard(() => ({ state: "ask", message: "Discard unsaved changes to Acme?" }));
+    runAction("settings");
+    await tick();
+    expect(useStore.getState().confirm?.options.title).toBe("Discard changes");
+    answerConfirm(false, false);
+    await tick();
+    expect(useStore.getState().settingsPage).toEqual({ page: "workspace", host: "local", id: "acme" });
   });
 
   it("stays put while a save is running", async () => {

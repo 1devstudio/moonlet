@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Bell, Bot, ChevronRight, Folder, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X } from "lucide-react";
-import { escapeAction, profilesNeedSignIn, routeKey, settingsCrumbs, settingsNav, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
+import { escapeAction, hostOrder, profilesNeedSignIn, routeKey, settingsCrumbs, settingsNav, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
 import { updateStatus } from "../../lib/updater";
@@ -35,8 +35,6 @@ const ICONS: Record<AppPage, typeof Settings> = {
 
 export const closeSettings = () => void goSettings(null);
 
-/** Hosts in sidebar order: this Mac first. */
-const hostOrder = (ids: string[]) => [...ids].sort((a, b) => (a === "local" ? -1 : b === "local" ? 1 : a.localeCompare(b)));
 
 function EntryIcon({ entry }: { entry: NavEntry }) {
   if (entry.mark) return <WorkspaceMark name={entry.label} color={entry.mark} size={14} />;
@@ -51,6 +49,8 @@ interface SearchField {
   setQuery: (q: string) => void;
   onKey: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   inputRef: React.RefObject<HTMLInputElement | null>;
+  /** The id of the selected result. */
+  active?: string;
 }
 
 function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; search: SearchField }) {
@@ -93,6 +93,8 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
             value={search.query}
             onChange={(e) => search.setQuery(e.target.value)}
             onKeyDown={search.onKey}
+            aria-controls={search.query.trim() ? "settings-search-results" : undefined}
+            aria-activedescendant={search.query.trim() && search.active ? search.active : undefined}
             placeholder="Search settings"
             aria-label="Search settings"
             className="min-w-0 flex-1 border-0 bg-transparent ui-text-12.5 text-fg outline-none placeholder:text-faint"
@@ -210,6 +212,7 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
       setSelected(0);
     },
     inputRef: searchRef,
+    active: results[selected] ? `settings-result-${selected}` : undefined,
     onKey: (e) => {
       if (e.key === "Escape") {
         setQuery("");
@@ -249,7 +252,7 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
     let done: ReturnType<typeof setTimeout> | undefined;
     const find = setInterval(() => {
       const el = root.current?.querySelector<HTMLElement>(`main [data-setting="${flash.setting}"]`);
-      if (!el && ++tries < 40) return;
+      if (!el && ++tries < 200) return;
       clearInterval(find);
       if (!el) return;
       el.scrollIntoView({ block: "center" });
@@ -317,7 +320,11 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
             <X size={14} />
           </IconButton>
         </header>
-        {searching ? <SearchResults query={query} results={results} selected={selected} onOpen={openResult} /> : <Page key={routeKey(route)} route={route} mobile={mobile} />}
+        {searching && <SearchResults query={query} results={results} selected={selected} onOpen={openResult} />}
+        {/* Kept mounted while searching, so a page's unsaved edits survive. */}
+        <div className={cx("flex min-h-0 flex-1 flex-col", searching && "hidden")}>
+          <Page key={routeKey(route)} route={route} mobile={mobile} />
+        </div>
       </main>
     </div>
   );
