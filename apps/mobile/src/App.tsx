@@ -4,6 +4,8 @@ import { Splash } from "./components/Splash";
 import { TabBar } from "./components/TabBar";
 import { HostsScreen } from "./screens/Hosts";
 import { InboxScreen, useInbox } from "./screens/Inbox";
+import { NewSessionScreen } from "./screens/NewSession";
+import { SessionsScreen } from "./screens/Sessions";
 import { PlanSheet } from "./screens/PlanSheet";
 import { PairScreen, PairedScreen } from "./screens/Pair";
 
@@ -26,7 +28,8 @@ export default function App() {
       <main className="min-h-0 flex-1">
         {tab === "inbox" && <InboxScreen />}
         {tab === "hosts" && <HostsScreen />}
-        {(tab === "sessions" || tab === "new") && <div className="p-6 text-muted">Coming in the next part of the stack.</div>}
+        {tab === "sessions" && <SessionsScreen />}
+        {tab === "new" && <NewSessionScreen />}
       </main>
       <TabBar badge={inbox.needs.length} />
       {screen?.kind === "plan" && <PlanSheet host={screen.host} terminal={screen.terminal} ask={screen.ask} />}
