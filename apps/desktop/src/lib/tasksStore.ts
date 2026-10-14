@@ -89,6 +89,8 @@ export interface Connection {
   site: string;
   account: string;
   auth: string;
+  /** Jira's sign-in email, kept so Reconnect asks only for a new token. */
+  email?: string;
   sources: Source[];
   /** Tracker state name → column, where the user changed the default (X44). */
   states?: Record<string, Column>;

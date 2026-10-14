@@ -89,7 +89,7 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
 /** Connect (or reconnect) a tracker with a token, then pick its sources. */
 export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection["kind"]; reconnect?: Connection; onClose: () => void }) {
   const [site, setSite] = useState(reconnect?.site ?? "");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(reconnect?.email ?? "");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +145,12 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
               <p className="ui-text-12 text-muted">Opens the browser. Or use an API key:</p>
             </>
           )}
-          {kind === "jira" && (
+          {kind === "jira" && reconnect?.email && (
+            <p className="ui-text-12.5 text-muted">
+              {reconnect.site} as {reconnect.email}
+            </p>
+          )}
+          {kind === "jira" && !reconnect?.email && (
             <>
               <Field label="Site">
                 <input className={inputCls} placeholder="acme.atlassian.net" value={site} onChange={(e) => setSite(e.target.value)} />
