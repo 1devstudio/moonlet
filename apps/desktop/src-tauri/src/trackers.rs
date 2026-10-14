@@ -99,15 +99,24 @@ impl Session {
     async fn load(id: &str) -> Res<Self> {
         let config = crate::read_trackers(&crate::trackers_path()).map_err(fail)?;
         let conn = config.connections.into_iter().find(|c| c.id == id).ok_or_else(|| fail(format!("no connection {id}")))?;
-        let again = || TrackerError { auth: true, message: format!("Sign in to {} again", conn.site) };
-        let secret = secrets::store().get(id).ok_or_else(again)?;
+        let again = || TrackerError { auth: true, message: LINEAR_AGAIN.into() };
+        let missing = || TrackerError { auth: true, message: format!("No saved token for {}; reconnect it", conn.site) };
+        let secret = secrets::store().get(id).ok_or_else(missing)?;
         if conn.auth != "oauth" {
             return Ok(Self { conn, token: secret });
         }
         // OAuth: the access token, refreshed shortly before it expires.
-        let mut tokens: moonlet_trackers::oauth::Tokens = serde_json::from_str(&secret).map_err(|_| again())?;
-        let now = moonlet_core::paths::now_ms();
-        if now + 60_000 >= tokens.expires_ms {
+        let read = |secret: &str| serde_json::from_str::<moonlet_trackers::oauth::Tokens>(secret).map_err(|_| again());
+        let mut tokens = read(&secret)?;
+        if tokens.needs_refresh(moonlet_core::paths::now_ms()) {
+            // Each refresh spends the refresh token, so one at a time; a
+            // command that waited uses the token the first one saved.
+            let _one = REFRESHING.lock().await;
+            tokens = read(&secrets::store().get(id).ok_or_else(again)?)?;
+            let now = moonlet_core::paths::now_ms();
+            if !tokens.needs_refresh(now) {
+                return Ok(Self { conn, token: tokens.access });
+            }
             let (Some(client_id), Some(refresh)) = (LINEAR_CLIENT_ID, tokens.refresh.clone()) else { return Err(again()) };
             let (status, body) = send(
                 client()?
@@ -173,10 +182,16 @@ async fn linear_request(token: &str, auth: &str, query: &str, variables: Value) 
     )
     .await?;
     if status == 401 {
-        return Err(TrackerError { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here.".into() });
+        let message = if auth == "oauth" { LINEAR_AGAIN } else { "Linear no longer accepts this token. Create a new one and paste it here." };
+        return Err(TrackerError { auth: true, message: message.into() });
     }
     Ok(body)
 }
+
+/// What a Linear OAuth connection whose sign-in ran out says (X44).
+const LINEAR_AGAIN: &str = "Sign in to Linear again";
+/// One OAuth refresh at a time (see `Session::load`).
+static REFRESHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Linear's OAuth app, when this build has one (X44). Without it the app
 /// signs in with an API key.
