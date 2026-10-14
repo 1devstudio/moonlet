@@ -112,3 +112,34 @@ export function githubRepo(remote: string | null): string | null {
     return null;
   }
 }
+
+export type TrackerKind = "linear" | "jira" | "clickup" | "github";
+
+/** What the new-session composer starts with for a task (X46). */
+export interface TaskStart {
+  ref: TaskRef;
+  kind: TrackerKind;
+  key: string;
+  title: string;
+  /** GitHub's issue number, for the `{number}` branch template. */
+  number?: number;
+  /** `<key> · <title>` and the description, which the user can edit before sending. */
+  firstMessage: string;
+  /** The project to start in: the one whose GitHub repository the issue is in. */
+  project: string | null;
+}
+
+/** The composer's preset for starting a session from `task`; `repos` are the projects' `owner/repo` by id. */
+export function taskStart(task: Task, repos: Record<string, string | null>): TaskStart {
+  const description = task.description.trim();
+  const repo = task.github?.repo.toLowerCase();
+  return {
+    ref: { connection: task.connection, key: task.key, url: task.url },
+    kind: task.connection.split(":")[0] as TrackerKind,
+    key: task.key,
+    title: task.title,
+    number: task.github?.number,
+    firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
+    project: (repo && Object.keys(repos).find((id) => repos[id]?.toLowerCase() === repo)) || null,
+  };
+}

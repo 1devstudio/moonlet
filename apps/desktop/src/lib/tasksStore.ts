@@ -54,6 +54,13 @@ export function toggleTasksMode() {
   useStore.setState({ tasksMode: { ...s.tasksMode, [key]: !s.tasksMode[key] }, showHistory: false });
 }
 
+/** Back to Sessions mode in the shown workspace, to work on a session (X45, X46). */
+export function leaveTasksMode() {
+  const s = useStore.getState();
+  const ws = shownWorkspace(s);
+  if (ws && s.tasksMode[wsKey(ws.host, ws.id)]) useStore.setState({ tasksMode: { ...s.tasksMode, [wsKey(ws.host, ws.id)]: false } });
+}
+
 /** The projects in a workspace's sections. */
 export function workspaceProjects(s: StoreState, host: string, workspaceId: string): Project[] {
   const ws = s.workspaces[host]?.find((w) => w.id === workspaceId);

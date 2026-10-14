@@ -21,13 +21,13 @@ A session can belong to a task. The link is made when a session starts from a ta
 ### Links
 
 - [x] A session has at most one task: `{connection, key, url}`, with the connection id of X44. It is stored by the daemon with the session. (`a_session_started_from_a_task_keeps_its_link`)
-- [ ] A session is linked to a task when (first match wins): it has a stored link; its branch name contains the key (if that rule is on, X44); its PR closes the issue or mentions the key (if that rule is on). Links found from the branch or PR are not stored, so renaming a branch or a reconnect never leaves a stale link.
+- [x] A session is linked to a task when (first match wins): it has a stored link; its branch name contains the key (if that rule is on, X44); its PR closes the issue or mentions the key (if that rule is on). Links found from the branch or PR are not stored, so renaming a branch or a reconnect never leaves a stale link. (`tasks.test.ts` taskForSession)
 - [ ] A stored link can be removed with **Unlink**; then branch and PR matches are ignored for that session until it is linked again. (Daemon side done: `task_unlinked`, `a_session_can_be_linked_to_a_task_and_unlinked`.)
-- [ ] A worktree whose branch carries a task's key and that no session uses is a "worktree without a session" on that task (X45).
+- [x] A worktree whose branch carries a task's key and that no session uses is a "worktree without a session" on that task (X45). (`tasksBoard.test.ts`)
 
 ### Starting a session from a task
 
-- [ ] **Start**, **Start a session** and **New session** on a task open the composer with a task chip `For <key> <title>` (removable), and the first message:
+- [x] **Start**, **Start a session** and **New session** on a task open the composer with a task chip `For <key> <title>` (removable), and the first message: (`tasks.test.ts` taskStart, `tasks-mode.e2e.ts`)
 
 ```
 <key> · <title>
@@ -35,10 +35,10 @@ A session can belong to a task. The link is made when a session starts from a ta
 ```
 
   The user can edit it before sending.
-- [ ] Project: the source's repository (X44). Branch: the source's template filled in and cut to the max length, then made unique the same way session branches are (`-2`, `-3`).
+- [x] Project: the source's repository (X44). Branch: the source's template filled in and cut to the max length, then made unique the same way session branches are (`-2`, `-3`). (`a_task_branch_follows_the_trackers_default_template`, `tasks-mode.e2e.ts`)
 - [ ] "Move <key> to In Progress and assign it to me" is shown and ticked when the "session starts" rule is Automatically, shown unticked when it is Suggest, and hidden when Off. It only acts on a task in Todo (or a state not shown); a task further along is left alone.
-- [ ] **Start session** on a worktree without a session creates a session on that worktree and branch instead of making a new one.
-- [ ] The new session is stored with its link.
+- [x] **Start session** on a worktree without a session creates a session on that worktree and branch instead of making a new one. (`worktrees_made_outside_moonlet_are_listed_and_can_be_adopted`)
+- [x] The new session is stored with its link. (`tasks-mode.e2e.ts`)
 
 ### Link dialog
 

@@ -84,5 +84,5 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X43 | Settings page (nav, app pages, workspace and project pages, shortcuts, search) | P1 | 3 | implemented (look unchecked in app) | [X43-settings-page.md](X43-settings-page.md) |
 | X44 | Task trackers (Linear, Jira Cloud, ClickUp, GitHub Issues) | P1 | 3 | draft | [X44-task-trackers.md](X44-task-trackers.md) |
 | X45 | Tasks mode (board and list of issues with their sessions) | P1 | 3 | draft (board with GitHub issues implemented; list, filters and fixes to come) | [X45-tasks-mode.md](X45-tasks-mode.md) |
-| X46 | Tasks in sessions (links, start from a task, Keep in step) | P1 | 3 | draft (daemon links and worktree adoption implemented) | [X46-tasks-in-sessions.md](X46-tasks-in-sessions.md) |
+| X46 | Tasks in sessions (links, start from a task, Keep in step) | P1 | 3 | draft (links and starting a session from a task implemented) | [X46-tasks-in-sessions.md](X46-tasks-in-sessions.md) |
 | X47 | Quieter notifications: one done per turn with subagents, per-event banners, mute | P1 | 3 | implemented (unheard in app) | [X47-quieter-notifications.md](X47-quieter-notifications.md) |
