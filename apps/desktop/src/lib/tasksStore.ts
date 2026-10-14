@@ -238,12 +238,18 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const conns = workspaceConnections(trackersConfig(useTasks.getState()).connections, key);
   const fromTrackers = await Promise.all(
     conns.map(async (c) => {
+      // A rejected token is not tried again until the user reconnects (X44).
+      const rejected = useTasks.getState().attention[c.id];
+      if (rejected !== undefined) {
+        error = rejected;
+        failed.add(c.id);
+        return [];
+      }
       try {
         // A source set to "All open issues" needs everyone's; the others keep the account's.
         const mine = c.all.length === 0;
         const fetched = await hostsApi.trackerTasks(c.id, mine);
         const list = mine ? fetched : fetched.filter((t) => c.all.includes(t.tracker?.source ?? "") || t.assignees.includes(c.account));
-        useTasks.setState((t) => (t.attention[c.id] ? { attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== c.id)) } : {}));
         return applyStateMapping(
           list.filter((t) => t.tracker && c.keys.includes(t.tracker.source)),
           trackersConfig(useTasks.getState()).connections,
@@ -384,6 +390,11 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
 }
 
 /** The chip's button (X45): close the issue, move it, or clean up after a done task. */
+/** A connection the user signed in to again: its tasks load once more (X44). */
+export function reconnected(id: string) {
+  useTasks.setState((t) => ({ attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== id)) }));
+}
+
 /** Runs a chip's fix; true when it was done (a declined Clean up is not). */
 export async function fixDrift(host: string, workspaceId: string, card: Card): Promise<boolean> {
   const plan = driftFix(card);

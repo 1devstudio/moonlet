@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, refreshTasks, retryTask, rulesFor, runAutoFixes, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -242,6 +242,15 @@ describe("tasks from Linear, Jira and ClickUp (X44)", () => {
     await refreshTasks("local", "personal", 2_000);
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key)).toEqual(["MOON-1"]);
     expect(useTasks.getState().attention).toEqual({ "linear:acme": "Linear no longer accepts this token. Create a new one and paste it here." });
+
+    // No more requests with the rejected token until the user reconnects.
+    answers["tracker_tasks linear:acme"] = () => [linearTask("MOON-2", "MOON")];
+    await refreshTasks("local", "personal", 3_000);
+    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key)).toEqual(["MOON-1"]);
+    reconnected("linear:acme");
+    await refreshTasks("local", "personal", 4_000);
+    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key)).toEqual(["MOON-2"]);
+    expect(useTasks.getState().attention).toEqual({});
     useTasks.setState({ config: null, attention: {} });
   });
 });
