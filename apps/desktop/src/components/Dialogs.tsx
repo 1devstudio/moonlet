@@ -13,6 +13,7 @@ import { hostSections } from "../lib/sidebar";
 import { newSectionWorkspace } from "../lib/workspaces";
 import { NewWorkspaceDialog, WorkspaceSettingsDialog } from "./WorkspaceDialogs";
 import { ProfilesSection } from "./Profiles";
+import { MobileSection } from "./Mobile";
 import { ProjectSettingsDialog } from "./ProjectSettings";
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../lib/agents";
 import type { ToolCallView } from "../lib/chat";
@@ -629,6 +630,7 @@ export function SettingsDialog() {
       <DaemonSection />
       <UpdatesSection />
       <HostsSection />
+      <MobileSection />
       <AgentsSection />
       <EditorSection />
       <TerminalSection />

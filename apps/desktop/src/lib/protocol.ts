@@ -77,6 +77,8 @@ export interface PermissionAsk {
   reason?: string | null;
   can_always: boolean;
   diff?: string | null;
+  /** When the agent asked, ms (X40). */
+  asked_at?: number | null;
 }
 
 export interface ChatState {
@@ -359,6 +361,8 @@ export interface ReadRequest {
   exit?: number;
   lines: number;
   text: string;
+  /** When the agent asked, ms (X40). */
+  asked_at?: number | null;
 }
 
 export interface HookStatus {
@@ -391,12 +395,44 @@ export interface HostInfo {
   home: string | null;
 }
 
+/** A paired phone (X39). */
+export interface MobileDevice {
+  id: string;
+  name: string;
+  created_at: number;
+  last_seen: number | null;
+  connected: boolean;
+}
+
+/** Phone access over Tailscale (X39). */
+export interface MobileStatus {
+  enabled: boolean;
+  port: number;
+  /** The Mac has a Tailscale address. */
+  tailscale: boolean;
+  addresses: string[];
+  /** Where the daemon listens for phones, `ip:port`; empty while off. */
+  listening: string[];
+  host: string;
+  devices: MobileDevice[];
+}
+
+/** A one-time pairing code and the link its QR code holds (X39). */
+export interface MobilePairing {
+  code: string;
+  url: string;
+  expires_at: number;
+  addresses: string[];
+  host: string;
+}
+
 export interface FsChanged {
   root: string;
   paths: string[];
 }
 
 export const M = {
+  daemonInfo: "daemon.info",
   terminalCreate: "terminal.create",
   terminalList: "terminal.list",
   terminalAttach: "terminal.attach",
@@ -466,6 +502,8 @@ export const M = {
   fsWatch: "fs.watch",
   fsUnwatch: "fs.unwatch",
   chatState: "chat.state",
+  /** Every chat's state without its items (X40). */
+  chatSummaries: "chat.summaries",
   chatSend: "chat.send",
   chatPermission: "chat.permission",
   chatInterrupt: "chat.interrupt",
@@ -476,6 +514,12 @@ export const M = {
   terminalReadRequests: "terminal.read_requests",
   terminalReadGrants: "terminal.read_grants",
   terminalReadGrantClear: "terminal.read_grant_clear",
+  mobileStatus: "mobile.status",
+  mobileSetEnabled: "mobile.set_enabled",
+  mobilePairStart: "mobile.pair_start",
+  mobilePairCancel: "mobile.pair_cancel",
+  mobileRevoke: "mobile.revoke",
+  mobileHosts: "mobile.hosts",
 } as const;
 
 export const EV = {
@@ -498,4 +542,7 @@ export const EV = {
   terminalReadRequest: "terminal.read_request",
   terminalReadDone: "terminal.read_done",
   terminalReadGrant: "terminal.read_grant",
+  mobileChanged: "mobile.changed",
+  mobilePaired: "mobile.paired",
+  mobilePairEnded: "mobile.pair_ended",
 } as const;
