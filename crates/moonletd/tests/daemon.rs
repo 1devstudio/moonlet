@@ -1023,6 +1023,33 @@ async fn a_session_can_be_linked_to_a_task_and_unlinked() {
         .unwrap();
     assert_eq!(unlinked.task, None);
     assert!(unlinked.task_unlinked);
+
+    // Linking again ends the unlinked state.
+    let relinked: Session = c
+        .request(
+            methods::SESSION_UPDATE,
+            serde_json::json!({"id": s.id, "task": task}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(&relinked.task).unwrap(), task);
+    assert!(!relinked.task_unlinked);
+}
+
+/// `git worktree add -q <args> <dir>` in `repo`, returning `dir` as git
+/// reports it.
+fn add_worktree(repo: &std::path::Path, args: &[&str], dir: &std::path::Path) -> String {
+    assert!(
+        Command::new("git")
+            .args(["worktree", "add", "-q"])
+            .args(args)
+            .arg(dir)
+            .current_dir(repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::canonicalize(dir).unwrap().display().to_string()
 }
 
 #[tokio::test]
@@ -1031,17 +1058,8 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
     let d = TestDaemon::start().await;
     let mut c = d.client().await;
     let (repo, p) = project_with_repo(&d, &mut c).await;
-    let wt = d.home.path().join("moon-149-host-health");
-    assert!(
-        Command::new("git")
-            .args(["worktree", "add", "-q", "-b", "moon-149-host-health"])
-            .arg(&wt)
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success()
-    );
-    let wt = std::fs::canonicalize(&wt).unwrap().display().to_string();
+    let wt_as_given = d.home.path().join("moon-149-host-health");
+    let wt = add_worktree(&repo, &["-b", "moon-149-host-health"], &wt_as_given);
 
     let list: serde_json::Value = c
         .request(methods::PROJECT_WORKTREES, serde_json::json!({"id": p.id}))
@@ -1060,7 +1078,8 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
             serde_json::json!({
                 "project_id": p.id,
                 "name": "Show remote host health in the sidebar footer",
-                "worktree": wt,
+                // The path as the user's temp dir spells it, not as git does.
+                "worktree": wt_as_given.display().to_string(),
             }),
         )
         .await
@@ -1075,17 +1094,7 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("is not a worktree of this project"), "{err}");
-    let detached = d.home.path().join("detached");
-    assert!(
-        Command::new("git")
-            .args(["worktree", "add", "-q", "--detach"])
-            .arg(&detached)
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success()
-    );
-    let detached = std::fs::canonicalize(&detached).unwrap().display().to_string();
+    let detached = add_worktree(&repo, &["--detach"], &d.home.path().join("detached"));
     let err = c
         .request::<_, Session>(methods::SESSION_CREATE, adopt(detached))
         .await
@@ -1097,6 +1106,14 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
         .request::<_, Session>(
             methods::SESSION_CREATE,
             serde_json::json!({"project_id": p.id, "name": "Again", "worktree": wt}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("already used by session"), "{err}");
+    let err = c
+        .request::<_, Session>(
+            methods::SESSION_CREATE,
+            serde_json::json!({"project_id": p.id, "name": "Again", "worktree": wt_as_given}),
         )
         .await
         .unwrap_err();

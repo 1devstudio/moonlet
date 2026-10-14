@@ -1140,16 +1140,25 @@ impl SessionManager {
     /// A linked work tree of the repo that no session uses, with its branch
     /// (X46: start a session on a worktree made outside moonlet).
     async fn adoptable_worktree(&self, repo: &Path, dir: &str) -> Result<(PathBuf, String)> {
+        // Paths compare by where they lead: `/var/…` and `/private/var/…`
+        // are the same worktree on macOS.
+        let real = |p: &str| std::fs::canonicalize(p).ok();
+        let not_ours = || format!("{dir} is not a worktree of this project");
+        let want = real(dir).with_context(not_ours)?;
         let found = git::worktrees(repo)
             .await?
             .into_iter()
-            .find(|w| w.path == dir)
-            .with_context(|| format!("{dir} is not a worktree of this project"))?;
+            .find(|w| real(&w.path).as_ref() == Some(&want))
+            .with_context(not_ours)?;
         let branch = found.branch.with_context(|| format!("{dir} is on a detached HEAD"))?;
-        if let Some(s) = self.list_sessions().into_iter().find(|s| !s.archived && s.path == dir) {
+        if let Some(s) = self
+            .list_sessions()
+            .into_iter()
+            .find(|s| !s.archived && real(&s.path).as_ref() == Some(&want))
+        {
             anyhow::bail!("{dir} is already used by session {}", s.name);
         }
-        Ok((PathBuf::from(dir), branch))
+        Ok((PathBuf::from(found.path), branch))
     }
 
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
