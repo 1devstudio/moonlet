@@ -35,13 +35,13 @@ Design: `Plan Panel.html` (a Claude Design bundle built from moonlet's own compo
 - [x] The compact card sits right after the transcript row of its `ExitPlanMode` call, has the approval buttons while the plan waits, and stays with the outcome after. (`plan-approval.e2e.ts`)
 - [x] Keep planning focuses the composer with the placeholder "What should change in the plan?"; sending answers the plan with the feedback; Escape in the empty composer leaves without sending and without stopping Claude. (`plan-approval.e2e.ts`)
 - [x] The Plan tab shows a dot while a plan waits and another tab is selected. (`planTabDot`)
-- [x] The right panel's tabs are Plan, Files, Changes and Review, styled as underlined 13px labels that scale with the text size. (`font-size.e2e.ts`)
+- [x] The right panel's tabs are Plan, Files, Changes and Review (X42 added Agents after Plan), styled as underlined 13px labels that scale with the text size. (`font-size.e2e.ts`)
 
 ## UI
 
 Plan tab (right panel):
 
-    Plan  Files  Changes  Review          ← 38px, active tab underlined in accent
+    Plan  Agents  Files  Changes  Review  ← 38px, active tab underlined in accent (Agents: X42)
     ─────────────────────────────────────
     ● Waiting for your approval   Updated 7:22 PM
     ~/.claude/plans/add-a-dark-theme.md

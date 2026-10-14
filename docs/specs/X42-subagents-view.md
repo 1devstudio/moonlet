@@ -39,12 +39,12 @@ Daemon (PR 1):
 
 Agents tab (PR 2):
 
-- [ ] The right panel has an **Agents** tab between Plan and Files. It shows a dot while an agent needs the user and another tab is selected. (`agentsTabDot`)
-- [ ] An agent's displayed state is `needs you` while one of the chat's pending asks names it and it is still running, else `running`, `done`, `failed` or `stopped`. (`agentRows`)
-- [ ] Each row shows the status dot, the description and the elapsed time (`m:ss`). Its second line depends on the state: the current activity while running; "Wants to run …" with Allow and Deny when it needs the user; the error in red with Retry when it failed; "Stopped" when stopped; nothing when done. (`agentRows`, `agents.e2e.ts`)
-- [ ] The header reads "N agents · m:ss · 57k tokens", and **Stop all** stops every running agent. (`agentsHeader`)
-- [ ] The detail shows the agent's state, model, elapsed time and tokens; its brief, collapsed to one line; its tool calls; the pending ask as a full permission card; and **Stop** while it runs. (`agents.e2e.ts`)
-- [ ] Retry sends the chat the message `Run the "<description>" agent again.` (`retryMessage`)
+- [x] The right panel has an **Agents** tab between Plan and Files. It shows a dot while an agent needs the user and another tab is selected, and clicking it always shows the list. With no agents it reads "No agents yet". (`agentsTabDot`, `agents.e2e.ts`)
+- [x] An agent's displayed state is `needs you` while one of the chat's pending asks names it and it is still running, else `running`, `done`, `failed` or `stopped`. (`agentRows`)
+- [x] Each row shows the status dot, the description and the elapsed time (`m:ss`). Its second line depends on the state: the current activity while running; "Wants to run …" with Allow and Deny when it needs the user; the error in red with Retry when it failed; "Stopped" when stopped; nothing when done. (`agentRows`, `agents.e2e.ts`)
+- [x] The header reads "N agents · m:ss · 57k tokens", and **Stop all** stops every agent that runs or waits for the user. (`agentsHeader`, `stoppable`)
+- [x] The detail shows the agent's state, model, elapsed time and tokens; its brief, collapsed to one line; its tool calls with `+a −r` for edits; the pending ask as a full permission card; its report once done, or its error with Retry once failed; and **Stop** while it runs. (`agents.e2e.ts`)
+- [x] Retry sends the chat the message `Run the "<description>" agent again.` (`retryMessage`)
 
 Strip and sidebar (PR 3):
 
@@ -143,7 +143,7 @@ Captured from claude 2.1.296 (haiku, `--permission-prompt-tool stdio`, hooks off
 
 - Unit (Rust, `crates/moonlet-core/src/chat/claude.rs`): replay the captured fixtures through the adapter, as listed under Behaviour.
 - Unit (Rust, `crates/moonlet-core/src/chat/runtime.rs`): `chat.stop_agent` and process exit with a fake `claude`.
-- Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `agentsHeader`, `agentsTabDot`, `retryMessage`, `stripView`, `agentEvents`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
+- Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `agentsHeader`, `agentsTabDot`, `retryMessage`, `stripView`, `agentEvents`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
 - E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents; the tab lists them, one asks and is allowed from its row, the detail shows its tool calls, and Stop sends `stop_task`.
 
 ## Open questions
