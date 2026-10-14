@@ -136,15 +136,22 @@ const COLUMN_TEXT: Record<Exclude<Column, "hidden">, string> = { todo: "Todo", i
  * moonlet moving them, for a notification (X44). `linked` and `byMoonlet`
  * hold `connection key`s; nothing on the first sync (`before` null).
  */
-export function outsideMoves(before: Task[] | null, after: Task[], linked: Set<string>, byMoonlet: Set<string>): { key: string; title: string; text: string }[] {
+export function outsideMoves(before: Task[] | null, after: Task[], linked: Set<string>, byMoonlet: Map<string, Task["column"]>): { id: string; title: string; text: string }[] {
   if (!before) return [];
   const was = new Map(before.map((t) => [`${t.connection} ${t.key}`, t.column]));
+  const closed = (c: Task["column"]) => c === "done" || c === "hidden";
   return after.flatMap((t) => {
     const id = `${t.connection} ${t.key}`;
     const from = was.get(id);
-    if (!from || from === t.column || !linked.has(id) || byMoonlet.has(id)) return [];
-    if (t.github) return t.column === "done" || t.column === "hidden" ? [{ key: t.key, title: t.title, text: `${t.key} was closed` }] : from === "done" || from === "hidden" ? [{ key: t.key, title: t.title, text: `${t.key} was reopened` }] : [];
-    return t.column === "open" || t.column === "hidden" ? [] : [{ key: t.key, title: t.title, text: `${t.key} moved to ${COLUMN_TEXT[t.column]}` }];
+    // moonlet's own move is not news; a task that ended up elsewhere is.
+    if (!from || from === t.column || !linked.has(id) || byMoonlet.get(id) === t.column) return [];
+    const say = (text: string) => [{ id, title: t.title, text }];
+    if (t.github) {
+      if (closed(t.column) === closed(from)) return [];
+      if (closed(t.column)) return byMoonlet.get(id) === "done" ? [] : say(`${t.key} was closed`);
+      return say(`${t.key} was reopened`);
+    }
+    return t.column === "open" || t.column === "hidden" ? [] : say(`${t.key} moved to ${COLUMN_TEXT[t.column]}`);
   });
 }
 

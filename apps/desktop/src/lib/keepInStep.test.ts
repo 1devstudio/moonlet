@@ -163,15 +163,29 @@ describe("outsideMoves (X44: notify when a task changes state outside moonlet)",
     const before = [task("MOON-142", "in_review"), task("MOON-151", "todo"), gh(7, "open"), gh(8, "open")];
     const after = [task("MOON-142", "in_progress"), task("MOON-151", "in_progress"), gh(7, "done"), gh(8, "done")];
     const linked = new Set(["linear:acme MOON-142", "github:github.com acme/web#7", "github:github.com acme/web#8"]);
-    const byMoonlet = new Set(["github:github.com acme/web#8"]);
+    // moonlet closed #8 itself.
+    const byMoonlet = new Map([["github:github.com acme/web#8", "done" as const]]);
     expect(outsideMoves(before, after, linked, byMoonlet)).toEqual([
-      { key: "MOON-142", title: "MOON-142", text: "MOON-142 moved to In Progress" },
-      { key: "acme/web#7", title: "acme/web#7", text: "acme/web#7 was closed" },
+      { id: "linear:acme MOON-142", title: "MOON-142", text: "MOON-142 moved to In Progress" },
+      { id: "github:github.com acme/web#7", title: "acme/web#7", text: "acme/web#7 was closed" },
     ]);
   });
 
+  it("names a move moonlet made only when the task ends up elsewhere", () => {
+    const linked = new Set(["linear:acme MOON-142"]);
+    const byMoonlet = new Map([["linear:acme MOON-142", "in_review" as const]]);
+    expect(outsideMoves([task("MOON-142", "in_progress")], [task("MOON-142", "done")], linked, byMoonlet)).toEqual([
+      { id: "linear:acme MOON-142", title: "MOON-142", text: "MOON-142 moved to Done" },
+    ]);
+  });
+
+  it("does not say a closed GitHub issue was closed again when only its reason changed", () => {
+    const linked = new Set(["github:github.com acme/web#7"]);
+    expect(outsideMoves([gh(7, "done")], [gh(7, "hidden")], linked, new Map())).toEqual([]);
+  });
+
   it("says nothing on the first sync", () => {
-    expect(outsideMoves(null, [task("MOON-142", "done")], new Set(["linear:acme MOON-142"]), new Set())).toEqual([]);
+    expect(outsideMoves(null, [task("MOON-142", "done")], new Set(["linear:acme MOON-142"]), new Map())).toEqual([]);
   });
 });
 

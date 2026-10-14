@@ -277,10 +277,15 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next } }));
   if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev?.tasks ?? null, next);
+  else forgetSeenMoves(next.tasks);
 }
 
-/** Tasks moonlet itself moved since the last sync, `connection key` (their move is not news). */
-const movedByMoonlet = new Set<string>();
+/**
+ * Tasks moonlet itself moved, `connection key` → the column it moved them to.
+ * Their move is not news; each entry stays until a sync shows that column, so
+ * a sync that started before the move cannot report it.
+ */
+const movedByMoonlet = new Map<string, Task["column"]>();
 
 /** "Notify when a task changes state outside moonlet" (X44): linked tasks only. */
 function notifyOutsideMoves(host: string, workspaceId: string, before: Task[] | null, data: TasksData) {
@@ -288,10 +293,18 @@ function notifyOutsideMoves(host: string, workspaceId: string, before: Task[] | 
   const linked = new Set(Object.values(board).flat().filter((c) => c.rows.length).map((c) => `${c.task.connection} ${c.task.key}`));
   for (const m of outsideMoves(before, data.tasks, linked, movedByMoonlet)) {
     void notify(m.text, m.title);
-    const t = data.tasks.find((x) => x.key === m.key);
+    const t = data.tasks.find((x) => `${x.connection} ${x.key}` === m.id);
     if (t) recordActivity(t, `Outside moonlet: ${m.text}`);
   }
-  movedByMoonlet.clear();
+  forgetSeenMoves(data.tasks);
+}
+
+function forgetSeenMoves(tasks: Task[]) {
+  for (const t of tasks) {
+    const id = `${t.connection} ${t.key}`;
+    const to = movedByMoonlet.get(id);
+    if (to && (to === t.column || (to === "done" && t.column === "hidden"))) movedByMoonlet.delete(id);
+  }
 }
 
 /** What the board needs of a workspace's sessions (X45). */
@@ -340,6 +353,8 @@ const COLUMN_LABEL = { todo: "Todo", in_progress: "In Progress", in_review: "In 
 export async function startedFromTask(host: string, workspaceId: string, start: TaskStart) {
   if (start.github) return assignToMe(host, workspaceId, start.github);
   if (!start.tracker) return;
+  const id = `${start.ref.connection} ${start.key}`;
+  movedByMoonlet.set(id, "in_progress");
   try {
     await hostsApi.trackerUpdate({
       id: start.ref.connection,
@@ -349,9 +364,9 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
       state: stateFor(start.ref.connection, "in_progress"),
       assign_me: true,
     });
-    movedByMoonlet.add(`${start.ref.connection} ${start.key}`);
     recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you");
   } catch (e) {
+    movedByMoonlet.delete(id);
     errorToast((e as { message?: string }).message ?? e);
   }
 }
@@ -373,20 +388,21 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
 export async function fixDrift(host: string, workspaceId: string, card: Card): Promise<boolean> {
   const plan = driftFix(card);
   if (!plan) return false;
-  retries.set(`${card.task.connection} ${card.task.key}`, async () => void (await fixDrift(host, workspaceId, card)));
+  const id = `${card.task.connection} ${card.task.key}`;
+  retries.set(id, async () => void (await fixDrift(host, workspaceId, card)));
   try {
     if (plan.kind === "github") {
       const path = repoPath(host, workspaceId, plan.repo);
       if (!path) throw new Error(`No project in this workspace has ${plan.repo} as its origin`);
+      movedByMoonlet.set(id, "done");
       await rpc(host, M.ghTaskUpdate, { path, number: plan.number, close: true });
-      movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
       recordActivity(card.task, "moonlet closed it: every session's PR is merged");
       toast(`Closed ${card.task.key}`);
     } else if (plan.kind === "move") {
       const t = card.task.tracker;
       if (!t) return false;
+      movedByMoonlet.set(id, plan.column);
       await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column, state: stateFor(card.task.connection, plan.column) });
-      movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
       recordActivity(card.task, `moonlet moved it to ${COLUMN_LABEL[plan.column]}`);
       toast(`Moved ${card.task.key} to ${COLUMN_LABEL[plan.column]}`);
     } else {
@@ -412,6 +428,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
     await refreshTasks(host, workspaceId);
     return true;
   } catch (e) {
+    movedByMoonlet.delete(id);
     setFailure(card.task, (e as { message?: string }).message ?? message(e));
     return false;
   }
@@ -507,22 +524,25 @@ export function recordActivity(task: Pick<Task, "connection" | "key">, text: str
 
 /** The state menu (X45 detail, X46 task bar): move a tracker issue, or close or reopen a GitHub issue. */
 export async function moveTask(host: string, workspaceId: string, task: Task, column: Exclude<Column, "hidden"> | null, now = Date.now()) {
-  retries.set(`${task.connection} ${task.key}`, () => moveTask(host, workspaceId, task, column));
+  const id = `${task.connection} ${task.key}`;
+  retries.set(id, () => moveTask(host, workspaceId, task, column));
   try {
     if (task.github) {
       const path = repoPath(host, workspaceId, task.github.repo);
-      if (!path) return;
+      if (!path) throw new Error(`No project in this workspace has ${task.github.repo} as its origin`);
       const close = column === "done";
+      movedByMoonlet.set(id, close ? "done" : "open");
       await rpc(host, M.ghTaskUpdate, close ? { path, number: task.github.number, close: true } : { path, number: task.github.number, reopen: true });
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
+      movedByMoonlet.set(id, column);
       await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, state: stateFor(task.connection, column) });
       recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
     } else return;
-    movedByMoonlet.add(`${task.connection} ${task.key}`);
     setFailure(task, null);
     void refreshTasks(host, workspaceId);
   } catch (e) {
+    movedByMoonlet.delete(id);
     setFailure(task, (e as { message?: string }).message ?? message(e));
   }
 }
