@@ -428,6 +428,7 @@ export interface FsChanged {
 }
 
 export const M = {
+  daemonInfo: "daemon.info",
   terminalCreate: "terminal.create",
   terminalList: "terminal.list",
   terminalAttach: "terminal.attach",
@@ -497,6 +498,8 @@ export const M = {
   fsWatch: "fs.watch",
   fsUnwatch: "fs.unwatch",
   chatState: "chat.state",
+  /** Every chat's state without its items (X40). */
+  chatSummaries: "chat.summaries",
   chatSend: "chat.send",
   chatPermission: "chat.permission",
   chatInterrupt: "chat.interrupt",

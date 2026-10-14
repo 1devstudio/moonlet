@@ -1,0 +1,61 @@
+@import "tailwindcss";
+@import "../../desktop/src/styles/moonlet.css";
+
+/* A phone screen: the app fills it, respects the notch and the home bar,
+   and only the content scrolls. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  overflow: hidden;
+}
+
+:root {
+  --safe-top: max(env(safe-area-inset-top), 12px);
+  --safe-bottom: env(safe-area-inset-bottom);
+}
+
+/* In the base layer, so Tailwind's utilities (text-bg, text-[14.5px]) win
+   over them: unlayered rules beat every layer. */
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  textarea::placeholder,
+  input::placeholder {
+    color: var(--color-faint);
+  }
+}
+
+@layer components {
+  .scroll {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+}

@@ -23,10 +23,13 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Shell and navigation
 
-- [ ] Before any Mac is paired, the app shows a pairing screen: **Scan QR code** (camera), **Paste link**, and the line "On the Mac: Settings › Mobile › Pair a phone". A `moonlet://pair` link opened from elsewhere starts pairing too. (`lib/pairLink.test.ts` parses the X39 link: hosts, several addresses, version, bad links.)
+- [x] Before any Mac is paired, the app shows a pairing screen: **Scan QR code** (camera, on the phone only), a box to paste the link with **Pair**, and the line "On the Mac: Settings › Mobile › Pair a phone". A link that is not a version 1 pairing link says so; a failed pairing shows the Mac's message. (`lib/pairLink.test.ts`: name, several addresses, version, bad links; `src-tauri/tests/macs.rs`: pairing, a dead first address, a wrong code)
+- [ ] A `moonlet://pair` link opened from elsewhere starts pairing too. (Not yet: needs the deep-link plugin and an iOS build.)
 - [ ] After pairing, a bottom tab bar has **Inbox**, **Sessions**, **New** and **Hosts**. The Inbox tab carries a badge with the number of items that need the user. (`lib/inbox.test.ts`)
-- [ ] The app keeps one connection per paired Mac and one per SSH host routed through it (X39). The Mac tries its addresses in order. A lost connection retries with backoff (1, 2, 4 … 30 s) and immediately when the app comes to the foreground.
+- [x] The app keeps one connection per paired Mac and one per SSH host the Mac lists in `mobile.hosts`, routed through it (X39). It tries the Mac's addresses in order. A lost connection retries with the desktop's backoff (0.3 s doubling to 5 s), and at once when the app comes back to the foreground. Paired Macs are kept in the app's data folder (`macs.json`, mode 0600, names and addresses only) and their device tokens in the Keychain; **Forget** removes both. (`src-tauri/tests/macs.rs`: the file has no token, a restart connects with the stored one) (`src-tauri/tests/macs.rs`)
 - [ ] The workspace switcher at the top of Inbox and Sessions lists the workspaces of all connected hosts (X32), with their colour dot; the choice is remembered.
+- [x] The app's logo is the desktop's ringed moon (`src/assets/moon.svg`): on the pairing screen, in the Inbox's title and, on a full-bleed dark square, as the iOS app icon (`src-tauri/icons/source/icon-ios.svg`). The ringed moon and "moonlet" on the dark background show from launch until the app has loaded: as the iOS launch screen, then as static HTML in `index.html`, then as the app's own splash, all three laid out alike, so starting has no flash and no jump. (`lib/splash.test.ts` checks the launch screen's layout against the splash's)
+- [x] Right after pairing, the app says "Paired with <Mac>" and goes on to the Inbox (after 1.5 seconds, or at once with **Continue**).
 - [ ] Colours, type and components follow the desktop's tokens: dark background `#121212`, the state colours of `StateGlyph`, `DiffStat`, `AgentIcon`.
 
 ### Inbox
@@ -100,9 +103,9 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Hosts
 
-- [ ] Hosts lists the paired Macs and the SSH hosts reached through them, each with its status (connected, connecting, offline), its route (`Paired · direct over Tailscale · 14 ms`, `Linux · reached through <Mac> over SSH`, `last seen 2 h ago · sessions keep running`), and `moonletd <version> · <n> sessions · <n> terminals`. An offline host has **Reconnect**. (`lib/hosts.test.ts` for the lines)
-- [ ] **Pair a Mac** starts pairing another Mac. Swiping a Mac offers **Forget**.
-- [ ] "Notify me when" has switches for an agent needs input, finishes, fails, and PR checks fail; and "Require Face ID to allow". The switches are kept on the phone; they take effect once push notifications exist (out of scope here).
+- [x] Hosts lists the paired Macs and the SSH hosts reached through them, each with its status (connected, connecting, offline), its route (`Paired · direct over Tailscale · 14 ms` with the last `daemon.info` round trip, `Reached through <Mac> over SSH`, `Last seen 2 h ago · sessions keep running`, `Not reachable over Tailscale`), and `moonletd <version> · <n> sessions · <n> terminals`. An offline host has **Reconnect**; a Mac has **Forget**, which asks once more. (`lib/hosts.test.ts` for the lines)
+- [x] **Pair a Mac** opens the pairing screen for another Mac.
+- [x] "Notify me when" has switches for an agent needs input, finishes, fails, and PR checks fail (off by default); and "Require Face ID to allow" (on by default). The switches are kept on the phone; they take effect once push notifications exist (out of scope here).
 
 ## UI
 
@@ -114,11 +117,11 @@ The app uses the existing methods and events (`docs/protocol.md`) through the X3
 
 ## Data and config
 
-On the phone, in the app's data folder: the paired Macs (name, addresses, device token) and the app settings. The token file is excluded from iCloud backup.
+On the phone: the paired Macs (id, name, addresses) in `macs.json` in the app's data folder, mode 0600; each Mac's device token in the Keychain (service = the app's identifier, account = the Mac's device id), on iOS readable only while the phone is unlocked and never restored to another device; the app settings in the webview's storage.
 
 ## Security considerations
 
-- The device token gives full access to the Mac (X39). It is stored in the app's sandbox with iOS data protection; Face ID gates approvals.
+- The device token gives full access to the Mac (X39). It lives in the Keychain, this device only, never in a file or a backup; Face ID gates approvals.
 - Text from the daemon (chat, terminal output, file names) is rendered as text or through the desktop's sanitising Markdown renderer, never as raw HTML.
 
 ## Out of scope
