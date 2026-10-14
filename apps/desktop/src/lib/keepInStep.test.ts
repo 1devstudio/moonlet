@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRules, autoFixes, cleanUpMessage, closesIssue, DEFAULT_RULES, driftFix, driftKey, outsideMoves, startAction, withCloses, withoutPutOff } from "./keepInStep";
+import { applyRules, autoFixes, cleanUpMessage, closesIssue, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, startAction, withCloses, withoutPutOff } from "./keepInStep";
 import type { Task } from "./tasks";
 import type { BoardSession, Card } from "./tasksBoard";
 
@@ -164,5 +164,20 @@ describe("outsideMoves (X44: notify when a task changes state outside moonlet)",
 
   it("says nothing on the first sync", () => {
     expect(outsideMoves(null, [task("MOON-142", "done")], new Set(["linear:acme MOON-142"]), new Set())).toEqual([]);
+  });
+});
+
+describe("prComments (X46: a pull request opens → comment its link)", () => {
+  it("comments each newly opened PR on its tracker issue once; GitHub uses Closes #N instead", () => {
+    const open = (n: number, url: string) => ({ number: n, url, state: "open", title: "Hosts section", checks: [], review_decision: null });
+    const linearTask = { ...task("MOON-142", "in_review"), tracker: { id: "issue-1", state: "In Review", source: "MOON" } };
+    const hosts = card(linearTask, null, [{ ...session("hosts", "/w/hosts"), pr: open(131, "https://github.com/acme/app/pull/131") }]);
+    const ghCard = card(task("acme/web#7", "open", { repo: "acme/web", number: 7, closingPrs: [] }), null, [{ ...session("fix", "/w/fix"), pr: open(70, "u") }]);
+    const board = { todo: [], in_progress: [ghCard], in_review: [hosts], done: [] };
+    expect(prComments(board, () => DEFAULT_RULES, {})).toEqual([
+      { card: hosts, key: "comment linear:acme MOON-142 #131", text: "Opened a pull request: Hosts section https://github.com/acme/app/pull/131" },
+    ]);
+    expect(prComments(board, () => DEFAULT_RULES, { "comment linear:acme MOON-142 #131": true })).toEqual([]);
+    expect(prComments(board, () => ({ ...DEFAULT_RULES, pr_comment: "off" }), {})).toEqual([]);
   });
 });

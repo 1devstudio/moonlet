@@ -53,7 +53,7 @@ export const hostsApi = {
   trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; assign_me?: boolean; comment?: string | null }) =>
     invoke("tracker_update", { req }),
   /** `~/.moonlet/trackers.toml`, or its defaults (X44). */
-  trackersConfig: () => invoke<import("./tasksStore").TrackersConfig>("trackers_config"),
+  trackersConfig: () => invoke<Partial<import("./tasksStore").TrackersConfig>>("trackers_config"),
   trackersSave: (config: import("./tasksStore").TrackersConfig) => invoke("trackers_save", { config }),
   /** A key or issue URL pasted into the link dialog, or null (X46). */
   parsePasted: (input: string) => invoke<import("./taskLinking").Pasted | null>("task_parse_pasted", { input }),

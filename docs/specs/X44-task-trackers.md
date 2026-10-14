@@ -27,26 +27,26 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 ### Connections
 
 - [x] Settings has a **Task trackers** page under App, after Notifications. Its nav entry shows a dot when a connection needs attention. (The dot comes with connections that can fail; `settingsPage.test.ts`, `task-trackers.e2e.ts`.)
-- [ ] The page lists one row per connection: tracker mark, name, site, status dot and line, and actions. Connected rows show `Connected as <name> · <auth> · <n> teams · synced <age>` with **Sync now** and **Configure**. A failed row shows the error in red (for example `API token rejected · Acme issues are stale`) with **Reconnect**. Trackers not connected show **Connect**.
-- [ ] **Add tracker** offers the four trackers. More than one connection of the same tracker is allowed (two Jira sites, two Linear organisations).
-- [ ] Disconnect asks first, deletes the token from the Keychain and removes the connection's sources from every workspace. Session links (X46) stay, and reconnecting the same tracker and site gets the same connection id back, so the links resolve again.
+- [x] The page lists one row per connection: tracker mark, name, site, status dot and line, and actions. Connected rows show `Connected as <name> · <auth> · <n> teams · synced <age>` with **Sync now** and **Configure**. A failed row shows the error in red (for example `API token rejected · Acme issues are stale`) with **Reconnect**. Trackers not connected show **Connect**. (Sync now is the Tasks mode refresh; `trackersPage.test.ts` connectionLine, `task-trackers.e2e.ts`)
+- [x] **Add tracker** offers the four trackers. More than one connection of the same tracker is allowed (two Jira sites, two Linear organisations). (GitHub is always there through `gh`; the page offers Connect Linear, Jira Cloud and ClickUp.)
+- [x] Disconnect asks first, deletes the token from the Keychain and removes the connection's sources from every workspace. Session links (X46) stay, and reconnecting the same tracker and site gets the same connection id back, so the links resolve again. (`task-trackers.e2e.ts` covers connecting; disconnect asks through the confirm modal.)
 
 ### Signing in
 
-- [ ] **Linear OAuth:** moonlet opens Linear's authorize URL with a PKCE `S256` challenge and a loopback redirect `http://127.0.0.1:<port>/callback` on a port chosen at run time. The callback's `state` must match; the code is exchanged with the verifier and no client secret. The access and refresh tokens go to the Keychain; refresh happens before expiry.
-- [ ] **Linear API key** is accepted instead of OAuth.
-- [ ] **Jira Cloud:** site, email and API token; requests use basic auth. Jira API tokens expire, and Jira's API does not say when, so moonlet does not warn ahead. When Jira answers 401 to a token that worked before, the connection shows `API token rejected · <workspace> issues are stale` and Reconnect explains: "Jira no longer accepts the API token for <site>. It may have expired or been revoked. Create a new token and paste it here." The Reconnect dialog keeps the site and email and only asks for the new token.
-- [ ] **ClickUp:** the personal token is sent as the raw `Authorization` header value.
+- [ ] **Linear OAuth:** moonlet opens Linear's authorize URL with a PKCE `S256` challenge and a loopback redirect `http://127.0.0.1:<port>/callback` on a port chosen at run time. The callback's `state` must match; the code is exchanged with the verifier and no client secret. The access and refresh tokens go to the Keychain; refresh happens before expiry. (Not yet: the PKCE parts are in `moonlet-trackers::oauth`, tested against RFC 7636; the flow needs a registered client ID and a fixed loopback port, which Linear's docs require to match exactly.)
+- [x] **Linear API key** is accepted instead of OAuth. (`task-trackers.e2e.ts` against a mock of Linear's API)
+- [x] **Jira Cloud:** site, email and API token; requests use basic auth. Jira API tokens expire, and Jira's API does not say when, so moonlet does not warn ahead. When Jira answers 401 to a token that worked before, the connection shows `API token rejected · <workspace> issues are stale` and Reconnect explains: "Jira no longer accepts the API token for <site>. It may have expired or been revoked. Create a new token and paste it here." The Reconnect dialog keeps the site and email and only asks for the new token. Only a `*.atlassian.net` or `*.jira.com` host gets the token. (`jira.rs`, `only_a_jira_cloud_host_gets_the_token`)
+- [x] **ClickUp:** the personal token is sent as the raw `Authorization` header value. (`clickup.rs`)
 - [ ] **GitHub Issues:** connecting checks `gh auth status` on each project's host. (Shipped: the page shows `Connected as <login> · uses gh on <host>` from `gh.whoami` on the shown workspace's host, or `gh is not signed in on <host> · run gh auth login there`; `the_github_login_comes_from_gh`, `a_gh_without_a_login_says_so`, `trackersPage.test.ts`, `task-trackers.e2e.ts`.) A host without a login shows `gh is not signed in on <host>` with the `gh auth login` command to copy. Reading a project board needs the `read:project` scope and moving its items the `project` scope; without them the page shows `gh auth refresh -s project` to copy, and project sources are unavailable.
 - [ ] **Test again** re-runs the check and shows the account name and the number of visible sources, or the tracker's error message.
-- [ ] A request answered with 401 marks the connection as needing attention and stops polling it until the user reconnects. The message names the tracker and what to do: Linear OAuth "Sign in to Linear again", an API key or token "<tracker> no longer accepts this token. Create a new one and paste it here."
-- [ ] The Jira and ClickUp connect dialogs say "The token is saved in the macOS Keychain." and, for Jira, "Tokens expire. moonlet tells you when Jira stops accepting it."
+- [x] A request answered with 401 marks the connection as needing attention and stops polling it until the user reconnects. The message names the tracker and what to do: Linear OAuth "Sign in to Linear again", an API key or token "<tracker> no longer accepts this token. Create a new one and paste it here." (`tasksStore.test.ts`; Linear, Jira and ClickUp errors in `moonlet-trackers`)
+- [x] The Jira and ClickUp connect dialogs say "The token is saved in the macOS Keychain." and, for Jira, "Tokens expire. moonlet tells you when Jira stops accepting it."
 
 
 ### Sources
 
 - [ ] A source is one Linear team, Jira project, ClickUp list (or folder, or space) or GitHub repository or project board.
-- [ ] Each source has a **repository** (the moonlet project its sessions start in), a **workspace** (X32) and a **Shows** filter: `Assigned to me` (default) or `All open issues`.
+- [x] Each source has a **repository** (the moonlet project its sessions start in), a **workspace** (X32) and a **Shows** filter: `Assigned to me` (default) or `All open issues`. (Shows is Assigned to me for now. `trackerSources.test.ts`, `task-trackers.e2e.ts`)
 - [ ] "Where each workspace gets its tasks" lists each workspace with its sources and the view Tasks mode opens on (`Current cycle`, `Active sprint`, `My issues`, or `Sessions mode` for a workspace with no sources). A source whose connection failed is outlined red with its reason.
 - [ ] A GitHub repository source defaults to the project's own `origin` repository.
 
@@ -110,6 +110,9 @@ GitHub goes through the daemon, because `gh` runs on the project's host:
 - Optional per project in `.moonlet/config.toml`: `[tasks] sources = ["linear:MOON"]`, which pre-fills the repository of a matching source.
 
 ## Security considerations
+
+- Atlassian's basic-auth page (updated 2026-10-14) says apps that collect users' API tokens don't comply with its security requirements and recommends one distributable OAuth (3LO) app. Jira's API-token sign-in should move to OAuth through a small token-exchange server before a public release.
+- An e2e build can point trackers at a mock server with `MOONLET_TRACKER_BASE`; other builds ignore it, so no environment variable can send a token elsewhere.
 
 - Tokens never leave the Mac running the app: not in `trackers.toml`, not in the daemon, not over SSH to remote hosts, not in logs. Errors are logged without request headers.
 - The OAuth callback listens only on 127.0.0.1, for one request, for at most 5 minutes, and checks `state`.

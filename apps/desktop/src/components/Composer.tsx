@@ -3,7 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { TaskStart } from "../lib/tasks";
-import { assignToMe, leaveTasksMode } from "../lib/tasksStore";
+import { leaveTasksMode, startedFromTask } from "../lib/tasksStore";
 import { composerOptions, composerTarget } from "../lib/workspaces";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
@@ -360,7 +360,7 @@ export function Composer({
       });
       close();
       // Keep in step: the "session starts" rule (X46).
-      if (task?.github && task.assign && assign) void assignToMe(current.host, s.workspace_id ?? workspaceFor(current.host) ?? "", task.github);
+      if (task?.assign && assign) void startedFromTask(current.host, s.workspace_id ?? workspaceFor(current.host) ?? "", task);
       // Started from Tasks mode: work on it in Sessions mode (X46).
       if (task || worktree) leaveTasksMode();
       selectSession(current.host, s.id);

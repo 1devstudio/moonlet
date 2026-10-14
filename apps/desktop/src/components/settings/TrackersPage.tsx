@@ -7,19 +7,16 @@ import { rpc } from "../../lib/daemon";
 import type { RuleSetting } from "../../lib/keepInStep";
 import { M } from "../../lib/protocol";
 import { errorToast, shownWorkspace, useStore } from "../../lib/store";
-import { loadTrackersConfig, saveTrackersConfig, type TrackersConfig, trackersConfig, useTasks } from "../../lib/tasksStore";
-import { GITHUB_RULES, githubConnection, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS } from "../../lib/trackersPage";
+import { loadTrackersConfig, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { GITHUB_RULES, githubConnection, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
+import { AddTracker, ConnectionRow } from "./TrackerConnections";
 import { IconButton } from "../ui";
 import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, SwitchRow } from "./controls";
 
 
-const SOON = [
-  { name: "Linear", note: "Sign in with your browser" },
-  { name: "Jira Cloud", note: "API token" },
-  { name: "ClickUp", note: "Personal API token" },
-];
+const NAME = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
 
-function RuleRow({ rule, value, onChange }: { rule: (typeof GITHUB_RULES)[number]; value: RuleSetting; onChange: (v: RuleSetting) => void }) {
+function RuleRow({ rule, value, onChange }: { rule: { id: string; when: string; then: string; hint: string; auto?: false }; value: RuleSetting; onChange: (v: RuleSetting) => void }) {
   const id = useId();
   return (
     <Row label={`${rule.when} → ${rule.then}`} hint={rule.hint} labelId={id} setting={`rule-${rule.id}`}>
@@ -59,13 +56,27 @@ export function TrackersPage() {
               <RotateCw size={13} />
             </IconButton>
           </Row>
-          {SOON.map((t) => (
-            <Row key={t.name} label={t.name} hint={`${t.note} · coming in a later release`}>
-              <span className="ui-text-12 text-faint">Not connected</span>
-            </Row>
+          {(config.connections ?? []).map((c) => (
+            <ConnectionRow key={c.id} c={c} />
           ))}
+          <Row label="Add tracker" hint="Linear and ClickUp with an API key or token; Jira Cloud with your email and an API token.">
+            <AddTracker />
+          </Row>
         </Card>
       </Section>
+      {[...new Set((config.connections ?? []).map((c) => c.kind))].map((kind) => {
+        const settings = trackerSettings(config, `${kind}:`);
+        const setRules = (rules: TrackerSettings["rules"]) => save({ ...config, [kind]: { ...settings, rules } });
+        return (
+          <Section key={kind} title={`Keep ${NAME[kind]} in step`} hint="Suggest shows the task as out of sync with a one-click fix instead.">
+            <Card>
+              {trackerRules(kind).map((r) => (
+                <RuleRow key={r.id} rule={r} value={settings.rules[r.id]} onChange={(v) => setRules({ ...settings.rules, [r.id]: v })} />
+              ))}
+            </Card>
+          </Section>
+        );
+      })}
       <Section title="Keep GitHub in step" hint="What moonlet does on GitHub when something happens in a session. Suggest shows the task as out of sync with a one-click fix instead.">
         <Card>
           {GITHUB_RULES.map((r) => (

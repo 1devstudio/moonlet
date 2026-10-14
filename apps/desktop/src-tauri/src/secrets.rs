@@ -18,13 +18,13 @@ pub fn store() -> Box<dyn Secrets> {
     Box::new(FileSecrets(moonlet_core::paths::home().join("secrets.json")))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "e2e")))]
 pub struct Keychain;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "e2e")))]
 const SERVICE: &str = "dev.onedevstudio.moonlet.trackers";
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "e2e")))]
 impl Secrets for Keychain {
     fn get(&self, id: &str) -> Option<String> {
         let bytes = security_framework::passwords::get_generic_password(SERVICE, id).ok()?;

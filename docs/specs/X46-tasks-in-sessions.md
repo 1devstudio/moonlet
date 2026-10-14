@@ -66,10 +66,10 @@ Each rule is Automatically, Suggest or Off per connection (X44). Suggest shows t
 | A pull request opens | Linear, Jira, ClickUp: comment on the issue with its link (skipped when the tracker's GitHub integration already links it); GitHub: add `Closes #<n>` to the PR body | Automatically |
 | The issue moves to Done | archive its sessions and remove their worktrees (always asks when a worktree has uncommitted changes) | Suggest |
 
-- [ ] "Move" uses the tracker state mapped first onto that column (X44). For Jira it uses the workflow transition that leads to that state; with none, the action fails with "No Jira transition to <state> from <state>".
+- [x] "Move" uses the tracker state mapped first onto that column (X44). For Jira it uses the workflow transition that leads to that state; with none, the action fails with "No Jira transition to <state> from <state>". (The default mapping until the state-mapping section exists. `linear.rs` state_for, `jira.rs` transition_to, `clickup.rs` status_for, `task-trackers.e2e.ts`.)
 - [x] For a GitHub repository source, "move to Done" closes the issue as completed and the other moves do nothing (the column follows the work). For a GitHub project board source, moves set the project's Status field. (`task_updates_reach_github_through_gh`, `keepInStep.test.ts`)
 - [ ] Each action moonlet takes is recorded in the task's activity (X45), and a failed action shows on the task with its error and a Retry.
-- [ ] Actions happen once per event: reopening the app or a repeated PR poll does not move or comment again.
+- [x] Actions happen once per event: reopening the app or a repeated PR poll does not move or comment again. (`keepInStep.test.ts` autoFixes and prComments with the remembered keys)
 
 ## UI
 

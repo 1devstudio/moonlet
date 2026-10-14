@@ -131,6 +131,8 @@ export interface TaskStart {
   project: string | null;
   /** A GitHub issue's repository and number, for assigning it (X46). */
   github?: { repo: string; number: number };
+  /** A tracker issue's id and team/project/list, for moving it (X46). */
+  tracker?: { id: string; source: string };
   /** The composer's "session starts" checkbox (Keep in step), when it does anything. */
   assign?: { label: string; checked: boolean } | null;
   /** The connection's branch template and max length (X44); the tracker's default when absent. */
@@ -155,5 +157,6 @@ export function taskStart(task: Task, repos: Record<string, string | null>, sour
     firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
     project: (repo && Object.keys(repos).find((id) => repos[id]?.toLowerCase() === repo)) || (task.tracker && sourceProjects[`${task.connection} ${task.tracker.source}`]) || null,
     ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
+    ...(task.tracker && { tracker: { id: task.tracker.id, source: task.tracker.source } }),
   };
 }
