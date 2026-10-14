@@ -67,6 +67,29 @@ describe("settings page", () => {
     await closeSettings();
   });
 
+  it("finds a setting from the search, opens its page and highlights its row", async () => {
+    await openSettings("General");
+    await browser.execute(() =>
+      (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "f", code: "KeyF", metaKey: true, bubbles: true, cancelable: true })),
+    );
+    await expect($('input[aria-label="Search settings"]')).toBeFocused();
+    await fill('//input[@aria-label="Search settings"]', "tool calls");
+    await expect($(sel.text("1 setting matches “tool calls”"))).toBeDisplayed();
+    await expect($('//*[@role="option"][@aria-selected="true"][.//*[normalize-space()="App › Agents"]]')).toBeDisplayed();
+    await browser.keys(["Enter"]);
+    await expect($(sel.navEntry("Agents", true))).toBeExisting();
+    await expect($('[data-setting="tool-calls"][data-flash="true"]')).toBeExisting();
+    await expect($('input[aria-label="Search settings"]')).toHaveValue("");
+  });
+
+  it("says when no setting matches", async () => {
+    await fill('//input[@aria-label="Search settings"]', "zebra");
+    await expect($(sel.text("No settings match “zebra”"))).toBeDisplayed();
+    await browser.keys(["Escape"]);
+    await expect($('input[aria-label="Search settings"]')).toHaveValue("");
+    await closeSettings();
+  });
+
   it("keeps a switched-off terminal setting", async () => {
     await openSettings("Terminal");
     if (await checked(meta)) await $(meta).click();

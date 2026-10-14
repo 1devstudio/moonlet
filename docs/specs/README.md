@@ -81,4 +81,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X40 | The moonlet phone app | P1 | 3 | implemented (iPhone build and push untried) | [X40-mobile-app.md](X40-mobile-app.md) |
 | X41 | Worker link and project identity | P1 | 4 | draft | [X41-worker-link-and-project-identity.md](X41-worker-link-and-project-identity.md) |
 | X42 | Agents view: the subagents a chat launches | P1 | 3 | implemented (look unchecked in app) | [X42-subagents-view.md](X42-subagents-view.md) |
-| X43 | Settings page (nav, app pages, workspace and project pages, shortcuts, search) | P1 | 3 | draft | [X43-settings-page.md](X43-settings-page.md) |
+| X43 | Settings page (nav, app pages, workspace and project pages, shortcuts, search) | P1 | 3 | implemented (look unchecked in app) | [X43-settings-page.md](X43-settings-page.md) |
