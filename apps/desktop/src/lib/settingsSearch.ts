@@ -70,6 +70,7 @@ function trackerEntries(t: TrackersConfig | undefined): [string | undefined, str
     ["branch-template", "Branch name for new sessions", t.github.branch_template || "{number}-{title}", "template"],
     ["branch-max", "Max length of branch names", String(t.github.max_length)],
     ["sync-interval", "Refresh issues", SYNC_INTERVALS.find((i) => i.value === t.sync.interval)?.label ?? `Every ${t.sync.interval} s`, "sync"],
+    ["sync-notify", "Notify when a task changes state outside moonlet", onOff(t.sync.notify), "notification"],
   ];
 }
 

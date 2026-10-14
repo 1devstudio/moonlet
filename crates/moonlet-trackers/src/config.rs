@@ -24,6 +24,8 @@ pub struct TrackersConfig {
 pub struct Sync {
     /// Seconds between refreshes; 0 refreshes only on demand.
     pub interval: u64,
+    /// Notify when a linked task changes state outside moonlet.
+    pub notify: bool,
 }
 
 /// One tracker's settings: branch names and the Keep in step rules.
@@ -54,7 +56,10 @@ pub struct Rules {
 
 impl Default for Sync {
     fn default() -> Self {
-        Self { interval: 60 }
+        Self {
+            interval: 60,
+            notify: true,
+        }
     }
 }
 
@@ -102,6 +107,7 @@ mod tests {
     fn an_empty_file_means_the_spec_defaults() {
         let c = parse("").unwrap();
         assert_eq!(c.sync.interval, 60);
+        assert!(c.sync.notify);
         assert_eq!(c.github.branch_template, "");
         assert_eq!(c.github.max_length, 48);
         assert_eq!(
@@ -136,6 +142,7 @@ mod tests {
              \n\
              [sync]\n\
              interval = 300\n\
+             notify = true\n\
              \n\
              [github]\n\
              branch_template = \"{user}/{number}-{title}\"\n\

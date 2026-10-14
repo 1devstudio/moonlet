@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./tasks";
 import { type BoardSession, tasksBoard } from "./tasksBoard";
-import { boardSummary, syncedLabel, viewBoard, viewCounts } from "./tasksView";
+import { boardSummary, sessionTaskLines, syncedLabel, viewBoard, viewCounts } from "./tasksView";
 
 const task = (key: string, column: Task["column"]): Task => ({
   connection: "github:github.com",
@@ -60,5 +60,14 @@ describe("syncedLabel", () => {
     expect(syncedLabel("GitHub", null, 0)).toBe("Syncing GitHub…");
     expect(syncedLabel("GitHub", 1_000, 41_000)).toBe("GitHub synced just now");
     expect(syncedLabel("GitHub", 0, 180_000)).toBe("GitHub synced 3 min ago");
+  });
+});
+
+describe("sessionTaskLines (X46 sidebar)", () => {
+  it("gives each linked session its task's key, title and state, out of sync when it is", () => {
+    expect(sessionTaskLines(board)).toEqual({
+      Hosts: { key: "MOON-142", title: "MOON-142", column: "in_progress", text: "In Progress", outOfSync: false },
+      Tabs: { key: "MOON-144", title: "MOON-144", column: "in_review", text: "In Review · out of sync", outOfSync: true },
+    });
   });
 });
