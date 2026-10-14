@@ -12,6 +12,10 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { registerSink, rpc, sendInput } from "./daemon";
 import { M } from "./protocol";
+import { THEME } from "./terminalTheme";
+import { type BlockContext, blockCopy, blockForAgent, blockHeader, blockLayout, commandFromRows, markTime, rerunInput } from "./blockText";
+
+export { type BlockContext, blockCopy, blockForAgent, blockHeader, blockLayout, commandFromRows, markTime, rerunInput, shortPath } from "./blockText";
 
 export interface TermSettings {
   fontFamily: string;
@@ -32,35 +36,6 @@ export const defaultTermSettings: TermSettings = {
   webgl: true,
 };
 
-const THEME = {
-  background: "#121212",
-  foreground: "#e2e2e2",
-  cursor: "#d0d0d0",
-  cursorAccent: "#121212",
-  selectionBackground: "#d9775740",
-  // Same quiet slider as the rest of the app's scrollbars (moonlet.css).
-  scrollbarSliderBackground: "#2a2a2a",
-  scrollbarSliderHoverBackground: "#3a3a3a",
-  scrollbarSliderActiveBackground: "#4a4a4a",
-  // The ruler's 1px edge, black by default; matches the background instead.
-  overviewRulerBorder: "#121212",
-  black: "#1c1f26",
-  red: "#ef6b73",
-  green: "#8fd18e",
-  yellow: "#e8c46b",
-  blue: "#7aa7ff",
-  magenta: "#c49bff",
-  cyan: "#6fd3e0",
-  white: "#c8ccd4",
-  brightBlack: "#5c6370",
-  brightRed: "#ff8a91",
-  brightGreen: "#a6e3a1",
-  brightYellow: "#f5d58a",
-  brightBlue: "#9cbcff",
-  brightMagenta: "#d6b8ff",
-  brightCyan: "#94e2ec",
-  brightWhite: "#f2f4f8",
-};
 
 /** One OSC 133 command block: prompt, command and output (T3, T4). */
 export interface CommandBlock {
@@ -85,59 +60,9 @@ export interface CommandBlock {
   headerEl?: HTMLElement;
 }
 
-/** Where a block's header comes from: the user's home and the session. */
-export interface BlockContext {
-  home: string | null;
-  worktree?: string;
-  branch?: string;
-  /** Recorded on each block when its command starts, for its header. */
-  nodeVersion?: string;
-  changes?: { files: number; additions: number; deletions: number };
-}
 
-/** `~`-shortens a path under `home`. */
-export function shortPath(p: string, home: string | null): string {
-  if (home && (p === home || p.startsWith(home + "/"))) return "~" + p.slice(home.length);
-  return p;
-}
 
-function duration(ms: number): string {
-  if (ms < 10_000) return `${(ms / 1000).toFixed(3)}s`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
-}
 
-/** The line above a command (T8): chips for the node version, directory,
- * session branch and uncommitted changes, then the duration, with
- * `exit 1` before it when the command failed. */
-export function blockHeader(
-  b: {
-    cwd?: string;
-    node?: string;
-    changes?: { files: number; additions: number; deletions: number };
-    exit?: number;
-    startedAt?: number;
-    endedAt?: number;
-    end?: unknown;
-  },
-  ctx: BlockContext,
-): { node: string | null; place: string; branch: string | null; changes: string | null; exit: string | null; duration: string | null; running: boolean } {
-  const cwd = b.cwd ?? "";
-  const inside = !!ctx.worktree && (cwd === ctx.worktree || cwd.startsWith(ctx.worktree + "/"));
-  const timed = !!b.end && b.startedAt !== undefined && b.endedAt !== undefined;
-  const c = b.changes;
-  return {
-    node: b.node ?? null,
-    place: shortPath(cwd, ctx.home),
-    // The session's branch, only inside its worktree.
-    branch: inside && ctx.branch ? ctx.branch : null,
-    // `5 • +113 -30`: the session's uncommitted changes, only inside it.
-    changes: inside && c ? `${c.files} • +${c.additions} -${c.deletions}` : null,
-    exit: b.end && b.exit ? `exit ${b.exit}` : null,
-    duration: timed ? `(${duration(b.endedAt! - b.startedAt!)})` : null,
-    running: !b.end,
-  };
-}
 
 /** Background rectangles, in viewport rows, for the blocks on screen (T8).
  * A block spans from its header row up to the row of its end mark. The
@@ -170,20 +95,6 @@ export function replayedPromptLine(outputLine: number, wrapped: (y: number) => b
   return start;
 }
 
-/** The command a user typed, from its screen rows (T8): rows the terminal
- * wrapped join their previous row as is, real line breaks stay. Row texts
- * are untrimmed, so a space at the wrap survives. */
-export function commandFromRows(rows: readonly { text: string; wrapped: boolean }[]): string {
-  const lines: string[] = [];
-  for (const r of rows) {
-    if (r.wrapped && lines.length) lines[lines.length - 1] += r.text;
-    else lines.push(r.text);
-  }
-  return lines
-    .map((l) => l.trimEnd())
-    .join("\n")
-    .trim();
-}
 
 /** Index of the finished block that contains buffer row `line` (T8). */
 export function blockAt(blocks: readonly { start: number; end?: number }[], line: number): number | null {
@@ -191,17 +102,6 @@ export function blockAt(blocks: readonly { start: number; end?: number }[], line
   return i < 0 ? null : i;
 }
 
-/** When an OSC 133 mark came, from its parameters after the mark letter
- * (S2): a mark replayed from the daemon's snapshot carries
- * `moonlet_age=<ms>`, how long ago the daemon saw it; a live mark came
- * now; a replayed one without an age (an older daemon) has no time. */
-export function markTime(params: readonly string[], replaying: boolean, now: number): number | undefined {
-  for (const p of params) {
-    const m = /^moonlet_age=(\d+)$/.exec(p);
-    if (m) return now - Number(m[1]);
-  }
-  return replaying ? undefined : now;
-}
 
 /** Index of the block whose header is pinned to the top of the viewport
  * (T8): the one whose header row scrolled above buffer row `top` while
@@ -231,13 +131,6 @@ export function selectStep(blocks: readonly { start: number; end?: number }[], c
   return at + 1 < done.length ? done[at + 1] : null;
 }
 
-/** What ⌘C (`all`), ⇧⌘C (`output`) and ⌥⌘C (`command`) copy from the
- * selected block (T8). */
-export function blockCopy(b: { command: string; output: string }, part: "all" | "output" | "command"): string {
-  if (part === "output") return b.output;
-  if (part === "command") return b.command;
-  return b.output ? `$ ${b.command}\n${b.output}` : `$ ${b.command}`;
-}
 
 /** What ⇧⌘C copies (T8): the selected block's output, or with no block
  * selected the last command's output. A selected block that printed
@@ -247,24 +140,7 @@ export function outputToCopy(selected: string | null, last: string): { text: str
   return last ? { text: last, toast: "Copied output" } : { text: null, toast: null };
 }
 
-/** A block as text for an agent's input (T8): the command line and its
- * output in a code fence longer than any fence inside either. */
-export function blockForAgent(b: { command: string; output: string }): string {
-  const longest = Math.max(2, ...(`${b.command}\n${b.output}`.match(/`{3,}/g) ?? []).map((f) => f.length));
-  const fence = "`".repeat(longest + 1);
-  return `${fence}\n${blockCopy(b, "all")}\n${fence}\n`;
-}
 
-/** Rows of a Blocks-mode block (T8), from its prompt mark's row and the row
- * its output starts on. The shell's prompt is empty rows: with two, the
- * first holds the separator and the second the header; with one, they
- * share it. A shell that left no empty row (an older integration) gets no
- * header row: the header goes at the end of the command line. */
-export function blockLayout(prompt: number, output: number, empty: (y: number) => boolean): { separator: number; header: number | null; commandFrom: number } {
-  if (!empty(prompt)) return { separator: prompt, header: null, commandFrom: prompt };
-  if (empty(prompt + 1) && prompt + 2 < output) return { separator: prompt, header: prompt + 1, commandFrom: prompt + 2 };
-  return { separator: prompt, header: prompt, commandFrom: prompt + 1 };
-}
 
 /** The parts of a header that fit at the end of the command line when the
  * shell left no row for it (T8), in `free` columns: the chips go first,
@@ -302,16 +178,6 @@ const LINE_HEIGHT = 1.15;
 /** Shells in Blocks mode get roomier rows (T8); agent TUIs keep 1.15. */
 const BLOCK_LINE_HEIGHT = 1.3;
 
-/** What re-running a block types into the shell (T4, T8). The command is
- * read back from the screen, so anything a program printed there could be
- * in it: control characters are dropped, so the text cannot act as keys or
- * end a paste, and a multi-line command goes as one bracketed paste, so no
- * line runs on its own before Enter, as the input editor sends commands. */
-export function rerunInput(command: string): string | null {
-  const text = command.replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
-  if (!text.trim()) return null;
-  return text.includes("\n") ? `\x1b[200~${text}\x1b[201~\r` : `${text}\r`;
-}
 
 export type BlockAction = "agent" | "copy" | "rerun";
 

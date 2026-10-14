@@ -203,6 +203,7 @@ impl Codex {
             reason: p["reason"].as_str().map(super::strip_ansi),
             can_always: true,
             diff,
+            asked_at: Some(crate::paths::now_ms()),
         });
         self.asks.insert(id, (rid, item_id));
         st.status = "blocked".into();

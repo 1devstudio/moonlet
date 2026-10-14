@@ -355,6 +355,7 @@ impl Adapter for Claude {
                         input: input.clone(),
                         reason,
                         can_always: suggestions.as_array().is_some_and(|a| !a.is_empty()),
+                        asked_at: Some(crate::paths::now_ms()),
                     });
                     self.asks.insert(rid, (req["tool_use_id"].as_str().map(String::from), suggestions, input));
                     st.status = "blocked".into();

@@ -37,6 +37,8 @@ pub struct Daemon {
     accounts: Mutex<HashMap<Option<String>, moonlet_proto::types::ProfileAccount>>,
     /// A `claude update` is running (X36).
     claude_updating: AtomicBool,
+    /// Phone access over Tailscale (X39).
+    pub mobile: Arc<crate::mobile::Mobile>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -137,6 +139,8 @@ impl Daemon {
             .and_then(|v| v.parse().ok())
             .map_or(terminal_read::DEFAULT_TIMEOUT, std::time::Duration::from_millis);
         let reads = TerminalReads::new(terminals.clone(), read_timeout);
+        let emitter = terminals.clone();
+        let mobile = Arc::new(crate::mobile::Mobile::load(crate::mobile::Mobile::default_file(), move |m| emitter.emit(m)));
         Arc::new(Self {
             terminals,
             chats,
@@ -149,6 +153,7 @@ impl Daemon {
             upgrading: AtomicBool::new(false),
             accounts: Mutex::new(HashMap::new()),
             claude_updating: AtomicBool::new(false),
+            mobile,
         })
     }
 
@@ -272,6 +277,12 @@ impl Daemon {
                 let r: m::TerminalRef = params(p)?;
                 ok(self.chats.state(r.id).map_err(internal)?)
             }
+            m::CHAT_SUMMARIES => ok(self
+                .chats
+                .summaries()
+                .into_iter()
+                .map(|(id, state)| serde_json::json!({ "id": id, "state": state }))
+                .collect::<Vec<_>>()),
             m::CHAT_SEND => {
                 let r: m::ChatSend = params(p)?;
                 self.chats.send(r.id, &r.text, &r.images).map_err(internal)?;
@@ -383,7 +394,39 @@ impl Daemon {
                 }
                 ok(status)
             }
+            m::MOBILE_HOSTS => ok(self.mobile.hosts()),
+            method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
             _ => self.handle_project(conn, method, p).await,
+        }
+    }
+
+    /// Phone access (X39): managed from the Mac's app only, never from a
+    /// phone or an agent's `moonlet` CLI.
+    fn handle_mobile(self: &Arc<Self>, conn: &Conn, method: &str, p: Value) -> HandlerResult {
+        if conn.phone.is_some() {
+            return Err(RpcError::new("forbidden", "manage phones from the Mac"));
+        }
+        if conn.client == CLI_CLIENT {
+            return Err(RpcError::new("forbidden", "only the moonlet app manages phones"));
+        }
+        match method {
+            m::MOBILE_STATUS => ok(self.mobile.status()),
+            m::MOBILE_SET_ENABLED => {
+                let r: m::MobileSetEnabled = params(p)?;
+                self.mobile.set_enabled(r.enabled);
+                ok(self.mobile.status())
+            }
+            m::MOBILE_PAIR_START => ok(self.mobile.pair_start()?),
+            m::MOBILE_PAIR_CANCEL => {
+                self.mobile.pair_cancel();
+                ok(true)
+            }
+            m::MOBILE_REVOKE => {
+                let r: m::IdRef = params(p)?;
+                self.mobile.revoke(&r.id)?;
+                ok(true)
+            }
+            _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
         }
     }
 
