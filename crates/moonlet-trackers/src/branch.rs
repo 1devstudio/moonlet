@@ -1,5 +1,20 @@
 //! Branch names for sessions started from a task (X44 "Branch names and linking").
 
+use crate::TrackerKind;
+
+/// "Max length" until the user changes it.
+pub const DEFAULT_MAX_LEN: usize = 48;
+
+/// The template a new connection starts with. GitHub uses the same names as
+/// `gh issue develop`. An empty template means "the tracker's own branch
+/// name" (Linear's `branchName`), which the caller fills in instead.
+pub fn default_template(kind: TrackerKind) -> &'static str {
+    match kind {
+        TrackerKind::Github => "{number}-{title}",
+        TrackerKind::Linear | TrackerKind::Jira | TrackerKind::Clickup => "{key}-{title}",
+    }
+}
+
 /// The values a branch template can use: `{key}`, `{title}`, `{number}`,
 /// `{user}` and `{type}`.
 #[derive(Debug, Clone)]
@@ -86,6 +101,17 @@ mod tests {
             user: "sam",
             kind: "feature",
         }
+    }
+
+    #[test]
+    fn default_templates_per_tracker() {
+        use crate::TrackerKind::*;
+        assert_eq!(DEFAULT_MAX_LEN, 48);
+        assert_eq!(
+            [Linear, Jira, Clickup].map(default_template),
+            ["{key}-{title}"; 3]
+        );
+        assert_eq!(default_template(Github), "{number}-{title}");
     }
 
     #[test]

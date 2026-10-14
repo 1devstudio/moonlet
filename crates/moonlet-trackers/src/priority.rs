@@ -15,7 +15,7 @@ pub fn linear_bars(priority: u8) -> u8 {
 pub fn named_bars(name: &str) -> u8 {
     match name.to_ascii_lowercase().as_str() {
         "highest" | "urgent" | "high" | "critical" | "blocker" => 3,
-        "medium" | "normal" => 2,
+        "medium" | "normal" | "major" => 2,
         "low" | "lowest" | "minor" | "trivial" => 1,
         _ => 0,
     }
@@ -39,6 +39,11 @@ mod tests {
             ]
             .map(named_bars),
             [3, 3, 2, 1, 1, 3, 2, 0]
+        );
+        // Jira's older scheme.
+        assert_eq!(
+            ["Blocker", "Critical", "Major", "Minor", "Trivial"].map(named_bars),
+            [3, 3, 2, 1, 1]
         );
     }
 }

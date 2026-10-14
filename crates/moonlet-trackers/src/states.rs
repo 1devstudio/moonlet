@@ -17,6 +17,9 @@ pub enum Column {
 }
 
 /// The column a tracker state lands in until the user maps it differently.
+/// For GitHub this maps a project board's Status options; issues of a plain
+/// repository source have no such state and are placed by the app from their
+/// sessions and PRs (X44 "States").
 /// `state_type` is Linear's state type, Jira's status category key or
 /// ClickUp's status type; `name` is the state's display name.
 pub fn default_column(kind: TrackerKind, state_type: &str, name: &str) -> Column {
@@ -48,13 +51,10 @@ pub fn default_column(kind: TrackerKind, state_type: &str, name: &str) -> Column
     }
 }
 
-/// "In Review", "Code review", "QA", "Ready for QA".
+/// "In Review", "Code review", "QA", "Ready for QA"; not "Preview".
 fn looks_like_review(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name.contains("review")
-        || name
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|w| w == "qa")
+    name.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w.eq_ignore_ascii_case("review") || w.eq_ignore_ascii_case("qa"))
 }
 
 #[cfg(test)]
@@ -74,6 +74,11 @@ mod tests {
             Column::InReview
         );
         assert_eq!(default_column(Linear, "started", "QA"), Column::InReview);
+        // "review" must be a word: a "Preview" state is still in progress.
+        assert_eq!(
+            default_column(Linear, "started", "Preview"),
+            Column::InProgress
+        );
         assert_eq!(default_column(Linear, "completed", "Done"), Column::Done);
         assert_eq!(default_column(Linear, "backlog", "Backlog"), Column::Hidden);
         assert_eq!(
