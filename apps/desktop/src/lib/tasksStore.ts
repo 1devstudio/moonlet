@@ -10,7 +10,7 @@ import { askConfirm } from "./confirm";
 import { autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, trackerOf } from "./tasks";
 import { workspaceConnections } from "./trackerSources";
 import { applyStateMapping, targetState } from "./stateMapping";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
@@ -109,8 +109,8 @@ export const DEFAULT_CONFIG: TrackersConfig = { sync: { interval: 60, notify: tr
 
 /** A tracker's branch names and rules (GitHub's, or a connection's tracker). */
 export function trackerSettings(config: TrackersConfig, connection: string): TrackerSettings {
-  const kind = connection.split(":")[0] as "github" | "linear" | "jira" | "clickup";
-  return config[kind] ?? DEFAULT_TRACKER;
+  const kind = trackerOf(connection);
+  return (kind && config[kind]) || DEFAULT_TRACKER;
 }
 
 export const useTasks = create<TasksState>(() => ({

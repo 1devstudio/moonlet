@@ -7,7 +7,7 @@ import { hostsApi } from "../../lib/daemon";
 import type { Session } from "../../lib/protocol";
 import { selectSession, useStore } from "../../lib/store";
 import { acceptanceCriteria, findPasted, linkChoices } from "../../lib/taskLinking";
-import type { Task } from "../../lib/tasks";
+import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
 import { ensureTasks, linkTask, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
@@ -15,7 +15,6 @@ import { Button, cx, Dialog, IconButton, inputCls, Kbd, StateGlyph } from "../ui
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
 
 const COLUMN_LABEL: Record<Card["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };
-const trackerName = (t: Task) => ({ github: "GitHub", linear: "Linear", jira: "Jira", clickup: "ClickUp" })[t.connection.split(":")[0]] ?? "tracker";
 
 /** The card of the task a session works on, loading its workspace's tasks when needed. */
 export function useSessionTask(host: string, ws: Session): Card | null {
@@ -55,7 +54,7 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
         </div>
       )}
       <a href={card.task.url} target="_blank" rel="noreferrer" className="ml-auto flex shrink-0 items-center gap-1 text-muted hover:text-fg">
-        {trackerName(card.task)} <ExternalLink size={12} />
+        {trackerName(card.task.connection)} <ExternalLink size={12} />
       </a>
     </div>
   );
@@ -203,9 +202,9 @@ function KeepInStep({ task }: { task: Task }) {
   const on = useTasks((t) => !t.paused[`${task.connection} ${task.key}`]);
   return (
     <label className="flex items-start gap-2 rounded-lg border border-border px-3 py-2 ui-text-12.5">
-      <input type="checkbox" role="switch" aria-label={`Keep ${trackerName(task)} in step`} checked={on} onChange={(e) => setKeepInStep(task, e.target.checked)} className="mt-0.5" />
+      <input type="checkbox" role="switch" aria-label={`Keep ${trackerName(task.connection)} in step`} checked={on} onChange={(e) => setKeepInStep(task, e.target.checked)} className="mt-0.5" />
       <span>
-        <span className="text-fg">Keep {trackerName(task)} in step</span>
+        <span className="text-fg">Keep {trackerName(task.connection)} in step</span>
         <span className="block text-muted">
           {on ? "Starting sessions, opening and merging their PRs move this issue as Settings › Task trackers says." : "moonlet leaves this issue alone, and shows no out-of-sync chips for it."}
         </span>
