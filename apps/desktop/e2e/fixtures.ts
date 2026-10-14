@@ -60,6 +60,8 @@ function makeWorld(root: string): World {
       MOONLET_HOME: home,
       MOONLET_BIN_DIR: BIN_DIR,
       MOONLET_E2E_ROOT: root,
+      // Phones (X39) reach the scratch daemon on loopback, not Tailscale.
+      MOONLET_MOBILE_ADDRS: "127.0.0.1",
     },
   };
 }
@@ -103,6 +105,8 @@ function seed(w: World) {
   git("add", "-A");
   git("-c", "user.email=e2e@moonlet.test", "-c", "user.name=e2e", "commit", "-qm", "init");
 
+  // Any free port, so a run never collides with another daemon's (X39).
+  writeFileSync(join(w.home, "mobile.json"), '{ "port": 0 }\n');
   execFileSync(join(BIN_DIR, "moonletd"), ["start"], { env: w.env, stdio: "pipe" });
   const project = rpc<{ id: string }>(w, "project.add", { path: w.repo });
   rpc(w, "session.create", { project_id: project.id, name: SESSION, agent: "none" });
