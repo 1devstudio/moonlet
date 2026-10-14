@@ -159,7 +159,7 @@ export function TrackersPage() {
       </Section>
       <Section title="Sync">
         <Card>
-          <Row label="Refresh issues" hint="Also refreshes whenever the window comes to the front, at most every 15 s." htmlFor={intervalId} setting="sync-interval">
+          <Row label="Refresh issues" hint={config.sync.interval > 0 ? "Also refreshes whenever the window comes to the front, at most every 15 s." : "Refreshes when Tasks mode opens and when you press Refresh."} htmlFor={intervalId} setting="sync-interval">
             <select id={intervalId} className={fieldCls} value={config.sync.interval} onChange={(e) => { const interval = Number(e.target.value); save((c) => ({ ...c, sync: { ...c.sync, interval } })); }}>
               {INTERVALS.map((i) => (
                 <option key={i.value} value={i.value}>
