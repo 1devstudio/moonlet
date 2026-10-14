@@ -172,6 +172,18 @@ describe("Tasks mode", () => {
     await expect(row.$(sel.text("acme/storefront#15"))).toBeDisplayed();
   });
 
+  it("groups the sidebar's sessions by task, each group headed by its task", async () => {
+    type Sec = { id: string; project_ids: string[]; view: { group_by: string; sort_by: string; filter: string[] } };
+    const sec = rpc<Sec[]>(w, "section.list", {}).find((x) => x.project_ids.includes(projectId(w)))!;
+    rpc(w, "section.update", { id: sec.id, view: { ...sec.view, group_by: "task" } });
+    try {
+      await expect($(sel.text("acme/storefront#15 Gift cards at checkout"))).toBeDisplayed({ wait: 10_000 });
+      await expect($(sel.text("No task"))).toBeDisplayed();
+    } finally {
+      rpc(w, "section.update", { id: sec.id, view: sec.view });
+    }
+  });
+
   it("finds a task by its title, and closes an issue from the detail's state menu", async () => {
     await tasksButton().click();
     await fill('//input[@placeholder="Find a task"]', "Gift");
