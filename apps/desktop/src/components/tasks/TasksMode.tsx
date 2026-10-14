@@ -4,12 +4,13 @@ import { ExternalLink, GitBranch, RotateCw, SquareTerminal, X } from "lucide-rea
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { focusThrottle } from "../../lib/prPoll";
-import { selectSession, shownWorkspace, useStore } from "../../lib/store";
+import { errorToast, selectSession, shownWorkspace, useStore } from "../../lib/store";
 import { type Column, taskStart } from "../../lib/tasks";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
 import { autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, putOffDrift, refreshTasks, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { listGroups, listRow } from "../../lib/tasksList";
-import { applyRules, autoFixes, driftKey, startAction, withoutPutOff } from "../../lib/keepInStep";
+import { applyRules, autoFixes, driftKey, prComments, startAction, withoutPutOff } from "../../lib/keepInStep";
+import { hostsApi } from "../../lib/daemon";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
@@ -70,9 +71,15 @@ function useTaskSync() {
   const config = useTasks((t) => trackersConfig(t));
   useEffect(() => {
     if (!ws || !board) return;
-    for (const card of autoFixes(board, (c) => trackerSettings(config, c.task.connection).rules, autoFixed())) {
+    const rulesOf = (c: Card) => trackerSettings(config, c.task.connection).rules;
+    for (const card of autoFixes(board, rulesOf, autoFixed())) {
       markAutoFixed(driftKey(card));
       void fixDrift(ws.host, ws.id, card);
+    }
+    for (const c of prComments(board, rulesOf, autoFixed())) {
+      markAutoFixed(c.key);
+      const t = c.card.task.tracker;
+      if (t) void hostsApi.trackerUpdate({ id: c.card.task.connection, task: t.id, source: t.source, comment: c.text }).catch((e) => errorToast(e?.message ?? e));
     }
   }, [ws, board, config]);
 }
@@ -128,9 +135,9 @@ export function TasksSidebar() {
       {ws && data && data.sources.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-2 ui-text-12 text-faint">
           <span className={cx("min-w-0 flex-1 truncate", data.error && "text-error")} title={data.error ?? undefined}>
-            {data.error ? `GitHub sync failed · ${data.error}` : syncedLabel("GitHub", data.syncedAt, now)}
+            {data.error ? `Sync failed · ${data.error}` : syncedLabel(data.sources.some((x) => x.includes(":")) ? "Tasks" : "GitHub", data.syncedAt, now)}
           </span>
-          <IconButton title="Refresh from GitHub" onClick={() => void refreshTasks(ws.host, ws.id)}>
+          <IconButton title="Refresh tasks" onClick={() => void refreshTasks(ws.host, ws.id)}>
             <RotateCw size={13} />
           </IconButton>
         </div>
@@ -300,11 +307,15 @@ export function TasksMode() {
               <div className="ui-text-13 text-fg">GitHub Issues</div>
               <div className="ui-text-12 text-muted">Uses your gh login · add a project with a GitHub origin to this workspace</div>
             </div>
-            {["Linear", "Jira Cloud", "ClickUp"].map((t) => (
-              <div key={t} className="px-3 py-2">
+            {[
+              ["Linear", "API key"],
+              ["Jira Cloud", "Site, email and API token"],
+              ["ClickUp", "Personal API token"],
+            ].map(([t, how]) => (
+              <button key={t} className="block w-full px-3 py-2 text-left hover:bg-panel-2" onClick={() => void goSettings({ page: "trackers" })}>
                 <div className="ui-text-13 text-fg">{t}</div>
-                <div className="ui-text-12 text-faint">Coming in a later release</div>
-              </div>
+                <div className="ui-text-12 text-muted">{how} · then pick what this workspace shows</div>
+              </button>
             ))}
           </div>
           <div className="mt-4 flex justify-between">

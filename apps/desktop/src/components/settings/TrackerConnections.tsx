@@ -1,0 +1,222 @@
+// Linear, Jira Cloud and ClickUp in Settings › Task trackers (X44): connect
+// with a token, pick the sources each workspace shows, disconnect.
+
+import { useEffect, useState } from "react";
+import { askConfirm } from "../../lib/confirm";
+import { hostsApi } from "../../lib/daemon";
+import { errorToast, useStore } from "../../lib/store";
+import { type Connection, loadTrackersConfig, saveTrackersConfig, type Source, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { connectionLine } from "../../lib/trackersPage";
+import { wsKey } from "../../lib/workspaces";
+import { Button, Dialog, Field, inputCls } from "../ui";
+import { Row, Status } from "./controls";
+
+const NAME: Record<Connection["kind"], string> = { linear: "Linear", jira: "Jira Cloud", clickup: "ClickUp" };
+const TOKEN_PAGE: Record<Connection["kind"], string> = {
+  linear: "https://linear.app/settings/account/security",
+  jira: "https://id.atlassian.com/manage-profile/security/api-tokens",
+  clickup: "https://app.clickup.com/settings/apps",
+};
+
+const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
+
+/** Which sources a connection shows, in which workspace and starting in which project. */
+function SourcesEditor({ connection, choices, onDone }: { connection: Connection; choices: { key: string; name: string }[]; onDone: () => void }) {
+  const workspaces = useStore((s) => s.workspaces);
+  const projects = useStore((s) => s.projects);
+  const [rows, setRows] = useState<Source[]>(() =>
+    choices.map((c) => connection.sources.find((s) => s.key === c.key) ?? { key: c.key, name: c.name, project: "", workspace: "" }),
+  );
+  const shown = (key: string) => connection.sources.some((s) => s.key === key);
+  const [on, setOn] = useState<Record<string, boolean>>(() => Object.fromEntries(choices.map((c) => [c.key, shown(c.key)])));
+  const wsOptions = Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ value: wsKey(host, w.id), label: w.name, host })));
+  const set = (key: string, patch: Partial<Source>) => setRows((r) => r.map((x) => (x.key === key ? { ...x, ...patch } : x)));
+  const save = async () => {
+    const config = trackersConfig(useTasks.getState());
+    const sources = rows.filter((r) => on[r.key]);
+    const connections = (config.connections ?? []).map((c) => (c.id === connection.id ? { ...c, sources } : c));
+    try {
+      await saveTrackersConfig({ ...config, connections });
+      onDone();
+    } catch (e) {
+      errorToast(message(e));
+    }
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="ui-text-12.5 text-muted">Pick what to show, the workspace that shows it, and the project its sessions start in.</div>
+      <div role="list" aria-label="Sources" className="flex max-h-[300px] flex-col gap-1 overflow-y-auto">
+        {rows.map((r) => {
+          const host = r.workspace.split("/")[0];
+          return (
+            <div key={r.key} role="listitem" aria-label={r.name} className="flex items-center gap-2 ui-text-12.5">
+              <label className="flex min-w-0 flex-1 items-center gap-2">
+                <input type="checkbox" checked={!!on[r.key]} onChange={(e) => setOn((o) => ({ ...o, [r.key]: e.target.checked }))} />
+                <span className="truncate text-fg">{r.name}</span>
+                <span className="font-mono ui-text-11.5 text-faint">{r.key}</span>
+              </label>
+              <select aria-label={`Workspace for ${r.name}`} className={`${inputCls} w-[130px]`} value={r.workspace} disabled={!on[r.key]} onChange={(e) => set(r.key, { workspace: e.target.value, project: "" })}>
+                <option value="">Workspace…</option>
+                {wsOptions.map((w) => (
+                  <option key={w.value} value={w.value}>
+                    {w.label}
+                  </option>
+                ))}
+              </select>
+              <select aria-label={`Project for ${r.name}`} className={`${inputCls} w-[130px]`} value={r.project} disabled={!on[r.key] || !r.workspace} onChange={(e) => set(r.key, { project: e.target.value })}>
+                <option value="">Project…</option>
+                {(projects[host] ?? []).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex justify-end gap-2">
+        <Button size="sm" variant="primary" onClick={() => void save()}>
+          Save and sync
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Connect (or reconnect) a tracker with a token, then pick its sources. */
+export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection["kind"]; reconnect?: Connection; onClose: () => void }) {
+  const [site, setSite] = useState(reconnect?.site ?? "");
+  const [email, setEmail] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<{ connection: Connection; sources: { key: string; name: string }[] } | null>(null);
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await hostsApi.trackerConnect({ kind, site, email, token });
+      await loadTrackersConfig(true);
+      setDone(r);
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog title={`${reconnect ? "Reconnect" : "Connect"} ${NAME[kind]}`} onClose={onClose} width={560}>
+      {done ? (
+        <>
+          <p className="mb-2 ui-text-12.5 text-done">
+            Signed in as {done.connection.account} · {done.sources.length} {done.sources.length === 1 ? "source" : "sources"} visible
+          </p>
+          <SourcesEditor connection={done.connection} choices={done.sources} onDone={onClose} />
+        </>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {kind === "jira" && (
+            <>
+              <Field label="Site">
+                <input className={inputCls} placeholder="acme.atlassian.net" value={site} onChange={(e) => setSite(e.target.value)} />
+              </Field>
+              <Field label="Email">
+                <input className={inputCls} placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+              </Field>
+            </>
+          )}
+          <Field
+            label={kind === "linear" ? "API key" : "API token"}
+            hint={
+              <a href={TOKEN_PAGE[kind]} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                Create one
+              </a>
+            }
+          >
+            <input className={inputCls} type="password" value={token} onChange={(e) => setToken(e.target.value)} />
+          </Field>
+          <p className="ui-text-12 text-muted">
+            The token is saved in the macOS Keychain.{kind === "jira" ? " Tokens expire; moonlet tells you when Jira stops accepting it." : ""}
+          </p>
+          {error && <p className="ui-text-12.5 text-error">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button size="sm" variant="primary" disabled={busy || !token.trim()} onClick={() => void connect()}>
+              {busy ? "Connecting…" : "Connect"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+/** One connection's row: its line, Sources, Reconnect when needed, Disconnect. */
+export function ConnectionRow({ c }: { c: Connection }) {
+  const attention = useTasks((t) => t.attention[c.id]);
+  const [editing, setEditing] = useState<{ key: string; name: string }[] | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+  const sources = async () => {
+    try {
+      setEditing(await hostsApi.trackerSources(c.id));
+    } catch (e) {
+      errorToast(message(e));
+    }
+  };
+  const disconnect = async () => {
+    const ok = await askConfirm({ title: `Disconnect ${NAME[c.kind]}?`, message: `moonlet forgets the token for ${c.site} and stops showing its issues. Sessions keep their links.`, action: "Disconnect", variant: "danger" });
+    if (!ok) return;
+    try {
+      await hostsApi.trackerDisconnect(c.id);
+      await loadTrackersConfig(true);
+    } catch (e) {
+      errorToast(message(e));
+    }
+  };
+  return (
+    <>
+      <Row label={`${NAME[c.kind]} · ${c.site}`} hint={<Status line={connectionLine(c, attention)} />} setting={`tracker-${c.id}`}>
+        <div className="flex gap-1.5">
+          {attention && (
+            <Button size="sm" variant="primary" onClick={() => setReconnecting(true)}>
+              Reconnect
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={() => void sources()}>
+            Sources
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => void disconnect()}>
+            Disconnect
+          </Button>
+        </div>
+      </Row>
+      {editing && (
+        <Dialog title={`${NAME[c.kind]} sources`} onClose={() => setEditing(null)} width={560}>
+          <SourcesEditor connection={c} choices={editing} onDone={() => setEditing(null)} />
+        </Dialog>
+      )}
+      {reconnecting && <ConnectTracker kind={c.kind} reconnect={c} onClose={() => setReconnecting(false)} />}
+    </>
+  );
+}
+
+/** "Add tracker": Linear, Jira Cloud or ClickUp. */
+export function AddTracker() {
+  const [kind, setKind] = useState<Connection["kind"] | null>(null);
+  useEffect(() => void loadTrackersConfig(), []);
+  return (
+    <>
+      <div className="flex gap-1.5">
+        {(["linear", "jira", "clickup"] as const).map((k) => (
+          <Button key={k} size="sm" variant="ghost" onClick={() => setKind(k)}>
+            Connect {NAME[k]}
+          </Button>
+        ))}
+      </div>
+      {kind && <ConnectTracker kind={kind} onClose={() => setKind(null)} />}
+    </>
+  );
+}

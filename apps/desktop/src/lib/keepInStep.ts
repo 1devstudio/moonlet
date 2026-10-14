@@ -137,3 +137,22 @@ export function outsideMoves(before: Task[] | null, after: Task[], linked: Set<s
     return t.column === "open" || t.column === "hidden" ? [] : [{ key: t.key, title: t.title, text: `${t.key} moved to ${COLUMN_TEXT[t.column]}` }];
   });
 }
+
+/**
+ * Tracker issues to comment on because a session's PR just opened ("a pull
+ * request opens → comment on the issue with its link" at Automatically), once
+ * per PR. GitHub issues get `Closes #<n>` in the PR instead.
+ */
+export function prComments(board: Board, rulesOf: (c: Card) => Rules, done: Record<string, true>): { card: Card; key: string; text: string }[] {
+  return Object.values(board)
+    .flat()
+    .flatMap((card) => {
+      if (card.task.github || !card.task.tracker || rulesOf(card).pr_comment !== "auto") return [];
+      return card.rows.flatMap(({ session }) => {
+        const pr = session.pr;
+        const key = `comment ${card.task.connection} ${card.task.key} #${pr?.number}`;
+        if (pr?.state !== "open" || done[key]) return [];
+        return [{ card, key, text: `Opened a pull request: ${pr.title} ${pr.url}` }];
+      });
+    });
+}

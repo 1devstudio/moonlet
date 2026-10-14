@@ -34,6 +34,13 @@ export interface World {
   env: Record<string, string>;
 }
 
+/** The mock tracker server's port for this world: fixed per scratch root, so the app and the specs agree. */
+export function trackerPort(root: string): number {
+  let h = 0;
+  for (const c of root) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return 40_000 + (h % 20_000);
+}
+
 /** The world created by the launcher, shared with workers through env. */
 export function world(): World {
   const root = process.env.MOONLET_E2E_ROOT;
@@ -64,6 +71,8 @@ function makeWorld(root: string): World {
       MOONLET_MOBILE_ADDRS: "127.0.0.1",
       // Remotes are local folders; an origin that names github.com (X44) never reaches the network.
       GIT_ALLOW_PROTOCOL: "file",
+      // Linear, Jira and ClickUp go to a mock server the specs start (X44; e2e builds only).
+      MOONLET_TRACKER_BASE: `http://127.0.0.1:${trackerPort(root)}`,
     },
   };
 }
