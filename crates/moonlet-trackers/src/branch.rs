@@ -6,8 +6,7 @@ use crate::TrackerKind;
 pub const DEFAULT_MAX_LEN: usize = 48;
 
 /// The template a new connection starts with. GitHub uses the same names as
-/// `gh issue develop`. An empty template means "the tracker's own branch
-/// name" (Linear's `branchName`), which the caller fills in instead.
+/// `gh issue develop`.
 pub fn default_template(kind: TrackerKind) -> &'static str {
     match kind {
         TrackerKind::Github => "{number}-{title}",
@@ -25,7 +24,7 @@ pub struct BranchVars<'a> {
     pub number: Option<u64>,
     pub user: &'a str,
     /// The issue type, such as "bug" or "feature".
-    pub kind: &'a str,
+    pub issue_type: &'a str,
 }
 
 /// Fills `template` and makes it a branch name: lower case, words joined by
@@ -46,7 +45,7 @@ pub fn branch_name(template: &str, vars: &BranchVars, max_len: usize) -> String 
             "title" => vars.title,
             "number" => &number,
             "user" => vars.user,
-            "type" => vars.kind,
+            "type" => vars.issue_type,
             _ => "",
         });
         rest = &rest[open + close + 1..];
@@ -70,10 +69,16 @@ fn cut(name: &str, max_len: usize) -> String {
     head.trim_end_matches(['-', '/']).into()
 }
 
-/// Lower case; `/` kept; any other run of non-alphanumerics becomes one `-`.
+/// Lower case, accents dropped; `/` kept; any other run of non-alphanumerics
+/// becomes one `-`.
 fn clean(raw: &str) -> String {
     let mut out = String::new();
-    for c in raw.to_lowercase().chars() {
+    let lower = raw.to_lowercase();
+    let folded = lower.chars().flat_map(|c| match fold(c) {
+        Some(ascii) => ascii.chars().collect::<Vec<_>>(),
+        None => vec![c],
+    });
+    for c in folded {
         if c.is_ascii_alphanumeric() {
             out.push(c);
         } else if c == '/' {
@@ -89,6 +94,33 @@ fn clean(raw: &str) -> String {
     out.trim_end_matches(['-', '/']).to_string()
 }
 
+/// The plain letters of a lower-case accented Latin letter, so titles in
+/// French, German, Polish and the like keep their words.
+fn fold(c: char) -> Option<&'static str> {
+    Some(match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => "a",
+        'æ' => "ae",
+        'ç' | 'ć' | 'č' => "c",
+        'ď' | 'đ' | 'ð' => "d",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' => "e",
+        'ğ' => "g",
+        'ì' | 'í' | 'î' | 'ï' | 'ī' | 'į' | 'ı' => "i",
+        'ł' | 'ľ' | 'ĺ' => "l",
+        'ñ' | 'ń' | 'ň' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' => "o",
+        'œ' => "oe",
+        'ř' | 'ŕ' => "r",
+        'ś' | 'š' | 'ş' => "s",
+        'ß' => "ss",
+        'ť' | 'ţ' => "t",
+        'þ' => "th",
+        'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' | 'ų' => "u",
+        'ý' | 'ÿ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,14 +131,13 @@ mod tests {
             title: "Drag sessions between sections",
             number: None,
             user: "sam",
-            kind: "feature",
+            issue_type: "feature",
         }
     }
 
     #[test]
     fn default_templates_per_tracker() {
         use crate::TrackerKind::*;
-        assert_eq!(DEFAULT_MAX_LEN, 48);
         assert_eq!(
             [Linear, Jira, Clickup].map(default_template),
             ["{key}-{title}"; 3]
@@ -139,7 +170,7 @@ mod tests {
             "moon-136-context-window-meter"
         );
         // A cut inside the first word keeps the characters that fit.
-        assert_eq!(branch_name("{key}-{title}", &vars, 5), "moon");
+        assert_eq!(branch_name("{key}-{title}", &vars, 3), "moo");
     }
 
     #[test]
@@ -161,6 +192,19 @@ mod tests {
         assert_eq!(
             branch_name("{nope}-{title}", &moon_151(), 48),
             "drag-sessions-between-sections"
+        );
+    }
+
+    #[test]
+    fn accented_letters_lose_their_accents() {
+        let vars = BranchVars {
+            key: "OPS-7",
+            title: "Café menü: zażółć gęślą jaźń, Straße",
+            ..moon_151()
+        };
+        assert_eq!(
+            branch_name("{key}-{title}", &vars, 60),
+            "ops-7-cafe-menu-zazolc-gesla-jazn-strasse"
         );
     }
 }
