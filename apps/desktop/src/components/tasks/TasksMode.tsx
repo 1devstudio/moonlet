@@ -1,10 +1,13 @@
 // Tasks mode (X45): the sidebar's views and the board of the shown workspace's tasks.
 
-import { ExternalLink, GitBranch, RotateCw, Search, SquareTerminal, X } from "lucide-react";
+import { Copy, ExternalLink, GitBranch, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { focusThrottle } from "../../lib/prPoll";
-import { errorToast, selectSession, shownWorkspace, useStore } from "../../lib/store";
+import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
+import { rpc } from "../../lib/daemon";
+import { M } from "../../lib/protocol";
+import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart } from "../../lib/tasks";
 import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
@@ -277,6 +280,9 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
     <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
         <span className="font-mono ui-text-12 text-muted">{card.task.key}</span>
+        <IconButton title="Copy issue key" onClick={() => void navigator.clipboard.writeText(card.task.key).then(() => toast(`Copied ${card.task.key}`))}>
+          <Copy size={13} />
+        </IconButton>
         <a href={card.task.url} target="_blank" rel="noreferrer" className="ml-auto flex items-center gap-1 ui-text-12 text-muted hover:text-fg">
           Open in GitHub <ExternalLink size={12} />
         </a>
@@ -338,7 +344,12 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
         {card.rows.map((r) => (
           <div key={r.session.id} className="mt-2 flex items-center gap-2 rounded-lg border border-border px-3 py-2">
             <StateGlyph state={r.session.state} size={13} />
-            <span className="min-w-0 flex-1 truncate ui-text-13 text-fg">{r.session.name}</span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate ui-text-13 text-fg">{r.session.name}</span>
+              <span className="truncate font-mono ui-text-11.5 text-faint">
+                {r.session.branch} · <span className={PR_TONE[listRow({ ...card, rows: [r] }).prTone]}>{r.session.pr ? listRow({ ...card, rows: [r] }).pr : "No pull request"}</span>
+              </span>
+            </span>
             <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => openSession(host, r.session.id)}>
               Open
             </button>
@@ -352,6 +363,9 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
             <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => startSession(host, workspaceId, card, w)}>
               Start session
             </button>
+            <IconButton title="Remove worktree" onClick={() => void removeWorktree(host, w)}>
+              <Trash2 size={13} />
+            </IconButton>
           </div>
         ))}
         <Activity task={card.task} />
@@ -455,7 +469,13 @@ export function TasksMode() {
                 </div>
               </section>
             ))}
-            <section aria-label={`Done: ${shown.done.length} tasks`} className="flex w-[64px] shrink-0 flex-col items-center gap-2 pt-0.5 ui-text-13 text-muted">
+            <section
+              aria-label={`Done: ${shown.done.length} tasks`}
+              role="button"
+              title="Open the list"
+              onClick={() => setLayout("list")}
+              className="flex w-[64px] shrink-0 cursor-default flex-col items-center gap-2 pt-0.5 ui-text-13 text-muted hover:text-fg"
+            >
               <TaskGlyph column="done" />
               Done
               <span className="font-mono ui-text-12 text-faint">{shown.done.length}</span>
@@ -673,4 +693,25 @@ function Activity({ task }: { task: Task }) {
 /** Where a task comes from, on its card when a workspace has several sources: the repository or the team, project or list. */
 function sourceLabel(task: Task): string {
   return task.github ? task.github.repo.split("/")[1] : (task.tracker?.source ?? "");
+}
+
+/** Removes a worktree without a session, after a confirm that names lost changes (X45 detail). */
+async function removeWorktree(host: string, w: BoardWorktree) {
+  if (!w.project) return;
+  const st = await rpc<{ files: unknown[] }>(host, M.gitStatus, { path: w.path }).catch(() => null);
+  const dirty = !!st?.files.length;
+  const ok = await askConfirm({
+    title: `Remove ${w.branch}?`,
+    message: dirty ? `${w.path} has uncommitted changes, which will be lost. Its branch is kept.` : `The worktree at ${w.path} goes; its branch is kept.`,
+    action: "Remove",
+    variant: dirty ? "danger" : "primary",
+  });
+  if (!ok) return;
+  try {
+    await rpc(host, M.projectWorktreeRemove, { id: w.project, path: w.path });
+    const ws = shownWorkspace(useStore.getState());
+    if (ws) void refreshTasks(ws.host, ws.id);
+  } catch (e) {
+    errorToast(e);
+  }
 }
