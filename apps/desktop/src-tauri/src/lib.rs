@@ -360,7 +360,7 @@ fn task_branch_name(
         title: &title,
         number,
         user: "",
-        kind: "",
+        issue_type: "",
     };
     branch::branch_name(&template, &vars, max_len.unwrap_or(branch::DEFAULT_MAX_LEN))
 }
