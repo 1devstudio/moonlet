@@ -88,7 +88,7 @@ import { ClaudeAuthDialog } from "./Profiles";
 // ------------------------------------------------------------ messages
 
 /** Paths inside the session's worktree are shown relative to it. */
-function rel(text: string, cwd: string): string {
+export function rel(text: string, cwd: string): string {
   return cwd.length > 1 ? text.split(cwd + "/").join("") : text;
 }
 
@@ -213,7 +213,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   );
 });
 
-function toolIcon(name: string) {
+export function toolIcon(name: string) {
   const n = name.toLowerCase();
   if (n === "bash" || n === "shell") return Terminal;
   if (n === "read") return FileText;
@@ -1010,7 +1010,7 @@ function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sess
 
 // ------------------------------------------------------------ view
 
-function useNow(active: boolean) {
+export function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!active) return;
