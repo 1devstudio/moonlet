@@ -150,6 +150,11 @@ describe("agents tab", () => {
     // One was stopped, so they did not all finish.
     await expect($(`${strip}//span[contains(normalize-space(), "2 agents · 1 done · 1 stopped")]`)).toBeDisplayed();
     await expect($(chip("1 agent"))).not.toBeExisting();
-    await expect($('//span[starts-with(normalize-space(), "2 agents finished in")]')).toBeDisplayed();
+    // One was stopped: the batch ended without all finishing.
+    await expect($('//span[starts-with(normalize-space(), "2 agents ended in")]')).toBeDisplayed();
+    // A row of the Launched card opens that agent in the tab.
+    await jsClick('//div[@role="button"][.//span[normalize-space()="Write hello file"]][.//span[normalize-space()="done"]]');
+    await expect($('//*[@id="right-tabpanel"]//span[normalize-space()="Write hello file"]')).toBeDisplayed();
+    await expect($('//*[@id="right-tabpanel"]//button[normalize-space()="Agents"]')).toBeDisplayed();
   });
 });
