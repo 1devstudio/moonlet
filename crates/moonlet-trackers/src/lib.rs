@@ -1,9 +1,10 @@
-//! Task-tracker logic shared by the desktop app (X44–X46): issue keys in
-//! branch names, pasted keys and URLs, state columns, priorities and branch
-//! names. Pure functions only; network and Keychain code live in the app.
+//! Task-tracker logic for the desktop app's Rust side (X44–X46): pasted keys
+//! and URLs, state columns, priorities and branch names. Pure functions only;
+//! network and Keychain code live in the app. Linking sessions to tasks by
+//! key happens in the app's board code (`apps/desktop/src/lib`), where the
+//! sessions and PRs are.
 
 pub mod branch;
-pub mod keys;
 pub mod priority;
 pub mod refs;
 pub mod states;
