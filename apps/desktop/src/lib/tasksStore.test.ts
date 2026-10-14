@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setKeepInStep, startedFromTask, syncTasks, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -121,6 +121,62 @@ describe("ensureTasks (X46: a linked session outside Tasks mode)", () => {
     expect(synced()).toBe(1_000);
     ensureTasks("local", "personal", 62_000);
     await vi.waitFor(() => expect(synced()).toBe(62_000));
+  });
+
+  it("waits a minute after a failed sync too, and asks only once while one runs", async () => {
+    answers["git.origin_url"] = () => "https://github.com/acme/web.git";
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = () => {
+      throw new Error("gh: not signed in");
+    };
+    useTasks.setState({ data: {} });
+    ensureTasks("local", "personal", 1_000);
+    ensureTasks("local", "personal", 1_001);
+    await vi.waitFor(() => expect(useTasks.getState().data["local/personal"]?.error).toBe("gh: not signed in"));
+    answers["gh.tasks"] = () => [issue];
+    ensureTasks("local", "personal", 30_000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(useTasks.getState().data["local/personal"].tasks).toEqual([]);
+    ensureTasks("local", "personal", 62_000);
+    await vi.waitFor(() => expect(useTasks.getState().data["local/personal"].tasks).toHaveLength(1));
+  });
+
+  it("does not refresh by itself when Sync is manual, once there is a list", async () => {
+    answers["git.origin_url"] = () => "https://github.com/acme/web.git";
+    answers["gh.tasks"] = () => [issue];
+    answers["project.worktrees"] = () => [];
+    useTasks.setState({ data: {}, config: { ...DEFAULT_CONFIG, sync: { interval: 0, notify: true } } });
+    const synced = () => useTasks.getState().data["local/personal"]?.syncedAt;
+    ensureTasks("local", "personal", 500_000);
+    await vi.waitFor(() => expect(synced()).toBe(500_000));
+    ensureTasks("local", "personal", 900_000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(synced()).toBe(500_000);
+    useTasks.setState({ config: null });
+  });
+});
+
+describe("syncTasks (X44 Sync)", () => {
+  it("refreshes when the window comes to the front, but not under manual Sync", async () => {
+    answers["git.origin_url"] = () => "https://github.com/acme/web.git";
+    answers["gh.tasks"] = () => [issue];
+    answers["project.worktrees"] = () => [];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const synced = () => useTasks.getState().data["local/personal"]?.syncedAt;
+    for (const [interval, at, after] of [
+      [0, 100_000, 100_000],
+      [60, 200_000, 250_000],
+    ]) {
+      vi.setSystemTime(at);
+      const stop = syncTasks("local", "personal", interval);
+      await vi.waitFor(() => expect(synced()).toBe(at));
+      vi.setSystemTime(at + 50_000);
+      window.dispatchEvent(new Event("focus"));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(synced()).toBe(after);
+      stop();
+    }
+    vi.useRealTimers();
   });
 });
 
