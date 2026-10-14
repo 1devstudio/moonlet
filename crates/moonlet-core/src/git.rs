@@ -985,6 +985,72 @@ pub async fn gh_list(repo: &Path, kind: &str) -> Result<Vec<moonlet_proto::types
         .collect())
 }
 
+const GH_TASK_FIELDS: &str =
+    "number,title,body,url,state,stateReason,assignees,labels,updatedAt,closedByPullRequestsReferences";
+
+/// The repository's issues for Tasks mode (X44): the 100 most recently
+/// updated, open and closed, so recently closed ones fill the Done column.
+pub async fn gh_tasks(repo: &Path, mine: bool) -> Result<Vec<moonlet_proto::types::GhTask>> {
+    let mut args = vec![
+        "issue", "list", "--state", "all", "--limit", "100", "--search", "sort:updated-desc",
+    ];
+    if mine {
+        args.extend(["--assignee", "@me"]);
+    }
+    args.extend(["--json", GH_TASK_FIELDS]);
+    parse_gh_tasks(&gh(repo, &args).await?)
+}
+
+/// `gh issue list --json <GH_TASK_FIELDS>` as tasks.
+fn parse_gh_tasks(raw: &[u8]) -> Result<Vec<moonlet_proto::types::GhTask>> {
+    let list: Vec<serde_json::Value> = serde_json::from_slice(raw)?;
+    let names = |v: &serde_json::Value, field: &str| -> Vec<String> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x[field].as_str().map(String::from))
+            .collect()
+    };
+    Ok(list
+        .into_iter()
+        .map(|x| {
+            let url = x["url"].as_str().unwrap_or("").to_string();
+            // https://github.com/<owner>/<repo>/issues/<n>
+            let repo = match url.split('/').collect::<Vec<_>>()[..] {
+                [_, _, _, owner, name, ..] => format!("{owner}/{name}"),
+                _ => String::new(),
+            };
+            let closing_prs = x["closedByPullRequestsReferences"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|pr| {
+                    let r = &pr["repository"];
+                    format!("{}/{}", r["owner"]["login"].as_str().unwrap_or(""), r["name"].as_str().unwrap_or(""))
+                        == repo
+                })
+                .filter_map(|pr| pr["number"].as_u64())
+                .collect();
+            moonlet_proto::types::GhTask {
+                number: x["number"].as_u64().unwrap_or(0),
+                title: x["title"].as_str().unwrap_or("").into(),
+                body: x["body"].as_str().unwrap_or("").chars().take(4000).collect(),
+                closed: x["state"].as_str().is_some_and(|s| s.eq_ignore_ascii_case("closed")),
+                state_reason: x["stateReason"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_ascii_lowercase),
+                assignees: names(&x["assignees"], "login"),
+                labels: names(&x["labels"], "name"),
+                updated_ms: x["updatedAt"].as_str().and_then(utc_ms).unwrap_or(0),
+                closing_prs,
+                url,
+                repo,
+            }
+        })
+        .collect())
+}
+
 /// One `statusCheckRollup` entry as a check run. GitHub Actions report a
 /// `CheckRun` (`status` + `conclusion`); bots like CodeRabbit post a commit
 /// status (`StatusContext`) with only a `state`, so a finished state maps to
@@ -1586,6 +1652,39 @@ pub(crate) mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn github_issues_as_tasks() {
+        use moonlet_proto::types::GhTask;
+        // `gh issue list --state all --json <GH_TASK_FIELDS>` on cli/cli,
+        // 2026-10-14; people, bodies and a spam title replaced.
+        let raw = include_bytes!("../tests/fixtures/gh-issue-list.json");
+        let tasks = parse_gh_tasks(raw).unwrap();
+        assert_eq!(tasks.len(), 4);
+        assert_eq!(
+            tasks[0],
+            GhTask {
+                repo: "cli/cli".into(),
+                number: 13876,
+                title: "`gh skill install` can't find skills when there's no `skills/` directory but the `SKILL.md` files are nested".into(),
+                body: tasks[0].body.clone(),
+                url: "https://github.com/cli/cli/issues/13876".into(),
+                closed: false,
+                state_reason: None,
+                assignees: vec!["sam-rivera".into()],
+                labels: vec!["bug".into(), "priority-3".into(), "stale".into(), "gh-skill".into()],
+                updated_ms: 1_789_528_295_000,
+                closing_prs: vec![13894],
+            }
+        );
+        assert!(tasks[0].body.starts_with("###"));
+        assert_eq!((tasks[1].closed, tasks[1].assignees.len()), (false, 0));
+        assert_eq!(
+            (tasks[2].closed, tasks[2].state_reason.as_deref(), tasks[2].closing_prs.clone()),
+            (true, Some("completed"), vec![14516])
+        );
+        assert_eq!((tasks[3].closed, tasks[3].state_reason.as_deref()), (true, Some("not_planned")));
     }
 
     #[test]
