@@ -102,3 +102,12 @@ export function scheduleUpdateChecks(check: () => void, enabled: () => boolean) 
   setTimeout(auto, 10_000);
   setInterval(auto, 6 * 3_600_000);
 }
+
+/** What a dev or e2e build says when asked to check: only release builds
+ * register the updater plugin (X35). */
+export const DEV_BUILD_NOTE = "Development builds don't update themselves";
+
+/** A failed check's message for the user. */
+export function checkError(raw: string): string {
+  return /plugin updater not found/i.test(raw) ? DEV_BUILD_NOTE : raw;
+}

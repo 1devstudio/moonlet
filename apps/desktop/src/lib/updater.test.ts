@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { afterCheck, afterDownloadEvent, scheduleUpdateChecks, updateButton, updateStatus } from "./updater";
+import { afterCheck, afterDownloadEvent, checkError, scheduleUpdateChecks, updateButton, updateStatus } from "./updater";
 
 const AUTO = { manual: false, running: "0.1.14" };
 const available = { text: "moonlet 0.1.15 is available", kind: "info", install: true } as const;
@@ -152,5 +152,17 @@ describe("scheduleUpdateChecks", () => {
     on = true;
     vi.advanceTimersByTime(6 * 60 * 60 * 1000);
     expect(check).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("why a check failed (X35, X43)", () => {
+  it("says a development build doesn't update itself, instead of the plugin's error", () => {
+    expect(checkError("plugin updater not found")).toBe("Development builds don't update themselves");
+  });
+
+  it("keeps any other error as it is", () => {
+    expect(checkError("error sending request for url (https://github.com/1devstudio/moonlet/releases/latest/download/latest.json)")).toBe(
+      "error sending request for url (https://github.com/1devstudio/moonlet/releases/latest/download/latest.json)",
+    );
   });
 });
