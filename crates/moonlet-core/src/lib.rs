@@ -17,6 +17,7 @@ pub mod project_config;
 pub mod pty;
 pub mod session;
 pub mod shell;
+pub mod ssh;
 pub mod term;
 pub mod terminal;
 pub mod terminal_read;

@@ -1,11 +1,12 @@
 # moonlet wire protocol
 
-`moonletd` speaks one protocol to every client: the desktop app, the `moonlet` CLI, and remote connections tunnelled through `ssh host moonletd proxy`. The Rust source of truth is `crates/moonlet-proto`.
+`moonletd` speaks one protocol to every client: the desktop app, the `moonlet` CLI, remote connections tunnelled through `ssh host moonletd proxy`, and the phone app (X39). The Rust source of truth is `crates/moonlet-proto`.
 
 ## Transport
 
 - **Local:** Unix socket at `~/.moonlet/run/moonletd.sock`. The directory is `0700` and the socket is `0600`. The daemon also checks that the peer's uid matches its own.
 - **Remote:** `ssh <host> ~/.moonlet/bin/moonletd proxy` bridges stdio to the remote daemon's socket and starts that daemon if it is not running. The daemon outlives the SSH connection.
+- **Phone (X39):** TCP port 47428 on the Mac's Tailscale addresses only, while phone access is on. The first frame must be `auth`; see Messages.
 
 ## Framing
 
@@ -28,6 +29,7 @@ Every JSON message is an object with a `t` tag:
 - `hello` `{protocol, client}` is sent by the client first. The daemon answers `welcome` `{protocol, daemon_version, host, pid}`, or closes the connection if `protocol` differs from its own.
 - `request` `{id, method, params}` gets exactly one `response` `{id, result | error}`. `error` is `{code, message}`.
 - `event` `{name, data}` is a daemon broadcast to every connected client.
+- `auth` `{token?, pair?, device?, route?}` comes first on a phone connection, before `hello` (X39). The daemon answers `authed` `{device_id, token?}` (`token` only after a pairing) or one `response` with `id` 0 and error `unauthorized`, then closes. With `route`, everything after `authed` comes from `ssh <route> moonletd proxy`.
 
 ## Attach ordering
 
@@ -47,6 +49,7 @@ Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`;
 - `git.*` and `gh.*`: status, diffs, staging, commit, log, PRs, issues.
 - `fs.*`: list, files, read, write, watch.
 - `shell.history`: the login shell's history for input suggestions.
+- `mobile.*`: status, set_enabled, pair_start, pair_cancel, revoke, hosts for phone access (X39). Only the desktop app may call them, except `mobile.hosts`, which phones use. Events: `mobile.changed`, `mobile.paired`, `mobile.pair_ended`.
 
 ## Versioning
 

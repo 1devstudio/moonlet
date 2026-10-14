@@ -34,6 +34,26 @@ pub enum Message {
         #[serde(default)]
         data: Value,
     },
+    /// First message on a phone connection, before `Hello` (X39): a device
+    /// `token`, or a `pair` code with the `device` name to pair. `route`
+    /// asks the daemon to connect through to one of its SSH hosts.
+    Auth {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pair: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        route: Option<String>,
+    },
+    /// The daemon's reply to a good `Auth`. `token` is set only when a
+    /// pairing just created the device: the phone keeps it.
+    Authed {
+        device_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, thiserror::Error)]
