@@ -48,14 +48,13 @@ export function agentMs(a: Subagent, now: number): number {
   return a.duration_ms ?? (a.ended_at ?? now) - a.started_at;
 }
 
-/** "Wants to run …" for an agent's ask. */
+/** "Wants to run …" for an agent's ask. A command shows in full, not
+ *  only its first line as in `summary`: Allow sits right next to it. */
 export function askLine(ask: PermissionAsk): string {
-  const verb = ["Bash", "shell", "command"].includes(ask.tool)
-    ? "run"
-    : ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(ask.tool)
-      ? "edit"
-      : `use ${ask.tool} on`;
-  return `Wants to ${verb} ${ask.summary}`.trim();
+  const shell = ["Bash", "shell", "command"].includes(ask.tool);
+  const command = (ask.input as { command?: unknown } | null)?.command;
+  const verb = shell ? "run" : ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(ask.tool) ? "edit" : `use ${ask.tool} on`;
+  return `Wants to ${verb} ${shell && typeof command === "string" ? command : ask.summary}`.trim();
 }
 
 function rowLine(state: AgentRowState, a: Subagent, ask: PermissionAsk | null): AgentRow["line"] {
@@ -100,8 +99,85 @@ export function spanClock(agents: Subagent[], now: number): string {
 /** The Agents tab shows a dot while an agent needs the user elsewhere. */
 export const agentsTabDot = (tab: string, rows: AgentRow[]) => tab !== "agents" && rows.some((r) => r.state === "needs");
 
-/** What Retry sends the main agent for a failed agent. */
-export const retryMessage = (a: Subagent) => `Run the "${a.description}" agent again.`;
+/** What Retry sends the main agent for failed agents. */
+export function retryMessage(agents: Subagent[]): string {
+  const names = agents.map((a) => `"${a.description}"`);
+  return names.length === 1 ? `Run the ${names[0]} agent again.` : `Run these agents again: ${names.join(", ")}.`;
+}
+
+/** The strip above the chat input (X42). */
+export interface StripView {
+  /** One per agent: done first, then running, needing the user, failed and stopped. */
+  dots: AgentRowState[];
+  /** "5 agents", or "5 agents finished". */
+  title: string;
+  /** "2 running · 2 done", or the diff once finished. */
+  detail: string;
+  alert: { tone: "blocked" | "error"; text: string } | null;
+  clock: string;
+  /** Review changes once all finished; Retry once one failed and none runs. */
+  button: "review" | "retry" | null;
+  dismissible: boolean;
+}
+
+/** The agents launched since the user's last message. */
+export function batchOf(st: ChatState): Subagent[] {
+  const since = st.items.reduce((t, i) => (i.kind === "user" ? Math.max(t, i.ts) : t), 0);
+  return (st.subagents ?? []).filter((a) => a.started_at >= since);
+}
+
+const DOTS: AgentRowState[] = ["done", "running", "needs", "failed", "stopped"];
+
+/** The agents launched since the user's last message, unless × hid them
+ *  (`dismissedAt`, the latest start then); `null` hides the strip. */
+export function stripView(st: ChatState, now: number, dismissedAt: number): StripView | null {
+  const batch = batchOf(st);
+  if (!batch.length || batch.every((a) => a.started_at <= dismissedAt)) return null;
+  const rows = agentRows([{ id: 0, st: { ...st, subagents: batch } }], now);
+  const n = (state: AgentRowState) => rows.filter((r) => r.state === state).length;
+  const ended = !rows.some((r) => isActive(r.state)) && !n("failed");
+  // Finished means every agent did its work; stopped ones did not.
+  const finished = ended && !n("stopped");
+  const counts = (["running", "done", "stopped"] as const)
+    .filter((state) => n(state))
+    .map((state) => `${n(state)} ${state}`)
+    .join(" · ");
+  const alert = n("needs") ? { tone: "blocked" as const, text: `${n("needs")} needs you` } : n("failed") ? { tone: "error" as const, text: `${n("failed")} failed` } : null;
+  return {
+    dots: rows.map((r) => r.state).sort((x, y) => DOTS.indexOf(x) - DOTS.indexOf(y)),
+    title: `${agentCount(batch.length)}${finished ? " finished" : ""}`,
+    detail: finished ? diffLine(batchDiff(batch)) : counts,
+    alert,
+    clock: spanClock(batch, now),
+    button: ended ? "review" : !rows.some((r) => isActive(r.state)) && n("failed") ? "retry" : null,
+    dismissible: ended,
+  };
+}
+
+/** The strip's × hides it until an agent starts after this. */
+export const stripDismissAt = (st: ChatState) => Math.max(0, ...batchOf(st).map((a) => a.started_at));
+
+/** What the strip's Retry sends: the batch's failed agents, if any. */
+export function stripRetry(st: ChatState): string | null {
+  const failed = batchOf(st).filter((a) => a.status === "failed");
+  return failed.length ? retryMessage(failed) : null;
+}
+
+/** Lines the agents' edits added and removed, and the files they edited.
+ *  Only edits that went through count. */
+export function batchDiff(agents: Subagent[]): { additions: number; deletions: number; files: number } {
+  const edits = agents.flatMap((a) => a.tools).filter((t) => t.status === "ok" && t.added != null);
+  return {
+    additions: edits.reduce((n, t) => n + (t.added ?? 0), 0),
+    deletions: edits.reduce((n, t) => n + (t.removed ?? 0), 0),
+    files: new Set(edits.map((t) => t.summary)).size,
+  };
+}
+
+/** "+318 −41 in 9 files", or nothing without edits. */
+export function diffLine(d: { additions: number; deletions: number; files: number }): string {
+  return d.additions || d.deletions ? `+${d.additions} −${d.deletions} in ${d.files} ${d.files === 1 ? "file" : "files"}` : "";
+}
 
 /** "Haiku 5.5" for `claude-haiku-5-5`; other ids as they are. */
 export function modelLabel(id: string): string {

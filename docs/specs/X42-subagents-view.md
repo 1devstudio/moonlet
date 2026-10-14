@@ -18,7 +18,7 @@ Design: `Moonlet Subagents View.html` (Claude Design bundle with five boards: th
 3. The Agents tab lists every agent with its status, elapsed time and what it is doing now ("Running pnpm test"). The header shows the count, the elapsed time and the tokens used, plus **Stop all**.
 4. One agent asks to run a command. Its row and the strip turn yellow ("1 needs you"), and the row shows "Wants to run `pnpm add …`" with **Allow** and **Deny**. The conversation's permission card names the agent that asks.
 5. Clicking a row opens the agent's detail: its brief (the prompt Claude gave it), each tool call with `+a −r` for edits, the pending permission card, and **Stop**.
-6. An agent finishes. Its row turns green, and the conversation shows "Explore the host protocol · finished" with its report. When all agents are done, the strip reads "3 agents finished · +318 −41 in 9 files" with **Review changes**, which opens the Changes tab, and × hides the strip.
+6. An agent finishes. Its row turns green, and the conversation shows "Explore the host protocol · finished" with its report. When all agents are done, the strip reads "3 agents finished · +318 −41 in 9 files" (the lines and files the agents' own edits changed) with **Review changes**, which opens the Changes tab, and × hides the strip.
 7. An agent fails. Its row shows the error in red with **Retry**, and the strip reads "1 failed" with **Retry**. Retry asks Claude, in the chat, to run that agent again.
 8. While any agent runs, the session row in the sidebar shows "N agents".
 
@@ -44,13 +44,14 @@ Agents tab (PR 2):
 - [x] Each row shows the status dot, the description and the elapsed time (`m:ss`). Its second line depends on the state: the current activity while running; "Wants to run …" with Allow and Deny when it needs the user; the error in red with Retry when it failed; "Stopped" when stopped; nothing when done. (`agentRows`, `agents.e2e.ts`)
 - [x] The header reads "N agents · m:ss · 57k tokens", and **Stop all** stops every agent that runs or waits for the user. (`agentsHeader`, `stoppable`)
 - [x] The detail shows the agent's state, model, elapsed time and tokens; its brief, collapsed to one line; its tool calls with `+a −r` for edits; the pending ask as a full permission card; its report once done, or its error with Retry once failed; and **Stop** while it runs. (`agents.e2e.ts`)
-- [x] Retry sends the chat the message `Run the "<description>" agent again.` (`retryMessage`)
+- [x] Retry sends the chat the message `Run the "<description>" agent again.`; for several failed agents, `Run these agents again: "<a>", "<b>".` (`retryMessage`)
+- [x] An ask's row shows a command in full, wrapped, since Allow sits next to it. (`askLine`)
 
 Strip and sidebar (PR 3):
 
-- [ ] The strip shows the agents launched since the user's last message. It is hidden when there are none, and after × until a new agent starts. (`stripView`)
-- [ ] The strip text for each state (working, one needs you, all finished, one failed) is as listed under UI. (`stripView`)
-- [ ] The session row shows "N agents" while N of its chats' subagents run; "needs input" still wins. (`sessionBadge`)
+- [x] The strip shows the agents launched since the user's last message. It is hidden when there are none, and after × until a new agent starts. (`stripView`, `stripDismissAt`)
+- [x] The strip text for each state (working, one needs you, all finished, one failed, ended with some stopped) is as listed under UI. "Finished" means every agent is done; its diff counts the agents' own edits that went through, not the session's. Retry asks for the batch's failed agents. (`stripView`, `stripRetry`, `agents.e2e.ts`)
+- [x] The session row shows "N agents" while N of its chats' subagents run; "needs input" still wins. (`sessionBadge`)
 
 Conversation cards (PR 4):
 
@@ -99,6 +100,7 @@ Strip, above the chat input:
 | working | `●●●●● 5 agents · 2 running · 2 done` | `1:48  Agents ›` |
 | one needs you | `… · 1 running · 2 done · 1 needs you` (yellow) | `2:14  Agents ›` |
 | all finished | `5 agents finished · +318 −41 in 9 files` | `3:40  Review changes  ×` |
+| ended, some stopped | `5 agents · 4 done · 1 stopped` | `3:40  Review changes  ×` |
 | one failed | `5 agents · 4 done · 1 failed` (red) | `2:40  Retry  Agents ›` |
 
 Dot colours: running accent, needs you `blocked`, done `done`, failed `error`, stopped muted.
@@ -143,7 +145,7 @@ Captured from claude 2.1.296 (haiku, `--permission-prompt-tool stdio`, hooks off
 
 - Unit (Rust, `crates/moonlet-core/src/chat/claude.rs`): replay the captured fixtures through the adapter, as listed under Behaviour.
 - Unit (Rust, `crates/moonlet-core/src/chat/runtime.rs`): `chat.stop_agent` and process exit with a fake `claude`.
-- Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `agentsHeader`, `agentsTabDot`, `retryMessage`, `stripView`, `agentEvents`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
+- Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `agentsHeader`, `agentsTabDot`, `retryMessage`, `stripView`, `stripDismissAt`, `stripRetry`, `agentEvents`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
 - E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents; the tab lists them, one asks and is allowed from its row, the detail shows its tool calls, and Stop sends `stop_task`.
 
 ## Open questions
