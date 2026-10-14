@@ -28,6 +28,8 @@ export interface BoardWorktree {
   path: string;
   branch: string | null;
   originRepo: string | null;
+  /** The project it belongs to. */
+  project?: string;
 }
 
 export interface BoardInput {

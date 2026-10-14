@@ -7,11 +7,12 @@ import { focusThrottle } from "../../lib/prPoll";
 import { selectSession, shownWorkspace, useStore } from "../../lib/store";
 import { type Column, taskStart } from "../../lib/tasks";
 import { type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { boardInput, isTasksMode, leaveTasksMode, refreshTasks, toggleTasksMode, useTasks } from "../../lib/tasksStore";
+import { boardInput, fixDrift, isTasksMode, leaveTasksMode, putOffDrift, refreshTasks, toggleTasksMode, useTasks } from "../../lib/tasksStore";
+import { startAction, withoutPutOff } from "../../lib/keepInStep";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
-import { cx, Empty, IconButton, StateGlyph } from "../ui";
+import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
 
 const COLUMNS: { id: Exclude<Column, "hidden" | "done">; label: string }[] = [
   { id: "todo", label: "Todo" },
@@ -64,13 +65,14 @@ function useTaskSync() {
 function useWorkspaceTasks() {
   const ws = useStore((s) => shownWorkspace(s));
   const data = useTasks((t) => (ws ? t.data[wsKey(ws.host, ws.id)] : undefined));
+  const notNow = useTasks((t) => t.notNow);
   // What the board reads of the main store; other changes (terminal output) don't rebuild it.
   const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads]));
   return useMemo(() => {
     if (!ws || !data) return { ws, data, board: null, unlinked: [] };
     const input = boardInput(useStore.getState(), ws.host, ws.id, data);
-    return { ws, data, board: tasksBoard(input), unlinked: sessionsWithoutTask(input.sessions, data.tasks) };
-  }, [ws, data, ...deps]);
+    return { ws, data, board: withoutPutOff(tasksBoard(input), notNow), unlinked: sessionsWithoutTask(input.sessions, data.tasks) };
+  }, [ws, data, notNow, ...deps]);
 }
 
 /** The sidebar body in Tasks mode: views with counts, then the sync line. */
@@ -123,7 +125,8 @@ function openSession(host: string, sessionId: string) {
 /** Opens the new-session composer for a task, or for one of its worktrees without a session (X46). */
 function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
-  const start = taskStart(card.task, data?.repos ?? {});
+  // The "session starts" rule at its default, Automatically, until X44's connection page sets it.
+  const start = { ...taskStart(card.task, data?.repos ?? {}), assign: startAction(card.task, "auto") };
   useStore.setState({
     dialog: {
       kind: "new-session",
@@ -172,7 +175,9 @@ function TaskCard({ host, workspaceId, card, selected }: { host: string; workspa
       {card.drift && (
         <div className="mt-2 flex items-center gap-2 rounded-md bg-accent/[0.08] px-2 py-1 ui-text-12 text-accent">
           <span className="min-w-0 flex-1 truncate">{card.drift.text}</span>
-          <span className="font-medium">{card.drift.fix}</span>
+          <button className="font-medium hover:underline" onClick={() => void fixDrift(host, workspaceId, card)}>
+            {card.drift.fix}
+          </button>
         </div>
       )}
     </article>
@@ -199,7 +204,19 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
           {card.task.labels.length > 0 && <span className="text-faint">· {card.task.labels.join(", ")}</span>}
         </div>
         {card.task.description && <p className="selectable mt-3 line-clamp-4 whitespace-pre-wrap ui-text-12.5 text-muted">{card.task.description}</p>}
-        {card.drift && <div className="mt-3 rounded-md border border-accent/30 bg-accent/[0.06] px-3 py-2 ui-text-12.5 text-accent">{card.drift.text}</div>}
+        {card.drift && (
+          <div className="mt-3 rounded-md border border-accent/30 bg-accent/[0.06] px-3 py-2 ui-text-12.5 text-accent">
+            {card.drift.text}
+            <div className="mt-2 flex gap-1.5">
+              <Button size="sm" variant="primary" onClick={() => void fixDrift(host, workspaceId, card)}>
+                {card.drift.fix}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => putOffDrift(card)}>
+                Not now
+              </Button>
+            </div>
+          </div>
+        )}
         <div className="mt-4 flex items-center ui-text-11.5 font-medium text-faint">
           Sessions {card.rows.length}
           <button className="ml-auto text-muted hover:text-fg" onClick={() => startSession(host, workspaceId, card)}>

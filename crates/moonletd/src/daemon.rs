@@ -561,6 +561,11 @@ impl Daemon {
                     .map_err(internal)?;
                 ok(names)
             }
+            m::GH_TASK_UPDATE => {
+                let r: m::GhTaskUpdate = params(p)?;
+                git::gh_task_update(&path(&r.path), r.number, r.assign_me, r.close).await.map_err(internal)?;
+                ok(true)
+            }
             m::GH_TASKS => {
                 let r: m::GhTasks = params(p)?;
                 ok(git::gh_tasks(&path(&r.path), r.mine).await.map_err(internal)?)
@@ -591,6 +596,11 @@ impl Daemon {
             m::PROJECT_SET_CONFIG => {
                 let r: m::ProjectSetConfig = params(p)?;
                 ok(w.set_project_config(&r.id, &r.version, &r.config).await.map_err(internal)?)
+            }
+            m::PROJECT_WORKTREE_REMOVE => {
+                let r: m::ProjectWorktree = params(p)?;
+                w.remove_worktree(&r.id, &r.path).await.map_err(internal)?;
+                ok(true)
             }
             m::PROJECT_WORKTREES => {
                 let r: m::IdRef = params(p)?;

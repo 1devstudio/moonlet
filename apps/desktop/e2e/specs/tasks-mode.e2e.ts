@@ -2,7 +2,7 @@
 // issues with the sessions working on them, and a session opens from its card.
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
@@ -16,6 +16,8 @@ interface Session {
 
 const w = world();
 const fakeGh = join(w.root, "bin", "gh");
+const ghLog = join(w.root, "gh.log");
+const asked = () => (existsSync(ghLog) ? readFileSync(ghLog, "utf8") : "");
 const git = (...args: string[]) => execFileSync("git", args, { cwd: w.repo, env: w.env, stdio: "pipe" });
 // `gh issue list --json …` as gh prints it, trimmed to the fields moonlet reads.
 const ISSUES = JSON.stringify([
@@ -53,8 +55,11 @@ let linkedId = "";
 
 describe("Tasks mode", () => {
   before(() => {
-    // gh answers the issue list; anything else fails, as with no gh at all.
-    writeFileSync(fakeGh, `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nexit 1\n`);
+    // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
+    writeFileSync(
+      fakeGh,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nexit 1\n`,
+    );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
     git("remote", "add", "origin", "https://github.com/acme/storefront.git");
@@ -100,6 +105,8 @@ describe("Tasks mode", () => {
     await expect($(sel.text("For acme/storefront#15"))).toBeDisplayed();
     await expect($(sel.text("15-gift-cards-at-checkout"))).toBeDisplayed({ wait: 10_000 });
     await expect($('//textarea[@placeholder="What do you want to work on?"]')).toHaveValue("acme/storefront#15 · Gift cards at checkout");
+    // Keep in step: "session starts" is Automatically, so the issue is assigned (X46).
+    await expect($('//label[normalize-space()="Assign acme/storefront#15 to me"]/input')).toBeSelected();
     await $(sel.button("Create")).click();
 
     await expect($(sel.sessionRow("Gift cards at checkout"))).toBeDisplayed({ wait: 30_000 });
@@ -107,5 +114,13 @@ describe("Tasks mode", () => {
     const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Gift cards at checkout");
     expect(created?.branch).toBe("15-gift-cards-at-checkout");
     expect(created?.task).toEqual({ connection: "github:github.com", key: "acme/storefront#15", url: "https://github.com/acme/storefront/issues/15" });
+    await browser.waitUntil(() => asked().includes("issue edit 15 --add-assignee @me"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+  });
+
+  it("puts Closes #N in the new PR of a session working on a GitHub issue", async () => {
+    await $(sel.sessionRow("Gift cards at checkout")).click();
+    await browser.keys(["Shift", "Meta", "p"]);
+    await expect($('//*[@role="dialog"]//textarea')).toHaveValue("Closes #15", { wait: 10_000 });
+    await browser.keys(["Escape"]);
   });
 });
