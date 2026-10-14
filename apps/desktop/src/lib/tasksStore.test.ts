@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -12,7 +12,8 @@ vi.mock("./daemon", () => ({
   }),
   sendInput: vi.fn(),
   hostsApi: {
-    trackersConfig: () => Promise.resolve({ sync: { interval: 300, notify: true } }),
+    trackersConfig: () => (configFails.length ? Promise.reject(configFails.shift()) : Promise.resolve({ sync: { interval: 300, notify: true } })),
+    trackersSave: (c: object) => new Promise<void>((r) => setTimeout(() => (saved.push(c), r()), 5)),
     trackerUpdate: (req: object) => (failNext.length ? Promise.reject(failNext.shift()) : (sent.push(req), Promise.resolve())),
     trackerTasks: (id: string, mine: boolean) => {
       const answer = answers[`tracker_tasks ${id}${mine ? "" : " all"}`] ?? answers[`tracker_tasks ${id}`];
@@ -24,6 +25,8 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCo
 const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
 const sent = vi.hoisted(() => [] as object[]);
 const failNext = vi.hoisted(() => [] as object[]);
+const configFails = vi.hoisted(() => [] as object[]);
+const saved = vi.hoisted(() => [] as object[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(true),
   requestPermission: () => Promise.resolve("granted"),
@@ -312,6 +315,28 @@ describe("loadTrackersConfig", () => {
     const c = trackersConfig(useTasks.getState());
     expect([c.sync.interval, c.github.rules.session_starts, c.github.max_length, c.connections]).toEqual([300, "auto", 48, []]);
     useTasks.setState({ config: null });
+  });
+});
+
+describe("saveTrackersConfig", () => {
+  it("keeps both of two quick changes", async () => {
+    saved.length = 0;
+    await loadTrackersConfig(true);
+    await Promise.all([
+      saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, notify: false } })),
+      saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, interval: 30 } })),
+    ]);
+    expect((saved.at(-1) as { sync: object }).sync).toEqual({ interval: 30, notify: false });
+    useTasks.setState({ config: null });
+  });
+
+  it("does not write over a file it could not read", async () => {
+    saved.length = 0;
+    configFails.push(new Error("TOML parse error at line 3"));
+    await loadTrackersConfig(true);
+    await expect(saveTrackersConfig((c) => c)).rejects.toThrow("~/.moonlet/trackers.toml could not be read (TOML parse error at line 3), so it is left as it is");
+    expect(saved).toEqual([]);
+    useTasks.setState({ config: null, configError: null });
   });
 });
 
