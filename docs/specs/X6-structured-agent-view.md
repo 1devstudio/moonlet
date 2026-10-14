@@ -83,7 +83,14 @@ Claude asks the user multiple-choice questions through the `AskUserQuestion` too
 ## Persistence and restore
 
 - The chat state is persisted to `~/.moonlet/chats/<terminal id>.json` (debounced), together with the agent session or thread id.
-- After a daemon restart, a chat terminal is re-created and re-spawned with resume, and its items are restored from the file. A turn in flight at the time is reported as interrupted.
+- After a daemon restart, a chat terminal is re-created and re-spawned with resume, and its items are restored from the file. A turn in flight at the time is reported as interrupted, unless the main agent was waiting on a question or a plan.
+- A question or plan the main agent was waiting on survives a daemon restart (an app update restarts the daemon). The chat stays blocked and the card shows again. Its agent process is gone, so the answer reaches the resumed agent as its next message:
+  - Submitted answers are sent as `Answers to your questions:` followed by each question and its answer, in the order the agent asked them.
+  - An approved plan restarts the agent in the chosen mode (manual for "ask before edits") with `I approve your plan. Go ahead with it.`
+  - "Keep planning" sends the typed feedback, and the mode stays Plan.
+  - Skip sends its message ("The user declined to answer the questions.").
+  - Sending a new message instead drops the card. So does Stop, which adds an "Interrupted" note.
+  - Tool permissions and subagents' asks are not kept: the agent asks again when it continues.
 - A live daemon upgrade hands chats over by restarting them with resume. The transcript is kept, but a running turn is interrupted. Pipe handoff is a possible later improvement.
 - Restored chats keep their terminal id. The agent process is only started by the next message, so a restart costs nothing until the user continues.
 - Permission cards for edits include the diff. Paths inside the session worktree are shown relative to it.
@@ -107,6 +114,9 @@ Claude asks the user multiple-choice questions through the `AskUserQuestion` too
 - [ ] **Codex live** (after `codex login`): the same flow.
 - [x] Agent state, sidebar dots and notifications work for chat terminals (verified live). The approval inbox uses the same agent state but was not checked separately.
 - [x] A daemon restart restores the conversation and resumes the agent (verified through two live upgrades).
+- [x] A question or plan waiting at a daemon restart is still waiting afterwards, and answering it resumes the agent with the answer as a message (`a_question_waits_through_a_daemon_restart_and_its_answer_resumes_claude`, `skipping_a_question_after_a_daemon_restart_tells_claude`, `a_plan_approved_after_a_daemon_restart_resumes_claude_in_the_chosen_mode`, `a_plan_approved_to_ask_before_edits_after_a_daemon_restart_resumes_claude_in_manual`, `approving_a_plan_proposed_again_after_a_daemon_restart_closes_the_new_call`, `plan_feedback_after_a_daemon_restart_reaches_claude_still_in_plan_mode`).
+- [x] A new message or Stop instead of an answer drops a card kept through a daemon restart (`a_new_message_instead_of_an_answer_after_a_daemon_restart_drops_the_question`, `stop_ends_a_question_kept_through_a_daemon_restart`).
+- [x] Tool permissions and subagents' asks waiting at a daemon restart end with "Interrupted by a daemon restart" (`tool_permissions_and_subagent_asks_end_at_a_daemon_restart`).
 - [x] Adapter unit tests replay recorded/synthetic protocol streams for both agents.
 - [x] **Questions, protocol** (2026-10-04, Haiku, $0.04): answering `AskUserQuestion` with `updatedInput.answers` gives the tool result `Your questions have been answered: "…"="Blue"` and Claude continues with the answer. The adapter round trip is unit-tested.
 - [x] Unsent text in the editor survives switching to another session and back (`chat.test.ts`, `agent-view.e2e.ts`).
