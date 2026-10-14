@@ -93,6 +93,8 @@ pub const SHELL_HISTORY: &str = "shell.history";
 pub const SHELL_COMMANDS: &str = "shell.commands";
 pub const CHAT_STATE: &str = "chat.state";
 pub const CHAT_SEND: &str = "chat.send";
+/// Every chat's state without its items: `[{ id, state }]` (X40).
+pub const CHAT_SUMMARIES: &str = "chat.summaries";
 pub const CHAT_PERMISSION: &str = "chat.permission";
 pub const CHAT_INTERRUPT: &str = "chat.interrupt";
 pub const CHAT_SETTINGS: &str = "chat.settings";
@@ -333,6 +335,9 @@ pub struct ReadRequest {
     pub exit: Option<i32>,
     pub lines: usize,
     pub text: String,
+    /// When the agent asked (ms), for "waiting 2m" (X40).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
