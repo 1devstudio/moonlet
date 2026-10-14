@@ -202,8 +202,15 @@ export function launchedRows(
   });
 }
 
-/** The conversation card's line for a subagent's ask: who asks for what. */
-export const agentAskTitle = (ask: PermissionAsk, description: string) => `${description} ${askLine(ask).replace(/^Wants/, "wants")}`;
+/** The subagent that asks, for the permission card's header; null for the
+ *  main agent. The name is the model's, so it stays on one line, apart from
+ *  the request it heads. */
+export function askerName(ask: PermissionAsk, subagents: Subagent[]): string | null {
+  const a = ask.agent ? subagents.find((x) => x.id === ask.agent) : undefined;
+  if (!a) return null;
+  // Line breaks and other control characters (C0, DEL, C1) become spaces.
+  return a.description.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
+}
 
 export type AgentNote = { kind: "finished"; agent: Subagent } | { kind: "all"; count: number; clock: string };
 

@@ -16,7 +16,7 @@ Design: `Moonlet Subagents View.html` (Claude Design bundle with five boards: th
 1. The user asks Claude for work that Claude splits across subagents. A "Launched 3 agents" card appears in the conversation, with one row per agent, and **Show in panel** opens the Agents tab.
 2. The strip above the chat input reads "3 agents · 2 running · 1 done" with one coloured dot per agent and the time since the first one started. **Agents ›** opens the tab.
 3. The Agents tab lists every agent with its status, elapsed time and what it is doing now ("Running pnpm test"). The header shows the count, the elapsed time and the tokens used, plus **Stop all**.
-4. One agent asks to run a command. Its row and the strip turn yellow ("1 needs you"), and the row shows "Wants to run `pnpm add …`" with **Allow** and **Deny**. The conversation's permission card names the agent that asks.
+4. One agent asks to run a command. Its row and the strip turn yellow ("1 needs you"), and the row shows "Wants to run `pnpm add …`" with **Allow** and **Deny**. The conversation's permission card is headed by the name of the agent that asks.
 5. Clicking a row opens the agent's detail: its brief (the prompt Claude gave it), each tool call with `+a −r` for edits, the pending permission card, and **Stop**.
 6. An agent finishes. Its row turns green, and the conversation shows "Explore the host protocol · finished" with its report. When all agents are done, the strip reads "3 agents finished · +318 −41 in 9 files" (the lines and files the agents' own edits changed) with **Review changes**, which opens the Changes tab, and × hides the strip.
 7. An agent fails. Its row shows the error in red with **Retry**, and the strip reads "1 failed" with **Retry**. Retry asks Claude, in the chat, to run that agent again.
@@ -56,7 +56,7 @@ Strip and sidebar (PR 3):
 Conversation cards (PR 4):
 
 - [x] Consecutive `Agent` tool calls show as one "Launched N agents" card, with a row per agent (its state and time) and **Show in panel**. (`chatBlocks`, `launchedRows`, `agents.e2e.ts`)
-- [x] A permission card for a subagent's ask reads "<description> wants to run <command>", with the command in full. (`agentAskTitle`, `agents.e2e.ts`)
+- [x] A subagent's ask gets the same permission card as the main agent's (command, diff, Allow, Always allow, Deny), headed by the agent's name on a line of its own. The name is model-written, so line breaks and control characters in it become spaces. (`askerName`, `agents.e2e.ts`)
 - [x] A finished agent's report, or a failed agent's error, shows in the conversation after the last message from before it ended. Once every agent launched after the same user message has ended (two or more), "N agents finished in m:ss" follows, with the diff stat and **Review changes**. (`agentNotes`, `agents.e2e.ts`)
 
 ## UI
@@ -145,7 +145,7 @@ Captured from claude 2.1.296 (haiku, `--permission-prompt-tool stdio`, hooks off
 
 - Unit (Rust, `crates/moonlet-core/src/chat/claude.rs`): replay the captured fixtures through the adapter, as listed under Behaviour.
 - Unit (Rust, `crates/moonlet-core/src/chat/runtime.rs`): `chat.stop_agent` and process exit with a fake `claude`.
-- Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `askLine`, `agentsHeader`, `agentsTabDot`, `modelLabel`, `retryMessage`, `stripView`, `stripDismissAt`, `stripRetry`, `launchedRows`, `agentAskTitle`, `agentNotes`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
+- Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `askLine`, `agentsHeader`, `agentsTabDot`, `modelLabel`, `retryMessage`, `stripView`, `stripDismissAt`, `stripRetry`, `launchedRows`, `askerName`, `agentNotes`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
 - E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents. The tab, the strip, the session chip and the conversation cards show them. One asks and is allowed from its row. The detail shows the other's brief and tool calls, and Stop sends `stop_task`.
 
 ## Open questions
