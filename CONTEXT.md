@@ -20,3 +20,7 @@ These terms are used the same way in the UI, the code, the protocol and the docs
 | **Live copy** | A worker's copy of a session's files, kept in step with the central host both ways. | `LiveCopy` |
 | **Routed command** | A heavy command, such as a test run, that an agent on the central host runs and that is carried out on a worker's live copy, with its output and exit status coming back. | `RoutedCommand` |
 | **Project identity** | What makes two folders on different hosts the same project: the repository's origin and its first commit, never its path. | `ProjectIdentity` |
+| **Task** | An issue in a task tracker (a Linear or Jira issue, a ClickUp task, a GitHub issue), shown in Tasks mode with the sessions working on it. A session belongs to at most one task. Not the same as a session, which is the work on it. | `Task` |
+| **Tracker** | A connected issue tracker account: Linear, Jira Cloud, ClickUp or GitHub Issues. One tracker can have several connections. | `TrackerConnection` |
+| **Source** | One team, project, list or repository of a tracker connection that a workspace shows tasks from, with the repository its sessions start in. | `TaskSource` |
+| **Out of sync** | A task whose tracker state disagrees with its work, such as an issue still In Review when every session's PR is merged. Shown with a one-click fix. | `drift` |
