@@ -89,10 +89,10 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Changes and diff review
 
-- [ ] Changes shows **vs main** / **vs HEAD**, the file count and diff stat, and the files grouped by folder, each with a staging checkbox, its status letter, name and diff stat. "2 commits on this branch" opens the log.
-- [ ] The bottom has the commit message box and **Commit <n> staged** (disabled with nothing staged) and **Create PR** (X2).
-- [ ] Tapping a file opens the diff: file name, folder, diff stat, `1 / 6` with previous and next file, and the hunks with old and new line numbers. Each hunk has **Stage hunk** and a discard button (asks first). The bottom has **Discard file** (asks first) and **Stage file**.
-- [ ] Long-pressing a line opens "Comment to Claude on line <n>" with **Cancel** and **Send to Claude**, which sends the comment to the session's agent in D3's format. (`lib/diffComment.test.ts` for the line numbers of added, removed and context lines)
+- [x] Changes shows **vs main** / **vs HEAD**, the file count and diff stat, and the files grouped by folder, each with its status letter, name and diff stat, and a staging checkbox when it has uncommitted changes (against the base, a file can be changed only by the branch's commits). "Commits on this branch" opens the log. (`lib/diffView.test.ts`)
+- [x] The bottom has the commit message box and **Commit <n> staged** ("Nothing staged", disabled, with nothing staged) and **Create PR**, which opens the PR tab (X2). (`commitLabel` in `diffView.test.ts`)
+- [x] Tapping a file opens the diff: file name, folder, diff stat, `1 / 6` with previous and next file, and the hunks with old and new line numbers. In the diff against HEAD, each hunk has **Stage hunk** and a discard button (asks first), and the bottom has **Discard file** (asks first) and **Stage file** (or **Staged**). The diff against the base includes committed lines, so it offers **Stage or discard vs HEAD** instead, as the desktop does. (`canStage`, `editsDiff` in `diffView.test.ts`) (`diffRows` in `diffView.test.ts`)
+- [x] Long-pressing a line opens "Comment to Claude on line <n>" (the new line number, or the old one for a removed line) with **Cancel** and **Send to Claude**, which sends the comment to the session's agent in D3's format (`commentPrompt`) and opens Chat. (`diffRows` in `diffView.test.ts` for the line numbers of added, removed and context lines)
 
 ### PR and checks
 
