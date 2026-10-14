@@ -27,7 +27,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 ### Connections
 
 - [ ] Settings has a **Task trackers** page under App, after Notifications. Its nav entry shows a dot when a connection needs attention.
-- [ ] The page lists one row per connection: tracker mark, name, site, status dot and line, and actions. Connected rows show `Connected as <name> · <auth> · <n> teams · synced <age>` with **Sync now** and **Configure**. A failed row shows the error in red (for example `API token expired 2 days ago · Acme issues are stale`) with **Reconnect**. Trackers not connected show **Connect**.
+- [ ] The page lists one row per connection: tracker mark, name, site, status dot and line, and actions. Connected rows show `Connected as <name> · <auth> · <n> teams · synced <age>` with **Sync now** and **Configure**. A failed row shows the error in red (for example `API token rejected · Acme issues are stale`) with **Reconnect**. Trackers not connected show **Connect**.
 - [ ] **Add tracker** offers the four trackers. More than one connection of the same tracker is allowed (two Jira sites, two Linear organisations).
 - [ ] Disconnect asks first, deletes the token from the Keychain and removes the connection's sources from every workspace. Session links (X46) stay, so reconnecting restores them.
 
@@ -35,11 +35,13 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 - [ ] **Linear OAuth:** moonlet opens Linear's authorize URL with a PKCE `S256` challenge and a loopback redirect `http://127.0.0.1:<port>/callback` on a port chosen at run time. The callback's `state` must match; the code is exchanged with the verifier and no client secret. The access and refresh tokens go to the Keychain; refresh happens before expiry.
 - [ ] **Linear API key** is accepted instead of OAuth.
-- [ ] **Jira Cloud:** site, email and API token; requests use basic auth. The dialog may take an optional "Expires on" date; from 7 days before it, the connection shows `API token expires in <n> days`.
+- [ ] **Jira Cloud:** site, email and API token; requests use basic auth. Jira API tokens expire, and Jira's API does not say when, so moonlet does not warn ahead. When Jira answers 401 to a token that worked before, the connection shows `API token rejected · <workspace> issues are stale` and Reconnect explains: "Jira no longer accepts the API token for <site>. It may have expired or been revoked. Create a new token and paste it here." The Reconnect dialog keeps the site and email and only asks for the new token.
 - [ ] **ClickUp:** the personal token is sent as the raw `Authorization` header value.
 - [ ] **GitHub Issues:** connecting checks `gh auth status` on each project's host. A host without a login shows `gh is not signed in on <host>` with the `gh auth login` command to copy. Project boards need the `project` scope; without it the page shows `gh auth refresh -s project` to copy, and project sources are unavailable.
 - [ ] **Test again** re-runs the check and shows the account name and the number of visible sources, or the tracker's error message.
-- [ ] A request answered with 401 marks the connection as needing attention and stops polling it until the user reconnects.
+- [ ] A request answered with 401 marks the connection as needing attention and stops polling it until the user reconnects. The message names the tracker and what to do: Linear OAuth "Sign in to Linear again", an API key or token "<tracker> no longer accepts this token. Create a new one and paste it here."
+- [ ] The Jira and ClickUp connect dialogs say "The token is saved in the macOS Keychain." and, for Jira, "Tokens expire. moonlet tells you when Jira stops accepting it."
+
 
 ### Sources
 
