@@ -47,7 +47,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Face ID
 
-- [x] Allow, Always, plan approvals and allowing a terminal read ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`needsFaceId` in `lib/cards.test.ts` for which answers need the check)
+- [x] Allow, Always, plan approvals, answers to questions and allowing a terminal read ask for Face ID (or the device passcode) first, when the setting "Require Face ID to allow" in Hosts is on (on by default). Deny never asks. A failed or cancelled check sends nothing. (`needsFaceId` in `lib/cards.test.ts` for which answers need the check)
 
 ### Plan approval sheet
 
@@ -70,15 +70,15 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Session screen
 
-- [ ] The header shows the back button, the state glyph and title, `<project> · <branch> · <host>`, and a ⋯ menu (Archive, Open on GitHub when there is a PR).
-- [ ] Tabs: **Chat**, **Terminal** (with the number of terminals), **Changes** (with the number of changed files), **PR** (with a dot in the checks' colour).
+- [x] The header shows the back button, the state glyph and title, `<project> · <branch> · <host>`, and a ⋯ menu with Archive session. (`lib/chatView.test.ts`)
+- [ ] Tabs: **Chat**, **Terminal** (with the number of shell, run and setup terminals), **Changes** (with the number of changed files), **PR** (with a dot in the checks' colour). (The PR dot comes with the PR tab.)
 
 ### Chat
 
-- [ ] The chat shows the conversation as the desktop does: user messages, thinking, tool calls folded into groups (X14), and Markdown replies.
-- [ ] A pending ask is docked at the bottom above the composer: the question, the command or summary, "Waiting 2m", and **Deny**, **Always**, **Allow**; under them "Deny and tell Claude what to do…", which opens a text box and answers `deny` with that message.
-- [ ] Without a pending ask, the composer sends a message (`chat.send`); while the agent works, a stop button interrupts it (`chat.interrupt`).
-- [ ] The footer shows the context meter (X34), the cost, the model and effort, and the permission mode; model, effort and mode open pickers that call `chat.settings`.
+- [x] The chat shows the session's first conversation as the desktop does: user messages, thinking (folded, tap to read), runs of tool calls folded into one row (X14) that open to each call's command and output, diff or plan, and Markdown replies. It follows the end as it grows.
+- [x] A pending ask is docked at the bottom in place of the composer: the question, the command or summary, "Waiting 2m", and **Deny**, **Always**, **Allow**; under them "Deny and tell Claude what to do…", which opens a text box and answers `deny` with that message. A plan docks as "Claude has a plan" with **Review plan** (the sheet, which returns to the chat); a question docks its options, an "Other…" box and **Answer**.
+- [x] Without a pending ask, the composer sends a message (`chat.send`); while the agent works, a stop button interrupts it (`chat.interrupt`).
+- [x] The footer shows the context meter (X34), the cost, the model and effort, and the permission mode; model, effort and mode open pickers that call `chat.settings`. (`chatFooter` in `chatView.test.ts`)
 
 ### Terminal
 

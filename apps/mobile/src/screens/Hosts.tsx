@@ -92,7 +92,7 @@ export function HostsScreen() {
         <div className="flex flex-col rounded-[14px] border border-border bg-panel">
           <Switch label="Require Face ID to allow" on={settings.faceId} onChange={(faceId) => updateSettings({ faceId })} />
         </div>
-        <span className="text-[12.5px] leading-[1.45] text-faint">Allowing a tool or a plan asks for Face ID first. Notifications arrive once push notifications are set up for this app.</span>
+        <span className="text-[12.5px] leading-[1.45] text-faint">Allowing a tool, approving a plan, answering a question or letting an agent read a terminal asks for Face ID first. Notifications arrive once push notifications are set up for this app.</span>
       </div>
     </div>
   );
