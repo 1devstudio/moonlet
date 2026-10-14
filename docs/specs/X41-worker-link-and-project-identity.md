@@ -1,13 +1,13 @@
-# X38 — Worker link and project identity
+# X41 — Worker link and project identity
 
 - **Status:** draft
 - **Priority / phase:** P1 · phase 4 (new scope: sessions across machines)
 - **PRD refs:** none (new scope)
-- **Related ADRs:** [0008](../adr/0008-central-host-workers-live-copies.md)
+- **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md), [0008](../adr/0008-phone-link-over-tailscale.md) (`moonlet-link`)
 
 ## Summary
 
-The first slice of [ADR 0008](../adr/0008-central-host-workers-live-copies.md).
+The first slice of [ADR 0009](../adr/0009-central-host-workers-live-copies.md).
 
 - **The link:** a Mac can be linked to a **central host** as a **worker**. Its own `moonletd` dials out to the central host over the SSH transport moonlet already uses and registers itself.
 - **The worker list:** the central host keeps a list of linked workers. It notices within about 30 s when one goes away, for example when the lid closes.
@@ -36,11 +36,11 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ### The link
 
-- [ ] The link runs `ssh <alias> ~/.moonlet/bin/moonletd proxy` with R1's options except connection sharing: `ControlMaster=no` and no `ControlPath`. A stale shared connection after sleep then cannot hang the link, and the link cannot hang the app's connection.
+- [ ] The link is a `moonlet-link` `Host` whose `Connector` runs `ssh <alias> ~/.moonlet/bin/moonletd proxy` with R1's options except connection sharing: `ControlMaster=no` and no `ControlPath`. A stale shared connection after sleep then cannot hang the link, and the link cannot hang the app's connection.
 - [ ] Over the link, the worker sends `Hello {client: "moonletd-worker"}` and then `worker.register`.
 - [ ] Before linking, the daemon checks the remote helper's version, as the app does (R2). A missing or different helper puts the link in state `needs_install`. It does not retry until `link.set` or `link.retry` is called.
-- [ ] A dropped link reconnects with backoff: 300 ms, doubling, capped at 5 s, as for the app's host links.
-- [ ] The link's state is one of `off`, `connecting`, `linked {since}`, `needs_install` or `error {message}`. `link.get` reports it, and the event `link.changed` fires on every change.
+- [ ] A dropped link reconnects with `moonlet-link`'s backoff: 300 ms, doubling, capped at 5 s, as for the apps' host links.
+- [ ] The link's state is `off`, or one of `moonlet-link`'s host statuses: `connecting`, `connected {since}`, `reconnecting`, `needs_install` or `error {message}`. `link.get` reports it, and the event `link.changed` fires on every change.
 - [ ] A worker linking with the same worker id as a linked worker replaces it, and the older connection is closed. Two workers with the same name and different ids are both linked.
 
 ### Registration and liveness (central host)
@@ -96,6 +96,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - "Not linked"
   - "Linking to studio-mini…"
   - "Linked to studio-mini since 10:42"
+  - "Reconnecting to studio-mini…"
   - "Install moonlet on studio-mini first" (with the R2 install button)
   - the ssh error, with **Retry**
 - The toggle's help text says it only links this Mac for now; commands are not routed yet.
@@ -111,9 +112,8 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 - **Requests both ways:** on a connection whose Hello says `moonletd-worker`, the central host may send `request` messages, and the worker answers with `response`. Other clients never receive requests.
 - **Changed type:** `Project` gains `identity {origin: string | null, root: string | null}`.
 - `PROTOCOL_VERSION` goes from 3 to 4.
-- **Code moves:**
-  - The ssh spawn, version check and backoff move from `apps/desktop/src-tauri/src/hosts.rs` and `remote.rs` into `moonlet-core`, and the app uses them from there.
-  - `moonlet_core::client::Client` works over any `AsyncRead + AsyncWrite` pair as well as the Unix socket.
+- **Reused code:** the link is `moonlet-link`'s `Host` (ADR 0008), with a new ssh `Connector` for the daemon. The version check moves from the app's `remote.rs` into that connector, so the app and the worker share it.
+- **`moonlet-link` gains request handling:** a `Host` can be given a handler for `request` messages from the daemon, and it answers with `response`. The worker uses it for `worker.ping`.
 
 ## Data and config
 
@@ -141,12 +141,12 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ## Out of scope
 
-Everything else in [ADR 0008](../adr/0008-central-host-workers-live-copies.md)'s later slices, including:
+Everything else in [ADR 0009](../adr/0009-central-host-workers-live-copies.md)'s later slices, including:
 
 - the central host setup switch;
 - live copies and cloning projects onto a worker;
 - routed commands, together with what only routing uses: slots, tool detection, project changes sent between reconnects, a Workers screen and renaming a worker in the UI;
-- phone access, takeover and cloud workers.
+- takeover and cloud workers. Phone access is ADR 0008's.
 
 ## Test plan
 
@@ -162,12 +162,13 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
     - both origins `null`: same;
     - a root that is `null`: different.
   - `link_ssh_args("studio-mini")` contains `ControlMaster=no`, no `ControlPath`, and R1's other options.
+  - `moonlet-link`: a `Host` with a request handler answers a daemon's `request` with a `response` carrying the same id, tested against the fake daemon in `crates/moonlet-link/tests/link.rs`.
   - `link.json`:
     - the first load creates a worker id, and later loads return the same id;
     - `link.set` cannot change the id;
     - an invalid alias is rejected and the file is unchanged;
     - the name defaults to the given computer name.
-  - The backoff sequence for successive failures is 300, 600, 1200, 2400, 4800, 5000, 5000 ms.
+  - `moonlet-link`'s backoff sequence for successive failures is 300, 600, 1200, 2400, 4800, 5000, 5000 ms (a test added to `crates/moonlet-link`).
 - **Daemon end-to-end, `crates/moonletd/tests/link.rs`:** two `TestDaemon`s with separate `MOONLET_HOME`s. A test-only `MOONLET_LINK_COMMAND` makes the worker spawn the central host's `moonletd proxy` directly, as in `proxy.rs`, without ssh.
   - A linked worker appears in `worker.list` with its literal id, name, `os`, `arch`, `cores`, `version` and project identities. `link.get` says `linked`, and `link.changed` fired.
   - `rtt_ms` is filled in after the first ping.
