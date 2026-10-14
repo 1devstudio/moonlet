@@ -367,8 +367,11 @@ describe("a failed action shows on its task with Retry (X46)", () => {
     sent.length = 0;
     const t = { connection: "linear:acme", key: "MOON-9", title: "x", url: "", column: "todo" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "issue-9", state: "Todo", source: "MOON" } };
     failNext.push({ message: "No Jira transition leads to that column from here" });
+    useStore.setState({ toasts: [] });
     await moveTask("local", "personal", t, "done", 1_000);
     expect(failureOf(t)).toBe("No Jira transition leads to that column from here");
+    // Said at once too: the session's task bar has no detail panel to show it.
+    expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["MOON-9: No Jira transition leads to that column from here"]);
     await retryTask(t);
     expect(failureOf(t)).toBe(undefined);
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-9", source: "MOON", column: "done", state: null }]);
