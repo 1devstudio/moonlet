@@ -11,7 +11,7 @@ import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
 import { ensureTasks, linkTask, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
-import { Button, cx, Dialog, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
+import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
 
 const COLUMN_LABEL: Record<Card["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };
@@ -34,8 +34,8 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
   const go = (d: number) => selectSession(host, card.rows[(at + d + card.rows.length) % card.rows.length].session.id);
   return (
     <div role="region" aria-label="Task" className="flex h-[34px] shrink-0 items-center gap-2 border-b border-border bg-panel px-4 ui-text-12.5">
-      <button className="flex items-center gap-1.5 text-muted hover:text-fg" onClick={() => openInTasksMode(card.task)}>
-        Tasks <Kbd>⌃⌘T</Kbd>
+      <button className="flex items-center gap-1.5 text-muted hover:text-fg" title="Show this task in Tasks mode" onClick={() => openInTasksMode(card.task)}>
+        Tasks
       </button>
       <span className="text-faint">/</span>
       <TaskGlyph column={card.column} size={13} />
@@ -192,7 +192,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
         )}
         {!pasted && !choices.suggested.length && !choices.recent.length && <p className="px-2 ui-text-12.5 text-muted">No tasks match.</p>}
       </div>
-      <p className="mt-3 ui-text-11.5 text-faint">Links live in moonlet. The issue gets a link back to the PR when one opens.</p>
+      <p className="mt-3 ui-text-11.5 text-faint">Links live in moonlet; the tracker hears of a PR only through Keep in step.</p>
     </Dialog>
   );
 }

@@ -8,6 +8,7 @@ import { routeKey, type SettingsRoute } from "./settingsPage";
 import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
 import { bannerOn } from "./alerts";
+import { trackerName } from "./tasks";
 import type { Settings } from "./store";
 import { WORKSPACE_COLORS } from "./workspaces";
 import type { TrackersConfig } from "./tasksStore";
@@ -68,6 +69,12 @@ function trackerEntries(t: TrackersConfig | undefined): [string | undefined, str
     [undefined, "Task trackers", "GitHub", "linear jira clickup issues connect"],
     ...GITHUB_RULES.map((r): [string, string, string] => [`rule-${r.id}`, `${r.when} → ${r.then}`, labelOf(RULE_SETTINGS, t.github.rules[r.id])]),
     ["branch-template", "Branch name for new sessions", t.github.branch_template || "{number}-{title}", "template"],
+    ...[...new Set((t.connections ?? []).map((c) => c.kind))].map((kind): [string, string, string, string] => [
+      `branch-template-${kind}`,
+      `${trackerName(kind)} branch name for new sessions`,
+      t[kind]?.branch_template || "{key}-{title}",
+      "template",
+    ]),
     ["branch-max", "Max length of branch names", String(t.github.max_length)],
     ["sync-interval", "Refresh issues", SYNC_INTERVALS.find((i) => i.value === t.sync.interval)?.label ?? `Every ${t.sync.interval} s`, "sync"],
     ["sync-notify", "Notify when a task changes state outside moonlet", onOff(t.sync.notify), "notification"],

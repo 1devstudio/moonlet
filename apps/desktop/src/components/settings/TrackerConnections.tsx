@@ -166,7 +166,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
             <input className={inputCls} type="password" value={token} onChange={(e) => setToken(e.target.value)} />
           </Field>
           <p className="ui-text-12 text-muted">
-            The token is saved in the macOS Keychain.{kind === "jira" ? " Tokens expire; moonlet tells you when Jira stops accepting it." : ""}
+            The token is saved in the macOS Keychain.{kind === "jira" ? " Tokens expire. moonlet tells you when Jira stops accepting it." : ""}
           </p>
           {error && <p className="ui-text-12.5 text-error">{error}</p>}
           <div className="flex justify-end gap-2">
