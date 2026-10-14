@@ -20,7 +20,7 @@ A session can belong to a task. The link is made when a session starts from a ta
 
 ### Links
 
-- [ ] A session has at most one task: `{connection, key}`. It is stored by the daemon with the session.
+- [ ] A session has at most one task: `{connection, key, url}`, with the connection id of X44. It is stored by the daemon with the session.
 - [ ] A session is linked to a task when (first match wins): it has a stored link; its branch name contains the key (if that rule is on, X44); its PR closes the issue or mentions the key (if that rule is on). Links found from the branch or PR are not stored, so renaming a branch or a reconnect never leaves a stale link.
 - [ ] A stored link can be removed with **Unlink**; then branch and PR matches are ignored for that session until it is linked again.
 - [ ] A worktree whose branch carries a task's key and that no session uses is a "worktree without a session" on that task (X45).

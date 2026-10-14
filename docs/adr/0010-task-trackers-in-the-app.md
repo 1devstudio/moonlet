@@ -23,5 +23,5 @@ Tasks mode shows issues from Linear, Jira Cloud, ClickUp and GitHub Issues besid
 **Consequences.**
 
 - The phone app does not show tasks. A later change could have the desktop push a task summary to the daemon.
-- Two Macs running the app each connect their own trackers; `trackers.toml` and the Keychain are per Mac. Session links are shared, because they live in the daemon.
+- Two Macs running the app each connect their own trackers; `trackers.toml` and the Keychain are per Mac. Session links are shared, because they live in the daemon, and resolve on both Macs because a connection's id is its tracker and site (`jira:acme.atlassian.net`), not a per-Mac random id.
 - Keep in step actions (X46) run in the app, so they only happen while the app is open; an action missed while it was closed shows as out of sync on the next sync instead.
