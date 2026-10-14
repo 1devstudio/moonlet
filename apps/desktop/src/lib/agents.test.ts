@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentReadiness, nextMode, resolveMode, resolvePlanMode } from "./agents";
+import { agentReadiness, nextMode, resolveMode, resolvePlanMode, tabAgent } from "./agents";
 
 describe("nextMode", () => {
   it("cycles manual, accept edits, plan, auto", () => {
@@ -48,5 +48,15 @@ describe("resolvePlanMode (X24)", () => {
 
   it("reads a missing or unknown value as auto", () => {
     for (const v of [undefined, null, "", "manual", "plan", "bypassPermissions", 3]) expect(resolvePlanMode(v)).toBe("auto");
+  });
+});
+
+describe("tabAgent", () => {
+  it("opens the session's agent, or Claude when it has none (X38)", () => {
+    expect(tabAgent("codex")).toBe("codex");
+    expect(tabAgent("claude")).toBe("claude");
+    expect(tabAgent(null)).toBe("claude");
+    expect(tabAgent("none")).toBe("claude");
+    expect(tabAgent("")).toBe("claude");
   });
 });

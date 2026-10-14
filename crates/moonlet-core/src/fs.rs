@@ -120,7 +120,8 @@ pub fn read(path: &str, max_bytes: Option<u64>) -> Result<FileContent> {
     })
 }
 
-/// Saves a text file atomically, keeping its permissions.
+/// Saves a text file atomically, keeping its permissions and creating
+/// missing folders.
 pub fn write(path: &str, content: &str) -> Result<()> {
     let mut p = expand_home(path);
     // Write through a symlink to its target instead of replacing the link.
@@ -133,6 +134,9 @@ pub fn write(path: &str, content: &str) -> Result<()> {
         p.file_name().context("not a file path")?.to_string_lossy()
     ));
     let result = (|| -> Result<()> {
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         std::fs::write(&tmp, content)?;
         if let Some(perms) = perms {
             std::fs::set_permissions(&tmp, perms)?;
@@ -144,6 +148,58 @@ pub fn write(path: &str, content: &str) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// Saves a file the app creates inside `root`, such as a chat's context
+/// file (X38). Missing folders are created. A symlink anywhere between
+/// `root` and the file is refused, so a repository can't point the write at
+/// another file, inside the worktree or outside it.
+pub fn write_inside(root: &str, path: &str, content: &str) -> Result<()> {
+    use std::io::Write;
+    use std::path::Component;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+
+    let root = expand_home(root);
+    if !root.is_dir() {
+        bail!("no such folder: {}", root.display());
+    }
+    let p = expand_home(path);
+    let Ok(rel) = p.strip_prefix(&root) else {
+        bail!("{} is outside {}", p.display(), root.display());
+    };
+    if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
+        bail!("{} is outside {}", p.display(), root.display());
+    }
+    let name = p.file_name().context("not a file path")?.to_string_lossy().to_string();
+    // Each folder on the way is checked without following it, or created.
+    let mut dir = root.clone();
+    for c in rel.parent().into_iter().flat_map(Path::components) {
+        dir.push(c);
+        if let Err(e) = std::fs::create_dir(&dir) {
+            // Another write may have just created it: check what is there.
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(e.into());
+            }
+        }
+        let meta = std::fs::symlink_metadata(&dir)?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            bail!("{} is not a folder", dir.display());
+        }
+    }
+    if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!("{} is a symlink", p.display());
+    }
+    // A temporary name of its own per write, created exclusively: writes of
+    // one file at once don't collide, and a planted symlink is never followed.
+    let n = WRITES.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}-{n}.moonlet-tmp", std::process::id()));
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let result = f.write_all(content.as_bytes()).and_then(|_| std::fs::rename(&tmp, &p));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(result?)
 }
 
 struct Watch {
@@ -282,6 +338,86 @@ mod tests {
         write(&link.display().to_string(), "new").unwrap();
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    #[test]
+    fn write_creates_missing_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".moonlet/context/chat-fix-login.md");
+        write(&file.display().to_string(), "# Chat\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "# Chat\n");
+    }
+
+    #[test]
+    fn write_inside_never_leaves_the_root_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("worktree");
+        let outside = dir.path().join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let s = |p: &Path| p.display().to_string();
+
+        // An ordinary write creates the folders.
+        let file = root.join(".moonlet/context/plan-x.md");
+        write_inside(&s(&root), &s(&file), "# Plan\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "# Plan\n");
+
+        // A file that is a symlink is refused, and its target is untouched.
+        std::fs::write(outside.join(".zshrc"), "export A=1\n").unwrap();
+        let link = root.join(".moonlet/context/.gitignore");
+        std::os::unix::fs::symlink(outside.join(".zshrc"), &link).unwrap();
+        assert!(write_inside(&s(&root), &s(&link), "*\n").is_err());
+        assert_eq!(std::fs::read_to_string(outside.join(".zshrc")).unwrap(), "export A=1\n");
+
+        // A folder that leads outside the root is refused, and nothing is written there.
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(other.join(".moonlet")).unwrap();
+        std::os::unix::fs::symlink(&outside, other.join(".moonlet/context")).unwrap();
+        assert!(write_inside(&s(&other), &s(&other.join(".moonlet/context/chat-x.md")), "x").is_err());
+        assert!(!outside.join("chat-x.md").exists());
+
+        // A leftover temporary file, from a crash or a planted symlink, is
+        // replaced: the write goes through and never follows it.
+        std::fs::write(outside.join("victim"), "keep").unwrap();
+        std::os::unix::fs::symlink(outside.join("victim"), root.join(".moonlet/context/.chat-y.md.moonlet-tmp")).unwrap();
+        write_inside(&s(&root), &s(&root.join(".moonlet/context/chat-y.md")), "y").unwrap();
+        assert_eq!(std::fs::read_to_string(outside.join("victim")).unwrap(), "keep");
+        assert_eq!(std::fs::read_to_string(root.join(".moonlet/context/chat-y.md")).unwrap(), "y");
+        std::fs::write(root.join(".moonlet/context/.chat-z.md.moonlet-tmp"), "half").unwrap();
+        write_inside(&s(&root), &s(&root.join(".moonlet/context/chat-z.md")), "z").unwrap();
+        assert_eq!(std::fs::read_to_string(root.join(".moonlet/context/chat-z.md")).unwrap(), "z");
+    }
+
+    #[test]
+    fn write_inside_takes_writes_of_one_file_at_once() {
+        // Two quick chip clicks both rewrite .moonlet/context/.gitignore.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().display().to_string();
+        let file = dir.path().join(".moonlet/context/.gitignore").display().to_string();
+        let writers: Vec<_> = (0..8)
+            .map(|_| {
+                let (root, file) = (root.clone(), file.clone());
+                std::thread::spawn(move || (0..20).map(|_| write_inside(&root, &file, "*\n")).collect::<Result<Vec<_>>>())
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap().unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "*\n");
+    }
+
+    #[test]
+    fn write_inside_refuses_a_symlinked_folder_inside_the_root() {
+        // A committed `.moonlet/context -> ../src` would overwrite src/.gitignore.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join(".moonlet")).unwrap();
+        std::fs::write(root.join("src/.gitignore"), "target/\n").unwrap();
+        std::os::unix::fs::symlink("../src", root.join(".moonlet/context")).unwrap();
+        let file = root.join(".moonlet/context/.gitignore");
+        assert!(write_inside(&root.display().to_string(), &file.display().to_string(), "*\n").is_err());
+        assert_eq!(std::fs::read_to_string(root.join("src/.gitignore")).unwrap(), "target/\n");
     }
 
     #[test]

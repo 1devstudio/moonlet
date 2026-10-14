@@ -675,6 +675,11 @@ impl Daemon {
                 blocking(move || fs::write(&r.path, &r.content)).await?;
                 ok(true)
             }
+            m::FS_WRITE_INSIDE => {
+                let r: m::FsWriteInside = params(p)?;
+                blocking(move || fs::write_inside(&r.root, &r.path, &r.content)).await?;
+                ok(true)
+            }
             m::FS_WATCH => {
                 let r: m::FsPath = params(p)?;
                 self.watchers.watch(&r.path, conn.id).map_err(internal)?;

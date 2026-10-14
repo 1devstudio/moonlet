@@ -8,7 +8,7 @@ import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession,
 import { arrange, hostSections, lastActive } from "./sidebar";
 import { isShown } from "./workspaces";
 import { findEntry, outputToCopy } from "./terminals";
-import { agentReadiness, isStructured } from "./agents";
+import { agentReadiness, isStructured, tabAgent } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 import { archivePrompt, askConfirm } from "./confirm";
@@ -59,6 +59,12 @@ export async function newAgentTab(agent: string): Promise<TerminalInfo | null> {
     errorToast(e);
     return null;
   }
+}
+
+/** ⌘T (X38): a new tab with the session's agent. */
+export async function newSessionAgentTab() {
+  const c = current();
+  if (c) await newAgentTab(tabAgent(c.ws.agent));
 }
 
 export async function split(dir: "row" | "col") {
@@ -196,7 +202,7 @@ export async function draftToAgent(text: string, newTab = false) {
   if (!c) return;
   let target = newTab ? null : agentSession()?.session ?? null;
   if (!target) {
-    target = await newAgentTab(c.ws.agent ?? "claude");
+    target = await newAgentTab(tabAgent(c.ws.agent));
     if (!target) return;
     // A TUI agent reads its input once it has drawn its first screen.
     if (!target.chat && !(await waitForAgent(c.host, target.id))) {
@@ -374,7 +380,8 @@ const RUN: Record<string, () => void> = {
   "new-ws": () => useStore.setState({ dialog: { kind: "new-workspace" } }),
   "new-section": () => useStore.setState({ dialog: { kind: "new-section" } }),
   "add-project": () => useStore.setState({ dialog: { kind: "add-project" } }),
-  "new-tab": () => void newTab(),
+  "new-tab": () => void newSessionAgentTab(),
+  "new-terminal": () => void newTab(),
   "split-r": () => void split("row"),
   "split-d": () => void split("col"),
   close: () => void closeFocused(),

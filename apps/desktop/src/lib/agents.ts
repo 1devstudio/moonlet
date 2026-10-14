@@ -58,6 +58,9 @@ export function nextMode(current: string | null | undefined, bypassEnabled: bool
 /** Agents moonlet can run with the structured view (X6). */
 export const isStructured = (agent?: string | null) => agent === "claude" || agent === "codex";
 
+/** The agent a new tab opens (X38): the session's, else Claude. */
+export const tabAgent = (agent?: string | null) => (agent && agent !== "none" ? agent : "claude");
+
 /** Whether a new TUI agent can take pasted text (T8): once it has printed
  * its first screen. An agent that exited or was removed never will. */
 export function agentReadiness(t?: { created_at: number; last_output_at: number; exit?: unknown }): "waiting" | "ready" | "gone" {

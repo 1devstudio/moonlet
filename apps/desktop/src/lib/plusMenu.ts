@@ -13,8 +13,9 @@ export function withSlashCommand(text: string, name: string): { text: string; ca
 }
 
 /** The input after inserting `@<mention> ` at the caret, such as a subagent
- *  (`agent-Plan`) or an attached file. */
+ *  (`agent-Plan`) or an attached file; unchanged when the text already has it. */
 export function withMention(text: string, caret: number, mention: string): { text: string; caret: number } {
+  if (text.split(/\s+/).includes(`@${mention}`)) return { text, caret };
   const before = text.slice(0, caret);
   const gap = before === "" || /\s$/.test(before) ? "" : " ";
   const head = `${before}${gap}@${mention} `;
