@@ -36,6 +36,16 @@ export function cleanUpMessage(sessions: number, worktrees: number, dirty: strin
   return `${what}? ${names} ${dirty.length === 1 ? "has" : "have"} uncommitted changes, which will be lost.`;
 }
 
+/** The confirm before removing a worktree that no session uses (X45). */
+export function removeWorktreeAsk(path: string, branch: string, dirty: boolean) {
+  return {
+    title: `Remove ${branch}?`,
+    message: dirty ? `${path} has uncommitted changes, which will be lost. Its branch is kept.` : `The worktree at ${path} goes; its branch is kept.`,
+    action: "Remove",
+    variant: dirty ? ("danger" as const) : ("primary" as const),
+  };
+}
+
 /** Names a chip's situation; "Not now" hides the chip until this changes. */
 export function driftKey(card: Card): string {
   const work = card.rows.map((r) => `${r.session.id}:${r.session.pr?.number ?? ""}:${r.session.pr?.state ?? ""}`).join(",");

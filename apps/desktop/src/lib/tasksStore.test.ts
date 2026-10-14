@@ -357,6 +357,17 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
     expect(Object.keys(autoFixed())).toHaveLength(1);
   });
 
+  it("records each PR that opens on a task's sessions once, whatever the rules", async () => {
+    const pr = { number: 131, url: "https://github.com/acme/app/pull/131", state: "open", title: "Hosts", checks: [], review_decision: null };
+    const t = { ...hosts, key: "MOON-170", column: "in_review" as const };
+    const row = { session: { id: "s9", name: "Hosts", branch: "moon-170", path: "/w/moon-170", archived: false, task: null, task_unlinked: false, state: "idle" as const, pr, additions: 0, subagents: 0, originRepo: null }, meta: { text: "#131", tone: "open" as const } };
+    const board = { todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows: [row], needsYou: false, orphans: [], empty: null, drift: null }], done: [] };
+    const off = () => ({ ...DEFAULT_RULES, pr_comment: "off" as const });
+    await runAutoFixes("local", "personal", board, off, 7_000);
+    await runAutoFixes("local", "personal", board, off, 8_000);
+    expect(activityOf(t).filter((e) => e.text.startsWith("PR"))).toEqual([{ at: 7_000, text: "PR #131 opened: Hosts" }]);
+  });
+
   it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
     sent.length = 0;
     await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } });
