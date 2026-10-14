@@ -1,0 +1,131 @@
+// Search across the settings page (X43): every setting with its page, the
+// row it is on (`data-setting`) and its current value. Pure.
+
+import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "./agents";
+import { EDITOR_THEMES, resolveEditorTheme } from "./editorThemes";
+import type { WorkspaceColor } from "./protocol";
+import { routeKey, type SettingsRoute } from "./settingsPage";
+import { soundFor } from "./sounds";
+import type { Settings } from "./store";
+import { WORKSPACE_COLORS } from "./workspaces";
+
+export interface SearchContext {
+  settings: Settings;
+  appVersion: string | null;
+  claudeInstalled: string | null;
+  /** This Mac's profiles, the default included. */
+  profiles: number;
+  remoteHosts: number;
+  phones: number;
+  /** `profile`: the name of the profile the workspace uses. */
+  workspaces: { host: string; id: string; name: string; color: WorkspaceColor; profile: string }[];
+  projects: { host: string; id: string; name: string; base_branch: string }[];
+}
+
+interface Entry {
+  label: string;
+  /** Other words that find it, such as "WebGL" for GPU rendering. */
+  also?: string;
+  path: string;
+  route: SettingsRoute;
+  /** The row's `data-setting`; none for a whole page. */
+  setting?: string;
+  value: string;
+}
+
+export interface SearchResult {
+  key: string;
+  /** The label around the match; `hit` is empty when another word matched. */
+  before: string;
+  hit: string;
+  after: string;
+  path: string;
+  value: string;
+  route: SettingsRoute;
+  setting?: string;
+}
+
+const onOff = (on: boolean) => (on ? "On" : "Off");
+const n = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
+const labelOf = (list: readonly { id: string; label: string }[], id: string) => list.find((x) => x.id === id)?.label ?? id;
+
+function index(c: SearchContext): Entry[] {
+  const s = c.settings;
+  const t = s.term;
+  const app = (page: Exclude<SettingsRoute["page"], "workspace" | "project">, path: string, setting: string | undefined, label: string, value: string, also?: string): Entry => ({
+    label,
+    also,
+    path,
+    route: { page },
+    setting,
+    value,
+  });
+  const custom = Object.keys(s.shortcuts ?? {}).length;
+  return [
+    app("general", "App › General › Updates", "updates", "moonlet version and updates", c.appVersion ?? "", "check now update"),
+    app("general", "App › General › Updates", "claude-update", "Claude Code version", c.claudeInstalled ?? ""),
+    app("general", "App › General › Updates", "auto-update", "Check for updates automatically", onOff(s.autoUpdateCheck)),
+    app("general", "App › General › Background daemon", "daemon", "Start the moonlet daemon at login", "", "launchd login item"),
+    app("appearance", "App › Appearance", "font-size", "Font size", `${t.fontSize}px`, "text zoom scale"),
+    app("appearance", "App › Appearance", "editor-theme", "Colour theme of files and diffs", labelOf(EDITOR_THEMES, resolveEditorTheme(s.editorTheme)), "color syntax editor"),
+    app("terminal", "App › Terminal", "font-family", "Font family", t.fontFamily.split(",")[0].replace(/"/g, "").trim(), "terminal font"),
+    app("terminal", "App › Terminal", "new-shells", "New shells", t.classicPrompt ? "Classic" : "Blocks", "classic blocks prompt input editor"),
+    app("terminal", "App › Terminal", "option-meta", "Use Option as Meta", onOff(t.optionIsMeta), "alt"),
+    app("terminal", "App › Terminal", "osc52", "Let programs write to the clipboard", onOff(t.allowOsc52), "OSC 52 copy"),
+    app("terminal", "App › Terminal", "webgl", "GPU rendering", onOff(t.webgl), "WebGL"),
+    app("agents", "App › Agents", "default-mode", "Default permission mode for new Claude sessions", labelOf(CLAUDE_MODES, resolveMode(s.defaultMode))),
+    app("agents", "App › Agents", "plan-approve", "When a plan is approved, switch to", labelOf(PLAN_APPROVE_MODES, resolvePlanMode(s.planApproveMode))),
+    app("agents", "App › Agents", "tool-calls", "Tool calls in the conversation", s.toolCalls === "expanded" ? "Expanded" : "Collapsed"),
+    app("notifications", "App › Notifications", "notify-focused", "Notify even while moonlet is focused", onOff(s.notifyWhenFocused), "desktop notification"),
+    app("notifications", "App › Notifications", "sound-blocked", "Sound when an agent needs you", soundFor(s.sounds, "blocked") ?? "Off"),
+    app("notifications", "App › Notifications", "sound-done", "Sound when an agent is done", soundFor(s.sounds, "done") ?? "Off"),
+    app("notifications", "App › Notifications", "sound-error", "Sound when an agent fails", soundFor(s.sounds, "error") ?? "Off"),
+    app("shortcuts", "App › Keyboard shortcuts", undefined, "Keyboard shortcuts", custom ? `${custom} custom` : "", "keys bindings"),
+    app("profiles", "Claude Code › Profiles", undefined, "Claude profiles", n(c.profiles, "profile"), "sign in account"),
+    app("hooks", "Claude Code › Hooks", undefined, "Claude Code hooks", "", "Codex skill install"),
+    app("hosts", "Machines › Hosts", undefined, "Remote hosts", n(c.remoteHosts, "host"), "ssh helper"),
+    app("phones", "Machines › Phones", "phones", "Allow phones on my tailnet", "", "mobile pair Tailscale"),
+    ...c.workspaces.flatMap((w): Entry[] => {
+      const route: SettingsRoute = { page: "workspace", host: w.host, id: w.id };
+      const path = `Workspaces › ${w.name}`;
+      return [
+        { label: "Workspace name", path, route, setting: "ws-name", value: w.name },
+        { label: "Workspace colour", also: "color", path, route, setting: "ws-color", value: labelOf(WORKSPACE_COLORS, w.color) },
+        { label: "Claude profile", path, route, setting: "ws-profile", value: w.profile },
+        { label: "Delete workspace", path, route, setting: "ws-delete", value: "" },
+      ];
+    }),
+    ...c.projects.flatMap((p): Entry[] => {
+      const route: SettingsRoute = { page: "project", host: p.host, id: p.id };
+      const path = `Projects › ${p.name}`;
+      return [
+        { label: "Setup script", path, route, setting: "project-setup", value: "" },
+        { label: "Run script", path, route, setting: "project-run", value: "" },
+        { label: "Archive script", path, route, setting: "project-archive", value: "" },
+        { label: "Default agent", path, route, setting: "project-default-agent", value: "" },
+        { label: "Custom agents", path, route, setting: "project-agents", value: "" },
+        { label: "Base branch", path, route, setting: "project-base", value: p.base_branch },
+      ];
+    }),
+  ];
+}
+
+/** Settings whose name (or another word for them) contains `q`, in page order. */
+export function searchSettings(q: string, c: SearchContext): SearchResult[] {
+  const query = q.trim().toLowerCase();
+  if (!query) return [];
+  return index(c).flatMap((e): SearchResult[] => {
+    const at = e.label.toLowerCase().indexOf(query);
+    const base = { key: `${routeKey(e.route)}:${e.setting ?? ""}`, path: e.path, value: e.value, route: e.route, ...(e.setting ? { setting: e.setting } : {}) };
+    if (at >= 0) return [{ ...base, before: e.label.slice(0, at), hit: e.label.slice(at, at + query.length), after: e.label.slice(at + query.length) }];
+    if (e.also?.toLowerCase().includes(query)) return [{ ...base, before: e.label, hit: "", after: "" }];
+    return [];
+  });
+}
+
+/** The result ↑ or ↓ moves to from `index` of `count`; null for other keys. */
+export function moveSelection(index: number, count: number, key: string): number | null {
+  if (key === "ArrowDown") return Math.min(count - 1, index + 1);
+  if (key === "ArrowUp") return Math.max(0, index - 1);
+  return null;
+}
