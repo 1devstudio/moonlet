@@ -19,10 +19,10 @@ describe("checks", () => {
     expect(checksSummary([])).toBe("no checks");
   });
 
-  it("colours the PR tab's dot like the worst check", () => {
-    expect(checksDot(CHECKS)).toBe("#ef5f5f");
-    expect(checksDot(CHECKS.slice(1))).toBe("#f2c94c");
-    expect(checksDot([CHECKS[1]])).toBe("#3ecf6e");
+  it("gives the PR tab's dot the worst check's state", () => {
+    expect(checksDot(CHECKS)).toBe("error");
+    expect(checksDot(CHECKS.slice(1))).toBe("running");
+    expect(checksDot([CHECKS[1]])).toBe("ok");
     expect(checksDot([])).toBeNull();
   });
 });

@@ -9,6 +9,7 @@ import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
 import { M, type ProjectConfig, type Session } from "@desktop/lib/protocol";
 import { loadHost, showScreen, showTab, useApp } from "../lib/app";
 import { MODES, branchPreview, modeHelp, projectChoices, setupLine } from "../lib/newSession";
+import { useBusy } from "../lib/busy";
 import { AgentIcon, Btn, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
 
@@ -64,8 +65,7 @@ export function NewSessionScreen() {
   const [branches, setBranches] = useState<string[]>([]);
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [picker, setPicker] = useState<Picker>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useBusy();
   const choice = choices[Math.min(pick, choices.length - 1)];
   const [latest] = useState(latestOnly);
 
@@ -86,9 +86,7 @@ export function NewSessionScreen() {
 
   const start = async () => {
     if (!choice || busy || !prompt.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
+    await run(async () => {
       const s = await rpc<Session>(choice.host, M.sessionCreate, {
         project_id: choice.project.id,
         prompt: prompt.trim(),
@@ -104,11 +102,7 @@ export function NewSessionScreen() {
       await loadHost(choice.host).catch(() => {});
       setPrompt("");
       showScreen({ kind: "session", host: choice.host, id: s.id, tab: "chat" });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   const baseName = base ?? choice?.project.base_branch ?? "main";

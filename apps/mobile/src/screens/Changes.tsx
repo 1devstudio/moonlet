@@ -7,7 +7,8 @@ import { rpc } from "@desktop/lib/daemon";
 import { type Commit, M, type Session } from "@desktop/lib/protocol";
 import { showScreen } from "../lib/app";
 import { canStage, commitLabel, folderGroups, statusLetter } from "../lib/diffView";
-import { forget, useGitStatus } from "../lib/lazy";
+import { forget, useGitStatus } from "../lib/rowDetails";
+import { useBusy } from "../lib/busy";
 import { Btn, DiffStat, cx } from "../components/ui";
 
 const LETTER_COLOR: Record<string, string> = { M: "text-blocked", A: "text-done", "?": "text-done", D: "text-error", R: "text-accent-2", U: "text-error" };
@@ -17,24 +18,12 @@ export function ChangesTab({ host, session }: { host: string; session: Session }
   const [status, reload] = useGitStatus(host, session, against);
   const [commits, setCommits] = useState<Commit[] | null>(null);
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run: runBusy } = useBusy();
   const refresh = () => {
     forget(`git:${host}:${session.id}`);
     reload();
   };
-  const run = async (f: () => Promise<unknown>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await f();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-      refresh();
-    }
-  };
+  const run = (f: () => Promise<unknown>) => runBusy(f, refresh);
   const files = status?.files ?? [];
   const staged = files.filter((f) => f.staged).length;
 

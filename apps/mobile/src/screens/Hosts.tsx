@@ -5,9 +5,9 @@ import { useEffect, useState } from "react";
 import { Laptop, QrCode, RotateCw, Server } from "lucide-react";
 import { type NotifyKey, forgetMac, reconnect, showScreen, updateSettings, useApp } from "../lib/app";
 import { hostMeta, hostRoute, hostWord } from "../lib/hosts";
+import { HOST_COLOR } from "../lib/palette";
 import { Btn, StateGlyph, Switch, Title, cx } from "../components/ui";
 
-const WORD_COLOR = { connected: "#3ecf6e", connecting: "#f2c94c", offline: "#7d7d7d" } as const;
 
 const TOGGLES: { key: NotifyKey; label: string; state: "blocked" | "done" | "error" | "idle" }[] = [
   { key: "blocked", label: "An agent needs input", state: "blocked" },
@@ -43,8 +43,8 @@ export function HostsScreen() {
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[15px] font-semibold">{h.label}</span>
-                  <span className="h-[7px] w-[7px] flex-none rounded-full" style={{ background: WORD_COLOR[word] }} />
-                  <span className="text-[12.5px]" style={{ color: WORD_COLOR[word] }}>
+                  <span className="h-[7px] w-[7px] flex-none rounded-full" style={{ background: HOST_COLOR[word] }} />
+                  <span className="text-[12.5px]" style={{ color: HOST_COLOR[word] }}>
                     {word}
                   </span>
                 </div>

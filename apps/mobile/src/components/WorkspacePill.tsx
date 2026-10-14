@@ -19,7 +19,7 @@ export function WorkspacePill() {
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} className="flex h-9 items-center gap-[7px] rounded-[18px] border border-border-strong bg-panel px-3 text-[13.5px]">
-        <span className="h-2 w-2 rounded-full" style={{ background: current ? colorHex(current.color) : "#8c8c8c" }} />
+        <span className="h-2 w-2 rounded-full" style={{ background: current ? colorHex(current.color) : "var(--color-muted)" }} />
         {current?.name ?? "All workspaces"}
         <ChevronDown size={14} className="text-muted" />
       </button>
