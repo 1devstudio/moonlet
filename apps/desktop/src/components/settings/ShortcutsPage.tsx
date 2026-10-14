@@ -4,12 +4,28 @@
 import { useEffect, useState } from "react";
 import { Search, Undo2 } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
-import { ACTIONS, assignShortcut, keyId, keyLabel, recordKey, resetShortcut, shortcutGroups } from "../../lib/runActions";
+import { ACTIONS, assignShortcut, effectiveKeys, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups } from "../../lib/runActions";
 import { updateSettings, useStore } from "../../lib/store";
 import { Button, IconButton, cx } from "../ui";
 import { Card, PageHeading, Section } from "./controls";
 
 const label = (id: string) => ACTIONS.find((a) => a.id === id)?.label ?? id;
+
+/** A shortcut as keycaps, one per key: ⇧ ⌘ N. */
+function Keycaps({ id }: { id: string }) {
+  return (
+    <span className="flex items-center gap-[3px]">
+      {keyParts(id).map((k, i) => (
+        <kbd
+          key={i}
+          className="inline-flex h-[20px] min-w-[20px] items-center justify-center rounded-[4px] border border-border-strong bg-raised px-[5px] font-sans ui-text-11.5 font-medium leading-none text-fg shadow-[0_1px_0_0_var(--color-border-strong)]"
+        >
+          {k}
+        </kbd>
+      ))}
+    </span>
+  );
+}
 
 export function ShortcutsPage() {
   const shortcuts = useStore((s) => s.settings.shortcuts);
@@ -17,6 +33,7 @@ export function ShortcutsPage() {
   const [recording, setRecording] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<{ id: string; message: string } | null>(null);
   const groups = shortcutGroups(shortcuts, query);
+  const keys = effectiveKeys(shortcuts);
   const save = (next: typeof shortcuts) => updateSettings({ shortcuts: next });
 
   // While recording, every key goes to the recorder, not the page or the app.
@@ -99,15 +116,15 @@ export function ShortcutsPage() {
                         setRecording(rec ? null : r.id);
                       }}
                       className={cx(
-                        "h-6 min-w-[72px] rounded-[5px] px-2 text-center ui-text-12",
+                        "flex h-7 min-w-[72px] items-center justify-end rounded-md px-1.5 ui-text-12",
                         rec
-                          ? "border border-accent bg-selected text-accent-2"
+                          ? "justify-center border border-accent bg-selected px-2.5 text-accent-2"
                           : r.keys
-                            ? "border border-border-strong bg-panel-2 font-mono text-fg hover:bg-hover"
-                            : "border border-dashed border-border-strong text-faint hover:text-muted",
+                            ? "border border-transparent hover:border-border-strong hover:bg-panel-2"
+                            : "justify-center border border-dashed border-border-strong px-2.5 text-faint hover:text-muted",
                       )}
                     >
-                      {rec ? "Press a shortcut…" : r.keys || "Not set"}
+                      {rec ? "Press a shortcut…" : r.keys ? <Keycaps id={keys[r.id]} /> : "Not set"}
                     </button>
                   </div>
                   {refusal?.id === r.id && (
