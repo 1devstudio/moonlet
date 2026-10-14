@@ -75,13 +75,13 @@ import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../l
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
-import { agentNotes, agentRows } from "../lib/subagents";
+import { agentNotes, agentRows, askerName } from "../lib/subagents";
 import { uiScale } from "../lib/uiScale";
 import { useNow } from "../lib/useNow";
 import { type ContextFiles, chatContextFiles, chipSection, newChatContext, otherChats, planContextFiles } from "../lib/chatContext";
 import { shortPath } from "../lib/terminals";
 import { AgentsStrip } from "./AgentsStrip";
-import { AgentAskCard, AgentNoteView, LaunchedCard } from "./AgentCards";
+import { AgentNoteView, LaunchedCard } from "./AgentCards";
 import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
@@ -473,11 +473,19 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
 /** An AskUserQuestion with questions we can render; anything else gets the plain card. */
 const isQuestion = (ask: PermissionAsk) => ask.tool === "AskUserQuestion" && askQuestions(ask.input).length > 0;
 
-export function PermissionCard({ ask, cwd, onAnswer }: { ask: PermissionAsk; cwd: string; onAnswer: (decision: "allow" | "always" | "deny") => void }) {
+/** `agent` names the subagent that asks (X42), on a line of its own. */
+export function PermissionCard({ ask, cwd, agent, onAnswer }: { ask: PermissionAsk; cwd: string; agent?: string | null; onAnswer: (decision: "allow" | "always" | "deny") => void }) {
   const Icon = toolIcon(ask.tool);
   const detail = ask.diff || ["Bash", "Write", "Edit", "MultiEdit", "Read"].includes(ask.tool) ? null : JSON.stringify(ask.input, null, 2);
   return (
     <div className="moonlet-card-in my-2 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] p-3">
+      {agent && (
+        <div className="mb-2 flex min-w-0 items-center gap-1.5 ui-text-12 text-muted" title={agent}>
+          <Bot size={13} className="shrink-0" />
+          <span className="shrink-0">Agent</span>
+          <span className="min-w-0 truncate text-fg">{agent}</span>
+        </div>
+      )}
       <div className="mb-2 flex items-center gap-2 ui-text-13">
         <ShieldAlert size={15} className="text-blocked" />
         <span className="font-medium">Allow {ask.tool}?</span>
@@ -1294,20 +1302,6 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
             {plan && !plan.itemId && planCard}
             {st?.pending.map((ask) => {
               if (planOf(ask)) return null;
-              const asker = ask.agent ? st.subagents?.find((a) => a.id === ask.agent) : undefined;
-              if (asker) {
-                return (
-                  <AgentAskCard
-                    key={ask.id}
-                    ask={ask}
-                    description={asker.description}
-                    onAnswer={(decision) => {
-                      stick.current = true;
-                      void call(M.chatPermission, { ask: ask.id, decision });
-                    }}
-                  />
-                );
-              }
               return isQuestion(ask) ? (
                 <QuestionCard
                   key={ask.id}
@@ -1322,6 +1316,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                   key={ask.id}
                   ask={ask}
                   cwd={info?.cwd ?? ""}
+                  agent={askerName(ask, st.subagents ?? [])}
                   onAnswer={(decision) => {
                     stick.current = true;
                     void call(M.chatPermission, { ask: ask.id, decision });

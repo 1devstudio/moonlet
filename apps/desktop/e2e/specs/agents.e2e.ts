@@ -111,7 +111,7 @@ describe("agents tab", () => {
     await expect($(chip("needs input"))).toBeDisplayed();
     // The conversation shows the launch and names the agent that asks.
     await expect($('//span[normalize-space()="Launched 2 agents"]')).toBeDisplayed();
-    await expect($('//span[normalize-space()="Write hello file wants to edit /repo/hello.txt"]')).toBeDisplayed();
+    await expect($('//div[contains(@class, "moonlet-card-in")][.//span[normalize-space()="Write hello file"]][.//span[normalize-space()="Allow Write?"]]')).toBeDisplayed();
   });
 
   it("shows the asking agent's model, tokens, edits and permission card in its detail", async () => {

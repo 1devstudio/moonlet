@@ -1,5 +1,5 @@
-import type { ChatItem, PermissionAsk } from "../lib/protocol";
-import { type AgentNote, type AgentRow, type AgentRowState, agentAskTitle, agentMs, clock, launchedRows } from "../lib/subagents";
+import type { ChatItem } from "../lib/protocol";
+import { type AgentNote, type AgentRow, type AgentRowState, agentMs, clock, launchedRows } from "../lib/subagents";
 import { sesKey, useStore } from "../lib/store";
 import { Markdown } from "./AgentView";
 import { Button, StateGlyph, cx } from "./ui";
@@ -35,23 +35,6 @@ export function LaunchedCard({ tools, rows }: { tools: ChatItem[]; rows: AgentRo
           <span className="w-10 shrink-0 text-right font-mono ui-text-12 tabular-nums text-faint">{r.elapsed}</span>
         </div>
       ))}
-    </div>
-  );
-}
-
-/** A subagent's ask in the conversation: which agent asks for what. */
-export function AgentAskCard({ ask, description, onAnswer }: { ask: PermissionAsk; description: string; onAnswer: (d: "allow" | "deny") => void }) {
-  return (
-    <div className="moonlet-card-in my-2 flex items-start gap-2.5 rounded-xl border border-[#5c4a1e] bg-[#1d1a12] px-3.5 py-2.5">
-      <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-blocked" />
-      {/* The whole command shows: the user approves what they read. */}
-      <span className="selectable min-w-0 flex-1 whitespace-pre-wrap break-all ui-text-13 text-fg">{agentAskTitle(ask, description)}</span>
-      <Button variant="primary" size="sm" onClick={() => onAnswer("allow")}>
-        Allow
-      </Button>
-      <Button variant="ghost" size="sm" onClick={() => onAnswer("deny")}>
-        Deny
-      </Button>
     </div>
   );
 }

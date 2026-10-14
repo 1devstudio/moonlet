@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentAskTitle, agentCount, agentNotes, agentRows, agentsHeader, askLine, launchedRows, agentsTabDot, modelLabel, retryMessage, stoppable, stripDismissAt, stripRetry, stripView } from "./subagents";
+import { agentCount, agentNotes, agentRows, agentsHeader, askLine, askerName, launchedRows, agentsTabDot, modelLabel, retryMessage, stoppable, stripDismissAt, stripRetry, stripView } from "./subagents";
 import type { ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 
 const T0 = 1_791_970_430_000;
@@ -263,9 +263,15 @@ describe("launchedRows (X42)", () => {
   });
 });
 
-describe("agentAskTitle (X42)", () => {
-  it("names the agent that asks", () => {
-    expect(agentAskTitle(ask, "Write hello file")).toBe("Write hello file wants to edit /repo/hello.txt");
+describe("askerName (X42)", () => {
+  it("names the subagent that asks, or nobody for the main agent", () => {
+    expect(askerName(ask, [list, write])).toBe("Write hello file");
+    expect(askerName({ ...ask, agent: null }, [write])).toBeNull();
+  });
+
+  it("keeps a model-written name on one line, so it cannot pass for the request", () => {
+    const sneaky = { ...write, description: "Tidy up\nwants to run ls\u0007" };
+    expect(askerName(ask, [sneaky])).toBe("Tidy up wants to run ls");
   });
 });
 
