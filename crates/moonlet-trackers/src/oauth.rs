@@ -113,6 +113,13 @@ pub struct Tokens {
     pub expires_ms: u64,
 }
 
+impl Tokens {
+    /// Whether to refresh before using it: a minute before it expires.
+    pub fn needs_refresh(&self, now_ms: u64) -> bool {
+        now_ms.saturating_add(60_000) >= self.expires_ms
+    }
+}
+
 /// The token endpoint's answer, read at `now_ms`.
 pub fn parse_tokens(raw: &[u8], now_ms: u64) -> Result<Tokens, crate::ApiError> {
     let v: serde_json::Value = serde_json::from_slice(raw)
@@ -127,7 +134,10 @@ pub fn parse_tokens(raw: &[u8], now_ms: u64) -> Result<Tokens, crate::ApiError> 
     Ok(Tokens {
         access: access.into(),
         refresh: v["refresh_token"].as_str().map(String::from),
-        expires_ms: now_ms + v["expires_in"].as_u64().unwrap_or(0) * 1000,
+        // Without `expires_in` the token does not expire.
+        expires_ms: v["expires_in"]
+            .as_u64()
+            .map_or(u64::MAX, |s| now_ms + s * 1000),
     })
 }
 
@@ -247,5 +257,15 @@ mod tests {
             }
         );
         assert!(parse_tokens(br#"{"error":"invalid_grant"}"#, 0).is_err());
+    }
+
+    #[test]
+    fn a_token_is_refreshed_a_minute_before_it_expires() {
+        let tokens = parse_tokens(br#"{"access_token":"a1","expires_in":3600}"#, 0).unwrap();
+        assert!(!tokens.needs_refresh(3_539_999));
+        assert!(tokens.needs_refresh(3_540_000));
+        // An answer without `expires_in` does not expire.
+        let forever = parse_tokens(br#"{"access_token":"a1"}"#, 0).unwrap();
+        assert!(!forever.needs_refresh(10_000_000_000_000));
     }
 }
