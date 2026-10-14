@@ -163,6 +163,7 @@ impl ChatManager {
             alt_screen: false,
             chat: true,
             classic: false,
+            subagents: 0,
             created_at: now,
             last_output_at: now,
         });
@@ -262,6 +263,19 @@ impl ChatManager {
         let Inner { adapter, state, .. } = &mut *inner;
         let Some(a) = adapter.as_mut() else { return Ok(()) };
         let outs = a.interrupt(state);
+        self.apply(&chat, &mut inner, outs);
+        Ok(())
+    }
+
+    /// Stops one running subagent (X42).
+    pub fn stop_agent(&self, id: TerminalId, agent: &str) -> Result<()> {
+        let chat = self.get(id)?;
+        let mut inner = chat.inner.lock().unwrap();
+        if !inner.state.subagents.iter().any(|a| a.id == agent && a.status == "running") {
+            bail!("no running subagent {agent}");
+        }
+        let Inner { adapter, state, .. } = &mut *inner;
+        let outs = adapter.as_mut().context("agent not running")?.stop_agent(agent, state);
         self.apply(&chat, &mut inner, outs);
         Ok(())
     }
@@ -388,6 +402,7 @@ impl ChatManager {
                 state.turn_started_at = None;
                 interrupted = true;
             }
+            super::stop_subagents(&mut state);
             for it in &mut state.items {
                 it.partial = false;
                 if let Some(t) = it.tool.as_mut()
@@ -477,6 +492,9 @@ impl ChatManager {
     /// After stopping the process ourselves: its exit handler is skipped
     /// (stale generation), so a running turn is closed here.
     fn settle(&self, chat: &Chat, inner: &mut Inner, note: &str) {
+        if super::stop_subagents(&mut inner.state) {
+            self.apply(chat, inner, vec![Out::State]);
+        }
         if !matches!(inner.state.status.as_str(), "working" | "blocked") {
             return;
         }
@@ -607,6 +625,10 @@ impl ChatManager {
             inner.stdin = None;
             inner.adapter = None;
             inner.pid = None;
+            // Subagents die with the agent process (X42).
+            if super::stop_subagents(&mut inner.state) {
+                mgr.apply(&c, &mut inner, vec![Out::State]);
+            }
             let busy = matches!(inner.state.status.as_str(), "working" | "blocked");
             if busy || !status.is_some_and(|s| s.success()) {
                 let tail = inner.stderr.iter().rev().take(5).rev().cloned().collect::<Vec<_>>().join("\n");
@@ -661,6 +683,10 @@ impl ChatManager {
                 None => st.items.iter().rev().find(|i| i.kind == "error").filter(|_| st.status == "error").map(|i| i.text.lines().next().unwrap_or("").to_string()),
             };
             let _ = self.terms.report(chat.id, agent_state(&st.status), StateSource::Hook, message, inner.cfg.agent.clone().into());
+            let running = st.subagents.iter().filter(|a| a.status == "running").count() as u32;
+            if self.terms.get(chat.id).is_some_and(|t| t.info().subagents != running) {
+                self.terms.update_info(chat.id, |i| i.subagents = running);
+            }
         }
         if inner.dirty && (state_changed || inner.saved_at.elapsed() > Duration::from_secs(2)) {
             self.save(chat, inner);
@@ -697,6 +723,12 @@ while IFS= read -r line; do
     *'"mode":"auto"'*)
       echo '{"type":"system","subtype":"status","status":null,"permissionMode":"auto"}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
+    *'launch an agent'*)
+      echo '{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_1","description":"List files","subagent_type":"general-purpose","is_backgrounded":true,"prompt":"List the files."}'
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
+    *'"subtype":"stop_task"'*)
+      echo '{"type":"system","subtype":"task_updated","task_id":"a1","patch":{"status":"killed","end_time":1791970412270}}'
+      echo '{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_1","status":"stopped","summary":"List files"}' ;;
     *'approve the plan'*)
       echo '{"type":"system","subtype":"status","status":null,"permissionMode":"acceptEdits"}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
@@ -997,6 +1029,50 @@ done
         assert_eq!(st.status, "idle");
         assert_eq!(st.items.last().unwrap().text, "Stopped");
         assert_eq!(terms.get(info.id).unwrap().info().agent_state, AgentState::Idle);
+    }
+
+    /// X42: one subagent stopped from the app; the terminal counts running ones.
+    #[tokio::test]
+    async fn a_running_subagent_can_be_stopped() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "launch an agent", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done" && s.subagents.first().is_some_and(|a| a.status == "running")).await;
+        assert_eq!(terms.get(info.id).unwrap().info().subagents, 1);
+        assert!(chats.stop_agent(info.id, "nope").is_err(), "an unknown agent");
+
+        chats.stop_agent(info.id, "a1").unwrap();
+        let st = wait_for(&chats, info.id, |s| s.subagents[0].status == "stopped").await;
+        assert_eq!(st.subagents[0].ended_at, Some(1791970412270));
+        assert_eq!(terms.get(info.id).unwrap().info().subagents, 0);
+        assert!(chats.stop_agent(info.id, "a1").is_err(), "no longer running");
+        chats.shutdown();
+    }
+
+    #[tokio::test]
+    async fn subagents_stop_with_their_agent_and_after_a_restart() {
+        let (dir, terms, chats) = setup().await;
+        let cwd = dir.path().display().to_string();
+        let a = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), ..Default::default() }).unwrap();
+        let b = chats.create(ChatCreate { cwd, agent: "claude".into(), ..Default::default() }).unwrap();
+        for id in [a.id, b.id] {
+            wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+            chats.send(id, "launch an agent", &[]).unwrap();
+            wait_for(&chats, id, |s| s.subagents.first().is_some_and(|x| x.status == "running")).await;
+        }
+        // The agent process of `a` is stopped.
+        terms.kill(a.id, false).unwrap();
+        assert_eq!(chats.state(a.id).unwrap().subagents[0].status, "stopped");
+        assert_eq!(terms.get(a.id).unwrap().info().subagents, 0);
+
+        // The daemon restarts while `b`'s subagent runs.
+        chats.save_all();
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
+        let chats2 = ChatManager::new(terms2.clone(), dir.path().join("chats"));
+        chats2.restore();
+        assert_eq!(chats2.state(b.id).unwrap().subagents[0].status, "stopped");
+        chats.shutdown();
     }
 
     #[tokio::test]

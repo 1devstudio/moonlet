@@ -204,6 +204,7 @@ impl Codex {
             can_always: true,
             diff,
             asked_at: Some(crate::paths::now_ms()),
+            agent: None,
         });
         self.asks.insert(id, (rid, item_id));
         st.status = "blocked".into();

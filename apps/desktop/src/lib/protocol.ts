@@ -33,6 +33,8 @@ export interface TerminalInfo {
   chat?: boolean;
   /** Shell keeps its own prompt; no Blocks-mode editor (T7). */
   classic?: boolean;
+  /** Running subagents of a chat terminal (X42). */
+  subagents?: number;
   created_at: number;
   last_output_at: number;
 }
@@ -79,6 +81,49 @@ export interface PermissionAsk {
   diff?: string | null;
   /** When the agent asked, ms (X40). */
   asked_at?: number | null;
+  /** The task id of the subagent that asks; absent for the main agent (X42). */
+  agent?: string | null;
+}
+
+export type SubagentStatus = "running" | "done" | "failed" | "stopped";
+
+/** A subagent the main agent launched with its `Agent` tool (X42). */
+export interface Subagent {
+  /** Claude's task id. */
+  id: string;
+  /** The `Agent` tool call that launched it. */
+  tool_use_id: string;
+  description: string;
+  /** The subagent type, e.g. `general-purpose`. */
+  kind?: string | null;
+  /** The brief the main agent gave it. */
+  prompt: string;
+  status: SubagentStatus;
+  started_at: number;
+  ended_at?: number | null;
+  /** How long it ran by Claude's count, once it ended. */
+  duration_ms?: number | null;
+  /** What it does now, e.g. "Running pnpm test". */
+  activity?: string | null;
+  tokens: number;
+  tool_uses: number;
+  model?: string | null;
+  /** Its final message, once done. */
+  report?: string | null;
+  error?: string | null;
+  /** Its latest tool calls, without their output. */
+  tools: SubagentTool[];
+}
+
+/** One tool call of a subagent (X42). */
+export interface SubagentTool {
+  id: string;
+  name: string;
+  summary: string;
+  status: ToolStatus;
+  /** Lines added and removed by an edit. */
+  added?: number | null;
+  removed?: number | null;
 }
 
 export interface ChatState {
@@ -103,6 +148,8 @@ export interface ChatState {
   queued: string[];
   /** How full the agent's context window is; null until it has said (X34). */
   context?: ContextUsage | null;
+  /** Subagents the agent launched, oldest first (X42). */
+  subagents?: Subagent[];
 }
 
 /** The agent's context window, from Claude's `get_context_usage` (X34). */
@@ -507,6 +554,8 @@ export const M = {
   chatSend: "chat.send",
   chatPermission: "chat.permission",
   chatInterrupt: "chat.interrupt",
+  /** Stops one running subagent: `{ id, agent }` (X42). */
+  chatStopAgent: "chat.stop_agent",
   chatSettings: "chat.settings",
   chatAddDir: "chat.add_dir",
   chatMcp: "chat.mcp",

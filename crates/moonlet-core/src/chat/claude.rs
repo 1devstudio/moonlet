@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatImage, ChatState, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk};
+use moonlet_proto::types::{ChatImage, ChatState, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, Subagent, SubagentTool};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, SignIns, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
@@ -92,6 +92,144 @@ fn context_usage(r: &Value) -> Option<ContextUsage> {
     })
 }
 
+/// Applies Claude's `task_started`, `task_progress`, `task_updated` and
+/// `task_notification` lines to the chat's subagents (X42). Whether
+/// anything changed.
+fn task_event(v: &Value, st: &mut ChatState) -> bool {
+    let Some(id) = v["task_id"].as_str() else { return false };
+    if v["subtype"] == "task_started" {
+        if st.subagents.iter().any(|a| a.id == id) {
+            return false;
+        }
+        st.subagents.push(Subagent {
+            id: id.into(),
+            tool_use_id: v["tool_use_id"].as_str().unwrap_or_default().into(),
+            description: v["description"].as_str().unwrap_or_default().into(),
+            kind: v["subagent_type"].as_str().map(String::from),
+            prompt: v["prompt"].as_str().unwrap_or_default().into(),
+            status: "running".into(),
+            started_at: now_ms(),
+            ..Default::default()
+        });
+        return true;
+    }
+    let Some(a) = st.subagents.iter_mut().find(|a| a.id == id) else { return false };
+    let usage = &v["usage"];
+    match v["subtype"].as_str().unwrap_or_default() {
+        "task_progress" => {
+            a.activity = v["description"].as_str().map(String::from).or(a.activity.take());
+        }
+        "task_updated" => {
+            if let Some(t) = v["patch"]["end_time"].as_u64() {
+                a.ended_at = Some(t);
+            }
+            if let Some(e) = v["patch"]["error"].as_str() {
+                a.error = Some(e.into());
+            }
+            return true;
+        }
+        "task_notification" => {
+            a.status = match v["status"].as_str().unwrap_or_default() {
+                "completed" => "done",
+                "failed" => "failed",
+                _ => "stopped",
+            }
+            .into();
+            a.ended_at.get_or_insert_with(now_ms);
+            a.duration_ms = usage["duration_ms"].as_u64().or(a.duration_ms);
+            let summary = v["summary"].as_str().map(String::from);
+            match a.status.as_str() {
+                "done" => a.report = summary,
+                "failed" => a.error = a.error.take().or(summary),
+                _ => {}
+            }
+        }
+        _ => return false,
+    }
+    if let Some(n) = usage["total_tokens"].as_u64() {
+        a.tokens = n;
+    }
+    if let Some(n) = usage["tool_uses"].as_u64() {
+        a.tool_uses = n;
+    }
+    true
+}
+
+/// Drops an answered or withdrawn ask. The chat stays blocked by another
+/// ask, else works on, unless it was a subagent's ask after the main turn
+/// ended (X42).
+fn close_ask(st: &mut ChatState, id: &str) {
+    let subagent = st.pending.iter().any(|p| p.id == id && p.agent.is_some());
+    st.pending.retain(|p| p.id != id);
+    st.status = if !st.pending.is_empty() {
+        "blocked"
+    } else if !subagent || st.turn_started_at.is_some() {
+        "working"
+    } else {
+        "done"
+    }
+    .into();
+}
+
+/// Tool calls kept per subagent (X42).
+const MAX_SUBAGENT_TOOLS: usize = 200;
+
+/// An `assistant` or `user` line from inside the subagent launched by the
+/// `parent` tool call: its tool calls and model (X42). Whether anything
+/// changed.
+fn subagent_line(parent: &str, v: &Value, st: &mut ChatState) -> bool {
+    let Some(a) = st.subagents.iter_mut().find(|a| a.tool_use_id == parent) else { return false };
+    let blocks = v["message"]["content"].as_array().into_iter().flatten();
+    let mut changed = false;
+    match v["type"].as_str().unwrap_or_default() {
+        "assistant" => {
+            if let Some(m) = v["message"]["model"].as_str()
+                && a.model.as_deref() != Some(m)
+            {
+                a.model = Some(m.into());
+                changed = true;
+            }
+            for b in blocks.filter(|b| b["type"] == "tool_use") {
+                let id = b["id"].as_str().unwrap_or_default();
+                if a.tools.iter().any(|t| t.id == id) {
+                    continue;
+                }
+                let name = b["name"].as_str().unwrap_or("tool");
+                let stat = super::diff_for(name, &b["input"]).map(|d| diff_stat(&d));
+                a.tools.push(SubagentTool {
+                    id: id.into(),
+                    name: name.into(),
+                    summary: summarize(name, &b["input"]),
+                    status: "running".into(),
+                    added: stat.map(|s| s.0),
+                    removed: stat.map(|s| s.1),
+                });
+                changed = true;
+            }
+            let extra = a.tools.len().saturating_sub(MAX_SUBAGENT_TOOLS);
+            a.tools.drain(..extra);
+        }
+        "user" => {
+            for part in blocks.filter(|b| b["type"] == "tool_result") {
+                if let Some(t) = a.tools.iter_mut().find(|t| part["tool_use_id"] == t.id.as_str())
+                    && t.status != "denied"
+                {
+                    t.status = if part["is_error"].as_bool().unwrap_or(false) { "error".into() } else { "ok".into() };
+                    changed = true;
+                }
+            }
+        }
+        _ => {}
+    }
+    changed
+}
+
+/// Lines added and removed by a unified diff.
+fn diff_stat(diff: &str) -> (u32, u32) {
+    let count = |sign: char, header: &str| diff.lines().filter(|l| l.starts_with(sign) && !l.starts_with(header)).count() as u32;
+    (count('+', "+++ "), count('-', "--- "))
+}
+
 fn result_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
@@ -156,8 +294,11 @@ impl Adapter for Claude {
     fn on_line(&mut self, line: &str, st: &mut ChatState) -> Vec<Out> {
         let Ok(v) = serde_json::from_str::<Value>(line) else { return vec![] };
         let mut out = Vec::new();
-        // Sub-agent (Task) traffic stays inside its tool row.
-        if v.get("parent_tool_use_id").is_some_and(|p| !p.is_null()) {
+        // Lines from inside a subagent go to that agent, never the transcript (X42).
+        if let Some(parent) = v.get("parent_tool_use_id").filter(|p| !p.is_null()) {
+            if subagent_line(parent.as_str().unwrap_or_default(), &v, st) {
+                out.push(Out::State);
+            }
             return out;
         }
         match v.get("type").and_then(Value::as_str).unwrap_or("") {
@@ -174,6 +315,12 @@ impl Adapter for Claude {
             "system" if v.get("subtype").and_then(Value::as_str) == Some("commands_changed") => {
                 if let Some(cmds) = v.get("commands").and_then(Value::as_array) {
                     st.slash_commands = cmds.iter().filter_map(|c| c["name"].as_str().map(String::from)).collect();
+                    out.push(Out::State);
+                }
+            }
+            // A background subagent started, progressed or ended (X42).
+            "system" if v["subtype"].as_str().is_some_and(|s| s.starts_with("task_")) => {
+                if task_event(&v, st) {
                     out.push(Out::State);
                 }
             }
@@ -335,6 +482,14 @@ impl Adapter for Claude {
                     out.push(self.control("context", json!({"subtype": "get_context_usage", "detail": "summary"})));
                 }
             }
+            // Claude withdrew a request, e.g. the ask of a stopped subagent (X42).
+            "control_cancel_request" => {
+                let rid = v["request_id"].as_str().unwrap_or_default();
+                if self.asks.remove(rid).is_some() {
+                    close_ask(st, rid);
+                    out.push(Out::State);
+                }
+            }
             "control_request" => {
                 let rid = v["request_id"].as_str().unwrap_or_default().to_string();
                 let req = &v["request"];
@@ -356,6 +511,7 @@ impl Adapter for Claude {
                         reason,
                         can_always: suggestions.as_array().is_some_and(|a| !a.is_empty()),
                         asked_at: Some(crate::paths::now_ms()),
+                        agent: req["agent_id"].as_str().map(String::from),
                     });
                     self.asks.insert(rid, (req["tool_use_id"].as_str().map(String::from), suggestions, input));
                     st.status = "blocked".into();
@@ -377,7 +533,8 @@ impl Adapter for Claude {
                 st.output_tokens += v["usage"]["output_tokens"].as_u64().unwrap_or(0);
                 let started_at = st.turn_started_at.take();
                 let api_error = self.api_error.take();
-                st.pending.clear();
+                // Background subagents may still wait for an answer (X42).
+                st.pending.retain(|p| p.agent.is_some());
                 if std::mem::take(&mut self.interrupted) {
                     let id = super::local_id("system");
                     out.push(upsert(st, item(id, "system", "Interrupted")));
@@ -404,6 +561,9 @@ impl Adapter for Claude {
                 if st.status == "done" {
                     out.extend(finish_turn(st, started_at));
                 }
+                if !st.pending.is_empty() {
+                    st.status = "blocked".into();
+                }
                 out.push(Out::State);
                 out.push(self.control("context", json!({"subtype": "get_context_usage", "detail": "summary"})));
             }
@@ -425,7 +585,7 @@ impl Adapter for Claude {
 
     fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>, st: &mut ChatState) -> Vec<Out> {
         let Some((tool_use, suggestions, mut input)) = self.asks.remove(ask) else { return vec![] };
-        st.pending.retain(|p| p.id != ask);
+        close_ask(st, ask);
         // AskUserQuestion is answered by allowing it with the answers in its input.
         if let (Some(a), Some(obj)) = (answers, input.as_object_mut()) {
             obj.insert("answers".into(), json!(a));
@@ -446,11 +606,15 @@ impl Adapter for Claude {
                 {
                     out.push(o);
                 }
+                if let Some(tid) = &tool_use
+                    && let Some(t) = st.subagents.iter_mut().flat_map(|a| a.tools.iter_mut()).find(|t| &t.id == tid)
+                {
+                    t.status = "denied".into();
+                }
                 json!({"behavior": "deny", "message": message.unwrap_or("The user denied this action.")})
             }
         };
         out.push(Out::Write(json!({"type": "control_response", "response": {"subtype": "success", "request_id": ask, "response": response}}).to_string()));
-        st.status = if st.pending.is_empty() { "working".into() } else { "blocked".into() };
         out.push(Out::State);
         out
     }
@@ -476,6 +640,10 @@ impl Adapter for Claude {
             }
             _ => vec![],
         }
+    }
+
+    fn stop_agent(&mut self, agent: &str, _st: &mut ChatState) -> Vec<Out> {
+        vec![self.control("stop", json!({"subtype": "stop_task", "task_id": agent}))]
     }
 
     fn interrupt(&mut self, st: &mut ChatState) -> Vec<Out> {
@@ -1032,5 +1200,159 @@ mod tests {
         let mut st = ChatState::default();
         let outs = a.on_line(r#"{"type":"control_request","request_id":"x","request":{"subtype":"elicitation"}}"#, &mut st);
         assert!(matches!(&outs[0], Out::Write(w) if w.contains("\"error\"")));
+    }
+
+    /// Captured from claude 2.1.296 (haiku, hooks off): two background
+    /// subagents, one asks to write a file and is allowed (X42).
+    const SUBAGENTS: &str = include_str!("fixtures/claude-subagents.jsonl");
+    /// The same with `stop_task` sent for "Touch a file" while it asked.
+    const SUBAGENT_STOP: &str = include_str!("fixtures/claude-subagent-stop.jsonl");
+
+    fn started() -> (Claude, ChatState) {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        a.send("Launch two agents", &[], &mut st);
+        (a, st)
+    }
+
+    #[test]
+    fn subagents_follow_task_events() {
+        let (mut a, mut st) = started();
+        replay(SUBAGENTS, &mut a, &mut st);
+        let s = &st.subagents;
+        assert_eq!(s.len(), 2, "{s:?}");
+        assert_eq!(s[0].id, "a98344134013d8227");
+        assert_eq!(s[0].tool_use_id, "toolu_01QNjAbPMDQiZwKyCqkmv2VD");
+        assert_eq!(s[0].description, "Write hello file");
+        assert_eq!(s[0].kind.as_deref(), Some("general-purpose"));
+        assert_eq!(s[0].prompt, "Use the Write tool to create hello.txt in the current directory containing the single word hi. Then reply done.");
+        assert_eq!(s[0].status, "done");
+        assert_eq!(s[0].activity.as_deref(), Some("Writing hello.txt"));
+        assert_eq!((s[0].tokens, s[0].tool_uses, s[0].duration_ms), (10682, 1, Some(3175)));
+        assert_eq!(s[0].ended_at, Some(1791970434654));
+        assert_eq!(s[0].report.as_deref(), Some("done"));
+        assert_eq!(s[1].description, "List files");
+        assert_eq!(s[1].status, "done");
+        assert_eq!(s[1].activity.as_deref(), Some("Running List top-level entries in the working directory"));
+        assert_eq!((s[1].tokens, s[1].tool_uses, s[1].duration_ms), (10779, 2, Some(11510)));
+        assert!(s[1].report.as_deref().is_some_and(|r| r.starts_with("The directory `/repo` contains two files")), "{:?}", s[1].report);
+        assert!(s.iter().all(|a| a.started_at > 0 && a.error.is_none()));
+    }
+
+    #[test]
+    fn subagent_tool_calls_stay_with_their_agent() {
+        let (mut a, mut st) = started();
+        replay(SUBAGENTS, &mut a, &mut st);
+        let tool = |id: &str, name: &str, summary: &str, status: &str, diff: Option<(u32, u32)>| SubagentTool {
+            id: id.into(),
+            name: name.into(),
+            summary: summary.into(),
+            status: status.into(),
+            added: diff.map(|d| d.0),
+            removed: diff.map(|d| d.1),
+        };
+        assert_eq!(st.subagents[0].tools, [tool("toolu_01HCnwCanjJxRH3wTnuE1cGa", "Write", "/repo/hello.txt", "ok", Some((1, 0)))]);
+        assert_eq!(
+            st.subagents[1].tools,
+            [
+                tool("toolu_01CTxqdEX7sP1JybbuNQQd46", "Glob", "*", "error", None),
+                tool("toolu_01S8c7hhXcyBvACkbd3u1Fuq", "Bash", "find /repo -mindepth 1 -maxdepth 1 -print0 | xargs -0 -n1 basename", "ok", None),
+            ]
+        );
+        assert_eq!(st.subagents[0].model.as_deref(), Some("claude-haiku-5-5"));
+        // The main transcript keeps only the two launches.
+        let tools: Vec<&str> = st.items.iter().filter(|i| i.kind == "tool").map(|i| i.id.as_str()).collect();
+        assert_eq!(tools, ["toolu_01QNjAbPMDQiZwKyCqkmv2VD", "toolu_01BxCjWGafqjuD8gywbDsWV7"]);
+        assert!(st.items.iter().all(|i| !i.text.contains("Glob tool is not available")), "a subagent's text leaked into the transcript");
+    }
+
+    /// The fixture's lines up to and including the first one containing `needle`.
+    fn until<'a>(fixture: &'a str, needle: &str) -> String {
+        let end = fixture.find(needle).expect(needle);
+        let end = end + fixture[end..].find('\n').unwrap_or(fixture.len() - end);
+        fixture[..end].to_string()
+    }
+
+    #[test]
+    fn a_subagent_ask_names_its_agent() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "can_use_tool""#), &mut a, &mut st);
+        assert_eq!(st.status, "blocked");
+        let ask = st.pending.last().unwrap();
+        assert_eq!((ask.id.as_str(), ask.tool.as_str()), ("eee7fb1b-453f-4303-8690-b9312d5f1b24", "Write"));
+        assert_eq!(ask.agent.as_deref(), Some("a98344134013d8227"));
+    }
+
+    #[test]
+    fn a_subagent_ask_outlives_the_main_turn() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "can_use_tool""#), &mut a, &mut st);
+        // The main turn ends while the subagent still waits for its answer.
+        let result = SUBAGENTS.lines().find(|l| l.contains(r#""type": "result""#)).unwrap();
+        a.on_line(result, &mut st);
+        assert_eq!(st.pending.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["eee7fb1b-453f-4303-8690-b9312d5f1b24"]);
+        assert_eq!(st.status, "blocked");
+        let outs = a.permission("eee7fb1b-453f-4303-8690-b9312d5f1b24", "allow", None, None, None, &mut st);
+        assert!(outs.iter().any(|o| matches!(o, Out::Write(w) if w.contains(r#""request_id":"eee7fb1b-453f-4303-8690-b9312d5f1b24""#) && w.contains(r#""behavior":"allow""#))), "{outs:?}");
+        assert!(st.pending.is_empty());
+        // The main agent is not working again: its turn had ended.
+        assert_eq!(st.status, "done");
+    }
+
+    #[test]
+    fn stopping_a_subagent_sends_stop_task() {
+        let (mut a, mut st) = started();
+        let asked = until(SUBAGENT_STOP, "b45af96a-71d5-42ad-8ebf-a8238ed2a070");
+        replay(&asked, &mut a, &mut st);
+        assert_eq!(st.pending.iter().map(|p| p.agent.as_deref()).collect::<Vec<_>>(), [Some("a9e80d60e7a0f792f")]);
+        let outs = a.stop_agent("a9e80d60e7a0f792f", &mut st);
+        let line = outs.iter().find_map(|o| if let Out::Write(l) = o { Some(l.clone()) } else { None }).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!((v["type"].as_str(), &v["request"]), (Some("control_request"), &json!({"subtype": "stop_task", "task_id": "a9e80d60e7a0f792f"})));
+        // Claude cancels the agent's ask, then reports it stopped.
+        replay(&SUBAGENT_STOP[asked.len()..], &mut a, &mut st);
+        assert!(st.pending.iter().all(|p| p.id != "b45af96a-71d5-42ad-8ebf-a8238ed2a070"), "{:?}", st.pending);
+        let s = &st.subagents;
+        assert_eq!((s[0].description.as_str(), s[0].status.as_str(), s[0].ended_at), ("Touch a file", "stopped", Some(1791970412270)));
+        assert_eq!(s[0].report, None);
+        assert_eq!((s[1].description.as_str(), s[1].status.as_str()), ("List files", "done"));
+    }
+
+    #[test]
+    fn denying_a_subagent_ask_marks_its_tool_call() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "can_use_tool""#), &mut a, &mut st);
+        a.permission("eee7fb1b-453f-4303-8690-b9312d5f1b24", "deny", None, None, None, &mut st);
+        let t = &st.subagents[0].tools[0];
+        assert_eq!((t.name.as_str(), t.status.as_str()), ("Write", "denied"));
+    }
+
+    #[test]
+    fn a_failed_subagent_keeps_its_error() {
+        let (mut a, mut st) = started();
+        let before = until(SUBAGENTS, r#""subtype": "task_progress", "task_id": "a69ffa893ad4d346c""#);
+        replay(&before, &mut a, &mut st);
+        // The captured run had no failure: these are its lines for the first
+        // agent's end, with the status Claude Code reports for a failed task.
+        a.on_line(r#"{"type": "system", "subtype": "task_updated", "task_id": "a98344134013d8227", "run_id": "0mv7wxe60-b32ba561", "patch": {"status": "failed", "end_time": 1791970434654, "error": "API Error: 529 overloaded"}}"#, &mut st);
+        a.on_line(r#"{"type": "system", "subtype": "task_notification", "task_id": "a98344134013d8227", "run_id": "0mv7wxe60-b32ba561", "tool_use_id": "toolu_01QNjAbPMDQiZwKyCqkmv2VD", "status": "failed", "summary": "Write hello file", "usage": {"total_tokens": 10682, "tool_uses": 1, "duration_ms": 3175}}"#, &mut st);
+        let s = &st.subagents[0];
+        assert_eq!((s.status.as_str(), s.error.as_deref(), s.report.as_deref()), ("failed", Some("API Error: 529 overloaded"), None));
+        assert_eq!(s.ended_at, Some(1791970434654));
+    }
+
+    #[test]
+    fn a_subagent_keeps_its_last_200_tool_calls() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "task_started", "task_id": "a98344134013d8227""#), &mut a, &mut st);
+        // The captured Write call of the first agent, sent 205 times with fresh ids.
+        let call = SUBAGENTS.lines().find(|l| l.contains(r#""id": "toolu_01HCnwCanjJxRH3wTnuE1cGa""#) && l.contains(r#""type": "assistant""#)).unwrap();
+        for n in 0..205 {
+            a.on_line(&call.replace("toolu_01HCnwCanjJxRH3wTnuE1cGa", &format!("toolu_{n:03}")), &mut st);
+        }
+        let ids: Vec<&str> = st.subagents[0].tools.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids.len(), 200);
+        assert_eq!((ids[0], ids[199]), ("toolu_005", "toolu_204"));
     }
 }
