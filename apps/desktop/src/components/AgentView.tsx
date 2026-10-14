@@ -75,11 +75,13 @@ import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../l
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
+import { agentNotes, agentRows } from "../lib/subagents";
 import { uiScale } from "../lib/uiScale";
 import { useNow } from "../lib/useNow";
 import { type ContextFiles, chatContextFiles, chipSection, newChatContext, otherChats, planContextFiles } from "../lib/chatContext";
 import { shortPath } from "../lib/terminals";
 import { AgentsStrip } from "./AgentsStrip";
+import { AgentAskCard, AgentNoteView, LaunchedCard } from "./AgentCards";
 import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
@@ -1061,6 +1063,11 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const exists = useProjectFiles(host, cwd, working);
   const fileLinks = useMemo(() => ({ host, wsId, cwd, exists }), [host, wsId, cwd, exists]);
   const now = useNow(working && visible);
+  // Subagents (X42): their launch cards, notes and asks.
+  const agentsRunning = (st?.subagents ?? []).some((a) => a.status === "running");
+  const agentNow = useNow(agentsRunning && visible);
+  const agentRowsHere = useMemo(() => agentRows([{ id, st }], agentNow), [id, st, agentNow]);
+  const notes = useMemo(() => (st ? agentNotes(st.items, st.subagents ?? []) : []), [st]);
 
   // Follow new output while the view is scrolled to the bottom.
   useLayoutEffect(() => {
@@ -1264,16 +1271,43 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
             ) : st.items.length === 0 ? (
               <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} onMention={(m) => editor.current?.mention(m)} />
             ) : (
-              blocks.map((b) => {
-                const view =
-                  b.kind === "tools" ? <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} /> : <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />;
-                const hasPlan = plan?.itemId && (b.kind === "tools" ? b.tools.some((t) => t.id === plan.itemId) : b.item.id === plan.itemId);
-                return hasPlan ? [view, planCard] : view;
-              })
+              [
+                ...notes.filter((n) => n.after === null).map((n, i) => <AgentNoteView key={`note-${i}`} note={n.note} host={host} session={info?.session_id} />),
+                ...blocks.map((b) => {
+                  const ids = b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id);
+                  const view =
+                    b.kind === "agents" ? (
+                      <LaunchedCard key={b.id} tools={b.tools} rows={agentRowsHere} />
+                    ) : b.kind === "tools" ? (
+                      <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} />
+                    ) : (
+                      <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />
+                    );
+                  const hasPlan = plan?.itemId && ids.includes(plan.itemId);
+                  const after = notes
+                    .filter((n) => n.after !== null && ids.includes(n.after))
+                    .map((n) => <AgentNoteView key={`note-${n.note.kind === "all" ? `all-${n.after}` : n.note.agent.id}`} note={n.note} host={host} session={info?.session_id} />);
+                  return [view, ...(hasPlan ? [planCard] : []), ...after];
+                }),
+              ]
             )}
             {plan && !plan.itemId && planCard}
             {st?.pending.map((ask) => {
               if (planOf(ask)) return null;
+              const asker = ask.agent ? st.subagents?.find((a) => a.id === ask.agent) : undefined;
+              if (asker) {
+                return (
+                  <AgentAskCard
+                    key={ask.id}
+                    ask={ask}
+                    description={asker.description}
+                    onAnswer={(decision) => {
+                      stick.current = true;
+                      void call(M.chatPermission, { ask: ask.id, decision });
+                    }}
+                  />
+                );
+              }
               return isQuestion(ask) ? (
                 <QuestionCard
                   key={ask.id}

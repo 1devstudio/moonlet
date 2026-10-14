@@ -1,6 +1,6 @@
 # X42 — Agents view: the subagents a chat launches
 
-- **Status:** draft
+- **Status:** implemented (2026-10-14). The daemon side checked against captured claude 2.1.296 output; the UI covered by e2e with a fake `claude`. Not yet looked at in the running app by a person.
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** goal 2 (agent-first)
 - **Related:** [X14](X14-collapsed-tool-calls.md) (tool rows), [X24](X24-plan-panel.md) (right panel tabs), [X29](X29-chat-plus-menu-and-mcp.md) (subagent definitions in the `+` menu)
@@ -55,9 +55,9 @@ Strip and sidebar (PR 3):
 
 Conversation cards (PR 4):
 
-- [ ] Consecutive `Agent` tool calls show as one "Launched N agents" card, with a row per agent and **Show in panel**. (`chatBlocks`)
-- [ ] A permission card for a subagent's ask reads "<description> wants to run <summary>". (`agents.e2e.ts`)
-- [ ] A finished agent's report shows in the conversation at the time it finished, and "N agents finished in m:ss" with the diff stat follows the last one. (`agentEvents`)
+- [x] Consecutive `Agent` tool calls show as one "Launched N agents" card, with a row per agent (its state and time) and **Show in panel**. (`chatBlocks`, `launchedRows`, `agents.e2e.ts`)
+- [x] A permission card for a subagent's ask reads "<description> wants to run <command>", with the command in full. (`agentAskTitle`, `agents.e2e.ts`)
+- [x] A finished agent's report, or a failed agent's error, shows in the conversation after the last message from before it ended. Once every agent launched after the same user message has ended (two or more), "N agents finished in m:ss" follows, with the diff stat and **Review changes**. (`agentNotes`, `agents.e2e.ts`)
 
 ## UI
 
@@ -145,8 +145,8 @@ Captured from claude 2.1.296 (haiku, `--permission-prompt-tool stdio`, hooks off
 
 - Unit (Rust, `crates/moonlet-core/src/chat/claude.rs`): replay the captured fixtures through the adapter, as listed under Behaviour.
 - Unit (Rust, `crates/moonlet-core/src/chat/runtime.rs`): `chat.stop_agent` and process exit with a fake `claude`.
-- Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `agentsHeader`, `agentsTabDot`, `retryMessage`, `stripView`, `stripDismissAt`, `stripRetry`, `agentEvents`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
-- E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents; the tab lists them, one asks and is allowed from its row, the detail shows its tool calls, and Stop sends `stop_task`.
+- Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `askLine`, `agentsHeader`, `agentsTabDot`, `modelLabel`, `retryMessage`, `stripView`, `stripDismissAt`, `stripRetry`, `launchedRows`, `agentAskTitle`, `agentNotes`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
+- E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents. The tab, the strip, the session chip and the conversation cards show them. One asks and is allowed from its row. The detail shows the other's brief and tool calls, and Stop sends `stop_task`.
 
 ## Open questions
 

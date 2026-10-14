@@ -1,7 +1,7 @@
 // The subagents a chat's agent launched (X42): the Agents tab's rows.
 
 import { tokens } from "./chat";
-import type { AgentState, ChatState, PermissionAsk, Subagent } from "./protocol";
+import type { AgentState, ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 
 /** An agent's state on screen: `needs` while one of its asks waits. */
 export type AgentRowState = "needs" | "running" | "failed" | "done" | "stopped";
@@ -187,3 +187,46 @@ export function modelLabel(id: string): string {
 
 /** Identifies one subagent across the session's chats. */
 export const agentKey = (chat: number, id: string) => `${chat}:${id}`;
+
+const STATE_LABEL: Record<AgentRowState, string> = { needs: "needs you", running: "running", failed: "failed", done: "done", stopped: "stopped" };
+
+/** The rows of a "Launched N agents" card, one per Agent call (X42). */
+export function launchedRows(
+  tools: ChatItem[],
+  rows: AgentRow[],
+): { key: string; description: string; state: AgentRowState | null; label: string; elapsed: string; agent: string | null }[] {
+  return tools.map((t) => {
+    const r = rows.find((x) => x.agent.tool_use_id === t.id);
+    if (!r) return { key: t.id, description: t.tool?.summary ?? "", state: null, label: "", elapsed: "", agent: null };
+    return { key: t.id, description: r.agent.description, state: r.state, label: STATE_LABEL[r.state], elapsed: r.elapsed, agent: agentKey(r.chat, r.agent.id) };
+  });
+}
+
+/** The conversation card's line for a subagent's ask: who asks for what. */
+export const agentAskTitle = (ask: PermissionAsk, description: string) => `${description} ${askLine(ask).replace(/^Wants/, "wants")}`;
+
+export type AgentNote = { kind: "finished"; agent: Subagent } | { kind: "all"; count: number; clock: string };
+
+/** Notes in the conversation (X42): each agent that finished or failed,
+ *  after the last item from before it ended, and each batch of agents
+ *  (launched after the same user message) once every one ended. `after`
+ *  is null when no item came before. */
+export function agentNotes(items: ChatItem[], subagents: Subagent[]): { after: string | null; note: AgentNote }[] {
+  const anchor = (t: number) => items.reduce<ChatItem | null>((last, i) => (i.ts <= t ? i : last), null)?.id ?? null;
+  const userTimes = items.filter((i) => i.kind === "user").map((i) => i.ts);
+  const batchOfAgent = (a: Subagent) => Math.max(0, ...userTimes.filter((t) => t <= a.started_at));
+  const end = (a: Subagent) => a.ended_at ?? a.started_at + agentMs(a, a.started_at);
+  const notes: { at: number; after: string | null; note: AgentNote }[] = [];
+  for (const a of subagents) {
+    if (a.status === "done" || a.status === "failed") notes.push({ at: end(a), after: anchor(end(a)), note: { kind: "finished", agent: a } });
+  }
+  const batches = new Map<number, Subagent[]>();
+  for (const a of subagents) batches.set(batchOfAgent(a), [...(batches.get(batchOfAgent(a)) ?? []), a]);
+  for (const batch of batches.values()) {
+    if (batch.length < 2 || batch.some((a) => a.status === "running")) continue;
+    const last = Math.max(...batch.map(end));
+    // After the last agent's own note.
+    notes.push({ at: last + 0.5, after: anchor(last), note: { kind: "all", count: batch.length, clock: spanClock(batch, last) } });
+  }
+  return notes.sort((x, y) => x.at - y.at).map(({ after, note }) => ({ after, note }));
+}
