@@ -39,12 +39,12 @@ Daemon (PR 1):
 
 Agents tab (PR 2):
 
-- [ ] The right panel has an **Agents** tab between Plan and Files. It shows a dot while an agent needs the user and another tab is selected. (`agentsTabDot`)
-- [ ] An agent's displayed state is `needs you` while one of the chat's pending asks names it and it is still running, else `running`, `done`, `failed` or `stopped`. (`agentRows`)
-- [ ] Each row shows the status dot, the description and the elapsed time (`m:ss`). Its second line depends on the state: the current activity while running; "Wants to run …" with Allow and Deny when it needs the user; the error in red with Retry when it failed; "Stopped" when stopped; nothing when done. (`agentRows`, `agents.e2e.ts`)
-- [ ] The header reads "N agents · m:ss · 57k tokens", and **Stop all** stops every running agent. (`agentsHeader`)
-- [ ] The detail shows the agent's state, model, elapsed time and tokens; its brief, collapsed to one line; its tool calls; the pending ask as a full permission card; and **Stop** while it runs. (`agents.e2e.ts`)
-- [ ] Retry sends the chat the message `Run the "<description>" agent again.` (`retryMessage`)
+- [x] The right panel has an **Agents** tab between Plan and Files. It shows a dot while an agent needs the user and another tab is selected. (`agentsTabDot`)
+- [x] An agent's displayed state is `needs you` while one of the chat's pending asks names it and it is still running, else `running`, `done`, `failed` or `stopped`. (`agentRows`)
+- [x] Each row shows the status dot, the description and the elapsed time (`m:ss`). Its second line depends on the state: the current activity while running; "Wants to run …" with Allow and Deny when it needs the user; the error in red with Retry when it failed; "Stopped" when stopped; nothing when done. (`agentRows`, `agents.e2e.ts`)
+- [x] The header reads "N agents · m:ss · 57k tokens", and **Stop all** stops every running agent. (`agentsHeader`)
+- [x] The detail shows the agent's state, model, elapsed time and tokens; its brief, collapsed to one line; its tool calls; the pending ask as a full permission card; and **Stop** while it runs. (`agents.e2e.ts`)
+- [x] Retry sends the chat the message `Run the "<description>" agent again.` (`retryMessage`)
 
 Strip and sidebar (PR 3):
 

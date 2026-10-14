@@ -1,18 +1,21 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ExternalLink, Layers, MoreHorizontal, Play, Plus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
+import { M, type PrStack, type ProjectConfig, type Session, type Subagent } from "../lib/protocol";
 import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { chatKey, loadChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
+import { agentRows, agentsTabDot } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
-import { FileLinks, useProjectFiles } from "./AgentView";
+import { AgentsPanel } from "./AgentsPanel";
+import { FileLinks, useNow, useProjectFiles } from "./AgentView";
 import { FilesPanel } from "./FilesPanel";
 import { cx, prTone } from "./ui";
 
@@ -20,6 +23,7 @@ const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
 const TABS: { id: RightTab; label: string }[] = [
   { id: "plan", label: "Plan" },
+  { id: "agents", label: "Agents" },
   { id: "files", label: "Files" },
   { id: "changes", label: "Changes" },
   { id: "review", label: "Review" },
@@ -217,9 +221,35 @@ function useSessionPlan(host: string, ws: Session) {
   return useMemo(() => (st ? planView(st) : null), [st]);
 }
 
+/** The subagents of every chat in the session (X42), loading chats not yet loaded. */
+function useSessionAgents(host: string, ws: Session) {
+  const ids = useStore((s) =>
+    Object.values(s.terminals[host] ?? {})
+      .filter((t) => t.session_id === ws.id && t.chat && !t.exit)
+      .map((t) => t.id)
+      .join(","),
+  );
+  const list = useMemo(() => (ids ? ids.split(",").map(Number) : []), [ids]);
+  // Only the parts that change on `chat.state`, so streaming text does not re-render the panel.
+  const parts = useChat(useShallow((s) => list.flatMap((id) => [s.chats[chatKey(host, id)]?.subagents, s.chats[chatKey(host, id)]?.pending])));
+  const missing = list.filter((_, i) => parts[i * 2 + 1] === undefined).join(",");
+  useEffect(() => {
+    for (const id of missing ? missing.split(",") : []) void loadChat(host, Number(id)).catch(() => {});
+  }, [host, missing]);
+  const running = list.some((_, i) => (parts[i * 2] as Subagent[] | undefined)?.some((a) => a.status === "running"));
+  const now = useNow(running);
+  const rows = useMemo(
+    () => agentRows(list.map((id) => ({ id, st: useChat.getState().chats[chatKey(host, id)] })), now),
+    // `parts` stands for the chats' subagents and asks.
+    [host, list, parts, now],
+  );
+  return { rows, now };
+}
+
 export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const tab = useStore((s) => s.rightTab);
   const plan = useSessionPlan(host, ws);
+  const agents = useSessionAgents(host, ws);
   // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
   const exists = useProjectFiles(host, tab === "plan" ? ws.path : "", plan?.plan);
 
@@ -240,7 +270,8 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             role="tab"
             aria-selected={tab === t.id}
             aria-controls="right-tabpanel"
-            onClick={() => useStore.setState({ rightTab: t.id })}
+            // The Agents tab always opens on its list (X42).
+            onClick={() => useStore.setState(t.id === "agents" ? { rightTab: t.id, agentDetail: null } : { rightTab: t.id })}
             className={cx(
               "flex items-center gap-1.5 px-3 ui-text-13 transition-colors",
               tab === t.id ? "text-fg shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg",
@@ -248,6 +279,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
           >
             {t.label}
             {t.id === "plan" && planTabDot(tab, plan?.status === "pending") && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
+            {t.id === "agents" && agentsTabDot(tab, agents.rows) && <span aria-label="agent waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
           </button>
         ))}
       </div>
@@ -261,6 +293,10 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
           {tab === "plan" ? (
             <FileLinks.Provider value={{ host, wsId: ws.id, cwd: ws.path, exists }}>
               <PlanPanel view={plan} />
+            </FileLinks.Provider>
+          ) : tab === "agents" ? (
+            <FileLinks.Provider value={{ host, wsId: ws.id, cwd: ws.path, exists }}>
+              <AgentsPanel host={host} cwd={ws.path} rows={agents.rows} now={agents.now} />
             </FileLinks.Provider>
           ) : tab === "files" ? (
             <FilesPanel host={host} ws={ws} />

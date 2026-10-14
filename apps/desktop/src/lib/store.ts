@@ -46,8 +46,8 @@ import type { Shortcuts } from "./runActions";
 import { readStored, writeStored } from "./storage";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
-/** Right panel tabs, in order (X24 added Plan). */
-export const RIGHT_TABS = ["plan", "files", "changes", "review"] as const;
+/** Right panel tabs, in order (X24 added Plan, X42 Agents). */
+export const RIGHT_TABS = ["plan", "agents", "files", "changes", "review"] as const;
 export type RightTab = (typeof RIGHT_TABS)[number];
 
 export interface Selection {
@@ -235,6 +235,8 @@ interface State extends UiPersist {
   /** When each agent session last started working (for "worked for 7s"). */
   workingSince: Record<string, number>;
   card: AgentCard | null;
+  /** The subagent the Agents tab shows in detail, `agentKey` (X42). */
+  agentDetail: string | null;
   /** File shown in the Changes diff (set from the Files list). */
   diffFile: string | null;
   /** Sessions (`sesKey`) whose sidebar row plays the archive loader (X21). */
@@ -281,6 +283,7 @@ function makeStore() {
   lastAttention: null,
   workingSince: {},
   card: null,
+  agentDetail: null,
   diffFile: null,
   archiving: {},
   }));
