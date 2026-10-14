@@ -127,3 +127,22 @@ describe("font size shortcuts (X37)", () => {
     expect(fontSize()).toBe(20);
   });
 });
+
+describe("the settings page (X43)", () => {
+  beforeAll(() => installShortcuts());
+  beforeEach(() => useStore.setState({ confirm: null, dialog: null, settingsPage: null, sidebarOpen: true }));
+
+  it("⌘, opens it at General", () => {
+    cmd(",");
+    expect(useStore.getState().settingsPage).toEqual({ page: "general" });
+  });
+
+  it("turns the other shortcuts off while it is open, except ⌘K", () => {
+    useStore.setState({ settingsPage: { page: "agents" } });
+    cmd("b");
+    expect(useStore.getState().sidebarOpen).toBe(true);
+    cmd("k");
+    expect(useStore.getState().dialog).toEqual({ kind: "palette" });
+    expect(useStore.getState().settingsPage).toEqual({ page: "agents" });
+  });
+});

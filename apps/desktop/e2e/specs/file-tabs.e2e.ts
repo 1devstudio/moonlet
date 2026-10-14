@@ -4,7 +4,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { PROJECT, choose, rpc, sel, world } from "../fixtures";
+import { PROJECT, choose, closeSettings, openSettings, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const NAME = "Edit a file";
@@ -31,10 +31,9 @@ const commandS = () =>
   });
 
 async function setTheme(id: string) {
-  await $('button[title="Settings (⌘,)"]').click();
-  await choose(sel.field("Colour theme of files and diffs"), id);
-  await $('[role="dialog"][aria-label="Settings"] button[title="Close"]').click();
-  await expect($('[role="dialog"][aria-label="Settings"]')).not.toBeExisting();
+  await openSettings("Appearance");
+  await choose(sel.settingsField("Colour theme of files and diffs"), id);
+  await closeSettings();
 }
 
 /** Focuses the editor. The embedded driver's click raises no mousedown,

@@ -15,7 +15,7 @@ moonlet checks GitHub for a newer release, downloads it, verifies its signature 
 2. Within ten seconds of launch, and every six hours after, moonlet checks for it. When one is found, a toast says "moonlet 0.1.15 is available" with an **Install** button, and an "Update to 0.1.15" button appears in the sidebar footer.
 3. The user clicks **Install**. The footer button shows the download progress, then "Restart to update".
 4. The user clicks it. moonlet relaunches as 0.1.15, upgrades the daemon, and every terminal and agent is still there.
-5. **Settings › Updates** shows the running version, a **Check now** button and a "Check for updates automatically" checkbox. **Check for updates…** in the Run action modal (⌘K) does the same as **Check now**.
+5. **Settings › General › Updates** (X43) shows the running version, a **Check now** button and a "Check for updates automatically" checkbox. **Check for updates…** in the Run action modal (⌘K) does the same as **Check now**.
 
 ## Behaviour and acceptance criteria
 

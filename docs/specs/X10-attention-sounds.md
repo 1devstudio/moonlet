@@ -14,7 +14,7 @@ A3 notifies through macOS notifications, which only fire when moonlet is not foc
 1. The user starts an agent in a session and switches to another session, another app, or leaves the desk.
 2. The agent stops to ask for permission or a question (blocked): moonlet plays the "needs you" sound.
 3. The agent finishes its turn (done) or fails (error): moonlet plays the "done" or "failed" sound.
-4. In **Settings › Agents › Sounds** the user picks a sound per event (or Off) and can preview it.
+4. In **Settings › Notifications › Sounds** (Settings › Agents before X43) the user picks a sound per event (or Off) and can preview it.
 
 ## Behaviour and acceptance criteria
 
@@ -27,7 +27,7 @@ A3 notifies through macOS notifications, which only fire when moonlet is not foc
 
 ## UI
 
-Settings › Agents, under the default permission mode:
+Settings › Agents, under the default permission mode (since X43: Settings › Notifications › Sounds):
 
     Sounds
     Needs you   [Glass   ▾] ▶

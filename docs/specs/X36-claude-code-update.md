@@ -17,7 +17,7 @@ moonlet runs the `claude` found on the user's PATH. Claude Code updates itself i
 4. When `claude update` reports success, the banner reads "Claude Code updated to 2.1.296" and "New agents start on 2.1.296." with a close button.
 5. When it fails, or Claude is managed by Homebrew or another package manager, the banner shows what `claude update` said (for example "To update, run: brew upgrade claude-code") with **Retry** and a close button.
 6. A result stays until the user closes it. Closing does not hide the release: a failed one comes back at the next check.
-7. **Settings › Updates** shows the installed Claude Code version under moonlet's with a status (Checking…, Updating…, "2.1.296 is available", Up to date, or "Not found on the PATH"), an **Update to 2.1.296** button even for a release the user said Later to, and **Check now** checks both.
+7. **Settings › General › Updates** (X43) shows the installed Claude Code version under moonlet's with a status (Checking…, Updating…, "2.1.296 is available", Up to date, or "Not found on the PATH"), an **Update to 2.1.296** button even for a release the user said Later to, and **Check now** checks both.
 
 ## Behaviour and acceptance criteria
 

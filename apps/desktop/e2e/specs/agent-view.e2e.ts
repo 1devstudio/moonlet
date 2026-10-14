@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { PROJECT, SESSION as OTHER_SESSION, choose, fill, rpc, sel, world } from "../fixtures";
+import { PROJECT, SESSION as OTHER_SESSION, choose, closeSettings, fill, openSettings, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
@@ -37,12 +37,11 @@ done
 `;
 
 const bashRows = () => $$('//button[.//span[normalize-space()="Bash"]]');
-const toolSetting = '//div[@role="dialog"]//label[span[normalize-space()="Tool calls in the conversation"]]//select';
-
-async function setToolCalls(value: "collapsed" | "expanded") {
-  await $('button[title="Settings (⌘,)"]').click();
-  await choose(toolSetting, value);
-  await $('[role="dialog"][aria-label="Settings"] button[title="Close"]').click();
+async function setToolCalls(value: "Collapsed" | "Expanded") {
+  await openSettings("Agents");
+  await $(sel.settingsOption("Tool calls in the conversation", value)).click();
+  await expect($(sel.settingsOption("Tool calls in the conversation", value))).toHaveAttribute("aria-checked", "true");
+  await closeSettings();
 }
 
 describe("agent view", () => {
@@ -68,7 +67,7 @@ describe("agent view", () => {
   after(async () => {
     // Back to the default, and to a claude that can never run. The session's
     // view stays mounted while it exists, and later specs select by text.
-    await setToolCalls("collapsed");
+    await setToolCalls("Collapsed");
     rpc(w, "session.archive", { id: sessionId });
     await expect($(sel.sessionRow(SESSION))).not.toBeExisting();
     writeFileSync(FAKE, blocked);
@@ -122,7 +121,7 @@ describe("agent view", () => {
   });
 
   it("shows one row per call when Settings says Expanded", async () => {
-    await setToolCalls("expanded");
+    await setToolCalls("Expanded");
     await expect($(sel.button("2 tool calls"))).not.toBeExisting();
     await expect(bashRows()).toBeElementsArrayOfSize(2);
     await expect($(sel.text(ANSWER))).toBeDisplayed();
