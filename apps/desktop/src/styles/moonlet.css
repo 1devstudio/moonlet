@@ -462,3 +462,18 @@ body:not(.kbd-nav) button:focus {
   from { background-position: 200% 0; }
   to { background-position: -200% 0; }
 }
+
+/* A setting opened from the settings search (X43). */
+@keyframes settings-flash {
+  from {
+    background: var(--color-selected);
+    box-shadow: inset 0 0 0 1px var(--color-accent);
+  }
+  to {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+.settings-flash {
+  animation: settings-flash 1.6s ease-out;
+}

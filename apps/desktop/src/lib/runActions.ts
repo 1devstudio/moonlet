@@ -108,12 +108,17 @@ const KEY_LABEL: Record<string, string> = {
   " ": "Space",
 };
 
-/** "shift+cmd+n" → "⇧⌘N". */
-export function keyLabel(id: string): string {
+/** "shift+cmd+n" → ["⇧", "⌘", "N"]: each modifier, then the key. */
+export function keyParts(id: string): string[] {
   const mods = /^((?:ctrl|shift|alt|cmd)\+)*/.exec(id)?.[0] ?? "";
   const key = id.slice(mods.length);
   const name = KEY_LABEL[key] ?? (key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1));
-  return mods.split("+").map((m) => MOD_LABEL[m] ?? "").join("") + name;
+  return [...mods.split("+").flatMap((m) => MOD_LABEL[m] ?? []), name];
+}
+
+/** "shift+cmd+n" → "⇧⌘N". */
+export function keyLabel(id: string): string {
+  return keyParts(id).join("");
 }
 
 /** Custom shortcuts, saved in settings: action id → key id, "" for none. */

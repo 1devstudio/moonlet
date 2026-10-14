@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { afterCheck, afterDownloadEvent, scheduleUpdateChecks, type CheckOutcome, type UpdateState } from "./updater";
+import { afterCheck, afterDownloadEvent, checkError, scheduleUpdateChecks, type CheckOutcome, type UpdateState } from "./updater";
 import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
 import { hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
@@ -358,7 +358,7 @@ export async function checkForUpdates({ manual = false } = {}) {
     outcome = { found: found?.version ?? null };
   } catch (e) {
     console.warn("update check failed", e);
-    outcome = { error: message(e) };
+    outcome = { error: checkError(message(e)) };
   }
   const prev = get().update;
   const { state, notice, error } = afterCheck(prev, outcome, { manual: reportCheck, running: get().appVersion });

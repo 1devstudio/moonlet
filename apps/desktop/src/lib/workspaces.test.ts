@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerOptions, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, workspacesNeedingYou, workspaceSummary } from "./workspaces";
+import { composerOptions, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -170,6 +170,23 @@ describe("the workspace settings page (X43)", () => {
       { id: "client", name: "client", projects: "3 projects" },
       { id: "infra", name: "infra", projects: "1 project" },
     ]);
+  });
+
+  it("follows a change made elsewhere while the form is untouched", () => {
+    const renamed = { ...acme, name: "Acme Inc", color: "violet" as const };
+    expect(syncWorkspaceForm(acme, renamed, { name: "Acme", color: "blue", profile: "work" })).toEqual({ name: "Acme Inc", color: "violet", profile: "work" });
+  });
+
+  it("keeps the user's edits when the workspace changes elsewhere", () => {
+    const renamed = { ...acme, name: "Acme Inc" };
+    expect(syncWorkspaceForm(acme, renamed, { name: "Acme Corp", color: "blue", profile: "work" })).toEqual({ name: "Acme Corp", color: "blue", profile: "work" });
+  });
+
+  it("can save changes, but not a blank name, nothing changed, or during a save", () => {
+    expect(workspaceCanSave(acme, { name: "Acme Inc", color: "blue", profile: "work" }, false)).toBe(true);
+    expect(workspaceCanSave(acme, { name: "  ", color: "blue", profile: "work" }, false)).toBe(false);
+    expect(workspaceCanSave(acme, { name: "Acme", color: "blue", profile: "work" }, false)).toBe(false);
+    expect(workspaceCanSave(acme, { name: "Acme Inc", color: "blue", profile: "work" }, true)).toBe(false);
   });
 
   it("has unsaved changes once the name, colour or profile differs", () => {

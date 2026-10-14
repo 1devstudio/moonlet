@@ -401,7 +401,7 @@ const RUN: Record<string, () => void> = {
   "copy-out": copyOutput,
   rerun: () => focusedEntry()?.rerunLast(),
   history: () => useStore.setState({ showHistory: true }),
-  settings: () => useStore.setState({ settingsPage: { page: "general" } }),
+  settings: () => void goSettings({ page: "general" }),
   "check-updates": () => void checkForUpdates({ manual: true }),
 };
 

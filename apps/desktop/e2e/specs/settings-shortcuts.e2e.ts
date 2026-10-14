@@ -3,7 +3,7 @@
 // recording cancels without closing the page.
 
 import { $, browser, expect } from "@wdio/globals";
-import { closeSettings, openSettings, sel } from "../fixtures";
+import { closeSettings, fill, openSettings, sel } from "../fixtures";
 
 const keyButton = (action: string) => $(`button[aria-label="Shortcut for ${action}"]`);
 
@@ -67,7 +67,7 @@ describe("keyboard shortcuts page", () => {
   });
 
   it("filters by key", async () => {
-    await $('input[aria-label="Filter shortcuts"]').setValue("⇧⌘P");
+    await fill('//input[@aria-label="Filter shortcuts"]', "⇧⌘P");
     await expect(keyButton("Create pull request…")).toBeDisplayed();
     await expect(keyButton("Split pane right")).not.toBeExisting();
   });

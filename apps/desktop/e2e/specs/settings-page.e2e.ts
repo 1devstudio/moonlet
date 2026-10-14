@@ -26,6 +26,12 @@ describe("settings page", () => {
     await expect($(sel.button("Check now"))).toBeDisplayed();
   });
 
+  it("says a development build doesn't update itself when asked to check", async () => {
+    await $(sel.button("Check now")).click();
+    await expect($(sel.text("Development builds don't update themselves"))).toBeDisplayed();
+    await expect($(sel.text("plugin updater not found"))).not.toBeExisting();
+  });
+
   it("goes back to the sessions with Esc", async () => {
     await browser.keys(["Escape"]);
     await expect($(sel.settings)).not.toBeExisting();
@@ -56,6 +62,24 @@ describe("settings page", () => {
     await expect($(sel.settingsField("Name"))).toHaveValue("Personal");
     await fill(sel.settingsField("Name"), "Personal stuff");
     await expect($(sel.text("Unsaved changes to Personal stuff"))).toBeDisplayed();
+    // Searching keeps the edits, and ⌘↵ there doesn't save the hidden page.
+    await fill('//input[@aria-label="Search settings"]', "gpu");
+    await expect($(sel.text("1 setting matches “gpu”"))).toBeDisplayed();
+    await browser.execute(() =>
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", metaKey: true, bubbles: true, cancelable: true })),
+    );
+    await fill('//input[@aria-label="Search settings"]', "");
+    await expect($(sel.settingsField("Name"))).toHaveValue("Personal stuff");
+    await expect($(sel.text("Unsaved changes to Personal stuff"))).toBeDisplayed();
+    // Its own nav entry doesn't ask: nothing is left.
+    await $(sel.navEntry("Personal")).click();
+    await expect($(sel.confirm("Discard changes"))).not.toBeExisting();
+    await expect($(sel.settingsField("Name"))).toHaveValue("Personal stuff");
+    // A blank name can't be saved, and says why.
+    await fill(sel.settingsField("Name"), " ");
+    await expect($(sel.text("Enter a name."))).toBeDisplayed();
+    await expect($(sel.settingsButton("Save"))).toBeDisabled();
+    await fill(sel.settingsField("Name"), "Personal stuff");
     await $(sel.navEntry("Hosts")).click();
     await expect($(sel.text("Discard unsaved changes to Personal?"))).toBeDisplayed();
     await $(sel.confirmButton("Keep editing")).click();
@@ -64,6 +88,34 @@ describe("settings page", () => {
     await expect($(sel.settingsField("Name"))).toHaveValue("Personal");
     await $(sel.navEntry("Hosts")).click();
     await expect($(sel.navEntry("Hosts", true))).toBeExisting();
+    await closeSettings();
+  });
+
+  it("finds a setting from the search, opens its page and highlights its row", async () => {
+    await openSettings("General");
+    await browser.execute(() =>
+      (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "f", code: "KeyF", metaKey: true, bubbles: true, cancelable: true })),
+    );
+    await expect($('input[aria-label="Search settings"]')).toBeFocused();
+    await fill('//input[@aria-label="Search settings"]', "tool calls");
+    await expect($(sel.text("1 setting matches “tool calls”"))).toBeDisplayed();
+    await expect($('//*[@role="option"][@aria-selected="true"][.//*[normalize-space()="App › Agents"]]')).toBeDisplayed();
+    await browser.keys(["Enter"]);
+    await expect($(sel.navEntry("Agents", true))).toBeExisting();
+    await expect($('[data-setting="tool-calls"][data-flash="true"]')).toBeExisting();
+    await expect($('input[aria-label="Search settings"]')).toHaveValue("");
+  });
+
+  it("shows a project script's value in the search", async () => {
+    await fill('//input[@aria-label="Search settings"]', "setup script");
+    await expect($('//*[@role="option"][.//*[normalize-space()="Projects › e2e-repo"]][.//*[normalize-space()="echo setting-up"]]')).toBeDisplayed();
+  });
+
+  it("says when no setting matches", async () => {
+    await fill('//input[@aria-label="Search settings"]', "zebra");
+    await expect($(sel.text("No settings match “zebra”"))).toBeDisplayed();
+    await browser.keys(["Escape"]);
+    await expect($('input[aria-label="Search settings"]')).toHaveValue("");
     await closeSettings();
   });
 
