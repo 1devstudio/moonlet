@@ -1,6 +1,6 @@
 [package]
 name = "moonlet-trackers"
-description = "Pure task-tracker logic for moonlet: issue keys, links, states and branch names (X44)"
+description = "Pure task-tracker logic for moonlet: pasted keys and URLs, states, priorities and branch names (X44)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
