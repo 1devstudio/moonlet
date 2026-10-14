@@ -42,7 +42,7 @@ export function TrackersPage() {
   };
   useEffect(() => void loadTrackersConfig(), []);
   useEffect(check, [ws?.host]); // eslint-disable-line react-hooks/exhaustive-deps
-  const save = (next: TrackersConfig) => void saveTrackersConfig(next).catch(errorToast);
+  const save = (update: (c: TrackersConfig) => TrackersConfig) => void saveTrackersConfig(update).catch(errorToast);
   const github = config.github;
   const link = config.link ?? DEFAULT_LINK;
   const workspaces = useStore((s) => s.workspaces);
@@ -56,7 +56,7 @@ export function TrackersPage() {
       return { key, name: w.name, sources: [...repos, ...others] };
     }),
   );
-  const setGithub = (patch: Partial<TrackersConfig["github"]>) => save({ ...config, github: { ...github, ...patch } });
+  const setGithub = (patch: Partial<TrackersConfig["github"]>) => save((c) => ({ ...c, github: { ...c.github, ...patch } }));
   const templateId = useId();
   const maxId = useId();
   const intervalId = useId();
@@ -80,20 +80,22 @@ export function TrackersPage() {
       </Section>
       {[...new Set((config.connections ?? []).map((c) => c.kind))].map((kind) => {
         const settings = trackerSettings(config, `${kind}:`);
-        const setRules = (rules: TrackerSettings["rules"]) => save({ ...config, [kind]: { ...settings, rules } });
+        const setTracker = (patch: Partial<TrackerSettings>) => save((c) => ({ ...c, [kind]: { ...trackerSettings(c, `${kind}:`), ...patch } }));
         return (
           <Section key={kind} title={`Keep ${NAME[kind]} in step`} hint="Suggest shows the task as out of sync with a one-click fix instead.">
             <Card>
               {trackerRules(kind).map((r) => (
-                <RuleRow key={r.id} rule={r} value={settings.rules[r.id]} onChange={(v) => setRules({ ...settings.rules, [r.id]: v })} />
+                <RuleRow key={r.id} rule={r} value={settings.rules[r.id]} onChange={(v) => save((c) => { const now = trackerSettings(c, `${kind}:`); return { ...c, [kind]: { ...now, rules: { ...now.rules, [r.id]: v } } }; })} />
               ))}
               <Row label="Branch name for new sessions" hint="{key}, {title} · empty: {key}-{title}" setting={`branch-template-${kind}`}>
                 <input
                   aria-label={`Branch name for ${NAME[kind]} sessions`}
                   className={fieldCls}
                   placeholder="{key}-{title}"
+                  // Keyed by the saved value: a file that loads after the page shows replaces the default.
+                  key={settings.branch_template}
                   defaultValue={settings.branch_template}
-                  onBlur={(e) => e.target.value.trim() !== settings.branch_template && save({ ...config, [kind]: { ...settings, branch_template: e.target.value.trim() } })}
+                  onBlur={(e) => e.target.value.trim() !== settings.branch_template && setTracker({ branch_template: e.target.value.trim() })}
                 />
               </Row>
             </Card>
@@ -103,7 +105,7 @@ export function TrackersPage() {
       <Section title="Keep GitHub in step" hint="What moonlet does on GitHub when something happens in a session. Suggest shows the task as out of sync with a one-click fix instead.">
         <Card>
           {GITHUB_RULES.map((r) => (
-            <RuleRow key={r.id} rule={r} value={github.rules[r.id]} onChange={(v) => setGithub({ rules: { ...github.rules, [r.id]: v } })} />
+            <RuleRow key={r.id} rule={r} value={github.rules[r.id]} onChange={(v) => save((c) => ({ ...c, github: { ...c.github, rules: { ...c.github.rules, [r.id]: v } } }))} />
           ))}
         </Card>
       </Section>
@@ -114,6 +116,7 @@ export function TrackersPage() {
               id={templateId}
               className={fieldCls}
               placeholder="{number}-{title}"
+              key={github.branch_template}
               defaultValue={github.branch_template}
               onBlur={(e) => e.target.value !== github.branch_template && setGithub({ branch_template: e.target.value.trim() })}
             />
@@ -123,6 +126,7 @@ export function TrackersPage() {
               id={maxId}
               className={`${fieldCls} w-[72px]`}
               inputMode="numeric"
+              key={github.max_length}
               defaultValue={github.max_length}
               onBlur={(e) => {
                 const n = Number(e.target.value);
@@ -135,14 +139,14 @@ export function TrackersPage() {
       </Section>
       <Section title="Linking" hint="The issue key in the branch name is what links a worktree to its task, even one made outside moonlet.">
         <Card>
-          <SwitchRow setting="link-branch" label="Link a session when its branch name contains the issue key" on={link.branch} onChange={(branch) => save({ ...config, link: { ...link, branch } })} />
-          <SwitchRow setting="link-pr" label="Link a session when its pull request mentions the key or closes the issue" on={link.pr} onChange={(pr) => save({ ...config, link: { ...link, pr } })} />
+          <SwitchRow setting="link-branch" label="Link a session when its branch name contains the issue key" on={link.branch} onChange={(branch) => save((c) => ({ ...c, link: { ...(c.link ?? DEFAULT_LINK), branch } }))} />
+          <SwitchRow setting="link-pr" label="Link a session when its pull request mentions the key or closes the issue" on={link.pr} onChange={(pr) => save((c) => ({ ...c, link: { ...(c.link ?? DEFAULT_LINK), pr } }))} />
           <SwitchRow
             setting="link-title"
             label="Suggest a task whose title is a session's name"
             hint="Only ever a suggestion: it never links by itself."
             on={link.title}
-            onChange={(title) => save({ ...config, link: { ...link, title } })}
+            onChange={(title) => save((c) => ({ ...c, link: { ...(c.link ?? DEFAULT_LINK), title } }))}
           />
         </Card>
       </Section>
@@ -156,7 +160,7 @@ export function TrackersPage() {
       <Section title="Sync">
         <Card>
           <Row label="Refresh issues" hint="Also refreshes whenever the window comes to the front, at most every 15 s." htmlFor={intervalId} setting="sync-interval">
-            <select id={intervalId} className={fieldCls} value={config.sync.interval} onChange={(e) => save({ ...config, sync: { ...config.sync, interval: Number(e.target.value) } })}>
+            <select id={intervalId} className={fieldCls} value={config.sync.interval} onChange={(e) => { const interval = Number(e.target.value); save((c) => ({ ...c, sync: { ...c.sync, interval } })); }}>
               {INTERVALS.map((i) => (
                 <option key={i.value} value={i.value}>
                   {i.label}
@@ -169,7 +173,7 @@ export function TrackersPage() {
             label="Notify when a task changes state outside moonlet"
             hint="For example, a reviewer reopens your issue. Only tasks with a session."
             on={config.sync.notify}
-            onChange={(notify) => save({ ...config, sync: { ...config.sync, notify } })}
+            onChange={(notify) => save((c) => ({ ...c, sync: { ...c.sync, notify } }))}
           />
         </Card>
       </Section>

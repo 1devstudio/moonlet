@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
-import { type Connection, loadTrackersConfig, reconnected, saveTrackersConfig, type Source, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { type Connection, loadTrackersConfig, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
 import { wsKey } from "../../lib/workspaces";
 import { Button, Dialog, Field, inputCls } from "../ui";
@@ -32,11 +32,9 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
   const wsOptions = Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ value: wsKey(host, w.id), label: w.name, host })));
   const set = (key: string, patch: Partial<Source>) => setRows((r) => r.map((x) => (x.key === key ? { ...x, ...patch } : x)));
   const save = async () => {
-    const config = trackersConfig(useTasks.getState());
     const sources = rows.filter((r) => on[r.key]);
-    const connections = (config.connections ?? []).map((c) => (c.id === connection.id ? { ...c, sources } : c));
     try {
-      await saveTrackersConfig({ ...config, connections });
+      await saveTrackersConfig((config) => ({ ...config, connections: (config.connections ?? []).map((c) => (c.id === connection.id ? { ...c, sources } : c)) }));
       onDone();
     } catch (e) {
       errorToast(message(e));
@@ -276,13 +274,11 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
     hostsApi.trackerStates(c.id, source).then(setStates, (e) => errorToast(message(e)));
   }, [c.id, source]);
   const save = async () => {
-    const config = trackersConfig(useTasks.getState());
     // Only states moved off their default column are kept.
     const defaults = Object.fromEntries((states ?? []).map((s) => [s.name, s.column]));
-    const kept = Object.fromEntries(Object.entries(mapping).filter(([name, col]) => defaults[name] === undefined || defaults[name] !== col));
-    const connections = (config.connections ?? []).map((x) => (x.id === c.id ? { ...x, states: kept as Connection["states"] } : x));
+    const kept = Object.fromEntries(Object.entries(mapping).filter(([name, col]) => defaults[name] !== col));
     try {
-      await saveTrackersConfig({ ...config, connections });
+      await saveTrackersConfig((config) => ({ ...config, connections: (config.connections ?? []).map((x) => (x.id === c.id ? { ...x, states: kept as Connection["states"] } : x)) }));
       onClose();
     } catch (e) {
       errorToast(message(e));

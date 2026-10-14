@@ -45,6 +45,8 @@ interface TasksState {
   notNow: Record<string, true>;
   /** `trackers.toml`; null until read. */
   config: TrackersConfig | null;
+  /** Why `trackers.toml` could not be read, if it could not. */
+  configError: string | null;
   /** Board or List (X45). */
   layout: "board" | "list";
   /** List rows open, by `connection key`. */
@@ -119,6 +121,7 @@ export const useTasks = create<TasksState>(() => ({
   selected: null,
   notNow: {},
   config: null,
+  configError: null,
   layout: storedLayout(),
   expanded: {},
   attention: {},
@@ -154,15 +157,28 @@ function withDefaults(c: Partial<TrackersConfig>): TrackersConfig {
 export async function loadTrackersConfig(force = false) {
   if (useTasks.getState().config && !force) return;
   try {
-    useTasks.setState({ config: withDefaults(await hostsApi.trackersConfig()) });
+    useTasks.setState({ config: withDefaults(await hostsApi.trackersConfig()), configError: null });
   } catch (e) {
+    useTasks.setState({ configError: message(e) });
     errorToast(e);
   }
 }
 
-export async function saveTrackersConfig(config: TrackersConfig) {
-  await hostsApi.trackersSave(config);
-  useTasks.setState({ config });
+let saving: Promise<void> = Promise.resolve();
+
+/**
+ * Changes `trackers.toml`. `update` gets the settings as they are when it
+ * runs, so quick changes in a row all land; writes go out in order. A file
+ * that could not be read is never written over with the defaults.
+ */
+export function saveTrackersConfig(update: (c: TrackersConfig) => TrackersConfig): Promise<void> {
+  const unread = useTasks.getState().configError;
+  if (unread) return Promise.reject(new Error(`~/.moonlet/trackers.toml could not be read (${unread}), so it is left as it is`));
+  const next = update(trackersConfig(useTasks.getState()));
+  useTasks.setState({ config: next });
+  const write = saving.then(async () => void (await hostsApi.trackersSave(next)));
+  saving = write.catch(() => {});
+  return write;
 }
 
 /** Fixes moonlet already made by itself, by `driftKey`, so each happens once (X46). */
