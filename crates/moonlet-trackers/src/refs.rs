@@ -46,10 +46,7 @@ fn parse_bare(input: &str) -> Option<Pasted> {
         && !id.is_empty()
         && id.chars().all(|c| c.is_ascii_alphanumeric())
     {
-        return bare(
-            Some(TrackerKind::Clickup),
-            format!("CU-{}", id.to_ascii_lowercase()),
-        );
+        return bare(Some(TrackerKind::Clickup), clickup_key(id));
     }
     let prefix_ok = prefix.starts_with(|c: char| c.is_ascii_alphabetic())
         && prefix.chars().all(|c| c.is_ascii_alphanumeric());
@@ -58,6 +55,12 @@ fn parse_bare(input: &str) -> Option<Pasted> {
         return bare(None, input.to_ascii_uppercase());
     }
     None
+}
+
+/// A ClickUp task without a custom ID, keyed the way ClickUp's GitHub
+/// integration names it in branches.
+fn clickup_key(task_id: &str) -> String {
+    format!("CU-{}", task_id.to_ascii_lowercase())
 }
 
 fn parse_url(rest: &str) -> Option<Pasted> {
@@ -106,11 +109,9 @@ fn parse_url(rest: &str) -> Option<Pasted> {
             custom.to_ascii_uppercase(),
             Some(team),
         ),
-        ("app.clickup.com", ["t", id, ..]) if !id.is_empty() => found(
-            TrackerKind::Clickup,
-            format!("CU-{}", id.to_ascii_lowercase()),
-            None,
-        ),
+        ("app.clickup.com", ["t", id, ..]) if !id.is_empty() => {
+            found(TrackerKind::Clickup, clickup_key(id), None)
+        }
         ("github.com", [owner, repo, "issues", n, ..]) => {
             let n: u64 = n.parse().ok()?;
             found(TrackerKind::Github, format!("{owner}/{repo}#{n}"), None)
