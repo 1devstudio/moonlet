@@ -9,6 +9,7 @@ import { FileIcon } from "./FileIcon";
 import { PaneTree } from "./PaneTree";
 import { AgentIcon, Kbd, cx } from "./ui";
 import { agentLabel } from "../lib/agents";
+import { TaskBar } from "./tasks/SessionTask";
 
 
 function AddMenu({ host, ws }: { host: string; ws: Session }) {
@@ -257,6 +258,7 @@ export function SessionView({ host, ws }: { host: string; ws: Session }) {
   return (
     <div className="flex h-full min-w-0 flex-col bg-bg">
       <TabStrip host={host} ws={ws} />
+      <TaskBar host={host} ws={ws} />
       {hostInfo && hostInfo.status !== "connected" && (
         <div className="shrink-0 bg-[#221d12] px-7 py-1.5 font-mono ui-text-12 text-blocked">
           {hostInfo.status === "reconnecting" || hostInfo.status === "connecting"

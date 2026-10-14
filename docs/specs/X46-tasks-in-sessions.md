@@ -22,7 +22,7 @@ A session can belong to a task. The link is made when a session starts from a ta
 
 - [x] A session has at most one task: `{connection, key, url}`, with the connection id of X44. It is stored by the daemon with the session. (`a_session_started_from_a_task_keeps_its_link`)
 - [x] A session is linked to a task when (first match wins): it has a stored link; its branch name contains the key (if that rule is on, X44); its PR closes the issue or mentions the key (if that rule is on). Links found from the branch or PR are not stored, so renaming a branch or a reconnect never leaves a stale link. (`tasks.test.ts` taskForSession)
-- [ ] A stored link can be removed with **Unlink**; then branch and PR matches are ignored for that session until it is linked again. (Daemon side done: `task_unlinked`, `a_session_can_be_linked_to_a_task_and_unlinked`.)
+- [x] A stored link can be removed with **Unlink**; then branch and PR matches are ignored for that session until it is linked again. (Daemon side done: `task_unlinked`, `a_session_can_be_linked_to_a_task_and_unlinked`.) (`tasks-mode.e2e.ts`)
 - [x] A worktree whose branch carries a task's key and that no session uses is a "worktree without a session" on that task (X45). (`tasksBoard.test.ts`)
 
 ### Starting a session from a task
@@ -42,16 +42,16 @@ A session can belong to a task. The link is made when a session starts from a ta
 
 ### Link dialog
 
-- [ ] Title `Link "<session name>" to a task`; a search field "Search Linear and Jira, or paste a key or URL" (naming the connected trackers).
-- [ ] **Suggested**: tasks whose title matches the session name or whose key is in its branch, with the reason (`Title matches the session name · In Progress · no sessions`). ↵ links the first.
+- [x] Title `Link "<session name>" to a task`; a search field "Search tasks, or paste a key or URL". (Naming the connected trackers comes with X44's connections.)
+- [x] **Suggested**: tasks whose title matches the session name or whose key is in its branch, with the reason (`Title matches the session name · In Progress · no sessions`). ↵ links the first. (`taskLinking.test.ts` linkChoices)
 - [ ] **Recent in <source>**: the source's recently updated tasks.
-- [ ] Pasting a key (`MOON-142`, `#42`, `CU-86abc`) or an issue URL of any connected tracker finds that task, even outside the workspace's sources.
+- [x] Pasting a key (`MOON-142`, `#42`, `CU-86abc`) or an issue URL of any connected tracker finds that task, even outside the workspace's sources. (`a_pasted_issue_url_reaches_the_app_as_kind_key_and_site`, `taskLinking.test.ts` findPasted, `tasks-mode.e2e.ts`)
 - [ ] Linking sets the stored link. The footer says "Links live in moonlet. <tracker> gets a link back to the PR when one opens."
 
 ### Session view
 
-- [ ] A linked session has a **task bar** above the conversation: `Tasks ⌃⌘T` (back to Tasks mode with the task selected), the tracker mark, key and title, a state menu, `Session <i> of <n>` with previous and next when the task has more than one session, and `<tracker> ↗`.
-- [ ] The right panel has a **Task** tab, first, shown only for a linked session: tracker, key, priority and cycle; title; description; **Acceptance criteria · <done> of <n>** from the description's checklist items (`- [ ]` / `- [x]`, or a section titled "Acceptance criteria"); the **Keep <tracker> in step** switch with what it will do; **Sessions on this task**, with this session marked; the task's worktrees without a session; **Link to another task** and **Unlink**.
+- [ ] A linked session has a **task bar** above the conversation: `Tasks ⌃⌘T` (back to Tasks mode with the task selected), the tracker mark, key and title, a state menu, `Session <i> of <n>` with previous and next when the task has more than one session, and `<tracker> ↗`. (Partly: the state shows as a label, not a menu yet; `tasks-mode.e2e.ts`.)
+- [ ] The right panel has a **Task** tab, first, shown only for a linked session: tracker, key, priority and cycle; title; description; **Acceptance criteria · <done> of <n>** from the description's checklist items (`- [ ]` / `- [x]`, or a section titled "Acceptance criteria"); the **Keep <tracker> in step** switch with what it will do; **Sessions on this task**, with this session marked; the task's worktrees without a session; **Link to another task** and **Unlink**. (Partly: no priority, cycle or Keep in step switch yet; `taskLinking.test.ts` acceptanceCriteria, `tasks-mode.e2e.ts`.)
 - [ ] The Sessions sidebar can group sessions by **Project** or **Task** ("Group by Project · Task"). In both, a linked session row shows a second line with the task glyph, key and state, in the accent colour with `· out of sync` when it is (X45). A session with no task shows `No task · Link` on hover.
 
 ### Keep in step

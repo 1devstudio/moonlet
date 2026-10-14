@@ -44,6 +44,8 @@ export const hostsApi = {
   service: (action: "install" | "uninstall" | "status") => invoke<{ installed: boolean; loaded: boolean; plist: string }>("daemon_service", { action }),
   appInfo: () => invoke<{ version: string }>("app_info"),
   claudeLatest: () => invoke<string>("claude_latest_version"),
+  /** A key or issue URL pasted into the link dialog, or null (X46). */
+  parsePasted: (input: string) => invoke<import("./taskLinking").Pasted | null>("task_parse_pasted", { input }),
   /** The branch for a session started from a task (X46); `kind` is the tracker. */
   taskBranch: (o: { kind: "linear" | "jira" | "clickup" | "github"; key: string; title: string; number?: number; template?: string; maxLen?: number }) =>
     invoke<string>("task_branch_name", { kind: o.kind, template: o.template ?? null, key: o.key, title: o.title, number: o.number ?? null, maxLen: o.maxLen ?? null }),

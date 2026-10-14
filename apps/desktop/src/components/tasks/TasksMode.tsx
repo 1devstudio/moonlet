@@ -64,6 +64,11 @@ function useTaskSync() {
 /** The shown workspace's tasks and their board. */
 function useWorkspaceTasks() {
   const ws = useStore((s) => shownWorkspace(s));
+  return useWorkspaceBoard(ws);
+}
+
+/** A workspace's tasks and their board (X45), for Tasks mode and a session's task (X46). */
+export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
   const data = useTasks((t) => (ws ? t.data[wsKey(ws.host, ws.id)] : undefined));
   const notNow = useTasks((t) => t.notNow);
   // What the board reads of the main store; other changes (terminal output) don't rebuild it.
@@ -123,7 +128,7 @@ function openSession(host: string, sessionId: string) {
 }
 
 /** Opens the new-session composer for a task, or for one of its worktrees without a session (X46). */
-function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
+export function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
   // The "session starts" rule at its default, Automatically, until X44's connection page sets it.
   const start = { ...taskStart(card.task, data?.repos ?? {}), assign: startAction(card.task, "auto") };
@@ -280,12 +285,17 @@ export function TasksMode() {
           <section aria-label="Sessions without a task" className="overflow-y-auto px-5">
             {unlinked.length === 0 && <p className="ui-text-13 text-muted">Every session is linked to a task.</p>}
             {unlinked.map((u) => (
-              <button key={u.session.id} onClick={() => openSession(ws.host, u.session.id)} className="flex w-full items-center gap-3 border-b border-border py-2 text-left hover:bg-panel-2">
-                <StateGlyph state={u.session.state} size={13} />
-                <span className="ui-text-13.5 text-fg">{u.session.name}</span>
+              <div key={u.session.id} className="flex w-full items-center gap-3 border-b border-border py-2">
+                <button onClick={() => openSession(ws.host, u.session.id)} className="flex min-w-0 items-center gap-3 text-left hover:underline">
+                  <StateGlyph state={u.session.state} size={13} />
+                  <span className="ui-text-13.5 text-fg">{u.session.name}</span>
+                </button>
                 <span className="font-mono ui-text-12 text-faint">{u.session.branch}</span>
                 <span className="ml-auto ui-text-12 text-faint">{u.hint}</span>
-              </button>
+                <button className="ui-text-12 text-accent hover:underline" onClick={() => useStore.setState({ dialog: { kind: "link-task", host: ws.host, session: u.session.id } })}>
+                  Link to task
+                </button>
+              </div>
             ))}
           </section>
         ) : (

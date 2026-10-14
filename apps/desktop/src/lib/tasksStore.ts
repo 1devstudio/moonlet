@@ -189,3 +189,28 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
     errorToast(e);
   }
 }
+
+/** Loads a workspace's tasks when a linked session opens outside Tasks mode, at most once a minute (X46). */
+export function ensureTasks(host: string, workspaceId: string, now = Date.now()) {
+  const d = useTasks.getState().data[wsKey(host, workspaceId)];
+  if (!d || d.syncedAt === null || now - d.syncedAt > 60_000) void refreshTasks(host, workspaceId, now);
+}
+
+/** Links a session to a task, or unlinks it with null (X46). */
+export async function linkTask(host: string, sessionId: string, task: Task | null) {
+  try {
+    await rpc(host, M.sessionUpdate, { id: sessionId, task: task ? { connection: task.connection, key: task.key, url: task.url } : null });
+    toast(task ? `Linked to ${task.key}` : "Unlinked the task");
+  } catch (e) {
+    errorToast(e);
+  }
+}
+
+/** Tasks mode with `task` open in the detail panel (the task bar's way back, X46). */
+export function openInTasksMode(task: Task) {
+  const s = useStore.getState();
+  const ws = shownWorkspace(s);
+  if (!ws) return;
+  useTasks.setState({ selected: `${task.connection} ${task.key}`, view: "mine" });
+  useStore.setState({ tasksMode: { ...s.tasksMode, [wsKey(ws.host, ws.id)]: true }, showHistory: false });
+}
