@@ -466,7 +466,9 @@ describe("Shows per source (X44)", () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
     const lt = (key: string, source: string, who: string[]) => ({ connection: "linear:acme", key, title: key, url: "", column: "todo", priority: 0, assignees: who, labels: [], description: "", updatedMs: 0, tracker: { id: key, state: "Todo", source } });
-    answers["tracker_tasks linear:acme all"] = () => [lt("MOON-1", "MOON", ["Kim"]), lt("MOON-2", "MOON", ["Sam"]), lt("DES-1", "DES", ["Kim"]), lt("DES-2", "DES", ["Sam"])];
+    answers["tracker_tasks linear:acme all"] = () => [lt("MOON-1", "MOON", ["Kim"]), lt("MOON-2", "MOON", ["Sam"]), lt("DES-1", "DES", ["Kim"]), lt("DES-2", "DES", ["Sam"]), lt("DES-3", "DES", ["Sam"])];
+    // The tracker's own "assigned to me": DES-3 belongs to another Sam.
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("DES-2", "DES", ["Sam"])];
     useTasks.setState({
       config: {
         ...DEFAULT_CONFIG,

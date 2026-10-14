@@ -262,10 +262,12 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
         return [];
       }
       try {
-        // A source set to "All open issues" needs everyone's; the others keep the account's.
-        const mine = c.all.length === 0;
-        const fetched = await hostsApi.trackerTasks(c.id, mine);
-        const list = mine ? fetched : fetched.filter((t) => c.all.includes(t.tracker?.source ?? "") || t.assignees.includes(c.account));
+        // The account's own, as the tracker decides who that is; a source set
+        // to "All open issues" also takes everyone's.
+        const shownAll = (t: Task) => c.all.includes(t.tracker?.source ?? "");
+        const mine = await hostsApi.trackerTasks(c.id, true);
+        const everyone = c.all.length ? (await hostsApi.trackerTasks(c.id, false)).filter(shownAll) : [];
+        const list = [...everyone, ...mine.filter((t) => !shownAll(t))];
         return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
       } catch (e) {
         const err = e as { auth?: boolean; message?: string };
