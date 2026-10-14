@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ExternalLink, Layers, MoreHorizontal, Play, Plus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type PrStack, type ProjectConfig, type Session, type Subagent } from "../lib/protocol";
+import { M, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
@@ -15,7 +15,8 @@ import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
 import { AgentsPanel } from "./AgentsPanel";
-import { FileLinks, useNow, useProjectFiles } from "./AgentView";
+import { FileLinks, useProjectFiles } from "./AgentView";
+import { useNow } from "../lib/useNow";
 import { FilesPanel } from "./FilesPanel";
 import { cx, prTone } from "./ui";
 
@@ -230,18 +231,18 @@ function useSessionAgents(host: string, ws: Session) {
       .join(","),
   );
   const list = useMemo(() => (ids ? ids.split(",").map(Number) : []), [ids]);
-  // Only the parts that change on `chat.state`, so streaming text does not re-render the panel.
-  const parts = useChat(useShallow((s) => list.flatMap((id) => [s.chats[chatKey(host, id)]?.subagents, s.chats[chatKey(host, id)]?.pending])));
-  const missing = list.filter((_, i) => parts[i * 2 + 1] === undefined).join(",");
+  // Each chat's subagents and asks, which change only on `chat.state`, so
+  // streaming text does not re-render the panel. Undefined until loaded.
+  const subagents = useChat(useShallow((s) => list.map((id) => s.chats[chatKey(host, id)]?.subagents)));
+  const pending = useChat(useShallow((s) => list.map((id) => s.chats[chatKey(host, id)]?.pending)));
+  const unloaded = list.filter((_, i) => pending[i] === undefined).join(",");
   useEffect(() => {
-    for (const id of missing ? missing.split(",") : []) void loadChat(host, Number(id)).catch(() => {});
-  }, [host, missing]);
-  const running = list.some((_, i) => (parts[i * 2] as Subagent[] | undefined)?.some((a) => a.status === "running"));
-  const now = useNow(running);
+    for (const id of unloaded ? unloaded.split(",") : []) void loadChat(host, Number(id)).catch(() => {});
+  }, [host, unloaded]);
+  const now = useNow(subagents.some((agents) => agents?.some((a) => a.status === "running")));
   const rows = useMemo(
-    () => agentRows(list.map((id) => ({ id, st: useChat.getState().chats[chatKey(host, id)] })), now),
-    // `parts` stands for the chats' subagents and asks.
-    [host, list, parts, now],
+    () => agentRows(list.map((id, i) => ({ id, st: pending[i] && { subagents: subagents[i], pending: pending[i] } })), now),
+    [list, subagents, pending, now],
   );
   return { rows, now };
 }

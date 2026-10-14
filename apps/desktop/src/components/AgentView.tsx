@@ -76,6 +76,7 @@ import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
 import { uiScale } from "../lib/uiScale";
+import { useNow } from "../lib/useNow";
 import { type ContextFiles, chatContextFiles, chipSection, newChatContext, otherChats, planContextFiles } from "../lib/chatContext";
 import { shortPath } from "../lib/terminals";
 import { ContextMeter } from "./ContextMeter";
@@ -1010,15 +1011,6 @@ function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sess
 
 // ------------------------------------------------------------ view
 
-export function useNow(active: boolean) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [active]);
-  return now;
-}
 
 async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
   const id = st.agent_session;
