@@ -472,6 +472,23 @@ describe("a failed action shows on its task with Retry (X46)", () => {
   });
 });
 
+describe("Retry on a chip's fix (X46)", () => {
+  it("fixes the task as it is now: nothing left to fix clears the error without a request", async () => {
+    sent.length = 0;
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const t = { connection: "linear:acme", key: "MOON-142", title: "Hosts", url: "", column: "in_progress" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "issue-1", state: "In Progress", source: "MOON" } };
+    failNext.push({ message: "Linear is not answering" });
+    await fixDrift("local", "personal", { task: t, column: "in_progress", rows: [], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open", text: "#131 open", fix: "Move to In Review" } });
+    expect(failureOf(t)).toBe("Linear is not answering");
+    // Meanwhile someone moved it to In Review in Linear.
+    useTasks.setState({ data: { "local/personal": { tasks: [{ ...t, column: "in_review" }], worktrees: [], sources: ["linear:acme"], repos: {}, sourceProjects: {}, syncedAt: 2, error: null } } });
+    await retryTask(t);
+    expect(failureOf(t)).toBe(undefined);
+    expect(sent).toEqual([]);
+  });
+});
+
 describe("Shows per source (X44)", () => {
   it("shows all open issues of a source set to all, and only the account's issues of the others", async () => {
     answers["git.origin_url"] = () => null;

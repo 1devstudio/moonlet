@@ -410,12 +410,28 @@ export function reconnected(id: string) {
   useTasks.setState((t) => ({ attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== id)) }));
 }
 
+/** A task's card on the workspace's board as it is now. */
+function currentCard(host: string, workspaceId: string, id: string): Card | undefined {
+  const data = useTasks.getState().data[wsKey(host, workspaceId)];
+  if (!data) return undefined;
+  const config = trackersConfig(useTasks.getState());
+  const board = tasksBoard(boardInput(useStore.getState(), host, workspaceId, data, config));
+  return Object.values(board)
+    .flat()
+    .find((c) => `${c.task.connection} ${c.task.key}` === id);
+}
+
 /** Runs a chip's fix; true when it was done (a declined Clean up is not). */
 export async function fixDrift(host: string, workspaceId: string, card: Card): Promise<boolean> {
   const plan = driftFix(card);
   if (!plan) return false;
   const id = `${card.task.connection} ${card.task.key}`;
-  retries.set(id, async () => void (await fixDrift(host, workspaceId, card)));
+  // Retry looks again: the task may have moved since, or need another fix.
+  retries.set(id, async () => {
+    const now = currentCard(host, workspaceId, id);
+    if (now?.drift) await fixDrift(host, workspaceId, now);
+    else setFailure(card.task, null);
+  });
   try {
     if (plan.kind === "github") {
       const path = repoPath(host, workspaceId, plan.repo);
