@@ -1558,7 +1558,8 @@ pub(crate) mod tests {
     #[test]
     fn linked_worktrees_from_porcelain() {
         // `git worktree list --porcelain` with a branch and a detached
-        // worktree, 2026-10-14; plus a prunable entry from the test above.
+        // worktree, captured 2026-10-14, with the prunable entry of the test
+        // above spliced in.
         let raw = "worktree /private/tmp/wtcap/r\n\
                    HEAD a406ac3cb27e5460ee0336e4d8c3b2dc61566194\n\
                    branch refs/heads/main\n\
@@ -1567,7 +1568,7 @@ pub(crate) mod tests {
                    HEAD a406ac3cb27e5460ee0336e4d8c3b2dc61566194\n\
                    detached\n\
                    \n\
-                   worktree /private/tmp/jaunt-vcheck/home/worktrees/moonlet/test\n\
+                   worktree /private/tmp/moonlet-vcheck/home/worktrees/moonlet/test\n\
                    HEAD 449191af3cf6b19bc796d73c10ad8d3f23248210\n\
                    branch refs/heads/moonlet/test\n\
                    prunable gitdir file points to non-existent location\n\
