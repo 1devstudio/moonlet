@@ -13,14 +13,15 @@ import { cx } from "./ui";
 export function AgentsStrip({ host, id, st, onSend }: { host: string; id: number; st: ChatState; onSend: (text: string) => void }) {
   const dismissedAt = useStore((s) => s.stripDismissed[termKey(host, id)] ?? 0);
   const active = (st.subagents ?? []).some((a) => a.status === "running");
-  // The clock ticks while agents run; `woke` moves the animation along between ticks.
-  const [woke, setWoke] = useState(0);
-  const now = Math.max(useNow(active), woke);
+  // The clock ticks while agents run; `steppedAt` moves the animation along between ticks.
+  const [steppedAt, setSteppedAt] = useState(0);
+  const now = Math.max(useNow(active), steppedAt);
   const view = stripView(st, now, dismissedAt);
   const wake = view?.wake ?? null;
   useEffect(() => {
     if (wake === null) return;
-    const t = setTimeout(() => setWoke(Date.now()), Math.max(0, wake - Date.now()));
+    // At least `wake`: a timer can fire a little before the wall clock gets there.
+    const t = setTimeout(() => setSteppedAt(Math.max(Date.now(), wake)), Math.max(0, wake - Date.now()));
     return () => clearTimeout(t);
   }, [wake]);
   if (!view) return null;

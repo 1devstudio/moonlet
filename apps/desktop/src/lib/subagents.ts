@@ -108,13 +108,15 @@ export function retryMessage(agents: Subagent[]): string {
 /** When an agent ended, or would have by Claude's duration. */
 const endedAt = (a: Subagent) => a.ended_at ?? a.started_at + (a.duration_ms ?? 0);
 
-/** How long a finished agent's dot pops, its done count shows green, and
- *  its dot stays before it hides, from when it ended (ms). */
-const STRIP_POP = 280;
-const STRIP_FLASH = 900;
-const STRIP_HIDE = 1200;
-/** How long "All N done" holds after the last agent ended before the strip folds (ms). */
-const STRIP_HOLD = 1600;
+// The strip's steps after an agent ended (ms), from the design.
+/** A finished agent's dot pops this long. */
+const DOT_POP = 280;
+/** The done count shows green this long. */
+const COUNT_FLASH = 900;
+/** Then the dot shrinks away. */
+const DOT_HIDE = 1200;
+/** "All N done" holds this long after the last one ended, then the strip folds. */
+const STRIP_FOLD = 1600;
 
 /** One agent's dot in the strip: `pop` just after it finished, `gone` once hidden. */
 export interface StripDot {
@@ -158,33 +160,40 @@ export function stripView(st: ChatState, now: number, dismissedAt: number): Stri
   const batch = batchOf(st);
   if (!batch.length || batch.every((a) => a.started_at <= dismissedAt)) return null;
   const rows = agentRows([{ id: 0, st: { ...st, subagents: batch } }], now);
+  const stateOf = new Map(rows.map((r) => [r.agent, r.state]));
   const n = (state: AgentRowState) => rows.filter((r) => r.state === state).length;
-  const ended = !rows.some((r) => isActive(r.state)) && !n("failed");
+  const idle = !rows.some((r) => isActive(r.state));
+  const ended = idle && !n("failed");
   // Finished means every agent did its work; stopped ones did not.
   const finished = ended && !n("stopped");
   const counts = (["running", "done", "stopped"] as const).filter((state) => n(state)).map((state) => ({ state, text: `${n(state)} ${state}` }));
   const ends = batch.filter((a) => a.status === "done").map(endedAt);
   const last = finished ? Math.max(...ends) : NaN;
-  const wake = Math.min(...[...ends.flatMap((t) => [t + STRIP_POP, t + STRIP_FLASH, t + STRIP_HIDE]), last + STRIP_HOLD].filter((t) => t > now));
+  const wake = Math.min(...[...ends.flatMap((t) => [t + DOT_POP, t + COUNT_FLASH, t + DOT_HIDE]), last + STRIP_FOLD].filter((t) => t > now));
   const alert = n("needs") ? { tone: "blocked" as const, text: `${n("needs")} needs you` } : n("failed") ? { tone: "error" as const, text: `${n("failed")} failed` } : null;
   return {
     dots: batch.map((a) => {
-      const state = rows.find((r) => r.agent === a)!.state;
-      // An end a little ahead of this clock (the daemon's) still pops.
-      const t = now - endedAt(a);
-      return { key: a.id, state, phase: state !== "done" ? "on" : t >= STRIP_HIDE ? "gone" : t < STRIP_POP ? "pop" : "on" };
+      const state = stateOf.get(a)!;
+      return { key: a.id, state, phase: state === "done" ? dotPhase(now - endedAt(a)) : "on" };
     }),
     title: !finished ? agentCount(batch.length) : batch.length === 1 ? "1 agent done" : `All ${batch.length} done`,
     counts: finished ? [] : counts,
-    flash: ends.some((t) => now < t + STRIP_FLASH),
+    flash: ends.some((t) => now < t + COUNT_FLASH),
     finished,
-    collapsed: now >= last + STRIP_HOLD,
+    collapsed: now >= last + STRIP_FOLD,
     alert,
     clock: spanClock(batch, now),
-    button: ended && !finished ? "review" : !rows.some((r) => isActive(r.state)) && n("failed") ? "retry" : null,
+    button: ended && !finished ? "review" : idle && n("failed") ? "retry" : null,
     dismissible: ended && !finished,
     wake: Number.isFinite(wake) ? wake : null,
   };
+}
+
+/** A done dot's phase, `since` ms after its agent ended. An end a little
+ *  ahead of this clock (the daemon's) still pops. */
+function dotPhase(since: number): StripDot["phase"] {
+  if (since >= DOT_HIDE) return "gone";
+  return since < DOT_POP ? "pop" : "on";
 }
 
 /** The strip's × hides it until an agent starts after this. */

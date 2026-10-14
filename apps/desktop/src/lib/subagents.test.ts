@@ -247,6 +247,10 @@ describe("stripView (X42)", () => {
   it("does not call stopped agents finished, and can be dismissed", () => {
     const st = withItems([done("a1", T0, 10_000), { ...bench, started_at: T0 + 2_000 }]);
     expect(stripView(st, T0 + 99_000, 0)).toMatchObject({
+      dots: [
+        { key: "a1", state: "done", phase: "gone" },
+        { key: bench.id, state: "stopped", phase: "on" },
+      ],
       title: "2 agents",
       counts: [{ state: "done", text: "1 done" }, { state: "stopped", text: "1 stopped" }],
       finished: false,
@@ -356,6 +360,15 @@ describe("agentNotes (X42)", () => {
     const edit = (id: string, added: number, removed: number) => ({ id, name: "Edit", summary: "/repo/a.ts", status: "ok" as const, added, removed });
     const notes = agentNotes(items, [{ ...list, tools: [edit("e1", 2, 1)] }, { ...list, id: "a7", started_at: T0, tools: [edit("e2", 1, 0)] }]);
     expect(notes.map(shape).at(-1)).toEqual(["m1", "2 agents finished in 0:12|+3 −1 in 1 file"]);
+  });
+
+  it("leaves reads and denied edits out of the batch's diff", () => {
+    const edit = (id: string, path: string, added: number, removed: number, status: "ok" | "denied" = "ok") => ({ id, name: "Edit", summary: path, status, added, removed });
+    const notes = agentNotes(items, [
+      { ...list, tools: [edit("e1", "/repo/a.ts", 10, 0), edit("e2", "/repo/b.ts", 3, 1), { id: "r1", name: "Read", summary: "/repo/c.ts", status: "ok" }] },
+      { ...list, id: "a7", started_at: T0, tools: [edit("e3", "/repo/b.ts", 2, 2), edit("e4", "/repo/d.ts", 5, 5, "denied")] },
+    ]);
+    expect(notes.map(shape).at(-1)).toEqual(["m1", "2 agents finished in 0:12|+15 −3 in 2 files"]);
   });
 
   it("only follows messages that show", () => {

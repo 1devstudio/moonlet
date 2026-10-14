@@ -958,7 +958,7 @@ function ChatEditor({
           ))}
         </div>
       )}
-      <div className="rounded-[14px] border border-border-strong bg-panel focus-within:border-[#3a3a3a]">
+      <div className="rounded-[14px] border border-border-strong bg-panel has-[textarea:focus]:border-[#3a3a3a]">
         {top}
         <div className="relative flex min-h-[52px] items-center gap-3 py-3 pl-4 pr-3.5">
           <div className="relative min-w-0 flex-1 ui-text-14 leading-[1.5]">

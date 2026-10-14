@@ -51,8 +51,8 @@ Strip and sidebar (PR 3):
 
 - [x] The strip shows the agents launched since the user's last message. It is hidden when there are none, and after × until a new agent starts. (`stripView`, `stripDismissAt`)
 - [x] The strip text for each state (working, one needs you, all finished, one failed, ended with some stopped) is as listed under UI. "Finished" means every agent is done. Retry asks for the batch's failed agents. (`stripView`, `stripRetry`, `agents.e2e.ts`)
-- [x] The strip is the top row of the chat input's card. Its dots keep launch order. A finished agent's dot turns green and pops for 0.28 s, the "N done" count shows green for 0.9 s, and 1.2 s after the agent ended its dot shrinks away; failed and stopped dots stay. Running dots pulse. (`stripView`)
-- [x] Once every agent is done the strip reads "✓ All N done" ("1 agent done" for one) with **Agents ›**, and 1.6 s after the last one ended it folds up, leaving the input. With reduced motion the changes happen without animation. (`stripView`)
+- [x] The strip is the top row of the chat input's card. Its dots keep launch order. A finished agent's dot turns green and pops for 0.28 s, the "N done" count shows green for 0.9 s, and 1.2 s after the agent ended its dot shrinks away; failed and stopped dots stay. Running dots pulse. (`stripView`, `agents.e2e.ts`)
+- [x] Once every agent is done the strip reads "✓ All N done" ("1 agent done" for one) with **Agents ›**, and 1.6 s after the last one ended it folds up, leaving the input. (`stripView`)
 - [x] The session row shows "N agents" while N of its chats' subagents run; "needs input" still wins. (`sessionBadge`)
 
 Conversation cards (PR 4):
@@ -105,7 +105,7 @@ Strip, the top row of the chat input's card:
 | ended, some stopped | `5 agents · 4 done · 1 stopped` | `3:40  Review changes  ×` |
 | one failed | `5 agents · 4 done · 1 failed` (red) | `2:40  Retry  Agents ›` |
 
-Dot colours: running accent (pulsing), needs you `blocked`, done `done` (then hidden), failed `error`, stopped muted.
+Dot colours: running accent (pulsing), needs you `blocked`, done `done` (then hidden), failed `error`, stopped muted. With reduced motion the strip changes without animation (`moonlet.css`; WebDriver cannot emulate the setting, so no test covers it).
 
 ## Protocol and RPCs
 
@@ -148,7 +148,7 @@ Captured from claude 2.1.296 (haiku, `--permission-prompt-tool stdio`, hooks off
 - Unit (Rust, `crates/moonlet-core/src/chat/claude.rs`): replay the captured fixtures through the adapter, as listed under Behaviour.
 - Unit (Rust, `crates/moonlet-core/src/chat/runtime.rs`): `chat.stop_agent` and process exit with a fake `claude`.
 - Unit (`apps/desktop/src/lib/subagents.test.ts`): `agentRows`, `stoppable`, `agentCount`, `askLine`, `agentsHeader`, `agentsTabDot`, `modelLabel`, `retryMessage`, `stripView`, `stripDismissAt`, `stripRetry`, `launchedRows`, `askerName`, `agentNotes`, `notesByBlock`; (`sidebar.test.ts`) `sessionBadge`; (`chat.test.ts`) the Launched card in `chatBlocks`.
-- E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents. The tab, the strip, the session chip and the conversation cards show them. One asks and is allowed from its row. The detail shows the other's brief and tool calls, and Stop sends `stop_task`.
+- E2E (`apps/desktop/e2e/specs/agents.e2e.ts`): a fake `claude` launches two subagents. The tab, the strip (the top row of the input's card, its running dot pulsing), the session chip and the conversation cards show them. One asks and is allowed from its row. The detail shows the other's brief and tool calls, and Stop sends `stop_task`.
 
 ## Open questions
 
