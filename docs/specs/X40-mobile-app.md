@@ -56,17 +56,17 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Sessions
 
-- [ ] Sessions lists the current workspace's sessions, grouped by section and project, as the desktop sidebar does (X32): a section label, then per project its avatar letter, name and host, then its sessions.
-- [ ] Each row shows the state glyph, the title, a state word (`needs you`, `working` with the time since its turn started, `done`, `failed`, `plan` for a waiting plan), the branch, the diff stat against the base, and the PR number with its state colour when there is a PR.
-- [ ] Filter chips: **All**, **Needs you**, **Working**, **Review**, each with its count. Search filters by title, branch and project. (`lib/sessionList.test.ts`)
-- [ ] A project whose base branch is behind `origin` shows "main 3 behind · Pull", which pulls (X13).
-- [ ] Tapping a row opens the session on the tab that matters: the plan sheet for a waiting plan, Changes for a done session, Chat otherwise.
+- [x] Sessions lists the current workspace's sessions on every connected host, grouped by section and project in the workspace's order (X32): a section label, then per project its avatar letter, name and host, then its sessions, most recently active first. Projects without sessions are left out. (`lib/sessionList.test.ts`)
+- [x] Each row shows the state glyph, the title, a state word (`needs you`, the time since its turn started while working, `done`, `failed`, `plan` for a waiting plan), the branch, the diff stat against the base, and the PR number with its state colour when there is a PR. Diff stats and PRs load as rows show and are kept for a minute. (`sessionList.test.ts`)
+- [x] Filter chips: **All**, **Needs you**, **Working**, **Review**, each with its count. Search filters by title, branch and project. (`lib/sessionList.test.ts`)
+- [x] A project whose base branch is behind `origin` (as last fetched) shows "main 3 behind · Pull", which pulls (X13).
+- [x] Tapping a row opens the session on the tab that matters: the plan sheet for a waiting plan, Changes for a done session, Chat otherwise. (`rowTarget` in `sessionList.test.ts`)
 
 ### New session
 
-- [ ] New session has the prompt box "What do you want to work on?" (with dictation from the keyboard), the branch name it will create (`moonlet/<slug>`, updated as the prompt changes), and rows for **Project**, **Host**, **Agent**, **Model** and **Base**, each opening a picker.
-- [ ] **Mode** has Auto, Manual, Edits and Plan, with one help line each (from the design). Manual is the default.
-- [ ] The footer says "Creates a worktree from <base> on <host> and runs setup: <setup command>" (no setup part without a setup command). **Start session** calls `session.create` and opens the new session's chat. (`lib/newSession.test.ts` for the branch name and the footer)
+- [x] New session has the prompt box "What do you want to work on?" (dictation comes from the keyboard's microphone), the branch the daemon will create (`moonlet/<slug of the name>`, the daemon's own rule, updated as the prompt changes), and rows for **Project** (the workspace's projects on connected hosts), **Host** (the project's host: tapping it opens the same project picker, since a project lives on one host), **Agent** (Claude Code, Codex), **Model** with effort (Claude only) and **Base** (the project's branches), each opening a picker. (`lib/newSession.test.ts`, with names captured from a real daemon)
+- [x] **Mode** has Auto, Manual, Edits and Plan, with one help line each (from the design). Manual is the default. It shows for Claude Code only: Codex has no such modes.
+- [x] The footer says "Creates a worktree from <base> on <host> and runs setup: <setup command>" (no setup part without a setup command). **Start session** calls `session.create` in the chosen workspace and opens the new session's chat. (`lib/newSession.test.ts` for the branch name and the footer)
 
 ### Session screen
 
