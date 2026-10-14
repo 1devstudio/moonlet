@@ -6,7 +6,7 @@ import { accountLabel, accountState, tildePath } from "./profiles";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
-import { updateButton, updateStatus, type UpdateState } from "./updater";
+import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
 
 /** The app-wide pages, in nav order. */
 export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
@@ -227,7 +227,7 @@ export function appUpdateLine(u: UpdateState, checking: boolean, error: string |
   const text = updateStatus(u, checking, error);
   if (!text) return null;
   if (checking) return { tone: "muted", text };
-  if (error) return { tone: "blocked", text };
+  if (error) return { tone: error === DEV_BUILD_NOTE ? "muted" : "blocked", text };
   return { tone: updateButton(u) ? "accent" : "done", text };
 }
 

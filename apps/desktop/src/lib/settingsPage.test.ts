@@ -268,6 +268,10 @@ describe("General's update lines (X43)", () => {
     expect(appUpdateLine({ phase: "idle" }, false, null)).toBeNull();
   });
 
+  it("is a quiet note, not a warning, in a development build", () => {
+    expect(appUpdateLine({ phase: "idle" }, false, "Development builds don't update themselves")).toEqual({ tone: "muted", text: "Development builds don't update themselves" });
+  });
+
   it("offers Claude Code's newer release, and warns when claude is missing", () => {
     expect(claudeUpdateLine({ phase: "idle" }, { installed: "2.1.292", latest: "2.1.301" }, false)).toEqual({ tone: "accent", text: "2.1.301 is available" });
     expect(claudeUpdateLine({ phase: "idle" }, { installed: "2.1.301", latest: "2.1.301" }, false)).toEqual({ tone: "done", text: "Up to date" });

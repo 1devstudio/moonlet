@@ -26,6 +26,12 @@ describe("settings page", () => {
     await expect($(sel.button("Check now"))).toBeDisplayed();
   });
 
+  it("says a development build doesn't update itself when asked to check", async () => {
+    await $(sel.button("Check now")).click();
+    await expect($(sel.text("Development builds don't update themselves"))).toBeDisplayed();
+    await expect($(sel.text("plugin updater not found"))).not.toBeExisting();
+  });
+
   it("goes back to the sessions with Esc", async () => {
     await browser.keys(["Escape"]);
     await expect($(sel.settings)).not.toBeExisting();
