@@ -6,7 +6,7 @@ import { accountLabel, accountState, tildePath } from "./profiles";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
-import { updateButton, updateStatus, type UpdateState } from "./updater";
+import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
 
 /** The app-wide pages, in nav order. */
 export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
@@ -227,7 +227,7 @@ export function appUpdateLine(u: UpdateState, checking: boolean, error: string |
   const text = updateStatus(u, checking, error);
   if (!text) return null;
   if (checking) return { tone: "muted", text };
-  if (error) return { tone: "blocked", text };
+  if (error) return { tone: error === DEV_BUILD_NOTE ? "muted" : "blocked", text };
   return { tone: updateButton(u) ? "accent" : "done", text };
 }
 
@@ -251,4 +251,30 @@ export function phoneAccessLine(st: MobileStatus): StatusLine {
  * or skipped. An unknown status (the read failed) still offers it. */
 export function hooksDone(st: HookStatus | null): boolean {
   return !!st?.claude_installed && (st.codex_installed || !!st.codex_conflict);
+}
+
+/** Hosts as the nav lists their workspaces and projects: this Mac first. */
+export function hostOrder(ids: string[]): string[] {
+  return [...ids].sort((a, b) => (a === "local" ? -1 : b === "local" ? 1 : a.localeCompare(b)));
+}
+
+/** ⌘↵ saves a workspace or project page only when the page is what the
+ * user sees and no dialog or nested form (New profile) has the key. */
+export function saveKeySaves(s: { dialogShown: boolean; inOwnForm: boolean; searching: boolean }): boolean {
+  return !s.dialogShown && !s.inOwnForm && !s.searching;
+}
+
+/** The confirm before Install hooks (A2); `st` is null when the status could
+ * not be read, so the files are named by their agent. */
+export function installHooksMessage(st: HookStatus | null): string {
+  const backup = "A backup of each file is written first and your own settings are kept.";
+  if (!st) return `moonlet will add its hooks to Claude Code's and Codex's settings, and a "moonlet" skill next to each.\n\n${backup}`;
+  return `moonlet will add its hooks to:\n• ${st.claude_settings}\n• ${st.codex_config}\n\nand a "moonlet" skill to the skills folder next to each.\n\n${backup}`;
+}
+
+/** Under a workspace's Claude profile: who it signs in as, or a warning. */
+export function accountNote(profile: string, account: ProfileAccount | null | undefined): StatusLine {
+  const state = accountState(account);
+  if (state === "signed-in" && account) return { tone: "muted", text: `Signed in as ${accountLabel(account)}` };
+  return state === "signed-out" ? { tone: "blocked", text: `${profile} is not signed in` } : { tone: "muted", text: "Checking…" };
 }
