@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
+import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, refreshTasks, retryTask, rulesFor, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, refreshTasks, retryTask, rulesFor, runAutoFixes, setKeepInStep, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -250,6 +251,23 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
       { id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: null },
       { id: "linear:acme", task: "issue-1", source: "MOON", column: "done", state: null },
     ]);
+  });
+
+  it("runs an automatic fix once: remembered only when it worked, a failure waits for Retry", async () => {
+    sent.length = 0;
+    localStorage.clear();
+    const board = (key: string) => ({ todo: [], in_progress: [{ ...card({ kind: "pr_open", text: "#131 open", fix: "Move to In Review" }), task: { ...hosts, key } }], in_review: [], done: [] });
+    failNext.push({ message: "Linear is not answering" });
+    await runAutoFixes("local", "personal", board("MOON-142"), () => DEFAULT_RULES);
+    expect(autoFixed()).toEqual({});
+    expect(failureOf({ ...hosts, key: "MOON-142" })).toBe("Linear is not answering");
+    await runAutoFixes("local", "personal", board("MOON-142"), () => DEFAULT_RULES);
+    expect(sent).toEqual([]);
+
+    await runAutoFixes("local", "personal", board("MOON-143"), () => DEFAULT_RULES);
+    await runAutoFixes("local", "personal", board("MOON-143"), () => DEFAULT_RULES);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review", state: null }]);
+    expect(Object.keys(autoFixed())).toHaveLength(1);
   });
 
   it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
