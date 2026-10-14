@@ -199,7 +199,9 @@ async fn wait_for_callback(listener: tokio::net::TcpListener, state: String, tim
         loop {
             let (mut sock, _) = listener.accept().await.map_err(fail)?;
             let mut buf = vec![0u8; 8192];
-            let n = sock.read(&mut buf).await.unwrap_or(0);
+            // A connection that says nothing is dropped, so it can't hold up the callback.
+            let Ok(read) = tokio::time::timeout(std::time::Duration::from_secs(2), sock.read(&mut buf)).await else { continue };
+            let n = read.unwrap_or(0);
             let req = String::from_utf8_lossy(&buf[..n]);
             let path = req.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("");
             let result = moonlet_trackers::oauth::parse_callback(path, &state);
@@ -581,6 +583,22 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_silent_connection_does_not_hold_up_the_callback() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let waiting = tokio::spawn(wait_for_callback(listener, "st4te".into(), std::time::Duration::from_secs(20)));
+        // Something on this Mac connects and never says anything.
+        let _silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+        c.write_all(b"GET /callback?code=abc&state=st4te HTTP/1.1\r\n\r\n").await.unwrap();
+        let mut answer = String::new();
+        c.read_to_string(&mut answer).await.unwrap();
+        let code = tokio::time::timeout(std::time::Duration::from_secs(10), waiting).await.expect("the callback was held up").unwrap();
+        assert_eq!(code.unwrap(), "abc");
+    }
 
     #[tokio::test]
     async fn the_loopback_listener_waits_for_the_callback_with_its_state() {
