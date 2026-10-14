@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCount, agentRows, agentsHeader, askLine, agentsTabDot, modelLabel, retryMessage, stoppable, stripView } from "./subagents";
+import { agentCount, agentRows, agentsHeader, askLine, agentsTabDot, modelLabel, retryMessage, stoppable, stripDismissAt, stripRetry, stripView } from "./subagents";
 import type { ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 
 const T0 = 1_791_970_430_000;
@@ -172,13 +172,13 @@ describe("stripView (X42)", () => {
   const ask2: PermissionAsk = { ...ask, agent: "a5" };
   const user = (ts: number): ChatItem => ({ id: `u${ts}`, kind: "user", text: "Go", ts });
   const running = (id: string, started: number): Subagent => ({ ...write, id, description: id, started_at: started, status: "running" });
-  const done = (id: string, started: number, ms: number): Subagent => ({ ...list, id, description: id, started_at: started, duration_ms: ms, ended_at: started + ms, status: "done" });
+  const done = (id: string, started: number, ms: number, tools: Subagent["tools"] = []): Subagent => ({ ...list, id, description: id, started_at: started, duration_ms: ms, ended_at: started + ms, status: "done", tools });
   const withItems = (subagents: Subagent[], pending: PermissionAsk[] = []) => ({ ...chat(subagents, pending), items: [user(T0 - 1_000)] });
-  const git = { additions: 318, deletions: 41, files: 9 };
+  const edit = (id: string, path: string, added: number, removed: number, status: "ok" | "denied" = "ok") => ({ id, name: "Edit", summary: path, status, added, removed });
 
   it("counts running and done agents while they work", () => {
     const st = withItems([done("a1", T0, 10_000), done("a2", T0, 20_000), running("a3", T0), running("a4", T0 + 5_000)]);
-    expect(stripView(st, T0 + 108_000, git, 0)).toEqual({
+    expect(stripView(st, T0 + 108_000, 0)).toEqual({
       dots: ["done", "done", "running", "running"],
       title: "4 agents",
       detail: "2 running · 2 done",
@@ -191,7 +191,7 @@ describe("stripView (X42)", () => {
 
   it("calls out an agent that needs the user", () => {
     const st = withItems([done("a1", T0, 10_000), running("a3", T0), running("a5", T0)], [ask2]);
-    expect(stripView(st, T0 + 134_000, git, 0)).toMatchObject({
+    expect(stripView(st, T0 + 134_000, 0)).toMatchObject({
       dots: ["done", "running", "needs"],
       title: "3 agents",
       detail: "1 running · 1 done",
@@ -201,25 +201,34 @@ describe("stripView (X42)", () => {
     });
   });
 
-  it("offers Review changes once all finished, and can be dismissed", () => {
-    const st = withItems([done("a1", T0, 100_000), done("a2", T0 + 20_000, 200_000)]);
-    expect(stripView(st, T0 + 999_000, git, 0)).toEqual({
+  it("offers Review changes once all finished, with the agents' own edits, and can be dismissed", () => {
+    const st = withItems([
+      done("a1", T0, 100_000, [edit("e1", "/repo/a.ts", 10, 0), edit("e2", "/repo/b.ts", 3, 1), { id: "r1", name: "Read", summary: "/repo/c.ts", status: "ok" }]),
+      done("a2", T0 + 20_000, 200_000, [edit("e3", "/repo/b.ts", 2, 2), edit("e4", "/repo/d.ts", 5, 5, "denied")]),
+    ]);
+    expect(stripView(st, T0 + 999_000, 0)).toEqual({
       dots: ["done", "done"],
       title: "2 agents finished",
-      detail: "+318 −41 in 9 files",
+      detail: "+15 −3 in 2 files",
       alert: null,
       clock: "3:40",
       button: "review",
       dismissible: true,
     });
-    expect(stripView(st, T0 + 999_000, null, 0)).toMatchObject({ title: "2 agents finished", detail: "" });
+    expect(stripView(withItems([done("a1", T0, 1_000)]), T0 + 9_000, 0)).toMatchObject({ title: "1 agent finished", detail: "" });
     // Dismissed after the last agent started: hidden until a new one starts.
-    expect(stripView(st, T0 + 999_000, git, T0 + 20_000)).toBeNull();
+    expect(stripDismissAt(st)).toBe(T0 + 20_000);
+    expect(stripView(st, T0 + 999_000, stripDismissAt(st))).toBeNull();
   });
 
-  it("offers Retry when an agent failed and none still runs", () => {
+  it("does not call stopped agents finished", () => {
+    const st = withItems([done("a1", T0, 10_000), { ...bench, started_at: T0 }]);
+    expect(stripView(st, T0 + 99_000, 0)).toMatchObject({ title: "2 agents", detail: "1 done · 1 stopped", alert: null, button: "review", dismissible: true });
+  });
+
+  it("offers Retry for the failed agents once none still runs", () => {
     const st = withItems([done("a1", T0, 10_000), { ...audit, started_at: T0 }]);
-    expect(stripView(st, T0 + 999_000, git, 0)).toMatchObject({
+    expect(stripView(st, T0 + 999_000, 0)).toMatchObject({
       dots: ["done", "failed"],
       title: "2 agents",
       detail: "1 done",
@@ -227,11 +236,13 @@ describe("stripView (X42)", () => {
       clock: "0:52",
       button: "retry",
     });
+    expect(stripRetry(st)).toBe('Run the "Audit SSH key handling" agent again.');
+    expect(stripRetry(withItems([done("a1", T0, 10_000)]))).toBeNull();
   });
 
   it("shows only the agents launched since the user's last message", () => {
     const st = { ...withItems([done("a1", T0 - 60_000, 10_000), running("a3", T0)]), items: [user(T0 - 90_000), user(T0 - 1_000)] };
-    expect(stripView(st, T0 + 1_000, git, 0)).toMatchObject({ title: "1 agent", detail: "1 running" });
-    expect(stripView({ ...st, items: [user(T0 + 500)] }, T0 + 1_000, git, 0)).toBeNull();
+    expect(stripView(st, T0 + 1_000, 0)).toMatchObject({ title: "1 agent", detail: "1 running" });
+    expect(stripView({ ...st, items: [user(T0 + 500)] }, T0 + 1_000, 0)).toBeNull();
   });
 });

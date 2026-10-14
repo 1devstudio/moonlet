@@ -2,6 +2,7 @@
 // (X5, X32). Pure, so it is unit-tested.
 
 import type { AgentState, Project, Section, Session, Workspace } from "./protocol";
+import { agentCount } from "./subagents";
 
 export interface Group {
   key: string;
@@ -96,7 +97,7 @@ export function sessionBadge(o: {
 }): { text: string; tone: "muted" | "blocked" | "agents" | "merged" | "diff" } | null {
   if (o.creating) return { text: "creating", tone: "muted" };
   if (o.state === "blocked") return { text: "needs input", tone: "blocked" };
-  if (o.agents) return { text: o.agents === 1 ? "1 agent" : `${o.agents} agents`, tone: "agents" };
+  if (o.agents) return { text: agentCount(o.agents), tone: "agents" };
   if (o.merged) return { text: "merged", tone: "merged" };
   if (o.git && (o.git.additions || o.git.deletions)) {
     return { text: `+${compact(o.git.additions)}${o.git.deletions ? ` -${compact(o.git.deletions)}` : ""}`, tone: "diff" };
