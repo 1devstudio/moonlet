@@ -37,9 +37,27 @@ pub struct TrackerRef {
     pub source: String,
 }
 
+/// A link the tracker gave for an issue, kept only when it is `https:`, since
+/// the app puts it in an `href`.
+pub fn web_url(v: &serde_json::Value) -> Option<String> {
+    v.as_str()
+        .filter(|u| u.starts_with("https://"))
+        .map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_https_links_are_kept() {
+        assert_eq!(
+            web_url(&serde_json::json!("https://linear.app/acme/issue/MOON-1")).as_deref(),
+            Some("https://linear.app/acme/issue/MOON-1")
+        );
+        assert_eq!(web_url(&serde_json::json!("javascript:alert(1)")), None);
+        assert_eq!(web_url(&serde_json::Value::Null), None);
+    }
 
     #[test]
     fn it_serialises_as_the_apps_task() {

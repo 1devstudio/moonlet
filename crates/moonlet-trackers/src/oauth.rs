@@ -45,12 +45,18 @@ fn decode(s: &str) -> String {
     while i < b.len() {
         match b[i] {
             b'+' => out.push(b' '),
-            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                Ok(v) => {
+            // Bytes, not `&s[..]`: a `%` before a multibyte letter must not
+            // slice inside it.
+            b'%' => match b
+                .get(i + 1..i + 3)
+                .and_then(|h| std::str::from_utf8(h).ok())
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+            {
+                Some(v) => {
                     out.push(v);
                     i += 2;
                 }
-                Err(_) => out.push(b'%'),
+                None => out.push(b'%'),
             },
             c => out.push(c),
         }
@@ -134,6 +140,14 @@ mod tests {
             "https://linear.app/oauth/authorize?response_type=code&client_id=client-1\
              &redirect_uri=http%3A%2F%2F127.0.0.1%3A53682%2Fcallback&state=st4te\
              &code_challenge=E9Mel&code_challenge_method=S256&scope=read%2Cwrite"
+        );
+    }
+
+    #[test]
+    fn a_percent_before_a_multibyte_letter_is_kept() {
+        assert_eq!(
+            parse_callback("/callback?code=%a\u{e9}&state=st4te", "st4te"),
+            Ok("%a\u{e9}".into())
         );
     }
 
