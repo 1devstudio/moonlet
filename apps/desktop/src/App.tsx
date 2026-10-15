@@ -14,6 +14,8 @@ import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
 import { SettingsPage } from "./components/settings/SettingsPage";
+import { TasksMode } from "./components/tasks/TasksMode";
+import { isTasksMode } from "./lib/tasksStore";
 
 function FindBar({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
@@ -120,6 +122,7 @@ export default function App() {
   const host = s.selected?.host;
   const [finding, setFinding] = useState(false);
   const scale = uiScale(s.settings.term.fontSize);
+  const tasks = isTasksMode(s);
 
   useEffect(() => {
     void startStore();
@@ -151,10 +154,10 @@ export default function App() {
         </>
       )}
       <main className="relative min-w-0 flex-1" inert={!!s.settingsPage}>
-        {ws && host && !ws.archived ? <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
-        {finding && ws && <FindBar onClose={() => setFinding(false)} />}
+        {tasks ? <TasksMode /> : ws && host && !ws.archived ? <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
+        {finding && ws && !tasks && <FindBar onClose={() => setFinding(false)} />}
       </main>
-      {s.rightOpen && ws && host && !ws.archived && (
+      {s.rightOpen && !tasks && ws && host && !ws.archived && (
         <>
           <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ rightWidth: clampRight(st.rightWidth - d) }))} />
           <div style={{ width: s.rightWidth }} className="shrink-0" inert={!!s.settingsPage}>
