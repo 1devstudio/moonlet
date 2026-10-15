@@ -1,6 +1,7 @@
 // Settings › Task trackers (X44): status lines and the rules' wording.
 
 import type { RuleSetting, Rules } from "./keepInStep";
+import type { Connection } from "./tasksStore";
 import type { StatusLine } from "./settingsPage";
 
 /** The GitHub row's line: who `gh` is signed in as on `host`, or why not. */
@@ -32,3 +33,25 @@ export const GITHUB_RULES: { id: keyof Rules; when: string; then: string; hint: 
   { id: "all_merged", when: "Every session's PR is merged", then: "close the issue", hint: "Suggest shows it as out of sync with a one-click fix." },
   { id: "issue_done", when: "The issue is closed", then: "archive its sessions and remove their worktrees", hint: "Always asks first.", auto: false },
 ];
+
+const AUTH_LABEL: Record<string, string> = { api_key: "API key", token: "API token", oauth: "OAuth" };
+
+/** A Linear, Jira or ClickUp row's line: who it is signed in as, or what to do. */
+export function connectionLine(c: Connection, attention: string | undefined): StatusLine {
+  if (attention) return { tone: "error", text: attention };
+  const n = c.sources.length;
+  const sources = n ? `${n} source${n === 1 ? "" : "s"}` : "pick what to show";
+  return { tone: n ? "done" : "blocked", text: `Connected as ${c.account} · ${AUTH_LABEL[c.auth] ?? c.auth} · ${sources}` };
+}
+
+/** Keep <tracker> in step (X46): the five rules, worded for Linear, Jira or ClickUp. */
+export function trackerRules(kind: Connection["kind"]): { id: keyof Rules; when: string; then: string; hint: string; auto?: false }[] {
+  const issue = kind === "clickup" ? "task" : "issue";
+  return [
+    { id: "session_starts", when: `A session starts from ${kind === "clickup" ? "a task" : "an issue"}`, then: "move it to In Progress and assign it to me", hint: `Only from Todo or a state not shown; an ${issue} further along is left alone.` },
+    { id: "pr_opens", when: "A pull request opens", then: `move the ${issue} to In Review`, hint: "When a session's pull request is open; Suggest shows a one-click fix instead." },
+    { id: "all_merged", when: "Every session's PR is merged", then: `move the ${issue} to Done`, hint: "Off by default in teams where QA closes issues." },
+    { id: "pr_comment", when: "A pull request opens", then: `comment on the ${issue} with its link`, hint: "Once per pull request." },
+    { id: "issue_done", when: `The ${issue} moves to Done`, then: "archive its sessions and remove their worktrees", hint: "Always asks first.", auto: false },
+  ];
+}

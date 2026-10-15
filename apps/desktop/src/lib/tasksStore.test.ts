@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { useStore } from "./store";
-import { DEFAULT_CONFIG, ensureTasks, isTasksMode, refreshTasks, toggleTasksMode, useTasks } from "./tasksStore";
+import { DEFAULT_CONFIG, ensureTasks, fixDrift, isTasksMode, loadTrackersConfig, refreshTasks, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -11,6 +11,8 @@ vi.mock("./daemon", () => ({
   }),
   sendInput: vi.fn(),
   hostsApi: {
+    trackersConfig: () => Promise.resolve({ sync: { interval: 300, notify: true } }),
+    trackerUpdate: (req: object) => (sent.push(req), Promise.resolve()),
     trackerTasks: (id: string) => {
       const answer = answers[`tracker_tasks ${id}`];
       return answer ? Promise.resolve().then(() => answer({})) : Promise.reject(new Error(`no tracker_tasks ${id}`));
@@ -19,6 +21,7 @@ vi.mock("./daemon", () => ({
 }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
 const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
+const sent = vi.hoisted(() => [] as object[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(true),
   requestPermission: () => Promise.resolve("granted"),
@@ -188,6 +191,24 @@ describe("tasks from Linear, Jira and ClickUp (X44)", () => {
     useTasks.setState({ config: null });
   });
 
+  it("keeps the last tasks only of a source that failed, and takes the others fresh", async () => {
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [linearTask("MOON-1", "MOON")];
+    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal", project: "" }]), attention: {} });
+    await refreshTasks("local", "personal", 1_000);
+    answers["gh.tasks"] = ({ path }) => (path === "/r/web" ? [issue] : []);
+    answers["tracker_tasks linear:acme"] = () => {
+      throw { auth: false, message: "cannot reach the tracker" };
+    };
+    await refreshTasks("local", "personal", 2_000);
+    const d = useTasks.getState().data["local/personal"];
+    expect(d.tasks.map((t) => t.key).sort()).toEqual(["MOON-1", "acme/web#12"]);
+    expect(d.error).toBe("cannot reach the tracker");
+    useTasks.setState({ config: null, attention: {} });
+  });
+
   it("marks a connection whose token stopped working, keeping the last list", async () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
@@ -201,5 +222,48 @@ describe("tasks from Linear, Jira and ClickUp (X44)", () => {
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key)).toEqual(["MOON-1"]);
     expect(useTasks.getState().attention).toEqual({ "linear:acme": "Linear no longer accepts this token. Create a new one and paste it here." });
     useTasks.setState({ config: null, attention: {} });
+  });
+});
+
+describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
+  const hosts = {
+    connection: "linear:acme",
+    key: "MOON-142",
+    title: "Remote hosts",
+    url: "",
+    column: "in_progress" as const,
+    priority: 0,
+    assignees: [],
+    labels: [],
+    description: "",
+    updatedMs: 0,
+    tracker: { id: "issue-1", state: "In Progress", source: "MOON" },
+  };
+  const card = (drift: { kind: "pr_open" | "merged"; text: string; fix: string }) => ({ task: hosts, column: "in_progress" as const, rows: [], needsYou: false, orphans: [], empty: null, drift });
+
+  it("sends the move a chip's fix asks for", async () => {
+    sent.length = 0;
+    await fixDrift("local", "personal", card({ kind: "pr_open", text: "#131 open", fix: "Move to In Review" }));
+    await fixDrift("local", "personal", card({ kind: "merged", text: "#131 merged", fix: "Move to Done" }));
+    expect(sent).toEqual([
+      { id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review" },
+      { id: "linear:acme", task: "issue-1", source: "MOON", column: "done" },
+    ]);
+  });
+
+  it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
+    sent.length = 0;
+    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } });
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
+  });
+});
+
+describe("loadTrackersConfig", () => {
+  it("fills in the trackers the file leaves out because they are at their defaults", async () => {
+    useTasks.setState({ config: null });
+    await loadTrackersConfig(true);
+    const c = trackersConfig(useTasks.getState());
+    expect([c.sync.interval, c.github.rules.session_starts, c.github.max_length, c.connections]).toEqual([300, "auto", 48, []]);
+    useTasks.setState({ config: null });
   });
 });
