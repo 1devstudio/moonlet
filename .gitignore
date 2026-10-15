@@ -16,3 +16,6 @@ apps/desktop/ds/dist/
 
 # The phone app: generated schemas (gen/apple, made by `tauri ios init`, is kept).
 apps/mobile/src-tauri/gen/schemas/
+
+# Throwaway e2e snaps (e2e/snap.ts)
+apps/desktop/e2e/snaps/

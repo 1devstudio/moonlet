@@ -30,4 +30,4 @@ Forbidden test anti-patterns, the inverse of the three rules above:
 
 ### Done
 
-The work is done when `pnpm test` passes, and `pnpm e2e` too when a crucial feature changed. Your report names the new tests and quotes the pass lines.
+The work is done when `pnpm check` passes, and `pnpm e2e` too when a crucial feature changed. A change to how something looks is done once you have seen it in the real app: screenshot it with `apps/desktop/e2e/snap.ts`. Your report names the new tests and quotes the pass lines.
