@@ -284,7 +284,11 @@ describe("Jira and ClickUp trackers", () => {
       ["acme.atlassian.net", "good"],
       ["ops.atlassian.net", "good"],
     ]) {
-      if (!(await $('//div[@role="dialog"]').isExisting())) await $(sel.settingsButton("Connect Jira Cloud")).click();
+      // After a refusal the dialog stays open; otherwise the last one has to close first.
+      if (token !== "good" || site !== "acme.atlassian.net") {
+        await $('//div[@role="dialog"]').waitForExist({ reverse: true, timeout: 10_000 });
+        await $(sel.settingsButton("Connect Jira Cloud")).click();
+      }
       await fill('//div[@role="dialog"]//input[@placeholder="acme.atlassian.net"]', site);
       await fill('//div[@role="dialog"]//input[@placeholder="you@example.com"]', "e2e@acme.example");
       await fill('//div[@role="dialog"]//input[@type="password"]', token);
