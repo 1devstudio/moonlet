@@ -74,9 +74,13 @@ export function TrackersPage() {
           {(config.connections ?? []).map((c) => (
             <ConnectionRow key={c.id} c={c} />
           ))}
-          <Row label="Add tracker" hint="Linear and ClickUp with an API key or token; Jira Cloud with your email and an API token.">
+          <div className="flex flex-col gap-2.5 px-4 py-3.5">
+            <div className="flex flex-col gap-[3px]">
+              <span className="ui-text-13">Add tracker</span>
+              <span className="ui-text-12 text-muted">Linear and ClickUp with an API key or token; Jira Cloud with your email and an API token.</span>
+            </div>
             <AddTracker />
-          </Row>
+          </div>
         </Card>
       </Section>
       {[...new Set((config.connections ?? []).map((c) => c.kind))].map((kind) => {

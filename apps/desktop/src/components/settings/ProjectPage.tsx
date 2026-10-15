@@ -10,11 +10,13 @@ import { M, type ProjectConfigFile } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { agentOptions, configName, fromForm, isDirty, loadFailure, newRowId, saveBarStatus, toForm, validate, type AgentRow, type Form, type SaveError } from "../../lib/projectSettings";
 import { tildePath } from "../../lib/profiles";
+import { loadTrackersConfig, useTasks } from "../../lib/tasksStore";
+import { projectTrackers } from "../../lib/trackerSources";
 import { Button, IconButton, cx } from "../ui";
 import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, fieldCls } from "./controls";
 import { useUnsaved } from "./useUnsaved";
 
-const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [] };
+const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], trackers: [] };
 
 const input = (error?: string, width = "w-[300px]") => cx(fieldCls, "font-mono ui-text-12.5", width, !!error && "border-error focus:border-error");
 
@@ -92,6 +94,9 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   const loading = !file;
   const parseError = file?.error ?? null;
   const v = validate(form);
+  const connections = useTasks((t) => t.config?.connections);
+  useEffect(() => void loadTrackersConfig(), []);
+  const trackers = projectTrackers(connections, form.trackers);
   const dirty = !parseError && isDirty(form, orig);
   const canSave = !loading && !parseError && dirty && !v.any && !saving;
   const path = file?.path ?? "";
@@ -295,6 +300,40 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
               <Button size="sm" className="self-start" onClick={addAgent}>
                 <Plus size={12} /> Add agent
               </Button>
+            </div>
+          </Card>
+        </Section>
+
+        <Section title="Task trackers">
+          <Card>
+            <div data-setting="project-trackers" className="flex flex-col gap-2.5 px-4 py-3.5">
+              <div className="flex flex-col gap-[3px]">
+                <span className="ui-text-13">Tracker projects</span>
+                <span className="ui-text-12 text-muted">A session started from an issue of these offers this project. With none linked, you pick from the workspace's projects.</span>
+              </div>
+              {trackers.linked.map((t) => (
+                <div key={t.id} className="flex items-center gap-1.5">
+                  <span className="min-w-0 flex-1 truncate ui-text-13">{t.label}</span>
+                  <IconButton title={`Unlink ${t.label}`} onClick={() => set({ trackers: form.trackers.filter((x) => x !== t.id) })}>
+                    <X size={14} />
+                  </IconButton>
+                </div>
+              ))}
+              {trackers.linked.length === 0 && <span className="ui-text-12 text-faint">None linked.</span>}
+              <select
+                aria-label="Link a tracker project"
+                className={cx(fieldCls, "w-[300px] self-start")}
+                value=""
+                disabled={!trackers.choices.length}
+                onChange={(e) => e.target.value && set({ trackers: [...form.trackers, e.target.value] })}
+              >
+                <option value="">{trackers.choices.length ? "Link a tracker project…" : "No other sources: add them in Settings › Task trackers"}</option>
+                {trackers.choices.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
             </div>
           </Card>
         </Section>

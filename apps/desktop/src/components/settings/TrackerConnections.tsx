@@ -11,7 +11,7 @@ import { connectionLine } from "../../lib/trackersPage";
 import { blankSource, changedStates, sourceChoices, sourceNoun, sourceRows, sourcesToSave } from "../../lib/trackerSources";
 import type { Column } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
-import { Button, Dialog, Field, IconButton, inputCls } from "../ui";
+import { Button, Dialog, Field, IconButton, inputCls, TrackerIcon } from "../ui";
 import { Row, Status } from "./controls";
 
 const NAME: Record<Connection["kind"], string> = { linear: "Linear", jira: "Jira Cloud", clickup: "ClickUp" };
@@ -21,12 +21,14 @@ const TOKEN_PAGE: Record<Connection["kind"], string> = {
   clickup: "https://app.clickup.com/settings/apps",
 };
 
+/** The Sources and States dialogs' menus, as tall as a text field (X44). */
+const selectCls = `${inputCls} menu-select field-height`;
+
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
 /** Which sources a connection shows, in which workspace and starting in which project. */
 function SourcesEditor({ connection, choices, onDone }: { connection: Connection; choices: { key: string; name: string }[]; onDone: () => void }) {
   const workspaces = useStore((s) => s.workspaces);
-  const projects = useStore((s) => s.projects);
   const [rows, setRows] = useState<Source[]>(() => sourceRows(connection.sources));
   const noun = sourceNoun(connection.kind);
   const wsOptions = Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ value: wsKey(host, w.id), label: w.name, host })));
@@ -41,25 +43,23 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
       errorToast(message(e));
     }
   };
-  const grid = "grid grid-cols-[minmax(0,1fr)_150px_150px_24px] items-center gap-2";
+  const grid = "grid grid-cols-[minmax(0,1fr)_200px_24px] items-center gap-2";
   return (
     <div className="flex flex-col gap-2">
       <div className="ui-text-12.5 text-muted">
-        Add the {noun}s whose issues Tasks mode shows. For each, pick the workspace that shows it and the moonlet project its sessions start in.
+        Add the {noun}s whose issues Tasks mode shows, and the workspace that shows each. Which moonlet projects their sessions start in is under each project's settings.
       </div>
       <div className={`${grid} ui-text-11.5 text-faint`} aria-hidden>
         <span>{noun}</span>
         <span>Workspace</span>
-        <span>moonlet project</span>
       </div>
       <div role="list" aria-label="Sources" className="flex max-h-[300px] flex-col gap-1 overflow-y-auto">
         {rows.map((r, i) => {
-          const host = r.workspace.split("/")[0];
           return (
             <div key={i} role="listitem" aria-label={r.name || "New source"} className={`${grid} ui-text-12.5`}>
               <select
                 aria-label={`Source ${i + 1}`}
-                className={inputCls}
+                className={selectCls}
                 value={r.key}
                 onChange={(e) => set(i, { key: e.target.value, name: choices.find((c) => c.key === e.target.value)?.name ?? "" })}
               >
@@ -70,19 +70,11 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
                   </option>
                 ))}
               </select>
-              <select aria-label={`Workspace for ${r.name}`} className={inputCls} value={r.workspace} onChange={(e) => set(i, { workspace: e.target.value, project: "" })}>
+              <select aria-label={`Workspace for ${r.name}`} className={selectCls} value={r.workspace} onChange={(e) => set(i, { workspace: e.target.value })}>
                 <option value="">Workspace…</option>
                 {wsOptions.map((w) => (
                   <option key={w.value} value={w.value}>
                     {w.label}
-                  </option>
-                ))}
-              </select>
-              <select aria-label={`Project for ${r.name}`} className={inputCls} value={r.project} disabled={!r.workspace} onChange={(e) => set(i, { project: e.target.value })}>
-                <option value="">Project…</option>
-                {(projects[host] ?? []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
                   </option>
                 ))}
               </select>
@@ -93,11 +85,11 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
           );
         })}
       </div>
-      <Button size="sm" className="self-start" disabled={!canAdd} onClick={() => setRows((rs) => [...rs, blankSource()])}>
+      <Button size="sm" className="field-height self-start" disabled={!canAdd} onClick={() => setRows((rs) => [...rs, blankSource()])}>
         <Plus size={12} /> Add source
       </Button>
       <div className="mt-2 flex justify-end gap-2">
-        <Button size="sm" variant="primary" onClick={() => void save()}>
+        <Button size="sm" variant="primary" className="field-height" onClick={() => void save()}>
           Save and sync
         </Button>
       </div>
@@ -158,7 +150,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
         <div className="flex flex-col gap-3">
           {oauth && (
             <>
-              <Button variant="primary" disabled={busy} onClick={() => void signIn()}>
+              <Button variant="primary" className="field-height" disabled={busy} onClick={() => void signIn()}>
                 Sign in with Linear
               </Button>
               <p className="ui-text-12 text-muted">Opens the browser. Or use an API key:</p>
@@ -194,10 +186,10 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
           </p>
           {error && <p className="ui-text-12.5 text-error">{error}</p>}
           <div className="flex justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={onClose}>
+            <Button size="sm" variant="ghost" className="field-height" onClick={onClose}>
               Cancel
             </Button>
-            <Button size="sm" variant="primary" disabled={busy || !token.trim()} onClick={() => void connect()}>
+            <Button size="sm" variant="primary" className="field-height" disabled={busy || !token.trim()} onClick={() => void connect()}>
               {busy ? "Connecting…" : "Connect"}
             </Button>
           </div>
@@ -268,10 +260,10 @@ export function AddTracker() {
   useEffect(() => void loadTrackersConfig(), []);
   return (
     <>
-      <div className="flex gap-1.5">
+      <div className="flex flex-wrap gap-2">
         {(["linear", "jira", "clickup"] as const).map((k) => (
-          <Button key={k} size="sm" variant="ghost" onClick={() => setKind(k)}>
-            Connect {NAME[k]}
+          <Button key={k} className="field-height" onClick={() => setKind(k)}>
+            <TrackerIcon kind={k} /> Connect {NAME[k]}
           </Button>
         ))}
       </div>
@@ -312,7 +304,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
     <Dialog title={`${NAME[c.kind]} workflow states`} onClose={onClose} width={520}>
       <p className="mb-2 ui-text-12.5 text-muted">moonlet groups tasks into four columns. Filled in from the tracker's state types; change them if your team uses its own.</p>
       {c.sources.length > 1 && (
-        <select aria-label="Source" className={`${inputCls} mb-2`} value={source} onChange={(e) => setSource(e.target.value)}>
+        <select aria-label="Source" className={`${selectCls} mb-2`} value={source} onChange={(e) => setSource(e.target.value)}>
           {c.sources.map((s) => (
             <option key={s.key} value={s.key}>
               {s.name}
@@ -324,9 +316,9 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
       {source && !states && <p className="ui-text-12.5 text-muted">Loading states…</p>}
       <div role="list" aria-label="States" className="flex flex-col gap-1">
         {(states ?? []).map((s) => (
-          <div key={s.name} role="listitem" className="flex items-center gap-2 ui-text-12.5">
-            <span className="min-w-0 flex-1 truncate text-fg">{s.name}</span>
-            <select aria-label={`Column for ${s.name}`} className={`${inputCls} w-[140px]`} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value as Column }))}>
+          <div key={s.name} role="listitem" className="grid grid-cols-[minmax(0,1fr)_160px] items-center gap-2 ui-text-12.5">
+            <span className="truncate text-fg">{s.name}</span>
+            <select aria-label={`Column for ${s.name}`} className={selectCls} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value as Column }))}>
               {COLUMN_CHOICES.map(([id, label]) => (
                 <option key={id} value={id}>
                   {label}
@@ -337,7 +329,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
         ))}
       </div>
       <div className="mt-3 flex justify-end">
-        <Button size="sm" variant="primary" disabled={!states} onClick={() => void save()}>
+        <Button size="sm" variant="primary" className="field-height" disabled={!states} onClick={() => void save()}>
           Save
         </Button>
       </div>
