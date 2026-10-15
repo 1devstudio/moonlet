@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceptanceCriteria, findPasted, firstChoice, linkChoices } from "./taskLinking";
+import { acceptanceCriteria, findPasted, firstChoice, linkChoices, pasteLookup } from "./taskLinking";
 import type { Task } from "./tasks";
 
 const task = (key: string, title: string, o: Partial<Task> = {}): Task => ({
@@ -87,5 +87,26 @@ describe("findPasted", () => {
     expect(findPasted({ kind: "github", key: "#42", site: null }, tasks, "acme/web")).toBe(gh);
     expect(findPasted({ kind: "github", key: "#42", site: null }, tasks, "other/repo")).toBe(null);
     expect(findPasted({ kind: "jira", key: "OPS-12", site: "acme.atlassian.net" }, tasks, null)).toBe(null);
+  });
+});
+
+describe("pasteLookup (X46 link dialog)", () => {
+  const found = task("MOON-12", "Remote hosts");
+  it("ends a replaced or cancelled lookup as cancelled, so ↵ links nothing from it", async () => {
+    const l = pasteLookup(0);
+    const first = l.start(() => Promise.resolve(found));
+    const second = l.start(() => Promise.resolve(null));
+    expect(await first).toBe(undefined);
+    expect(await second).toBe(null);
+    const third = l.start(() => new Promise((r) => setTimeout(() => r(found), 10)));
+    l.cancel();
+    expect(await third).toBe(undefined);
+    expect(await l.settled()).toBe(undefined);
+  });
+
+  it("gives ↵ the task the current lookup finds", async () => {
+    const l = pasteLookup(0);
+    void l.start(() => Promise.resolve(found));
+    expect(await l.settled()).toBe(found);
   });
 });

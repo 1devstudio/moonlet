@@ -85,3 +85,33 @@ export function findPasted(p: Pasted, tasks: Task[], originRepo: string | null):
   if (!key) return null;
   return tasks.find((t) => t.key.toLowerCase() === key.toLowerCase() && (!p.kind || t.connection.startsWith(`${p.kind}:`))) ?? null;
 }
+
+/**
+ * The link dialog's lookups of what was typed or pasted (X46): one at a time,
+ * after a short pause. A lookup that a newer one replaced, or that was
+ * cancelled, ends as `undefined`, so ↵ never links from it.
+ */
+export function pasteLookup(delayMs = 200) {
+  let round = 0;
+  let current: Promise<Task | null | undefined> = Promise.resolve(null);
+  return {
+    start(run: () => Promise<Task | null>): Promise<Task | null | undefined> {
+      const mine = ++round;
+      current = new Promise((resolve) =>
+        setTimeout(async () => {
+          if (mine !== round) return resolve(undefined);
+          const found = await run().catch(() => null);
+          resolve(mine === round ? found : undefined);
+        }, delayMs),
+      );
+      return current;
+    },
+    cancel() {
+      round++;
+    },
+    /** The current lookup's task: what ↵ links, or `undefined` once it was replaced or cancelled. */
+    settled(): Promise<Task | null | undefined> {
+      return current;
+    },
+  };
+}
