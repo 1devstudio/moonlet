@@ -54,3 +54,8 @@ export interface ActivityEntry {
 export function appendActivity(list: ActivityEntry[], entry: ActivityEntry): ActivityEntry[] {
   return [entry, ...list].slice(0, 20);
 }
+
+/** How a task's state is drawn (X45): by shape, so it reads without colour. */
+export function glyphShape(column: Column): "ring" | "half" | "three-quarters" | "check" {
+  return column === "done" ? "check" : column === "in_progress" ? "half" : column === "in_review" ? "three-quarters" : "ring";
+}

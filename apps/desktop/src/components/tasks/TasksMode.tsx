@@ -8,7 +8,7 @@ import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
-import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
+import { findTasks, glyphShape, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
 import { activityOf, boardInput, ensureTasks, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
@@ -38,8 +38,9 @@ const TONE: Record<CardRow["meta"]["tone"], string> = {
 
 /** Task state by shape: ring Todo, half In Progress, three quarters In Review, filled check Done. */
 export function TaskGlyph({ column, size = 14 }: { column: Column; size?: number }) {
-  const done = column === "done";
-  const pie = column === "in_progress" ? "M7 7 L7 4 A3 3 0 0 1 7 10 Z" : column === "in_review" ? "M7 7 L7 4 A3 3 0 1 1 4 7 Z" : "";
+  const shape = glyphShape(column);
+  const done = shape === "check";
+  const pie = shape === "half" ? "M7 7 L7 4 A3 3 0 0 1 7 10 Z" : shape === "three-quarters" ? "M7 7 L7 4 A3 3 0 1 1 4 7 Z" : "";
   return (
     <svg viewBox="0 0 14 14" width={size} height={size} className={cx("shrink-0", done ? "text-merged" : column === "todo" ? "text-muted" : "text-fg")} aria-hidden="true">
       <circle cx="7" cy="7" r="5.5" fill={done ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" />

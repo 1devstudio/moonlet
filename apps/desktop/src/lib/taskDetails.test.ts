@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendActivity, findTasks, initials, stateOptions } from "./taskDetails";
+import { appendActivity, findTasks, glyphShape, initials, stateOptions } from "./taskDetails";
 import type { Task } from "./tasks";
 import { tasksBoard } from "./tasksBoard";
 
@@ -56,5 +56,11 @@ describe("appendActivity (X45 activity)", () => {
     expect(next.length).toBe(20);
     expect(next[0]).toEqual({ at: 99, text: "Moved to In Review" });
     expect(next[19].text).toBe("e1");
+  });
+});
+
+describe("glyphShape (X45: task state by shape)", () => {
+  it("is an empty ring for Todo, half for In Progress, three quarters for In Review and a filled check for Done", () => {
+    expect((["todo", "in_progress", "in_review", "done"] as const).map(glyphShape)).toEqual(["ring", "half", "three-quarters", "check"]);
   });
 });
