@@ -113,6 +113,17 @@ describe("Linear tracker", () => {
     expect(toml).toContain('key = "ENG"');
     expect(toml).not.toContain("lin_api_e2e");
     expect(readFileSync(join(w.home, "secrets.json"), "utf8")).toContain("lin_api_e2e");
+  });
+
+  it("maps a workflow state to another column, saved with the connection", async () => {
+    await $(sel.settingsButton("States")).click();
+    await expect($('//div[@role="dialog"]').$(sel.text("Backlog"))).toBeDisplayed({ wait: 10_000 });
+    await choose('//select[@aria-label="Column for Backlog"]', "todo");
+    await $('//div[@role="dialog"]//button[normalize-space()="Save"]').click();
+    await browser.waitUntil(() => readFileSync(join(w.home, "trackers.toml"), "utf8").includes('Backlog = "todo"'), {
+      timeout: 10_000,
+      timeoutMsg: readFileSync(join(w.home, "trackers.toml"), "utf8"),
+    });
     await closeSettings();
   });
 

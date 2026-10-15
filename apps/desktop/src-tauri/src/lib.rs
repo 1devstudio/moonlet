@@ -476,6 +476,7 @@ pub fn run() {
             trackers::tracker_sources,
             trackers::tracker_tasks,
             trackers::tracker_update,
+            trackers::tracker_states,
             app_info
         ])
         .run(context)
