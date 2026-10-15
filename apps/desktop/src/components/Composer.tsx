@@ -242,8 +242,9 @@ export function Composer({
   const workspaceFor = (host: string) => (target?.host === host ? target.id : null);
   const currentProject = useStore((s) => (s.selected ? s.sessions[s.selected.host]?.find((x) => x.id === s.selected!.session)?.project_id : undefined));
   // Started from an issue, the projects that link its tracker project (X44).
-  const linked = presetTask?.projects ?? [];
-  const initial = composerPick(options, { host: presetHost, preset: presetProject, linked, current: selected && currentProject ? { host: selected.host, id: currentProject } : null });
+  // An adopted worktree stays in its project (X46).
+  const linked = worktree ? [] : (presetTask?.projects ?? []);
+  const initial = composerPick(options, { host: presetHost, preset: presetProject, linked, current: selected && currentProject ? { host: selected.host, id: currentProject } : null, worktree: !!worktree });
   const [projectQuery, setProjectQuery] = useState("");
   const [pick, setPick] = useState(initial ? { host: initial.host, id: initial.project.id } : null);
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
@@ -316,7 +317,7 @@ export function Composer({
     checked: !!pick && pick.host === o.host && pick.id === o.project.id,
     onSelect: () => setPick({ host: o.host, id: o.project.id }),
   });
-  const found = composerProjects(options, linked, projectQuery);
+  const found = composerProjects(options, linked, projectQuery, presetHost);
   const projectItems: MenuItem[] = [
     ...(found.linked.length ? [{ kind: "label" as const, label: `Linked to ${task?.key ?? "the issue"}` }, ...found.linked.map(projectItem)] : []),
     ...(found.linked.length && found.others.length ? [{ kind: "label" as const, label: "Other projects" }] : []),

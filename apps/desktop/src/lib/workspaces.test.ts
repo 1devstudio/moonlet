@@ -215,6 +215,12 @@ describe("composerPick (X44, X46 starting a session from an issue)", () => {
     expect(pick(undefined, undefined)).toBe("web");
   });
 
+  it("stays in an adopted worktree's project, whatever links the issue", () => {
+    const adopt = (linked: string[]) => composerPick(options, { host: "local", preset: "web", linked, current: null, worktree: true })?.project.id;
+    expect(adopt(["web", "api"])).toBe("web");
+    expect(adopt(["api"])).toBe("web");
+  });
+
   it("ignores a linked project outside the workspace", () => {
     expect(pick(undefined, ["elsewhere"], "docs")).toBe("docs");
   });
@@ -224,12 +230,18 @@ describe("composerProjects (X44 the composer's project search)", () => {
   const o = (id: string, name: string) => ({ host: "local", project: { id, name }, section: null });
   const options = [o("1", "storefront"), o("2", "store-api"), o("3", "docs")];
   const ids = (query: string, linked: string[] = []) => {
-    const r = composerProjects(options, linked, query);
+    const r = composerProjects(options, linked, query, "local");
     return [r.linked.map((x) => x.project.id), r.others.map((x) => x.project.id)];
   };
 
   it("lists the linked projects first, then the others", () => {
     expect(ids("", ["3"])).toEqual([["3"], ["1", "2"]]);
+  });
+
+  it("counts as linked only a project on the issue's host", () => {
+    const both = [{ host: "local", project: { id: "1", name: "web" }, section: null }, { host: "devbox", project: { id: "1", name: "web" }, section: null }];
+    const r = composerProjects(both, ["1"], "", "local");
+    expect([r.linked.map((x) => x.host), r.others.map((x) => x.host)]).toEqual([["local"], ["devbox"]]);
   });
 
   it("keeps the projects whose name has the query, ignoring case", () => {
