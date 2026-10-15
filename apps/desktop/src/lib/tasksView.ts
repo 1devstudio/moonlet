@@ -99,3 +99,16 @@ export function modeSwitch(key: string, outOfSync: number): { sessions: string; 
   const titled = (name: string) => (key ? `${name} ${key}` : name);
   return { sessions: titled("Sessions"), tasks: titled("Tasks"), label: outOfSync ? `Tasks, ${outOfSync} out of sync` : "Tasks", dot: outOfSync > 0 };
 }
+
+export interface BoardFilters {
+  /** Assignee: me. */
+  mine: boolean;
+  /** Hide done tasks with no session or worktree left. */
+  hideEmptyDone: boolean;
+}
+
+/** The board with the header's filters applied (X45). */
+export function filterBoard(board: Board, f: BoardFilters): Board {
+  const keep = (c: Board["todo"][number]) => (!f.mine || c.task.mine !== false) && (!f.hideEmptyDone || c.column !== "done" || c.rows.length + c.orphans.length > 0);
+  return { todo: board.todo.filter(keep), in_progress: board.in_progress.filter(keep), in_review: board.in_review.filter(keep), done: board.done.filter(keep) };
+}

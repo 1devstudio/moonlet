@@ -15,7 +15,7 @@ import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type 
 import { workspaceConnections } from "./trackerSources";
 import { applyStateMapping } from "./stateMapping";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
-import type { TaskView } from "./tasksView";
+import type { BoardFilters, TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
 
 /** GitHub Issues through `gh` on the project's host (X44). */
@@ -52,6 +52,8 @@ interface TasksState {
   layout: "board" | "list";
   /** List rows open, by `connection key`. */
   expanded: Record<string, boolean>;
+  /** The header's filters, kept across restarts (X45). */
+  filters: BoardFilters;
   /** Connections whose token stopped working, with what to do (X44). */
   attention: Record<string, string>;
   /** What moonlet did about each task, by `connection key` (X45 Activity). */
@@ -127,12 +129,28 @@ export const useTasks = create<TasksState>(() => ({
   configError: null,
   layout: storedLayout(),
   expanded: storedExpanded(),
+  filters: storedFilters(),
   attention: {},
   activity: {},
   query: "",
   paused: storedPaused(),
   failures: {},
 }));
+
+function storedFilters(): BoardFilters {
+  try {
+    const f = JSON.parse(readStored("tasks.filters") ?? "{}");
+    return { mine: f.mine === true, hideEmptyDone: f.hideEmptyDone === true };
+  } catch {
+    return { mine: false, hideEmptyDone: false };
+  }
+}
+
+/** Assignee: me and Hide empty Done in the header (X45). */
+export function setFilters(filters: BoardFilters) {
+  useTasks.setState({ filters });
+  writeStored("tasks.filters", JSON.stringify(filters));
+}
 
 function storedExpanded(): Record<string, boolean> {
   try {
@@ -306,7 +324,8 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
         const shownAll = (t: Task) => c.all.includes(t.tracker?.source ?? "");
         const mine = await hostsApi.trackerTasks(c.id, true);
         const everyone = c.all.length ? (await hostsApi.trackerTasks(c.id, false)).filter(shownAll) : [];
-        const list = [...everyone, ...mine.filter((t) => !shownAll(t))];
+        const own = new Set(mine.map((t) => t.key));
+        const list = [...everyone.map((t) => ({ ...t, mine: own.has(t.key) })), ...mine.filter((t) => !shownAll(t)).map((t) => ({ ...t, mine: true }))];
         return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
       } catch (e) {
         const err = e as { auth?: boolean; message?: string };

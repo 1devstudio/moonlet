@@ -23,6 +23,8 @@ export interface Task {
   updatedMs: number;
   /** Linear's cycle number, when the issue is in one. */
   cycle?: number;
+  /** Assigned to the user, as the tracker (or `gh`) said; for Assignee: me (X45). */
+  mine?: boolean;
   /** GitHub issues: what links a branch or PR to it. */
   github?: { repo: string; number: number; closingPrs: number[] };
   /** Linear, Jira and ClickUp issues: their id, state name and team/project/list in the tracker. */
@@ -32,6 +34,8 @@ export interface Task {
 /** A GitHub issue from `gh.tasks` as a task. */
 export function taskFromGh(gh: GhTask, connection: string): Task {
   return {
+    // `gh.tasks` asks for the user's issues only.
+    mine: true,
     connection,
     key: `${gh.repo}#${gh.number}`,
     title: gh.title,

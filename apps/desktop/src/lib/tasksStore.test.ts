@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -611,6 +611,8 @@ describe("Shows per source (X44)", () => {
     });
     await refreshTasks("local", "personal", 1_000);
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2"]);
+    // Assignee: me (X45) reads which of them the tracker gave as the account's own.
+    expect(Object.fromEntries(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.mine]))).toEqual({ "DES-2": true, "MOON-1": false, "MOON-2": true });
     useTasks.setState({ config: null });
   });
 });
@@ -813,5 +815,15 @@ describe("the out-of-sync dot's poll and the remembered mode (X45)", () => {
     const restarted = await import("./tasksStore");
     expect(restarted.isTasksMode(store.useStore.getState())).toBe(true);
     toggleTasksMode();
+  });
+});
+
+describe("the header's filters (X45)", () => {
+  it("are remembered across restarts", async () => {
+    setFilters({ mine: true, hideEmptyDone: false });
+    vi.resetModules();
+    const restarted = await import("./tasksStore");
+    expect(restarted.useTasks.getState().filters).toEqual({ mine: true, hideEmptyDone: false });
+    setFilters({ mine: false, hideEmptyDone: false });
   });
 });
