@@ -9,6 +9,7 @@ import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
 import { bannerOn } from "./alerts";
 import { trackerName } from "./tasks";
+import { ROW_STYLES, rowStyle } from "./sessionRows";
 import type { Settings } from "./store";
 import { WORKSPACE_COLORS } from "./workspaces";
 import type { TrackersConfig } from "./tasksStore";
@@ -104,6 +105,7 @@ function index(c: SearchContext): Entry[] {
     app("general", "App › General › Background daemon", "daemon", "Start the moonlet daemon at login", "", "launchd login item"),
     app("appearance", "App › Appearance", "font-size", "Font size", `${t.fontSize}px`, "text zoom scale"),
     app("appearance", "App › Appearance", "editor-theme", "Colour theme of files and diffs", labelOf(EDITOR_THEMES, resolveEditorTheme(s.editorTheme)), "color syntax editor"),
+    app("appearance", "App › Appearance", "session-rows", "Session rows", labelOf(ROW_STYLES, rowStyle(s.sessionRows)), "sidebar task issue number"),
     app("terminal", "App › Terminal", "font-family", "Font family", t.fontFamily.split(",")[0].replace(/"/g, "").trim(), "terminal font"),
     app("terminal", "App › Terminal", "new-shells", "New shells", t.classicPrompt ? "Classic" : "Blocks", "classic blocks prompt input editor"),
     app("terminal", "App › Terminal", "option-meta", "Use Option as Meta", onOff(t.optionIsMeta), "alt"),
