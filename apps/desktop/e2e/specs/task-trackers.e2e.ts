@@ -125,8 +125,14 @@ describe("Linear tracker", () => {
     await fill('//div[@role="dialog"]//input[@type="password"]', "lin_api_e2e");
     await $('//div[@role="dialog"]//button[normalize-space()="Connect"]').click();
     await expect($(sel.text("Signed in as Ada Lovelace · 2 sources visible"))).toBeDisplayed({ wait: 15_000 });
+    // Sources are added row by row: the first row starts empty, a second is added, then removed.
+    await expect($('//div[@role="dialog"]').$(sel.text("Add the Linear teams whose issues Tasks mode shows. For each, pick the workspace that shows it, whose issues it shows and the moonlet project its sessions start in."))).toBeDisplayed();
+    await choose('//div[@role="dialog"]//select[@aria-label="Source 1"]', "ENG");
+    await $('//div[@role="dialog"]//button[normalize-space()="Add source"]').click();
+    await choose('//div[@role="dialog"]//select[@aria-label="Source 2"]', "DES");
+    await $('//div[@role="dialog"]//button[@aria-label="Remove Design"]').click();
+    await $('//div[@role="listitem"][@aria-label="Design"]').waitForExist({ reverse: true });
     const eng = '//div[@role="listitem"][@aria-label="Engineering"]';
-    await $(`${eng}//input[@type="checkbox"]`).click();
     const ws = rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
     await choose(`${eng}//select[@aria-label="Workspace for Engineering"]`, `local/${ws}`);
     await choose(`${eng}//select[@aria-label="Project for Engineering"]`, projectId(w));
@@ -135,6 +141,7 @@ describe("Linear tracker", () => {
     const toml = readFileSync(join(w.home, "trackers.toml"), "utf8");
     expect(toml).toContain('id = "linear:acme"');
     expect(toml).toContain('key = "ENG"');
+    expect(toml).not.toContain('key = "DES"');
     expect(toml).not.toContain("lin_api_e2e");
     expect(readFileSync(join(w.home, "secrets.json"), "utf8")).toContain("lin_api_e2e");
   });
@@ -299,8 +306,8 @@ describe("Jira and ClickUp trackers", () => {
       }
       await expect($(sel.text("Signed in as Mia Krystof · 2 sources visible"))).toBeDisplayed({ wait: 15_000 });
       if (site === "acme.atlassian.net") {
+        await choose('//div[@role="dialog"]//select[@aria-label="Source 1"]', "EX");
         const ex = '//div[@role="listitem"][@aria-label="Example"]';
-        await $(`${ex}//input[@type="checkbox"]`).click();
         const ws = rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
         await choose(`${ex}//select[@aria-label="Workspace for Example"]`, `local/${ws}`);
       }
