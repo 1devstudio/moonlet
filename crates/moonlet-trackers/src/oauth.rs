@@ -84,6 +84,53 @@ pub fn authorize_url(
     )
 }
 
+/// The form body that trades the code for tokens (PKCE: no client secret).
+pub fn token_body(client_id: &str, code: &str, redirect: &str, verifier: &str) -> String {
+    format!(
+        "grant_type=authorization_code&client_id={}&code={}&redirect_uri={}&code_verifier={}",
+        encode(client_id),
+        encode(code),
+        encode(redirect),
+        encode(verifier)
+    )
+}
+
+/// The form body that trades a refresh token for new tokens.
+pub fn refresh_body(client_id: &str, refresh: &str) -> String {
+    format!(
+        "grant_type=refresh_token&client_id={}&refresh_token={}",
+        encode(client_id),
+        encode(refresh)
+    )
+}
+
+/// OAuth tokens and when the access token expires.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Tokens {
+    pub access: String,
+    /// Each refresh returns a new one.
+    pub refresh: Option<String>,
+    pub expires_ms: u64,
+}
+
+/// The token endpoint's answer, read at `now_ms`.
+pub fn parse_tokens(raw: &[u8], now_ms: u64) -> Result<Tokens, crate::ApiError> {
+    let v: serde_json::Value = serde_json::from_slice(raw)
+        .map_err(|e| crate::ApiError::new(format!("Linear answered with something else: {e}")))?;
+    let access = v["access_token"].as_str().ok_or_else(|| crate::ApiError {
+        auth: true,
+        message: format!(
+            "Linear refused the sign-in: {}",
+            v["error"].as_str().unwrap_or("no token")
+        ),
+    })?;
+    Ok(Tokens {
+        access: access.into(),
+        refresh: v["refresh_token"].as_str().map(String::from),
+        expires_ms: now_ms + v["expires_in"].as_u64().unwrap_or(0) * 1000,
+    })
+}
+
 /// The authorization code from the loopback callback's path and query, if
 /// it answers this request (`state`).
 pub fn parse_callback(path_and_query: &str, state: &str) -> Result<String, String> {
@@ -172,5 +219,33 @@ mod tests {
             parse_callback("/favicon.ico", "st4te"),
             Err("not the sign-in callback".into())
         );
+    }
+
+    #[test]
+    fn token_exchange_and_refresh_bodies() {
+        assert_eq!(
+            token_body(
+                "client-1",
+                "abc+1",
+                "http://127.0.0.1:53682/callback",
+                "verifier"
+            ),
+            "grant_type=authorization_code&client_id=client-1&code=abc%2B1\
+             &redirect_uri=http%3A%2F%2F127.0.0.1%3A53682%2Fcallback&code_verifier=verifier"
+        );
+        assert_eq!(
+            refresh_body("client-1", "r1"),
+            "grant_type=refresh_token&client_id=client-1&refresh_token=r1"
+        );
+        let tokens = parse_tokens(br#"{"access_token":"a1","token_type":"Bearer","expires_in":86399,"refresh_token":"r2","scope":"read,write"}"#, 1_000).unwrap();
+        assert_eq!(
+            tokens,
+            Tokens {
+                access: "a1".into(),
+                refresh: Some("r2".into()),
+                expires_ms: 1_000 + 86_399_000
+            }
+        );
+        assert!(parse_tokens(br#"{"error":"invalid_grant"}"#, 0).is_err());
     }
 }

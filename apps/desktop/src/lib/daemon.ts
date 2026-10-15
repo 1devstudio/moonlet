@@ -52,6 +52,8 @@ export const hostsApi = {
   trackerTasks: (id: string, mine: boolean) => invoke<import("./tasks").Task[]>("tracker_tasks", { id, mine }),
   trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; state?: string | null; assign_me?: boolean; comment?: string | null }) =>
     invoke("tracker_update", { req }),
+  trackerOauthAvailable: () => invoke<boolean>("tracker_oauth_available"),
+  trackerOauthLinear: () => invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_oauth_linear"),
   trackerStates: (id: string, source: string) => invoke<{ name: string; column: string }[]>("tracker_states", { id, source }),
   /** `~/.moonlet/trackers.toml`, or its defaults (X44). */
   trackersConfig: () => invoke<Partial<import("./tasksStore").TrackersConfig>>("trackers_config"),
