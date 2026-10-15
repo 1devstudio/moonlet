@@ -3,9 +3,9 @@ import { GitBranch, SquareTerminal, X } from "lucide-react";
 import type { AgentState } from "../lib/protocol";
 import { fromOtherDialog, tabWrap } from "../lib/modal";
 
-export function cx(...c: (string | false | null | undefined)[]) {
-  return c.filter(Boolean).join(" ");
-}
+import { cx } from "../lib/cx";
+
+export { cx };
 
 type Variant = "primary" | "ghost" | "subtle" | "danger";
 
