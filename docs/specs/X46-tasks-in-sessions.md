@@ -36,7 +36,7 @@ A session can belong to a task. The link is made when a session starts from a ta
 
   The user can edit it before sending.
 - [x] Project: the source's repository (X44). Branch: the source's template filled in and cut to the max length, then made unique the same way session branches are (`-2`, `-3`). (`a_task_branch_follows_the_trackers_default_template`, `tasks-mode.e2e.ts`)
-- [ ] "Move <key> to In Progress and assign it to me" is shown and ticked when the "session starts" rule is Automatically, shown unticked when it is Suggest, and hidden when Off. It only acts on a task in Todo (or a state not shown); a task further along is left alone.
+- [x] "Move <key> to In Progress and assign it to me" is shown and ticked when the "session starts" rule is Automatically, shown unticked when it is Suggest, and hidden when Off. It only acts on a task in Todo (or a state not shown); a task further along is left alone. For a GitHub repository issue it reads "Assign <key> to me". (`keepInStep.test.ts` startAction, `tasks-mode.e2e.ts`)
 - [x] **Start session** on a worktree without a session creates a session on that worktree and branch instead of making a new one. (`worktrees_made_outside_moonlet_are_listed_and_can_be_adopted`)
 - [x] The new session is stored with its link. (`tasks-mode.e2e.ts`)
 
@@ -67,7 +67,7 @@ Each rule is Automatically, Suggest or Off per connection (X44). Suggest shows t
 | The issue moves to Done | archive its sessions and remove their worktrees (always asks when a worktree has uncommitted changes) | Suggest |
 
 - [ ] "Move" uses the tracker state mapped first onto that column (X44). For Jira it uses the workflow transition that leads to that state; with none, the action fails with "No Jira transition to <state> from <state>".
-- [ ] For a GitHub repository source, "move to Done" closes the issue as completed and the other moves do nothing (the column follows the work). For a GitHub project board source, moves set the project's Status field.
+- [x] For a GitHub repository source, "move to Done" closes the issue as completed and the other moves do nothing (the column follows the work). For a GitHub project board source, moves set the project's Status field. (`task_updates_reach_github_through_gh`, `keepInStep.test.ts`)
 - [ ] Each action moonlet takes is recorded in the task's activity (X45), and a failed action shows on the task with its error and a Retry.
 - [ ] Actions happen once per event: reopening the app or a repeated PR poll does not move or comment again.
 
@@ -80,6 +80,9 @@ The designs are the "Session opened from a task" and "Link a session · Start fr
 - `Session` gains `task: Option<TaskRef>`, `TaskRef {connection, key, url}`, and `task_unlinked: bool` (set by an unlink, cleared by the next link).
 - `session.create` gains `task` and `worktree`: the path of a linked worktree of the project to adopt, with its branch. It fails when the path is not one of the project's worktrees, is on a detached HEAD, or is used by a session that is not archived.
 - `session.update` gains `task`: a task links to it, `null` unlinks, absent leaves the link alone.
+- `gh.task_update {path, number, assign_me?, close?}` assigns a GitHub issue to the user (`gh issue edit --add-assignee @me`) or closes it as completed.
+- `project.worktree_remove {id, path}` removes a linked worktree no session uses (Clean up); it refuses the main checkout and a session's worktree.
+- Until X44's connection page sets the rules, they run at their defaults; for GitHub, "a pull request opens" is the `Closes #<n>` line the Create PR dialog adds to the body.
 - No new events: `sessions.changed` already carries sessions.
 
 ## Data and config

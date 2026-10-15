@@ -6,7 +6,10 @@ import { errorToast, refreshGit, selectedSession, shownWorkspace, toast, useStor
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { hostSections } from "../lib/sidebar";
-import { newSectionWorkspace } from "../lib/workspaces";
+import { newSectionWorkspace, wsKey } from "../lib/workspaces";
+import { closesIssue, withCloses } from "../lib/keepInStep";
+import { githubRepo } from "../lib/tasks";
+import { useTasks } from "../lib/tasksStore";
 import { NewWorkspaceDialog } from "./WorkspaceDialogs";
 
 const close = () => useStore.setState({ dialog: null });
@@ -212,10 +215,15 @@ export function CreatePrDialog() {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!ws) return;
+    // The GitHub issue the session works on gets `Closes #N` (X46 Keep in step).
+    const tasks = useTasks.getState().data[wsKey(host, ws.workspace_id ?? "")]?.tasks ?? [];
+    const issue = rpc<string | null>(host, M.gitOriginUrl, { path: ws.path })
+      .then((url) => closesIssue(ws, githubRepo(url), tasks))
+      .catch(() => null);
     void rpc<Commit[]>(host, M.gitLog, { path: ws.path, base: ws.base })
-      .then((log) => {
+      .then(async (log) => {
         if (log.length === 1) setTitle(log[0].subject);
-        setBody(log.map((c) => `- ${c.subject}`).join("\n"));
+        setBody(withCloses(log.map((c) => `- ${c.subject}`).join("\n"), await issue));
       })
       .catch(() => {});
   }, [host, ws]);

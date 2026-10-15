@@ -5,9 +5,11 @@ import { create } from "zustand";
 import { rpc } from "./daemon";
 import { latestPerKey } from "./prPoll";
 import { type GhTask, M, type Project, type Worktree } from "./protocol";
-import { sesKey, sessionState, sessionTerminals, shownWorkspace, useStore } from "./store";
+import { errorToast, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
+import { askConfirm } from "./confirm";
+import { cleanUpMessage, driftFix, driftKey } from "./keepInStep";
 import { githubRepo, type Task, taskFromGh } from "./tasks";
-import type { BoardInput, BoardSession, BoardWorktree } from "./tasksBoard";
+import type { BoardInput, BoardSession, BoardWorktree, Card } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
 
@@ -33,9 +35,11 @@ interface TasksState {
   view: TaskView;
   /** The task the detail panel shows, `connection key`. */
   selected: string | null;
+  /** Out-of-sync chips put off with "Not now", by `driftKey` (X45). */
+  notNow: Record<string, true>;
 }
 
-export const useTasks = create<TasksState>(() => ({ data: {}, view: "mine", selected: null }));
+export const useTasks = create<TasksState>(() => ({ data: {}, view: "mine", selected: null, notNow: {} }));
 
 type StoreState = ReturnType<typeof useStore.getState>;
 
@@ -87,7 +91,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
           })
         : [];
       const worktrees = await rpc<Worktree[]>(host, M.projectWorktrees, { id: p.id }).catch(() => []);
-      return { id: p.id, repo, issues, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo })) };
+      return { id: p.id, repo, issues, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo, project: p.id })) };
     }),
   );
   if (!isLatest()) return;
@@ -124,4 +128,64 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       originRepo: data.repos[x.project_id] ?? null,
     }));
   return { tasks: data.tasks, sessions, worktrees: data.worktrees, sessionStartRule: "auto" };
+}
+
+/** The project path of a workspace project in GitHub repository `repo`. */
+function repoPath(host: string, workspaceId: string, repo: string): string | null {
+  const repos = useTasks.getState().data[wsKey(host, workspaceId)]?.repos ?? {};
+  const id = Object.keys(repos).find((p) => repos[p]?.toLowerCase() === repo.toLowerCase());
+  return useStore.getState().projects[host]?.find((p) => p.id === id)?.path ?? null;
+}
+
+/** "Not now" on a chip: hidden until the task or its sessions change. */
+export function putOffDrift(card: Card) {
+  useTasks.setState((t) => ({ notNow: { ...t.notNow, [driftKey(card)]: true } }));
+}
+
+/** Assigns a GitHub issue to the user, as the "session starts" rule does (X46). */
+export async function assignToMe(host: string, workspaceId: string, github: { repo: string; number: number }) {
+  const path = repoPath(host, workspaceId, github.repo);
+  if (!path) return;
+  try {
+    await rpc(host, M.ghTaskUpdate, { path, number: github.number, assign_me: true });
+  } catch (e) {
+    errorToast(e);
+  }
+}
+
+/** The chip's button (X45): close the issue, move it, or clean up after a done task. */
+export async function fixDrift(host: string, workspaceId: string, card: Card) {
+  const plan = driftFix(card);
+  if (!plan) return;
+  try {
+    if (plan.kind === "github") {
+      const path = repoPath(host, workspaceId, plan.repo);
+      if (!path) return;
+      await rpc(host, M.ghTaskUpdate, { path, number: plan.number, close: true });
+      toast(`Closed ${card.task.key}`);
+    } else if (plan.kind === "move") {
+      toast(`Moving ${card.task.key} comes with its tracker's connection (X44)`);
+      return;
+    } else {
+      const sessions = useStore.getState().sessions[host]?.filter((s) => plan.sessions.includes(s.id)) ?? [];
+      const paths = [...sessions.map((s) => s.path), ...plan.worktrees];
+      const dirty: string[] = [];
+      for (const path of paths) {
+        const st = await rpc<{ files: unknown[] }>(host, M.gitStatus, { path }).catch(() => null);
+        if (st?.files.length) dirty.push(path);
+      }
+      const ok = await askConfirm({
+        title: `Clean up ${card.task.key}?`,
+        message: cleanUpMessage(sessions.length, plan.worktrees.length, dirty),
+        action: "Clean up",
+        variant: dirty.length ? "danger" : "primary",
+      });
+      if (!ok) return;
+      for (const s of sessions) await rpc(host, M.sessionArchive, { id: s.id, remove_worktree: true });
+      for (const w of card.orphans) if (w.project) await rpc(host, M.projectWorktreeRemove, { id: w.project, path: w.path });
+    }
+    await refreshTasks(host, workspaceId);
+  } catch (e) {
+    errorToast(e);
+  }
 }

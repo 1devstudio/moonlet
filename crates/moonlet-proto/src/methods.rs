@@ -49,6 +49,8 @@ pub const PROJECT_CONFIG_FILE: &str = "project.config_file";
 pub const PROJECT_SET_CONFIG: &str = "project.set_config";
 /// `{id}` → the project's linked work trees (X45).
 pub const PROJECT_WORKTREES: &str = "project.worktrees";
+/// `{id, path}`: removes a linked worktree no session uses (X45 Clean up).
+pub const PROJECT_WORKTREE_REMOVE: &str = "project.worktree_remove";
 pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
@@ -110,6 +112,9 @@ pub const GH_PRS: &str = "gh.prs";
 /// `{path, mine}` → the repository's 100 most recently updated issues, open
 /// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
 pub const GH_TASKS: &str = "gh.tasks";
+/// `{path, number, assign_me?, close?}`: assigns a GitHub issue to the user
+/// or closes it as completed (X46 Keep in step).
+pub const GH_TASK_UPDATE: &str = "gh.task_update";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
 pub const GH_PR_STACK: &str = "gh.pr_stack";
 
@@ -645,6 +650,24 @@ pub struct GhTasks {
     pub path: String,
     #[serde(default)]
     pub mine: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectWorktree {
+    /// The project.
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhTaskUpdate {
+    /// Any directory inside the repository.
+    pub path: String,
+    pub number: u64,
+    #[serde(default)]
+    pub assign_me: bool,
+    #[serde(default)]
+    pub close: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

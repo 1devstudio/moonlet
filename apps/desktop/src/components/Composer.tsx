@@ -3,7 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { TaskStart } from "../lib/tasks";
-import { leaveTasksMode } from "../lib/tasksStore";
+import { assignToMe, leaveTasksMode } from "../lib/tasksStore";
 import { composerOptions, composerTarget } from "../lib/workspaces";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
@@ -250,6 +250,7 @@ export function Composer({
 
   const [prompt, setPrompt] = useState(presetTask?.firstMessage ?? "");
   const [task, setTask] = useState(presetTask ?? null);
+  const [assign, setAssign] = useState(!!presetTask?.assign?.checked);
   const [taskBranch, setTaskBranch] = useState<string | null>(null);
   // Starts at the Settings default every time; not remembered per project (X7).
   const [mode, setMode] = useState(() => resolveMode(useStore.getState().settings.defaultMode));
@@ -358,6 +359,8 @@ export function Composer({
         rows: 32,
       });
       close();
+      // Keep in step: the "session starts" rule (X46).
+      if (task?.github && task.assign && assign) void assignToMe(current.host, s.workspace_id ?? workspaceFor(current.host) ?? "", task.github);
       // Started from Tasks mode: work on it in Sessions mode (X46).
       if (task || worktree) leaveTasksMode();
       selectSession(current.host, s.id);
@@ -478,6 +481,12 @@ export function Composer({
             }}
           />
         </div>
+        {task?.assign && (
+          <label className="flex items-center gap-2 border-b border-border px-6 py-2 ui-text-12.5 text-muted">
+            <input type="checkbox" checked={assign} onChange={(e) => setAssign(e.target.checked)} />
+            {task.assign.label}
+          </label>
+        )}
         {editingFrom && (
           <div className="flex items-center gap-2 border-b border-border px-6 py-2.5">
             <GitBranch size={14} className="text-muted" />
