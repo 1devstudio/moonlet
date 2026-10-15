@@ -98,7 +98,9 @@ fn context_usage(r: &Value) -> Option<ContextUsage> {
 fn task_event(v: &Value, st: &mut ChatState) -> bool {
     let Some(id) = v["task_id"].as_str() else { return false };
     if v["subtype"] == "task_started" {
-        if st.subagents.iter().any(|a| a.id == id) {
+        // Long Bash calls are tasks too (`local_bash`): only agents become subagents.
+        let agent = v["task_type"].as_str().map_or(true, |t| t.ends_with("_agent"));
+        if !agent || st.subagents.iter().any(|a| a.id == id) {
             return false;
         }
         st.subagents.push(Subagent {
@@ -1340,6 +1342,23 @@ mod tests {
         let s = &st.subagents[0];
         assert_eq!((s.status.as_str(), s.error.as_deref(), s.report.as_deref()), ("failed", Some("API Error: 529 overloaded"), None));
         assert_eq!(s.ended_at, Some(1791970434654));
+    }
+
+    #[test]
+    fn a_long_bash_call_is_not_a_subagent() {
+        let (mut a, mut st) = started();
+        // Captured from claude 2.1.296: one Bash call in the background and
+        // one in the foreground, each reported as a task of type local_bash.
+        for line in [
+            r#"{"type":"system","subtype":"task_started","task_id":"bmt2jjlj9","run_id":"0mv9ookld-58f2936b","tool_use_id":"toolu_01PCHWaYf6Y1yhSW44BgmSC3","description":"Run sleep 3 then echo hi in background","is_backgrounded":true,"task_type":"local_bash"}"#,
+            r#"{"type":"system","subtype":"task_started","task_id":"bmovbnk9m","run_id":"0mv9oomwr-996c421d","tool_use_id":"toolu_014N3kW2WkZKyrwoN2esYz4Q","description":"Sleep for 5 seconds in foreground","is_backgrounded":false,"task_type":"local_bash"}"#,
+            r#"{"type":"system","subtype":"task_updated","task_id":"bmt2jjlj9","run_id":"0mv9ookld-58f2936b","patch":{"status":"completed","end_time":1792077518374}}"#,
+            r#"{"type":"system","subtype":"task_notification","task_id":"bmt2jjlj9","run_id":"0mv9ookld-58f2936b","tool_use_id":"toolu_01PCHWaYf6Y1yhSW44BgmSC3","status":"completed","output_file":"/tmp/tasks/bmt2jjlj9.output","summary":"Background command \"Run sleep 3 then echo hi in background\" completed (exit code 0)"}"#,
+            r#"{"type":"system","subtype":"task_notification","task_id":"bmovbnk9m","run_id":"0mv9oomwr-996c421d","tool_use_id":"toolu_014N3kW2WkZKyrwoN2esYz4Q","status":"completed","output_file":"","summary":"Sleep for 5 seconds in foreground"}"#,
+        ] {
+            a.on_line(line, &mut st);
+        }
+        assert!(st.subagents.is_empty());
     }
 
     #[test]
