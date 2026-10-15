@@ -1059,8 +1059,10 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
     let mut c = d.client().await;
     let (repo, p) = project_with_repo(&d, &mut c).await;
     let wt = add_worktree(&repo, &["-b", "moon-149-host-health"], &d.home.path().join("moon-149-host-health"));
-    // The same worktree reached through a symlink, as `/var` is on macOS.
-    let link = d.home.path().join("via-link");
+    // The same worktree reached through a symlink, as `/var` is on macOS. The
+    // link sits outside home, so nothing walking home loops through it.
+    let links = tempfile::tempdir().unwrap();
+    let link = links.path().join("home");
     std::os::unix::fs::symlink(d.home.path(), &link).unwrap();
     let wt_as_given = link.join("moon-149-host-health");
 
