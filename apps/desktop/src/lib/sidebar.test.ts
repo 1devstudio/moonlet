@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, compact, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, workspaceSections } from "./sidebar";
+import { arrange, compact, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
@@ -153,5 +153,13 @@ describe("groupHeading", () => {
   it("gives project, status and task groups a heading, and the ungrouped list none", () => {
     const g = (kind: "project" | "status" | "task" | "all") => ({ key: kind, kind, label: "MOON-142 Remote hosts", sessions: [] });
     expect(["project", "status", "task", "all"].map((k) => groupHeading(g(k as "project")))).toEqual(["project", "label", "label", null]);
+  });
+});
+
+describe("sessionMenu (X46 linking from the right-click menu)", () => {
+  it("offers Link to task… only for a session without a task, in a workspace with a task source", () => {
+    expect(sessionMenu({ linked: false, sources: true })).toEqual(["open", "link-task", "archive"]);
+    expect(sessionMenu({ linked: true, sources: true })).toEqual(["open", "archive"]);
+    expect(sessionMenu({ linked: false, sources: false })).toEqual(["open", "archive"]);
   });
 });

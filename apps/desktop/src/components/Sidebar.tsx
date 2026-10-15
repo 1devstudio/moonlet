@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, type Group } from "../lib/sidebar";
+import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, sessionMenu, type Group } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -284,7 +284,7 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   // Running subagents of the session's chats (X42).
   const agents = useStore((st) => sessionTerminals(st, host, s.id).reduce((n, x) => n + (x.subagents ?? 0), 0));
   const badge = sessionBadge({ creating, state, merged: pr?.state === "merged", git, agents });
-  const { lines, sources } = useContext(TaskLines);
+  const { lines } = useContext(TaskLines);
   const line = lines[s.id];
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
@@ -330,17 +330,6 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
             </span>
           )}
         </span>
-      )}
-      {!renaming && !line && sources && (
-        <button
-          className="hidden shrink-0 ui-text-11.5 text-faint hover:text-fg group-hover:block"
-          onClick={(e) => {
-            e.stopPropagation();
-            useStore.setState({ dialog: { kind: "link-task", host, session: s.id } });
-          }}
-        >
-          No task · Link
-        </button>
       )}
       {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-12 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
     </div>
@@ -581,7 +570,8 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
     };
   }, [onClose]);
   const { host, session: s, section: sec } = m;
-  const items = s ? sessionItems(host, s) : m.projectId ? projectItems(host, m.projectId, sec) : [];
+  const { lines, sources } = useContext(TaskLines);
+  const items = s ? sessionItems(host, s, { linked: !!lines[s.id], sources }) : m.projectId ? projectItems(host, m.projectId, sec) : [];
   return (
     <div
       className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
@@ -617,18 +607,26 @@ function projectItems(host: string, projectId: string, sec: Section): MenuItem[]
   ];
 }
 
-function sessionItems(host: string, s: Session): MenuItem[] {
-  return [
-    { label: "Open", onSelect: () => selectSession(host, s.id) },
-    { kind: "divider" },
-    {
-      label: "Archive",
-      icon: <Archive size={14} className="text-muted" />,
-      onSelect: () => {
-        void archiveSession({ host, ws: s });
-      },
-    },
-  ];
+function sessionItems(host: string, s: Session, task: { linked: boolean; sources: boolean }): MenuItem[] {
+  return sessionMenu(task).flatMap((id): MenuItem[] => {
+    switch (id) {
+      case "open":
+        return [{ label: "Open", onSelect: () => selectSession(host, s.id) }];
+      case "link-task":
+        return [{ label: "Link to task…", icon: <Link2 size={14} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "link-task", host, session: s.id } }) }];
+      case "archive":
+        return [
+          { kind: "divider" },
+          {
+            label: "Archive",
+            icon: <Archive size={14} className="text-muted" />,
+            onSelect: () => {
+              void archiveSession({ host, ws: s });
+            },
+          },
+        ];
+    }
+  });
 }
 
 function HistoryList() {

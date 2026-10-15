@@ -305,6 +305,23 @@ describe("Tasks mode", () => {
     expect([s?.task ?? null, s?.task_unlinked]).toEqual([null, true]);
   });
 
+  it("offers Link to task… in a session's right-click menu, not on the row", async () => {
+    if (await sessionsButton().isExisting()) await sessionsButton().click();
+    const row = sel.sessionRow(SESSION);
+    await expect($(row)).toBeDisplayed({ wait: 10_000 });
+    await expect($(`${row}//button[normalize-space()="No task · Link"]`)).not.toBeExisting();
+    // The embedded driver has no right click: send the contextmenu event itself.
+    await browser.execute((xp: string) => {
+      const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+      const r = el.getBoundingClientRect();
+      el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 10 }));
+    }, row);
+    await $(sel.button("Link to task…")).click();
+    await expect($(`//div[@role="dialog"]`).$(sel.text(`Link “${SESSION}” to a task`))).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($(`//div[@role="dialog"]`)).not.toBeExisting();
+  });
+
   it("links a session to a task from a pasted key", async () => {
     await tasksButton().click();
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "Sessions without a task")]').click();
