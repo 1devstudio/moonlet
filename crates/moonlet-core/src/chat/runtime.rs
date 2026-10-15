@@ -787,8 +787,13 @@ impl ChatManager {
                 Some(a) => Some(format!("{} {}", a.tool, a.summary).trim().to_string()),
                 None => st.items.iter().rev().find(|i| i.kind == "error").filter(|_| st.status == "error").map(|i| i.text.lines().next().unwrap_or("").to_string()),
             };
-            let _ = self.terms.report(chat.id, agent_state(&st.status), StateSource::Hook, message, inner.cfg.agent.clone().into());
             let running = st.subagents.iter().filter(|a| a.status == "running").count() as u32;
+            // The turn is not done while its background subagents run, so it alerts once at the end (X47).
+            let state = match agent_state(&st.status) {
+                AgentState::Done if running > 0 => AgentState::Working,
+                s => s,
+            };
+            let _ = self.terms.report(chat.id, state, StateSource::Hook, message, inner.cfg.agent.clone().into());
             if self.terms.get(chat.id).is_some_and(|t| t.info().subagents != running) {
                 self.terms.update_info(chat.id, |i| i.subagents = running);
             }
@@ -1162,6 +1167,40 @@ done
         assert_eq!(st.subagents[0].ended_at, Some(1791970412270));
         assert_eq!(terms.get(info.id).unwrap().info().subagents, 0);
         assert!(chats.stop_agent(info.id, "a1").is_err(), "no longer running");
+        chats.shutdown();
+    }
+
+    /// The agent states `agent.attention` raised for `id` since the last call.
+    fn attention(events: &mut tokio::sync::broadcast::Receiver<Message>, id: TerminalId) -> Vec<AgentState> {
+        let mut out = Vec::new();
+        while let Ok(ev) = events.try_recv() {
+            if let Message::Event { name, data } = ev
+                && name == methods::EV_AGENT_ATTENTION
+            {
+                let a: methods::Attention = serde_json::from_value(data).unwrap();
+                if a.terminal == id {
+                    out.push(a.state);
+                }
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn a_turn_is_not_done_while_its_subagents_run() {
+        let (dir, terms, chats) = setup().await;
+        let mut events = terms.subscribe_events();
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "launch an agent", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done" && s.subagents.first().is_some_and(|a| a.status == "running")).await;
+        assert_eq!(terms.get(info.id).unwrap().info().agent_state, AgentState::Working);
+        assert_eq!(attention(&mut events, info.id), []);
+
+        chats.stop_agent(info.id, "a1").unwrap();
+        wait_for(&chats, info.id, |s| s.subagents[0].status == "stopped").await;
+        assert_eq!(terms.get(info.id).unwrap().info().agent_state, AgentState::Done);
+        assert_eq!(attention(&mut events, info.id), [AgentState::Done]);
         chats.shutdown();
     }
 

@@ -58,11 +58,22 @@ describe("searching settings (X43)", () => {
 
   it("shows switches as On or Off and sounds by name", () => {
     expect(shown("sound")).toEqual([
+      ["Mute all sounds", "App › Notifications", "Off"],
       ["Sound when an agent needs you", "App › Notifications", "Glass"],
       ["Sound when an agent is done", "App › Notifications", "Hero"],
       ["Sound when an agent fails", "App › Notifications", "Off"],
     ]);
     expect(shown("notify even")).toEqual([["Notify even while moonlet is focused", "App › Notifications", "Off"]]);
+  });
+
+  it("finds the notification per event and mute, on unless turned off", () => {
+    const quiet: SearchContext = { ...ctx, settings: { ...ctx.settings, banners: { done: false }, muted: true } };
+    expect(searchSettings("notification when", quiet).map((r) => [r.before + r.hit + r.after, r.path, r.value])).toEqual([
+      ["Notification when an agent needs you", "App › Notifications", "On"],
+      ["Notification when an agent is done", "App › Notifications", "Off"],
+      ["Notification when an agent fails", "App › Notifications", "On"],
+    ]);
+    expect(searchSettings("mute all sounds", quiet).map((r) => [r.before + r.hit + r.after, r.value])).toEqual([["Mute all sounds", "On"]]);
   });
 
   it("finds an action's shortcut, with its key", () => {

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, hostSections, lastActive, projectRemoval, sessionBadge, type Group } from "../lib/sidebar";
-import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, useStore } from "../lib/store";
+import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
@@ -725,11 +725,22 @@ export function Sidebar() {
         <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ settingsPage: { page: "general" } })}>
           <Settings size={14} />
         </IconButton>
+        <MuteButton />
         <ProfileFooter />
         <UpdateButton />
       </div>
       {rowMenu && <RowContextMenu m={rowMenu} onClose={() => setRowMenu(null)} />}
     </aside>
+  );
+}
+
+/** Mutes every agent sound, or turns them back on (X47). */
+function MuteButton() {
+  const muted = useStore((s) => !!s.settings.muted);
+  return (
+    <IconButton title={muted ? "Unmute sounds" : "Mute sounds"} aria-pressed={muted} onClick={() => updateSettings({ muted: !muted })}>
+      {muted ? <BellOff size={14} /> : <Bell size={14} />}
+    </IconButton>
   );
 }
 

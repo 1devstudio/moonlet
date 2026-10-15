@@ -36,6 +36,7 @@ Daemon (PR 1):
 - [x] `chat.stop_agent {id, agent}` sends Claude a `stop_task` control request for that task id. It fails unless that id is a running subagent of that chat; Codex chats have none. (`stopping_a_subagent_sends_stop_task`, `a_running_subagent_can_be_stopped`)
 - [x] When the agent process exits, or the daemon restarts, every agent still running becomes `stopped`. (runtime test)
 - [x] The chat terminal's `TerminalInfo.subagents` counts its running subagents. (runtime test)
+- [x] While a subagent runs, the chat terminal's agent state is working, even after Claude's own turn ended ([X47](X47-quieter-notifications.md)).
 
 Agents tab (PR 2):
 
