@@ -96,4 +96,11 @@ describe("sourceLabels (X45 card)", () => {
     const mixed = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("github:github.com", "acme/web#7", undefined, "acme/web")]);
     expect(mixed(t("github:github.com", "acme/web#7", undefined, "acme/web"))).toBe("web");
   });
+
+  it("names a source in full when two sources share a short name", () => {
+    const repos = sourceLabels([t("github:github.com", "acme/web#7", undefined, "acme/web"), t("github:github.com", "other/web#2", undefined, "other/web")]);
+    expect(repos(t("github:github.com", "other/web#2", undefined, "other/web"))).toBe("other/web");
+    const teams = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("linear:globex", "ENG-2", "ENG")]);
+    expect(teams(t("linear:globex", "ENG-2", "ENG"))).toBe("globex ENG");
+  });
 });
