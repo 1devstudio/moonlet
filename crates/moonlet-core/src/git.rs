@@ -1690,8 +1690,9 @@ pub(crate) mod tests {
 
     #[test]
     fn only_pull_requests_of_the_issues_own_repository_close_it() {
-        // The captured shape of `closedByPullRequestsReferences`, with a PR
-        // from a fork-less sibling repository and GitHub's mixed-case owner.
+        // Hand-written in the shape of the captured fixture above: a closing
+        // PR in another repository of the same owner, and the issue's repository
+        // written in mixed case as GitHub may.
         let raw = serde_json::json!([{
             "number": 7,
             "title": "Gift cards at checkout",
