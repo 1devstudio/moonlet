@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceptanceCriteria, findPasted, linkChoices } from "./taskLinking";
+import { acceptanceCriteria, findPasted, firstChoice, linkChoices } from "./taskLinking";
 import type { Task } from "./tasks";
 
 const task = (key: string, title: string, o: Partial<Task> = {}): Task => ({
@@ -50,6 +50,21 @@ describe("linkChoices (X46 link dialog)", () => {
     expect(c.suggested.map((s) => [s.task.key, s.reason])).toEqual([["CDK-41", "Title matches the session name"]]);
     const b = linkChoices({ name: "Retries", branch: "cdk-38-retries" }, tasks, "");
     expect(b.suggested.map((s) => [s.task.key, s.reason])).toEqual([["CDK-38", "Branch carries the key"]]);
+  });
+
+  it("names the task's state and how many sessions it has in the reason", () => {
+    const c = linkChoices({ name: "Changelog themes", branch: "themes" }, tasks, "", (t) => (t.key === "CDK-41" ? 0 : 2));
+    expect(c.suggested.map((s) => s.reason)).toEqual(["Title matches the session name · In Progress · no sessions"]);
+    const b = linkChoices({ name: "Retries", branch: "cdk-38-retries" }, tasks, "", () => 1);
+    expect(b.suggested.map((s) => s.reason)).toEqual(["Branch carries the key · Todo · 1 session"]);
+  });
+
+  it("↵ links the pasted task, else the first suggested, else the first of the rest", () => {
+    const c = linkChoices({ name: "Changelog themes", branch: "themes" }, tasks, "");
+    expect(firstChoice(retry, c)).toBe(retry);
+    expect(firstChoice(null, c)).toBe(themes);
+    expect(firstChoice(null, linkChoices({ name: "x", branch: "x" }, tasks, ""))).toBe(dark);
+    expect(firstChoice(null, linkChoices({ name: "x", branch: "x" }, tasks, "nothing"))).toBe(null);
   });
 
   it("lists the rest by most recently updated, and filters both by the typed text", () => {

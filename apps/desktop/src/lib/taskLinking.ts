@@ -40,17 +40,36 @@ export function linkChoices(
   session: { name: string; branch: string },
   tasks: Task[],
   query: string,
-): { suggested: { task: Task; reason: string }[]; recent: Task[] } {
+  sessionsOf?: (t: Task) => number,
+): LinkChoices {
   const q = query.trim().toLowerCase();
   const matches = (t: Task) => !q || t.key.toLowerCase().includes(q) || t.title.toLowerCase().includes(q);
+  // `Title matches the session name · In Progress · no sessions`
+  const why = (task: Task, first: string) => {
+    if (!sessionsOf) return first;
+    const n = sessionsOf(task);
+    return [first, STATE[task.column], n ? `${n} session${n === 1 ? "" : "s"}` : "no sessions"].join(" · ");
+  };
   const suggested = tasks.flatMap((task) => {
     if (!matches(task)) return [];
-    if (words(task.title) === words(session.name)) return [{ task, reason: "Title matches the session name" }];
-    if (!task.github && mentionsKey(session.branch, task.key)) return [{ task, reason: "Branch carries the key" }];
+    if (words(task.title) === words(session.name)) return [{ task, reason: why(task, "Title matches the session name") }];
+    if (!task.github && mentionsKey(session.branch, task.key)) return [{ task, reason: why(task, "Branch carries the key") }];
     return [];
   });
   const recent = tasks.filter((t) => matches(t) && !suggested.some((s) => s.task === t)).sort((a, b) => b.updatedMs - a.updatedMs);
   return { suggested, recent };
+}
+
+export interface LinkChoices {
+  suggested: { task: Task; reason: string }[];
+  recent: Task[];
+}
+
+const STATE: Record<Task["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done", open: "Open", hidden: "Not shown" };
+
+/** What ↵ links in the dialog: the pasted task, else the first suggested, else the first of the rest. */
+export function firstChoice(pasted: Task | null, choices: LinkChoices): Task | null {
+  return pasted ?? choices.suggested[0]?.task ?? choices.recent[0] ?? null;
 }
 
 /** A pasted key or URL as `moonlet-trackers` reads it. */

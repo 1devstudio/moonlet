@@ -47,6 +47,20 @@ const ISSUES = JSON.stringify([
   },
 ]);
 
+// `gh issue view 99 --repo acme/other`: an issue outside the workspace's repositories.
+const OTHER_ISSUE = JSON.stringify({
+  number: 99,
+  title: "Shared design tokens",
+  body: "",
+  url: "https://github.com/acme/other/issues/99",
+  state: "OPEN",
+  stateReason: "",
+  assignees: [],
+  labels: [],
+  updatedAt: "2026-10-12T10:00:00Z",
+  closedByPullRequestsReferences: [],
+});
+
 const LINKED = "Checkout on Safari";
 const tasksButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]');
 const sessionsButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[@aria-label="Sessions"]');
@@ -58,7 +72,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -145,8 +159,13 @@ describe("Tasks mode", () => {
     await tasksButton().click();
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "Sessions without a task")]').click();
     await $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]//button[normalize-space()="Link to task"]`).click();
+    // An issue outside the workspace's tasks is asked of gh.
+    await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "https://github.com/acme/other/issues/99");
+    await expect($('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/other#99"]]')).toBeDisplayed({ wait: 10_000 });
     await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "#12");
-    await $('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/storefront#12"]]').click();
+    await expect($('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/storefront#12"]]')).toBeDisplayed({ wait: 10_000 });
+    // ↵ links the pasted task.
+    await browser.keys("Enter");
     await browser.waitUntil(() => rpc<Session[]>(w, "session.list", {}).find((x) => x.name === SESSION)?.task?.key === "acme/storefront#12", {
       timeout: 10_000,
       timeoutMsg: "the seeded session was not linked to acme/storefront#12",
