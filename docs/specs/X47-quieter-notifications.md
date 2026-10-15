@@ -19,12 +19,12 @@ With several agents at work, moonlet sounds and shows a banner for every finishe
 ## Behaviour and acceptance criteria
 
 - [x] A chat whose turn ended while a background subagent still runs reports its agent as working, and raises no `agent.attention`. When the last subagent ends, it reports done and raises one `agent.attention` with state done. (`a_turn_is_not_done_while_its_subagents_run`)
-- [x] A "done" for a session within 90 s of the last "done" that alerted for it plays no sound and shows no banner. After 90 s it alerts again. "Needs you" and "failed" always alert. (`alerts.test.ts`: a burst of done)
+- [x] A "done" for a session within 90 s of the last "done" that alerted for it plays no sound and shows no banner. After 90 s it alerts again. A "done" the user watched starts no burst, and looking at the session ends the burst, so the next "done" alerts. "Needs you" and "failed" always alert. (`alerts.test.ts`: a burst of done, DoneBursts)
 - [x] Each event (needs you, done, failed) has its own desktop notification switch, on by default. Off sends no banner for that event and still plays its sound. (`alerts.test.ts`: banners per event, `mute-sounds.e2e.ts`)
 - [x] "Mute all sounds" turns off every agent sound and leaves the banners. (`alerts.test.ts`: muted)
 - [x] The sidebar footer has a bell next to the gear: "Mute sounds" mutes, and the crossed-out bell "Unmute sounds" turns the sounds back on. It and the switch in Settings › Notifications › Sounds are the same setting. (`mute-sounds.e2e.ts`)
 - [x] Settings search finds the three notification switches and "Mute all sounds", with On or Off. (`settingsSearch.test.ts`)
-- [x] The unread mark and the dock badge are unchanged: a silenced alert still marks the session.
+- [x] The unread mark and the dock badge are unchanged: a silenced alert still marks the session. (`alerts.test.ts`: unread)
 
 ## UI
 
@@ -52,7 +52,7 @@ No new RPC. The daemon's chat runtime reports `working` instead of `done` while 
 
 ## Data and config
 
-`moonlet.settings` in localStorage gains `banners: { blocked?, done?, error? }` (a missing value is on) and `muted: boolean`. The 90 s burst timestamps live in memory only.
+`moonlet.settings` in localStorage gains `banners: { blocked?, done?, error? }` (a missing value is on) and `muted: boolean`. The 90 s burst timestamps live in memory only (`DoneBursts`).
 
 ## Security considerations
 
@@ -60,6 +60,8 @@ None: no new input crosses a trust boundary.
 
 ## Out of scope
 
+- Waiting for Claude's wrap-up turn. Claude answers once more after its last subagent ends; the "done" comes when the subagent ends, a few seconds before that answer.
+- Stopping a chat, or restarting it for a new setting, while its subagents run ends them, so the chat turns done and alerts like a finished turn.
 - A "done" alert from a Claude terminal tab per background subagent turn. Hooks carry no subagent state, so the burst rule is what keeps those quiet.
 - Muting banners from the footer (macOS Focus does that).
 - Per-session or per-project mute.

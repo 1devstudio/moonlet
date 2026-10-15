@@ -32,7 +32,7 @@ import {
 import { sanitize } from "./sanitize";
 import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
-import { alertFor, type BannerSettings } from "./alerts";
+import { DoneBursts, alertFor, type BannerSettings } from "./alerts";
 import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { avatarUrl } from "./projectAvatar";
@@ -611,6 +611,7 @@ export function focusTerminal(host: string, session: number) {
     return { selected: { host, session: ws }, unread, showHistory: false, ...showSessionWorkspace(s, host, ws) };
   });
   if (tab) setLayout(host, ws, { ...layout, active: tab.id, focused: session });
+  doneBursts.seen(sesKey(host, ws));
   updateBadge();
 }
 
@@ -624,6 +625,7 @@ export function selectSession(host: string, id: string) {
       return { unread };
     });
   }
+  doneBursts.seen(sesKey(host, id));
   updateBadge();
   void refreshGit(host, id);
 }
@@ -809,8 +811,7 @@ function isVisible(host: string, session: number): boolean {
   return !!layout && tabOf(layout, session)?.id === layout.active;
 }
 
-/** When each session last alerted a "done", for the burst rule (X47). */
-const lastDoneAt = new Map<string, number>();
+const doneBursts = new DoneBursts();
 
 async function onAttention(host: string, a: Attention) {
   const s = get();
@@ -836,10 +837,8 @@ async function onAttention(host: string, a: Attention) {
   const focused = document.hasFocus();
   const visible = focused && isVisible(host, a.terminal);
   const burstKey = a.session_id ? sesKey(host, a.session_id) : termKey(host, a.terminal);
-  const now = Date.now();
-  const alert = alertFor({ state: a.state, focused, visible, settings: s.settings, lastDoneAt: lastDoneAt.get(burstKey), now });
-  if (a.state === "done" && (alert.sound || alert.banner)) lastDoneAt.set(burstKey, now);
-  if (!visible) {
+  const alert = doneBursts.alert(burstKey, { state: a.state, focused, visible, settings: s.settings, now: Date.now() });
+  if (alert.unread) {
     set((st) => ({ unread: { ...st.unread, [termKey(host, a.terminal)]: a.state } }));
     updateBadge();
   }
@@ -862,7 +861,7 @@ async function onReadRequest(host: string, req: ReadRequest) {
   const focused = document.hasFocus();
   const inView = focused && s.selected?.host === host && s.selected.session === req.session_id;
   const alert = alertFor({ state: "blocked", focused, visible: inView, settings: s.settings, now: Date.now() });
-  if (!inView) {
+  if (alert.unread) {
     set((st) => ({ unread: { ...st.unread, [termKey(host, req.caller)]: "blocked" } }));
     updateBadge();
   }
