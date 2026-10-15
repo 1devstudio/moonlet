@@ -1,0 +1,73 @@
+{
+  "transitions": [
+    {
+      "id": "11",
+      "name": "To Do",
+      "hasScreen": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "isGlobal": true,
+      "isInitial": false,
+      "to": {
+        "self": "https://your-domain.atlassian.net/rest/api/3/status/10000",
+        "description": "",
+        "iconUrl": "https://your-domain.atlassian.net/images/icons/statuses/open.png",
+        "name": "To Do",
+        "id": "10000",
+        "statusCategory": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/statuscategory/2",
+          "id": 2,
+          "key": "new",
+          "colorName": "blue-gray",
+          "name": "To Do"
+        }
+      }
+    },
+    {
+      "id": "21",
+      "name": "In Progress",
+      "hasScreen": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "isGlobal": true,
+      "isInitial": false,
+      "to": {
+        "self": "https://your-domain.atlassian.net/rest/api/3/status/3",
+        "description": "The issue is currently being worked on.",
+        "iconUrl": "https://your-domain.atlassian.net/images/icons/progress.gif",
+        "name": "In Progress",
+        "id": "3",
+        "statusCategory": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/statuscategory/4",
+          "id": 4,
+          "key": "indeterminate",
+          "colorName": "yellow",
+          "name": "In Progress"
+        }
+      }
+    },
+    {
+      "id": "31",
+      "name": "Done",
+      "hasScreen": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "isGlobal": true,
+      "isInitial": false,
+      "to": {
+        "self": "https://your-domain.atlassian.net/rest/api/3/status/10001",
+        "description": "The issue is closed.",
+        "iconUrl": "https://your-domain.atlassian.net/images/icons/closed.gif",
+        "name": "Done",
+        "id": "10001",
+        "statusCategory": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/statuscategory/3",
+          "id": 3,
+          "key": "done",
+          "colorName": "green",
+          "name": "Done"
+        }
+      }
+    }
+  ]
+}

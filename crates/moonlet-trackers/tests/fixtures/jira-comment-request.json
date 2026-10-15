@@ -1,0 +1,17 @@
+{
+  "body": {
+    "content": [
+      {
+        "content": [
+          {
+            "text": "Opened a pull request: https://github.com/acme/app/pull/57",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc",
+    "version": 1
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "124",
+  "name": "Updated List Name",
+  "orderindex": 1,
+  "content": "Updated List Content",
+  "folder": { "id": "456", "name": "Folder Name", "hidden": false, "access": true },
+  "space": { "id": "789", "name": "Space Name", "access": true },
+  "archived": false,
+  "override_statuses": false,
+  "statuses": [
+    { "status": "to do", "orderindex": 0, "color": "#d3d3d3", "type": "open" },
+    { "status": "complete", "orderindex": 1, "color": "#6bc950", "type": "closed" }
+  ],
+  "permission_level": "create"
+}

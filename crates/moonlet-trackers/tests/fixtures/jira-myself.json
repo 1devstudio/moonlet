@@ -1,0 +1,9 @@
+{
+  "accountId": "5b10a2844c20165700ede21g",
+  "accountType": "atlassian",
+  "active": true,
+  "displayName": "Mia Krystof",
+  "emailAddress": "mia@example.com",
+  "self": "https://your-domain.atlassian.net/rest/api/3/user?accountId=5b10a2844c20165700ede21g",
+  "timeZone": "Australia/Sydney"
+}

@@ -5,6 +5,8 @@
 mod attach;
 mod hosts;
 mod remote;
+mod secrets;
+mod trackers;
 mod webview_data;
 
 use std::sync::Arc;
@@ -469,6 +471,11 @@ pub fn run() {
             task_parse_pasted,
             trackers_config,
             trackers_save,
+            trackers::tracker_connect,
+            trackers::tracker_disconnect,
+            trackers::tracker_sources,
+            trackers::tracker_tasks,
+            trackers::tracker_update,
             app_info
         ])
         .run(context)

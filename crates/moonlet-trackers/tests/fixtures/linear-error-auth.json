@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "message": "Authentication required, not authenticated",
+      "extensions": {
+        "type": "authentication error",
+        "userPresentableMessage": "You need to authenticate to access this operation."
+      }
+    }
+  ]
+}

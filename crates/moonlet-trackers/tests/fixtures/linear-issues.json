@@ -1,0 +1,99 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "1a2b3c4d-0000-4000-8000-000000000123",
+          "identifier": "ENG-123",
+          "title": "Retry failed webhook deliveries",
+          "description": "Webhooks that fail with a 5xx should be retried.\n\n- [ ] Exponential backoff\n- [ ] Give up after 24h",
+          "url": "https://linear.app/acme/issue/ENG-123/retry-failed-webhook-deliveries",
+          "branchName": "ada/eng-123-retry-failed-webhook-deliveries",
+          "priority": 2,
+          "updatedAt": "2026-10-14T09:12:44.512Z",
+          "state": {
+            "id": "a1000000-0000-4000-8000-000000000002",
+            "name": "In Progress",
+            "type": "started"
+          },
+          "assignee": {
+            "id": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+            "name": "Ada Lovelace"
+          },
+          "labels": {
+            "nodes": [
+              { "name": "Bug" },
+              { "name": "Backend" }
+            ]
+          },
+          "cycle": {
+            "number": 42
+          },
+          "team": {
+            "key": "ENG"
+          }
+        },
+        {
+          "id": "1a2b3c4d-0000-4000-8000-000000000124",
+          "identifier": "ENG-124",
+          "title": "Add dark mode to settings page",
+          "description": null,
+          "url": "https://linear.app/acme/issue/ENG-124/add-dark-mode-to-settings-page",
+          "branchName": "ada/eng-124-add-dark-mode-to-settings-page",
+          "priority": 0,
+          "updatedAt": "2026-10-13T16:40:02.001Z",
+          "state": {
+            "id": "a1000000-0000-4000-8000-000000000001",
+            "name": "Todo",
+            "type": "unstarted"
+          },
+          "assignee": {
+            "id": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+            "name": "Ada Lovelace"
+          },
+          "labels": {
+            "nodes": []
+          },
+          "cycle": null,
+          "team": {
+            "key": "ENG"
+          }
+        },
+        {
+          "id": "1a2b3c4d-0000-4000-8000-000000000098",
+          "identifier": "ENG-98",
+          "title": "Upgrade to Node 22",
+          "description": "Done as part of the Q3 runtime refresh.",
+          "url": "https://linear.app/acme/issue/ENG-98/upgrade-to-node-22",
+          "branchName": "ada/eng-98-upgrade-to-node-22",
+          "priority": 4,
+          "updatedAt": "2026-10-01T08:00:00.000Z",
+          "state": {
+            "id": "a1000000-0000-4000-8000-000000000003",
+            "name": "Done",
+            "type": "completed"
+          },
+          "assignee": {
+            "id": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+            "name": "Ada Lovelace"
+          },
+          "labels": {
+            "nodes": [
+              { "name": "Chore" }
+            ]
+          },
+          "cycle": {
+            "number": 41
+          },
+          "team": {
+            "key": "ENG"
+          }
+        }
+      ],
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "1a2b3c4d-0000-4000-8000-000000000098"
+      }
+    }
+  }
+}

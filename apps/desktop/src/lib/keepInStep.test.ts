@@ -124,17 +124,27 @@ describe("rules from Settings › Task trackers (X44, X46)", () => {
   const board = { todo: [], in_progress: [gh7], in_review: [], done: [old] };
 
   it("drops a chip whose rule is Off", () => {
-    const off = applyRules(board, { ...DEFAULT_RULES, all_merged: "off", issue_done: "off" });
+    const off = applyRules(board, () => ({ ...DEFAULT_RULES, all_merged: "off", issue_done: "off" }));
     expect(Object.values(off).flat().map((c) => c.drift)).toEqual([null, null]);
-    const on = applyRules(board, DEFAULT_RULES);
+    const on = applyRules(board, () => DEFAULT_RULES);
     expect(Object.values(on).flat().map((c) => c.drift?.kind)).toEqual(["merged", "done_open"]);
   });
 
   it("closes merged GitHub issues by itself when the rule is Automatically, once per situation", () => {
-    expect(autoFixes(board, DEFAULT_RULES, {})).toEqual([]);
-    const auto = { ...DEFAULT_RULES, all_merged: "auto" as const };
+    expect(autoFixes(board, () => DEFAULT_RULES, {})).toEqual([]);
+    const auto = () => ({ ...DEFAULT_RULES, all_merged: "auto" as const });
     expect(autoFixes(board, auto, {}).map((c) => c.task.key)).toEqual(["acme/web#7"]);
     expect(autoFixes(board, auto, { [driftKey(gh7)]: true })).toEqual([]);
+  });
+
+  it("moves a tracker issue with an open PR to In Review: by itself at Automatically, never at Off", () => {
+    const prOpen = { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" };
+    const hosts = card(task("MOON-142", "in_progress"), prOpen, [session("hosts", "/w/hosts")]);
+    const b = { todo: [], in_progress: [hosts], in_review: [], done: [] };
+    expect(driftFix(hosts)).toEqual({ kind: "move", column: "in_review" });
+    expect(autoFixes(b, () => DEFAULT_RULES, {}).map((c) => c.task.key)).toEqual(["MOON-142"]);
+    expect(Object.values(applyRules(b, () => ({ ...DEFAULT_RULES, pr_opens: "off" }))).flat()[0].drift).toBe(null);
+    expect(autoFixes(b, () => ({ ...DEFAULT_RULES, pr_opens: "suggest" }), {})).toEqual([]);
   });
 });
 

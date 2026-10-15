@@ -1,0 +1,27 @@
+{
+  "folders": [
+    {
+      "id": "457",
+      "name": "Updated Folder Name",
+      "orderindex": 0,
+      "override_statuses": false,
+      "hidden": false,
+      "space": { "id": "789", "name": "Space Name", "access": true },
+      "task_count": "0",
+      "statuses": [],
+      "lists": []
+    },
+    {
+      "id": "458",
+      "name": "Second Folder Name",
+      "orderindex": 1,
+      "override_statuses": false,
+      "hidden": false,
+      "space": { "id": "789", "name": "Space Name", "access": true },
+      "task_count": "0",
+      "statuses": [],
+      "lists": [],
+      "parent_folder": "457"
+    }
+  ]
+}

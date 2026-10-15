@@ -141,6 +141,12 @@ describe("taskStart (X46 starting a session from a task)", () => {
     });
   });
 
+  it("starts a tracker issue's session in the project its source names", () => {
+    const t = { ...linear("MOON-151", "Drag sessions"), tracker: { id: "a1", state: "Todo", source: "MOON" } };
+    const st = taskStart(t, {}, { "linear:acme MOON": "p-moonlet" });
+    expect([st.kind, st.project, st.github]).toEqual(["linear", "p-moonlet", undefined]);
+  });
+
   it("sends only the title line when the issue has no description, and names no project it can't place", () => {
     const s = taskStart({ ...hosts, description: "" }, { web: "acme/web" });
     expect([s.kind, s.firstMessage, s.project, s.number]).toEqual(["linear", "MOON-142 · Remote hosts sidebar", null, undefined]);
