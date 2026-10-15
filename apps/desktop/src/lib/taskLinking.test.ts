@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { acceptanceCriteria, findPasted, firstChoice, linkChoices, pasteLookup } from "./taskLinking";
 import type { Task } from "./tasks";
 
@@ -118,6 +118,20 @@ describe("pasteLookup (X46 link dialog)", () => {
     const waiting = l.settled();
     void l.start(() => Promise.resolve(found));
     expect(await waiting).toBe(found);
+  });
+
+  it("a replaced lookup ends at once, without waiting out its pause", async () => {
+    vi.useFakeTimers();
+    try {
+      const l = pasteLookup(200);
+      let first: Task | null | undefined = null;
+      void l.start(() => Promise.resolve(found)).then((t) => (first = t));
+      void l.start(() => Promise.resolve(null));
+      await Promise.resolve();
+      expect(first).toBe(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("gives ↵ the task the current lookup finds", async () => {

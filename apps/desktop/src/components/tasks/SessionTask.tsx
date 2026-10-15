@@ -157,14 +157,14 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   // throw away what was pasted.
   const latest = useRef(tasks);
   latest.current = tasks;
-  const lookup = useRef<ReturnType<typeof pasteLookup>>(null as never);
-  lookup.current ??= pasteLookup();
+  const [lookup] = useState(() => pasteLookup());
   const linking = useRef(false);
+  const latestChoices = useRef<ReturnType<typeof linkChoices>>({ suggested: [], recent: [] });
   const loaded = !!data;
   useEffect(() => {
     // What was pasted before no longer counts, so ↵ cannot link it.
     setPasted(null);
-    const l = lookup.current;
+    const l = lookup;
     void l
       .start(async () => {
         const p = await hostsApi.parsePasted(query);
@@ -177,6 +177,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   }, [query, host, ws?.path, originRepo, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ws) return null;
   const choices = linkChoices(ws, tasks, pasted ? "" : query, sessionsOf);
+  latestChoices.current = choices;
   const pick = (t: Task) => {
     close();
     void linkTask(host, ws.id, t);
@@ -205,8 +206,9 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
             // A paste still being looked up decides what ↵ links; a lookup
             // that was replaced or cancelled links nothing.
             linking.current = true;
-            void lookup.current.settled().then((found) => {
-              const first = found === undefined ? null : firstChoice(found, choices);
+            void lookup.settled().then((found) => {
+              // The lists as they are when the lookup ends, not when ↵ was pressed.
+              const first = found === undefined ? null : firstChoice(found, latestChoices.current);
               if (first) pick(first);
               else linking.current = false;
             });
