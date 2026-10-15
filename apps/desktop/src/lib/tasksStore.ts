@@ -188,6 +188,7 @@ export async function loadTrackersConfig(force = false) {
 }
 
 let saving: Promise<void> = Promise.resolve();
+let saveRound = 0;
 
 /**
  * Changes `trackers.toml`. `update` gets the settings as they are when it
@@ -200,13 +201,21 @@ export function saveTrackersConfig(update: (c: TrackersConfig) => TrackersConfig
   if (!config) return Promise.reject(new Error("Task tracker settings are still loading"));
   const next = update(config);
   useTasks.setState({ config: next });
-  const write = saving.then(async () => void (await hostsApi.trackersSave(next)));
-  // A failed write shows the file as it is again.
-  saving = write.catch(() => loadTrackersConfig(true));
-  return write.catch(async (e) => {
-    await saving;
-    throw e;
+  // A write that fails drops the changes queued behind it, which were built
+  // on it, and shows the file as it is again.
+  const asOf = saveRound;
+  const write = saving.then(async () => {
+    if (asOf !== saveRound) throw new Error("An earlier change to the task tracker settings could not be saved");
+    try {
+      await hostsApi.trackersSave(next);
+    } catch (e) {
+      saveRound++;
+      await loadTrackersConfig(true);
+      throw e;
+    }
   });
+  saving = write.catch(() => {});
+  return write;
 }
 
 /** Fixes moonlet already made by itself, by `driftKey`, so each happens once (X46). */
@@ -591,9 +600,13 @@ export async function runAutoFixes(host: string, workspaceId: string, board: Boa
         recordActivity(c.card.task, "moonlet commented with the pull request's link");
       } catch (e) {
         autoFailed(c.key);
-        if (failureOf(c.card.task)) return;
-        retries.set(id, comment);
-        setFailure(c.card.task, (e as { message?: string }).message ?? message(e), "comment");
+        // The task already shows another failure: its Retry sends the comment too.
+        const before = failureOf(c.card.task) ? retries.get(id) : undefined;
+        retries.set(id, async () => {
+          await before?.();
+          await comment();
+        });
+        if (!before) setFailure(c.card.task, (e as { message?: string }).message ?? message(e), "comment");
       }
     };
     await comment();

@@ -90,13 +90,18 @@ pub fn tasks_path(
 }
 
 /// One list's tasks from its two passes (see [`tasks_path`]): the open pass
-/// minus done ones (any age, since ClickUp's `include_closed` only covers
-/// "closed"-type statuses), then the recent pass's tasks not already in.
-pub fn merge_passes(open: Vec<TrackerTask>, recent: Vec<TrackerTask>) -> Vec<TrackerTask> {
-    let mut out: Vec<TrackerTask> = open
-        .into_iter()
-        .filter(|t| !matches!(t.column, Column::Done | Column::Hidden))
-        .collect();
+/// minus those in Done (any age, since ClickUp's `include_closed` only covers
+/// "closed"-type statuses), by the user's state `mapping` where it has one,
+/// then the recent pass's tasks not already in.
+pub fn merge_passes(
+    open: Vec<TrackerTask>,
+    recent: Vec<TrackerTask>,
+    mapping: &crate::states::Mapping,
+) -> Vec<TrackerTask> {
+    let done = |t: &TrackerTask| {
+        mapping.get(&t.tracker.state).copied().unwrap_or(t.column) == Column::Done
+    };
+    let mut out: Vec<TrackerTask> = open.into_iter().filter(|t| !done(t)).collect();
     let mut seen: std::collections::HashSet<String> = out.iter().map(|t| t.key.clone()).collect();
     out.extend(recent.into_iter().filter(|t| seen.insert(t.key.clone())));
     out
@@ -359,11 +364,40 @@ mod tests {
             with("CU-a", Column::InProgress),
             with("CU-new", Column::Done),
         ];
-        let keys: Vec<String> = merge_passes(open, recent)
+        let keys: Vec<String> = merge_passes(open, recent, &Default::default())
             .into_iter()
             .map(|t| t.key)
             .collect();
         assert_eq!(keys, ["CU-a", "CU-new"]);
+    }
+
+    #[test]
+    fn the_open_pass_follows_the_users_state_mapping() {
+        let all = parse_tasks(&fixture("clickup-tasks.json"), "clickup:9012345").unwrap();
+        let with = |key: &str, column: Column, state: &str| {
+            let mut t = TrackerTask {
+                key: key.into(),
+                column,
+                ..all[0].clone()
+            };
+            t.tracker.state = state.into();
+            t
+        };
+        // "shipped" is a done-type status the user maps to In Review: its old
+        // tasks stay; "parked" is mapped to Done: its old tasks go.
+        let mapping = crate::states::Mapping::from([
+            ("shipped".to_string(), Column::InReview),
+            ("parked".to_string(), Column::Done),
+        ]);
+        let open = vec![
+            with("CU-s", Column::Done, "shipped"),
+            with("CU-p", Column::InProgress, "parked"),
+        ];
+        let keys: Vec<String> = merge_passes(open, vec![], &mapping)
+            .into_iter()
+            .map(|t| t.key)
+            .collect();
+        assert_eq!(keys, ["CU-s"]);
     }
 
     #[test]

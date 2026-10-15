@@ -56,6 +56,10 @@ pub fn parse_issue(raw: &[u8], connection: &str) -> Result<Option<TrackerTask>, 
     Ok((!issue.is_null()).then(|| issue_task(issue, connection)))
 }
 
+/// What a rejected API key says (X44).
+pub const REJECTED: &str =
+    "Linear no longer accepts this token. Create a new one and paste it here.";
+
 /// The answer's `data`, or the error it carries.
 fn data(raw: &[u8]) -> Result<Value, ApiError> {
     let v: Value = serde_json::from_slice(raw)
@@ -68,7 +72,7 @@ fn data(raw: &[u8]) -> Result<Value, ApiError> {
         // A rejected token reads the same however Linear sends it (X44); the
         // app words it for an OAuth sign-in.
         let message = if auth {
-            "Linear no longer accepts this token. Create a new one and paste it here."
+            REJECTED
         } else {
             ext["userPresentableMessage"]
                 .as_str()
