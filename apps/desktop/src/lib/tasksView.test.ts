@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./tasks";
 import { type BoardSession, tasksBoard } from "./tasksBoard";
-import { boardSummary, sessionTaskLines, syncedLabel, viewBoard, viewCounts } from "./tasksView";
+import { boardSummary, sessionTaskLines, sourceLabels, syncedLabel, viewBoard, viewCounts } from "./tasksView";
 
 const task = (key: string, column: Task["column"]): Task => ({
   connection: "github:github.com",
@@ -69,5 +69,31 @@ describe("sessionTaskLines (X46 sidebar)", () => {
       Hosts: { key: "MOON-142", title: "MOON-142", column: "in_progress", text: "In Progress", outOfSync: false },
       Tabs: { key: "MOON-144", title: "MOON-144", column: "in_review", text: "In Review · out of sync", outOfSync: true },
     });
+  });
+});
+
+describe("sourceLabels (X45 card)", () => {
+  const t = (connection: string, key: string, source?: string, repo?: string): Task => ({
+    connection,
+    key,
+    title: key,
+    url: "",
+    column: "todo",
+    priority: 0,
+    assignees: [],
+    labels: [],
+    description: "",
+    updatedMs: 0,
+    ...(source && { tracker: { id: key, state: "Todo", source } }),
+    ...(repo && { github: { repo, number: 1, closingPrs: [] } }),
+  });
+  it("names each task's source only when the workspace's tasks come from more than one", () => {
+    const oneTeam = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("linear:acme", "ENG-2", "ENG")]);
+    expect(oneTeam(t("linear:acme", "ENG-1", "ENG"))).toBe(undefined);
+    // One connection, two teams.
+    const twoTeams = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("linear:acme", "DES-1", "DES")]);
+    expect(twoTeams(t("linear:acme", "DES-1", "DES"))).toBe("DES");
+    const mixed = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("github:github.com", "acme/web#7", undefined, "acme/web")]);
+    expect(mixed(t("github:github.com", "acme/web#7", undefined, "acme/web"))).toBe("web");
   });
 });
