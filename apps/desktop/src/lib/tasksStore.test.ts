@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setExpanded, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -781,5 +781,37 @@ describe("open spec lines: Activity, comments, drafts and toasts (X45, X46)", ()
     await refreshTasks("local", "personal", 1_000);
     await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "acme/web#12", url: "" }, kind: "github", key: "acme/web#12", title: "Fix", firstMessage: "", project: null, github: { repo: "acme/web", number: 12 } }, { session: "Fix", assign: true }, 6_000);
     expect(activityOf({ connection: "github:github.com", key: "acme/web#12" }).map((e) => e.text)).toContain("moonlet assigned it to you");
+  });
+});
+
+describe("the out-of-sync dot's poll and the remembered mode (X45)", () => {
+  it("asks for the shown workspace's tasks again every 5 minutes", async () => {
+    answers["git.origin_url"] = () => "https://github.com/acme/web.git";
+    answers["gh.tasks"] = () => [issue];
+    answers["project.worktrees"] = () => [];
+    useTasks.setState({ data: {} });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const stop = pollTasks("local", "personal");
+      await vi.waitFor(() => expect(useTasks.getState().data["local/personal"]?.syncedAt).toBe(1_000_000));
+      await vi.advanceTimersByTimeAsync(299_000);
+      expect(useTasks.getState().data["local/personal"].syncedAt).toBe(1_000_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(useTasks.getState().data["local/personal"].syncedAt).toBe(1_300_000));
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("remembers Tasks mode per workspace across restarts", async () => {
+    useStore.setState({ tasksMode: {} });
+    toggleTasksMode();
+    vi.resetModules();
+    const store = await import("./store");
+    const restarted = await import("./tasksStore");
+    expect(restarted.isTasksMode(store.useStore.getState())).toBe(true);
+    toggleTasksMode();
   });
 });

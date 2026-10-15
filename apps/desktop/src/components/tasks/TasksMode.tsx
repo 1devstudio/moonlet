@@ -10,11 +10,11 @@ import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
 import { findTasks, glyphShape, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, boardInput, ensureTasks, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, boardInput, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, pollTasks, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, removeWorktreeAsk, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
-import { boardSummary, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
+import { boardSummary, modeSwitch, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
@@ -467,32 +467,25 @@ export function TasksMode() {
 export function ModeSwitch() {
   const tasks = useStore((s) => isTasksMode(s));
   const { ws, board } = useWorkspaceTasks();
-  // The dot needs the tasks: checked now and every 5 minutes, also in Sessions mode (X45).
-  useEffect(() => {
-    if (!ws) return;
-    ensureTasks(ws.host, ws.id);
-    const timer = setInterval(() => ensureTasks(ws.host, ws.id), 300_000);
-    return () => clearInterval(timer);
-  }, [ws]);
-  const drift = board ? outOfSync(board).length : 0;
+  useEffect(() => (ws ? pollTasks(ws.host, ws.id) : undefined), [ws]);
   // The switch's shortcut as the user has it (Settings › Shortcuts).
   const key = keyLabel(effectiveKeys(useStore((s) => s.settings.shortcuts)).tasks ?? "");
-  const titled = (name: string) => (key ? `${name} ${key}` : name);
+  const m = modeSwitch(key, board ? outOfSync(board).length : 0);
   const item = "no-drag relative flex h-[26px] w-[30px] items-center justify-center rounded-[5px]";
   return (
     <div role="group" aria-label="Mode" className="ml-auto flex shrink-0 items-center gap-0.5 rounded-md bg-panel-2 p-0.5">
-      <button aria-label="Sessions" aria-pressed={!tasks} title={titled("Sessions")} onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
+      <button aria-label="Sessions" aria-pressed={!tasks} title={m.sessions} onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
         <SquareTerminal size={14} />
       </button>
       <button
-        aria-label={drift ? `Tasks, ${drift} out of sync` : "Tasks"}
+        aria-label={m.label}
         aria-pressed={tasks}
-        title={titled("Tasks")}
+        title={m.tasks}
         onClick={() => !tasks && toggleTasksMode()}
         className={cx(item, tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}
       >
         <TaskGlyph column="in_progress" size={14} />
-        {drift > 0 && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
+        {m.dot && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
       </button>
     </div>
   );
