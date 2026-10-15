@@ -134,7 +134,7 @@ export function TrackersPage() {
           <Row label="Max length" htmlFor={maxId} setting="branch-max">
             <input
               id={maxId}
-              className={`${fieldCls} w-[72px]`}
+              className={cx(fieldCls, "w-[72px]")}
               inputMode="numeric"
               key={github.max_length}
               defaultValue={github.max_length}
