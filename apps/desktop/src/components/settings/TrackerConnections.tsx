@@ -89,7 +89,7 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
         <Plus size={12} /> Add source
       </Button>
       <div className="mt-2 flex justify-end gap-2">
-        <Button size="sm" variant="primary" onClick={() => void save()}>
+        <Button size="sm" variant="primary" className="field-height" onClick={() => void save()}>
           Save and sync
         </Button>
       </div>
@@ -150,7 +150,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
         <div className="flex flex-col gap-3">
           {oauth && (
             <>
-              <Button variant="primary" disabled={busy} onClick={() => void signIn()}>
+              <Button variant="primary" className="field-height" disabled={busy} onClick={() => void signIn()}>
                 Sign in with Linear
               </Button>
               <p className="ui-text-12 text-muted">Opens the browser. Or use an API key:</p>
@@ -186,10 +186,10 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
           </p>
           {error && <p className="ui-text-12.5 text-error">{error}</p>}
           <div className="flex justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={onClose}>
+            <Button size="sm" variant="ghost" className="field-height" onClick={onClose}>
               Cancel
             </Button>
-            <Button size="sm" variant="primary" disabled={busy || !token.trim()} onClick={() => void connect()}>
+            <Button size="sm" variant="primary" className="field-height" disabled={busy || !token.trim()} onClick={() => void connect()}>
               {busy ? "Connecting…" : "Connect"}
             </Button>
           </div>
@@ -329,7 +329,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
         ))}
       </div>
       <div className="mt-3 flex justify-end">
-        <Button size="sm" variant="primary" disabled={!states} onClick={() => void save()}>
+        <Button size="sm" variant="primary" className="field-height" disabled={!states} onClick={() => void save()}>
           Save
         </Button>
       </div>
