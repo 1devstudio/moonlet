@@ -176,6 +176,14 @@ pub fn validate(config: &ProjectConfig) -> Result<()> {
     {
         bail!("default agent `{a}` is not an agent in this project");
     }
+    for t in &config.trackers {
+        let ok = t
+            .split_once('/')
+            .is_some_and(|(conn, key)| conn.contains(':') && !key.is_empty());
+        if !ok {
+            bail!("tracker `{t}`: write it as connection/key, such as jira:acme.atlassian.net/ABC");
+        }
+    }
     Ok(())
 }
 
@@ -203,6 +211,15 @@ fn normalize(c: &ProjectConfig) -> ProjectConfig {
             .iter()
             .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
             .collect(),
+        trackers: c.trackers.iter().map(|t| t.trim()).filter(|t| !t.is_empty()).fold(
+            Vec::new(),
+            |mut seen, t| {
+                if !seen.iter().any(|s| s == t) {
+                    seen.push(t.to_string());
+                }
+                seen
+            },
+        ),
     }
 }
 
@@ -221,6 +238,7 @@ fn apply(doc: &mut DocumentMut, c: &ProjectConfig) {
             set(doc.as_table_mut(), key, v.as_deref());
         }
     }
+    set_trackers(doc, &c.trackers);
     let has_table = doc
         .get("agents")
         .is_some_and(|i| i.as_table_like().is_some());
@@ -316,6 +334,24 @@ fn set(table: &mut dyn TableLike, key: &str, v: Option<&str>) {
         None => {
             table.insert(key, toml_edit::value(v));
         }
+    }
+}
+
+/// Sets or removes `trackers`; an unchanged list is left as written.
+fn set_trackers(doc: &mut DocumentMut, trackers: &[String]) {
+    if trackers.is_empty() {
+        if doc.contains_key("trackers") {
+            remove_top_level(doc, "trackers");
+        }
+        return;
+    }
+    let same = doc
+        .get("trackers")
+        .and_then(|i| i.as_array())
+        .is_some_and(|a| a.iter().map(|v| v.as_str()).eq(trackers.iter().map(|t| Some(t.as_str()))));
+    if !same {
+        let list: toml_edit::Array = trackers.iter().map(String::as_str).collect();
+        doc.insert("trackers", toml_edit::value(list));
     }
 }
 
@@ -550,6 +586,40 @@ mod tests {
         }))
         .unwrap();
         validate(&cfg(|c| c.default_agent = Some("codex".into()))).unwrap();
+    }
+
+    /// X44: the tracker projects a project's sessions start from.
+    #[test]
+    fn keeps_the_tracker_projects_it_handles() {
+        let dir = repo_with(Some("# moonlet settings\nrun = \"pnpm dev\"\n"));
+        let v = load(dir.path(), "main".into()).version;
+        let linked = cfg(|c| {
+            c.run = Some("pnpm dev".into());
+            c.trackers = vec![
+                "jira:acme.atlassian.net/ABC".into(),
+                " linear:acme/ENG ".into(),
+                "jira:acme.atlassian.net/ABC".into(),
+            ];
+        });
+        save(dir.path(), &v, &linked).unwrap();
+        assert_eq!(
+            read(&dir),
+            "# moonlet settings\nrun = \"pnpm dev\"\ntrackers = [\"jira:acme.atlassian.net/ABC\", \"linear:acme/ENG\"]\n"
+        );
+        let file = load(dir.path(), "main".into());
+        assert_eq!(
+            file.config.trackers,
+            ["jira:acme.atlassian.net/ABC", "linear:acme/ENG"]
+        );
+        save(dir.path(), &file.version, &cfg(|c| c.run = Some("pnpm dev".into()))).unwrap();
+        assert_eq!(read(&dir), "# moonlet settings\nrun = \"pnpm dev\"\n");
+        let err = |t: &str| {
+            validate(&normalize(&cfg(|c| c.trackers = vec![t.into()])))
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(err("ABC").contains("`ABC`"), "{}", err("ABC"));
+        assert!(err("jira:acme.atlassian.net").contains("connection/key"));
     }
 
     /// X27: a project set up under jaunt keeps its config.
