@@ -123,3 +123,13 @@ export function pasteLookup(delayMs = 200) {
     },
   };
 }
+
+/**
+ * What ↵ links in the dialog once the lookup under way ends: the pasted task,
+ * else the first of the lists as they are then (`lists`), not as they were
+ * when ↵ was pressed. Nothing once the lookup was cancelled.
+ */
+export async function enterChoice(lookup: ReturnType<typeof pasteLookup>, lists: () => LinkChoices): Promise<Task | null> {
+  const found = await lookup.settled();
+  return found === undefined ? null : firstChoice(found, lists());
+}

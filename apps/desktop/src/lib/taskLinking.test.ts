@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { acceptanceCriteria, findPasted, firstChoice, linkChoices, pasteLookup } from "./taskLinking";
+import { acceptanceCriteria, enterChoice, findPasted, firstChoice, linkChoices, pasteLookup } from "./taskLinking";
 import type { Task } from "./tasks";
 
 const task = (key: string, title: string, o: Partial<Task> = {}): Task => ({
@@ -138,5 +138,27 @@ describe("pasteLookup (X46 link dialog)", () => {
     const l = pasteLookup(0);
     void l.start(() => Promise.resolve(found));
     expect(await l.settled()).toBe(found);
+  });
+});
+
+describe("enterChoice (X46: what ↵ links)", () => {
+  const a = task("MOON-1", "Remote hosts");
+  const b = task("MOON-2", "Block styling");
+  it("picks from the lists as they are when the lookup ends, not when ↵ was pressed", async () => {
+    const l = pasteLookup(0);
+    let lists = { suggested: [], recent: [a] };
+    void l.start(() => new Promise((r) => setTimeout(() => r(null), 10)));
+    const picked = enterChoice(l, () => lists);
+    // The user edits the query while the lookup runs; the dialog shows new lists.
+    lists = { suggested: [], recent: [b] };
+    expect(await picked).toBe(b);
+  });
+
+  it("picks nothing once the lookup was cancelled", async () => {
+    const l = pasteLookup(0);
+    void l.start(() => new Promise((r) => setTimeout(() => r(a), 10)));
+    const picked = enterChoice(l, () => ({ suggested: [], recent: [b] }));
+    l.cancel();
+    expect(await picked).toBe(null);
   });
 });
