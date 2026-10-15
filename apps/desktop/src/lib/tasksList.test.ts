@@ -93,7 +93,7 @@ describe("Tasks list (X45 List)", () => {
 
   it("sums up each task's sessions, PR and worktrees in its row", () => {
     const rows = Object.fromEntries(listGroups(board).flatMap((g) => g.cards.map((c) => [c.task.key, listRow(c)])));
-    expect(rows["MOON-142"]).toEqual({ glyphs: ["working", "idle"], sum: "1 working", sumTone: "faint", pr: "no PR", prTone: "faint", worktrees: 2, needsYou: false });
+    expect(rows["MOON-142"]).toEqual({ glyphs: ["working", "idle"], sum: "1 working", sumTone: "faint", pr: "no PR", prTone: "faint", worktrees: 2, needsYou: false, chip: null, updated: "" });
     expect(rows["MOON-147"]).toMatchObject({ sum: "needs you", sumTone: "blocked", needsYou: true });
     expect(rows["MOON-139"]).toMatchObject({ sum: "1 session", pr: "#131 · 7/7 ✓", prTone: "open" });
     expect(rows["MOON-144"]).toMatchObject({ pr: "#128 merged", prTone: "merged" });
@@ -112,5 +112,18 @@ describe("a group with both notes (X45 List)", () => {
       sessionStartRule: "suggest",
     });
     expect(listGroups(b).find((g) => g.name === "Todo")).toMatchObject({ note: "1 needs you · 2 out of sync", noteTone: "blocked" });
+  });
+});
+
+describe("a row's chip and updated time (X45 List)", () => {
+  it("shows the Out of sync chip with its fix, and how long ago the task changed", () => {
+    const b = tasksBoard({
+      tasks: [task("MOON-153", "todo", 1_000)],
+      sessions: [session("Guard", "moon-153-guard", { state: "working" })],
+      worktrees: [],
+      sessionStartRule: "suggest",
+    });
+    expect(listRow(b.todo[0], 1_000 + 5 * 60_000)).toMatchObject({ chip: "Session running · In Progress", updated: "5 min ago" });
+    expect(listRow(b.todo[0], 1_000 + 3 * 3_600_000).updated).toBe("3 h ago");
   });
 });
