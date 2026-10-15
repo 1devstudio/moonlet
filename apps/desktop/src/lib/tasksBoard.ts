@@ -135,11 +135,23 @@ export function tasksBoard(input: BoardInput): Board {
   const live = input.sessions.filter((s) => !s.archived);
   const used = new Set(live.map((s) => s.path));
   const loose = input.worktrees.filter((w) => w.branch && !used.has(w.path));
+  // Each session and worktree looks up its task once, so a tracker with
+  // thousands of issues keeps the board linear in tasks (X45).
+  const byTask = <T>(items: T[], find: (x: T) => Task | null) => {
+    const m = new Map<Task, T[]>();
+    for (const x of items) {
+      const t = find(x);
+      if (t) m.set(t, [...(m.get(t) ?? []), x]);
+    }
+    return m;
+  };
+  const sessionsOf = byTask(live, (s) => taskForSession(s, s.pr, s.originRepo, input.tasks, input.link));
+  const orphansOf = byTask(loose, (w) => taskForSession({ branch: w.branch ?? "" }, null, w.originRepo, input.tasks, input.link));
   for (const task of input.tasks) {
     if (task.column === "hidden") continue;
-    const sessions = live.filter((s) => taskForSession(s, s.pr, s.originRepo, input.tasks, input.link) === task);
+    const sessions = sessionsOf.get(task) ?? [];
     const column = task.column === "open" ? workColumn(sessions) : task.column;
-    const orphans = loose.filter((w) => taskForSession({ branch: w.branch ?? "" }, null, w.originRepo, input.tasks, input.link) === task);
+    const orphans = orphansOf.get(task) ?? [];
     board[column].push({
       task,
       column,
