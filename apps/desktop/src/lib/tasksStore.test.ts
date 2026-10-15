@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { useStore } from "./store";
-import { DEFAULT_CONFIG, ensureTasks, fixDrift, isTasksMode, loadTrackersConfig, refreshTasks, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, DEFAULT_CONFIG, ensureTasks, fixDrift, isTasksMode, loadTrackersConfig, moveTask, refreshTasks, startedFromTask, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -265,5 +265,41 @@ describe("loadTrackersConfig", () => {
     const c = trackersConfig(useTasks.getState());
     expect([c.sync.interval, c.github.rules.session_starts, c.github.max_length, c.connections]).toEqual([300, "auto", 48, []]);
     useTasks.setState({ config: null });
+  });
+});
+
+describe("moving a task from its state menu, and its activity (X45, X46)", () => {
+  const linearTask = {
+    connection: "linear:acme",
+    key: "MOON-142",
+    title: "Remote hosts",
+    url: "",
+    column: "in_progress" as const,
+    priority: 0,
+    assignees: [],
+    labels: [],
+    description: "",
+    updatedMs: 0,
+    tracker: { id: "issue-1", state: "In Progress", source: "MOON" },
+  };
+
+  it("moves a tracker issue to the chosen column and records it", async () => {
+    sent.length = 0;
+    await moveTask("local", "personal", linearTask, "in_review", 5_000);
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review" }]);
+    expect(activityOf(linearTask)[0]).toEqual({ at: 5_000, text: "moonlet moved it to In Review" });
+  });
+
+  it("reopens a closed GitHub issue through gh", async () => {
+    const asked: object[] = [];
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = () => [];
+    await refreshTasks("local", "personal", 1_000);
+    answers["gh.task_update"] = (p) => (asked.push(p), true);
+    const closed = { ...linearTask, connection: "github:github.com", key: "acme/web#7", column: "done" as const, tracker: undefined, github: { repo: "acme/web", number: 7, closingPrs: [] } };
+    await moveTask("local", "personal", closed, null, 6_000);
+    expect(asked).toEqual([{ path: "/r/web", number: 7, reopen: true }]);
+    expect(activityOf(closed)[0].text).toBe("moonlet reopened it");
   });
 });

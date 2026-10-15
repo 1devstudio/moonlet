@@ -112,8 +112,8 @@ pub const GH_PRS: &str = "gh.prs";
 /// `{path, mine}` → the repository's 100 most recently updated issues, open
 /// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
 pub const GH_TASKS: &str = "gh.tasks";
-/// `{path, number, assign_me?, close?}`: assigns a GitHub issue to the user
-/// or closes it as completed (X46 Keep in step).
+/// `{path, number, assign_me?, close?, reopen?}`: assigns a GitHub issue to
+/// the user, closes it as completed or reopens it (X46 Keep in step).
 pub const GH_TASK_UPDATE: &str = "gh.task_update";
 /// `{}` → the GitHub login `gh` is signed in as on this host (X44 GitHub connection).
 pub const GH_WHOAMI: &str = "gh.whoami";
@@ -670,6 +670,8 @@ pub struct GhTaskUpdate {
     pub assign_me: bool,
     #[serde(default)]
     pub close: bool,
+    #[serde(default)]
+    pub reopen: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
