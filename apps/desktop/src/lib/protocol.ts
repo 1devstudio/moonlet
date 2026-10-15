@@ -235,6 +235,25 @@ export interface TaskRef {
   url: string;
 }
 
+/** A GitHub issue for Tasks mode (X44). */
+export interface GhTask {
+  /** `owner/repo`. */
+  repo: string;
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  closed: boolean;
+  /** `completed`, `not_planned`, `duplicate` or `reopened`. */
+  state_reason: string | null;
+  /** Logins. */
+  assignees: string[];
+  labels: string[];
+  updated_ms: number;
+  /** Pull requests in the same repository that close the issue. */
+  closing_prs: number[];
+}
+
 /** A linked git work tree of a project (X45). */
 export interface Worktree {
   path: string;
@@ -542,6 +561,7 @@ export const M = {
   shellHistory: "shell.history",
   shellCommands: "shell.commands",
   ghPrs: "gh.prs",
+  ghTasks: "gh.tasks",
   workspaceList: "workspace.list",
   workspaceCreate: "workspace.create",
   workspaceUpdate: "workspace.update",

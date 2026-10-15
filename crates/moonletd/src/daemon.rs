@@ -561,6 +561,10 @@ impl Daemon {
                     .map_err(internal)?;
                 ok(names)
             }
+            m::GH_TASKS => {
+                let r: m::GhTasks = params(p)?;
+                ok(git::gh_tasks(&path(&r.path), r.mine).await.map_err(internal)?)
+            }
             m::GH_ISSUES | m::GH_PRS => {
                 let r: m::GitPath = params(p)?;
                 let kind = if method == m::GH_PRS { "pr" } else { "issue" };

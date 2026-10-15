@@ -107,6 +107,9 @@ pub const CHAT_MCP: &str = "chat.mcp";
 pub const EV_CHAT_ITEM: &str = "chat.item";
 pub const EV_CHAT_STATE: &str = "chat.state";
 pub const GH_PRS: &str = "gh.prs";
+/// `{path, mine}` → the repository's 100 most recently updated issues, open
+/// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
+pub const GH_TASKS: &str = "gh.tasks";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
 pub const GH_PR_STACK: &str = "gh.pr_stack";
 
@@ -634,6 +637,14 @@ pub struct SessionRun {
     pub cols: u16,
     #[serde(default = "default_rows")]
     pub rows: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhTasks {
+    /// Any directory inside the repository.
+    pub path: String,
+    #[serde(default)]
+    pub mine: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
