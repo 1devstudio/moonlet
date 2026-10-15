@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRules, autoFixes, cleanUpMessage, closesIssue, DEFAULT_RULES, driftFix, driftKey, startAction, withCloses, withoutPutOff } from "./keepInStep";
+import { applyRules, autoFixes, cleanUpMessage, closesIssue, DEFAULT_RULES, driftFix, driftKey, outsideMoves, startAction, withCloses, withoutPutOff } from "./keepInStep";
 import type { Task } from "./tasks";
 import type { BoardSession, Card } from "./tasksBoard";
 
@@ -135,5 +135,24 @@ describe("rules from Settings › Task trackers (X44, X46)", () => {
     const auto = { ...DEFAULT_RULES, all_merged: "auto" as const };
     expect(autoFixes(board, auto, {}).map((c) => c.task.key)).toEqual(["acme/web#7"]);
     expect(autoFixes(board, auto, { [driftKey(gh7)]: true })).toEqual([]);
+  });
+});
+
+describe("outsideMoves (X44: notify when a task changes state outside moonlet)", () => {
+  const gh = (n: number, column: Task["column"]) => task(`acme/web#${n}`, column, { repo: "acme/web", number: n, closingPrs: [] });
+
+  it("names linked tasks that changed column since the last sync, unless moonlet moved them", () => {
+    const before = [task("MOON-142", "in_review"), task("MOON-151", "todo"), gh(7, "open"), gh(8, "open")];
+    const after = [task("MOON-142", "in_progress"), task("MOON-151", "in_progress"), gh(7, "done"), gh(8, "done")];
+    const linked = new Set(["linear:acme MOON-142", "github:github.com acme/web#7", "github:github.com acme/web#8"]);
+    const byMoonlet = new Set(["github:github.com acme/web#8"]);
+    expect(outsideMoves(before, after, linked, byMoonlet)).toEqual([
+      { key: "MOON-142", title: "MOON-142", text: "MOON-142 moved to In Progress" },
+      { key: "acme/web#7", title: "acme/web#7", text: "acme/web#7 was closed" },
+    ]);
+  });
+
+  it("says nothing on the first sync", () => {
+    expect(outsideMoves(null, [task("MOON-142", "done")], new Set(["linear:acme MOON-142"]), new Set())).toEqual([]);
   });
 });

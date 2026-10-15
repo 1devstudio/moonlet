@@ -10,7 +10,7 @@ import { errorToast, shownWorkspace, useStore } from "../../lib/store";
 import { loadTrackersConfig, saveTrackersConfig, type TrackersConfig, trackersConfig, useTasks } from "../../lib/tasksStore";
 import { GITHUB_RULES, githubConnection, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS } from "../../lib/trackersPage";
 import { IconButton } from "../ui";
-import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status } from "./controls";
+import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, SwitchRow } from "./controls";
 
 
 const SOON = [
@@ -102,7 +102,7 @@ export function TrackersPage() {
       <Section title="Sync">
         <Card>
           <Row label="Refresh issues" hint="Also refreshes whenever the window comes to the front, at most every 15 s." htmlFor={intervalId} setting="sync-interval">
-            <select id={intervalId} className={fieldCls} value={config.sync.interval} onChange={(e) => save({ ...config, sync: { interval: Number(e.target.value) } })}>
+            <select id={intervalId} className={fieldCls} value={config.sync.interval} onChange={(e) => save({ ...config, sync: { ...config.sync, interval: Number(e.target.value) } })}>
               {INTERVALS.map((i) => (
                 <option key={i.value} value={i.value}>
                   {i.label}
@@ -110,6 +110,13 @@ export function TrackersPage() {
               ))}
             </select>
           </Row>
+          <SwitchRow
+            setting="sync-notify"
+            label="Notify when a task changes state outside moonlet"
+            hint="For example, a reviewer reopens your issue. Only tasks with a session."
+            on={config.sync.notify}
+            onChange={(notify) => save({ ...config, sync: { ...config.sync, notify } })}
+          />
         </Card>
       </Section>
       <p className="flex items-center gap-2 ui-text-12 text-muted">

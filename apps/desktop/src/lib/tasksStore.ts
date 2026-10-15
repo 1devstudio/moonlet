@@ -5,12 +5,12 @@ import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { latestPerKey } from "./prPoll";
 import { type GhTask, M, type Project, type Worktree } from "./protocol";
-import { errorToast, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
+import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
-import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, type Rules } from "./keepInStep";
+import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { githubRepo, type Task, taskFromGh } from "./tasks";
-import type { BoardInput, BoardSession, BoardWorktree, Card } from "./tasksBoard";
+import { type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
 
@@ -48,11 +48,11 @@ interface TasksState {
 
 /** `~/.moonlet/trackers.toml` as `moonlet-trackers` reads it (X44). */
 export interface TrackersConfig {
-  sync: { interval: number };
+  sync: { interval: number; notify: boolean };
   github: { branch_template: string; max_length: number; rules: Rules };
 }
 
-export const DEFAULT_CONFIG: TrackersConfig = { sync: { interval: 60 }, github: { branch_template: "", max_length: 48, rules: DEFAULT_RULES } };
+export const DEFAULT_CONFIG: TrackersConfig = { sync: { interval: 60, notify: true }, github: { branch_template: "", max_length: 48, rules: DEFAULT_RULES } };
 
 export const useTasks = create<TasksState>(() => ({
   data: {},
@@ -60,9 +60,17 @@ export const useTasks = create<TasksState>(() => ({
   selected: null,
   notNow: {},
   config: null,
-  layout: readStored("tasks.layout") === "list" ? "list" : "board",
+  layout: storedLayout(),
   expanded: {},
 }));
+
+function storedLayout(): "board" | "list" {
+  try {
+    return readStored("tasks.layout") === "list" ? "list" : "board";
+  } catch {
+    return "board";
+  }
+}
 
 /** Board or List; remembered across restarts. */
 export function setLayout(layout: "board" | "list") {
@@ -159,14 +167,24 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const repos = Object.fromEntries(per.map((x) => [x.id, x.repo]));
   const tasks = new Map<string, Task>();
   for (const x of per) for (const gh of x.issues) tasks.set(`${gh.repo}#${gh.number}`, taskFromGh(gh, GITHUB));
-  useTasks.setState((st) => {
-    const prev = st.data[key];
-    const next: TasksData =
-      error && prev
-        ? { ...prev, sources, repos, error }
-        : { tasks: [...tasks.values()], worktrees: per.flatMap((x) => x.worktrees), sources, repos, syncedAt: error ? null : now, error };
-    return { data: { ...st.data, [key]: next } };
-  });
+  const prev = useTasks.getState().data[key];
+  const next: TasksData =
+    error && prev
+      ? { ...prev, sources, repos, error }
+      : { tasks: [...tasks.values()], worktrees: per.flatMap((x) => x.worktrees), sources, repos, syncedAt: error ? null : now, error };
+  useTasks.setState((st) => ({ data: { ...st.data, [key]: next } }));
+  if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev?.tasks ?? null, next);
+}
+
+/** Tasks moonlet itself moved since the last sync, `connection key` (their move is not news). */
+const movedByMoonlet = new Set<string>();
+
+/** "Notify when a task changes state outside moonlet" (X44): linked tasks only. */
+function notifyOutsideMoves(host: string, workspaceId: string, before: Task[] | null, data: TasksData) {
+  const board = tasksBoard(boardInput(useStore.getState(), host, workspaceId, data));
+  const linked = new Set(Object.values(board).flat().filter((c) => c.rows.length).map((c) => `${c.task.connection} ${c.task.key}`));
+  for (const m of outsideMoves(before, data.tasks, linked, movedByMoonlet)) void notify(m.text, m.title);
+  movedByMoonlet.clear();
 }
 
 /** What the board needs of a workspace's sessions (X45). */
@@ -222,6 +240,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
       const path = repoPath(host, workspaceId, plan.repo);
       if (!path) return;
       await rpc(host, M.ghTaskUpdate, { path, number: plan.number, close: true });
+      movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
       toast(`Closed ${card.task.key}`);
     } else if (plan.kind === "move") {
       toast(`Moving ${card.task.key} comes with its tracker's connection (X44)`);

@@ -6,7 +6,7 @@ import { agentCount } from "./subagents";
 
 export interface Group {
   key: string;
-  kind: "project" | "status" | "all";
+  kind: "project" | "status" | "task" | "all";
   label: string;
   projectId?: string;
   sessions: Session[];
@@ -32,6 +32,8 @@ export function arrange(
   activeAt: (s: Session) => number,
   /** Archived sessions whose row still plays the archive loader (X21). */
   archiving: (s: Session) => boolean = () => false,
+  /** The task a session works on, for grouping by task (X46). */
+  taskOf: (s: Session) => { key: string; title: string } | null = () => null,
 ): Group[] {
   const filter = sec.view.filter.filter((id) => sec.project_ids.includes(id));
   const visible = sec.project_ids.filter((id) => filter.length === 0 || filter.includes(id));
@@ -51,6 +53,17 @@ export function arrange(
       if (!p) continue;
       groups.push({ key: `proj:${id}`, kind: "project", label: p.name, projectId: id, sessions: rest.filter((s) => s.project_id === id) });
     }
+  } else if (sec.view.group_by === "task") {
+    const byTask = new Map<string, Group>();
+    const none: Session[] = [];
+    for (const s of rest) {
+      const t = taskOf(s);
+      if (!t) none.push(s);
+      else if (byTask.has(t.key)) byTask.get(t.key)!.sessions.push(s);
+      else byTask.set(t.key, { key: `task:${t.key}`, kind: "task", label: `${t.key} ${t.title}`, sessions: [s] });
+    }
+    groups.push(...byTask.values());
+    if (none.length) groups.push({ key: "task:none", kind: "task", label: "No task", sessions: none });
   } else if (sec.view.group_by === "status") {
     for (const { state, label } of STATUS_ORDER) {
       const list = rest.filter((s) => stateOf(s) === state);

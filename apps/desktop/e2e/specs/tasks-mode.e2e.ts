@@ -164,4 +164,11 @@ describe("Tasks mode", () => {
     await expect($('//section[@aria-label="Todo"]')).toBeDisplayed();
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
+
+  it("shows a linked session's task under its name in the sidebar", async () => {
+    await sessionsButton().click();
+    const row = $(sel.sessionRow("Gift cards at checkout"));
+    await expect(row.$('//span[@title="acme/storefront#15 · Gift cards at checkout"]')).toBeDisplayed({ wait: 10_000 });
+    await expect(row.$(sel.text("acme/storefront#15"))).toBeDisplayed();
+  });
 });
