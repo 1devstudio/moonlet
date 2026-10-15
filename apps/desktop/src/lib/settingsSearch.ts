@@ -7,6 +7,7 @@ import type { ProjectConfig, WorkspaceColor } from "./protocol";
 import { routeKey, type SettingsRoute } from "./settingsPage";
 import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
+import { bannerOn } from "./alerts";
 import type { Settings } from "./store";
 import { WORKSPACE_COLORS } from "./workspaces";
 
@@ -85,6 +86,10 @@ function index(c: SearchContext): Entry[] {
     app("agents", "App › Agents", "plan-approve", "When a plan is approved, switch to", labelOf(PLAN_APPROVE_MODES, resolvePlanMode(s.planApproveMode))),
     app("agents", "App › Agents", "tool-calls", "Tool calls in the conversation", s.toolCalls === "expanded" ? "Expanded" : "Collapsed"),
     app("notifications", "App › Notifications", "notify-focused", "Notify even while moonlet is focused", onOff(s.notifyWhenFocused), "desktop notification"),
+    app("notifications", "App › Notifications", "banner-blocked", "Notification when an agent needs you", onOff(bannerOn(s.banners, "blocked")), "desktop banner"),
+    app("notifications", "App › Notifications", "banner-done", "Notification when an agent is done", onOff(bannerOn(s.banners, "done")), "desktop banner"),
+    app("notifications", "App › Notifications", "banner-error", "Notification when an agent fails", onOff(bannerOn(s.banners, "error")), "desktop banner"),
+    app("notifications", "App › Notifications", "muted", "Mute all sounds", onOff(!!s.muted), "silence quiet bell"),
     app("notifications", "App › Notifications", "sound-blocked", "Sound when an agent needs you", soundFor(s.sounds, "blocked") ?? "Off"),
     app("notifications", "App › Notifications", "sound-done", "Sound when an agent is done", soundFor(s.sounds, "done") ?? "Off"),
     app("notifications", "App › Notifications", "sound-error", "Sound when an agent fails", soundFor(s.sounds, "error") ?? "Off"),
