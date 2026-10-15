@@ -1,16 +1,17 @@
 // Linear, Jira Cloud and ClickUp in Settings › Task trackers (X44): connect
 // with a token, pick the sources each workspace shows, disconnect.
 
+import { Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
 import { type Connection, loadTrackersConfig, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
-import { changedStates } from "../../lib/trackerSources";
+import { blankSource, changedStates, sourceChoices, sourceNoun, sourceRows, sourcesToSave } from "../../lib/trackerSources";
 import type { Column } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
-import { Button, Dialog, Field, inputCls } from "../ui";
+import { Button, Dialog, Field, IconButton, inputCls } from "../ui";
 import { Row, Status } from "./controls";
 
 const NAME: Record<Connection["kind"], string> = { linear: "Linear", jira: "Jira Cloud", clickup: "ClickUp" };
@@ -26,15 +27,13 @@ const message = (e: unknown) => (e as { message?: string })?.message ?? String(e
 function SourcesEditor({ connection, choices, onDone }: { connection: Connection; choices: { key: string; name: string }[]; onDone: () => void }) {
   const workspaces = useStore((s) => s.workspaces);
   const projects = useStore((s) => s.projects);
-  const [rows, setRows] = useState<Source[]>(() =>
-    choices.map((c) => connection.sources.find((s) => s.key === c.key) ?? { key: c.key, name: c.name, project: "", workspace: "" }),
-  );
-  const shown = (key: string) => connection.sources.some((s) => s.key === key);
-  const [on, setOn] = useState<Record<string, boolean>>(() => Object.fromEntries(choices.map((c) => [c.key, shown(c.key)])));
+  const [rows, setRows] = useState<Source[]>(() => sourceRows(connection.sources));
+  const noun = sourceNoun(connection.kind);
   const wsOptions = Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ value: wsKey(host, w.id), label: w.name, host })));
-  const set = (key: string, patch: Partial<Source>) => setRows((r) => r.map((x) => (x.key === key ? { ...x, ...patch } : x)));
+  const set = (i: number, patch: Partial<Source>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const canAdd = !rows.some((r) => !r.key);
   const save = async () => {
-    const sources = rows.filter((r) => on[r.key]);
+    const sources = sourcesToSave(rows);
     try {
       await saveTrackersConfig((config) => ({ ...config, connections: (config.connections ?? []).map((c) => (c.id === connection.id ? { ...c, sources } : c)) }));
       onDone();
@@ -42,20 +41,37 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
       errorToast(message(e));
     }
   };
+  const grid = "grid grid-cols-[minmax(0,1fr)_120px_130px_130px_24px] items-center gap-2";
   return (
     <div className="flex flex-col gap-2">
-      <div className="ui-text-12.5 text-muted">Pick what to show, the workspace that shows it, and the project its sessions start in.</div>
+      <div className="ui-text-12.5 text-muted">
+        Add the {noun}s whose issues Tasks mode shows. For each, pick the workspace that shows it, whose issues it shows and the moonlet project its sessions start in.
+      </div>
+      <div className={`${grid} ui-text-11.5 text-faint`} aria-hidden>
+        <span>{noun}</span>
+        <span>Workspace</span>
+        <span>Shows</span>
+        <span>moonlet project</span>
+      </div>
       <div role="list" aria-label="Sources" className="flex max-h-[300px] flex-col gap-1 overflow-y-auto">
-        {rows.map((r) => {
+        {rows.map((r, i) => {
           const host = r.workspace.split("/")[0];
           return (
-            <div key={r.key} role="listitem" aria-label={r.name} className="flex items-center gap-2 ui-text-12.5">
-              <label className="flex min-w-0 flex-1 items-center gap-2">
-                <input type="checkbox" checked={!!on[r.key]} onChange={(e) => setOn((o) => ({ ...o, [r.key]: e.target.checked }))} />
-                <span className="truncate text-fg">{r.name}</span>
-                <span className="font-mono ui-text-11.5 text-faint">{r.key}</span>
-              </label>
-              <select aria-label={`Workspace for ${r.name}`} className={`${inputCls} w-[130px]`} value={r.workspace} disabled={!on[r.key]} onChange={(e) => set(r.key, { workspace: e.target.value, project: "" })}>
+            <div key={i} role="listitem" aria-label={r.name || "New source"} className={`${grid} ui-text-12.5`}>
+              <select
+                aria-label={`Source ${i + 1}`}
+                className={inputCls}
+                value={r.key}
+                onChange={(e) => set(i, { key: e.target.value, name: choices.find((c) => c.key === e.target.value)?.name ?? "" })}
+              >
+                <option value="">{noun}…</option>
+                {sourceChoices(choices, rows, i).map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.name} ({c.key})
+                  </option>
+                ))}
+              </select>
+              <select aria-label={`Workspace for ${r.name}`} className={inputCls} value={r.workspace} onChange={(e) => set(i, { workspace: e.target.value, project: "" })}>
                 <option value="">Workspace…</option>
                 {wsOptions.map((w) => (
                   <option key={w.value} value={w.value}>
@@ -63,11 +79,11 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
                   </option>
                 ))}
               </select>
-              <select aria-label={`What ${r.name} shows`} className={`${inputCls} w-[130px]`} value={r.all ? "all" : "mine"} disabled={!on[r.key]} onChange={(e) => set(r.key, { all: e.target.value === "all" })}>
+              <select aria-label={`What ${r.name} shows`} className={inputCls} value={r.all ? "all" : "mine"} onChange={(e) => set(i, { all: e.target.value === "all" })}>
                 <option value="mine">Assigned to me</option>
                 <option value="all">All open issues</option>
               </select>
-              <select aria-label={`Project for ${r.name}`} className={`${inputCls} w-[130px]`} value={r.project} disabled={!on[r.key] || !r.workspace} onChange={(e) => set(r.key, { project: e.target.value })}>
+              <select aria-label={`Project for ${r.name}`} className={inputCls} value={r.project} disabled={!r.workspace} onChange={(e) => set(i, { project: e.target.value })}>
                 <option value="">Project…</option>
                 {(projects[host] ?? []).map((p) => (
                   <option key={p.id} value={p.id}>
@@ -75,10 +91,16 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
                   </option>
                 ))}
               </select>
+              <IconButton title={`Remove ${r.name || "this row"}`} onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}>
+                <X size={14} />
+              </IconButton>
             </div>
           );
         })}
       </div>
+      <Button size="sm" className="self-start" disabled={!canAdd} onClick={() => setRows((rs) => [...rs, blankSource()])}>
+        <Plus size={12} /> Add source
+      </Button>
       <div className="mt-2 flex justify-end gap-2">
         <Button size="sm" variant="primary" onClick={() => void save()}>
           Save and sync
@@ -129,7 +151,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
     }
   };
   return (
-    <Dialog title={`${reconnect ? "Reconnect" : "Connect"} ${NAME[kind]}`} onClose={onClose} width={560}>
+    <Dialog title={`${reconnect ? "Reconnect" : "Connect"} ${NAME[kind]}`} onClose={onClose} width={done ? 680 : 560}>
       {done ? (
         <>
           <p className="mb-2 ui-text-12.5 text-done">
@@ -235,7 +257,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
         </div>
       </Row>
       {editing && (
-        <Dialog title={`${NAME[c.kind]} sources`} onClose={() => setEditing(null)} width={560}>
+        <Dialog title={`${NAME[c.kind]} sources`} onClose={() => setEditing(null)} width={680}>
           <SourcesEditor connection={c} choices={editing} onDone={() => setEditing(null)} />
         </Dialog>
       )}
