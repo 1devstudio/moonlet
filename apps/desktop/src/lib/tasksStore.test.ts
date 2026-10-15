@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { useStore } from "./store";
-import { ensureTasks, isTasksMode, refreshTasks, toggleTasksMode, useTasks } from "./tasksStore";
+import { DEFAULT_CONFIG, ensureTasks, isTasksMode, refreshTasks, toggleTasksMode, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -12,6 +12,12 @@ vi.mock("./daemon", () => ({
   sendInput: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
+const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: () => Promise.resolve(true),
+  requestPermission: () => Promise.resolve("granted"),
+  sendNotification: (n: { title: string; body: string }) => shown.push(n),
+}));
 
 const ws = (id: string, section_ids: string[]): Workspace => ({ id, name: id, color: "clay", section_ids, created_at: 0 });
 const sec = (id: string, project_ids: string[]): Section => ({ id, name: id, project_ids, view: { group_by: "project", sort_by: "created", filter: [] }, created_at: 0 });
@@ -101,5 +107,45 @@ describe("ensureTasks (X46: a linked session outside Tasks mode)", () => {
     expect(synced()).toBe(1_000);
     ensureTasks("local", "personal", 62_000);
     await vi.waitFor(() => expect(synced()).toBe(62_000));
+  });
+});
+
+describe("a linked task changed outside moonlet (X44 Sync)", () => {
+  it("is announced once, and not at all with the switch off", async () => {
+    shown.length = 0;
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    useStore.setState({
+      sessions: {
+        local: [
+          {
+            id: "s1",
+            project_id: "web",
+            name: "Checkout",
+            branch: "12-checkout",
+            base: "main",
+            path: "/w/12-checkout",
+            agent: null,
+            archived: false,
+            created_at: 1,
+            workspace_id: "personal",
+            terminals: [],
+            layout: null,
+          },
+        ],
+      },
+    });
+    answers["gh.tasks"] = () => [issue];
+    await refreshTasks("local", "personal", 1_000);
+    answers["gh.tasks"] = () => [{ ...issue, closed: true, state_reason: "completed" }];
+    await refreshTasks("local", "personal", 2_000);
+    await vi.waitFor(() => expect(shown).toEqual([{ title: "acme/web#12 was closed", body: "Fix checkout button" }]));
+
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, sync: { interval: 60, notify: false } } });
+    answers["gh.tasks"] = () => [issue];
+    await refreshTasks("local", "personal", 3_000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shown).toHaveLength(1);
+    useTasks.setState({ config: null });
   });
 });

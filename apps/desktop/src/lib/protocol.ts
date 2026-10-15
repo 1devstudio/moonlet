@@ -307,7 +307,7 @@ export interface Section {
 }
 
 export interface SectionView {
-  group_by: "project" | "status" | "none";
+  group_by: "project" | "task" | "status" | "none";
   sort_by: "recent" | "created" | "name";
   filter: string[];
 }

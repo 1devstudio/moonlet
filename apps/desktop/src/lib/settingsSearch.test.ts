@@ -120,7 +120,7 @@ describe("moving through the search results (X43)", () => {
 
 describe("Task trackers in the search (X44)", () => {
   const trackers = {
-    sync: { interval: 300 },
+    sync: { interval: 300, notify: true },
     github: { branch_template: "", max_length: 48, rules: { session_starts: "auto", pr_opens: "auto", all_merged: "suggest", pr_comment: "off", issue_done: "suggest" } },
   } as const;
   const found = (q: string) => searchSettings(q, { ...ctx, trackers }).map((r) => [r.before + r.hit + r.after, r.path, r.value]);
@@ -130,5 +130,6 @@ describe("Task trackers in the search (X44)", () => {
     expect(found("close the issue")).toEqual([["Every session's PR is merged → close the issue", "App › Task trackers", "Suggest"]]);
     expect(found("closes #")).toEqual([["A pull request opens → add Closes #<number> to it", "App › Task trackers", "Off"]]);
     expect(found("refresh issues")).toEqual([["Refresh issues", "App › Task trackers", "Every 5 minutes"]]);
+    expect(found("changes state outside")).toEqual([["Notify when a task changes state outside moonlet", "App › Task trackers", "On"]]);
   });
 });

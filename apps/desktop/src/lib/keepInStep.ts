@@ -106,3 +106,22 @@ export function autoFixes(board: Board, rules: Rules, done: Record<string, true>
     .flat()
     .filter((c) => c.drift?.kind === "merged" && c.task.github && !done[driftKey(c)]);
 }
+
+const COLUMN_TEXT: Record<Exclude<Column, "hidden">, string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };
+
+/**
+ * Linked tasks whose tracker state changed since the last sync without
+ * moonlet moving them, for a notification (X44). `linked` and `byMoonlet`
+ * hold `connection key`s; nothing on the first sync (`before` null).
+ */
+export function outsideMoves(before: Task[] | null, after: Task[], linked: Set<string>, byMoonlet: Set<string>): { key: string; title: string; text: string }[] {
+  if (!before) return [];
+  const was = new Map(before.map((t) => [`${t.connection} ${t.key}`, t.column]));
+  return after.flatMap((t) => {
+    const id = `${t.connection} ${t.key}`;
+    const from = was.get(id);
+    if (!from || from === t.column || !linked.has(id) || byMoonlet.has(id)) return [];
+    if (t.github) return t.column === "done" || t.column === "hidden" ? [{ key: t.key, title: t.title, text: `${t.key} was closed` }] : from === "done" || from === "hidden" ? [{ key: t.key, title: t.title, text: `${t.key} was reopened` }] : [];
+    return t.column === "open" || t.column === "hidden" ? [] : [{ key: t.key, title: t.title, text: `${t.key} moved to ${COLUMN_TEXT[t.column]}` }];
+  });
+}
