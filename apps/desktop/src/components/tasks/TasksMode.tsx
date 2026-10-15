@@ -12,6 +12,7 @@ import { findTasks, glyphShape, initials, stateOptions } from "../../lib/taskDet
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
 import { activityOf, boardInput, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, pollTasks, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
+import { sourceList } from "../../lib/trackerSources";
 import { applyRules, removeWorktreeAsk, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { boardSummary, modeSwitch, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
@@ -98,14 +99,10 @@ export function TasksSidebar() {
   const config = useTasks((t) => trackersConfig(t));
   const attention = useTasks((t) => t.attention);
   // The workspace's sources: GitHub repositories, then each connection's teams, projects or lists here.
-  const trackers = useMemo(() => {
-    if (!ws || !data) return [];
-    const github = data.sources.filter((x) => !x.includes(":")).map((repo) => ({ name: `GitHub · ${repo}`, attention: undefined as string | undefined }));
-    const others = (config.connections ?? []).flatMap((c) =>
-      c.sources.filter((s) => s.workspace === wsKey(ws.host, ws.id)).map((s) => ({ name: `${trackerName(c.kind)} · ${s.name}`, attention: attention[c.id] })),
-    );
-    return [...github, ...others];
-  }, [ws, data, config, attention]);
+  const trackers = useMemo(
+    () => (ws && data ? sourceList(wsKey(ws.host, ws.id), data.sources.filter((x) => !x.includes(":")), config.connections, attention) : []),
+    [ws, data, config, attention],
+  );
   const now = useNow(true);
   const counts = board ? viewCounts(board, unlinked.length) : null;
   return (
@@ -143,8 +140,10 @@ export function TasksSidebar() {
           <div className="px-4 pb-1 pt-3 ui-text-11.5 font-medium text-faint">Trackers</div>
           <ul aria-label="Trackers" className="px-2">
             {trackers.map((t) => (
-              <li key={t.name} className="flex items-center gap-2 rounded-md px-3 py-1.5 ui-text-13 text-muted">
-                <span className="min-w-0 flex-1 truncate">{t.name}</span>
+              <li key={`${t.tracker} ${t.name}`} className="flex items-center gap-2 rounded-md px-3 py-1.5 ui-text-13 text-muted">
+                <span className="min-w-0 flex-1 truncate">
+                  {t.tracker} · {t.name}
+                </span>
                 {t.attention && <span title={t.attention} className="h-1.5 w-1.5 rounded-full bg-error" />}
               </li>
             ))}

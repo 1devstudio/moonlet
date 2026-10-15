@@ -7,10 +7,11 @@ import { rpc } from "../../lib/daemon";
 import type { RuleSetting } from "../../lib/keepInStep";
 import { M } from "../../lib/protocol";
 import { errorToast, shownWorkspace, useStore } from "../../lib/store";
+import { sourceList } from "../../lib/trackerSources";
 import { loadTrackersConfig, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { GITHUB_RULES, githubConnection, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
 import { AddTracker, ConnectionRow } from "./TrackerConnections";
-import { IconButton } from "../ui";
+import { cx, IconButton } from "../ui";
 import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, SwitchRow } from "./controls";
 import { DEFAULT_LINK } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
@@ -47,13 +48,12 @@ export function TrackersPage() {
   const link = config.link ?? DEFAULT_LINK;
   const workspaces = useStore((s) => s.workspaces);
   const data = useTasks((t) => t.data);
+  const attention = useTasks((t) => t.attention);
   const wsRows = Object.entries(workspaces).flatMap(([host, list]) =>
     list.map((w) => {
       const key = wsKey(host, w.id);
-      const NAMES = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
-      const repos = (data[key]?.sources ?? []).filter((x) => !x.includes(":")).map((r) => `GitHub ${r}`);
-      const others = (config.connections ?? []).flatMap((c) => c.sources.filter((s) => s.workspace === key).map((s) => `${NAMES[c.kind]} ${s.name}`));
-      return { key, name: w.name, sources: [...repos, ...others] };
+      const repos = (data[key]?.sources ?? []).filter((x) => !x.includes(":"));
+      return { key, name: w.name, loaded: !!data[key], sources: sourceList(key, repos, config.connections, attention) };
     }),
   );
   const setGithub = (patch: Partial<TrackersConfig["github"]>) => save((c) => ({ ...c, github: { ...c.github, ...patch } }));
@@ -153,7 +153,27 @@ export function TrackersPage() {
       <Section title="Where each workspace gets its tasks" hint="Tasks mode shows the sources of the workspace you are in.">
         <Card>
           {wsRows.map((w) => (
-            <Row key={w.key} label={w.name} hint={w.sources.length ? w.sources.join(" · ") : "No source: a project with a GitHub origin, or a team, project or list picked under Sources"} setting={`ws-sources-${w.key}`} />
+            <Row
+              key={w.key}
+              label={w.name}
+              hint={
+                w.sources.length ? (
+                  <span className="flex flex-wrap gap-1.5">
+                    {w.sources.map((x) => (
+                      // A source whose connection failed is outlined red, with its reason.
+                      <span key={`${x.tracker} ${x.name}`} title={x.attention} aria-label={x.attention ? `${x.tracker} ${x.name}: ${x.attention}` : undefined} className={cx("rounded px-1", x.attention && "outline outline-1 outline-error text-error")}>
+                        {x.tracker} {x.name}
+                      </span>
+                    ))}
+                  </span>
+                ) : w.loaded ? (
+                  "No source: a project with a GitHub origin, or a team, project or list picked under Sources"
+                ) : (
+                  "GitHub repositories show once the workspace's Tasks mode has loaded"
+                )
+              }
+              setting={`ws-sources-${w.key}`}
+            />
           ))}
         </Card>
       </Section>
