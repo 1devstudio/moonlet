@@ -89,6 +89,17 @@ export function sourcesToSave(rows: Source[]): Source[] {
   });
 }
 
+/** A project's link to a tracker source in `.moonlet/config.toml`: `jira:acme.atlassian.net/ABC` (X44). */
+export const trackerLink = (connection: string, key: string) => `${connection}/${key}`;
+
+/** The connection and key of a link, or null when it is not `<connection>/<key>`. */
+export function parseTrackerLink(link: string): { connection: string; key: string } | null {
+  const at = link.indexOf("/");
+  const connection = link.slice(0, at);
+  const key = link.slice(at + 1);
+  return at > 0 && connection.includes(":") && key ? { connection, key } : null;
+}
+
 export interface TrackerLink {
   /** `<connection>/<key>`, as `.moonlet/config.toml` keeps it. */
   id: string;
@@ -103,7 +114,7 @@ export function projectTrackers(connections: Connection[] | undefined, linked: s
   const known = new Map<string, TrackerLink>();
   for (const c of connections ?? [])
     for (const s of c.sources) {
-      const id = `${c.id}/${s.key}`;
+      const id = trackerLink(c.id, s.key);
       if (!known.has(id)) known.set(id, { id, label: `${sourceNoun(c.kind)} ${s.name} (${s.key})` });
     }
   return {

@@ -629,6 +629,17 @@ describe("Assignee: me decides whose issues are fetched (X45)", () => {
     expect(shown()).toEqual({ "acme/web#12": true, "acme/web#13": false });
   });
 
+  it("takes only the open ones of other people's GitHub issues", async () => {
+    const theirsDone: GhTask = { ...issue, number: 14, title: "Old banner", url: "https://github.com/acme/web/issues/14", assignees: ["kim"], closed: true, state_reason: "completed" };
+    const theirsOpen: GhTask = { ...issue, number: 13, title: "Tidy the footer", url: "https://github.com/acme/web/issues/13", assignees: ["kim"] };
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = (p) => ((p as { mine?: boolean }).mine ? [issue] : [issue, theirsOpen, theirsDone]);
+    useTasks.setState({ filters: { mine: false, hideEmptyDone: false } });
+    await refreshTasks("local", "personal", 1_000);
+    expect(shown()).toEqual({ "acme/web#12": true, "acme/web#13": false });
+  });
+
   it("fetches everyone's issues as soon as the filter is turned off", async () => {
     const theirs: GhTask = { ...issue, number: 13, title: "Tidy the footer", url: "https://github.com/acme/web/issues/13", assignees: ["kim"] };
     answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);

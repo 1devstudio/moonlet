@@ -161,10 +161,11 @@ type ComposerOption = { host: string; project: { id: string; name: string } };
  * The project the composer starts on. Started from an issue (X44): the one
  * project in the workspace that links the issue's tracker project, or none
  * when several do, so the user picks. Otherwise the preset, then the current
- * session's project, then the first.
+ * session's project, then the first. An adopted worktree stays in its
+ * project (the preset), whatever links the issue (X46).
  */
-export function composerPick<O extends ComposerOption>(options: O[], s: { host?: string; preset?: string; linked?: string[]; current: { host: string; id: string } | null }): O | null {
-  const linked = options.filter((o) => o.host === s.host && s.linked?.includes(o.project.id));
+export function composerPick<O extends ComposerOption>(options: O[], s: { host?: string; preset?: string; linked?: string[]; current: { host: string; id: string } | null; worktree?: boolean }): O | null {
+  const linked = s.worktree ? [] : options.filter((o) => o.host === s.host && s.linked?.includes(o.project.id));
   if (linked.length) return linked.length === 1 ? linked[0] : null;
   return (
     options.find((o) => o.host === s.host && o.project.id === s.preset) ??
@@ -174,11 +175,15 @@ export function composerPick<O extends ComposerOption>(options: O[], s: { host?:
   );
 }
 
-/** The composer's project menu: the projects that link the issue's tracker project first, then the others, by name (X44). */
-export function composerProjects<O extends ComposerOption>(options: O[], linked: string[], query: string): { linked: O[]; others: O[] } {
+/**
+ * The composer's project menu, filtered by `query` on the name: the projects
+ * on `host` that link the issue's tracker project first, then the others (X44).
+ */
+export function composerProjects<O extends ComposerOption>(options: O[], linked: string[], query: string, host: string | undefined): { linked: O[]; others: O[] } {
   const q = query.trim().toLowerCase();
   const shown = options.filter((o) => o.project.name.toLowerCase().includes(q));
-  return { linked: shown.filter((o) => linked.includes(o.project.id)), others: shown.filter((o) => !linked.includes(o.project.id)) };
+  const isLinked = (o: O) => o.host === host && linked.includes(o.project.id);
+  return { linked: shown.filter(isLinked), others: shown.filter((o) => !isLinked(o)) };
 }
 
 /** Where the composer creates the session: the workspace it was opened for
