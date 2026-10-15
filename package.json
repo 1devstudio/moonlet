@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter @moonlet/desktop tauri dev",
     "build": "pnpm --filter @moonlet/desktop tauri build",
-    "test": "cargo test --workspace && pnpm --filter @moonlet/desktop --filter @moonlet/mobile test",
+    "test": "scripts/clean-env.sh --scratch-home sh -c 'cargo test --workspace && pnpm --filter @moonlet/desktop --filter @moonlet/mobile test'",
     "e2e:build": "pnpm --filter @moonlet/desktop e2e:build",
     "e2e": "pnpm --filter @moonlet/desktop e2e",
     "mobile": "pnpm --filter @moonlet/mobile tauri dev",

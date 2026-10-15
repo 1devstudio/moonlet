@@ -13,8 +13,8 @@
     "prepare:bins": "node scripts/prepare-bins.mjs",
     "bundle": "tauri build --config src-tauri/tauri.bundle.json",
     "build:ds": "vite build --config vite.ds.config.ts && tsc -p tsconfig.ds.json",
-    "e2e:build": "node scripts/e2e-build.mjs",
-    "e2e": "wdio run e2e/wdio.conf.ts",
+    "e2e:build": "../../scripts/clean-env.sh node scripts/e2e-build.mjs",
+    "e2e": "../../scripts/clean-env.sh wdio run e2e/wdio.conf.ts",
     "e2e:typecheck": "tsc -p e2e/tsconfig.json"
   },
   "dependencies": {

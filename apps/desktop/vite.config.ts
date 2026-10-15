@@ -15,5 +15,6 @@ export default defineConfig({
     chunkSizeWarningLimit: 4000,
   },
   worker: { format: "es" },
-  test: { environment: "jsdom" },
+  // Node 25+ has its own localStorage, which hides jsdom's: turn it off.
+  test: { environment: "jsdom", execArgv: ["--no-experimental-webstorage"] },
 });
