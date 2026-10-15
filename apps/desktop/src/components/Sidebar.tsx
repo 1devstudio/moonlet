@@ -284,8 +284,10 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   // Running subagents of the session's chats (X42).
   const agents = useStore((st) => sessionTerminals(st, host, s.id).reduce((n, x) => n + (x.subagents ?? 0), 0));
   const badge = sessionBadge({ creating, state, merged: pr?.state === "merged", git, agents });
-  const { lines } = useContext(TaskLines);
+  const { lines, sources } = useContext(TaskLines);
   const line = lines[s.id];
+  // In a workspace with a task source, a session without a task says so (X46).
+  const noTask = !line && sources;
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
   if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
@@ -303,36 +305,57 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
         e.preventDefault();
         onMenu(e);
       }}
-      // The design's row: inset and rounded, the glyph in a 15px column under
-      // the project's mark, the name and the task line under the project's name.
+      // The design's row: inset and rounded. Line 1 is the glyph (in a 15px
+      // column under the project's mark), the name and the badge; the task
+      // line sits under the name.
       className={cx(
-        "group relative mx-2 flex cursor-default items-center gap-2 rounded-md px-2 text-left transition-colors",
-        line ? "min-h-[46px] py-1" : "h-[38px]",
+        "group relative mx-2 flex cursor-default flex-col justify-center gap-[3px] rounded-md px-2 text-left transition-colors",
+        line || noTask ? "min-h-[46px] py-1" : "h-[38px]",
         selected ? "bg-selected shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-panel-2",
       )}
     >
-      <span className="flex w-[15px] shrink-0 justify-center">{notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}</span>
-      {renaming ? (
-        <InlineInput
-          initial={s.name}
-          onDone={(v) => {
-            setRenaming(false);
-            if (v && v !== s.name) void rpc(host, M.sessionUpdate, { id: s.id, name: v }).catch(errorToast);
-          }}
-        />
-      ) : (
-        <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
-          <span className={cx("truncate ui-text-13", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
-          {line && (
-            <span title={`${line.key} · ${line.title}`} className="flex min-w-0 items-center gap-1.5 ui-text-11.5 text-faint">
-              <TaskGlyph column={line.column} size={11} />
-              <span className="shrink-0 font-mono ui-text-11 text-muted">{line.key}</span>
-              <span className={cx("truncate", line.outOfSync && "text-accent-2")}>{line.text}</span>
-            </span>
-          )}
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="flex w-[15px] shrink-0 justify-center">{notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}</span>
+        {renaming ? (
+          <InlineInput
+            initial={s.name}
+            onDone={(v) => {
+              setRenaming(false);
+              if (v && v !== s.name) void rpc(host, M.sessionUpdate, { id: s.id, name: v }).catch(errorToast);
+            }}
+          />
+        ) : (
+          <span className={cx("min-w-0 flex-1 truncate ui-text-13", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+        )}
+        {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
+      </span>
+      {line && (
+        <span title={`${line.key} · ${line.title}`} className="flex min-w-0 items-center gap-2 ui-text-11.5 text-faint">
+          <span aria-hidden className="w-[15px] shrink-0" />
+          <span className="flex min-w-0 items-center gap-1.5">
+            <TaskGlyph column={line.column} size={11} />
+            <span className="shrink-0 font-mono ui-text-11 text-muted">{line.key}</span>
+            <span className={cx("truncate", line.outOfSync && "text-accent-2")}>{line.text}</span>
+          </span>
         </span>
       )}
-      {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
+      {noTask && (
+        <span className="flex min-w-0 items-center gap-2 ui-text-11.5 text-faint">
+          <span aria-hidden className="w-[15px] shrink-0" />
+          <span className="flex items-center gap-1">
+            No task ·
+            <button
+              className="text-accent-2 hover:text-accent"
+              onClick={(e) => {
+                e.stopPropagation();
+                useStore.setState({ dialog: { kind: "link-task", host, session: s.id } });
+              }}
+            >
+              Link
+            </button>
+          </span>
+        </span>
+      )}
     </div>
   );
 }
