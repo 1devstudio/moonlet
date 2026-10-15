@@ -171,6 +171,7 @@ pub fn parse_tasks(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, Api
                 description: desc.into(),
                 updated_ms: str_of(&t["date_updated"]).parse().unwrap_or(0),
                 cycle: None,
+                issue_type: None,
                 tracker: TrackerRef {
                     id,
                     state: name.into(),
@@ -301,6 +302,7 @@ mod tests {
                 description: "Users are unable to log in when **SSO** is enabled.".into(),
                 updated_ms: 1_567_780_450_202,
                 cycle: None,
+                issue_type: None,
                 tracker: TrackerRef {
                     id: "9hx".into(),
                     state: "in progress".into(),
@@ -400,6 +402,17 @@ mod tests {
             .map(|t| t.key)
             .collect();
         assert_eq!(keys, ["CU-s", "CU-h"]);
+    }
+
+    #[test]
+    fn the_lists_inside_a_spaces_folders_are_sources() {
+        // The documented folders answer has no lists in its example folders.
+        assert_eq!(parse_folder_lists(&fixture("clickup-folders.json")).unwrap(), []);
+        let raw = br#"{"folders":[{"id":"457","name":"Roadmap","lists":[{"id":"901","name":"Q4"},{"id":"902","name":"Bugs"}]}]}"#;
+        assert_eq!(
+            parse_folder_lists(raw).unwrap(),
+            [("901".to_string(), "Q4".to_string()), ("902".to_string(), "Bugs".to_string())]
+        );
     }
 
     #[test]

@@ -162,3 +162,32 @@ describe("enterChoice (X46: what ↵ links)", () => {
     expect(await picked).toBe(null);
   });
 });
+
+describe("the link dialog's lists and ↵ (X46)", () => {
+  it("shows at most 20 under Recent", () => {
+    const many = Array.from({ length: 25 }, (_, i) => task(`MOON-${i + 1}`, `Task ${i + 1}`, { updatedMs: i }));
+    const r = linkChoices({ name: "x", branch: "x" }, many, "").recent;
+    expect([r.length, r[0].key, r[19].key]).toEqual([20, "MOON-25", "MOON-6"]);
+  });
+
+  it("↵ pressed twice links once", async () => {
+    const l = pasteLookup(0);
+    const one = task("MOON-1", "Remote hosts");
+    void l.query("MOON-1", () => Promise.resolve(one));
+    const linked: string[] = [];
+    await Promise.all([l.enter(() => ({ suggested: [], recent: [] }), (t) => linked.push(t.key)), l.enter(() => ({ suggested: [], recent: [] }), (t) => linked.push(t.key))]);
+    expect(linked).toEqual(["MOON-1"]);
+  });
+
+  it("asking again for the same text keeps the lookup under way, so a background sync drops nothing", async () => {
+    const l = pasteLookup(0);
+    const one = task("MOON-1", "Remote hosts");
+    const first = l.query("#12", () => new Promise((r) => setTimeout(() => r(one), 10)));
+    // The dialog renders again after a sync; the text is the same.
+    void l.query("#12", () => Promise.resolve(null));
+    expect(await first).toBe(one);
+    // New text, or the forced lookup once the workspace's tasks arrive, starts again.
+    const next = l.query("#12", () => Promise.resolve(null), true);
+    expect(await next).toBe(null);
+  });
+});

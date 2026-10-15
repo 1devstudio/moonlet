@@ -1,5 +1,7 @@
 // Which Linear, Jira and ClickUp sources each workspace shows (X44).
 
+import type { Column } from "./tasks";
+import { trackerName } from "./tasks";
 import type { Connection } from "./tasksStore";
 
 export interface WorkspaceConnection {
@@ -29,4 +31,29 @@ export function workspaceConnections(connections: Connection[] | undefined, wsKe
       },
     ];
   });
+}
+
+export interface SourceEntry {
+  tracker: string;
+  name: string;
+  /** Why its connection needs attention, if it does (X44). */
+  attention: string | undefined;
+}
+
+/**
+ * A workspace's task sources: its projects' GitHub repositories, then each
+ * connection's teams, projects or lists shown there.
+ */
+export function sourceList(wsKey: string, repos: string[], connections: Connection[] | undefined, attention: Record<string, string>): SourceEntry[] {
+  const github = repos.map((name) => ({ tracker: "GitHub", name, attention: undefined }));
+  const others = (connections ?? []).flatMap((c) =>
+    c.sources.filter((s) => s.workspace === wsKey).map((s) => ({ tracker: trackerName(c.kind), name: s.name, attention: attention[c.id] })),
+  );
+  return [...github, ...others];
+}
+
+/** The States dialog's mapping as saved: only states moved off their default column (X44). */
+export function changedStates(states: { name: string; column: Column }[], mapping: Record<string, Column>): Record<string, Column> {
+  const defaults = Object.fromEntries(states.map((s) => [s.name, s.column]));
+  return Object.fromEntries(Object.entries(mapping).filter(([name, column]) => defaults[name] !== column));
 }

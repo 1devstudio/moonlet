@@ -25,6 +25,9 @@ pub struct TrackerTask {
     /// Linear's cycle number, when the issue is in one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cycle: Option<u64>,
+    /// Jira's issue type ("Bug", "Story"), for `{type}` in branch names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_type: Option<String>,
     /// What moves and comments need: the tracker's own ids and state.
     pub tracker: TrackerRef,
 }
@@ -76,6 +79,7 @@ mod tests {
             description: "Add a Hosts section.".into(),
             updated_ms: 1_789_528_295_000,
             cycle: None,
+            issue_type: None,
             tracker: TrackerRef {
                 id: "a1b2".into(),
                 state: "In Progress".into(),

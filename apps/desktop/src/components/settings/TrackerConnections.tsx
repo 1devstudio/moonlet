@@ -7,6 +7,8 @@ import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
 import { type Connection, loadTrackersConfig, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
+import { changedStates } from "../../lib/trackerSources";
+import type { Column } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
 import { Button, Dialog, Field, inputCls } from "../ui";
 import { Row, Status } from "./controls";
@@ -272,8 +274,8 @@ const COLUMN_CHOICES = [
 /** Workflow states (X44): each state of a source and the column it lands in. */
 export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => void }) {
   const [source, setSource] = useState(c.sources[0]?.key ?? "");
-  const [states, setStates] = useState<{ name: string; column: string }[] | null>(null);
-  const [mapping, setMapping] = useState<Record<string, string>>(c.states ?? {});
+  const [states, setStates] = useState<{ name: string; column: Column }[] | null>(null);
+  const [mapping, setMapping] = useState<Record<string, Column>>(c.states ?? {});
   useEffect(() => {
     if (!source) return;
     setStates(null);
@@ -281,8 +283,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
   }, [c.id, source]);
   const save = async () => {
     // Only states moved off their default column are kept.
-    const defaults = Object.fromEntries((states ?? []).map((s) => [s.name, s.column]));
-    const kept = Object.fromEntries(Object.entries(mapping).filter(([name, col]) => defaults[name] !== col));
+    const kept = changedStates(states ?? [], mapping);
     try {
       await saveTrackersConfig((config) => ({ ...config, connections: (config.connections ?? []).map((x) => (x.id === c.id ? { ...x, states: kept as Connection["states"] } : x)) }));
       onClose();
@@ -308,7 +309,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
         {(states ?? []).map((s) => (
           <div key={s.name} role="listitem" className="flex items-center gap-2 ui-text-12.5">
             <span className="min-w-0 flex-1 truncate text-fg">{s.name}</span>
-            <select aria-label={`Column for ${s.name}`} className={`${inputCls} w-[140px]`} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value }))}>
+            <select aria-label={`Column for ${s.name}`} className={`${inputCls} w-[140px]`} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value as Column }))}>
               {COLUMN_CHOICES.map(([id, label]) => (
                 <option key={id} value={id}>
                   {label}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./tasks";
-import { type BoardSession, tasksBoard } from "./tasksBoard";
-import { boardSummary, sessionTaskLines, sourceLabels, syncedLabel, viewBoard, viewCounts } from "./tasksView";
+import { type Board, type BoardSession, tasksBoard } from "./tasksBoard";
+import { boardSummary, filterBoard, modeSwitch, sessionTaskLines, sourceLabels, syncedLabel, viewBoard, viewCounts } from "./tasksView";
 
 const task = (key: string, column: Task["column"]): Task => ({
   connection: "github:github.com",
@@ -102,5 +102,36 @@ describe("sourceLabels (X45 card)", () => {
     expect(repos(t("github:github.com", "other/web#2", undefined, "other/web"))).toBe("other/web");
     const teams = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("linear:globex", "ENG-2", "ENG")]);
     expect(teams(t("linear:globex", "ENG-2", "ENG"))).toBe("globex ENG");
+  });
+});
+
+describe("modeSwitch (X45 mode switch)", () => {
+  it("titles both buttons with the shortcut as bound, and names what is out of sync", () => {
+    expect(modeSwitch("⌃⌘T", 0)).toEqual({ sessions: "Sessions ⌃⌘T", tasks: "Tasks ⌃⌘T", label: "Tasks", dot: false });
+    expect(modeSwitch("⌥T", 3)).toEqual({ sessions: "Sessions ⌥T", tasks: "Tasks ⌥T", label: "Tasks, 3 out of sync", dot: true });
+    // Unbound in Settings › Shortcuts: no key in the titles.
+    expect(modeSwitch("", 0)).toMatchObject({ sessions: "Sessions", tasks: "Tasks" });
+  });
+});
+
+describe("filterBoard (X45 header filters)", () => {
+  const t = (key: string, column: Task["column"], mine: boolean): Task => ({ connection: "linear:acme", key, title: key, url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, mine });
+  const card = (task: Task, rows = 0, orphans = 0) => ({ task, column: task.column === "done" ? ("done" as const) : ("todo" as const), rows: Array.from({ length: rows }, () => ({}) as never), needsYou: false, orphans: Array.from({ length: orphans }, () => ({}) as never), empty: null, drift: null });
+  const board = {
+    todo: [card(t("ENG-1", "todo", true)), card(t("ENG-2", "todo", false))],
+    in_progress: [],
+    in_review: [],
+    done: [card(t("ENG-3", "done", true)), card(t("ENG-4", "done", true), 1), card(t("ENG-5", "done", true), 0, 1)],
+  } as Board;
+  const keys = (b: Board) => Object.values(b).flat().map((c) => c.task.key);
+  it("Assignee: me keeps the user's tasks; Hide empty Done drops done tasks with no session or worktree", () => {
+    expect(keys(filterBoard(board, { mine: false, hideEmptyDone: false }))).toEqual(["ENG-1", "ENG-2", "ENG-3", "ENG-4", "ENG-5"]);
+    expect(keys(filterBoard(board, { mine: true, hideEmptyDone: false }))).toEqual(["ENG-1", "ENG-3", "ENG-4", "ENG-5"]);
+    expect(keys(filterBoard(board, { mine: false, hideEmptyDone: true }))).toEqual(["ENG-1", "ENG-2", "ENG-4", "ENG-5"]);
+  });
+
+  it("Assignee: me keeps someone else's task you have a session on", () => {
+    const yours = { todo: [card(t("ENG-6", "todo", false), 1)], in_progress: [], in_review: [], done: [] } as Board;
+    expect(keys(filterBoard(yours, { mine: true, hideEmptyDone: false }))).toEqual(["ENG-6"]);
   });
 });

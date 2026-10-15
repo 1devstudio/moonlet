@@ -55,15 +55,24 @@ export const hostsApi = {
     invoke("tracker_update", { req }),
   trackerOauthAvailable: () => invoke<boolean>("tracker_oauth_available"),
   trackerOauthLinear: () => invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_oauth_linear"),
-  trackerStates: (id: string, source: string) => invoke<{ name: string; column: string }[]>("tracker_states", { id, source }),
+  trackerStates: (id: string, source: string) => invoke<{ name: string; column: import("./tasks").Column }[]>("tracker_states", { id, source }),
   /** `~/.moonlet/trackers.toml`, or its defaults (X44). */
   trackersConfig: () => invoke<Partial<import("./tasksStore").TrackersConfig>>("trackers_config"),
   trackersSave: (config: import("./tasksStore").TrackersConfig) => invoke("trackers_save", { config }),
   /** A key or issue URL pasted into the link dialog, or null (X46). */
   parsePasted: (input: string) => invoke<import("./taskLinking").Pasted | null>("task_parse_pasted", { input }),
   /** The branch for a session started from a task (X46); `kind` is the tracker. */
-  taskBranch: (o: { kind: "linear" | "jira" | "clickup" | "github"; key: string; title: string; number?: number; template?: string; maxLen?: number }) =>
-    invoke<string>("task_branch_name", { kind: o.kind, template: o.template ?? null, key: o.key, title: o.title, number: o.number ?? null, maxLen: o.maxLen ?? null }),
+  taskBranch: (o: { kind: "linear" | "jira" | "clickup" | "github"; key: string; title: string; number?: number; template?: string; maxLen?: number; user?: string; issueType?: string }) =>
+    invoke<string>("task_branch_name", {
+      kind: o.kind,
+      template: o.template ?? null,
+      key: o.key,
+      title: o.title,
+      number: o.number ?? null,
+      maxLen: o.maxLen ?? null,
+      user: o.user ?? null,
+      issueType: o.issueType ?? null,
+    }),
 };
 
 /** Must match `RESET_FLAG` in src-tauri/src/hosts.rs. */

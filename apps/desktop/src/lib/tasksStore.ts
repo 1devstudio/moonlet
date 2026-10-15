@@ -15,7 +15,7 @@ import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type 
 import { workspaceConnections } from "./trackerSources";
 import { applyStateMapping } from "./stateMapping";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
-import type { TaskView } from "./tasksView";
+import type { BoardFilters, TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
 
 /** GitHub Issues through `gh` on the project's host (X44). */
@@ -52,6 +52,8 @@ interface TasksState {
   layout: "board" | "list";
   /** List rows open, by `connection key`. */
   expanded: Record<string, boolean>;
+  /** The header's filters, kept across restarts (X45). */
+  filters: BoardFilters;
   /** Connections whose token stopped working, with what to do (X44). */
   attention: Record<string, string>;
   /** What moonlet did about each task, by `connection key` (X45 Activity). */
@@ -127,12 +129,28 @@ export const useTasks = create<TasksState>(() => ({
   configError: null,
   layout: storedLayout(),
   expanded: storedExpanded(),
+  filters: storedFilters(),
   attention: {},
   activity: {},
   query: "",
   paused: storedPaused(),
   failures: {},
 }));
+
+function storedFilters(): BoardFilters {
+  try {
+    const f = JSON.parse(readStored("tasks.filters") ?? "{}");
+    return { mine: f.mine === true, hideEmptyDone: f.hideEmptyDone === true };
+  } catch {
+    return { mine: false, hideEmptyDone: false };
+  }
+}
+
+/** Assignee: me and Hide empty Done in the header (X45). */
+export function setFilters(filters: BoardFilters) {
+  useTasks.setState({ filters });
+  writeStored("tasks.filters", JSON.stringify(filters));
+}
 
 function storedExpanded(): Record<string, boolean> {
   try {
@@ -263,7 +281,8 @@ export function workspaceProjects(s: StoreState, host: string, workspaceId: stri
   return (s.projects[host] ?? []).filter((p) => ids.has(p.id));
 }
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** An error's text: an Error's or a Tauri command's `{ message }`, else the value. */
+const message = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
 const syncs = latestPerKey();
 
 /** Reads a workspace's GitHub issues and worktrees. A failed read keeps the last good list. */
@@ -305,7 +324,10 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
         const shownAll = (t: Task) => c.all.includes(t.tracker?.source ?? "");
         const mine = await hostsApi.trackerTasks(c.id, true);
         const everyone = c.all.length ? (await hostsApi.trackerTasks(c.id, false)).filter(shownAll) : [];
-        const list = [...everyone, ...mine.filter((t) => !shownAll(t))];
+        // Everyone's, then the account's own that everyone's left out (it stops at 500).
+        const own = new Set(mine.map((t) => t.key));
+        const seen = new Set(everyone.map((t) => t.key));
+        const list = [...everyone.map((t) => ({ ...t, mine: own.has(t.key) })), ...mine.filter((t) => !seen.has(t.key)).map((t) => ({ ...t, mine: true }))];
         return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
       } catch (e) {
         const err = e as { auth?: boolean; message?: string };
@@ -388,6 +410,11 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       state: sessionState(s, host, x.id),
       pr: s.prs[sesKey(host, x.id)] ?? null,
       additions: s.git[sesKey(host, x.id)]?.additions ?? 0,
+      deletions: s.git[sesKey(host, x.id)]?.deletions ?? 0,
+      project: s.projects[host]?.find((p) => p.id === x.project_id)?.name,
+      agents: sessionTerminals(s, host, x.id)
+        .filter((t) => t.kind === "agent")
+        .map((t) => ({ name: t.agent ?? "agent", state: t.agent_state, since: t.last_output_at })),
       subagents: sessionTerminals(s, host, x.id).reduce((n, t) => n + (t.subagents ?? 0), 0),
       originRepo: data.repos[x.project_id] ?? null,
     }));
@@ -420,7 +447,8 @@ export async function lookUpPasted(host: string, projectPath: string, p: Pasted,
     const repo = m?.[1] ?? originRepo;
     if (!m || !repo) return null;
     const gh = await rpc<GhTask>(host, M.ghTask, { path: projectPath, repo, number: Number(m[2]) }).catch(() => null);
-    return gh ? taskFromGh(gh, GITHUB) : null;
+    // Whose it is is not known for a pasted issue.
+    return gh ? { ...taskFromGh(gh, GITHUB), mine: undefined } : null;
   }
   const site = p.site?.toLowerCase();
   const conns = (trackersConfig(useTasks.getState()).connections ?? []).filter((c) => (!p.kind || c.kind === p.kind) && (!site || c.site.toLowerCase() === site));
@@ -440,7 +468,10 @@ const COLUMN_LABEL = { todo: "Todo", in_progress: "In Progress", in_review: "In 
 
 /** The "session starts" rule after a session started from a task with the box ticked (X46):
  *  a GitHub issue is assigned; a tracker issue moves to In Progress and is assigned. */
-export async function startedFromTask(host: string, workspaceId: string, start: TaskStart) {
+export async function startedFromTask(host: string, workspaceId: string, start: TaskStart, opts: { session: string; assign: boolean }, now = Date.now()) {
+  recordActivity({ connection: start.ref.connection, key: start.key }, `Session “${opts.session}” started from it`, now);
+  // Keep in step: the "session starts" rule, as the composer's box was left.
+  if (!opts.assign) return;
   if (start.github) return assignToMe(host, workspaceId, start.github);
   if (!start.tracker) return;
   const id = `${start.ref.connection} ${start.key}`;
@@ -453,10 +484,10 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
       column: "in_progress",
       assign_me: true,
     });
-    recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you");
+    recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you", now + 1);
   } catch (e) {
     movedByMoonlet.delete(id);
-    errorToast((e as { message?: string }).message ?? e);
+    toast(`${start.key}: ${message(e)}`, "error");
   }
 }
 
@@ -471,6 +502,30 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
   } catch (e) {
     toast(`${key}: ${message(e)}`, "error");
   }
+}
+
+// A gh login that worked, per host, and when it was asked: asked again after a minute.
+const ghLogins = new Map<string, { login: string; at: number }>();
+
+/**
+ * `{user}` in branch names (X44): the first name of the tracker account,
+ * lower case, or the `gh` login on the host (asked once per host).
+ */
+export async function branchUser(host: string, connection: string, now = Date.now()): Promise<string> {
+  if (trackerOf(connection) === "github") {
+    const known = ghLogins.get(host);
+    if (known && now - known.at < 60_000) return known.login;
+    try {
+      const login = await rpc<string>(host, M.ghWhoami, {});
+      ghLogins.set(host, { login, at: now });
+      return login;
+    } catch {
+      // Not signed in (yet): nothing to remember.
+      return "";
+    }
+  }
+  const account = trackersConfig(useTasks.getState()).connections?.find((c) => c.id === connection)?.account ?? "";
+  return account.split(/\s+/)[0].toLowerCase();
 }
 
 /** A connection the user signed in to again, or forgot: its attention dot goes (X44). */
@@ -539,7 +594,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
     return true;
   } catch (e) {
     movedByMoonlet.delete(id);
-    setFailure(card.task, (e as { message?: string }).message ?? message(e));
+    setFailure(card.task, message(e));
     return false;
   }
 }
@@ -607,7 +662,7 @@ export async function runAutoFixes(host: string, workspaceId: string, board: Boa
           await before?.();
           await comment();
         });
-        if (!before) setFailure(c.card.task, (e as { message?: string }).message ?? message(e), "comment");
+        if (!before) setFailure(c.card.task, message(e), "comment");
       }
     };
     await comment();
@@ -631,6 +686,13 @@ export function syncTasks(host: string, workspaceId: string, interval: number): 
     window.removeEventListener("focus", onFocus);
     clearInterval(timer);
   };
+}
+
+/** The out-of-sync dot needs the tasks: asked for now and every 5 minutes, also in Sessions mode (X45). Returns the stop. */
+export function pollTasks(host: string, workspaceId: string): () => void {
+  ensureTasks(host, workspaceId);
+  const timer = setInterval(() => ensureTasks(host, workspaceId), 300_000);
+  return () => clearInterval(timer);
 }
 
 /** Loads a workspace's tasks when a linked session opens outside Tasks mode, at most once a minute (X46). */
@@ -717,7 +779,7 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
     void refreshTasks(host, workspaceId);
   } catch (e) {
     movedByMoonlet.delete(id);
-    const why = (e as { message?: string }).message ?? message(e);
+    const why = message(e);
     setFailure(task, why);
     toast(`${task.key}: ${why}`, "error");
   }

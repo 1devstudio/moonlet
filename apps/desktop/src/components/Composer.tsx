@@ -3,7 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { TaskStart } from "../lib/tasks";
-import { leaveTasksMode, recordActivity, startedFromTask } from "../lib/tasksStore";
+import { branchUser, leaveTasksMode, startedFromTask } from "../lib/tasksStore";
 import { composerOptions, composerTarget } from "../lib/workspaces";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
@@ -287,11 +287,12 @@ export function Composer({
       taskBranchLoad.current = Promise.resolve(null);
       return setTaskBranch(null);
     }
-    taskBranchLoad.current = hostsApi
-      .taskBranch({ kind: task.kind, key: task.key, title: task.title, number: task.number, template: task.template, maxLen: task.maxLen })
+    // `{user}` and `{type}` too (X44).
+    taskBranchLoad.current = branchUser(current?.host ?? "local", task.ref.connection)
+      .then((user) => hostsApi.taskBranch({ kind: task.kind, key: task.key, title: task.title, number: task.number, template: task.template, maxLen: task.maxLen, user, issueType: task.issueType }))
       .catch(() => null);
     void taskBranchLoad.current.then(setTaskBranch);
-  }, [task, worktree]);
+  }, [task, worktree, current?.host]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
   const modelLabel =
@@ -366,9 +367,8 @@ export function Composer({
         rows: 32,
       });
       close();
-      if (task) recordActivity({ connection: task.ref.connection, key: task.key }, `Session “${s.name}” started from it`);
-      // Keep in step: the "session starts" rule (X46).
-      if (task?.assign && assign) void startedFromTask(current.host, s.workspace_id ?? workspaceFor(current.host) ?? "", task);
+      // Activity, and Keep in step's "session starts" rule (X46).
+      if (task) void startedFromTask(current.host, s.workspace_id ?? workspaceFor(current.host) ?? "", task, { session: s.name, assign: !!task.assign && assign });
       // Started from Tasks mode: work on it in Sessions mode (X46).
       if (task || worktree) leaveTasksMode();
       selectSession(current.host, s.id);

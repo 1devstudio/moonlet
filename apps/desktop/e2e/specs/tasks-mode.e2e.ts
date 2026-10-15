@@ -45,6 +45,14 @@ const ISSUES = JSON.stringify([
     updatedAt: "2026-10-13T10:00:00Z",
     closedByPullRequestsReferences: [],
   },
+  // Done, with a worktree left (made in `before`): it needs clean-up.
+  { number: 16, title: "Old banner", body: "", url: "https://github.com/acme/storefront/issues/16", state: "CLOSED", stateReason: "COMPLETED", assignees: [{ login: "sam-rivera" }], labels: [], updatedAt: "2026-10-12T10:00:00Z", closedByPullRequestsReferences: [] },
+  // Done, with nothing left.
+  { number: 17, title: "Typo in footer", body: "", url: "https://github.com/acme/storefront/issues/17", state: "CLOSED", stateReason: "COMPLETED", assignees: [{ login: "sam-rivera" }], labels: [], updatedAt: "2026-10-11T10:00:00Z", closedByPullRequestsReferences: [] },
+  // Open, with a worktree and no session (made in `before`).
+  { number: 18, title: "Orphan work", body: "", url: "https://github.com/acme/storefront/issues/18", state: "OPEN", stateReason: "", assignees: [{ login: "sam-rivera" }], labels: [], updatedAt: "2026-10-10T10:00:00Z", closedByPullRequestsReferences: [] },
+  // Open, with no session at all.
+  { number: 19, title: "Saved carts", body: "", url: "https://github.com/acme/storefront/issues/19", state: "OPEN", stateReason: "", assignees: [{ login: "sam-rivera" }], labels: [], updatedAt: "2026-10-09T10:00:00Z", closedByPullRequestsReferences: [] },
 ]);
 
 // `gh issue view 99 --repo acme/other`: an issue outside the workspace's repositories.
@@ -62,6 +70,10 @@ const OTHER_ISSUE = JSON.stringify({
 });
 
 const LINKED = "Checkout on Safari";
+// While this file exists, the fake gh fails to list issues.
+const ghFails = join(w.root, "gh-fails");
+const wt16 = join(w.root, "wt-16-old-banner");
+const wt18 = join(w.root, "wt-18-orphan-work");
 const tasksButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]');
 const sessionsButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[@aria-label="Sessions"]');
 const card = (key: string, column: string) => $(`//section[@aria-label=${JSON.stringify(column)}]//article[starts-with(@aria-label, ${JSON.stringify(key)})]`);
@@ -72,17 +84,19 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
     git("remote", "add", "origin", "https://github.com/acme/storefront.git");
+    git("worktree", "add", "-q", "-b", "16-old-banner", wt16);
+    git("worktree", "add", "-q", "-b", "18-orphan-work", wt18);
     linkedId = rpc<{ id: string }>(w, "session.create", { project_id: projectId(w), name: LINKED, branch: "12-fix-checkout", agent: "none" }).id;
   });
 
   // The app keeps the layout and open rows across restarts, and localStorage
   // outlives a run: start and end from the defaults.
-  const forgetLayout = () => browser.execute(() => ["moonlet.tasks.layout", "moonlet.tasks.expanded"].forEach((k) => localStorage.removeItem(k)));
+  const forgetLayout = () => browser.execute(() => ["moonlet.tasks.layout", "moonlet.tasks.expanded", "moonlet.tasks.filters"].forEach((k) => localStorage.removeItem(k)));
   before(async () => {
     await forgetLayout();
     // The store read them when the app started.
@@ -100,6 +114,18 @@ describe("Tasks mode", () => {
       else if (s.id === linkedId || s.task) rpc(w, "session.archive", { id: s.id });
     }
     git("remote", "remove", "origin");
+    for (const [dir, branch] of [
+      [wt16, "16-old-banner"],
+      [wt18, "18-orphan-work"],
+    ]) {
+      try {
+        git("worktree", "remove", "--force", dir);
+        git("branch", "-D", branch);
+      } catch {
+        // Already gone.
+      }
+    }
+    rmSync(ghFails, { force: true });
     rmSync(fakeGh, { force: true });
   });
 
@@ -155,7 +181,8 @@ describe("Tasks mode", () => {
       await $('//button[@title="Refresh tasks"]').click();
       // #12 has sessions, so its worktree without one is in the detail panel.
       await card("acme/storefront#12", "In Progress").$('//button[normalize-space()="Fix checkout button"]').click();
-      const start = $('//aside[@aria-label="Task detail"]').$(sel.button("Start session"));
+      // `.//`: within the detail, not the whole page.
+      const start = $('//aside[@aria-label="Task detail"]').$(`.${sel.button("Start session")}`);
       await start.waitForDisplayed({ timeout: 15_000 });
       await start.click();
       await expect($(sel.text("12-orphan-fix · existing worktree"))).toBeDisplayed({ wait: 10_000 });
@@ -182,6 +209,82 @@ describe("Tasks mode", () => {
     }
   });
 
+  it("counts done tasks left to clean up on the Done button, and filters the board", async () => {
+    await tasksButton().click();
+    await $('//button[@title="Refresh tasks"]').click();
+    const done = $('//button[starts-with(@aria-label, "Done: ")]');
+    await expect(done).toHaveAttribute("aria-label", "Done: 2 tasks, 1 needs clean-up", { wait: 15_000 });
+    await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Hide empty Done"]').click();
+    await expect(done).toHaveAttribute("aria-label", "Done: 1 task, 1 needs clean-up");
+    await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Hide empty Done"]').click();
+  });
+
+  it("offers Start session on a card whose task has a worktree and no session, and No sessions yet on one with neither", async () => {
+    await expect(card("acme/storefront#18", "Todo").$(`.${sel.button("Start session")}`)).toBeDisplayed();
+    await card("acme/storefront#19", "Todo").$('//button[normalize-space()="Saved carts"]').click();
+    const detail = $('//aside[@aria-label="Task detail"]');
+    await expect(detail.$(`.${sel.text("No sessions yet. Starting one names the branch after the issue.")}`)).toBeDisplayed();
+    // + New session opens the composer for the task.
+    await detail.$(`.${sel.button("+ New session")}`).click();
+    await expect($(sel.text("For acme/storefront#19"))).toBeDisplayed({ wait: 10_000 });
+    await browser.keys("Escape");
+    // So does Start a session for <key> in the list.
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
+    const row = $('//div[@role="row"][starts-with(@aria-label, "acme/storefront#19")]');
+    await row.$('button[aria-label="Expand acme/storefront#19"]').click();
+    await row.$(`.${sel.button("Start a session for acme/storefront#19")}`).click();
+    await expect($(sel.text("For acme/storefront#19"))).toBeDisplayed({ wait: 10_000 });
+    await browser.keys("Escape");
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+  });
+
+  it("shows each session's card in the detail, and ↵ opens the first", async () => {
+    await card("acme/storefront#12", "In Progress").$('.//button[normalize-space()="Fix checkout button"]').click();
+    const session = $('//aside[@aria-label="Task detail"]').$(`.//div[@role="group"][@aria-label="Session ${LINKED}"]`);
+    await expect(session.$(`.${sel.text("e2e-repo/12-fix-checkout")}`)).toBeDisplayed({ wait: 10_000 });
+    await expect(session.$(`.${sel.text("No pull request · Create PR ⇧⌘P")}`)).toBeDisplayed();
+    await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
+    await browser.keys("Enter");
+    await expect(sessionsButton()).toHaveAttribute("aria-pressed", "true", { wait: 10_000 });
+    await expect($(sel.sessionRow(LINKED))).toHaveAttribute("aria-current", "true");
+    await tasksButton().click();
+  });
+
+  it("copies a task's key from its detail", async () => {
+    await card("acme/storefront#19", "Todo").$('//button[normalize-space()="Saved carts"]').click();
+    await $('//aside[@aria-label="Task detail"]').$('.//button[@title="Copy issue key"]').click();
+    await expect($(sel.text("Copied acme/storefront#19"))).toBeDisplayed({ wait: 5_000 });
+  });
+
+  it("says Sync failed with gh's error when a sync fails", async () => {
+    writeFileSync(ghFails, "");
+    try {
+      await $('//button[@title="Refresh tasks"]').click();
+      await expect($('//*[starts-with(normalize-space(), "Sync failed · ")]')).toBeDisplayed({ wait: 15_000 });
+    } finally {
+      rmSync(ghFails, { force: true });
+    }
+    await $('//button[@title="Refresh tasks"]').click();
+    await expect($('//*[starts-with(normalize-space(), "Sync failed · ")]')).not.toBeExisting({ wait: 15_000 });
+  });
+
+  it("asks to connect a task tracker in a workspace with no source", async () => {
+    git("remote", "remove", "origin");
+    try {
+      // No project has a GitHub origin now.
+      await tasksButton().click();
+      await $('//button[@title="Refresh tasks"]').click();
+      await expect($(sel.text("Connect a task tracker"))).toBeDisplayed({ wait: 15_000 });
+      await expect($(sel.button("Open Settings › Task trackers"))).toBeDisplayed();
+      await $(sel.button("Not now")).click();
+    } finally {
+      git("remote", "add", "origin", "https://github.com/acme/storefront.git");
+    }
+    await tasksButton().click();
+    await expect(card("acme/storefront#19", "Todo")).toBeDisplayed({ wait: 15_000 });
+    await sessionsButton().click();
+  });
+
   it("puts Closes #N in the new PR of a session working on a GitHub issue", async () => {
     await $(sel.sessionRow("Gift cards at checkout")).click();
     await browser.keys(["Shift", "Meta", "p"]);
@@ -206,6 +309,8 @@ describe("Tasks mode", () => {
     await tasksButton().click();
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "Sessions without a task")]').click();
     await $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]//button[normalize-space()="Link to task"]`).click();
+    await expect($(`//div[@role="dialog"]`).$(sel.text(`Link “${SESSION}” to a task`))).toBeDisplayed();
+    await expect($(sel.text("Links live in moonlet; the tracker hears of a PR only through Keep in step."))).toBeDisplayed();
     // An issue outside the workspace's tasks is asked of gh.
     await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "https://github.com/acme/other/issues/99");
     await expect($('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/other#99"]]')).toBeDisplayed({ wait: 10_000 });
@@ -217,6 +322,20 @@ describe("Tasks mode", () => {
       timeoutMsg: "the seeded session was not linked to acme/storefront#12",
     });
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "My issues")]').click();
+  });
+
+  it("shows the task bar on a session of a task with two sessions", async () => {
+    // A second session on #12, linked by its branch.
+    const second = rpc<{ id: string }>(w, "session.create", { project_id: projectId(w), name: "Second look", branch: "12-second-look", agent: "none" }).id;
+    await sessionsButton().click();
+    await $(sel.sessionRow(SESSION)).click();
+    const bar = $('//div[@role="region"][@aria-label="Task"]');
+    await expect(bar.$(`.${sel.text("acme/storefront#12")}`)).toBeDisplayed({ wait: 10_000 });
+    await expect(bar.$('.//button[normalize-space()="Tasks"]')).toBeDisplayed();
+    await expect(bar.$('.//div[@aria-label="Sessions on this task"]')).toHaveText(/Session \d of 2/);
+    await expect(bar.$('.//a[normalize-space()="GitHub"]')).toHaveAttribute("href", "https://github.com/acme/storefront/issues/12");
+    rpc(w, "session.archive", { id: second });
+    await tasksButton().click();
   });
 
   it("shows the same tasks as a list whose rows open into their sessions", async () => {

@@ -56,7 +56,11 @@ export function linkChoices(
     if (!task.github && mentionsKey(session.branch, task.key)) return [{ task, reason: why(task, "Branch carries the key") }];
     return [];
   });
-  const recent = tasks.filter((t) => matches(t) && !suggested.some((s) => s.task === t)).sort((a, b) => b.updatedMs - a.updatedMs);
+  // Recent shows at most 20.
+  const recent = tasks
+    .filter((t) => matches(t) && !suggested.some((s) => s.task === t))
+    .sort((a, b) => b.updatedMs - a.updatedMs)
+    .slice(0, 20);
   return { suggested, recent };
 }
 
@@ -95,6 +99,8 @@ export function pasteLookup(delayMs = 200) {
   let current: Promise<Task | null | undefined> = Promise.resolve(null);
   // Ends the lookup under way as `undefined`; a result it finds later is ignored.
   let stop = () => {};
+  let asked: string | null = null;
+  let entering = false;
   return {
     start(run: () => Promise<Task | null>): Promise<Task | null | undefined> {
       stop();
@@ -109,6 +115,25 @@ export function pasteLookup(delayMs = 200) {
     },
     cancel() {
       stop();
+      asked = null;
+    },
+    /**
+     * Looks up `text` unless it is what the lookup under way is for, so the
+     * dialog drawing again (after a background sync) keeps it; `force` starts
+     * again anyway, as when the workspace's tasks first arrive.
+     */
+    query(text: string, run: () => Promise<Task | null>, force = false): Promise<Task | null | undefined> {
+      if (!force && text === asked) return current;
+      asked = text;
+      return this.start(run);
+    },
+    /** ↵: links what {@link enterChoice} picks, once, however often it is pressed. */
+    async enter(lists: () => LinkChoices, link: (t: Task) => void): Promise<void> {
+      if (entering) return;
+      entering = true;
+      const first = await enterChoice(this, lists);
+      if (first) link(first);
+      else entering = false;
     },
     /**
      * What ↵ links: the task of the lookup under way, following any newer

@@ -3,16 +3,18 @@
 
 import { Lock, RotateCw } from "lucide-react";
 import { useEffect, useId, useState } from "react";
-import { rpc } from "../../lib/daemon";
+import { useShallow } from "zustand/react/shallow";
+import { hostsApi, rpc } from "../../lib/daemon";
 import type { RuleSetting } from "../../lib/keepInStep";
 import { M } from "../../lib/protocol";
 import { errorToast, shownWorkspace, useStore } from "../../lib/store";
-import { loadTrackersConfig, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
-import { GITHUB_RULES, githubConnection, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
+import { sourceList } from "../../lib/trackerSources";
+import { branchUser, loadTrackersConfig, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { GITHUB_RULES, githubConnection, previewTask, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
 import { AddTracker, ConnectionRow } from "./TrackerConnections";
-import { IconButton } from "../ui";
+import { cx, IconButton } from "../ui";
 import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, SwitchRow } from "./controls";
-import { DEFAULT_LINK } from "../../lib/tasks";
+import { DEFAULT_LINK, type TrackerKind } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
 
 
@@ -47,13 +49,12 @@ export function TrackersPage() {
   const link = config.link ?? DEFAULT_LINK;
   const workspaces = useStore((s) => s.workspaces);
   const data = useTasks((t) => t.data);
+  const attention = useTasks((t) => t.attention);
   const wsRows = Object.entries(workspaces).flatMap(([host, list]) =>
     list.map((w) => {
       const key = wsKey(host, w.id);
-      const NAMES = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
-      const repos = (data[key]?.sources ?? []).filter((x) => !x.includes(":")).map((r) => `GitHub ${r}`);
-      const others = (config.connections ?? []).flatMap((c) => c.sources.filter((s) => s.workspace === key).map((s) => `${NAMES[c.kind]} ${s.name}`));
-      return { key, name: w.name, sources: [...repos, ...others] };
+      const repos = (data[key]?.sources ?? []).filter((x) => !x.includes(":"));
+      return { key, name: w.name, loaded: !!data[key], sources: sourceList(key, repos, config.connections, attention) };
     }),
   );
   const setGithub = (patch: Partial<TrackersConfig["github"]>) => save((c) => ({ ...c, github: { ...c.github, ...patch } }));
@@ -87,7 +88,7 @@ export function TrackersPage() {
               {trackerRules(kind).map((r) => (
                 <RuleRow key={r.id} rule={r} value={settings.rules[r.id]} onChange={(v) => save((c) => { const now = trackerSettings(c, `${kind}:`); return { ...c, [kind]: { ...now, rules: { ...now.rules, [r.id]: v } } }; })} />
               ))}
-              <Row label="Branch name for new sessions" hint="{key}, {title} · empty: {key}-{title}" setting={`branch-template-${kind}`}>
+              <Row label="Branch name for new sessions" hint={<BranchPreview kind={kind} template={settings.branch_template} maxLen={settings.max_length} placeholders="{key}, {title}, {user}, {type} · empty: {key}-{title}" />} setting={`branch-template-${kind}`}>
                 <input
                   aria-label={`Branch name for ${NAME[kind]} sessions`}
                   className={fieldCls}
@@ -111,7 +112,12 @@ export function TrackersPage() {
       </Section>
       <Section title="Branch names" hint="The issue number in the branch name is what links a worktree to its issue, even one made outside moonlet.">
         <Card>
-          <Row label="Branch name for new sessions" hint="{number}, {title}, {key} · empty: {number}-{title}, as gh issue develop names it" htmlFor={templateId} setting="branch-template">
+          <Row
+            label="Branch name for new sessions"
+            hint={<BranchPreview kind="github" template={github.branch_template} maxLen={github.max_length} placeholders="{number}, {title}, {key}, {user}, {type} · empty: {number}-{title}, as gh issue develop names it" />}
+            htmlFor={templateId}
+            setting="branch-template"
+          >
             <input
               id={templateId}
               className={fieldCls}
@@ -153,7 +159,27 @@ export function TrackersPage() {
       <Section title="Where each workspace gets its tasks" hint="Tasks mode shows the sources of the workspace you are in.">
         <Card>
           {wsRows.map((w) => (
-            <Row key={w.key} label={w.name} hint={w.sources.length ? w.sources.join(" · ") : "No source: a project with a GitHub origin, or a team, project or list picked under Sources"} setting={`ws-sources-${w.key}`} />
+            <Row
+              key={w.key}
+              label={w.name}
+              hint={
+                w.sources.length ? (
+                  <span className="flex flex-wrap gap-1.5">
+                    {w.sources.map((x) => (
+                      // A source whose connection failed is outlined red, with its reason.
+                      <span key={`${x.tracker} ${x.name}`} title={x.attention} aria-label={x.attention ? `${x.tracker} ${x.name}: ${x.attention}` : undefined} className={cx("rounded px-1", x.attention && "outline outline-1 outline-error text-error")}>
+                        {x.tracker} {x.name}
+                      </span>
+                    ))}
+                  </span>
+                ) : w.loaded ? (
+                  "No source: a project with a GitHub origin, or a team, project or list picked under Sources"
+                ) : (
+                  "GitHub repositories show once the workspace's Tasks mode has loaded"
+                )
+              }
+              setting={`ws-sources-${w.key}`}
+            />
           ))}
         </Card>
       </Section>
@@ -181,5 +207,34 @@ export function TrackersPage() {
         <Lock size={13} /> Tokens are kept in the macOS Keychain on this Mac and never sent to remote hosts. moonletd only stores which issue each session is linked to. Settings are saved to ~/.moonlet/trackers.toml.
       </p>
     </>
+  );
+}
+
+/** The branch template's placeholders and what it makes of a real issue (X44 preview). */
+function BranchPreview({ kind, template, maxLen, placeholders }: { kind: TrackerKind; template: string; maxLen: number; placeholders: string }) {
+  const host = useStore((s) => shownWorkspace(s)?.host ?? "local");
+  const connections = useTasks((t) => trackersConfig(t).connections);
+  // The issue only, so a sync that changes nothing about it asks nothing again.
+  const issue = useTasks(useShallow((t) => previewTask(Object.values(t.data).flatMap((d) => d.tasks), kind, connections ?? [])));
+  const [example, setExample] = useState("");
+  useEffect(() => {
+    let live = true;
+    void branchUser(host, issue.connection)
+      .then((user) => hostsApi.taskBranch({ kind, key: issue.key, title: issue.title, number: issue.number, template: template || undefined, maxLen, user, issueType: issue.issueType }))
+      .then((name) => live && setExample(name), () => live && setExample(""));
+    return () => {
+      live = false;
+    };
+  }, [issue.key, issue.title, issue.number, issue.issueType, issue.connection, kind, template, maxLen, host]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <span>
+      {placeholders}
+      {example && (
+        <>
+          {" "}
+          · e.g. <span className="font-mono">{example}</span>
+        </>
+      )}
+    </span>
   );
 }

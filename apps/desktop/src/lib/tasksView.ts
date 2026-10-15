@@ -93,3 +93,23 @@ export function sourceLabels(tasks: Task[]): (task: Task) => string | undefined 
   for (const t of sources.values()) counts.set(short(t), (counts.get(short(t)) ?? 0) + 1);
   return (t) => ((counts.get(short(t)) ?? 0) > 1 ? full(t) : short(t));
 }
+
+/** The mode switch's titles, with the shortcut as bound, and the Tasks button's label and dot (X45). */
+export function modeSwitch(key: string, outOfSync: number): { sessions: string; tasks: string; label: string; dot: boolean } {
+  const titled = (name: string) => (key ? `${name} ${key}` : name);
+  return { sessions: titled("Sessions"), tasks: titled("Tasks"), label: outOfSync ? `Tasks, ${outOfSync} out of sync` : "Tasks", dot: outOfSync > 0 };
+}
+
+export interface BoardFilters {
+  /** Assignee: me. */
+  mine: boolean;
+  /** Hide done tasks with no session or worktree left. */
+  hideEmptyDone: boolean;
+}
+
+/** The board with the header's filters applied (X45). */
+export function filterBoard(board: Board, f: BoardFilters): Board {
+  // Assignee: me keeps a task you have a session on, whoever it is assigned to.
+  const keep = (c: Board["todo"][number]) => (!f.mine || c.task.mine !== false || c.rows.length > 0) && (!f.hideEmptyDone || c.column !== "done" || c.rows.length + c.orphans.length > 0);
+  return { todo: board.todo.filter(keep), in_progress: board.in_progress.filter(keep), in_review: board.in_review.filter(keep), done: board.done.filter(keep) };
+}

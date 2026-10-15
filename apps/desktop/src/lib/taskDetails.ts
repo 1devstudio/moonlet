@@ -1,7 +1,8 @@
 // Details of a task on its card and in the detail panel (X45, X46).
 
 import type { Column, Task } from "./tasks";
-import type { Board, Card } from "./tasksBoard";
+import { ago } from "./mobile";
+import type { Board, BoardSession, Card } from "./tasksBoard";
 
 /** "SR" for "Sam Rivera": first letters of the first and last name. */
 export function initials(name: string): string {
@@ -58,4 +59,35 @@ export function appendActivity(list: ActivityEntry[], entry: ActivityEntry): Act
 /** How a task's state is drawn (X45): by shape, so it reads without colour. */
 export function glyphShape(column: Column): "ring" | "half" | "three-quarters" | "check" {
   return column === "done" ? "check" : column === "in_progress" ? "half" : column === "in_review" ? "three-quarters" : "ring";
+}
+
+const PASSING = new Set(["success", "neutral", "skipped"]);
+const REVIEW: Record<string, string> = { APPROVED: "approved", CHANGES_REQUESTED: "changes requested", REVIEW_REQUIRED: "review required" };
+
+/** A session's card in the task detail (X45): where it works, its diff, its agents and its PR. */
+export function sessionCard(s: BoardSession, project: string, now: number): { where: string; diff: string; agents: string[]; pr: string } {
+  const diff = s.additions || s.deletions ? `+${s.additions} −${s.deletions ?? 0}` : "";
+  const agents = (s.agents ?? []).map((a) => `${a.name} · ${a.state} · ${ago(now - a.since).replace(/ ago$/, "")}`);
+  let pr = "No pull request · Create PR ⇧⌘P";
+  if (s.pr) {
+    const checks = s.pr.checks.length ? `${s.pr.checks.filter((c) => c.conclusion && PASSING.has(c.conclusion)).length}/${s.pr.checks.length} checks` : "";
+    const review = s.pr.review_decision ? REVIEW[s.pr.review_decision] : "";
+    pr = [`#${s.pr.number} ${s.pr.state}`, checks, review].filter(Boolean).join(" · ");
+  }
+  return { where: `${project}/${s.branch}`, diff, agents, pr };
+}
+
+/** Whether a key press opens the detail's first session: ↵ outside a field, a button or an editor (X45). */
+export function enterOpensFirst(e: {
+  key: string;
+  tagName: string;
+  isContentEditable: boolean;
+  /** ⌘, ⌥, ⌃ or ⇧ held. */
+  modifier?: boolean;
+  defaultPrevented?: boolean;
+  /** A dialog, the composer or Settings is over Tasks mode. */
+  covered?: boolean;
+}): boolean {
+  if (e.key !== "Enter" || e.modifier || e.defaultPrevented || e.covered || e.isContentEditable) return false;
+  return !["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(e.tagName);
 }
