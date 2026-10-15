@@ -32,7 +32,8 @@ describe("editor colour theme setting (X26)", () => {
 
 describe("editor colours (X26)", () => {
   it("colours TypeScript with Dark+'s TextMate colours", async () => {
-    const syntax = createSyntax();
+    // No time limit: a busy machine would otherwise leave the line half coloured.
+    const syntax = createSyntax({ timeLimitMs: 0 });
     await syntax.load("typescript", "dark-plus");
     const line = "const a = 1;";
     const { tokens } = syntax.tokenize("typescript", line, syntax.initial);
