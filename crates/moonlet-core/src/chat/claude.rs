@@ -98,7 +98,10 @@ fn context_usage(r: &Value) -> Option<ContextUsage> {
 fn task_event(v: &Value, st: &mut ChatState) -> bool {
     let Some(id) = v["task_id"].as_str() else { return false };
     if v["subtype"] == "task_started" {
-        if st.subagents.iter().any(|a| a.id == id) {
+        // Long Bash calls are tasks too (`local_bash`): only agents become
+        // subagents. Claude before task_type sent agents only.
+        let is_agent = v["task_type"].as_str().is_none_or(|t| t.ends_with("_agent"));
+        if !is_agent || st.subagents.iter().any(|a| a.id == id) {
             return false;
         }
         st.subagents.push(Subagent {
@@ -318,7 +321,7 @@ impl Adapter for Claude {
                     out.push(Out::State);
                 }
             }
-            // A background subagent started, progressed or ended (X42).
+            // A background subagent or Bash call started, progressed or ended (X42).
             "system" if v["subtype"].as_str().is_some_and(|s| s.starts_with("task_")) => {
                 if task_event(&v, st) {
                     out.push(Out::State);
@@ -1340,6 +1343,28 @@ mod tests {
         let s = &st.subagents[0];
         assert_eq!((s.status.as_str(), s.error.as_deref(), s.report.as_deref()), ("failed", Some("API Error: 529 overloaded"), None));
         assert_eq!(s.ended_at, Some(1791970434654));
+    }
+
+    const BASH_TASKS: &str = include_str!("fixtures/claude-bash-tasks.jsonl");
+
+    #[test]
+    fn a_long_bash_call_is_not_a_subagent() {
+        let (mut a, mut st) = started();
+        // Claude reports a background Bash call, and a foreground one that
+        // runs for a while, as tasks of type local_bash.
+        replay(BASH_TASKS, &mut a, &mut st);
+        assert!(st.subagents.is_empty());
+        let tools: Vec<_> = st.items.iter().filter_map(|i| i.tool.as_ref()).map(|t| (t.name.as_str(), t.summary.as_str(), t.status.as_str())).collect();
+        assert_eq!(tools, [("Bash", "sleep 3 && echo hi", "ok"), ("Bash", "sleep 5 && echo bye", "ok")]);
+    }
+
+    #[test]
+    fn a_task_without_a_type_is_a_subagent() {
+        let (mut a, mut st) = started();
+        // Lines from before Claude sent task_type.
+        replay(&SUBAGENTS.replace(r#", "task_type": "local_agent""#, ""), &mut a, &mut st);
+        let ids: Vec<&str> = st.subagents.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["a98344134013d8227", "a69ffa893ad4d346c"]);
     }
 
     #[test]
