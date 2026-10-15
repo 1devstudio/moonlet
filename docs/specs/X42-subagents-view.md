@@ -27,6 +27,7 @@ Design: `Moonlet Subagents View.html` (Claude Design bundle with five boards: th
 Daemon (PR 1):
 
 - [x] Claude's `system` `task_started` line adds a subagent to the chat's state: its task id, the id of the `Agent` tool call that launched it, its description, its type and its prompt, with status `running`. (`subagents_follow_task_events`)
+- [x] A `task_started` line whose `task_type` is not an agent's, such as `local_bash` for a long or backgrounded Bash call, adds no subagent: that call stays in the transcript's tool calls. (`a_long_bash_call_is_not_a_subagent`)
 - [x] A `task_progress` line sets the agent's activity (its `description`, such as "Running Create made.txt and echo made"), its tokens and its tool-call count. (`subagents_follow_task_events`)
 - [x] A `task_notification` line ends the agent as `done` (`completed`), `failed` (`failed`) or `stopped` (`stopped`, `killed`), with the final token count and the duration. A done agent keeps the summary as its report; a failed one keeps the error from `task_updated`, else the summary. (`subagents_follow_task_events`, `a_failed_subagent_keeps_its_error`, `stopping_a_subagent_sends_stop_task`)
 - [x] An `assistant` line from inside a subagent (`parent_tool_use_id` set) adds its tool calls to that agent's tool list, with name, one-line summary and `+a −r` counts for edits, and sets the agent's model. The matching `user` line marks each call `ok` or `error`. None of these lines reaches the main transcript. (`subagent_tool_calls_stay_with_their_agent`)
