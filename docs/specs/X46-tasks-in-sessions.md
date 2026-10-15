@@ -43,9 +43,9 @@ A session can belong to a task. The link is made when a session starts from a ta
 ### Link dialog
 
 - [x] Title `Link "<session name>" to a task`; a search field "Search tasks, or paste a key or URL" that filters by key or title. (`taskLinking.test.ts` linkChoices, `tasks-mode.e2e.ts`)
-- [x] **Suggested**: tasks whose title is the session's name or whose key is in its branch, with the reason (`Title matches the session name`, `Branch carries the key`). (`taskLinking.test.ts` linkChoices)
+- [x] **Suggested**: tasks whose title is the session's name or whose key is in its branch, with the reason, the task's state and its sessions (`Title matches the session name · In Progress · no sessions`). ↵ links the pasted task, else the first suggested, else the first of the rest. (`taskLinking.test.ts` linkChoices, firstChoice, `tasks-mode.e2e.ts`)
 - [x] **Recent**: the workspace's other tasks, most recently updated first, at most 20. (`taskLinking.test.ts` linkChoices)
-- [x] Pasting a key (`MOON-142`, `#42`, `CU-86abc`) or an issue URL of Linear, Jira, ClickUp or GitHub finds that task among the workspace's tasks. A key must look like one: letters and digits starting with a letter, `-`, then digits. `CU-` followed by letters and digits is a ClickUp task id; a digits-only `CU-12` could be any tracker. A trailing slash on a URL is fine. `#42` is that issue in the session's project's repository. (`refs.rs`, `a_pasted_issue_url_reaches_the_app_as_kind_key_and_site`, `taskLinking.test.ts` findPasted, `tasks-mode.e2e.ts`)
+- [x] Pasting a key (`MOON-142`, `#42`, `CU-86abc`) or an issue URL of Linear, Jira, ClickUp or GitHub finds that task among the workspace's tasks, and otherwise asks its tracker: GitHub through the project's `gh` (`gh.task`, any repository), Linear, Jira and ClickUp through the connection the URL names or each connection of that tracker for a bare key. A session linked by hand to a task outside the loaded ones has a task, not "No task". A key must look like one: letters and digits starting with a letter, `-`, then digits. `CU-` followed by letters and digits is a ClickUp task id; a digits-only `CU-12` could be any tracker. A trailing slash on a URL is fine. `#42` is that issue in the session's project's repository. (`refs.rs`, `a_pasted_issue_url_reaches_the_app_as_kind_key_and_site`, `taskLinking.test.ts` findPasted, `tasksStore.test.ts` lookUpPasted, `daemon.rs` one_github_issue_by_its_number_through_gh, `linear.rs`/`jira.rs`/`clickup.rs` one issue by its key, `tasks-mode.e2e.ts`)
 - [x] Linking sets the stored link. The footer says "Links live in moonlet; the tracker hears of a PR only through Keep in step." (`tasks-mode.e2e.ts`)
 
 ### Session view
@@ -83,6 +83,7 @@ The designs are the "Session opened from a task" and "Link a session · Start fr
 - `Session` gains `task: Option<TaskRef>`, `TaskRef {connection, key, url}`, and `task_unlinked: bool`.
 - `session.create` gains `task` and `worktree`: the path of a linked worktree of the project to adopt, with its branch. Paths are compared by where they lead. It fails when the path is not one of the project's worktrees, is on a detached HEAD, or is used by a session that is not archived.
 - `session.update` gains `task`: a task links it and clears `task_unlinked`; `null` unlinks it and sets `task_unlinked`; absent leaves the link alone.
+- `gh.task {path, repo, number}` reads one issue of any repository, for a pasted key or URL.
 - `gh.task_update {path, number, assign_me?, close?, reopen?}` assigns a GitHub issue to the user (`gh issue edit --add-assignee @me`), closes it as completed or reopens it.
 - `project.worktree_remove {id, path}` removes a linked worktree no session uses (Clean up); it refuses the main checkout and a session's worktree.
 - `PullRequest` gains `draft`, from `gh`'s `isDraft`.
@@ -101,8 +102,7 @@ The designs are the "Session opened from a task" and "Link a session · Start fr
 
 ## Out of scope
 
-- ↵ to link the first suggestion; a suggestion's state and session count; a Recent list per source.
-- Finding a pasted key or URL outside the workspace's loaded tasks.
+- A Recent list per source.
 - Skipping the PR-link comment when the tracker's own GitHub integration already links the PR.
 - GitHub project board sources, whose moves would set the Status field (X44).
 - Renaming a session's branch from the link dialog.
@@ -111,7 +111,7 @@ The designs are the "Session opened from a task" and "Link a session · Start fr
 
 ## Test plan
 
-- Rust: daemon tests creating a session with `task`, linking and unlinking it (`task_unlinked`), adopting and removing an existing worktree, and `gh.task_update` with a stub `gh` (`daemon.rs`); `isDraft` (`git.rs`); pasted keys and URLs, branch names and the state a move picks (`moonlet-trackers`).
+- Rust: daemon tests creating a session with `task`, linking and unlinking it (`task_unlinked`), adopting and removing an existing worktree, and `gh.task` and `gh.task_update` with a stub `gh` (`daemon.rs`); `isDraft` (`git.rs`); pasted keys and URLs, branch names and the state a move picks (`moonlet-trackers`).
 - Vitest: link resolution (stored, branch, PR, unlinked) and key matching (`tasks.test.ts`), composer prefill (`tasks.test.ts` taskStart), the link dialog's lists and pasted keys and acceptance criteria (`taskLinking.test.ts`), Keep in step decisions for each rule, drafts, `Closes #N` and actions happening once (`keepInStep.test.ts`, `tasksBoard.test.ts`, `tasksStore.test.ts`), grouping by task (`sidebar.test.ts`).
 - e2e: start a session from a task (crucial: starting a session), `Closes #N` in its PR, see the task bar and Task tab and unlink, link a session from a pasted key (`tasks-mode.e2e.ts`); a Linear issue moved and assigned when a session starts from it (`task-trackers.e2e.ts`).
 
