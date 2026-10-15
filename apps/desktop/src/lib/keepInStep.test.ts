@@ -160,6 +160,11 @@ describe("rules from Settings › Task trackers (X44, X46)", () => {
     expect(applyRules(b, () => DEFAULT_RULES).todo[0].drift?.kind).toBe("started");
   });
 
+  it("never moves a task by itself for work started, whatever the rule", () => {
+    const started = card(task("MOON-153", "todo"), { kind: "started", text: "Session running", fix: "In Progress" }, [session("guard", "/w/guard")]);
+    expect(autoFixes({ todo: [started], in_progress: [], in_review: [], done: [] }, () => DEFAULT_RULES, {})).toEqual([]);
+  });
+
   it("closes merged GitHub issues by itself when the rule is Automatically, once per situation", () => {
     expect(autoFixes(board, () => DEFAULT_RULES, {})).toEqual([]);
     const auto = () => ({ ...DEFAULT_RULES, all_merged: "auto" as const });
