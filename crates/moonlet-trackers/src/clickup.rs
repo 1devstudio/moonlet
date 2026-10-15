@@ -109,6 +109,24 @@ pub fn more_pages(raw: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+/// One task by its key (X46: a key pasted into the link dialog): `CU-<id>`
+/// by its id, a custom id within ClickUp workspace `team`.
+pub fn task_path(key: &str, team: &str) -> String {
+    match key.strip_prefix("CU-") {
+        Some(id) => format!("/task/{id}"),
+        None => format!("/task/{key}?custom_task_ids=true&team_id={team}"),
+    }
+}
+
+/// The task of [`task_path`] as a task of `connection`.
+pub fn parse_task(raw: &[u8], connection: &str) -> Result<TrackerTask, ApiError> {
+    let task = parse(raw)?;
+    let wrapped = json!({ "tasks": [task] }).to_string();
+    parse_tasks(wrapped.as_bytes(), connection)?
+        .pop()
+        .ok_or_else(|| ApiError::new("ClickUp sent no task"))
+}
+
 pub fn parse_tasks(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, ApiError> {
     let v = parse(raw)?;
     Ok(v["tasks"]
@@ -241,6 +259,26 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn one_task_by_its_key() {
+        let list: serde_json::Value =
+            serde_json::from_slice(&fixture("clickup-tasks.json")).unwrap();
+        let one = list["tasks"][0].to_string();
+        assert_eq!(
+            parse_task(one.as_bytes(), "clickup:9012345").unwrap(),
+            parse_tasks(&fixture("clickup-tasks.json"), "clickup:9012345")
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        );
+        assert_eq!(task_path("CU-86abc123", "9012345"), "/task/86abc123");
+        assert_eq!(
+            task_path("MOON-12", "9012345"),
+            "/task/MOON-12?custom_task_ids=true&team_id=9012345"
+        );
     }
 
     #[test]

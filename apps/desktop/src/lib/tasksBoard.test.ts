@@ -175,6 +175,8 @@ describe("sessions without a task (X45 list)", () => {
       session("Notion sync retries", "cdk-38-notion-retries"),
       session("Old", "old", { archived: true }),
       session("Unlinked by hand", "cdk-38-x", { task_unlinked: true }),
+      // Linked by hand to a task outside the loaded ones: it has a task.
+      session("Rotate keys", "rotate", { task: { connection: "jira:ops.atlassian.net", key: "OPS-12", url: "" } }),
     ];
     expect(sessionsWithoutTask(sessions, tasks).map((u) => [u.session.name, u.hint])).toEqual([
       ["Changelog themes", "Looks like CDK-41 Changelog themes"],

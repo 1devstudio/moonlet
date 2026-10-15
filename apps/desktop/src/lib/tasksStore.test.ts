@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setExpanded, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setExpanded, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -15,6 +15,7 @@ vi.mock("./daemon", () => ({
     trackersConfig: () => (configFails.length ? Promise.reject(configFails.shift()) : Promise.resolve({ sync: { interval: 300, notify: true } })),
     trackersSave: (c: object) => new Promise<void>((r) => setTimeout(() => (saved.push(c), r()), 5)),
     trackerUpdate: (req: object) => (failNext.length ? Promise.reject(failNext.shift()) : (sent.push(req), Promise.resolve())),
+    trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
     trackerTasks: (id: string, mine: boolean) => {
       const answer = answers[`tracker_tasks ${id}${mine ? "" : " all"}`] ?? answers[`tracker_tasks ${id}`];
       return answer ? Promise.resolve().then(() => answer({})) : Promise.reject(new Error(`no tracker_tasks ${id}`));
@@ -541,5 +542,26 @@ describe("the List layout's open rows (X45)", () => {
     const restarted = await import("./tasksStore");
     expect(restarted.useTasks.getState().expanded).toEqual({ "linear:acme MOON-1": true });
     setExpanded({});
+  });
+});
+
+describe("a pasted key or URL outside the loaded tasks (X46 link dialog)", () => {
+  const conn = (id: string, kind: "linear" | "jira", site: string) => ({ id, kind, site, account: "Sam", auth: "token", sources: [] });
+
+  it("asks GitHub for an issue of the session's repository, or of the repository the URL names", async () => {
+    answers["gh.task"] = (p) => ({ ...issue, repo: (p as { repo: string }).repo, number: (p as { number: number }).number, title: "Gift cards", url: "" });
+    const seven = await lookUpPasted("local", "/r/web", { kind: "github", key: "#7", site: null }, "acme/web");
+    expect([seven?.key, seven?.title]).toEqual(["acme/web#7", "Gift cards"]);
+    const other = await lookUpPasted("local", "/r/web", { kind: "github", key: "cli/cli#9", site: null }, "acme/web");
+    expect(other?.key).toBe("cli/cli#9");
+  });
+
+  it("asks the connection the URL names, or each one of that tracker for a bare key", async () => {
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [conn("linear:acme", "linear", "acme"), conn("jira:ops.atlassian.net", "jira", "ops.atlassian.net")] } });
+    const found = { connection: "jira:ops.atlassian.net", key: "OPS-12", title: "Rotate keys", url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0 };
+    answers["tracker_task jira:ops.atlassian.net OPS-12"] = () => found;
+    expect((await lookUpPasted("local", "/r/web", { kind: null, key: "OPS-12", site: null }, null))?.title).toBe("Rotate keys");
+    expect(await lookUpPasted("local", "/r/web", { kind: "jira", key: "OPS-12", site: "other.atlassian.net" }, null)).toBe(null);
+    useTasks.setState({ config: null });
   });
 });

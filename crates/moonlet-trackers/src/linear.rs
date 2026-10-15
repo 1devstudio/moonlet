@@ -26,10 +26,28 @@ pub fn issues_query(mine: bool) -> String {
     let recent = r#"or: [{ state: { type: { nin: ["completed", "canceled"] } } }, { updatedAt: { gt: "-P14D" } }]"#;
     format!(
         "query Issues($teams: [String!], $after: String) {{ issues(first: 100, after: $after, \
-         filter: {{ team: {{ key: {{ in: $teams }} }}{who}, {recent} }}) {{ nodes {{ id identifier title description url \
-         branchName priority updatedAt state {{ id name type }} assignee {{ id name }} labels {{ nodes {{ name }} }} \
-         cycle {{ number }} team {{ key }} }} pageInfo {{ hasNextPage endCursor }} }} }}"
+         filter: {{ team: {{ key: {{ in: $teams }} }}{who}, {recent} }}) {{ nodes {{ {ISSUE_FIELDS} }} \
+         pageInfo {{ hasNextPage endCursor }} }} }}"
     )
+}
+
+/// What a task needs of a Linear issue.
+const ISSUE_FIELDS: &str = "id identifier title description url branchName priority updatedAt \
+     state { id name type } assignee { id name } labels { nodes { name } } cycle { number } team { key }";
+
+/// One issue by its key, such as `MOON-142` (X46: a key pasted into the link dialog).
+pub fn issue_query() -> String {
+    format!("query Issue($id: String!) {{ issue(id: $id) {{ {ISSUE_FIELDS} }} }}")
+}
+
+/// The issue of [`issue_query`], or `None` when Linear knows no such key.
+pub fn parse_issue(raw: &[u8], connection: &str) -> Result<Option<TrackerTask>, ApiError> {
+    let v: Value = serde_json::from_slice(raw)
+        .map_err(|e| ApiError::new(format!("Linear answered with something else: {e}")))?;
+    if v["data"]["issue"].is_null() {
+        return Ok(None);
+    }
+    Ok(Some(issue_task(&data(raw)?["issue"], connection)))
 }
 
 /// The answer's `data`, or the error it carries.
@@ -163,42 +181,44 @@ pub fn parse_states(raw: &[u8]) -> Result<Vec<State>, ApiError> {
 pub fn parse_issues(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, ApiError> {
     let d = data(raw)?;
     Ok(nodes(&d["issues"])
-        .map(|i| {
-            let state = &i["state"];
-            let state_name = state["name"].as_str().unwrap_or_default();
-            TrackerTask {
-                connection: connection.into(),
-                key: i["identifier"].as_str().unwrap_or_default().into(),
-                title: i["title"].as_str().unwrap_or_default().into(),
-                url: crate::task::web_url(&i["url"]).unwrap_or_default(),
-                column: crate::states::default_column(
-                    TrackerKind::Linear,
-                    state["type"].as_str().unwrap_or_default(),
-                    state_name,
-                ),
-                priority: crate::priority::linear_bars(i["priority"].as_f64().unwrap_or(0.0) as u8),
-                assignees: i["assignee"]["name"]
-                    .as_str()
-                    .map(String::from)
-                    .into_iter()
-                    .collect(),
-                labels: nodes(&i["labels"])
-                    .filter_map(|l| l["name"].as_str().map(String::from))
-                    .collect(),
-                description: i["description"].as_str().unwrap_or_default().into(),
-                updated_ms: i["updatedAt"]
-                    .as_str()
-                    .and_then(crate::time::timestamp_ms)
-                    .unwrap_or(0),
-                cycle: i["cycle"]["number"].as_u64(),
-                tracker: TrackerRef {
-                    id: i["id"].as_str().unwrap_or_default().into(),
-                    state: state_name.into(),
-                    source: i["team"]["key"].as_str().unwrap_or_default().into(),
-                },
-            }
-        })
+        .map(|i| issue_task(i, connection))
         .collect())
+}
+
+fn issue_task(i: &Value, connection: &str) -> TrackerTask {
+    let state = &i["state"];
+    let state_name = state["name"].as_str().unwrap_or_default();
+    TrackerTask {
+        connection: connection.into(),
+        key: i["identifier"].as_str().unwrap_or_default().into(),
+        title: i["title"].as_str().unwrap_or_default().into(),
+        url: crate::task::web_url(&i["url"]).unwrap_or_default(),
+        column: crate::states::default_column(
+            TrackerKind::Linear,
+            state["type"].as_str().unwrap_or_default(),
+            state_name,
+        ),
+        priority: crate::priority::linear_bars(i["priority"].as_f64().unwrap_or(0.0) as u8),
+        assignees: i["assignee"]["name"]
+            .as_str()
+            .map(String::from)
+            .into_iter()
+            .collect(),
+        labels: nodes(&i["labels"])
+            .filter_map(|l| l["name"].as_str().map(String::from))
+            .collect(),
+        description: i["description"].as_str().unwrap_or_default().into(),
+        updated_ms: i["updatedAt"]
+            .as_str()
+            .and_then(crate::time::timestamp_ms)
+            .unwrap_or(0),
+        cycle: i["cycle"]["number"].as_u64(),
+        tracker: TrackerRef {
+            id: i["id"].as_str().unwrap_or_default().into(),
+            state: state_name.into(),
+            source: i["team"]["key"].as_str().unwrap_or_default().into(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -214,6 +234,27 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn one_issue_by_its_key() {
+        let list: serde_json::Value =
+            serde_json::from_slice(&fixture("linear-issues.json")).unwrap();
+        let node = &list["data"]["issues"]["nodes"][0];
+        let one = serde_json::json!({ "data": { "issue": node } }).to_string();
+        assert_eq!(
+            parse_issue(one.as_bytes(), "linear:acme").unwrap(),
+            parse_issues(&fixture("linear-issues.json"), "linear:acme")
+                .unwrap()
+                .into_iter()
+                .next()
+        );
+        // Linear answers a key it does not know with `issue: null` and an error.
+        let missing =
+            br#"{"data":{"issue":null},"errors":[{"message":"Entity not found: Issue"}]}"#;
+        assert_eq!(parse_issue(missing, "linear:acme").unwrap(), None);
+        assert!(issue_query()
+            .starts_with("query Issue($id: String!) { issue(id: $id) { id identifier title"));
     }
 
     #[test]

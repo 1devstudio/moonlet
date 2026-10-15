@@ -1023,6 +1023,24 @@ pub async fn gh_task_update(repo: &Path, number: u64, assign_me: bool, close: bo
     Ok(())
 }
 
+/// One issue of `owner/name` by its number, for a key pasted into the link
+/// dialog (X46). `repo` comes from the clipboard, so it is checked first.
+pub async fn gh_task(dir: &Path, repo: &str, number: u64) -> Result<moonlet_proto::types::GhTask> {
+    let ok = repo.split_once('/').is_some_and(|(owner, name)| {
+        let part = |s: &str| !s.is_empty() && !s.starts_with(['-', '.']) && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        part(owner) && part(name)
+    });
+    if !ok {
+        anyhow::bail!("{repo} is not a GitHub repository");
+    }
+    let n = number.to_string();
+    let out = gh(dir, &["issue", "view", &n, "--repo", repo, "--json", GH_TASK_FIELDS]).await?;
+    let one: serde_json::Value = serde_json::from_slice(&out)?;
+    parse_gh_tasks(serde_json::json!([one]).to_string().as_bytes())?
+        .pop()
+        .context("gh printed no issue")
+}
+
 /// `gh issue list --json <GH_TASK_FIELDS>` as tasks.
 fn parse_gh_tasks(raw: &[u8]) -> Result<Vec<moonlet_proto::types::GhTask>> {
     let list: Vec<serde_json::Value> = serde_json::from_slice(raw)?;

@@ -9,7 +9,7 @@ import { selectSession, useStore } from "../../lib/store";
 import { acceptanceCriteria, findPasted, linkChoices } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
-import { ensureTasks, linkTask, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
+import { ensureTasks, linkTask, lookUpPasted, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
@@ -141,7 +141,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   const [query, setQuery] = useState("");
   const [pasted, setPasted] = useState<Task | null>(null);
   const close = () => useStore.setState({ dialog: null });
-  const tasks = data?.tasks ?? [];
+  const tasks = useMemo(() => data?.tasks ?? [], [data]);
   const originRepo = ws ? (data?.repos[ws.project_id] ?? null) : null;
   useEffect(() => {
     if (ws?.workspace_id) ensureTasks(host, ws.workspace_id);
@@ -149,13 +149,17 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   useEffect(() => {
     let live = true;
     void hostsApi.parsePasted(query).then(
-      (p) => live && setPasted(p ? findPasted(p, tasks, originRepo) : null),
+      async (p) => {
+        // A task outside the loaded ones is asked of its tracker.
+        const found = p ? (findPasted(p, tasks, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null;
+        if (live) setPasted(found);
+      },
       () => live && setPasted(null),
     );
     return () => {
       live = false;
     };
-  }, [query, tasks, originRepo]);
+  }, [query, tasks, originRepo, host, ws?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ws) return null;
   const choices = linkChoices(ws, tasks, pasted ? "" : query);
   const pick = (t: Task) => {
