@@ -73,6 +73,13 @@ function linear(query: string, variables: Record<string, unknown>): string {
   }
   if (query.includes("issues(")) {
     issuesAsked++;
+    if (!endlessPages && !query.includes("isMe")) {
+      // Everyone's open issues: the account's, and one of Grace's (X45 Assignee: me off).
+      const all = JSON.parse(answer("linear-issues.json"));
+      const ada = all.data.issues.nodes[1];
+      all.data.issues.nodes.push({ ...ada, id: "1a2b3c4d-0000-4000-8000-000000000200", identifier: "ENG-200", title: "Tidy the onboarding copy", url: "https://linear.app/acme/issue/ENG-200", branchName: "grace/eng-200", assignee: { id: "g", name: "Grace Hopper" } });
+      return JSON.stringify(all);
+    }
     if (!endlessPages) return answer("linear-issues.json");
     const page = JSON.parse(answer("linear-issues.json"));
     page.data.issues.pageInfo = { hasNextPage: true, endCursor: `c${issuesAsked}` };
@@ -126,7 +133,7 @@ describe("Linear tracker", () => {
     await $('//div[@role="dialog"]//button[normalize-space()="Connect"]').click();
     await expect($(sel.text("Signed in as Ada Lovelace · 2 sources visible"))).toBeDisplayed({ wait: 15_000 });
     // Sources are added row by row: the first row starts empty, a second is added, then removed.
-    await expect($('//div[@role="dialog"]').$(sel.text("Add the Linear teams whose issues Tasks mode shows. For each, pick the workspace that shows it, whose issues it shows and the moonlet project its sessions start in."))).toBeDisplayed();
+    await expect($('//div[@role="dialog"]').$(sel.text("Add the Linear teams whose issues Tasks mode shows. For each, pick the workspace that shows it and the moonlet project its sessions start in."))).toBeDisplayed();
     await choose('//div[@role="dialog"]//select[@aria-label="Source 1"]', "ENG");
     await $('//div[@role="dialog"]//button[normalize-space()="Add source"]').click();
     await choose('//div[@role="dialog"]//select[@aria-label="Source 2"]', "DES");
@@ -166,6 +173,17 @@ describe("Linear tracker", () => {
     await expect($(sel.text("Linear · Engineering"))).toBeDisplayed();
     await $('//section[@aria-label="In Progress"]//article[starts-with(@aria-label, "ENG-123")]//button[normalize-space()="Retry failed webhook deliveries"]').click();
     await expect($('//aside[@aria-label="Task detail"]').$(sel.text("· Cycle 42"))).toBeDisplayed();
+  });
+
+  it("shows everyone's open issues once Assignee: me is off", async () => {
+    const mine = '//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Assignee: me"]';
+    const grace = '//section[@aria-label="Todo"]//article[starts-with(@aria-label, "ENG-200")]';
+    if ((await $(mine).getAttribute("aria-pressed")) !== "true") await $(mine).click();
+    await expect($(grace)).not.toBeExisting();
+    await $(mine).click();
+    await expect($(grace)).toBeDisplayed({ wait: 15_000 });
+    await $(mine).click();
+    await expect($(grace)).not.toBeExisting();
   });
 
   it("moves the issue to In Progress and assigns it when a session starts from it", async () => {

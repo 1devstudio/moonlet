@@ -583,43 +583,66 @@ describe("Retry on a chip's fix (X46)", () => {
   });
 });
 
-describe("Shows per source (X44)", () => {
-  it("shows all open issues of a source set to all, and only the account's issues of the others", async () => {
+describe("Assignee: me decides whose issues are fetched (X45)", () => {
+  const lt = (key: string, source: string, who: string[]) => ({ connection: "linear:acme", key, title: key, url: "", column: "todo", priority: 0, assignees: who, labels: [], description: "", updatedMs: 0, tracker: { id: key, state: "Todo", source } });
+  const linear = {
+    id: "linear:acme",
+    kind: "linear" as const,
+    site: "acme",
+    account: "Sam",
+    auth: "api_key" as const,
+    sources: [
+      { key: "MOON", name: "Moonlet", project: "", workspace: "local/personal" },
+      { key: "DES", name: "Design", project: "", workspace: "local/personal" },
+    ],
+  };
+  const shown = () => Object.fromEntries(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.mine]));
+
+  it("takes only the account's issues while the filter is on, and everyone's open issues once it is off", async () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
-    const lt = (key: string, source: string, who: string[]) => ({ connection: "linear:acme", key, title: key, url: "", column: "todo", priority: 0, assignees: who, labels: [], description: "", updatedMs: 0, tracker: { id: key, state: "Todo", source } });
-    answers["tracker_tasks linear:acme all"] = () => [lt("MOON-1", "MOON", ["Kim"]), lt("MOON-2", "MOON", ["Sam"]), lt("DES-1", "DES", ["Kim"]), lt("DES-2", "DES", ["Sam"]), lt("DES-3", "DES", ["Sam"])];
+    answers["tracker_tasks linear:acme all"] = () => [lt("MOON-1", "MOON", ["Kim"]), lt("MOON-2", "MOON", ["Sam"]), lt("DES-1", "DES", ["Kim"]), lt("DES-3", "DES", ["Sam"])];
     // The tracker's own "assigned to me": DES-3 belongs to another Sam.
-    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("DES-2", "DES", ["Sam"])];
-    useTasks.setState({
-      config: {
-        ...DEFAULT_CONFIG,
-        connections: [
-          {
-            id: "linear:acme",
-            kind: "linear",
-            site: "acme",
-            account: "Sam",
-            auth: "api_key",
-            sources: [
-              { key: "MOON", name: "Moonlet", project: "", workspace: "local/personal", all: true },
-              { key: "DES", name: "Design", project: "", workspace: "local/personal" },
-            ],
-          },
-        ],
-      },
-    });
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("MOON-9", "MOON", ["Sam"])];
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [linear] }, filters: { mine: true, hideEmptyDone: false } });
     await refreshTasks("local", "personal", 1_000);
-    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2"]);
-    // An own issue of an "all" source missing from everyone's (cut at 500) still shows.
-    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("MOON-9", "MOON", ["Sam"]), lt("DES-2", "DES", ["Sam"])];
+    expect(shown()).toEqual({ "MOON-2": true, "MOON-9": true });
+    useTasks.setState({ filters: { mine: false, hideEmptyDone: false } });
     await refreshTasks("local", "personal", 2_000);
-    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2", "MOON-9"]);
-    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("DES-2", "DES", ["Sam"])];
-    await refreshTasks("local", "personal", 1_000);
-    // Assignee: me (X45) reads which of them the tracker gave as the account's own.
-    expect(Object.fromEntries(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.mine]))).toEqual({ "DES-2": true, "MOON-1": false, "MOON-2": true });
+    // Everyone's, marking the account's own; an own issue everyone's left out (it stops at 500) still shows.
+    expect(shown()).toEqual({ "MOON-1": false, "MOON-2": true, "DES-1": false, "DES-3": false, "MOON-9": true });
     useTasks.setState({ config: null });
+  });
+
+  it("takes a repository's open issues from GitHub too once the filter is off", async () => {
+    const theirs: GhTask = { ...issue, number: 13, title: "Tidy the footer", url: "https://github.com/acme/web/issues/13", assignees: ["kim"] };
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = (p) => ((p as { mine?: boolean }).mine ? [issue] : [issue, theirs]);
+    useTasks.setState({ filters: { mine: true, hideEmptyDone: false } });
+    await refreshTasks("local", "personal", 1_000);
+    expect(shown()).toEqual({ "acme/web#12": true });
+    useTasks.setState({ filters: { mine: false, hideEmptyDone: false } });
+    await refreshTasks("local", "personal", 2_000);
+    expect(shown()).toEqual({ "acme/web#12": true, "acme/web#13": false });
+  });
+
+  it("fetches everyone's issues as soon as the filter is turned off", async () => {
+    const theirs: GhTask = { ...issue, number: 13, title: "Tidy the footer", url: "https://github.com/acme/web/issues/13", assignees: ["kim"] };
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = (p) => ((p as { mine?: boolean }).mine ? [issue] : [issue, theirs]);
+    useTasks.setState({ filters: { mine: true, hideEmptyDone: false } });
+    await refreshTasks("local", "personal", 1_000);
+    setFilters({ mine: false, hideEmptyDone: false });
+    await vi.waitFor(() => expect(shown()).toEqual({ "acme/web#12": true, "acme/web#13": false }));
+  });
+
+  it("starts on for a new install", async () => {
+    localStorage.clear();
+    vi.resetModules();
+    const fresh = await import("./tasksStore");
+    expect(fresh.useTasks.getState().filters).toEqual({ mine: true, hideEmptyDone: false });
   });
 });
 
@@ -826,10 +849,10 @@ describe("the out-of-sync dot's poll and the remembered mode (X45)", () => {
 
 describe("the header's filters (X45)", () => {
   it("are remembered across restarts", async () => {
-    setFilters({ mine: true, hideEmptyDone: false });
+    setFilters({ mine: false, hideEmptyDone: true });
     vi.resetModules();
     const restarted = await import("./tasksStore");
-    expect(restarted.useTasks.getState().filters).toEqual({ mine: true, hideEmptyDone: false });
+    expect(restarted.useTasks.getState().filters).toEqual({ mine: false, hideEmptyDone: true });
     setFilters({ mine: false, hideEmptyDone: false });
   });
 });

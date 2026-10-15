@@ -81,8 +81,6 @@ export interface Source {
   project: string;
   /** `host/workspaceId`. */
   workspace: string;
-  /** All open issues rather than only the account's (X44 Shows). */
-  all?: boolean;
 }
 
 /** A signed-in Linear, Jira or ClickUp account (its token is in the Keychain). */
@@ -139,17 +137,25 @@ export const useTasks = create<TasksState>(() => ({
 
 function storedFilters(): BoardFilters {
   try {
+    // Assignee: me starts on, as the trackers' "Assigned to me" did (X45).
     const f = JSON.parse(readStored("tasks.filters") ?? "{}");
-    return { mine: f.mine === true, hideEmptyDone: f.hideEmptyDone === true };
+    return { mine: f.mine !== false, hideEmptyDone: f.hideEmptyDone === true };
   } catch {
-    return { mine: false, hideEmptyDone: false };
+    return { mine: true, hideEmptyDone: false };
   }
 }
 
 /** Assignee: me and Hide empty Done in the header (X45). */
 export function setFilters(filters: BoardFilters) {
+  const was = useTasks.getState().filters;
   useTasks.setState({ filters });
   writeStored("tasks.filters", JSON.stringify(filters));
+  // Everyone's issues are only fetched with Assignee: me off: ask for them now.
+  if (was.mine && !filters.mine)
+    for (const key of Object.keys(useTasks.getState().data)) {
+      const [host, ...id] = key.split("/");
+      void refreshTasks(host, id.join("/"));
+    }
 }
 
 function storedExpanded(): Record<string, boolean> {
@@ -293,15 +299,23 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   let error: string | null = null;
   // Sources that failed this time keep their last good tasks; the others are fresh.
   const failed = new Set<string>();
+  const everyoneToo = !useTasks.getState().filters.mine;
   const per = await Promise.all(
     projects.map(async (p) => {
       const repo = githubRepo(await rpc<string | null>(host, M.gitOriginUrl, { path: p.path }).catch(() => null));
+      // The user's issues; with Assignee: me off (X45), the repository's other open ones too.
+      const ask = (mine: boolean) => rpc<GhTask[]>(host, M.ghTasks, { path: p.path, mine });
       const issues = repo
-        ? await rpc<GhTask[]>(host, M.ghTasks, { path: p.path, mine: true }).catch((e) => {
-            error = message(e);
-            failed.add(GITHUB);
-            return [];
-          })
+        ? await Promise.all([ask(true), everyoneToo ? ask(false) : []])
+            .then(([own, all]) => {
+              const ownNumbers = new Set(own.map((gh) => gh.number));
+              return [...own.map((gh) => ({ gh, mine: true })), ...all.filter((gh) => !ownNumbers.has(gh.number)).map((gh) => ({ gh, mine: false }))];
+            })
+            .catch((e) => {
+              error = message(e);
+              failed.add(GITHUB);
+              return [];
+            })
         : [];
       const worktrees = await rpc<Worktree[]>(host, M.projectWorktrees, { id: p.id }).catch(() => []);
       return { id: p.id, repo, issues, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo, project: p.id })) };
@@ -319,11 +333,10 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
         return [];
       }
       try {
-        // The account's own, as the tracker decides who that is; a source set
-        // to "All open issues" also takes everyone's.
-        const shownAll = (t: Task) => c.all.includes(t.tracker?.source ?? "");
+        // The account's own, as the tracker decides who that is; with
+        // Assignee: me off (X45), everyone's open issues too.
         const mine = await hostsApi.trackerTasks(c.id, true);
-        const everyone = c.all.length ? (await hostsApi.trackerTasks(c.id, false)).filter(shownAll) : [];
+        const everyone = everyoneToo ? await hostsApi.trackerTasks(c.id, false) : [];
         // Everyone's, then the account's own that everyone's left out (it stops at 500).
         const own = new Set(mine.map((t) => t.key));
         const seen = new Set(everyone.map((t) => t.key));
@@ -343,7 +356,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const repos = Object.fromEntries(per.map((x) => [x.id, x.repo]));
   const sourceProjects = Object.fromEntries(conns.flatMap((c) => Object.entries(c.projects).map(([k, p]) => [`${c.id} ${k}`, p])));
   const tasks = new Map<string, Task>();
-  for (const x of per) for (const gh of x.issues) tasks.set(`${GITHUB} ${gh.repo}#${gh.number}`, taskFromGh(gh, GITHUB));
+  for (const x of per) for (const { gh, mine } of x.issues) tasks.set(`${GITHUB} ${gh.repo}#${gh.number}`, { ...taskFromGh(gh, GITHUB), mine });
   for (const t of fromTrackers.flat()) tasks.set(`${t.connection} ${t.key}`, t);
   const prev = useTasks.getState().data[key];
   for (const t of prev?.tasks ?? []) if (failed.has(t.connection) && !tasks.has(`${t.connection} ${t.key}`)) tasks.set(`${t.connection} ${t.key}`, t);

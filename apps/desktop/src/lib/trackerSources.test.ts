@@ -15,8 +15,8 @@ describe("workspaceConnections (X44 sources per workspace)", () => {
       conn("clickup:9012", [{ key: "901", name: "Sprint", project: "", workspace: "" }]),
     ];
     expect(workspaceConnections(connections, "local/one")).toEqual([
-      { id: "linear:acme", keys: ["MOON"], projects: { MOON: "p-moonlet" }, all: [], account: "Sam" },
-      { id: "jira:acme.atlassian.net", keys: ["OPS"], projects: { OPS: "p-ops" }, all: [], account: "Sam" },
+      { id: "linear:acme", keys: ["MOON"], projects: { MOON: "p-moonlet" }, account: "Sam" },
+      { id: "jira:acme.atlassian.net", keys: ["OPS"], projects: { OPS: "p-ops" }, account: "Sam" },
     ]);
     expect(workspaceConnections(connections, "local/three")).toEqual([]);
     expect(workspaceConnections(undefined, "local/one")).toEqual([]);
@@ -56,7 +56,7 @@ describe("sourceNoun (X44 Sources dialog)", () => {
 
 describe("sourceRows (X44 Sources dialog)", () => {
   it("opens with the connection's sources, or one empty row when it has none", () => {
-    const ops = { key: "OPS", name: "Operations", project: "p-ops", workspace: "local/one", all: true };
+    const ops = { key: "OPS", name: "Operations", project: "p-ops", workspace: "local/one" };
     expect(sourceRows([ops])).toEqual([ops]);
     expect(sourceRows([])).toEqual([{ key: "", name: "", project: "", workspace: "" }]);
   });

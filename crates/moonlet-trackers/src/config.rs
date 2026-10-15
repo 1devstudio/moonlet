@@ -97,9 +97,6 @@ pub struct Source {
     /// `host/workspaceId` of the workspace that shows it; empty until chosen.
     #[serde(default)]
     pub workspace: String,
-    /// All open issues, rather than only the account's (X44 Shows).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub all: bool,
 }
 
 /// A connection's stable id: its tracker and site, so session links survive
@@ -280,6 +277,8 @@ key = "OPS"
 name = "Operations"
 project = "p1"
 workspace = "local/acme"
+# Written before Assignee: me took its place (X45); read and dropped.
+all = true
 "#;
         let c = parse(text).unwrap();
         assert_eq!(c.connections[0].email, None);
@@ -297,12 +296,12 @@ workspace = "local/acme"
                     name: "Operations".into(),
                     project: "p1".into(),
                     workspace: "local/acme".into(),
-                    all: false,
                 }],
                 states: Default::default(),
             }]
         );
         assert_eq!(parse(&to_toml(&c)).unwrap(), c);
+        assert!(!to_toml(&c).contains("all ="), "{}", to_toml(&c));
         assert_eq!(
             connection_id(crate::TrackerKind::Jira, "ACME.atlassian.net"),
             "jira:acme.atlassian.net"

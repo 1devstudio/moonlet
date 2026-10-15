@@ -38,7 +38,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 ### Board
 
-- [x] The header shows the view name and a summary such as `9 tasks · 6 sessions`, then filters (`Assignee: me`, which keeps a task you have a session on; `Hide empty Done`; both kept across restarts) and the Board / List switch. (`tasksView.test.ts` boardSummary, filterBoard, `tasksStore.test.ts` the header's filters, `tasks-mode.e2e.ts`)
+- [x] The header shows the view name and a summary such as `9 tasks · 6 sessions`, then filters (`Assignee: me`, on for a new install, which keeps a task you have a session on and decides whose issues are fetched: off, every source also brings everyone's open issues, GitHub included, fetched as soon as it is turned off (X44); `Hide empty Done`; both kept across restarts) and the Board / List switch. (`tasksView.test.ts` boardSummary, filterBoard, `tasksStore.test.ts` the header's filters and Assignee: me decides whose issues are fetched, `tasks-mode.e2e.ts`, `task-trackers.e2e.ts` shows everyone's open issues once Assignee: me is off)
 - [x] Columns Todo, In Progress and In Review, each with its glyph and count. (`tasks-mode.e2e.ts`)
 - [x] Done is a narrow column: a button that opens List. (`tasks-mode.e2e.ts`)
 - [x] The Done button shows its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`). (`tasksList.test.ts` groups In Progress, In Review, Todo and Done, `tasks-mode.e2e.ts`)
