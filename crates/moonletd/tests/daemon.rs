@@ -1058,8 +1058,11 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
     let d = TestDaemon::start().await;
     let mut c = d.client().await;
     let (repo, p) = project_with_repo(&d, &mut c).await;
-    let wt_as_given = d.home.path().join("moon-149-host-health");
-    let wt = add_worktree(&repo, &["-b", "moon-149-host-health"], &wt_as_given);
+    let wt = add_worktree(&repo, &["-b", "moon-149-host-health"], &d.home.path().join("moon-149-host-health"));
+    // The same worktree reached through a symlink, as `/var` is on macOS.
+    let link = d.home.path().join("via-link");
+    std::os::unix::fs::symlink(d.home.path(), &link).unwrap();
+    let wt_as_given = link.join("moon-149-host-health");
 
     let list: serde_json::Value = c
         .request(methods::PROJECT_WORKTREES, serde_json::json!({"id": p.id}))
