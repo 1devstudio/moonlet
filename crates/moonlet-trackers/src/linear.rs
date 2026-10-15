@@ -420,6 +420,14 @@ mod tests {
     }
 
     #[test]
+    fn assigned_to_me_is_linears_own_is_me() {
+        assert!(issues_query(true).contains("assignee: { isMe: { eq: true } }"));
+        assert!(!issues_query(false).contains("isMe"));
+        // Pages of 100.
+        assert!(issues_query(true).contains("issues(first: 100, after: $after"));
+    }
+
+    #[test]
     fn issues_are_read_page_by_page() {
         assert_eq!(next_page(&fixture("linear-issues.json")), None);
         let more =
