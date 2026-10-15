@@ -153,4 +153,15 @@ describe("Tasks mode", () => {
     });
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "My issues")]').click();
   });
+
+  it("shows the same tasks as a list whose rows open into their sessions", async () => {
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
+    const row = $('//section[@aria-label="In Progress"]//div[@role="row"][starts-with(@aria-label, "acme/storefront#15")]');
+    await expect(row).toBeDisplayed({ wait: 10_000 });
+    await expect(row.$(sel.text("1 session"))).toBeDisplayed();
+    await row.$('button[aria-label="Expand acme/storefront#15"]').click();
+    await expect(row.$('//button[normalize-space()="Gift cards at checkout"]')).toBeDisplayed();
+    await expect($('//section[@aria-label="Todo"]')).toBeDisplayed();
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+  });
 });
