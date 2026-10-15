@@ -10,12 +10,12 @@ import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
 import { findTasks, glyphShape, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, boardInput, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, pollTasks, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, boardInput, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, pollTasks, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setFilters, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
 import { sourceList } from "../../lib/trackerSources";
 import { applyRules, removeWorktreeAsk, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
-import { boardSummary, modeSwitch, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
+import { boardSummary, filterBoard, modeSwitch, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
@@ -355,6 +355,7 @@ export function TasksMode() {
   const { ws, data, board, unlinked } = useWorkspaceTasks();
   const layout = useTasks((t) => t.layout);
   const query = useTasks((t) => t.query);
+  const filters = useTasks((t) => t.filters);
   const view = useTasks((t) => t.view);
   const selected = useTasks((t) => t.selected);
   if (!ws) return null;
@@ -396,7 +397,7 @@ export function TasksMode() {
     );
   }
   if (!board) return null;
-  const shown = findTasks(viewBoard(board, view), query);
+  const shown = findTasks(filterBoard(viewBoard(board, view), filters), query);
   const labelOf = sourceLabels(data.tasks);
   const cards = Object.values(board).flat();
   const detail = cards.find((c) => `${c.task.connection} ${c.task.key}` === selected);
@@ -406,6 +407,7 @@ export function TasksMode() {
         <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-3 px-5">
           <h1 className="ui-text-15 font-medium text-fg">{TITLE[view]}</h1>
           <span className="ui-text-12.5 text-faint">{boardSummary(board)}</span>
+          {view !== "unlinked" && <Filters />}
           {view !== "unlinked" && <LayoutSwitch />}
         </header>
         {view !== "unlinked" && layout === "list" ? (
@@ -486,6 +488,26 @@ export function ModeSwitch() {
         <TaskGlyph column="in_progress" size={14} />
         {m.dot && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
       </button>
+    </div>
+  );
+}
+
+/** Assignee: me and Hide empty Done in the header (X45). */
+function Filters() {
+  const filters = useTasks((t) => t.filters);
+  const item = (id: keyof typeof filters, label: string) => (
+    <button
+      aria-pressed={filters[id]}
+      onClick={() => setFilters({ ...filters, [id]: !filters[id] })}
+      className={cx("no-drag rounded-md px-2 py-1 ui-text-12", filters[id] ? "bg-raised text-fg" : "text-muted hover:text-fg")}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="group" aria-label="Filters" className="flex gap-0.5">
+      {item("mine", "Assignee: me")}
+      {item("hideEmptyDone", "Hide empty Done")}
     </div>
   );
 }

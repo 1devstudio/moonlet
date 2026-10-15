@@ -49,6 +49,7 @@ const ghIssue: GhTask = {
 describe("taskFromGh", () => {
   it("keys a GitHub issue by repository and number, placed by its work while open", () => {
     expect(taskFromGh(ghIssue, "github:github.com")).toEqual({
+      mine: true,
       connection: "github:github.com",
       key: "cli/cli#13876",
       title: "`gh skill install` can't find skills",
