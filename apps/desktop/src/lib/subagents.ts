@@ -109,7 +109,7 @@ export function retryMessage(agents: Subagent[]): string {
 const endedAt = (a: Subagent) => a.ended_at ?? a.started_at + (a.duration_ms ?? 0);
 
 // The strip's steps after an agent ended (ms), from the design.
-/** A finished agent's dot pops this long. */
+/** An ended agent's dot pops this long. */
 const DOT_POP = 280;
 /** The done count shows green this long. */
 const COUNT_FLASH = 900;
@@ -132,15 +132,19 @@ export interface StripView {
   dots: StripDot[];
   /** "All done" once every agent is done, else none: the counts lead. */
   title: string | null;
-  /** "2 running", "2 done", "1 stopped": the counts after the title. */
-  counts: { state: "running" | "done" | "stopped"; text: string }[];
+  /** "2 running", "2 done", "1 stopped": the counts that lead the strip.
+   *  `lead` is the first, which needs no " · " before it. */
+  counts: { state: "running" | "done" | "stopped"; text: string; lead: boolean }[];
+  /** What the dots stand for, read out in their place. */
+  label: string;
   /** An agent finished just now: the done count shows green. */
   flash: boolean;
   /** Every agent is done: the title gets a check. */
   finished: boolean;
   /** Finished a while ago: the strip folds away. */
   collapsed: boolean;
-  alert: { tone: "blocked" | "error"; text: string } | null;
+  /** "1 needs you" or "1 failed", after the counts; `lead` when none show. */
+  alert: { tone: "blocked" | "error"; text: string; lead: boolean } | null;
   clock: string;
   /** Review changes once all ended, some stopped; Retry once one failed and none runs. */
   button: "review" | "retry" | null;
@@ -167,7 +171,9 @@ export function stripView(st: ChatState, now: number, dismissedAt: number): Stri
   const ended = idle && !n("failed");
   // Finished means every agent did its work; stopped ones did not.
   const finished = ended && !n("stopped");
-  const counts = (["running", "done", "stopped"] as const).filter((state) => n(state)).map((state) => ({ state, text: `${n(state)} ${state}` }));
+  const counts = finished
+    ? []
+    : (["running", "done", "stopped"] as const).filter((state) => n(state)).map((state, i) => ({ state, text: `${n(state)} ${state}`, lead: i === 0 }));
   const ends = batch.filter((a) => a.status === "done").map(endedAt);
   // Every ended agent's dot pops and hides; only done ones flash the count.
   const dotEnds = batch.filter((a) => a.status !== "running").map(endedAt);
@@ -175,14 +181,17 @@ export function stripView(st: ChatState, now: number, dismissedAt: number): Stri
   const wake = Math.min(
     ...[...dotEnds.flatMap((t) => [t + DOT_POP, t + DOT_HIDE]), ...ends.map((t) => t + COUNT_FLASH), last + STRIP_FOLD].filter((t) => t > now),
   );
-  const alert = n("needs") ? { tone: "blocked" as const, text: `${n("needs")} needs you` } : n("failed") ? { tone: "error" as const, text: `${n("failed")} failed` } : null;
+  const lead = !counts.length;
+  const alert = n("needs") ? { tone: "blocked" as const, text: `${n("needs")} needs you`, lead } : n("failed") ? { tone: "error" as const, text: `${n("failed")} failed`, lead } : null;
+  const title = finished ? "All done" : null;
   return {
     dots: batch.map((a) => {
       const state = stateOf.get(a)!;
       return { key: a.id, state, phase: a.status === "running" ? "on" : dotPhase(now - endedAt(a)) };
     }),
-    title: finished ? "All done" : null,
-    counts: finished ? [] : counts,
+    title,
+    counts,
+    label: counts.map((c) => c.text).join(", ") || title || alert?.text || "",
     flash: ends.some((t) => now < t + COUNT_FLASH),
     finished,
     collapsed: now >= last + STRIP_FOLD,
