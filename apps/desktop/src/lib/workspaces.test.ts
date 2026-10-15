@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerOptions, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
+import { composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -196,5 +196,44 @@ describe("the workspace settings page (X43)", () => {
     expect(workspaceDirty(acme, { name: "Acme", color: "violet", profile: "work" })).toBe(true);
     expect(workspaceDirty(acme, { name: "Acme", color: "blue", profile: "" })).toBe(true);
     expect(workspaceDirty(w("p", "Personal", []), { name: "Personal", color: "clay", profile: "" })).toBe(false);
+  });
+});
+
+describe("composerPick (X44, X46 starting a session from an issue)", () => {
+  const o = (id: string) => ({ host: "local", project: { id, name: id }, section: null });
+  const options = [o("web"), o("api"), o("docs")];
+  const pick = (preset: string | undefined, linked: string[] | undefined, current?: string) => composerPick(options, { host: "local", preset, linked, current: current ? { host: "local", id: current } : null })?.project.id ?? null;
+
+  it("starts in the one linked project, and in none when several are linked", () => {
+    expect(pick(undefined, ["api"], "docs")).toBe("api");
+    expect(pick(undefined, ["web", "api"], "docs")).toBe(null);
+  });
+
+  it("falls back to the preset, then the current session's project, then the first, with none linked", () => {
+    expect(pick("api", [], "docs")).toBe("api");
+    expect(pick(undefined, [], "docs")).toBe("docs");
+    expect(pick(undefined, undefined)).toBe("web");
+  });
+
+  it("ignores a linked project outside the workspace", () => {
+    expect(pick(undefined, ["elsewhere"], "docs")).toBe("docs");
+  });
+});
+
+describe("composerProjects (X44 the composer's project search)", () => {
+  const o = (id: string, name: string) => ({ host: "local", project: { id, name }, section: null });
+  const options = [o("1", "storefront"), o("2", "store-api"), o("3", "docs")];
+  const ids = (query: string, linked: string[] = []) => {
+    const r = composerProjects(options, linked, query);
+    return [r.linked.map((x) => x.project.id), r.others.map((x) => x.project.id)];
+  };
+
+  it("lists the linked projects first, then the others", () => {
+    expect(ids("", ["3"])).toEqual([["3"], ["1", "2"]]);
+  });
+
+  it("keeps the projects whose name has the query, ignoring case", () => {
+    expect(ids("STORE")).toEqual([[], ["1", "2"]]);
+    expect(ids("api", ["3"])).toEqual([[], ["2"]]);
   });
 });

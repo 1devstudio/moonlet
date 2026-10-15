@@ -73,12 +73,15 @@ export function Menu({
   align = "left",
   side = "bottom",
   width = 230,
+  search,
 }: {
   trigger: (open: () => void) => ReactNode;
   items: MenuItem[];
   align?: "left" | "right";
   side?: "bottom" | "top";
   width?: number;
+  /** A search box above the items; the caller filters `items` by `query`. */
+  search?: { placeholder: string; query: string; onQuery: (q: string) => void };
 }) {
   const [rect, setRect] = useState<DOMRect | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
@@ -95,7 +98,7 @@ export function Menu({
         return setRect(null);
       }
       // A single-character hint doubles as the item's shortcut while the menu is open.
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement | null)?.tagName === "INPUT") return;
       const hit = itemsRef.current.find((it) => (it.kind === undefined || it.kind === "item") && it.hint?.length === 1 && it.hint === e.key);
       if (hit && (hit.kind === undefined || hit.kind === "item")) {
         e.preventDefault();
@@ -117,7 +120,10 @@ export function Menu({
       window.removeEventListener("resize", onScroll);
     };
   }, [open]);
-  const toggle = () => setRect((r) => (r ? null : (anchor.current?.getBoundingClientRect() ?? null)));
+  const toggle = () => {
+    search?.onQuery("");
+    setRect((r) => (r ? null : (anchor.current?.getBoundingClientRect() ?? null)));
+  };
   const style: React.CSSProperties = { width, position: "fixed" };
   if (rect) {
     style.left = align === "right" ? Math.max(8, rect.right - width) : Math.min(rect.left, window.innerWidth - width - 8);
@@ -130,7 +136,19 @@ export function Menu({
       {rect &&
         createPortal(
           <div ref={panel} style={style} className="z-[60] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
-            <MenuItems items={items} onClose={() => setRect(null)} />
+            {search && (
+              <input
+                autoFocus
+                aria-label={search.placeholder}
+                value={search.query}
+                onChange={(e) => search.onQuery(e.target.value)}
+                placeholder={search.placeholder}
+                className="mb-1 w-full rounded-md bg-panel-2 px-2.5 py-1.5 ui-text-13 outline-none placeholder:text-faint"
+              />
+            )}
+            <div className={cx(search && "max-h-[320px] overflow-y-auto")}>
+              <MenuItems items={items} onClose={() => setRect(null)} />
+            </div>
           </div>,
           document.body,
         )}

@@ -191,6 +191,8 @@ export interface ProjectConfig {
   default_agent?: string | null;
   base_branch?: string | null;
   agents: Record<string, string>;
+  /** Tracker projects this project's sessions start from, `<connection>/<key>` (X44). */
+  trackers?: string[];
 }
 
 /** `.moonlet/config.toml` as the Project settings dialog edits it (X8). */

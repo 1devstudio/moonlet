@@ -155,6 +155,32 @@ export function composerOptions<P extends { id: string }>(hosts: Record<string, 
   return out;
 }
 
+type ComposerOption = { host: string; project: { id: string; name: string } };
+
+/**
+ * The project the composer starts on. Started from an issue (X44): the one
+ * project in the workspace that links the issue's tracker project, or none
+ * when several do, so the user picks. Otherwise the preset, then the current
+ * session's project, then the first.
+ */
+export function composerPick<O extends ComposerOption>(options: O[], s: { host?: string; preset?: string; linked?: string[]; current: { host: string; id: string } | null }): O | null {
+  const linked = options.filter((o) => o.host === s.host && s.linked?.includes(o.project.id));
+  if (linked.length) return linked.length === 1 ? linked[0] : null;
+  return (
+    options.find((o) => o.host === s.host && o.project.id === s.preset) ??
+    options.find((o) => s.current && o.host === s.current.host && o.project.id === s.current.id) ??
+    options[0] ??
+    null
+  );
+}
+
+/** The composer's project menu: the projects that link the issue's tracker project first, then the others, by name (X44). */
+export function composerProjects<O extends ComposerOption>(options: O[], linked: string[], query: string): { linked: O[]; others: O[] } {
+  const q = query.trim().toLowerCase();
+  const shown = options.filter((o) => o.project.name.toLowerCase().includes(q));
+  return { linked: shown.filter((o) => linked.includes(o.project.id)), others: shown.filter((o) => !linked.includes(o.project.id)) };
+}
+
 /** Where the composer creates the session: the workspace it was opened for
  * (`host` defaults to the shown one's), else the shown workspace. */
 export function composerTarget(host: string | undefined, workspace: string | undefined, shown: WorkspaceRef | null): WorkspaceRef | null {

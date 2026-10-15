@@ -152,21 +152,21 @@ describe("taskStart (X46 starting a session from a task)", () => {
       title: "`gh skill install` can't find skills",
       number: 13876,
       firstMessage: "cli/cli#13876 · `gh skill install` can't find skills\n### Describe the bug\nSkills are not found.",
-      project: "cli",
+      projects: ["cli"],
       issueType: "bug",
       github: { repo: "cli/cli", number: 13876 },
     });
   });
 
-  it("starts a tracker issue's session in the project its source names", () => {
+  it("offers a tracker issue's session the projects that link its source", () => {
     const t = { ...linear("MOON-151", "Drag sessions"), tracker: { id: "a1", state: "Todo", source: "MOON" } };
-    const st = taskStart(t, {}, { "linear:acme MOON": "p-moonlet" });
-    expect([st.kind, st.project, st.github]).toEqual(["linear", "p-moonlet", undefined]);
+    const st = taskStart(t, {}, { "linear:acme MOON": ["p-web", "p-api"] });
+    expect([st.kind, st.projects, st.github]).toEqual(["linear", ["p-web", "p-api"], undefined]);
   });
 
   it("sends only the title line when the issue has no description, and names no project it can't place", () => {
     const s = taskStart({ ...hosts, description: "" }, { web: "acme/web" });
-    expect([s.kind, s.firstMessage, s.project, s.number]).toEqual(["linear", "MOON-142 · Remote hosts sidebar", null, undefined]);
+    expect([s.kind, s.firstMessage, s.projects, s.number]).toEqual(["linear", "MOON-142 · Remote hosts sidebar", [], undefined]);
   });
 });
 

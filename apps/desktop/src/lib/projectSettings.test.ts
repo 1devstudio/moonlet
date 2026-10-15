@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { agentOptions, closeRequest, configName, fromForm, hasRunCommand, isDirty, loadFailure, saveBarStatus, toForm, validate, type Form } from "./projectSettings";
 
-const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], ...patch });
+const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], trackers: [], ...patch });
 
 describe("toForm and fromForm", () => {
   it("round-trips a config", () => {
-    const c = { setup: "pnpm i", run: "pnpm dev", archive: null, default_agent: "yolo", base_branch: null, agents: { yolo: "claude --x" } };
+    const c = { setup: "pnpm i", run: "pnpm dev", archive: null, default_agent: "yolo", base_branch: null, agents: { yolo: "claude --x" }, trackers: ["jira:acme.atlassian.net/ABC"] };
     expect(fromForm(toForm(c))).toEqual(c);
+  });
+
+  it("reads a config without tracker projects as none (X44)", () => {
+    expect(fromForm(toForm({ agents: {} })).trackers).toEqual([]);
   });
 
   it("turns blank fields into missing keys and trims the rest", () => {
@@ -21,6 +25,11 @@ describe("isDirty", () => {
   it("ignores whitespace-only edits", () => {
     expect(isDirty(form({ run: "x " }), form({ run: "x" }))).toBe(false);
     expect(isDirty(form({ run: "y" }), form({ run: "x" }))).toBe(true);
+  });
+
+  it("sees a tracker project linked or unlinked (X44)", () => {
+    expect(isDirty(form({ trackers: ["linear:acme/ENG"] }), form())).toBe(true);
+    expect(isDirty(form({ trackers: ["linear:acme/ENG"] }), form({ trackers: ["linear:acme/ENG"] }))).toBe(false);
   });
 
   it("counts an added agent row", () => {
