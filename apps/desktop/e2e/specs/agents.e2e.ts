@@ -106,8 +106,10 @@ describe("agents tab", () => {
     await expect($(row("Write hello file") + text("Wants to edit /repo/hello.txt"))).toBeExisting();
     await expect($(row("List files") + text("Finding *"))).toBeExisting();
     await expect($('//span[starts-with(normalize-space(), "2 agents ·")]')).toBeDisplayed();
-    await expect($(`${strip}//span[normalize-space()="2 agents"]`)).toBeDisplayed();
+    // The counts lead, with no total.
+    await expect($(`${strip}//span[normalize-space()="1 running"]`)).toBeDisplayed();
     await expect($(`${strip}//span[normalize-space()="· 1 needs you"]`)).toBeDisplayed();
+    await expect($(`${strip}//span[contains(normalize-space(), "2 agents")]`)).not.toBeExisting();
     // The strip is the top row of the input's card, and the running agent's dot pulses.
     await expect($(`${strip}/following-sibling::div//textarea`)).toBeExisting();
     const pulses = await browser.execute(() =>
@@ -155,7 +157,12 @@ describe("agents tab", () => {
     await jsClick('//*[@id="right-tabpanel"]//button[normalize-space()="Agents"]');
     await expect($(row("List files") + text("Stopped"))).toBeExisting();
     // One was stopped, so they did not all finish.
-    await expect($(`${strip}//span[contains(normalize-space(), "2 agents · 1 done · 1 stopped")]`)).toBeDisplayed();
+    await expect($(`${strip}//span[starts-with(normalize-space(), "1 done · 1 stopped")]`)).toBeDisplayed();
+    // Neither is at work any more, so both dots hide.
+    await browser.waitUntil(async () => (await browser.execute(() => document.querySelectorAll('[aria-label="Agents"] [role="img"] > span:not(.gone)').length)) === 0, {
+      timeout: 10_000,
+      timeoutMsg: "an ended agent's dot stayed in the strip",
+    });
     await expect($(chip("1 agent"))).not.toBeExisting();
     // One was stopped: the batch ended without all finishing.
     await expect($('//span[starts-with(normalize-space(), "2 agents ended in")]')).toBeDisplayed();
