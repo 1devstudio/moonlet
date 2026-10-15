@@ -96,3 +96,19 @@ export function taskForSession(
     tasks.find((t) => (t.github ? sameRepo(t) && t.github.closingPrs.includes(pr.number) : mentionsKey(pr.title, t.key))) ?? null
   );
 }
+
+/** The `owner/repo` of an `origin` URL (https, ssh or scp-like) on github.com. */
+export function githubRepo(remote: string | null): string | null {
+  const r = remote?.trim();
+  if (!r) return null;
+  const scp = /^[^/@:]+@github\.com:([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(r);
+  if (scp) return `${scp[1]}/${scp[2]}`;
+  try {
+    const url = new URL(r);
+    if (url.hostname !== "github.com") return null;
+    const [owner, repo] = url.pathname.split("/").filter(Boolean);
+    return owner && repo ? `${owner}/${repo.replace(/\.git$/, "")}` : null;
+  } catch {
+    return null;
+  }
+}

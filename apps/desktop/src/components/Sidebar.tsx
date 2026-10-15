@@ -12,6 +12,8 @@ import { ArchiveLoader } from "./ArchiveLoader";
 import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { ModeSwitch, TasksSidebar } from "./tasks/TasksMode";
+import { isTasksMode } from "../lib/tasksStore";
 import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
@@ -662,6 +664,7 @@ export function Sidebar() {
   const sections = useStore((s) => s.sections);
   const shown = useStore((s) => shownWorkspace(s));
   const showHistory = useStore((s) => s.showHistory);
+  const tasksMode = useStore((s) => isTasksMode(s));
   const [rowMenu, setRowMenu] = useState<RowMenuState | null>(null);
   const [creating, setCreating] = useState(false);
   const ordered = useMemo(() => Object.values(hosts).sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id)), [hosts]);
@@ -671,7 +674,12 @@ export function Sidebar() {
       {/* The traffic lights sit on the left of the title bar (X32), 16px before the switcher. */}
       <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center pl-[86px] pr-2.5">
         <WorkspaceSwitcher />
+        <ModeSwitch />
       </div>
+      {tasksMode ? (
+        <TasksSidebar />
+      ) : (
+      <>
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session", host: shown?.host, workspace: shown?.id } })} />
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />
@@ -720,6 +728,8 @@ export function Sidebar() {
           </div>
         )}
       </div>
+      </>
+      )}
       <ClaudeUpdateBanner />
       <div className="flex items-center gap-1 px-3 py-2.5">
         <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ settingsPage: { page: "general" } })}>

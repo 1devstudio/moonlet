@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GhTask } from "./protocol";
-import { githubBranchNumber, mentionsKey, type Task, taskForSession, taskFromGh } from "./tasks";
+import { githubBranchNumber, githubRepo, mentionsKey, type Task, taskForSession, taskFromGh } from "./tasks";
 
 describe("mentionsKey (X44 keys)", () => {
   it("finds the key in a branch or PR title, ignoring case", () => {
@@ -112,5 +112,16 @@ describe("taskForSession (X46 links)", () => {
   it("links nothing after the user unlinked it, and nothing when no task matches", () => {
     expect(taskForSession(session({ branch: "moon-142-x", task_unlinked: true }), null, null, tasks)).toBe(null);
     expect(taskForSession(session({ branch: "zsh-perf" }), pr(9, "Speed up zsh"), "cli/cli", tasks)).toBe(null);
+  });
+});
+
+describe("githubRepo", () => {
+  it("reads owner/repo from an origin URL on github.com", () => {
+    expect(githubRepo("https://github.com/1devstudio/moonlet.git")).toBe("1devstudio/moonlet");
+    expect(githubRepo("https://github.com/1devstudio/moonlet")).toBe("1devstudio/moonlet");
+    expect(githubRepo("git@github.com:1devstudio/moonlet.git\n")).toBe("1devstudio/moonlet");
+    expect(githubRepo("ssh://git@github.com/acme/web.git")).toBe("acme/web");
+    expect(githubRepo("https://gitlab.com/acme/web.git")).toBe(null);
+    expect(githubRepo(null)).toBe(null);
   });
 });
