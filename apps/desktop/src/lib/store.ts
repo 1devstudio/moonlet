@@ -49,8 +49,8 @@ import type { SettingsRoute } from "./settingsPage";
 import { readStored, writeStored } from "./storage";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
-/** Right panel tabs, in order (X24 added Plan, X42 Agents). */
-export const RIGHT_TABS = ["plan", "agents", "files", "changes", "review"] as const;
+/** Right panel tabs, in order (X24 added Plan, X42 Agents, X46 Task for a linked session). */
+export const RIGHT_TABS = ["task", "plan", "agents", "files", "changes", "review"] as const;
 export type RightTab = (typeof RIGHT_TABS)[number];
 
 export interface Selection {
@@ -225,6 +225,8 @@ interface State extends UiPersist {
     | { kind: "new-section" }
     | { kind: "new-workspace" }
     | { kind: "create-pr" }
+    /** Link a session to a task (X46). */
+    | { kind: "link-task"; host: string; session: string }
     | { kind: "palette" }
     | { kind: "commit" };
   /** The open confirm modal, above any dialog (X23). */
