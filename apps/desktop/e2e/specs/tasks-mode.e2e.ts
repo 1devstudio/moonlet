@@ -132,11 +132,12 @@ describe("Tasks mode", () => {
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), projectId(w));
     await card("acme/storefront#15", "Todo").$(sel.button("Start")).click();
     await expect($(sel.text("For acme/storefront#15"))).toBeDisplayed();
-    await expect($(sel.text("15-gift-cards-at-checkout"))).toBeDisplayed({ wait: 10_000 });
     await expect($('//textarea[@placeholder="What do you want to work on?"]')).toHaveValue("acme/storefront#15 · Gift cards at checkout");
     // Keep in step: "session starts" is Automatically, so the issue is assigned (X46).
     await expect($('//label[normalize-space()="Assign acme/storefront#15 to me"]/input')).toBeSelected();
-    await $(sel.button("Create")).click();
+    // ⌘↵ at once, without waiting for the branch name to show: Create waits for it.
+    await $('//textarea[@placeholder="What do you want to work on?"]').click();
+    await browser.keys(["Meta", "Enter"]);
 
     await expect($(sel.sessionRow("Gift cards at checkout"))).toBeDisplayed({ wait: 30_000 });
     await expect(sessionsButton()).toHaveAttribute("aria-pressed", "true");
@@ -144,6 +145,41 @@ describe("Tasks mode", () => {
     expect(created?.branch).toBe("15-gift-cards-at-checkout");
     expect(created?.task).toEqual({ connection: "github:github.com", key: "acme/storefront#15", url: "https://github.com/acme/storefront/issues/15" });
     await browser.waitUntil(() => asked().includes("issue edit 15 --add-assignee @me"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+  });
+
+  it("starts a session on a worktree made outside moonlet, keeping its project", async () => {
+    const dir = join(w.root, "wt-12-orphan-fix");
+    git("worktree", "add", "-q", "-b", "12-orphan-fix", dir);
+    try {
+      await tasksButton().click();
+      await $('//button[@title="Refresh tasks"]').click();
+      // #12 has sessions, so its worktree without one is in the detail panel.
+      await card("acme/storefront#12", "In Progress").$('//button[normalize-space()="Fix checkout button"]').click();
+      const start = $('//aside[@aria-label="Task detail"]').$(sel.button("Start session"));
+      await start.waitForDisplayed({ timeout: 15_000 });
+      await start.click();
+      await expect($(sel.text("12-orphan-fix · existing worktree"))).toBeDisplayed({ wait: 10_000 });
+      // The worktree belongs to its project: the picker stays put.
+      await expect($('//button[@title="This worktree belongs to this project"]')).toBeDisabled();
+      await $(sel.button("Create")).click();
+      await browser.waitUntil(() => rpc<(Session & { branch?: string })[]>(w, "session.list", {}).some((x) => x.branch === "12-orphan-fix"), {
+        timeout: 15_000,
+        timeoutMsg: "no session on the existing worktree",
+      });
+    } finally {
+      for (const x of rpc<(Session & { branch?: string })[]>(w, "session.list", {})) if (x.branch === "12-orphan-fix") rpc(w, "session.archive", { id: x.id });
+      try {
+        git("worktree", "remove", "--force", dir);
+      } catch {
+        // Archiving removed it already.
+      }
+      try {
+        git("branch", "-D", "12-orphan-fix");
+      } catch {
+        // Already gone.
+      }
+      if (await sessionsButton().isExisting()) await sessionsButton().click();
+    }
   });
 
   it("puts Closes #N in the new PR of a session working on a GitHub issue", async () => {
