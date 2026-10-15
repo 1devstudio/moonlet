@@ -11,7 +11,7 @@ import { connectionLine } from "../../lib/trackersPage";
 import { blankSource, changedStates, sourceChoices, sourceNoun, sourceRows, sourcesToSave } from "../../lib/trackerSources";
 import type { Column } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
-import { Button, Dialog, Field, IconButton, inputCls, TrackerIcon } from "../ui";
+import { Button, cx, Dialog, Field, IconButton, inputCls, TrackerIcon } from "../ui";
 import { Row, Status } from "./controls";
 
 const NAME: Record<Connection["kind"], string> = { linear: "Linear", jira: "Jira Cloud", clickup: "ClickUp" };
@@ -22,7 +22,7 @@ const TOKEN_PAGE: Record<Connection["kind"], string> = {
 };
 
 /** The Sources and States dialogs' menus, as tall as a text field (X44). */
-const selectCls = `${inputCls} menu-select field-height`;
+const selectCls = cx(inputCls, "menu-select field-height");
 
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
@@ -304,7 +304,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
     <Dialog title={`${NAME[c.kind]} workflow states`} onClose={onClose} width={520}>
       <p className="mb-2 ui-text-12.5 text-muted">moonlet groups tasks into four columns. Filled in from the tracker's state types; change them if your team uses its own.</p>
       {c.sources.length > 1 && (
-        <select aria-label="Source" className={`${selectCls} mb-2`} value={source} onChange={(e) => setSource(e.target.value)}>
+        <select aria-label="Source" className={cx(selectCls, "mb-2")} value={source} onChange={(e) => setSource(e.target.value)}>
           {c.sources.map((s) => (
             <option key={s.key} value={s.key}>
               {s.name}
