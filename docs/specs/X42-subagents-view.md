@@ -14,12 +14,12 @@ Design: `Moonlet Subagents View.html` (Claude Design bundle with five boards: th
 ## User journey
 
 1. The user asks Claude for work that Claude splits across subagents. A "Launched 3 agents" card appears in the conversation, with one row per agent, and **Show in panel** opens the Agents tab.
-2. The strip above the chat input reads "3 agents · 2 running · 1 done" with one coloured dot per agent and the time since the first one started. **Agents ›** opens the tab.
+2. The strip above the chat input reads "2 running · 1 done" with one coloured dot per agent still at work and the time since the first one started. **Agents ›** opens the tab.
 3. The Agents tab lists every agent with its status, elapsed time and what it is doing now ("Running pnpm test"). The header shows the count, the elapsed time and the tokens used, plus **Stop all**.
 4. One agent asks to run a command. Its row and the strip turn yellow ("1 needs you"), and the row shows "Wants to run `pnpm add …`" with **Allow** and **Deny**. The conversation's permission card is headed by the name of the agent that asks.
 5. Clicking a row opens the agent's detail: its brief (the prompt Claude gave it), each tool call with `+a −r` for edits, the pending permission card, and **Stop**.
-6. An agent finishes. Its row turns green, and the conversation shows "Explore the host protocol · finished" with its report. In the strip its dot turns green with a small pop, the "N done" count flashes green, and the dot hides a moment later. When all agents are done, the strip reads "✓ All 3 done", holds for a moment, then folds away; the conversation's "3 agents finished" card keeps the diff and **Review changes**.
-7. An agent fails. Its row shows the error in red with **Retry**, and the strip reads "1 failed" with **Retry**. Retry asks Claude, in the chat, to run that agent again.
+6. An agent finishes. Its row turns green, and the conversation shows "Explore the host protocol · finished" with its report. In the strip its dot turns green with a small pop, the "N done" count flashes green, and the dot hides a moment later. When all agents are done, the strip reads "✓ All done", holds for a moment, then folds away; the conversation's "3 agents finished" card keeps the diff and **Review changes**.
+7. An agent fails. Its row shows the error in red with **Retry**, and the strip reads "1 failed" with **Retry**; its dot pops and hides like a done one. Retry asks Claude, in the chat, to run that agent again.
 8. While any agent runs, the session row in the sidebar shows "N agents".
 
 ## Behaviour and acceptance criteria
@@ -52,8 +52,8 @@ Strip and sidebar (PR 3):
 
 - [x] The strip shows the agents launched since the user's last message. It is hidden when there are none, and after × until a new agent starts. (`stripView`, `stripDismissAt`)
 - [x] The strip text for each state (working, one needs you, all finished, one failed, ended with some stopped) is as listed under UI. "Finished" means every agent is done. Retry asks for the batch's failed agents. (`stripView`, `stripRetry`, `agents.e2e.ts`)
-- [x] The strip is the top row of the chat input's card. Its dots keep launch order. A finished agent's dot turns green and pops for 0.28 s, the "N done" count shows green for 0.9 s, and 1.2 s after the agent ended its dot shrinks away; failed and stopped dots stay. Running dots pulse. (`stripView`, `agents.e2e.ts`)
-- [x] Once every agent is done the strip reads "✓ All N done" ("1 agent done" for one) with **Agents ›**, and 1.6 s after the last one ended it folds up, leaving the input. (`stripView`)
+- [x] The strip is the top row of the chat input's card. Its dots keep launch order. A finished agent's dot turns green and pops for 0.28 s, the "N done" count shows green for 0.9 s, and 1.2 s after the agent ended its dot shrinks away. Failed and stopped dots pop and shrink away the same way, so only agents still at work (running or needing the user) keep a dot. Running dots pulse. (`stripView`, `agents.e2e.ts`)
+- [x] The strip shows no total of agents: the counts lead. Once every agent is done it reads "✓ All done" with **Agents ›**, and 1.6 s after the last one ended it folds up, leaving the input. (`stripView`)
 - [x] The session row shows "N agents" while N of its chats' subagents run; "needs input" still wins. (`sessionBadge`)
 
 Conversation cards (PR 4):
@@ -100,13 +100,13 @@ Strip, the top row of the chat input's card:
 
 | State | Left | Right |
 |---|---|---|
-| working | `●●●●● 5 agents · 2 running · 2 done` | `1:48  Agents ›` |
-| one needs you | `… · 1 running · 2 done · 1 needs you` (yellow) | `2:14  Agents ›` |
-| all finished | `✓ All 5 done`, then the strip folds away after 1.6 s | `3:40  Agents ›` |
-| ended, some stopped | `5 agents · 4 done · 1 stopped` | `3:40  Review changes  ×` |
-| one failed | `5 agents · 4 done · 1 failed` (red) | `2:40  Retry  Agents ›` |
+| working | `●● 2 running · 2 done` | `1:48  Agents ›` |
+| one needs you | `●● 1 running · 2 done · 1 needs you` (yellow) | `2:14  Agents ›` |
+| all finished | `✓ All done`, then the strip folds away after 1.6 s | `3:40  Agents ›` |
+| ended, some stopped | `4 done · 1 stopped` | `3:40  Review changes  ×` |
+| one failed | `4 done · 1 failed` (red) | `2:40  Retry  Agents ›` |
 
-Dot colours: running accent (pulsing), needs you `blocked`, done `done` (then hidden), failed `error`, stopped muted. With reduced motion the strip changes without animation (`moonlet.css`; WebDriver cannot emulate the setting, so no test covers it).
+Dot colours: running accent (pulsing), needs you `blocked`, done `done`, failed `error`, stopped muted; done, failed and stopped dots hide 1.2 s after the agent ended. With reduced motion the strip changes without animation (`moonlet.css`; WebDriver cannot emulate the setting, so no test covers it).
 
 ## Protocol and RPCs
 

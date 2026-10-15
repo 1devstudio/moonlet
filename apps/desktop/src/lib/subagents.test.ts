@@ -185,7 +185,7 @@ describe("stripView (X42)", () => {
         { key: "a3", state: "running", phase: "on" },
         { key: "a4", state: "running", phase: "on" },
       ],
-      title: "4 agents",
+      title: null,
       counts: [
         { state: "running", text: "2 running" },
         { state: "done", text: "2 done" },
@@ -209,7 +209,7 @@ describe("stripView (X42)", () => {
         { key: "a3", state: "running", phase: "on" },
         { key: "a5", state: "needs", phase: "on" },
       ],
-      title: "3 agents",
+      title: null,
       counts: [
         { state: "running", text: "1 running" },
         { state: "done", text: "1 done" },
@@ -220,7 +220,7 @@ describe("stripView (X42)", () => {
     });
   });
 
-  it("reads All N done once all finished, then folds away", () => {
+  it("reads All done once all finished, then folds away", () => {
     // a1 ends at T0 + 100_000, a2 at T0 + 220_000.
     const st = withItems([done("a1", T0, 100_000), done("a2", T0 + 20_000, 200_000)]);
     expect(stripView(st, T0 + 220_100, 0)).toEqual({
@@ -228,7 +228,7 @@ describe("stripView (X42)", () => {
         { key: "a1", state: "done", phase: "gone" },
         { key: "a2", state: "done", phase: "pop" },
       ],
-      title: "All 2 done",
+      title: "All done",
       counts: [],
       flash: true,
       finished: true,
@@ -240,8 +240,8 @@ describe("stripView (X42)", () => {
       wake: T0 + 220_280,
     });
     expect(stripView(st, T0 + 221_200, 0)).toMatchObject({ dots: [{ phase: "gone" }, { phase: "gone" }], collapsed: false, wake: T0 + 221_600 });
-    expect(stripView(st, T0 + 221_600, 0)).toMatchObject({ title: "All 2 done", collapsed: true, wake: null });
-    expect(stripView(withItems([done("a1", T0, 1_000)]), T0 + 1_100, 0)).toMatchObject({ title: "1 agent done", finished: true, collapsed: false });
+    expect(stripView(st, T0 + 221_600, 0)).toMatchObject({ title: "All done", collapsed: true, wake: null });
+    expect(stripView(withItems([done("a1", T0, 1_000)]), T0 + 1_100, 0)).toMatchObject({ title: "All done", finished: true, collapsed: false });
   });
 
   it("does not call stopped agents finished, and can be dismissed", () => {
@@ -249,9 +249,9 @@ describe("stripView (X42)", () => {
     expect(stripView(st, T0 + 99_000, 0)).toMatchObject({
       dots: [
         { key: "a1", state: "done", phase: "gone" },
-        { key: bench.id, state: "stopped", phase: "on" },
+        { key: bench.id, state: "stopped", phase: "gone" },
       ],
-      title: "2 agents",
+      title: null,
       counts: [{ state: "done", text: "1 done" }, { state: "stopped", text: "1 stopped" }],
       finished: false,
       collapsed: false,
@@ -269,9 +269,9 @@ describe("stripView (X42)", () => {
     expect(stripView(st, T0 + 999_000, 0)).toMatchObject({
       dots: [
         { key: "a1", state: "done", phase: "gone" },
-        { key: "a3", state: "failed", phase: "on" },
+        { key: "a3", state: "failed", phase: "gone" },
       ],
-      title: "2 agents",
+      title: null,
       counts: [{ state: "done", text: "1 done" }],
       alert: { tone: "error", text: "1 failed" },
       clock: "0:52",
@@ -293,6 +293,38 @@ describe("stripView (X42)", () => {
     expect(at(T0 + 11_200)).toMatchObject({ dots: [{ key: "a1", state: "done", phase: "gone" }, { phase: "on" }], wake: null });
   });
 
+  it("pops and hides a failed or stopped agent's dot too, and keeps those still at work", () => {
+    // a6 fails at T0 + 10_000; a2 still runs and a5 waits for the user.
+    const failed: Subagent = { ...audit, id: "a6", ended_at: T0 + 10_000 };
+    const st = withItems([failed, running("a2", T0), running("a5", T0)], [ask2]);
+    const at = (now: number) => stripView(st, now, 0)!;
+    expect(at(T0 + 10_100)).toMatchObject({
+      dots: [
+        { key: "a6", state: "failed", phase: "pop" },
+        { key: "a2", state: "running", phase: "on" },
+        { key: "a5", state: "needs", phase: "on" },
+      ],
+      flash: false,
+      wake: T0 + 10_280,
+    });
+    expect(at(T0 + 10_500)).toMatchObject({ dots: [{ key: "a6", phase: "on" }, { phase: "on" }, { phase: "on" }], wake: T0 + 11_200 });
+    expect(at(T0 + 11_200)).toMatchObject({
+      dots: [
+        { key: "a6", state: "failed", phase: "gone" },
+        { key: "a2", state: "running", phase: "on" },
+        { key: "a5", state: "needs", phase: "on" },
+      ],
+      alert: { tone: "blocked", text: "1 needs you" },
+      wake: null,
+    });
+    // A stopped agent's dot goes the same way.
+    const stopped = stripView(withItems([bench, running("a2", T0)]), T0 + 11_100, 0)!;
+    expect(stopped.dots).toEqual([
+      { key: "a4", state: "stopped", phase: "pop" },
+      { key: "a2", state: "running", phase: "on" },
+    ]);
+  });
+
   it("shows the done count green for a moment after an agent finishes", () => {
     const st = withItems([done("a1", T0, 10_000), running("a2", T0)]);
     expect(stripView(st, T0 + 10_800, 0)).toMatchObject({
@@ -307,7 +339,7 @@ describe("stripView (X42)", () => {
 
   it("shows only the agents launched since the user's last message", () => {
     const st = { ...withItems([done("a1", T0 - 60_000, 10_000), running("a3", T0)]), items: [user(T0 - 90_000), user(T0 - 1_000)] };
-    expect(stripView(st, T0 + 1_000, 0)).toMatchObject({ title: "1 agent", counts: [{ state: "running", text: "1 running" }] });
+    expect(stripView(st, T0 + 1_000, 0)).toMatchObject({ title: null, counts: [{ state: "running", text: "1 running" }] });
     expect(stripView({ ...st, items: [user(T0 + 500)] }, T0 + 1_000, 0)).toBeNull();
   });
 });

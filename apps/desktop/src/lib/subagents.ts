@@ -115,10 +115,11 @@ const DOT_POP = 280;
 const COUNT_FLASH = 900;
 /** Then the dot shrinks away. */
 const DOT_HIDE = 1200;
-/** "All N done" holds this long after the last one ended, then the strip folds. */
+/** "All done" holds this long after the last one ended, then the strip folds. */
 const STRIP_FOLD = 1600;
 
-/** One agent's dot in the strip: `pop` just after it finished, `gone` once hidden. */
+/** One agent's dot in the strip: `pop` just after it ended, `gone` once
+ *  hidden. Only agents still at work keep theirs. */
 export interface StripDot {
   key: string;
   state: AgentRowState;
@@ -129,8 +130,8 @@ export interface StripDot {
 export interface StripView {
   /** One per agent, in launch order. */
   dots: StripDot[];
-  /** "5 agents", or "All 5 done". */
-  title: string;
+  /** "All done" once every agent is done, else none: the counts lead. */
+  title: string | null;
   /** "2 running", "2 done", "1 stopped": the counts after the title. */
   counts: { state: "running" | "done" | "stopped"; text: string }[];
   /** An agent finished just now: the done count shows green. */
@@ -168,15 +169,19 @@ export function stripView(st: ChatState, now: number, dismissedAt: number): Stri
   const finished = ended && !n("stopped");
   const counts = (["running", "done", "stopped"] as const).filter((state) => n(state)).map((state) => ({ state, text: `${n(state)} ${state}` }));
   const ends = batch.filter((a) => a.status === "done").map(endedAt);
+  // Every ended agent's dot pops and hides; only done ones flash the count.
+  const dotEnds = batch.filter((a) => a.status !== "running").map(endedAt);
   const last = finished ? Math.max(...ends) : NaN;
-  const wake = Math.min(...[...ends.flatMap((t) => [t + DOT_POP, t + COUNT_FLASH, t + DOT_HIDE]), last + STRIP_FOLD].filter((t) => t > now));
+  const wake = Math.min(
+    ...[...dotEnds.flatMap((t) => [t + DOT_POP, t + DOT_HIDE]), ...ends.map((t) => t + COUNT_FLASH), last + STRIP_FOLD].filter((t) => t > now),
+  );
   const alert = n("needs") ? { tone: "blocked" as const, text: `${n("needs")} needs you` } : n("failed") ? { tone: "error" as const, text: `${n("failed")} failed` } : null;
   return {
     dots: batch.map((a) => {
       const state = stateOf.get(a)!;
-      return { key: a.id, state, phase: state === "done" ? dotPhase(now - endedAt(a)) : "on" };
+      return { key: a.id, state, phase: a.status === "running" ? "on" : dotPhase(now - endedAt(a)) };
     }),
-    title: !finished ? agentCount(batch.length) : batch.length === 1 ? "1 agent done" : `All ${batch.length} done`,
+    title: finished ? "All done" : null,
     counts: finished ? [] : counts,
     flash: ends.some((t) => now < t + COUNT_FLASH),
     finished,
@@ -189,7 +194,7 @@ export function stripView(st: ChatState, now: number, dismissedAt: number): Stri
   };
 }
 
-/** A done dot's phase, `since` ms after its agent ended. An end a little
+/** An ended agent's dot phase, `since` ms after it ended. An end a little
  *  ahead of this clock (the daemon's) still pops. */
 function dotPhase(since: number): StripDot["phase"] {
   if (since >= DOT_HIDE) return "gone";
