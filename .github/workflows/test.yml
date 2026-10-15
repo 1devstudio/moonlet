@@ -1,0 +1,42 @@
+# Typechecks and runs the Rust and Vitest suites on every pull request and
+# on main (`pnpm check`). The e2e suite needs a desktop session and stays
+# local (`pnpm e2e`).
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned to commits, as in release.yml.
+jobs:
+  check:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - run: pnpm install --frozen-lockfile
+
+      # The Tauri crates need their frontendDist to exist to compile; the
+      # tests do not need the built frontend in it. Some Rust tests commit.
+      - name: Prepare
+        run: |
+          mkdir -p apps/desktop/dist apps/mobile/dist
+          git config --global user.name "moonlet CI"
+          git config --global user.email "ci@moonlet.invalid"
+
+      - run: pnpm check
