@@ -16,6 +16,11 @@ describe("mentionsKey (X44 keys)", () => {
     expect(mentionsKey("moon-1420-and-moon-142", "MOON-142")).toBe(true);
     expect(mentionsKey("anything", "")).toBe(false);
   });
+
+  it("needs the key's own hyphen", () => {
+    expect(mentionsKey("feat/moon_142", "MOON-142")).toBe(false);
+    expect(mentionsKey("feat_moon-142", "MOON-142")).toBe(true);
+  });
 });
 
 describe("githubBranchNumber", () => {
@@ -44,6 +49,7 @@ const ghIssue: GhTask = {
 describe("taskFromGh", () => {
   it("keys a GitHub issue by repository and number, placed by its work while open", () => {
     expect(taskFromGh(ghIssue, "github:github.com")).toEqual({
+      mine: true,
       connection: "github:github.com",
       key: "cli/cli#13876",
       title: "`gh skill install` can't find skills",
@@ -147,6 +153,7 @@ describe("taskStart (X46 starting a session from a task)", () => {
       number: 13876,
       firstMessage: "cli/cli#13876 · `gh skill install` can't find skills\n### Describe the bug\nSkills are not found.",
       project: "cli",
+      issueType: "bug",
       github: { repo: "cli/cli", number: 13876 },
     });
   });
@@ -174,5 +181,14 @@ describe("trackerOf and trackerName", () => {
     expect(trackerOf("trello:x")).toBe(null);
     expect(trackerOf("constructor:x")).toBe(null);
     expect(trackerName("trello:x")).toBe("tracker");
+  });
+});
+
+describe("taskStart's {type} (X44 branch names)", () => {
+  const base: Task = { connection: "jira:acme.atlassian.net", key: "OPS-12", title: "Rotate keys", url: "", column: "todo", priority: 0, assignees: [], labels: ["security"], description: "", updatedMs: 0, tracker: { id: "1", state: "To Do", source: "OPS" } };
+  it("is Jira's issue type, else the first label", () => {
+    expect(taskStart({ ...base, issueType: "Bug" }, {}).issueType).toBe("Bug");
+    expect(taskStart(base, {}).issueType).toBe("security");
+    expect(taskStart({ ...base, labels: [] }, {}).issueType).toBe(undefined);
   });
 });

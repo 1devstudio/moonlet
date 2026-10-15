@@ -7,7 +7,7 @@ use crate::task::{TrackerRef, TrackerTask};
 use crate::{ApiError, TrackerKind};
 
 /// The fields a search asks for.
-const FIELDS: [&str; 8] = [
+const FIELDS: [&str; 9] = [
     "summary",
     "status",
     "priority",
@@ -16,6 +16,7 @@ const FIELDS: [&str; 8] = [
     "updated",
     "description",
     "project",
+    "issuetype",
 ];
 
 fn parse(raw: &[u8]) -> Result<Value, ApiError> {
@@ -117,6 +118,7 @@ pub fn parse_search(
                     .and_then(crate::time::timestamp_ms)
                     .unwrap_or(0),
                 cycle: None,
+                issue_type: f["issuetype"]["name"].as_str().map(String::from),
                 tracker: TrackerRef {
                     id: i["id"].as_str().unwrap_or_default().into(),
                     state: name.into(),
@@ -272,8 +274,24 @@ mod tests {
         );
         assert_eq!(
             issue_path("OPS-12"),
-            "/rest/api/3/issue/OPS-12?fields=summary,status,priority,assignee,labels,updated,description,project"
+            "/rest/api/3/issue/OPS-12?fields=summary,status,priority,assignee,labels,updated,description,project,issuetype"
         );
+    }
+
+    #[test]
+    fn an_issue_carries_its_type() {
+        // The documented `issuetype` field of an issue's fields.
+        let raw = serde_json::json!({ "issues": [{ "id": "1", "key": "OPS-12", "fields": {
+            "summary": "Rotate keys", "status": { "name": "To Do", "statusCategory": { "key": "new" } },
+            "issuetype": { "name": "Bug" }, "labels": [], "updated": "2026-10-14T09:00:00.000+0000"
+        } }] });
+        let t = parse_search(
+            raw.to_string().as_bytes(),
+            "jira:acme.atlassian.net",
+            "acme.atlassian.net",
+        )
+        .unwrap();
+        assert_eq!(t[0].issue_type.as_deref(), Some("Bug"));
     }
 
     #[test]
@@ -299,6 +317,7 @@ mod tests {
                 description: "Orders fail at the payment step.\n\n- Happens on Safari only\n- Started after the 3.2 release".into(),
                 updated_ms: 1_791_969_164_512,
                 cycle: None,
+                issue_type: None,
                 tracker: TrackerRef { id: "10002".into(), state: "In Progress".into(), source: "EX".into() },
             }
         );
@@ -412,7 +431,7 @@ mod tests {
             search_body(&["OPS".into(), "PLAT".into()], true, None),
             serde_json::json!({
                 "jql": "project in (\"OPS\", \"PLAT\") AND assignee = currentUser() AND (statusCategory != Done OR updated >= -14d) ORDER BY updated DESC",
-                "fields": ["summary", "status", "priority", "assignee", "labels", "updated", "description", "project"],
+                "fields": ["summary", "status", "priority", "assignee", "labels", "updated", "description", "project", "issuetype"],
                 "maxResults": 100
             })
         );

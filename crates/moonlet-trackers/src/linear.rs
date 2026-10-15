@@ -230,6 +230,7 @@ fn issue_task(i: &Value, connection: &str) -> TrackerTask {
             .and_then(crate::time::timestamp_ms)
             .unwrap_or(0),
         cycle: i["cycle"]["number"].as_u64(),
+        issue_type: None,
         tracker: TrackerRef {
             id: i["id"].as_str().unwrap_or_default().into(),
             state: state_name.into(),
@@ -290,6 +291,7 @@ mod tests {
                 description: "Webhooks that fail with a 5xx should be retried.\n\n- [ ] Exponential backoff\n- [ ] Give up after 24h".into(),
                 updated_ms: 1_791_969_164_512,
                 cycle: Some(42),
+                issue_type: None,
                 tracker: TrackerRef {
                     id: "1a2b3c4d-0000-4000-8000-000000000123".into(),
                     state: "In Progress".into(),
@@ -415,6 +417,14 @@ mod tests {
             "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f"
         );
         assert!(parse_viewer_id(br#"{"data":{"viewer":null}}"#).is_err());
+    }
+
+    #[test]
+    fn assigned_to_me_is_linears_own_is_me() {
+        assert!(issues_query(true).contains("assignee: { isMe: { eq: true } }"));
+        assert!(!issues_query(false).contains("isMe"));
+        // Pages of 100.
+        assert!(issues_query(true).contains("issues(first: 100, after: $after"));
     }
 
     #[test]

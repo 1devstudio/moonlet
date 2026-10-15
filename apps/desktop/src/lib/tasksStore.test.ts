@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, saveTrackersConfig, setExpanded, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -185,6 +185,31 @@ describe("syncTasks (X44 Sync)", () => {
   });
 });
 
+describe("syncTasks timer (X44 Sync)", () => {
+  it("refreshes on the chosen interval, and sets no timer when Sync is manual", async () => {
+    answers["git.origin_url"] = () => "https://github.com/acme/web.git";
+    answers["gh.tasks"] = () => [issue];
+    answers["project.worktrees"] = () => [];
+    vi.useFakeTimers();
+    try {
+      const synced = () => useTasks.getState().data["local/personal"]?.syncedAt;
+      for (const [interval, after] of [
+        [60, 160_000],
+        [0, 100_000],
+      ]) {
+        vi.setSystemTime(100_000);
+        const stop = syncTasks("local", "personal", interval);
+        await vi.waitFor(() => expect(synced()).toBe(100_000));
+        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.waitFor(() => expect(synced()).toBe(after));
+        stop();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("a linked task changed outside moonlet (X44 Sync)", () => {
   it("is announced once, and not at all with the switch off", async () => {
     shown.length = 0;
@@ -215,6 +240,8 @@ describe("a linked task changed outside moonlet (X44 Sync)", () => {
     answers["gh.tasks"] = () => [{ ...issue, closed: true, state_reason: "completed" }];
     await refreshTasks("local", "personal", 2_000);
     await vi.waitFor(() => expect(shown).toEqual([{ title: "acme/web#12 was closed", body: "Fix checkout button" }]));
+    // The notice also goes into the task's Activity.
+    expect(activityOf({ connection: "github:github.com", key: "acme/web#12" }).map((e) => e.text)).toContain("Outside moonlet: acme/web#12 was closed");
 
     useTasks.setState({ config: { ...DEFAULT_CONFIG, sync: { interval: 60, notify: false } } });
     answers["gh.tasks"] = () => [issue];
@@ -398,7 +425,7 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
 
   it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
     sent.length = 0;
-    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } });
+    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } }, { session: "Drag", assign: true });
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
   });
 });
@@ -584,6 +611,14 @@ describe("Shows per source (X44)", () => {
     });
     await refreshTasks("local", "personal", 1_000);
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2"]);
+    // An own issue of an "all" source missing from everyone's (cut at 500) still shows.
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("MOON-9", "MOON", ["Sam"]), lt("DES-2", "DES", ["Sam"])];
+    await refreshTasks("local", "personal", 2_000);
+    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2", "MOON-9"]);
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("DES-2", "DES", ["Sam"])];
+    await refreshTasks("local", "personal", 1_000);
+    // Assignee: me (X45) reads which of them the tracker gave as the account's own.
+    expect(Object.fromEntries(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.mine]))).toEqual({ "DES-2": true, "MOON-1": false, "MOON-2": true });
     useTasks.setState({ config: null });
   });
 });
@@ -697,7 +732,123 @@ describe("automatic fixes and failures, second review round (X46)", () => {
 
   it("starting a session on a GitHub issue whose repository is in no project says so", async () => {
     useStore.setState({ toasts: [] });
-    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", project: null, github: { repo: "else/where", number: 3 } });
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", project: null, github: { repo: "else/where", number: 3 } }, { session: "x", assign: true });
     expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["else/where#3: No project in this workspace has else/where as its origin"]);
+  });
+});
+
+describe("open spec lines: Activity, comments, drafts and toasts (X45, X46)", () => {
+  const lt = (key: string, column: "todo" | "in_progress" | "in_review") => ({ connection: "linear:acme", key, title: key, url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: `i-${key}`, state: "x", source: "MOON" } });
+  const pr = (o: object = {}) => ({ number: 131, url: "https://github.com/acme/app/pull/131", state: "open", title: "Hosts", checks: [], review_decision: null, ...o });
+  const rowWith = (id: string, p: object) => ({ session: { id, name: id, branch: id, path: `/w/${id}`, archived: false, task: null, task_unlinked: false, state: "idle" as const, pr: pr(p), additions: 0, subagents: 0, originRepo: null }, meta: { text: "#131", tone: "open" as const } });
+  const boardOf = (t: ReturnType<typeof lt>, rows: ReturnType<typeof rowWith>[]) => ({ todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows, needsYou: false, orphans: [], empty: null, drift: null }], done: [] });
+  const start = (key: string) => ({ ref: { connection: "linear:acme", key, url: "" }, kind: "linear" as const, key, title: key, firstMessage: "", project: null, tracker: { id: `i-${key}`, source: "MOON" } });
+
+  it("records that a session started from the task, and moves and assigns it only when asked", async () => {
+    sent.length = 0;
+    await startedFromTask("local", "personal", start("MOON-301"), { session: "Drag sessions", assign: false }, 1_000);
+    expect(activityOf({ connection: "linear:acme", key: "MOON-301" }).map((e) => e.text)).toEqual(["Session “Drag sessions” started from it"]);
+    expect(sent).toEqual([]);
+    await startedFromTask("local", "personal", start("MOON-302"), { session: "Hosts", assign: true }, 2_000);
+    expect(activityOf({ connection: "linear:acme", key: "MOON-302" }).map((e) => e.text)).toEqual(["moonlet moved it to In Progress and assigned it to you", "Session “Hosts” started from it"]);
+  });
+
+  it("says why when the move or assignment of a tracker issue fails", async () => {
+    useStore.setState({ toasts: [] });
+    failNext.push({ message: "Linear is not answering" });
+    await startedFromTask("local", "personal", start("MOON-303"), { session: "x", assign: true }, 3_000);
+    expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["MOON-303: Linear is not answering"]);
+  });
+
+  it("records the comment moonlet posts, remembers it only once it worked, and shows a failed one with Retry", async () => {
+    sent.length = 0;
+    const t = lt("MOON-304", "in_review");
+    const b = boardOf(t, [rowWith("s304", {})]);
+    failNext.push({ message: "Linear is not answering" });
+    await runAutoFixes("local", "personal", b, () => DEFAULT_RULES, 4_000);
+    expect(Object.keys(autoFixed()).filter((k) => k.startsWith("comment") && k.includes("MOON-304"))).toEqual([]);
+    expect(failureOf(t)).toBe("Linear is not answering");
+    await retryTask(t);
+    expect(sent).toEqual([{ id: "linear:acme", task: "i-MOON-304", source: "MOON", comment: "Opened a pull request: Hosts https://github.com/acme/app/pull/131" }]);
+    expect(failureOf(t)).toBe(undefined);
+    expect(Object.keys(autoFixed()).filter((k) => k.startsWith("comment") && k.includes("MOON-304"))).toHaveLength(1);
+    expect(activityOf(t).map((e) => e.text)).toContain("moonlet commented with the pull request's link");
+  });
+
+  it("adds no PR opened for a draft", async () => {
+    const t = lt("MOON-305", "in_review");
+    await runAutoFixes("local", "personal", boardOf(t, [rowWith("s305", { draft: true })]), () => ({ ...DEFAULT_RULES, pr_comment: "off" }), 5_000);
+    expect(activityOf(t)).toEqual([]);
+  });
+
+  it("records an assignment on GitHub", async () => {
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = () => [issue];
+    answers["gh.task_update"] = () => true;
+    await refreshTasks("local", "personal", 1_000);
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "acme/web#12", url: "" }, kind: "github", key: "acme/web#12", title: "Fix", firstMessage: "", project: null, github: { repo: "acme/web", number: 12 } }, { session: "Fix", assign: true }, 6_000);
+    expect(activityOf({ connection: "github:github.com", key: "acme/web#12" }).map((e) => e.text)).toContain("moonlet assigned it to you");
+  });
+});
+
+describe("the out-of-sync dot's poll and the remembered mode (X45)", () => {
+  it("asks for the shown workspace's tasks again every 5 minutes", async () => {
+    answers["git.origin_url"] = () => "https://github.com/acme/web.git";
+    answers["gh.tasks"] = () => [issue];
+    answers["project.worktrees"] = () => [];
+    useTasks.setState({ data: {} });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const stop = pollTasks("local", "personal");
+      await vi.waitFor(() => expect(useTasks.getState().data["local/personal"]?.syncedAt).toBe(1_000_000));
+      await vi.advanceTimersByTimeAsync(299_000);
+      expect(useTasks.getState().data["local/personal"].syncedAt).toBe(1_000_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(useTasks.getState().data["local/personal"].syncedAt).toBe(1_300_000));
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("remembers Tasks mode per workspace across restarts", async () => {
+    useStore.setState({ tasksMode: {} });
+    toggleTasksMode();
+    vi.resetModules();
+    const store = await import("./store");
+    const restarted = await import("./tasksStore");
+    expect(restarted.isTasksMode(store.useStore.getState())).toBe(true);
+    toggleTasksMode();
+  });
+});
+
+describe("the header's filters (X45)", () => {
+  it("are remembered across restarts", async () => {
+    setFilters({ mine: true, hideEmptyDone: false });
+    vi.resetModules();
+    const restarted = await import("./tasksStore");
+    expect(restarted.useTasks.getState().filters).toEqual({ mine: true, hideEmptyDone: false });
+    setFilters({ mine: false, hideEmptyDone: false });
+  });
+});
+
+describe("branchUser (X44 {user} in branch names)", () => {
+  it("is the first name of the tracker account, or the gh login, asked once per host", async () => {
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Ada Lovelace", auth: "api_key", sources: [] }] } });
+    expect(await branchUser("local", "linear:acme")).toBe("ada");
+    // gh not signed in yet: nothing remembered, so signing in counts at once.
+    answers["gh.whoami"] = () => {
+      throw new Error("gh is not signed in");
+    };
+    expect(await branchUser("local", "github:github.com", 1_000)).toBe("");
+    answers["gh.whoami"] = () => "sam-rivera";
+    expect(await branchUser("local", "github:github.com", 2_000)).toBe("sam-rivera");
+    // Asked again only after a minute, so `gh auth switch` shows up then.
+    answers["gh.whoami"] = () => "someone-else";
+    expect(await branchUser("local", "github:github.com", 30_000)).toBe("sam-rivera");
+    expect(await branchUser("local", "github:github.com", 70_000)).toBe("someone-else");
+    useTasks.setState({ config: null });
   });
 });

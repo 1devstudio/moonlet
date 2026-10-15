@@ -138,6 +138,8 @@ describe("out of sync (X45)", () => {
     // Automatically rule never moved it.
     expect(only(task("MOON-153", "todo"), running, "auto").drift?.kind).toBe("started");
     expect(only(task("MOON-153", "todo"), running, "off").drift).toBe(null);
+    const waiting = [session("Force-push guard", "moon-153-guard", { state: "blocked" })];
+    expect(only(task("MOON-153", "todo"), waiting, "suggest").drift?.text).toBe("Session running");
     const idle = [session("Force-push guard", "moon-153-guard")];
     expect(only(task("MOON-153", "todo"), idle, "suggest").drift?.text).toBe("Session open");
   });

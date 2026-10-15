@@ -35,33 +35,33 @@ A session can belong to a task. The link is made when a session starts from a ta
 ```
 
   The user can edit it before sending.
-- [ ] `+ New session` in the detail and `Start a session for <key>` in the list open the same composer. (Partly: built; those two buttons have no test yet.)
+- [x] `+ New session` in the detail and `Start a session for <key>` in the list open the same composer. (`tasks-mode.e2e.ts`)
 - [x] Project: the source's project (X44); for a GitHub issue, the project whose `origin` is the issue's repository. Branch: the tracker's template filled in and cut to the max length (X44), then made unique the same way session branches are (`-2`, `-3`). (`tasks.test.ts` taskStart, `a_task_branch_follows_the_trackers_default_template`, `tasks-mode.e2e.ts`)
 - [x] A quick ⌘↵ waits for the branch name. (`tasks-mode.e2e.ts`)
 - [x] "Move <key> to In Progress and assign it to me" is shown and ticked when the "session starts" rule is Automatically, shown unticked when it is Suggest, and hidden when Off. It only acts on a task in Todo (or a state not shown); a task further along is left alone. For a GitHub repository issue it reads "Assign <key> to me", and if the assignment fails an error toast says why. (`keepInStep.test.ts` startAction, `tasksStore.test.ts` moves a tracker issue to In Progress and assigns it, starting a session on a GitHub issue whose repository is in no project says so; `tasks-mode.e2e.ts`, `task-trackers.e2e.ts`)
-- [ ] If the move or the assignment of a Linear, Jira or ClickUp issue fails, an error toast says why. (Partly: built; that toast has no test yet.)
+- [x] If the move or the assignment of a Linear, Jira or ClickUp issue fails, an error toast says why. (`tasksStore.test.ts` says why when the move or assignment of a tracker issue fails)
 - [x] **Start session** on a worktree without a session creates a session on that worktree and branch instead of making a new one. A worktree is matched by its real path, so `/var/…` and `/private/var/…` name the same one. (`worktrees_made_outside_moonlet_are_listed_and_can_be_adopted`, `tasks-mode.e2e.ts`)
 - [x] The project picker stays on the worktree's project. (`tasks-mode.e2e.ts`)
 - [x] The new session is stored with its link. (`tasks-mode.e2e.ts`)
-- [ ] The task's Activity records that a session started from it. (Partly: built; the entry has no test yet.)
+- [x] The task's Activity records that a session started from it. (`tasksStore.test.ts` records that a session started from the task)
 
 ### Link dialog
 
 - [x] A search field "Search tasks, or paste a key or URL" filters by key or title. (`taskLinking.test.ts` linkChoices, `tasks-mode.e2e.ts`)
-- [ ] The dialog is titled `Link “<session name>” to a task`. (Partly: built, `SessionTask.tsx`; the title has no test yet.)
+- [x] The dialog is titled `Link “<session name>” to a task`. (`tasks-mode.e2e.ts`)
 - [x] **Suggested**: tasks whose title is the session's name or whose key is in its branch, with the reason, the task's state and its sessions (`Title matches the session name · In Progress · no sessions`). ↵ links the pasted task, else the first suggested, else the first of the rest. (`taskLinking.test.ts` linkChoices, firstChoice, `tasks-mode.e2e.ts`)
 - [x] **Recent**: the workspace's other tasks, most recently updated first. (`taskLinking.test.ts` linkChoices)
-- [ ] Recent shows at most 20. (Partly: built, `SessionTask.tsx`; the cap has no test yet.)
+- [x] Recent shows at most 20. (`taskLinking.test.ts` shows at most 20 under Recent)
 - [x] Pasting a key (`MOON-142`, `#42`, `CU-86abc`) or an issue URL of Linear, Jira, ClickUp or GitHub finds that task among the workspace's tasks, and otherwise asks its tracker: GitHub through the project's `gh` (`gh.task`, any repository), Linear, Jira and ClickUp through the connection the URL names or each connection of that tracker for a bare key. A session linked by hand to a task outside the loaded ones has a task, not "No task". A key must look like one: letters, digits and `_` starting with a letter (a Jira project key may hold `_`: `MY_PROJ-12`), `-`, then digits. `CU-` followed by letters and digits is a ClickUp task id; a digits-only `CU-12` could be any tracker. A trailing slash on a URL is fine. `#42` is that issue in the session's project's repository. (`refs.rs` a_jira_project_key_may_hold_an_underscore, `a_pasted_issue_url_reaches_the_app_as_kind_key_and_site`, `taskLinking.test.ts` findPasted, `tasksStore.test.ts` lookUpPasted, `daemon.rs` one_github_issue_by_its_number_through_gh, `linear.rs`/`jira.rs`/`clickup.rs` one issue by its key, `tasks-mode.e2e.ts`)
 - [x] The dialog looks a pasted key or URL up after a short pause, and forgets an earlier paste as soon as the query changes. ↵ waits for the lookup under way, following a newer one that replaces it, and links from the lists as they are when it ends; a lookup cancelled by the dialog closing links nothing. (`taskLinking.test.ts` pasteLookup, enterChoice, `tasks-mode.e2e.ts`)
-- [ ] A background sync does not drop the pasted task, and ↵ links once. (Partly: built, `SessionTask.tsx`; neither has a test yet.)
+- [x] A background sync does not drop the pasted task, and ↵ links once. (`taskLinking.test.ts` ↵ pressed twice links once, asking again for the same text keeps the lookup under way)
 - [x] Linking sets the stored link. (`tasks-mode.e2e.ts`)
-- [ ] The footer says "Links live in moonlet; the tracker hears of a PR only through Keep in step." (Partly: built; the footer has no test yet.)
+- [x] The footer says "Links live in moonlet; the tracker hears of a PR only through Keep in step." (`tasks-mode.e2e.ts`)
 
 ### Session view
 
 - [x] A linked session has a **task bar** above the conversation with the task's key and title and a state menu. A move from the state menu that fails shows an error toast and on the task in Tasks mode. (`tasks-mode.e2e.ts`, `taskDetails.test.ts` stateOptions, `tasksStore.test.ts` a failed action shows on its task with Retry)
-- [ ] The task bar also has `Tasks` (back to Tasks mode with the task selected), the task's glyph, `Session <i> of <n>` with previous and next when the task has more than one session, and `<tracker> ↗`. (Partly: built; these have no test yet.)
+- [x] The task bar also has `Tasks` (back to Tasks mode with the task selected), the task's glyph, `Session <i> of <n>` with previous and next when the task has more than one session, and `<tracker> ↗`. (`tasks-mode.e2e.ts`)
 - [x] The right panel has a **Task** tab, first, shown only for a linked session: the task's glyph and key; title; priority, cycle and assignees; description; **Acceptance criteria · <done> of <n>** from the description's checklist items (`- [ ]` / `- [x]`, or a section titled "Acceptance criteria"); the **Keep <tracker> in step** switch with what it does; **Sessions on this task**, with this session marked; the task's worktrees without a session; **Link to another task** and **Unlink**. Turning the switch off turns every rule off for that task. (`tasksStore.test.ts`, `taskLinking.test.ts` acceptanceCriteria, `tasks-mode.e2e.ts`)
 - [x] The Sessions sidebar's section menu groups by Project, Task, Status or None. Grouped by Task, each group is headed `<key> <title>`, in order of its newest session, then "No task". A linked session row shows a second line with the task's glyph, key and state, in the accent colour with `· out of sync` when it is (X45). A session with no task shows `No task · Link` on hover. (`sidebar.test.ts`, `tasksView.test.ts` sessionTaskLines, `tasks-mode.e2e.ts`)
 
@@ -78,15 +78,15 @@ Each rule is Automatically, Suggest or Off, per tracker: Settings › Task track
 | The issue moves to Done | archive its sessions and remove their worktrees, always after a confirm that names uncommitted changes (Suggest or Off only) | Suggest |
 
 - [x] A move lands on the tracker state whose own default column (X44) is the target and that the user did not map elsewhere; failing that, on the first state, in the tracker's order, that the user mapped onto that column. The app's Rust side picks it (`tracker_update`) from the tracker's states and the connection's mapping. (the shared `states::pick`, with a mapping in `linear.rs` a_move_follows_the_users_state_mapping and a_move_picks_the_first_state_of_the_column_by_position; Jira and ClickUp go through the same `pick`, `jira.rs` the_transition_that_reaches_a_column, `clickup.rs` user_workspaces_spaces_lists_and_statuses; `task-trackers.e2e.ts`)
-- [ ] For Jira a move takes the transition that leads to that state; with none, it fails with "No Jira transition leads to that column from here". (Partly: the transition choice is tested, `jira.rs` the_transition_that_reaches_a_column; the failure has no test yet.)
+- [x] For Jira a move takes the transition that leads to that state; with none, it fails with "No Jira transition leads to that column from here". (`jira.rs` the_transition_that_reaches_a_column, `task-trackers.e2e.ts`)
 - [x] For a GitHub repository source, "move to Done" closes the issue as completed and the other moves do nothing (the column follows the work). The state menu offers Open and Closed, which reopen or close it. (`task_updates_reach_github_through_gh`, `keepInStep.test.ts`, `taskDetails.test.ts` stateOptions, `tasksStore.test.ts`)
 - [x] A draft PR does not count as opened: no In Review move, no PR-link comment, and a GitHub issue whose only PR is a draft stays In Progress. (`tasksBoard.test.ts` a draft PR is not an open one, `keepInStep.test.ts` prComments, `git.rs` a_draft_pr_says_so)
-- [ ] A draft PR adds no `PR #n opened` to Activity. (Partly: built, `runAutoFixes`; it has no test yet.)
+- [x] A draft PR adds no `PR #n opened` to Activity. (`tasksStore.test.ts` adds no PR opened for a draft)
 - [x] The Create PR dialog adds `Closes #<n>` to the body, once, for a session linked to a GitHub issue in the PR's own repository. It follows the link rules (X44), and leaves the line out when the "a pull request opens" comment rule is Off or the task's switch is off. (`keepInStep.test.ts` Closes #N, `tasks-mode.e2e.ts`)
 - [x] A failed chip fix or state-menu move shows on the task with its error and a Retry until the app quits, and is not tried again by itself, not even after a restart. Retry acts on the task as it is now, under the rules as they are now. A PR-link comment that works afterwards does not clear the failure; one that fails too is sent again by the same Retry. (`tasksStore.test.ts` a failed action shows on its task with Retry, Retry on a chip's fix, runs an automatic fix once, automatic fixes and failures, second review round)
-- [ ] Each action moonlet takes is recorded in the task's Activity (X45), and a failed PR-link comment shows on the task with its error and a Retry too. (Partly: moves, closes and reopens are recorded, and a failed comment behind a failed fix is sent again by its Retry, `tasksStore.test.ts`; the other entries and a failed comment on its own have no test yet.)
+- [x] Each action moonlet takes is recorded in the task's Activity (X45), and a failed PR-link comment shows on the task with its error and a Retry too. (`tasksStore.test.ts` open spec lines: Activity, comments, drafts and toasts)
 - [x] Actions happen once per event: reopening the app or a repeated PR poll does not move or comment again. An automatic fix is remembered per situation, only once it worked, and a PR-link comment per PR URL. (`keepInStep.test.ts` autoFixes and prComments, `tasksStore.test.ts` runs an automatic fix once)
-- [ ] A PR-link comment is remembered only once it worked. (Partly: built, `runAutoFixes`; it has no test yet.)
+- [x] A PR-link comment is remembered only once it worked. (`tasksStore.test.ts` records the comment moonlet posts, remembers it only once it worked)
 
 ## UI
 

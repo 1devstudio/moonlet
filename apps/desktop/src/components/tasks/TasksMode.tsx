@@ -1,6 +1,6 @@
 // Tasks mode (X45): the sidebar's views and the board of the shown workspace's tasks.
 
-import { Copy, ExternalLink, GitBranch, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, Copy, ExternalLink, GitBranch, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
@@ -8,16 +8,17 @@ import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
-import { findTasks, glyphShape, initials, stateOptions } from "../../lib/taskDetails";
+import { enterOpensFirst, findTasks, glyphShape, initials, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, boardInput, ensureTasks, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { activityOf, boardInput, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, pollTasks, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setFilters, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
+import { sourceList } from "../../lib/trackerSources";
 import { applyRules, removeWorktreeAsk, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
-import { boardSummary, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
+import { boardSummary, filterBoard, modeSwitch, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
-import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
+import { Button, cx, Empty, IconButton, Kbd, StateGlyph } from "../ui";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
 
@@ -98,14 +99,10 @@ export function TasksSidebar() {
   const config = useTasks((t) => trackersConfig(t));
   const attention = useTasks((t) => t.attention);
   // The workspace's sources: GitHub repositories, then each connection's teams, projects or lists here.
-  const trackers = useMemo(() => {
-    if (!ws || !data) return [];
-    const github = data.sources.filter((x) => !x.includes(":")).map((repo) => ({ name: `GitHub · ${repo}`, attention: undefined as string | undefined }));
-    const others = (config.connections ?? []).flatMap((c) =>
-      c.sources.filter((s) => s.workspace === wsKey(ws.host, ws.id)).map((s) => ({ name: `${trackerName(c.kind)} · ${s.name}`, attention: attention[c.id] })),
-    );
-    return [...github, ...others];
-  }, [ws, data, config, attention]);
+  const trackers = useMemo(
+    () => (ws && data ? sourceList(wsKey(ws.host, ws.id), data.sources.filter((x) => !x.includes(":")), config.connections, attention) : []),
+    [ws, data, config, attention],
+  );
   const now = useNow(true);
   const counts = board ? viewCounts(board, unlinked.length) : null;
   return (
@@ -143,8 +140,10 @@ export function TasksSidebar() {
           <div className="px-4 pb-1 pt-3 ui-text-11.5 font-medium text-faint">Trackers</div>
           <ul aria-label="Trackers" className="px-2">
             {trackers.map((t) => (
-              <li key={t.name} className="flex items-center gap-2 rounded-md px-3 py-1.5 ui-text-13 text-muted">
-                <span className="min-w-0 flex-1 truncate">{t.name}</span>
+              <li key={`${t.tracker} ${t.name}`} className="flex items-center gap-2 rounded-md px-3 py-1.5 ui-text-13 text-muted">
+                <span className="min-w-0 flex-1 truncate">
+                  {t.tracker} · {t.name}
+                </span>
                 {t.attention && <span title={t.attention} className="h-1.5 w-1.5 rounded-full bg-error" />}
               </li>
             ))}
@@ -250,6 +249,22 @@ function TaskCard({ host, workspaceId, card, selected, source }: { host: string;
 
 function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: string; card: Card }) {
   const failure = useTasks(() => failureOf(card.task));
+  const now = useNow(true);
+  // ↵ opens the first session (X45).
+  const first = card.rows[0]?.session.id;
+  useEffect(() => {
+    if (!first) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = (e.target as HTMLElement | null) ?? document.body;
+      const st = useStore.getState();
+      const covered = !!st.dialog || !!st.settingsPage || !!t.closest?.('[role="dialog"]') || !!document.querySelector('[role="dialog"]');
+      const modifier = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey;
+      if (enterOpensFirst({ key: e.key, tagName: t.tagName, isContentEditable: t.isContentEditable, modifier, defaultPrevented: e.defaultPrevented, covered: covered || e.isComposing }))
+        openSession(host, first);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [host, first]);
   return (
     <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
@@ -315,20 +330,30 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
           </button>
         </div>
         {card.rows.length === 0 && <p className="mt-1 ui-text-12.5 text-muted">No sessions yet. Starting one names the branch after the issue.</p>}
-        {card.rows.map((r) => (
-          <div key={r.session.id} className="mt-2 flex items-center gap-2 rounded-lg border border-border px-3 py-2">
-            <StateGlyph state={r.session.state} size={13} />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate ui-text-13 text-fg">{r.session.name}</span>
-              <span className="truncate font-mono ui-text-11.5 text-faint">
-                {r.session.branch} · <span className={PR_TONE[listRow({ ...card, rows: [r] }).prTone]}>{r.session.pr ? listRow({ ...card, rows: [r] }).pr : "No pull request"}</span>
-              </span>
-            </span>
-            <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => openSession(host, r.session.id)}>
-              Open
-            </button>
-          </div>
-        ))}
+        {card.rows.map((r, i) => {
+          const c = sessionCard(r.session, r.session.project ?? "", now);
+          return (
+            <div key={r.session.id} role="group" aria-label={`Session ${r.session.name}`} className="mt-2 rounded-lg border border-border px-3 py-2">
+              <div className="flex items-center gap-2">
+                <StateGlyph state={r.session.state} size={13} />
+                <span className="min-w-0 flex-1 truncate ui-text-13 text-fg">{r.session.name}</span>
+                <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => openSession(host, r.session.id)}>
+                  Open{i === 0 && <> <Kbd>↵</Kbd></>}
+                </button>
+              </div>
+              <div className="mt-1 flex gap-2 font-mono ui-text-11.5 text-faint">
+                <span className="min-w-0 truncate">{c.where}</span>
+                {c.diff && <span>{c.diff}</span>}
+              </div>
+              {c.agents.map((a) => (
+                <div key={a} className="mt-0.5 flex items-center gap-1.5 ui-text-12 text-muted">
+                  <Bot size={12} /> {a}
+                </div>
+              ))}
+              <div className={cx("mt-0.5 ui-text-12", r.session.pr ? PR_TONE[listRow({ ...card, rows: [r] }).prTone] : "text-faint")}>{c.pr}</div>
+            </div>
+          );
+        })}
         {card.orphans.length > 0 && <div className="mt-4 ui-text-11.5 font-medium text-faint">Worktrees without a session {card.orphans.length}</div>}
         {card.orphans.map((w) => (
           <div key={w.path} className="mt-2 flex items-center gap-2 ui-text-12.5 text-muted">
@@ -356,6 +381,7 @@ export function TasksMode() {
   const { ws, data, board, unlinked } = useWorkspaceTasks();
   const layout = useTasks((t) => t.layout);
   const query = useTasks((t) => t.query);
+  const filters = useTasks((t) => t.filters);
   const view = useTasks((t) => t.view);
   const selected = useTasks((t) => t.selected);
   if (!ws) return null;
@@ -397,7 +423,7 @@ export function TasksMode() {
     );
   }
   if (!board) return null;
-  const shown = findTasks(viewBoard(board, view), query);
+  const shown = findTasks(filterBoard(viewBoard(board, view), filters), query);
   const labelOf = sourceLabels(data.tasks);
   const cards = Object.values(board).flat();
   const detail = cards.find((c) => `${c.task.connection} ${c.task.key}` === selected);
@@ -407,6 +433,7 @@ export function TasksMode() {
         <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-3 px-5">
           <h1 className="ui-text-15 font-medium text-fg">{TITLE[view]}</h1>
           <span className="ui-text-12.5 text-faint">{boardSummary(board)}</span>
+          {view !== "unlinked" && <Filters />}
           {view !== "unlinked" && <LayoutSwitch />}
         </header>
         {view !== "unlinked" && layout === "list" ? (
@@ -445,7 +472,7 @@ export function TasksMode() {
               </section>
             ))}
             <button
-              aria-label={`Done: ${shown.done.length} tasks${cleanUpCount(shown) ? `, ${cleanUpCount(shown)} needs clean-up` : ""}`}
+              aria-label={`Done: ${shown.done.length} ${shown.done.length === 1 ? "task" : "tasks"}${cleanUpCount(shown) ? `, ${cleanUpCount(shown)} needs clean-up` : ""}`}
               title="Open the list"
               onClick={() => setLayout("list")}
               className="flex w-[64px] shrink-0 cursor-default flex-col items-center gap-2 self-start pt-0.5 ui-text-13 text-muted hover:text-fg"
@@ -467,33 +494,46 @@ export function TasksMode() {
 export function ModeSwitch() {
   const tasks = useStore((s) => isTasksMode(s));
   const { ws, board } = useWorkspaceTasks();
-  // The dot needs the tasks: checked now and every 5 minutes, also in Sessions mode (X45).
-  useEffect(() => {
-    if (!ws) return;
-    ensureTasks(ws.host, ws.id);
-    const timer = setInterval(() => ensureTasks(ws.host, ws.id), 300_000);
-    return () => clearInterval(timer);
-  }, [ws]);
-  const drift = board ? outOfSync(board).length : 0;
+  useEffect(() => (ws ? pollTasks(ws.host, ws.id) : undefined), [ws]);
   // The switch's shortcut as the user has it (Settings › Shortcuts).
   const key = keyLabel(effectiveKeys(useStore((s) => s.settings.shortcuts)).tasks ?? "");
-  const titled = (name: string) => (key ? `${name} ${key}` : name);
+  const m = modeSwitch(key, board ? outOfSync(board).length : 0);
   const item = "no-drag relative flex h-[26px] w-[30px] items-center justify-center rounded-[5px]";
   return (
     <div role="group" aria-label="Mode" className="ml-auto flex shrink-0 items-center gap-0.5 rounded-md bg-panel-2 p-0.5">
-      <button aria-label="Sessions" aria-pressed={!tasks} title={titled("Sessions")} onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
+      <button aria-label="Sessions" aria-pressed={!tasks} title={m.sessions} onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
         <SquareTerminal size={14} />
       </button>
       <button
-        aria-label={drift ? `Tasks, ${drift} out of sync` : "Tasks"}
+        aria-label={m.label}
         aria-pressed={tasks}
-        title={titled("Tasks")}
+        title={m.tasks}
         onClick={() => !tasks && toggleTasksMode()}
         className={cx(item, tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}
       >
         <TaskGlyph column="in_progress" size={14} />
-        {drift > 0 && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
+        {m.dot && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
       </button>
+    </div>
+  );
+}
+
+/** Assignee: me and Hide empty Done in the header (X45). */
+function Filters() {
+  const filters = useTasks((t) => t.filters);
+  const item = (id: keyof typeof filters, label: string) => (
+    <button
+      aria-pressed={filters[id]}
+      onClick={() => setFilters({ ...filters, [id]: !filters[id] })}
+      className={cx("no-drag rounded-md px-2 py-1 ui-text-12", filters[id] ? "bg-raised text-fg" : "text-muted hover:text-fg")}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="group" aria-label="Filters" className="flex gap-0.5">
+      {item("mine", "Assignee: me")}
+      {item("hideEmptyDone", "Hide empty Done")}
     </div>
   );
 }
@@ -546,7 +586,7 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
           </div>
           {g.column !== "done" &&
             g.cards.map((c) => {
-              const r = listRow(c);
+              const r = listRow(c, now);
               const open = !!expanded[keyOf(c)];
               return (
                 <div key={keyOf(c)} role="row" aria-label={`${c.task.key} ${c.task.title}`} className={cx("border-b border-border", r.needsYou && "bg-blocked/[0.04]")}>
@@ -558,9 +598,9 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
                     <button className="min-w-0 flex-1 truncate text-left ui-text-13.5 text-fg hover:underline" onClick={() => useTasks.setState({ selected: keyOf(c) })}>
                       {c.task.title}
                     </button>
-                    {c.drift && (
+                    {r.chip && (
                       <button className="ui-text-12 text-accent hover:underline" onClick={() => void fixDrift(host, workspaceId, c)}>
-                        {c.drift.text} · {c.drift.fix}
+                        {r.chip}
                       </button>
                     )}
                     <span title="Sessions" className="flex items-center gap-1">
@@ -575,7 +615,7 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
                       {r.worktrees}
                     </span>
                     <span title="Updated" className="w-[80px] text-right ui-text-12 text-faint">
-                      {c.task.updatedMs ? ago(now - c.task.updatedMs) : ""}
+                      {r.updated}
                     </span>
                   </div>
                   {open && (
