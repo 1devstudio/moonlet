@@ -323,6 +323,32 @@ fn default_sort() -> String {
     "recent".into()
 }
 
+/// A GitHub issue for Tasks mode (X44): a repository source's task.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhTask {
+    /// `owner/repo`.
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    pub url: String,
+    pub closed: bool,
+    /// `completed`, `not_planned`, `duplicate` or `reopened`; `None` when
+    /// GitHub gives none.
+    #[serde(default)]
+    pub state_reason: Option<String>,
+    /// Logins.
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    pub updated_ms: u64,
+    /// Pull requests in the same repository that close the issue.
+    #[serde(default)]
+    pub closing_prs: Vec<u64>,
+}
+
 /// A linked git work tree of a project (X45).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Worktree {

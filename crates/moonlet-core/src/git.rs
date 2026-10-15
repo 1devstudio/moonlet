@@ -973,14 +973,81 @@ pub async fn gh_list(repo: &Path, kind: &str) -> Result<Vec<moonlet_proto::types
         .map(|x| moonlet_proto::types::IssueRef {
             number: x["number"].as_u64().unwrap_or(0),
             title: x["title"].as_str().unwrap_or("").into(),
-            body: x["body"]
-                .as_str()
-                .unwrap_or("")
-                .chars()
-                .take(4000)
-                .collect(),
+            body: cut_body(&x["body"]),
             url: x["url"].as_str().unwrap_or("").into(),
             head_branch: x["headRefName"].as_str().map(String::from),
+        })
+        .collect())
+}
+
+/// An issue or PR body, at most 4000 characters.
+fn cut_body(body: &serde_json::Value) -> String {
+    body.as_str().unwrap_or("").chars().take(4000).collect()
+}
+
+const GH_TASK_FIELDS: &str =
+    "number,title,body,url,state,stateReason,assignees,labels,updatedAt,closedByPullRequestsReferences";
+
+/// The repository's issues for Tasks mode (X44): the 100 most recently
+/// updated, open and closed, so recently closed ones fill the Done column.
+pub async fn gh_tasks(repo: &Path, mine: bool) -> Result<Vec<moonlet_proto::types::GhTask>> {
+    let mut args = vec![
+        "issue", "list", "--state", "all", "--limit", "100", "--search", "sort:updated-desc",
+    ];
+    if mine {
+        args.extend(["--assignee", "@me"]);
+    }
+    args.extend(["--json", GH_TASK_FIELDS]);
+    parse_gh_tasks(&gh(repo, &args).await?)
+}
+
+/// `gh issue list --json <GH_TASK_FIELDS>` as tasks.
+fn parse_gh_tasks(raw: &[u8]) -> Result<Vec<moonlet_proto::types::GhTask>> {
+    let list: Vec<serde_json::Value> = serde_json::from_slice(raw)?;
+    let names = |v: &serde_json::Value, field: &str| -> Vec<String> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x[field].as_str().map(String::from))
+            .collect()
+    };
+    Ok(list
+        .into_iter()
+        .map(|x| {
+            let url = x["url"].as_str().unwrap_or("").to_string();
+            // https://github.com/<owner>/<repo>/issues/<n>
+            let repo = match url.split('/').collect::<Vec<_>>()[..] {
+                [_, _, _, owner, name, ..] => format!("{owner}/{name}"),
+                _ => String::new(),
+            };
+            let closing_prs = x["closedByPullRequestsReferences"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|pr| {
+                    let r = &pr["repository"];
+                    // GitHub names compare case-insensitively.
+                    format!("{}/{}", r["owner"]["login"].as_str().unwrap_or(""), r["name"].as_str().unwrap_or(""))
+                        .eq_ignore_ascii_case(&repo)
+                })
+                .filter_map(|pr| pr["number"].as_u64())
+                .collect();
+            moonlet_proto::types::GhTask {
+                number: x["number"].as_u64().unwrap_or(0),
+                title: x["title"].as_str().unwrap_or("").into(),
+                body: cut_body(&x["body"]),
+                closed: x["state"].as_str().is_some_and(|s| s.eq_ignore_ascii_case("closed")),
+                state_reason: x["stateReason"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_ascii_lowercase),
+                assignees: names(&x["assignees"], "login"),
+                labels: names(&x["labels"], "name"),
+                updated_ms: x["updatedAt"].as_str().and_then(utc_ms).unwrap_or(0),
+                closing_prs,
+                url,
+                repo,
+            }
         })
         .collect())
 }
@@ -1586,6 +1653,65 @@ pub(crate) mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn github_issues_as_tasks() {
+        use moonlet_proto::types::GhTask;
+        // `gh issue list --state all --limit 100 --search sort:updated-desc
+        // --json <GH_TASK_FIELDS>` on cli/cli, 2026-10-14; people, bodies and
+        // a spam title replaced.
+        let raw = include_bytes!("../tests/fixtures/gh-issue-list.json");
+        let tasks = parse_gh_tasks(raw).unwrap();
+        assert_eq!(tasks.len(), 4);
+        assert_eq!(
+            tasks[0],
+            GhTask {
+                repo: "cli/cli".into(),
+                number: 13876,
+                title: "`gh skill install` can't find skills when there's no `skills/` directory but the `SKILL.md` files are nested".into(),
+                body: "### Describe the bug\n\n`gh skill install` fails with `no skills found` for a repo that has no `skills/` directory and keeps its `SKILL.md` files in nested subdirectories like `<category>/<skill>/SKILL.md`.\n\n[android/skills](https://github.com/android/skills) is a public example. \nIts skills live unde".into(),
+                url: "https://github.com/cli/cli/issues/13876".into(),
+                closed: false,
+                state_reason: None,
+                assignees: vec!["sam-rivera".into()],
+                labels: vec!["bug".into(), "priority-3".into(), "stale".into(), "gh-skill".into()],
+                updated_ms: 1_789_528_295_000,
+                closing_prs: vec![13894],
+            }
+        );
+        assert_eq!((tasks[1].closed, tasks[1].assignees.len()), (false, 0));
+        assert_eq!(
+            (tasks[2].closed, tasks[2].state_reason.as_deref(), tasks[2].closing_prs.clone()),
+            (true, Some("completed"), vec![14516])
+        );
+        assert_eq!((tasks[3].closed, tasks[3].state_reason.as_deref()), (true, Some("not_planned")));
+    }
+
+    #[test]
+    fn only_pull_requests_of_the_issues_own_repository_close_it() {
+        // Hand-written in the shape of the captured fixture above: a closing
+        // PR in another repository of the same owner, and the issue's repository
+        // written in mixed case as GitHub may.
+        let raw = serde_json::json!([{
+            "number": 7,
+            "title": "Gift cards at checkout",
+            "body": "x".repeat(5000),
+            "url": "https://github.com/Acme/Web/issues/7",
+            "state": "OPEN",
+            "stateReason": "",
+            "assignees": [],
+            "labels": [],
+            "updatedAt": "2026-10-14T09:00:00Z",
+            "closedByPullRequestsReferences": [
+                {"number": 12, "repository": {"name": "web", "owner": {"login": "acme"}}},
+                {"number": 3, "repository": {"name": "api", "owner": {"login": "acme"}}}
+            ]
+        }]);
+        let tasks = parse_gh_tasks(raw.to_string().as_bytes()).unwrap();
+        assert_eq!(tasks[0].closing_prs, vec![12]);
+        // Long bodies are cut to 4000 characters.
+        assert_eq!(tasks[0].body.chars().count(), 4000);
     }
 
     #[test]
