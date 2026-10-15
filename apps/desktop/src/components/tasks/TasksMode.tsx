@@ -468,7 +468,7 @@ export function TasksMode() {
               </section>
             ))}
             <button
-              aria-label={`Done: ${shown.done.length} tasks${cleanUpCount(shown) ? `, ${cleanUpCount(shown)} needs clean-up` : ""}`}
+              aria-label={`Done: ${shown.done.length} ${shown.done.length === 1 ? "task" : "tasks"}${cleanUpCount(shown) ? `, ${cleanUpCount(shown)} needs clean-up` : ""}`}
               title="Open the list"
               onClick={() => setLayout("list")}
               className="flex w-[64px] shrink-0 cursor-default flex-col items-center gap-2 self-start pt-0.5 ui-text-13 text-muted hover:text-fg"
