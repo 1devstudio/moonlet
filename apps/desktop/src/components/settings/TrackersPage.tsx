@@ -3,6 +3,7 @@
 
 import { Lock, RotateCw } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { hostsApi, rpc } from "../../lib/daemon";
 import type { RuleSetting } from "../../lib/keepInStep";
 import { M } from "../../lib/protocol";
@@ -211,20 +212,20 @@ export function TrackersPage() {
 
 /** The branch template's placeholders and what it makes of a real issue (X44 preview). */
 function BranchPreview({ kind, template, maxLen, placeholders }: { kind: TrackerKind; template: string; maxLen: number; placeholders: string }) {
-  const tasks = useTasks((t) => t.data);
   const host = useStore((s) => shownWorkspace(s)?.host ?? "local");
+  const connections = useTasks((t) => trackersConfig(t).connections);
+  // The issue only, so a sync that changes nothing about it asks nothing again.
+  const issue = useTasks(useShallow((t) => previewTask(Object.values(t.data).flatMap((d) => d.tasks), kind, connections ?? [])));
   const [example, setExample] = useState("");
   useEffect(() => {
-    const issue = previewTask(Object.values(tasks).flatMap((d) => d.tasks), kind);
-    const connection = Object.values(tasks).flatMap((d) => d.tasks).find((t) => t.key === issue.key)?.connection ?? (kind === "github" ? "github:github.com" : `${kind}:`);
     let live = true;
-    void branchUser(host, connection)
+    void branchUser(host, issue.connection)
       .then((user) => hostsApi.taskBranch({ kind, key: issue.key, title: issue.title, number: issue.number, template: template || undefined, maxLen, user, issueType: issue.issueType }))
       .then((name) => live && setExample(name), () => live && setExample(""));
     return () => {
       live = false;
     };
-  }, [tasks, kind, template, maxLen, host]);
+  }, [issue.key, issue.title, issue.number, issue.issueType, issue.connection, kind, template, maxLen, host]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <span>
       {placeholders}

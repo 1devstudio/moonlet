@@ -58,8 +58,14 @@ export function trackerRules(kind: Connection["kind"]): { id: keyof Rules; when:
 }
 
 /** The issue the branch name preview fills the template with: a real one of that tracker, else an example (X44). */
-export function previewTask(tasks: Task[], kind: TrackerKind): { key: string; title: string; number?: number; issueType?: string } {
+export function previewTask(
+  tasks: Task[],
+  kind: TrackerKind,
+  connections: { id: string; kind: string }[] = [],
+): { key: string; title: string; number?: number; issueType?: string; connection: string } {
   const real = tasks.find((t) => trackerOf(t.connection) === kind);
-  if (real) return { key: real.key, title: real.title, number: real.github?.number, issueType: real.issueType ?? real.labels[0] };
-  return kind === "github" ? { key: "acme/web#42", title: "Fix checkout on Safari", number: 42 } : { key: "MOON-151", title: "Drag sessions between sections" };
+  if (real) return { key: real.key, title: real.title, number: real.github?.number, issueType: real.issueType ?? real.labels[0], connection: real.connection };
+  // An example, with the tracker's first connection for `{user}`.
+  const connection = kind === "github" ? "github:github.com" : (connections.find((c) => c.kind === kind)?.id ?? `${kind}:`);
+  return kind === "github" ? { key: "acme/web#42", title: "Fix checkout on Safari", number: 42, connection } : { key: "MOON-151", title: "Drag sessions between sections", connection };
 }

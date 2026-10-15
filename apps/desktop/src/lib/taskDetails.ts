@@ -78,6 +78,16 @@ export function sessionCard(s: BoardSession, project: string, now: number): { wh
 }
 
 /** Whether a key press opens the detail's first session: ↵ outside a field, a button or an editor (X45). */
-export function enterOpensFirst(e: { key: string; tagName: string; isContentEditable: boolean }): boolean {
-  return e.key === "Enter" && !e.isContentEditable && !["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(e.tagName);
+export function enterOpensFirst(e: {
+  key: string;
+  tagName: string;
+  isContentEditable: boolean;
+  /** ⌘, ⌥, ⌃ or ⇧ held. */
+  modifier?: boolean;
+  defaultPrevented?: boolean;
+  /** A dialog, the composer or Settings is over Tasks mode. */
+  covered?: boolean;
+}): boolean {
+  if (e.key !== "Enter" || e.modifier || e.defaultPrevented || e.covered || e.isContentEditable) return false;
+  return !["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(e.tagName);
 }

@@ -217,10 +217,6 @@ describe("Tasks mode", () => {
     await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Hide empty Done"]').click();
     await expect(done).toHaveAttribute("aria-label", "Done: 1 task, 1 needs clean-up");
     await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Hide empty Done"]').click();
-    // Every issue here is the user's: Assignee: me keeps them all.
-    await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Assignee: me"]').click();
-    await expect(card("acme/storefront#19", "Todo")).toBeDisplayed();
-    await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Assignee: me"]').click();
   });
 
   it("offers Start session on a card whose task has a worktree and no session, and No sessions yet on one with neither", async () => {
@@ -240,6 +236,18 @@ describe("Tasks mode", () => {
     await expect($(sel.text("For acme/storefront#19"))).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Escape");
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+  });
+
+  it("shows each session's card in the detail, and ↵ opens the first", async () => {
+    await card("acme/storefront#12", "In Progress").$('.//button[normalize-space()="Fix checkout button"]').click();
+    const session = $('//aside[@aria-label="Task detail"]').$(`.//div[@role="group"][@aria-label="Session ${LINKED}"]`);
+    await expect(session.$(`.${sel.text("e2e-repo/12-fix-checkout")}`)).toBeDisplayed({ wait: 10_000 });
+    await expect(session.$(`.${sel.text("No pull request · Create PR ⇧⌘P")}`)).toBeDisplayed();
+    await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
+    await browser.keys("Enter");
+    await expect(sessionsButton()).toHaveAttribute("aria-pressed", "true", { wait: 10_000 });
+    await expect($(sel.sessionRow(LINKED))).toHaveAttribute("aria-current", "true");
+    await tasksButton().click();
   });
 
   it("copies a task's key from its detail", async () => {

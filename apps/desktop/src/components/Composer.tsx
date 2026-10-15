@@ -292,7 +292,7 @@ export function Composer({
       .then((user) => hostsApi.taskBranch({ kind: task.kind, key: task.key, title: task.title, number: task.number, template: task.template, maxLen: task.maxLen, user, issueType: task.issueType }))
       .catch(() => null);
     void taskBranchLoad.current.then(setTaskBranch);
-  }, [task, worktree]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [task, worktree, current?.host]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
   const modelLabel =
