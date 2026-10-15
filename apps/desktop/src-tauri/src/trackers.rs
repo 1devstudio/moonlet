@@ -138,6 +138,17 @@ impl Session {
         linear_request(&self.token, &self.conn.auth, query, variables).await
     }
 
+    /// A Linear parse result, with a rejected OAuth sign-in worded as such.
+    fn linear_ok<T>(&self, r: Result<T, moonlet_trackers::ApiError>) -> Res<T> {
+        r.map_err(|e| {
+            if e.auth && self.conn.auth == "oauth" {
+                TrackerError { auth: true, message: LINEAR_AGAIN.into() }
+            } else {
+                e.into()
+            }
+        })
+    }
+
     fn jira(&self, method: reqwest::Method, path: &str) -> Res<reqwest::RequestBuilder> {
         let (email, token) = self.token.split_once(':').ok_or_else(|| fail("the saved Jira token is broken; reconnect"))?;
         // The site comes from trackers.toml, which can be edited: check it again.
@@ -387,7 +398,7 @@ pub fn tracker_disconnect(id: String) -> Res<()> {
 pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
     let s = Session::load(&id).await?;
     Ok(match s.conn.kind {
-        TrackerKind::Linear => pairs(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?)?),
+        TrackerKind::Linear => pairs(s.linear_ok(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?))?),
         TrackerKind::Jira => pairs(jira::parse_projects(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/project/search?maxResults=100")?).await?)?),
         TrackerKind::Clickup => {
             let team = safe_id(&s.conn.site)?;
@@ -415,7 +426,7 @@ pub async fn tracker_task(id: String, key: String) -> Res<Option<TrackerTask>> {
     match s.conn.kind {
         TrackerKind::Linear => {
             let raw = s.linear(&linear::issue_query(), json!({ "id": key })).await?;
-            Ok(linear::parse_issue(&raw, &s.conn.id)?)
+            s.linear_ok(linear::parse_issue(&raw, &s.conn.id))
         }
         TrackerKind::Jira => {
             let (status, body) = send(s.jira(reqwest::Method::GET, &jira::issue_path(&key))?).await?;
@@ -454,7 +465,7 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
             // At most 500 issues, as for Jira.
             for _ in 0..5 {
                 let raw = s.linear(&query, json!({ "teams": keys, "after": after })).await?;
-                out.extend(linear::parse_issues(&raw, &s.conn.id)?);
+                out.extend(s.linear_ok(linear::parse_issues(&raw, &s.conn.id))?);
                 after = linear::next_page(&raw);
                 if after.is_none() {
                     break;
@@ -525,7 +536,7 @@ pub async fn tracker_states(id: String, source: String) -> Res<Vec<StateChoice>>
     };
     Ok(match s.conn.kind {
         TrackerKind::Linear => {
-            let states = linear::parse_states(&s.linear(linear::STATES, json!({ "team": source })).await?)?;
+            let states = s.linear_ok(linear::parse_states(&s.linear(linear::STATES, json!({ "team": source })).await?))?;
             named(TrackerKind::Linear, states.into_iter().map(|x| (x.name, x.kind)).collect())
         }
         TrackerKind::Jira => {
@@ -565,20 +576,20 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
         TrackerKind::Linear => {
             let mut input = json!({});
             if let Some(column) = req.column {
-                let states = linear::parse_states(&s.linear(linear::STATES, json!({ "team": req.source })).await?)?;
+                let states = s.linear_ok(linear::parse_states(&s.linear(linear::STATES, json!({ "team": req.source })).await?))?;
                 let state = linear::state_for(&states, column, &s.conn.states).ok_or_else(|| fail(format!("{} has no state for that column", req.source)))?;
                 input["stateId"] = json!(state.id);
             }
             if req.assign_me {
                 let raw = s.linear(linear::VIEWER, json!({})).await?;
-                input["assigneeId"] = json!(linear::parse_viewer_id(&raw)?);
+                input["assigneeId"] = json!(s.linear_ok(linear::parse_viewer_id(&raw))?);
             }
             if input.as_object().is_some_and(|o| !o.is_empty()) {
-                linear::parse_success(&s.linear(linear::ISSUE_UPDATE, json!({ "id": req.task, "input": input })).await?, "issueUpdate")?;
+                s.linear_ok(linear::parse_success(&s.linear(linear::ISSUE_UPDATE, json!({ "id": req.task, "input": input })).await?, "issueUpdate"))?;
             }
             if let Some(text) = req.comment {
                 let raw = s.linear(linear::COMMENT, json!({ "input": { "issueId": req.task, "body": text } })).await?;
-                linear::parse_success(&raw, "commentCreate")?;
+                s.linear_ok(linear::parse_success(&raw, "commentCreate"))?;
             }
         }
         TrackerKind::Jira => {

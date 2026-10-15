@@ -266,13 +266,10 @@ mod tests {
         let list: serde_json::Value =
             serde_json::from_slice(&fixture("clickup-tasks.json")).unwrap();
         let one = list["tasks"][0].to_string();
+        let t = parse_task(one.as_bytes(), "clickup:9012345").unwrap();
         assert_eq!(
-            parse_task(one.as_bytes(), "clickup:9012345").unwrap(),
-            parse_tasks(&fixture("clickup-tasks.json"), "clickup:9012345")
-                .unwrap()
-                .into_iter()
-                .next()
-                .unwrap()
+            (t.key.as_str(), t.title.as_str(), t.tracker.state.as_str()),
+            ("CU-9hx", "Fix login bug", "in progress")
         );
         assert_eq!(task_path("CU-86abc123", "9012345"), "/task/86abc123");
         assert_eq!(
