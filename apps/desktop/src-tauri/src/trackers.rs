@@ -503,7 +503,8 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
             s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
             let mut out = Vec::new();
             let mut token: Option<String> = None;
-            loop {
+            // At most 5 pages (500 issues), however Jira pages them.
+            for _ in 0..5 {
                 let body = jira::search_body(&keys, mine, token.as_deref());
                 let raw = s.jira_send(s.jira(reqwest::Method::POST, "/rest/api/3/search/jql")?.json(&body)).await?;
                 out.extend(jira::parse_search(&raw, &s.conn.id, &s.conn.site)?);
