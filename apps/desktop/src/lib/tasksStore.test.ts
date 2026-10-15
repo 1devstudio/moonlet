@@ -69,7 +69,7 @@ describe("refreshTasks (X44 GitHub source)", () => {
     const d = useTasks.getState().data["local/personal"];
     expect(d.sources).toEqual(["acme/web"]);
     expect(d.tasks.map((t) => [t.connection, t.key, t.column])).toEqual([["github:github.com", "acme/web#12", "open"]]);
-    expect(d.worktrees).toEqual([{ path: "/w/12-fix", branch: "12-fix", originRepo: "acme/web" }]);
+    expect(d.worktrees).toEqual([{ path: "/w/12-fix", branch: "12-fix", originRepo: "acme/web", project: "web" }]);
     expect([d.syncedAt, d.error]).toEqual([5_000, null]);
   });
 

@@ -1001,6 +1001,18 @@ pub async fn gh_tasks(repo: &Path, mine: bool) -> Result<Vec<moonlet_proto::type
     parse_gh_tasks(&gh(repo, &args).await?)
 }
 
+/// Assigns issue `number` to the user and/or closes it as completed (X46).
+pub async fn gh_task_update(repo: &Path, number: u64, assign_me: bool, close: bool) -> Result<()> {
+    let n = number.to_string();
+    if assign_me {
+        gh(repo, &["issue", "edit", &n, "--add-assignee", "@me"]).await?;
+    }
+    if close {
+        gh(repo, &["issue", "close", &n, "--reason", "completed"]).await?;
+    }
+    Ok(())
+}
+
 /// `gh issue list --json <GH_TASK_FIELDS>` as tasks.
 fn parse_gh_tasks(raw: &[u8]) -> Result<Vec<moonlet_proto::types::GhTask>> {
     let list: Vec<serde_json::Value> = serde_json::from_slice(raw)?;

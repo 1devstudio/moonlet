@@ -46,17 +46,17 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 A task is out of sync when the work and the tracker disagree. Each case has a chip and a fix:
 
-- [ ] **PR merged:** every session on the task has a merged PR and the task is not Done → `#<n> merged`, fix **Move to Done**.
+- [x] **PR merged:** every session on the task has a merged PR and the task is not Done → `#<n> merged`, fix **Move to Done**. (`tasksBoard.test.ts`, `keepInStep.test.ts`; GitHub closes the issue)
 - [ ] **Work started:** the task is Todo and a session on it is running → `Session running`, fix **In Progress**. Only shown when the "session starts" rule (X46) is not Automatically.
-- [ ] **Done, still open:** the task is Done and still has sessions that are not archived, or worktrees → `<n> session, <n> worktree`, fix **Clean up**: archive the sessions and remove the worktrees after a confirm, which warns about uncommitted changes.
-- [ ] Out of sync tasks are listed by the Out of sync view and counted on the Tasks button.
-- [ ] **Not now** on the detail hides that chip until the task or its sessions change.
+- [x] **Done, still open:** the task is Done and still has sessions that are not archived, or worktrees → `<n> session, <n> worktree`, fix **Clean up**: archive the sessions and remove the worktrees after a confirm, which warns about uncommitted changes. (`keepInStep.test.ts`, `a_worktree_without_a_session_can_be_removed`)
+- [x] Out of sync tasks are listed by the Out of sync view and counted on the Tasks button. (`tasksView.test.ts`)
+- [x] **Not now** on the detail hides that chip until the task or its sessions change. (`keepInStep.test.ts` driftKey, withoutPutOff)
 
 ### Detail panel
 
 - [ ] Header: tracker mark, key, copy key, `Open in <tracker>`, more, close.
 - [ ] Title, then State (a menu listing the columns; picking one moves the issue), Assignee, Priority, Labels, and the description cut to four lines with **More**.
-- [ ] An out-of-sync block explains why and offers the fix and **Not now**.
+- [x] An out-of-sync block explains why and offers the fix and **Not now**.
 - [ ] **Sessions** with a count and `+ New session`. Each session card: glyph, name, **Open** (↵ on the first), `project/branch`, diff stat, one line per agent (icon, name, state with time), and the PR line (`#131 open · 7/7 checks · 1 approval`, or `No pull request · Create PR ⇧⌘P`).
 - [ ] With no session: "No sessions yet. Starting one names the branch after the issue and moves it to In Progress." and **Start a session** (X46).
 - [ ] **Worktrees without a session**: branch, how it was made or its last commit, **Start session** (adopts the worktree, X46) and remove (with confirm).
