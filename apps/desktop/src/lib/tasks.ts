@@ -159,8 +159,11 @@ export interface TaskStart {
   number?: number;
   /** `<key> · <title>` and the description, which the user can edit before sending. */
   firstMessage: string;
-  /** The project to start in: the one whose GitHub repository the issue is in. */
-  project: string | null;
+  /**
+   * The projects to start in: the one whose GitHub repository the issue is
+   * in, or those whose Project settings link the issue's tracker project (X44).
+   */
+  projects: string[];
   /** A GitHub issue's repository and number, for assigning it (X46). */
   github?: { repo: string; number: number };
   /** A tracker issue's id and team/project/list, for moving it (X46). */
@@ -178,10 +181,10 @@ export interface TaskStart {
 
 /**
  * The composer's preset for starting a session from `task`. `repos` are the
- * projects' `owner/repo` by id; `sourceProjects` the project a tracker source's
- * sessions start in, by `connection source`.
+ * projects' `owner/repo` by id; `sourceProjects` the projects that link a
+ * tracker source, by `connection source`.
  */
-export function taskStart(task: Task, repos: Record<string, string | null>, sourceProjects: Record<string, string> = {}): TaskStart {
+export function taskStart(task: Task, repos: Record<string, string | null>, sourceProjects: Record<string, string[]> = {}): TaskStart {
   const description = task.description.trim();
   const repo = task.github?.repo.toLowerCase();
   return {
@@ -191,7 +194,7 @@ export function taskStart(task: Task, repos: Record<string, string | null>, sour
     title: task.title,
     number: task.github?.number,
     firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
-    project: (repo && Object.keys(repos).find((id) => repos[id]?.toLowerCase() === repo)) || (task.tracker && sourceProjects[`${task.connection} ${task.tracker.source}`]) || null,
+    projects: repo ? Object.keys(repos).filter((id) => repos[id]?.toLowerCase() === repo).slice(0, 1) : task.tracker ? (sourceProjects[`${task.connection} ${task.tracker.source}`] ?? []) : [],
     ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
     ...(task.tracker && { tracker: { id: task.tracker.id, source: task.tracker.source } }),
     ...((task.issueType ?? task.labels[0]) && { issueType: task.issueType ?? task.labels[0] }),

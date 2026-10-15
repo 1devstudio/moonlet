@@ -26,7 +26,6 @@ const message = (e: unknown) => (e as { message?: string })?.message ?? String(e
 /** Which sources a connection shows, in which workspace and starting in which project. */
 function SourcesEditor({ connection, choices, onDone }: { connection: Connection; choices: { key: string; name: string }[]; onDone: () => void }) {
   const workspaces = useStore((s) => s.workspaces);
-  const projects = useStore((s) => s.projects);
   const [rows, setRows] = useState<Source[]>(() => sourceRows(connection.sources));
   const noun = sourceNoun(connection.kind);
   const wsOptions = Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ value: wsKey(host, w.id), label: w.name, host })));
@@ -41,20 +40,18 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
       errorToast(message(e));
     }
   };
-  const grid = "grid grid-cols-[minmax(0,1fr)_150px_150px_24px] items-center gap-2";
+  const grid = "grid grid-cols-[minmax(0,1fr)_200px_24px] items-center gap-2";
   return (
     <div className="flex flex-col gap-2">
       <div className="ui-text-12.5 text-muted">
-        Add the {noun}s whose issues Tasks mode shows. For each, pick the workspace that shows it and the moonlet project its sessions start in.
+        Add the {noun}s whose issues Tasks mode shows, and the workspace that shows each. Which moonlet projects their sessions start in is under each project's settings.
       </div>
       <div className={`${grid} ui-text-11.5 text-faint`} aria-hidden>
         <span>{noun}</span>
         <span>Workspace</span>
-        <span>moonlet project</span>
       </div>
       <div role="list" aria-label="Sources" className="flex max-h-[300px] flex-col gap-1 overflow-y-auto">
         {rows.map((r, i) => {
-          const host = r.workspace.split("/")[0];
           return (
             <div key={i} role="listitem" aria-label={r.name || "New source"} className={`${grid} ui-text-12.5`}>
               <select
@@ -70,19 +67,11 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
                   </option>
                 ))}
               </select>
-              <select aria-label={`Workspace for ${r.name}`} className={inputCls} value={r.workspace} onChange={(e) => set(i, { workspace: e.target.value, project: "" })}>
+              <select aria-label={`Workspace for ${r.name}`} className={inputCls} value={r.workspace} onChange={(e) => set(i, { workspace: e.target.value })}>
                 <option value="">Workspace…</option>
                 {wsOptions.map((w) => (
                   <option key={w.value} value={w.value}>
                     {w.label}
-                  </option>
-                ))}
-              </select>
-              <select aria-label={`Project for ${r.name}`} className={inputCls} value={r.project} disabled={!r.workspace} onChange={(e) => set(i, { project: e.target.value })}>
-                <option value="">Project…</option>
-                {(projects[host] ?? []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
                   </option>
                 ))}
               </select>

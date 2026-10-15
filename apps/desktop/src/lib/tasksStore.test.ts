@@ -278,7 +278,7 @@ describe("outside changes with a state mapping (X44)", () => {
     answers["project.worktrees"] = () => [];
     const lt = (state: string, column: string) => ({ connection: "linear:acme", key: "MOON-1", title: "Hosts", url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "i1", state, source: "MOON" } });
     useTasks.setState({
-      config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "Moonlet", project: "", workspace: "local/personal" }], states: { QA: "in_progress", "In Progress": "in_review" } }] },
+      config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "Moonlet", workspace: "local/personal" }], states: { QA: "in_progress", "In Progress": "in_review" } }] },
     });
     useStore.setState({ sessions: { local: [{ id: "s1", project_id: "web", name: "Hosts", branch: "hosts", base: "main", path: "/w/hosts", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: { connection: "linear:acme", key: "MOON-1", url: "" } }] } });
     answers["tracker_tasks linear:acme"] = () => [lt("Todo", "todo")];
@@ -308,21 +308,23 @@ describe("tasks from Linear, Jira and ClickUp (X44)", () => {
     updatedMs: 0,
     tracker: { id: key, state: "Todo", source },
   });
-  const config = (sources: { key: string; workspace: string; project: string }[]) => ({
+  const config = (sources: { key: string; workspace: string }[]) => ({
     ...DEFAULT_CONFIG,
     connections: [{ id: "linear:acme", kind: "linear" as const, site: "acme", account: "Sam", auth: "api_key", sources: sources.map((x) => ({ ...x, name: x.key })) }],
   });
 
-  it("adds the tasks of the workspace's sources, and where their sessions start", async () => {
+  it("adds the tasks of the workspace's sources, and the projects that link them", async () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
+    // Project settings › Task trackers (X44): both projects handle MOON.
+    answers["project.config"] = ({ id }) => ({ agents: {}, trackers: id === "web" ? ["linear:acme/MOON", "linear:acme/DES"] : ["linear:acme/MOON"] });
     answers["tracker_tasks linear:acme"] = () => [linearTask("MOON-1", "MOON"), linearTask("DES-2", "DES")];
-    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal", project: "web" }, { key: "DES", workspace: "local/acme", project: "" }]) });
+    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal" }, { key: "DES", workspace: "local/acme" }]) });
     await refreshTasks("local", "personal", 1_000);
     const d = useTasks.getState().data["local/personal"];
     expect(d.tasks.map((t) => t.key)).toEqual(["MOON-1"]);
     expect(d.sources).toEqual(["linear:acme"]);
-    expect(d.sourceProjects).toEqual({ "linear:acme MOON": "web" });
+    expect(d.sourceProjects).toEqual({ "linear:acme MOON": ["web", "notes"], "linear:acme DES": ["web"] });
     useTasks.setState({ config: null });
   });
 
@@ -331,7 +333,7 @@ describe("tasks from Linear, Jira and ClickUp (X44)", () => {
     answers["project.worktrees"] = () => [];
     answers["gh.tasks"] = () => [];
     answers["tracker_tasks linear:acme"] = () => [linearTask("MOON-1", "MOON")];
-    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal", project: "" }]), attention: {} });
+    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal" }]), attention: {} });
     await refreshTasks("local", "personal", 1_000);
     answers["gh.tasks"] = ({ path }) => (path === "/r/web" ? [issue] : []);
     answers["tracker_tasks linear:acme"] = () => {
@@ -348,7 +350,7 @@ describe("tasks from Linear, Jira and ClickUp (X44)", () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
     answers["tracker_tasks linear:acme"] = () => [linearTask("MOON-1", "MOON")];
-    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal", project: "" }]), attention: {} });
+    useTasks.setState({ config: config([{ key: "MOON", workspace: "local/personal" }]), attention: {} });
     await refreshTasks("local", "personal", 1_000);
     answers["tracker_tasks linear:acme"] = () => {
       throw { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here." };
@@ -425,7 +427,7 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
 
   it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
     sent.length = 0;
-    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } }, { session: "Drag", assign: true });
+    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", projects: [], tracker: { id: "issue-2", source: "MOON" } }, { session: "Drag", assign: true });
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
   });
 });
@@ -592,8 +594,8 @@ describe("Assignee: me decides whose issues are fetched (X45)", () => {
     account: "Sam",
     auth: "api_key" as const,
     sources: [
-      { key: "MOON", name: "Moonlet", project: "", workspace: "local/personal" },
-      { key: "DES", name: "Design", project: "", workspace: "local/personal" },
+      { key: "MOON", name: "Moonlet", workspace: "local/personal" },
+      { key: "DES", name: "Design", workspace: "local/personal" },
     ],
   };
   const shown = () => Object.fromEntries(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.mine]));
@@ -747,7 +749,7 @@ describe("automatic fixes and failures, second review round (X46)", () => {
   it("a rejected connection does not stop the workspace's sync", async () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
-    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "M", project: "", workspace: "local/personal" }] }] }, attention: { "linear:acme": "Linear no longer accepts this token." } });
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "M", workspace: "local/personal" }] }] }, attention: { "linear:acme": "Linear no longer accepts this token." } });
     await refreshTasks("local", "personal", 9_000);
     expect([useTasks.getState().data["local/personal"].syncedAt, useTasks.getState().data["local/personal"].error]).toEqual([9_000, null]);
     useTasks.setState({ config: null, attention: {} });
@@ -755,7 +757,7 @@ describe("automatic fixes and failures, second review round (X46)", () => {
 
   it("starting a session on a GitHub issue whose repository is in no project says so", async () => {
     useStore.setState({ toasts: [] });
-    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", project: null, github: { repo: "else/where", number: 3 } }, { session: "x", assign: true });
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", projects: [], github: { repo: "else/where", number: 3 } }, { session: "x", assign: true });
     expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["else/where#3: No project in this workspace has else/where as its origin"]);
   });
 });
@@ -765,7 +767,7 @@ describe("open spec lines: Activity, comments, drafts and toasts (X45, X46)", ()
   const pr = (o: object = {}) => ({ number: 131, url: "https://github.com/acme/app/pull/131", state: "open", title: "Hosts", checks: [], review_decision: null, ...o });
   const rowWith = (id: string, p: object) => ({ session: { id, name: id, branch: id, path: `/w/${id}`, archived: false, task: null, task_unlinked: false, state: "idle" as const, pr: pr(p), additions: 0, subagents: 0, originRepo: null }, meta: { text: "#131", tone: "open" as const } });
   const boardOf = (t: ReturnType<typeof lt>, rows: ReturnType<typeof rowWith>[]) => ({ todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows, needsYou: false, orphans: [], empty: null, drift: null }], done: [] });
-  const start = (key: string) => ({ ref: { connection: "linear:acme", key, url: "" }, kind: "linear" as const, key, title: key, firstMessage: "", project: null, tracker: { id: `i-${key}`, source: "MOON" } });
+  const start = (key: string) => ({ ref: { connection: "linear:acme", key, url: "" }, kind: "linear" as const, key, title: key, firstMessage: "", projects: [], tracker: { id: `i-${key}`, source: "MOON" } });
 
   it("records that a session started from the task, and moves and assigns it only when asked", async () => {
     sent.length = 0;
@@ -810,7 +812,7 @@ describe("open spec lines: Activity, comments, drafts and toasts (X45, X46)", ()
     answers["gh.tasks"] = () => [issue];
     answers["gh.task_update"] = () => true;
     await refreshTasks("local", "personal", 1_000);
-    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "acme/web#12", url: "" }, kind: "github", key: "acme/web#12", title: "Fix", firstMessage: "", project: null, github: { repo: "acme/web", number: 12 } }, { session: "Fix", assign: true }, 6_000);
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "acme/web#12", url: "" }, kind: "github", key: "acme/web#12", title: "Fix", firstMessage: "", projects: [], github: { repo: "acme/web", number: 12 } }, { session: "Fix", assign: true }, 6_000);
     expect(activityOf({ connection: "github:github.com", key: "acme/web#12" }).map((e) => e.text)).toContain("moonlet assigned it to you");
   });
 });
