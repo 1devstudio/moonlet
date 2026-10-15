@@ -12,7 +12,7 @@ import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, trackerOf } from "./tasks";
-import { workspaceConnections } from "./trackerSources";
+import { parseTrackerLink, workspaceConnections } from "./trackerSources";
 import { applyStateMapping } from "./stateMapping";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters, TaskView } from "./tasksView";
@@ -307,7 +307,8 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
         ? await Promise.all([ask(true), everyoneToo ? ask(false) : []])
             .then(([own, all]) => {
               const ownNumbers = new Set(own.map((gh) => gh.number));
-              return [...own.map((gh) => ({ gh, mine: true })), ...all.filter((gh) => !ownNumbers.has(gh.number)).map((gh) => ({ gh, mine: false }))];
+              // `gh.tasks` without `mine` also gives closed issues: only others' open ones join.
+              return [...own.map((gh) => ({ gh, mine: true })), ...all.filter((gh) => !ownNumbers.has(gh.number) && !gh.closed).map((gh) => ({ gh, mine: false }))];
             })
             .catch((e) => {
               error = message(e);
@@ -359,9 +360,9 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const sourceProjects: Record<string, string[]> = {};
   for (const x of per)
     for (const t of x.trackers) {
-      const at = t.indexOf("/");
-      const source = `${t.slice(0, at)} ${t.slice(at + 1)}`;
-      if (at > 0) sourceProjects[source] = [...(sourceProjects[source] ?? []), x.id];
+      const link = parseTrackerLink(t);
+      const source = link && `${link.connection} ${link.key}`;
+      if (source) sourceProjects[source] = [...(sourceProjects[source] ?? []), x.id];
     }
   const tasks = new Map<string, Task>();
   for (const x of per) for (const { gh, mine } of x.issues) tasks.set(`${GITHUB} ${gh.repo}#${gh.number}`, { ...taskFromGh(gh, GITHUB), mine });

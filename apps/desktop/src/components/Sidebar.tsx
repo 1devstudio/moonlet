@@ -334,6 +334,22 @@ function TaskLineHeader({ g }: { g: TaskGroup }) {
   );
 }
 
+/** Style B's task lines, each above its sessions with a guide line (X48). */
+function TaskGroupList({ tasks, row }: { tasks: TaskGroup[]; row: (id: string) => ReactNode }) {
+  return tasks.map((t) => (
+    <div key={t.key || "none"} className="flex flex-col">
+      <TaskLineHeader g={t} />
+      <div className="relative flex flex-col">
+        <span aria-hidden className="absolute bottom-[10px] left-[calc(1rem+7.5px)] top-0 w-px bg-border-strong" />
+        {t.ids.map(row)}
+      </div>
+    </div>
+  ));
+}
+
+/** Style A's cell for one row, or none. */
+const cellOf = (column: ReturnType<typeof numberColumn> | null, id: string) => (column ? { ...column.cells[id], width: column.width } : undefined);
+
 function SessionRow({ host, s, onMenu, cell, nested }: { host: string; s: Session; onMenu: (e: React.MouseEvent) => void; cell?: { text: string; outOfSync: boolean; width: number }; nested?: boolean }) {
   const selected = useStore((st) => !st.showHistory && st.selected?.host === host && st.selected.session === s.id);
   const state = useStore((st) => sessionState(st, host, s.id));
@@ -401,7 +417,7 @@ const PREVIEW: { id: string; name: string; state: "working" | "blocked" | "idle"
 export function SessionRowsPreview({ style }: { style: RowStyle }) {
   const lines = Object.fromEntries(PREVIEW.flatMap((p) => (p.task ? [[p.id, p.task]] : [])));
   const ids = PREVIEW.map((p) => p.id);
-  const column = style === "number" ? numberColumn(ids, lines) : null;
+  const column = style === "number" ? numberColumn(ids, lines, { heading: true }) : null;
   const tasks = style === "task" ? taskGroups(ids, lines, { sources: true, groupedByTask: false }) : null;
   const row = (id: string, nested?: boolean) => {
     const p = PREVIEW.find((x) => x.id === id)!;
@@ -411,7 +427,7 @@ export function SessionRowsPreview({ style }: { style: RowStyle }) {
         aria-hidden
         selected={id === "1"}
         nested={nested}
-        cell={column ? { ...column.cells[id], width: column.width } : undefined}
+        cell={cellOf(column, id)}
         glyph={p.state !== "idle" ? <StateGlyph state={p.state} size={15} /> : <BranchIcon state={p.pr} />}
         badge={p.badge}
         name={<span className={cx("min-w-0 flex-1 truncate ui-text-13", id === "1" ? "text-fg" : "text-[#cfcfcf]")}>{p.name}</span>}
@@ -425,15 +441,7 @@ export function SessionRowsPreview({ style }: { style: RowStyle }) {
         {column?.prefix && <span className="font-mono ui-text-11.5 text-faint">{column.prefix}</span>}
       </div>
       {!tasks && ids.map((id) => row(id))}
-      {tasks?.map((t) => (
-        <div key={t.key || "none"} className="flex flex-col">
-          <TaskLineHeader g={t} />
-          <div className="relative flex flex-col">
-            <span aria-hidden className="absolute bottom-[10px] left-[calc(1rem+7.5px)] top-0 w-px bg-border-strong" />
-            {t.ids.map((id) => row(id, true))}
-          </div>
-        </div>
-      ))}
+      {tasks && <TaskGroupList tasks={tasks} row={(id) => row(id, true)} />}
     </div>
   );
 }
@@ -470,10 +478,10 @@ function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; wo
   const style = useStore((s) => rowStyle(s.settings.sessionRows));
   const { lines, sources } = useContext(TaskLines);
   const ids = g.sessions.map((s) => s.id);
-  const column = style === "number" && sources ? numberColumn(ids, lines) : null;
+  const column = style === "number" && sources ? numberColumn(ids, lines, { heading: heading === "project" }) : null;
   const tasks = style === "task" ? taskGroups(ids, lines, { sources, groupedByTask: g.kind === "task" }) : null;
   const row = (s: Session, nested?: boolean) => (
-    <SessionRow key={s.id} host={host} s={s} nested={nested} cell={column ? { ...column.cells[s.id], width: column.width } : undefined} onMenu={(e) => onRowMenu({ session: s }, e)} />
+    <SessionRow key={s.id} host={host} s={s} nested={nested} cell={cellOf(column, s.id)} onMenu={(e) => onRowMenu({ session: s }, e)} />
   );
   const header =
     heading === "project" ? (
@@ -520,16 +528,7 @@ function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; wo
         </div>
       )}
       {!collapsed && !tasks && g.sessions.map((s) => row(s))}
-      {!collapsed &&
-        tasks?.map((t) => (
-          <div key={t.key || "none"} className="flex flex-col">
-            <TaskLineHeader g={t} />
-            <div className="relative flex flex-col">
-              <span aria-hidden className="absolute bottom-[10px] left-[calc(1rem+7.5px)] top-0 w-px bg-border-strong" />
-              {t.ids.map((id) => row(g.sessions.find((s) => s.id === id)!, true))}
-            </div>
-          </div>
-        ))}
+      {!collapsed && tasks && <TaskGroupList tasks={tasks} row={(id) => row(g.sessions.find((s) => s.id === id)!, true)} />}
     </div>
   );
 }

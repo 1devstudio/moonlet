@@ -4,7 +4,7 @@ import { numberColumn, rowStyle, splitKey, taskGroups } from "./sessionRows";
 describe("splitKey (X48 A · issue number column)", () => {
   it("splits a key into its prefix and its number", () => {
     expect(splitKey("MOON-142")).toEqual({ prefix: "MOON-", number: "142" });
-    expect(splitKey("acme/web#12")).toEqual({ prefix: "#", number: "12" });
+    expect(splitKey("acme/web#12")).toEqual({ prefix: "acme/web#", number: "12" });
     expect(splitKey("CU-86abc")).toEqual({ prefix: "CU-", number: "86abc" });
     expect(splitKey("901")).toEqual({ prefix: "", number: "901" });
   });
@@ -14,7 +14,7 @@ describe("numberColumn (X48 A · issue number column)", () => {
   const line = (key: string, outOfSync = false) => ({ key, outOfSync });
 
   it("moves a shared prefix to the heading and keeps the numbers, blank for a session without a task", () => {
-    expect(numberColumn(["a", "b", "c"], { a: line("MOON-142"), b: line("MOON-9", true) })).toEqual({
+    expect(numberColumn(["a", "b", "c"], { a: line("MOON-142"), b: line("MOON-9", true) }, { heading: true })).toEqual({
       prefix: "MOON-",
       cells: { a: { text: "142", outOfSync: false }, b: { text: "9", outOfSync: true }, c: { text: "", outOfSync: false } },
       width: 3,
@@ -22,7 +22,7 @@ describe("numberColumn (X48 A · issue number column)", () => {
   });
 
   it("shows whole keys when the sessions' prefixes differ", () => {
-    expect(numberColumn(["a", "b"], { a: line("MOON-142"), b: line("OPS-7") })).toEqual({
+    expect(numberColumn(["a", "b"], { a: line("MOON-142"), b: line("OPS-7") }, { heading: true })).toEqual({
       prefix: null,
       cells: { a: { text: "MOON-142", outOfSync: false }, b: { text: "OPS-7", outOfSync: false } },
       width: 8,
@@ -30,7 +30,16 @@ describe("numberColumn (X48 A · issue number column)", () => {
   });
 
   it("has no column when no session has a task", () => {
-    expect(numberColumn(["a"], {})).toEqual({ prefix: null, cells: { a: { text: "", outOfSync: false } }, width: 0 });
+    expect(numberColumn(["a"], {}, { heading: true })).toEqual({ prefix: null, cells: { a: { text: "", outOfSync: false } }, width: 0 });
+  });
+
+  it("shows # for one GitHub repository, and whole keys for issues of two", () => {
+    expect(numberColumn(["a", "b"], { a: line("acme/web#12"), b: line("acme/web#3") }, { heading: true })).toMatchObject({ prefix: "#", cells: { a: { text: "12" }, b: { text: "3" } } });
+    expect(numberColumn(["a", "b"], { a: line("acme/web#12"), b: line("acme/api#12") }, { heading: true })).toMatchObject({ prefix: null, cells: { a: { text: "acme/web#12" }, b: { text: "acme/api#12" } } });
+  });
+
+  it("shows whole keys under a heading that cannot show the prefix", () => {
+    expect(numberColumn(["a"], { a: line("MOON-142") }, { heading: false })).toEqual({ prefix: null, cells: { a: { text: "MOON-142", outOfSync: false } }, width: 8 });
   });
 });
 
