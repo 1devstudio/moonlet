@@ -122,6 +122,10 @@ pub struct ProjectConfig {
     /// Extra agents, name to shell command.
     #[serde(default)]
     pub agents: BTreeMap<String, String>,
+    /// The tracker projects, teams or lists this project's sessions start
+    /// from, as `<connection>/<key>`: `jira:acme.atlassian.net/ABC` (X44).
+    #[serde(default)]
+    pub trackers: Vec<String>,
 }
 
 /// A project's `.moonlet/config.toml` as the Project settings dialog sees it (X8).
