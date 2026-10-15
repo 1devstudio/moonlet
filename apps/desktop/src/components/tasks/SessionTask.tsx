@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { hostsApi } from "../../lib/daemon";
 import type { Session } from "../../lib/protocol";
 import { selectSession, useStore } from "../../lib/store";
-import { acceptanceCriteria, findPasted, linkChoices } from "../../lib/taskLinking";
+import { acceptanceCriteria, findPasted, firstChoice, linkChoices } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
 import { ensureTasks, linkTask, lookUpPasted, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
@@ -143,6 +143,12 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   const close = () => useStore.setState({ dialog: null });
   const tasks = useMemo(() => data?.tasks ?? [], [data]);
   const originRepo = ws ? (data?.repos[ws.project_id] ?? null) : null;
+  const boardRef = useMemo(() => (ws?.workspace_id ? { host, id: ws.workspace_id } : null), [host, ws?.workspace_id]);
+  const { board } = useWorkspaceBoard(boardRef);
+  const sessionsOf = useMemo(() => {
+    const n = new Map(Object.values(board ?? {}).flat().map((c) => [`${c.task.connection} ${c.task.key}`, c.rows.length]));
+    return (t: Task) => n.get(`${t.connection} ${t.key}`) ?? 0;
+  }, [board]);
   useEffect(() => {
     if (ws?.workspace_id) ensureTasks(host, ws.workspace_id);
   }, [host, ws?.workspace_id]);
@@ -161,7 +167,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
     };
   }, [query, tasks, originRepo, host, ws?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ws) return null;
-  const choices = linkChoices(ws, tasks, pasted ? "" : query);
+  const choices = linkChoices(ws, tasks, pasted ? "" : query, sessionsOf);
   const pick = (t: Task) => {
     close();
     void linkTask(host, ws.id, t);
@@ -178,7 +184,17 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
       <label className="flex items-center gap-2">
         <Search size={14} className="text-muted" />
         <span className="sr-only">Search tasks</span>
-        <input autoFocus className={inputCls} placeholder="Search tasks, or paste a key or URL" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input
+          autoFocus
+          className={inputCls}
+          placeholder="Search tasks, or paste a key or URL"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            const first = e.key === "Enter" ? firstChoice(pasted, choices) : null;
+            if (first) pick(first);
+          }}
+        />
       </label>
       <div className="mt-3 flex max-h-[360px] flex-col gap-3 overflow-y-auto">
         {pasted && <section aria-label="Pasted">{row(pasted, "Pasted")}</section>}
