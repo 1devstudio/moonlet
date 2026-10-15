@@ -71,7 +71,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 - [ ] "Branch name for new sessions" is a template with `{key}`, `{title}`, `{number}`, `{user}` and `{type}`, cut to "Max length" (default 48). The preview shows the result for a real issue. Defaults: `{key}-{title}` for Linear, Jira and ClickUp, `{number}-{title}` for GitHub (the same as `gh issue develop`). Left empty, Linear uses the issue's own branch name.
 - [ ] "Link a session to an issue when": its branch name contains the issue key (on; for GitHub, its branch starts with `<number>-` and its project's `origin` is the issue's repository), its pull request mentions the key or closes the issue (on), its name looks like an issue title (off, and only ever a suggestion).
-- [ ] Keys: Linear and Jira `ABC-123`; ClickUp the custom task ID when the workspace has them, otherwise `CU-<task id>`; GitHub `<owner>/<repo>#<number>` (a pasted `#42` means that number in the current project's repository). Matching is case-insensitive and needs no letter or digit right before or after the key, so `moon-142-x` and `feat/moon_142` match `MOON-142` and `moon-1420` does not.
+- [ ] Keys: Linear and Jira `ABC-123`; ClickUp the custom task ID when the workspace has them, otherwise `CU-<task id>`; GitHub `<owner>/<repo>#<number>` (a pasted `#42` means that number in the current project's repository). Matching is case-insensitive and needs no letter or digit right before or after the key, so `moon-142-x` and `feat_moon-142` match `MOON-142` and `moon-1420` does not.
 
 ### Sync
 
