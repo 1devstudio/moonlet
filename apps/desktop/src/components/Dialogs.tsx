@@ -277,7 +277,7 @@ export function Dialogs() {
     case "new-workspace":
       return <NewWorkspaceDialog />;
     case "new-session":
-      return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} />;
+      return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} task={dialog.task} worktree={dialog.worktree} />;
     case "commit":
       return <CommitDialog />;
     case "create-pr":

@@ -38,6 +38,7 @@ import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
+import type { TaskStart } from "./tasks";
 import { spawnedNotices } from "./spawned";
 import { currentWorkspace, isShown, sessionToRestore, switcherRows, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
@@ -210,7 +211,16 @@ interface State extends UiPersist {
   showHistory: boolean;
   dialog:
     | null
-    | { kind: "new-session"; host?: string; project?: string; workspace?: string }
+    | {
+        kind: "new-session";
+        host?: string;
+        project?: string;
+        workspace?: string;
+        /** Starting from a task (X46). */
+        task?: TaskStart;
+        /** Adopting a worktree without a session, with its branch (X46). */
+        worktree?: { path: string; branch: string };
+      }
     | { kind: "add-project"; host?: string; section?: string }
     | { kind: "new-section" }
     | { kind: "new-workspace" }

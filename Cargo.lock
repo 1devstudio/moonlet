@@ -2560,6 +2560,7 @@ dependencies = [
  "moonlet-core",
  "moonlet-link",
  "moonlet-proto",
+ "moonlet-trackers",
  "reqwest",
  "rustls",
  "serde",

@@ -340,6 +340,31 @@ async fn claude_latest_version() -> Result<String, RpcError> {
     latest_from_dist_tags(&body).ok_or_else(|| err("npm did not name a latest Claude Code"))
 }
 
+/// The branch of a session started from a task (X44, X46): the template
+/// (the tracker's default when absent) filled in and cut to `max_len`.
+#[tauri::command]
+fn task_branch_name(
+    kind: moonlet_trackers::TrackerKind,
+    template: Option<String>,
+    key: String,
+    title: String,
+    number: Option<u64>,
+    max_len: Option<usize>,
+) -> String {
+    use moonlet_trackers::branch;
+    let template = template
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| branch::default_template(kind).into());
+    let vars = branch::BranchVars {
+        key: &key,
+        title: &title,
+        number,
+        user: "",
+        issue_type: "",
+    };
+    branch::branch_name(&template, &vars, max_len.unwrap_or(branch::DEFAULT_MAX_LEN))
+}
+
 #[tauri::command]
 fn app_info() -> Value {
     serde_json::json!({
@@ -400,6 +425,7 @@ pub fn run() {
             log_js,
             play_sound,
             claude_latest_version,
+            task_branch_name,
             app_info
         ])
         .run(context)
@@ -409,6 +435,23 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_task_branch_follows_the_trackers_default_template() {
+        use moonlet_trackers::TrackerKind;
+        let name = |kind, template: Option<&str>, key: &str, title: &str, number, max| {
+            task_branch_name(kind, template.map(String::from), key.into(), title.into(), number, max)
+        };
+        assert_eq!(
+            name(TrackerKind::Github, None, "acme/storefront#15", "Gift cards at checkout", Some(15), None),
+            "15-gift-cards-at-checkout"
+        );
+        assert_eq!(
+            name(TrackerKind::Linear, None, "MOON-151", "Drag sessions between sections", None, None),
+            "moon-151-drag-sessions-between-sections"
+        );
+        assert_eq!(name(TrackerKind::Linear, Some("{key}"), "MOON-151", "x", None, Some(5)), "moon");
+    }
 
     #[test]
     fn sound_path_accepts_only_allowlisted_names() {
