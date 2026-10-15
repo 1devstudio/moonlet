@@ -611,6 +611,12 @@ describe("Shows per source (X44)", () => {
     });
     await refreshTasks("local", "personal", 1_000);
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2"]);
+    // An own issue of an "all" source missing from everyone's (cut at 500) still shows.
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("MOON-9", "MOON", ["Sam"]), lt("DES-2", "DES", ["Sam"])];
+    await refreshTasks("local", "personal", 2_000);
+    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1", "MOON-2", "MOON-9"]);
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("DES-2", "DES", ["Sam"])];
+    await refreshTasks("local", "personal", 1_000);
     // Assignee: me (X45) reads which of them the tracker gave as the account's own.
     expect(Object.fromEntries(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.mine]))).toEqual({ "DES-2": true, "MOON-1": false, "MOON-2": true });
     useTasks.setState({ config: null });
@@ -832,10 +838,17 @@ describe("branchUser (X44 {user} in branch names)", () => {
   it("is the first name of the tracker account, or the gh login, asked once per host", async () => {
     useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Ada Lovelace", auth: "api_key", sources: [] }] } });
     expect(await branchUser("local", "linear:acme")).toBe("ada");
+    // gh not signed in yet: nothing remembered, so signing in counts at once.
+    answers["gh.whoami"] = () => {
+      throw new Error("gh is not signed in");
+    };
+    expect(await branchUser("local", "github:github.com", 1_000)).toBe("");
     answers["gh.whoami"] = () => "sam-rivera";
-    expect(await branchUser("local", "github:github.com")).toBe("sam-rivera");
+    expect(await branchUser("local", "github:github.com", 2_000)).toBe("sam-rivera");
+    // Asked again only after a minute, so `gh auth switch` shows up then.
     answers["gh.whoami"] = () => "someone-else";
-    expect(await branchUser("local", "github:github.com")).toBe("sam-rivera");
+    expect(await branchUser("local", "github:github.com", 30_000)).toBe("sam-rivera");
+    expect(await branchUser("local", "github:github.com", 70_000)).toBe("someone-else");
     useTasks.setState({ config: null });
   });
 });

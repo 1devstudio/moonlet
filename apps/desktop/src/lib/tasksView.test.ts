@@ -129,4 +129,9 @@ describe("filterBoard (X45 header filters)", () => {
     expect(keys(filterBoard(board, { mine: true, hideEmptyDone: false }))).toEqual(["ENG-1", "ENG-3", "ENG-4", "ENG-5"]);
     expect(keys(filterBoard(board, { mine: false, hideEmptyDone: true }))).toEqual(["ENG-1", "ENG-2", "ENG-4", "ENG-5"]);
   });
+
+  it("Assignee: me keeps someone else's task you have a session on", () => {
+    const yours = { todo: [card(t("ENG-6", "todo", false), 1)], in_progress: [], in_review: [], done: [] } as Board;
+    expect(keys(filterBoard(yours, { mine: true, hideEmptyDone: false }))).toEqual(["ENG-6"]);
+  });
 });

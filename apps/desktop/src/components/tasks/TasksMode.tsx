@@ -256,7 +256,11 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
     if (!first) return;
     const onKey = (e: KeyboardEvent) => {
       const t = (e.target as HTMLElement | null) ?? document.body;
-      if (enterOpensFirst({ key: e.key, tagName: t.tagName, isContentEditable: t.isContentEditable })) openSession(host, first);
+      const st = useStore.getState();
+      const covered = !!st.dialog || !!st.settingsPage || !!t.closest?.('[role="dialog"]') || !!document.querySelector('[role="dialog"]');
+      const modifier = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey;
+      if (enterOpensFirst({ key: e.key, tagName: t.tagName, isContentEditable: t.isContentEditable, modifier, defaultPrevented: e.defaultPrevented, covered: covered || e.isComposing }))
+        openSession(host, first);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

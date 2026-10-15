@@ -91,4 +91,11 @@ describe("enterOpensFirst (X45 detail: ↵ opens the first session)", () => {
     expect(enterOpensFirst({ key: "Enter", tagName: "DIV", isContentEditable: true })).toBe(false);
     expect(enterOpensFirst({ key: "a", tagName: "BODY", isContentEditable: false })).toBe(false);
   });
+
+  it("leaves ↵ alone with a modifier, once something handled it, or with a dialog or Settings over Tasks mode", () => {
+    const plain = { key: "Enter", tagName: "BODY", isContentEditable: false };
+    expect(enterOpensFirst({ ...plain, modifier: true })).toBe(false);
+    expect(enterOpensFirst({ ...plain, defaultPrevented: true })).toBe(false);
+    expect(enterOpensFirst({ ...plain, covered: true })).toBe(false);
+  });
 });

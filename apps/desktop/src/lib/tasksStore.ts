@@ -324,8 +324,10 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
         const shownAll = (t: Task) => c.all.includes(t.tracker?.source ?? "");
         const mine = await hostsApi.trackerTasks(c.id, true);
         const everyone = c.all.length ? (await hostsApi.trackerTasks(c.id, false)).filter(shownAll) : [];
+        // Everyone's, then the account's own that everyone's left out (it stops at 500).
         const own = new Set(mine.map((t) => t.key));
-        const list = [...everyone.map((t) => ({ ...t, mine: own.has(t.key) })), ...mine.filter((t) => !shownAll(t)).map((t) => ({ ...t, mine: true }))];
+        const seen = new Set(everyone.map((t) => t.key));
+        const list = [...everyone.map((t) => ({ ...t, mine: own.has(t.key) })), ...mine.filter((t) => !seen.has(t.key)).map((t) => ({ ...t, mine: true }))];
         return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
       } catch (e) {
         const err = e as { auth?: boolean; message?: string };
@@ -445,7 +447,8 @@ export async function lookUpPasted(host: string, projectPath: string, p: Pasted,
     const repo = m?.[1] ?? originRepo;
     if (!m || !repo) return null;
     const gh = await rpc<GhTask>(host, M.ghTask, { path: projectPath, repo, number: Number(m[2]) }).catch(() => null);
-    return gh ? taskFromGh(gh, GITHUB) : null;
+    // Whose it is is not known for a pasted issue.
+    return gh ? { ...taskFromGh(gh, GITHUB), mine: undefined } : null;
   }
   const site = p.site?.toLowerCase();
   const conns = (trackersConfig(useTasks.getState()).connections ?? []).filter((c) => (!p.kind || c.kind === p.kind) && (!site || c.site.toLowerCase() === site));
@@ -501,16 +504,25 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
   }
 }
 
-const ghLogins = new Map<string, Promise<string>>();
+// A gh login that worked, per host, and when it was asked: asked again after a minute.
+const ghLogins = new Map<string, { login: string; at: number }>();
 
 /**
  * `{user}` in branch names (X44): the first name of the tracker account,
  * lower case, or the `gh` login on the host (asked once per host).
  */
-export async function branchUser(host: string, connection: string): Promise<string> {
+export async function branchUser(host: string, connection: string, now = Date.now()): Promise<string> {
   if (trackerOf(connection) === "github") {
-    if (!ghLogins.has(host)) ghLogins.set(host, rpc<string>(host, M.ghWhoami, {}).catch(() => ""));
-    return ghLogins.get(host)!;
+    const known = ghLogins.get(host);
+    if (known && now - known.at < 60_000) return known.login;
+    try {
+      const login = await rpc<string>(host, M.ghWhoami, {});
+      ghLogins.set(host, { login, at: now });
+      return login;
+    } catch {
+      // Not signed in (yet): nothing to remember.
+      return "";
+    }
   }
   const account = trackersConfig(useTasks.getState()).connections?.find((c) => c.id === connection)?.account ?? "";
   return account.split(/\s+/)[0].toLowerCase();

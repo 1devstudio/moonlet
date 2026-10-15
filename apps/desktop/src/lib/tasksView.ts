@@ -109,6 +109,7 @@ export interface BoardFilters {
 
 /** The board with the header's filters applied (X45). */
 export function filterBoard(board: Board, f: BoardFilters): Board {
-  const keep = (c: Board["todo"][number]) => (!f.mine || c.task.mine !== false) && (!f.hideEmptyDone || c.column !== "done" || c.rows.length + c.orphans.length > 0);
+  // Assignee: me keeps a task you have a session on, whoever it is assigned to.
+  const keep = (c: Board["todo"][number]) => (!f.mine || c.task.mine !== false || c.rows.length > 0) && (!f.hideEmptyDone || c.column !== "done" || c.rows.length + c.orphans.length > 0);
   return { todo: board.todo.filter(keep), in_progress: board.in_progress.filter(keep), in_review: board.in_review.filter(keep), done: board.done.filter(keep) };
 }
