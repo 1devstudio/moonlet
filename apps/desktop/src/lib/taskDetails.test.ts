@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendActivity, findTasks, glyphShape, initials, stateOptions } from "./taskDetails";
+import { appendActivity, enterOpensFirst, findTasks, glyphShape, initials, sessionCard, stateOptions } from "./taskDetails";
 import type { Task } from "./tasks";
 import { tasksBoard } from "./tasksBoard";
 
@@ -62,5 +62,33 @@ describe("appendActivity (X45 activity)", () => {
 describe("glyphShape (X45: task state by shape)", () => {
   it("is an empty ring for Todo, half for In Progress, three quarters for In Review and a filled check for Done", () => {
     expect((["todo", "in_progress", "in_review", "done"] as const).map(glyphShape)).toEqual(["ring", "half", "three-quarters", "check"]);
+  });
+});
+
+describe("sessionCard (X45 detail: a session's card)", () => {
+  const base = { id: "s1", name: "Remote hosts", branch: "moon-142-hosts", path: "/w/moon-142-hosts", archived: false, task: null, task_unlinked: false, state: "working" as const, pr: null, additions: 42, deletions: 7, subagents: 0, originRepo: null };
+  const check = (conclusion: string | null) => ({ name: "ci", url: "", status: conclusion ? "completed" : "in_progress", conclusion });
+  it("names where it works, its diff, each agent with its state and time, and its PR", () => {
+    const card = sessionCard({ ...base, agents: [{ name: "claude", state: "working", since: 1_000 }], pr: { number: 131, url: "", state: "open", title: "", checks: [check("success"), check("success"), check("failure")], review_decision: "APPROVED" } }, "web", 121_000);
+    expect(card).toEqual({
+      where: "web/moon-142-hosts",
+      diff: "+42 −7",
+      agents: ["claude · working · 2 min"],
+      pr: "#131 open · 2/3 checks · approved",
+    });
+  });
+
+  it("offers Create PR when there is none, and leaves out an empty diff", () => {
+    expect(sessionCard({ ...base, additions: 0, deletions: 0, agents: [] }, "web", 0)).toEqual({ where: "web/moon-142-hosts", diff: "", agents: [], pr: "No pull request · Create PR ⇧⌘P" });
+  });
+});
+
+describe("enterOpensFirst (X45 detail: ↵ opens the first session)", () => {
+  it("is ↵ outside a field or button", () => {
+    expect(enterOpensFirst({ key: "Enter", tagName: "BODY", isContentEditable: false })).toBe(true);
+    expect(enterOpensFirst({ key: "Enter", tagName: "INPUT", isContentEditable: false })).toBe(false);
+    expect(enterOpensFirst({ key: "Enter", tagName: "BUTTON", isContentEditable: false })).toBe(false);
+    expect(enterOpensFirst({ key: "Enter", tagName: "DIV", isContentEditable: true })).toBe(false);
+    expect(enterOpensFirst({ key: "a", tagName: "BODY", isContentEditable: false })).toBe(false);
   });
 });
