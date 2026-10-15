@@ -1131,6 +1131,36 @@ impl SessionManager {
         Ok(st.first_holding(project).unwrap_or_else(|| st.workspaces[0].id.clone()))
     }
 
+    /// The project's linked work trees, including the sessions' own (X45).
+    pub async fn project_worktrees(&self, id: &str) -> Result<Vec<moonlet_proto::types::Worktree>> {
+        let project = self.project(id)?;
+        git::worktrees(Path::new(&project.path)).await
+    }
+
+    /// A linked work tree of the repo that no session uses, with its branch
+    /// (X46: start a session on a worktree made outside moonlet).
+    async fn adoptable_worktree(&self, repo: &Path, dir: &str) -> Result<(PathBuf, String)> {
+        // Paths compare by where they lead: `/var/…` and `/private/var/…`
+        // are the same worktree on macOS.
+        let real = |p: &str| std::fs::canonicalize(p).ok();
+        let not_ours = || format!("{dir} is not a worktree of this project");
+        let want = real(dir).with_context(not_ours)?;
+        let found = git::worktrees(repo)
+            .await?
+            .into_iter()
+            .find(|w| real(&w.path).as_ref() == Some(&want))
+            .with_context(not_ours)?;
+        let branch = found.branch.with_context(|| format!("{dir} is on a detached HEAD"))?;
+        if let Some(s) = self
+            .list_sessions()
+            .into_iter()
+            .find(|s| !s.archived && real(&s.path).as_ref() == Some(&want))
+        {
+            anyhow::bail!("{dir} is already used by session {}", s.name);
+        }
+        Ok((PathBuf::from(found.path), branch))
+    }
+
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
         let mut req = req;
         crate::chat::check_mode(req.mode.as_deref())?;
@@ -1184,8 +1214,14 @@ impl SessionManager {
             .and_then(|s| s.workspace_id);
         let workspace_id = self.session_workspace(&repo.id, req.workspace_id.as_deref(), parent_ws.as_deref())?;
         let slug = git::slug(&name);
+        let adopted = match req.worktree.as_deref() {
+            Some(dir) => Some(self.adoptable_worktree(&repo_path, dir).await?),
+            None => None,
+        };
         let existing_branches = git::branches(&repo_path).await.unwrap_or_default();
-        let branch = if req.existing_branch {
+        let branch = if let Some((_, branch)) = &adopted {
+            branch.clone()
+        } else if req.existing_branch {
             let b = req
                 .branch
                 .clone()
@@ -1198,13 +1234,16 @@ impl SessionManager {
                 .unwrap_or_else(|| format!("moonlet/{slug}"));
             unique(&wanted, |b| existing_branches.iter().any(|e| e == b))
         };
-        let dir = {
+        let from = req.from.clone().unwrap_or_else(|| repo.base_branch.clone());
+        let dir = if let Some((dir, _)) = &adopted {
+            dir.clone()
+        } else {
             let base = self.worktrees_root.join(&repo.name);
             let name = unique(&slug, |n| base.join(n).exists());
-            base.join(name)
+            let dir = base.join(name);
+            git::worktree_add(&repo_path, &dir, &branch, &from, req.existing_branch).await?;
+            dir
         };
-        let from = req.from.clone().unwrap_or_else(|| repo.base_branch.clone());
-        git::worktree_add(&repo_path, &dir, &branch, &from, req.existing_branch).await?;
 
         let config = read_config(&repo_path);
         // Absent means "the repo default"; "none" (or empty) means a plain shell.
@@ -1238,7 +1277,7 @@ impl SessionManager {
             project_id: repo.id.clone(),
             name,
             branch,
-            base: if req.existing_branch {
+            base: if req.existing_branch || adopted.is_some() {
                 repo.base_branch.clone()
             } else {
                 from.trim_start_matches("origin/").to_string()
@@ -1254,6 +1293,8 @@ impl SessionManager {
             // A session opened from a PR is that PR's session.
             pr: req.pr,
             spawned_by: parent.as_ref().and_then(|p| p.session_id.clone()),
+            task: req.task.clone(),
+            task_unlinked: false,
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
@@ -1445,6 +1486,10 @@ impl SessionManager {
             }
             if let Some(l) = req.layout {
                 w.layout = l;
+            }
+            if let Some(task) = req.task {
+                w.task_unlinked = task.is_none();
+                w.task = task;
             }
             Ok(())
         })?;
@@ -1742,6 +1787,8 @@ mod tests {
             spawned_by: None,
             add_dirs: vec![],
             workspace_id: None,
+            task: None,
+            worktree: None,
         };
         for bad in ["", "yolo"] {
             let err = mgr.create_session(req(bad)).await.unwrap_err();
@@ -1778,6 +1825,8 @@ mod tests {
                 spawned_by: None,
                 add_dirs: vec![],
                 workspace_id: None,
+                task: None,
+                worktree: None,
             })
             .await
             .unwrap();
@@ -1818,6 +1867,8 @@ mod tests {
                 spawned_by: None,
                 add_dirs: vec![],
                 workspace_id: None,
+                task: None,
+                worktree: None,
             })
             .await
             .unwrap();
@@ -2419,6 +2470,8 @@ mod tests {
                     spawned_by: None,
                     add_dirs: vec![],
                     workspace_id: None,
+                    task: None,
+                    worktree: None,
                 })
                 .await
                 .unwrap();
@@ -2478,6 +2531,8 @@ mod tests {
                 spawned_by: None,
                 add_dirs: vec![],
                 workspace_id: None,
+                task: None,
+                worktree: None,
             })
             .await
             .unwrap();
@@ -2513,6 +2568,8 @@ mod tests {
                 spawned_by: None,
                 add_dirs: vec![],
                 workspace_id: None,
+                task: None,
+                worktree: None,
             })
             .await
             .unwrap();
@@ -2573,6 +2630,8 @@ mod tests {
                 spawned_by: None,
                 add_dirs: vec![],
                 workspace_id: None,
+                task: None,
+                worktree: None,
             })
             .await
             .unwrap();
@@ -2632,6 +2691,8 @@ mod tests {
                 spawned_by: None,
                 add_dirs: vec![],
                 workspace_id: None,
+                task: None,
+                worktree: None,
             })
             .await
             .unwrap();
@@ -2697,6 +2758,8 @@ mod tests {
                 spawned_by: None,
                 add_dirs: vec![],
                 workspace_id: None,
+                task: None,
+                worktree: None,
             })
             .await
             .unwrap();
@@ -3162,6 +3225,8 @@ mod tests {
             mode: Some("plan".into()),
             pr: None,
             spawned_by: None,
+            task: None,
+            task_unlinked: false,
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],

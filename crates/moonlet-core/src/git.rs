@@ -652,6 +652,50 @@ fn checkout_of(porcelain: &str, branch: &str) -> Option<String> {
     })
 }
 
+/// The linked work trees in `git worktree list --porcelain`, with their
+/// branch (`None` when detached). The first entry, the main checkout, and
+/// prunable entries (directory gone) are left out.
+fn linked_worktrees(porcelain: &str) -> Vec<(String, Option<String>)> {
+    porcelain
+        .split("\n\n")
+        .skip(1)
+        .filter_map(|entry| {
+            let lines: Vec<&str> = entry.lines().collect();
+            if lines.iter().any(|l| l.starts_with("prunable")) {
+                return None;
+            }
+            let path = lines.iter().find_map(|l| l.strip_prefix("worktree "))?;
+            let branch = lines
+                .iter()
+                .find_map(|l| l.strip_prefix("branch refs/heads/"))
+                .map(String::from);
+            Some((path.to_string(), branch))
+        })
+        .collect()
+}
+
+/// The project's linked work trees (X45), with the time of their last
+/// commit, so ones made outside moonlet can show on their task.
+pub async fn worktrees(repo: &Path) -> Result<Vec<moonlet_proto::types::Worktree>> {
+    let root = toplevel(repo).await?;
+    let out = git_text(&root, &["worktree", "list", "--porcelain"]).await?;
+    let mut list = Vec::new();
+    for (path, branch) in linked_worktrees(&out) {
+        let last = git_text(Path::new(&path), &["log", "-1", "--format=%ct"]).await;
+        let last_commit_ms = last
+            .ok()
+            .and_then(|t| t.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+            * 1000;
+        list.push(moonlet_proto::types::Worktree {
+            path,
+            branch,
+            last_commit_ms,
+        });
+    }
+    Ok(list)
+}
+
 /// Rejects branch names git could read as an option or that are not
 /// branch names at all.
 async fn check_branch(root: &Path, branch: &str) -> Result<()> {
@@ -1509,6 +1553,39 @@ pub(crate) mod tests {
         // Its directory is gone, so nothing can be merged there.
         assert_eq!(checkout_of(raw, "moonlet/test"), None);
         assert_eq!(checkout_of(raw, "develop"), None);
+    }
+
+    #[test]
+    fn linked_worktrees_from_porcelain() {
+        // `git worktree list --porcelain` with a branch and a detached
+        // worktree, captured 2026-10-14, with the prunable entry of the test
+        // above spliced in.
+        let raw = "worktree /private/tmp/wtcap/r\n\
+                   HEAD a406ac3cb27e5460ee0336e4d8c3b2dc61566194\n\
+                   branch refs/heads/main\n\
+                   \n\
+                   worktree /private/tmp/wtcap/detached\n\
+                   HEAD a406ac3cb27e5460ee0336e4d8c3b2dc61566194\n\
+                   detached\n\
+                   \n\
+                   worktree /private/tmp/moonlet-vcheck/home/worktrees/moonlet/test\n\
+                   HEAD 449191af3cf6b19bc796d73c10ad8d3f23248210\n\
+                   branch refs/heads/moonlet/test\n\
+                   prunable gitdir file points to non-existent location\n\
+                   \n\
+                   worktree /private/tmp/wtcap/moon-149-host-health\n\
+                   HEAD a406ac3cb27e5460ee0336e4d8c3b2dc61566194\n\
+                   branch refs/heads/moon-149-host-health\n";
+        assert_eq!(
+            linked_worktrees(raw),
+            vec![
+                ("/private/tmp/wtcap/detached".to_string(), None),
+                (
+                    "/private/tmp/wtcap/moon-149-host-health".to_string(),
+                    Some("moon-149-host-health".to_string())
+                ),
+            ]
+        );
     }
 
     #[test]
