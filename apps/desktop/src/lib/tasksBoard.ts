@@ -135,8 +135,8 @@ export function tasksBoard(input: BoardInput): Board {
   const live = input.sessions.filter((s) => !s.archived);
   const used = new Set(live.map((s) => s.path));
   const loose = input.worktrees.filter((w) => w.branch && !used.has(w.path));
-  // Each session and worktree finds its task once: per task, a busy tracker's
-  // thousands of issues made the board quadratic.
+  // Each session and worktree looks up its task once, so a tracker with
+  // thousands of issues keeps the board linear in tasks (X45).
   const byTask = <T>(items: T[], find: (x: T) => Task | null) => {
     const m = new Map<Task, T[]>();
     for (const x of items) {
