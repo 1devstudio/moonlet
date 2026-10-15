@@ -6,14 +6,16 @@ import { useShallow } from "zustand/react/shallow";
 import { focusThrottle } from "../../lib/prPoll";
 import { selectSession, shownWorkspace, useStore } from "../../lib/store";
 import { type Column, taskStart } from "../../lib/tasks";
-import { type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { autoFixed, boardInput, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, putOffDrift, refreshTasks, toggleTasksMode, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
+import { autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, putOffDrift, refreshTasks, setLayout, toggleTasksMode, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, autoFixes, driftKey, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
 import { goSettings } from "../../lib/settingsNavigation";
+import { ago } from "../../lib/mobile";
 
 const COLUMNS: { id: Exclude<Column, "hidden" | "done">; label: string }[] = [
   { id: "todo", label: "Todo" },
@@ -279,6 +281,7 @@ const TITLE: Record<TaskView, string> = { mine: "My issues", review: "In review"
 export function TasksMode() {
   useTaskSync();
   const { ws, data, board, unlinked } = useWorkspaceTasks();
+  const layout = useTasks((t) => t.layout);
   const view = useTasks((t) => t.view);
   const selected = useTasks((t) => t.selected);
   if (!ws) return null;
@@ -325,8 +328,11 @@ export function TasksMode() {
         <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-3 px-5">
           <h1 className="ui-text-15 font-medium text-fg">{TITLE[view]}</h1>
           <span className="ui-text-12.5 text-faint">{boardSummary(board)}</span>
+          {view !== "unlinked" && <LayoutSwitch />}
         </header>
-        {view === "unlinked" ? (
+        {view !== "unlinked" && layout === "list" ? (
+          <TasksList host={ws.host} workspaceId={ws.id} board={shown} />
+        ) : view === "unlinked" ? (
           <section aria-label="Sessions without a task" className="overflow-y-auto px-5">
             {unlinked.length === 0 && <p className="ui-text-13 text-muted">Every session is linked to a task.</p>}
             {unlinked.map((u) => (
@@ -375,7 +381,14 @@ export function TasksMode() {
 /** Sessions | Tasks beside the workspace switcher (X45), with a dot when tasks are out of sync. */
 export function ModeSwitch() {
   const tasks = useStore((s) => isTasksMode(s));
-  const { board } = useWorkspaceTasks();
+  const { ws, board } = useWorkspaceTasks();
+  // The dot needs the tasks: checked now and every 5 minutes, also in Sessions mode (X45).
+  useEffect(() => {
+    if (!ws) return;
+    ensureTasks(ws.host, ws.id);
+    const timer = setInterval(() => ensureTasks(ws.host, ws.id), 300_000);
+    return () => clearInterval(timer);
+  }, [ws]);
   const drift = board ? outOfSync(board).length : 0;
   const item = "no-drag relative flex h-[26px] w-[30px] items-center justify-center rounded-[5px]";
   return (
@@ -393,6 +406,122 @@ export function ModeSwitch() {
         <TaskGlyph column="in_progress" size={14} />
         {drift > 0 && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
       </button>
+    </div>
+  );
+}
+
+/** Board | List in the header (X45). */
+function LayoutSwitch() {
+  const layout = useTasks((t) => t.layout);
+  const item = (id: "board" | "list", label: string) => (
+    <button
+      aria-pressed={layout === id}
+      onClick={() => setLayout(id)}
+      className={cx("no-drag h-6 rounded-[5px] px-2.5 ui-text-12.5", layout === id ? "bg-raised text-fg" : "text-muted hover:text-fg")}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="group" aria-label="Layout" className="ml-auto flex gap-0.5 rounded-md bg-panel-2 p-0.5">
+      {item("board", "Board")}
+      {item("list", "List")}
+    </div>
+  );
+}
+
+const SUM_TONE = { blocked: "text-blocked", faint: "text-faint" } as const;
+const PR_TONE = { open: "text-done", merged: "text-merged", error: "text-error", faint: "text-faint" } as const;
+const NOTE_TONE = { blocked: "text-blocked", accent: "text-accent", faint: "text-faint" } as const;
+
+/** The List layout: groups by column, rows that open into their sessions and worktrees (X45). */
+function TasksList({ host, workspaceId, board }: { host: string; workspaceId: string; board: Board }) {
+  const expanded = useTasks((t) => t.expanded);
+  const groups = listGroups(board);
+  const keyOf = (c: Card) => `${c.task.connection} ${c.task.key}`;
+  const all = groups.flatMap((g) => (g.column === "done" ? [] : g.cards));
+  const allOpen = all.length > 0 && all.every((c) => expanded[keyOf(c)]);
+  const toggle = (c: Card) => useTasks.setState((t) => ({ expanded: { ...t.expanded, [keyOf(c)]: !t.expanded[keyOf(c)] } }));
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
+      <button className="mb-2 ui-text-12 text-muted hover:text-fg" onClick={() => useTasks.setState({ expanded: allOpen ? {} : Object.fromEntries(all.map((c) => [keyOf(c), true])) })}>
+        {allOpen ? "Collapse all" : "Expand all"}
+      </button>
+      {groups.map((g) => (
+        <section key={g.name} aria-label={g.name} className="mb-4">
+          <div className="flex items-center gap-2 border-b border-border pb-1.5 ui-text-13 text-fg">
+            <TaskGlyph column={g.column} />
+            {g.name}
+            <span className="font-mono ui-text-12 text-faint">{g.cards.length}</span>
+            {g.note && <span className={cx("ui-text-12", NOTE_TONE[g.noteTone])}>{g.note}</span>}
+          </div>
+          {g.column !== "done" &&
+            g.cards.map((c) => {
+              const r = listRow(c);
+              const open = !!expanded[keyOf(c)];
+              return (
+                <div key={keyOf(c)} role="row" aria-label={`${c.task.key} ${c.task.title}`} className={cx("border-b border-border", r.needsYou && "bg-blocked/[0.04]")}>
+                  <div className="flex items-center gap-3 py-2">
+                    <button aria-label={`${open ? "Collapse" : "Expand"} ${c.task.key}`} aria-expanded={open} onClick={() => toggle(c)} className="text-muted hover:text-fg">
+                      {open ? "▾" : "▸"}
+                    </button>
+                    <span className="font-mono ui-text-12 text-faint">{c.task.key}</span>
+                    <button className="min-w-0 flex-1 truncate text-left ui-text-13.5 text-fg hover:underline" onClick={() => useTasks.setState({ selected: keyOf(c) })}>
+                      {c.task.title}
+                    </button>
+                    {c.drift && (
+                      <button className="ui-text-12 text-accent hover:underline" onClick={() => void fixDrift(host, workspaceId, c)}>
+                        {c.drift.text} · {c.drift.fix}
+                      </button>
+                    )}
+                    <span title="Sessions" className="flex items-center gap-1">
+                      {r.glyphs.map((st, i) => (
+                        <StateGlyph key={i} state={st} size={11} />
+                      ))}
+                      <span className={cx("ui-text-12", SUM_TONE[r.sumTone])}>{r.sum}</span>
+                    </span>
+                    <span className={cx("w-[120px] truncate font-mono ui-text-12", PR_TONE[r.prTone])}>{r.pr}</span>
+                    <span title="Worktrees" className="flex w-[36px] items-center gap-1 ui-text-12 text-faint">
+                      <GitBranch size={12} />
+                      {r.worktrees}
+                    </span>
+                    <span title="Updated" className="w-[80px] text-right ui-text-12 text-faint">
+                      {c.task.updatedMs ? ago(Date.now() - c.task.updatedMs) : ""}
+                    </span>
+                  </div>
+                  {open && (
+                    <div className="flex flex-col gap-1 pb-2 pl-7">
+                      {c.rows.map((row) => (
+                        <div key={row.session.id} className="flex items-center gap-2 ui-text-12.5">
+                          <StateGlyph state={row.session.state} size={12} />
+                          <button className="text-fg hover:underline" onClick={() => openSession(host, row.session.id)}>
+                            {row.session.name}
+                          </button>
+                          <span className="font-mono ui-text-11.5 text-faint">{row.session.branch}</span>
+                          <span className={cx("ml-auto font-mono ui-text-11.5", TONE[row.meta.tone])}>{row.meta.text}</span>
+                        </div>
+                      ))}
+                      {c.orphans.map((w) => (
+                        <div key={w.path} className="flex items-center gap-2 ui-text-12.5 text-muted">
+                          <GitBranch size={12} />
+                          <span className="font-mono">{w.branch}</span> worktree, no session
+                          <button className="ml-auto text-accent hover:underline" onClick={() => startSession(host, workspaceId, c, w)}>
+                            Start session
+                          </button>
+                        </div>
+                      ))}
+                      {c.rows.length === 0 && c.orphans.length === 0 && (
+                        <button className="self-start text-accent hover:underline ui-text-12.5" onClick={() => startSession(host, workspaceId, c)}>
+                          Start a session for {c.task.key}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+        </section>
+      ))}
     </div>
   );
 }
