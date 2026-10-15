@@ -1,6 +1,7 @@
 // Views, counts and labels of the Tasks mode sidebar and header (X45).
 
 import { ago } from "./mobile";
+import type { Task } from "./tasks";
 import { type Board, outOfSync } from "./tasksBoard";
 
 /** The sidebar's views. Current cycle joins with trackers that have cycles. */
@@ -75,4 +76,14 @@ export function sessionTaskLines(board: Board): Record<string, SessionTaskLine> 
     }
   }
   return out;
+}
+
+/**
+ * A card's source (X45): the repository, or the team, project or list, named
+ * only when the workspace's tasks come from more than one.
+ */
+export function sourceLabels(tasks: Task[]): (task: Task) => string | undefined {
+  const of = (t: Task) => (t.github ? `gh ${t.github.repo}` : `${t.connection} ${t.tracker?.source ?? ""}`);
+  const many = new Set(tasks.map(of)).size > 1;
+  return (t) => (many ? (t.github ? t.github.repo.split("/")[1] : (t.tracker?.source ?? "")) : undefined);
 }

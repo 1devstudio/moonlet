@@ -14,7 +14,7 @@ import { activityOf, boardInput, ensureTasks, failureOf, fixDrift, isTasksMode, 
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
 import { applyRules, removeWorktreeAsk, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
-import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
+import { boardSummary, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
@@ -398,6 +398,7 @@ export function TasksMode() {
   }
   if (!board) return null;
   const shown = findTasks(viewBoard(board, view), query);
+  const labelOf = sourceLabels(data.tasks);
   const cards = Object.values(board).flat();
   const detail = cards.find((c) => `${c.task.connection} ${c.task.key}` === selected);
   return (
@@ -438,7 +439,7 @@ export function TasksMode() {
                 </div>
                 <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                   {shown[col.id].map((c) => (
-                    <TaskCard key={c.task.key} host={ws.host} workspaceId={ws.id} card={c} selected={c === detail} source={data.sources.length > 1 ? sourceLabel(c.task) : undefined} />
+                    <TaskCard key={c.task.key} host={ws.host} workspaceId={ws.id} card={c} selected={c === detail} source={labelOf(c.task)} />
                   ))}
                 </div>
               </section>
@@ -668,10 +669,6 @@ function Activity({ task }: { task: Task }) {
   );
 }
 
-/** Where a task comes from, on its card when a workspace has several sources: the repository or the team, project or list. */
-function sourceLabel(task: Task): string {
-  return task.github ? task.github.repo.split("/")[1] : (task.tracker?.source ?? "");
-}
 
 /** Removes a worktree without a session, after a confirm that names lost changes (X45 detail). */
 async function removeWorktree(host: string, w: BoardWorktree) {
