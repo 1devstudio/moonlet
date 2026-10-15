@@ -659,8 +659,11 @@ mod tests {
             .unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         mgr.attach(info.id, 1, tx, None).unwrap();
+        // The first prompt reports the first `node` on PATH. A login bash
+        // runs the system profile, whose path_helper can put a machine's own
+        // node (Homebrew's, on CI) ahead of n1, so only its presence is fixed.
         let first = read_until(&mut rx, "133;A").await;
-        assert!(first.contains(&format!("\x1b]1337;MoonletNodePath={n1}/node\x07")), "{shell} first prompt: {first:?}");
+        assert!(first.contains("\x1b]1337;MoonletNodePath=/"), "{shell} first prompt: {first:?}");
         tokio::time::sleep(Duration::from_millis(300)).await;
         mgr.write(info.id, b"true\n".to_vec()).unwrap();
         let same = read_until(&mut rx, "133;A").await;
