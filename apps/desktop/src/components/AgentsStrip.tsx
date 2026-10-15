@@ -8,7 +8,7 @@ import { useNow } from "../lib/useNow";
 import { cx } from "./ui";
 
 /** The top row of the chat input (X42): the agents launched since the
- *  user's last message. Finished dots pop and hide, and the row folds away
+ *  user's last message. Ended agents' dots pop and hide, and the row folds away
  *  once all are done. */
 export function AgentsStrip({ host, id, st, onSend }: { host: string; id: number; st: ChatState; onSend: (text: string) => void }) {
   const dismissedAt = useStore((s) => s.stripDismissed[termKey(host, id)] ?? 0);
@@ -28,7 +28,7 @@ export function AgentsStrip({ host, id, st, onSend }: { host: string; id: number
   return (
     <div aria-label="Agents" aria-hidden={view.collapsed} inert={view.collapsed} className={cx("agents-strip", view.collapsed && "collapsed")}>
       <div className="flex h-full items-center gap-2.5 pl-3.5 pr-2 ui-text-12.5">
-        <span role="img" aria-label={view.counts.map((c) => c.text).join(", ") || view.title} className="-mr-1 flex shrink-0 items-center">
+        <span role="img" aria-label={view.label} className="-mr-1 flex shrink-0 items-center">
           {view.dots.map((d) => (
             <span key={d.key} className={cx("agents-dot", AGENT_STATE[d.state].dot, d.state === "running" && "pulse", d.phase !== "on" && d.phase)} />
           ))}
@@ -41,15 +41,17 @@ export function AgentsStrip({ host, id, st, onSend }: { host: string; id: number
               </svg>
               {view.title}
             </span>
-          ) : (
-            <span className="text-fg">{view.title}</span>
-          )}
+          ) : null}
           {view.counts.map((c) => (
             <span key={c.state} className={cx(c.state === "done" && "agents-done-count", c.state === "done" && view.flash && "text-done")}>
-              {` · ${c.text}`}
+              {`${c.lead ? "" : " · "}${c.text}`}
             </span>
           ))}
-          {view.alert && <span className={cx("agents-fade-in", view.alert.tone === "blocked" ? "text-blocked" : "text-error")}> · {view.alert.text}</span>}
+          {view.alert && (
+            <span className={cx("agents-fade-in", view.alert.tone === "blocked" ? "text-blocked" : "text-error")}>
+              {`${view.alert.lead ? "" : " · "}${view.alert.text}`}
+            </span>
+          )}
         </span>
         <span className="ml-auto shrink-0 font-mono ui-text-12 tabular-nums text-faint">{view.clock}</span>
         {view.button === "review" && (
