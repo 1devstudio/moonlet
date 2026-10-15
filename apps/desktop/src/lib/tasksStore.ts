@@ -501,6 +501,21 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
   }
 }
 
+const ghLogins = new Map<string, Promise<string>>();
+
+/**
+ * `{user}` in branch names (X44): the first name of the tracker account,
+ * lower case, or the `gh` login on the host (asked once per host).
+ */
+export async function branchUser(host: string, connection: string): Promise<string> {
+  if (trackerOf(connection) === "github") {
+    if (!ghLogins.has(host)) ghLogins.set(host, rpc<string>(host, M.ghWhoami, {}).catch(() => ""));
+    return ghLogins.get(host)!;
+  }
+  const account = trackersConfig(useTasks.getState()).connections?.find((c) => c.id === connection)?.account ?? "";
+  return account.split(/\s+/)[0].toLowerCase();
+}
+
 /** A connection the user signed in to again, or forgot: its attention dot goes (X44). */
 export function reconnected(id: string) {
   useTasks.setState((t) => ({ attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== id)) }));

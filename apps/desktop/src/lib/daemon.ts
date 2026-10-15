@@ -62,8 +62,17 @@ export const hostsApi = {
   /** A key or issue URL pasted into the link dialog, or null (X46). */
   parsePasted: (input: string) => invoke<import("./taskLinking").Pasted | null>("task_parse_pasted", { input }),
   /** The branch for a session started from a task (X46); `kind` is the tracker. */
-  taskBranch: (o: { kind: "linear" | "jira" | "clickup" | "github"; key: string; title: string; number?: number; template?: string; maxLen?: number }) =>
-    invoke<string>("task_branch_name", { kind: o.kind, template: o.template ?? null, key: o.key, title: o.title, number: o.number ?? null, maxLen: o.maxLen ?? null }),
+  taskBranch: (o: { kind: "linear" | "jira" | "clickup" | "github"; key: string; title: string; number?: number; template?: string; maxLen?: number; user?: string; issueType?: string }) =>
+    invoke<string>("task_branch_name", {
+      kind: o.kind,
+      template: o.template ?? null,
+      key: o.key,
+      title: o.title,
+      number: o.number ?? null,
+      maxLen: o.maxLen ?? null,
+      user: o.user ?? null,
+      issueType: o.issueType ?? null,
+    }),
 };
 
 /** Must match `RESET_FLAG` in src-tauri/src/hosts.rs. */

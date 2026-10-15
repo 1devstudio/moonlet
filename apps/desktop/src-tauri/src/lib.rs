@@ -352,6 +352,8 @@ fn task_branch_name(
     title: String,
     number: Option<u64>,
     max_len: Option<usize>,
+    user: Option<String>,
+    issue_type: Option<String>,
 ) -> String {
     use moonlet_trackers::branch;
     let template = template
@@ -361,8 +363,8 @@ fn task_branch_name(
         key: &key,
         title: &title,
         number,
-        user: "",
-        issue_type: "",
+        user: user.as_deref().unwrap_or(""),
+        issue_type: issue_type.as_deref().unwrap_or(""),
     };
     branch::branch_name(&template, &vars, max_len.unwrap_or(branch::DEFAULT_MAX_LEN))
 }
@@ -521,7 +523,7 @@ mod tests {
     fn a_task_branch_follows_the_trackers_default_template() {
         use moonlet_trackers::TrackerKind;
         let name = |kind, template: Option<&str>, key: &str, title: &str, number, max| {
-            task_branch_name(kind, template.map(String::from), key.into(), title.into(), number, max)
+            task_branch_name(kind, template.map(String::from), key.into(), title.into(), number, max, None, None)
         };
         assert_eq!(
             name(TrackerKind::Github, None, "acme/storefront#15", "Gift cards at checkout", Some(15), None),
@@ -532,6 +534,24 @@ mod tests {
             "moon-151-drag-sessions-between-sections"
         );
         assert_eq!(name(TrackerKind::Linear, Some("{key}"), "MOON-151", "x", None, Some(5)), "moon");
+    }
+
+    #[test]
+    fn a_task_branch_fills_user_and_type() {
+        use moonlet_trackers::TrackerKind;
+        assert_eq!(
+            task_branch_name(
+                TrackerKind::Jira,
+                Some("{user}/{type}/{key}-{title}".into()),
+                "OPS-12".into(),
+                "Rotate keys".into(),
+                None,
+                None,
+                Some("sam".into()),
+                Some("Bug".into()),
+            ),
+            "sam/bug/ops-12-rotate-keys"
+        );
     }
 
     #[test]

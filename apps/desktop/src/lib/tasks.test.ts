@@ -153,6 +153,7 @@ describe("taskStart (X46 starting a session from a task)", () => {
       number: 13876,
       firstMessage: "cli/cli#13876 · `gh skill install` can't find skills\n### Describe the bug\nSkills are not found.",
       project: "cli",
+      issueType: "bug",
       github: { repo: "cli/cli", number: 13876 },
     });
   });
@@ -180,5 +181,14 @@ describe("trackerOf and trackerName", () => {
     expect(trackerOf("trello:x")).toBe(null);
     expect(trackerOf("constructor:x")).toBe(null);
     expect(trackerName("trello:x")).toBe("tracker");
+  });
+});
+
+describe("taskStart's {type} (X44 branch names)", () => {
+  const base: Task = { connection: "jira:acme.atlassian.net", key: "OPS-12", title: "Rotate keys", url: "", column: "todo", priority: 0, assignees: [], labels: ["security"], description: "", updatedMs: 0, tracker: { id: "1", state: "To Do", source: "OPS" } };
+  it("is Jira's issue type, else the first label", () => {
+    expect(taskStart({ ...base, issueType: "Bug" }, {}).issueType).toBe("Bug");
+    expect(taskStart(base, {}).issueType).toBe("security");
+    expect(taskStart({ ...base, labels: [] }, {}).issueType).toBe(undefined);
   });
 });

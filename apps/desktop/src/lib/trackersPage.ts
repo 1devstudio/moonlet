@@ -1,6 +1,7 @@
 // Settings › Task trackers (X44): status lines and the rules' wording.
 
 import type { RuleSetting, Rules } from "./keepInStep";
+import { type Task, type TrackerKind, trackerOf } from "./tasks";
 import type { Connection } from "./tasksStore";
 import type { StatusLine } from "./settingsPage";
 
@@ -54,4 +55,11 @@ export function trackerRules(kind: Connection["kind"]): { id: keyof Rules; when:
     { id: "pr_comment", when: "A pull request opens", then: `comment on the ${issue} with its link`, hint: "Once per pull request." },
     { id: "issue_done", when: `The ${issue} moves to Done`, then: "archive its sessions and remove their worktrees", hint: "Always asks first.", auto: false },
   ];
+}
+
+/** The issue the branch name preview fills the template with: a real one of that tracker, else an example (X44). */
+export function previewTask(tasks: Task[], kind: TrackerKind): { key: string; title: string; number?: number; issueType?: string } {
+  const real = tasks.find((t) => trackerOf(t.connection) === kind);
+  if (real) return { key: real.key, title: real.title, number: real.github?.number, issueType: real.issueType ?? real.labels[0] };
+  return kind === "github" ? { key: "acme/web#42", title: "Fix checkout on Safari", number: 42 } : { key: "MOON-151", title: "Drag sessions between sections" };
 }

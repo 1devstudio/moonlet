@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectionLine, githubConnection, trackerRules } from "./trackersPage";
+import { connectionLine, githubConnection, previewTask, trackerRules } from "./trackersPage";
 
 describe("Settings › Task trackers: the GitHub connection (X44)", () => {
   it("says who gh is signed in as, or why it isn't", () => {
@@ -32,5 +32,15 @@ describe("Linear, Jira and ClickUp connections (X44)", () => {
       "The issue moves to Done → archive its sessions and remove their worktrees",
     ]);
     expect(trackerRules("clickup")[0].when).toBe("A session starts from a task");
+  });
+});
+
+describe("previewTask (X44 branch name preview)", () => {
+  const t = (connection: string, key: string, title: string) => ({ connection, key, title, url: "", column: "todo" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0 });
+  it("shows a real issue of that tracker, else an example", () => {
+    const tasks = [{ ...t("github:github.com", "acme/web#7", "Fix checkout"), github: { repo: "acme/web", number: 7, closingPrs: [] } }, t("jira:ops.atlassian.net", "OPS-12", "Rotate keys")];
+    expect(previewTask(tasks, "jira")).toMatchObject({ key: "OPS-12", title: "Rotate keys" });
+    expect(previewTask(tasks, "linear")).toMatchObject({ key: "MOON-151", title: "Drag sessions between sections" });
+    expect(previewTask(tasks, "github")).toMatchObject({ key: "acme/web#7", number: 7 });
   });
 });
