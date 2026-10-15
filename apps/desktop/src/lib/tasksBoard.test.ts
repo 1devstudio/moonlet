@@ -209,3 +209,20 @@ describe("outOfSync", () => {
     expect(outOfSync(b).map((c) => c.task.key)).toEqual(["MOON-144"]);
   });
 });
+
+describe("a workspace with many tasks", () => {
+  // The sidebar rebuilds the board while an agent works; a busy tracker has
+  // thousands of issues, and the board must still take a frame, not seconds.
+  it("builds the board for 2000 issues, 60 sessions and 60 worktrees in under 250 ms", () => {
+    const tasks = Array.from({ length: 2000 }, (_, i) => gh(i + 1));
+    const sessions = Array.from({ length: 60 }, (_, i) => session(`s${i}`, `feature-${i}`));
+    sessions[0] = session("login", "1500-fix-login");
+    const worktrees = Array.from({ length: 60 }, (_, i) => ({ path: `/x/${i}`, branch: `spike-${i}`, originRepo: "acme/web" }));
+    worktrees[0] = { path: "/x/1700", branch: "1700-cache", originRepo: "acme/web" };
+    const started = performance.now();
+    const b = tasksBoard({ tasks, sessions, worktrees, sessionStartRule: "off" });
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(b.in_progress.map((c) => [c.task.key, c.rows.map((r) => r.session.name)])).toEqual([["acme/web#1500", ["login"]]]);
+    expect(b.todo.find((c) => c.task.key === "acme/web#1700")?.empty).toBe("1 worktree, no session");
+  });
+});
