@@ -155,16 +155,21 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   }, [host, ws?.workspace_id]);
   useEffect(() => {
     let live = true;
-    void hostsApi.parsePasted(query).then(
-      async (p) => {
-        // A task outside the loaded ones is asked of its tracker.
-        const found = p ? (findPasted(p, tasks, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null;
-        if (live) setPasted(found);
-      },
-      () => live && setPasted(null),
-    );
+    // What was pasted before no longer counts, so ↵ cannot link it.
+    setPasted(null);
+    const timer = setTimeout(() => {
+      void hostsApi.parsePasted(query).then(
+        async (p) => {
+          // A task outside the loaded ones is asked of its tracker.
+          const found = p ? (findPasted(p, tasks, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null;
+          if (live) setPasted(found);
+        },
+        () => live && setPasted(null),
+      );
+    }, 200);
     return () => {
       live = false;
+      clearTimeout(timer);
     };
   }, [query, tasks, originRepo, host, ws?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ws) return null;

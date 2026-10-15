@@ -13,7 +13,7 @@ vi.mock("./daemon", () => ({
   sendInput: vi.fn(),
   hostsApi: {
     trackersConfig: () => (configFails.length ? Promise.reject(configFails.shift()) : Promise.resolve({ sync: { interval: 300, notify: true } })),
-    trackersSave: (c: object) => new Promise<void>((r) => setTimeout(() => (saved.push(c), r()), 5)),
+    trackersSave: (c: object) => new Promise<void>((r, no) => setTimeout(() => (saveFails.length ? no(saveFails.shift()) : (saved.push(c), r())), 5)),
     trackerUpdate: (req: object) => (failNext.length ? Promise.reject(failNext.shift()) : (sent.push(req), Promise.resolve())),
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
     trackerTasks: (id: string, mine: boolean) => {
@@ -28,6 +28,7 @@ const sent = vi.hoisted(() => [] as object[]);
 const failNext = vi.hoisted(() => [] as object[]);
 const configFails = vi.hoisted(() => [] as object[]);
 const saved = vi.hoisted(() => [] as object[]);
+const saveFails = vi.hoisted(() => [] as object[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(true),
   requestPermission: () => Promise.resolve("granted"),
@@ -421,6 +422,16 @@ describe("saveTrackersConfig", () => {
     useTasks.setState({ config: null });
   });
 
+  it("waits for the file before changing it, and shows the file again when a write fails", async () => {
+    useTasks.setState({ config: null, configError: null });
+    await expect(saveTrackersConfig((c) => c)).rejects.toThrow("Task tracker settings are still loading");
+    await loadTrackersConfig(true);
+    saveFails.push(new Error("disk full"));
+    await expect(saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, interval: 30 } }))).rejects.toThrow("disk full");
+    expect(trackersConfig(useTasks.getState()).sync.interval).toBe(300);
+    useTasks.setState({ config: null });
+  });
+
   it("does not write over a file it could not read", async () => {
     saved.length = 0;
     configFails.push(new Error("TOML parse error at line 3"));
@@ -586,5 +597,63 @@ describe("a pasted key or URL outside the loaded tasks (X46 link dialog)", () =>
     expect((await lookUpPasted("local", "/r/web", { kind: null, key: "OPS-12", site: null }, null))?.title).toBe("Rotate keys");
     expect(await lookUpPasted("local", "/r/web", { kind: "jira", key: "OPS-12", site: "other.atlassian.net" }, null)).toBe(null);
     useTasks.setState({ config: null });
+  });
+});
+
+describe("automatic fixes and failures, second review round (X46)", () => {
+  const lt = (key: string, column: "todo" | "in_progress") => ({ connection: "linear:acme", key, title: key, url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: `i-${key}`, state: "x", source: "MOON" } });
+  const openPr = { number: 131, url: "https://github.com/acme/app/pull/131", state: "open", title: "Hosts", checks: [], review_decision: null };
+  const row = (id: string) => ({ session: { id, name: id, branch: id, path: `/w/${id}`, archived: false, task: null, task_unlinked: false, state: "idle" as const, pr: openPr, additions: 0, subagents: 0, originRepo: null }, meta: { text: "#131", tone: "open" as const } });
+
+  it("keeps a failed move's error when the PR-link comment after it works", async () => {
+    sent.length = 0;
+    const t = lt("MOON-201", "in_progress");
+    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [row("s201")], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
+    failNext.push({ message: "Linear is not answering" });
+    await runAutoFixes("local", "personal", board, () => DEFAULT_RULES, 1_000);
+    expect(failureOf(t)).toBe("Linear is not answering");
+  });
+
+  it("does not try a failed automatic fix again by itself after a restart", async () => {
+    sent.length = 0;
+    const t = lt("MOON-202", "in_progress");
+    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
+    failNext.push({ message: "Linear is not answering" });
+    await runAutoFixes("local", "personal", board, () => DEFAULT_RULES, 1_000);
+    vi.resetModules();
+    const restarted = await import("./tasksStore");
+    await restarted.runAutoFixes("local", "personal", board, () => DEFAULT_RULES, 2_000);
+    expect(sent).toEqual([]);
+  });
+
+  it("Retry follows the rules as they are now: with Keep in step off it moves nothing", async () => {
+    sent.length = 0;
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const t = lt("MOON-203", "todo");
+    useStore.setState({ sessions: { local: [{ id: "s203", project_id: "web", name: "x", branch: "x", base: "main", path: "/w/x", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: { connection: "linear:acme", key: "MOON-203", url: "" } }] } });
+    useTasks.setState({ data: { "local/personal": { tasks: [t], worktrees: [], sources: ["linear:acme"], repos: {}, sourceProjects: {}, syncedAt: 1, error: null } } });
+    failNext.push({ message: "Linear is not answering" });
+    await fixDrift("local", "personal", { task: t, column: "todo", rows: [], needsYou: false, orphans: [], empty: null, drift: { kind: "started", text: "Session open", fix: "In Progress" } });
+    setKeepInStep(t, false);
+    await retryTask(t);
+    expect(sent).toEqual([]);
+    expect(failureOf(t)).toBe(undefined);
+    setKeepInStep(t, true);
+  });
+
+  it("a rejected connection does not stop the workspace's sync", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "M", project: "", workspace: "local/personal" }] }] }, attention: { "linear:acme": "Linear no longer accepts this token." } });
+    await refreshTasks("local", "personal", 9_000);
+    expect([useTasks.getState().data["local/personal"].syncedAt, useTasks.getState().data["local/personal"].error]).toEqual([9_000, null]);
+    useTasks.setState({ config: null, attention: {} });
+  });
+
+  it("starting a session on a GitHub issue whose repository is in no project says so", async () => {
+    useStore.setState({ toasts: [] });
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", project: null, github: { repo: "else/where", number: 3 } });
+    expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["else/where#3: No project in this workspace has else/where as its origin"]);
   });
 });

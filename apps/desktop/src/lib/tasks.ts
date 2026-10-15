@@ -134,7 +134,7 @@ const TRACKER_NAMES: Record<TrackerKind, string> = { github: "GitHub", linear: "
 /** The tracker of a connection id (`jira:acme.atlassian.net` → `jira`). */
 export function trackerOf(connection: string): TrackerKind | null {
   const kind = connection.split(":")[0];
-  return kind in TRACKER_NAMES ? (kind as TrackerKind) : null;
+  return Object.hasOwn(TRACKER_NAMES, kind) ? (kind as TrackerKind) : null;
 }
 
 /** The tracker's name as the UI writes it, from a connection id or a kind. */
