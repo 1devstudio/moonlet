@@ -408,6 +408,11 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       state: sessionState(s, host, x.id),
       pr: s.prs[sesKey(host, x.id)] ?? null,
       additions: s.git[sesKey(host, x.id)]?.additions ?? 0,
+      deletions: s.git[sesKey(host, x.id)]?.deletions ?? 0,
+      project: s.projects[host]?.find((p) => p.id === x.project_id)?.name,
+      agents: sessionTerminals(s, host, x.id)
+        .filter((t) => t.kind === "agent")
+        .map((t) => ({ name: t.agent ?? "agent", state: t.agent_state, since: t.last_output_at })),
       subagents: sessionTerminals(s, host, x.id).reduce((n, t) => n + (t.subagents ?? 0), 0),
       originRepo: data.repos[x.project_id] ?? null,
     }));

@@ -17,6 +17,11 @@ export interface BoardSession {
   state: AgentState | null;
   pr: PullRequest | null;
   additions: number;
+  deletions?: number;
+  /** The project's name, for `project/branch` on its card. */
+  project?: string;
+  /** Each agent of the session, its state and since when (its last output). */
+  agents?: { name: string; state: AgentState; since: number }[];
   /** Running subagents (X42). */
   subagents: number;
   /** The project's `owner/repo` on GitHub, if any. */

@@ -1,6 +1,6 @@
 // Tasks mode (X45): the sidebar's views and the board of the shown workspace's tasks.
 
-import { Copy, ExternalLink, GitBranch, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, Copy, ExternalLink, GitBranch, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
@@ -8,7 +8,7 @@ import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
-import { findTasks, glyphShape, initials, stateOptions } from "../../lib/taskDetails";
+import { enterOpensFirst, findTasks, glyphShape, initials, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
 import { activityOf, boardInput, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, pollTasks, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setFilters, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
@@ -18,7 +18,7 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { boardSummary, filterBoard, modeSwitch, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
-import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
+import { Button, cx, Empty, IconButton, Kbd, StateGlyph } from "../ui";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
 
@@ -249,6 +249,18 @@ function TaskCard({ host, workspaceId, card, selected, source }: { host: string;
 
 function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: string; card: Card }) {
   const failure = useTasks(() => failureOf(card.task));
+  const now = useNow(true);
+  // ↵ opens the first session (X45).
+  const first = card.rows[0]?.session.id;
+  useEffect(() => {
+    if (!first) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = (e.target as HTMLElement | null) ?? document.body;
+      if (enterOpensFirst({ key: e.key, tagName: t.tagName, isContentEditable: t.isContentEditable })) openSession(host, first);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [host, first]);
   return (
     <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
@@ -314,20 +326,30 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
           </button>
         </div>
         {card.rows.length === 0 && <p className="mt-1 ui-text-12.5 text-muted">No sessions yet. Starting one names the branch after the issue.</p>}
-        {card.rows.map((r) => (
-          <div key={r.session.id} className="mt-2 flex items-center gap-2 rounded-lg border border-border px-3 py-2">
-            <StateGlyph state={r.session.state} size={13} />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate ui-text-13 text-fg">{r.session.name}</span>
-              <span className="truncate font-mono ui-text-11.5 text-faint">
-                {r.session.branch} · <span className={PR_TONE[listRow({ ...card, rows: [r] }).prTone]}>{r.session.pr ? listRow({ ...card, rows: [r] }).pr : "No pull request"}</span>
-              </span>
-            </span>
-            <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => openSession(host, r.session.id)}>
-              Open
-            </button>
-          </div>
-        ))}
+        {card.rows.map((r, i) => {
+          const c = sessionCard(r.session, r.session.project ?? "", now);
+          return (
+            <div key={r.session.id} role="group" aria-label={`Session ${r.session.name}`} className="mt-2 rounded-lg border border-border px-3 py-2">
+              <div className="flex items-center gap-2">
+                <StateGlyph state={r.session.state} size={13} />
+                <span className="min-w-0 flex-1 truncate ui-text-13 text-fg">{r.session.name}</span>
+                <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => openSession(host, r.session.id)}>
+                  Open{i === 0 && <> <Kbd>↵</Kbd></>}
+                </button>
+              </div>
+              <div className="mt-1 flex gap-2 font-mono ui-text-11.5 text-faint">
+                <span className="min-w-0 truncate">{c.where}</span>
+                {c.diff && <span>{c.diff}</span>}
+              </div>
+              {c.agents.map((a) => (
+                <div key={a} className="mt-0.5 flex items-center gap-1.5 ui-text-12 text-muted">
+                  <Bot size={12} /> {a}
+                </div>
+              ))}
+              <div className={cx("mt-0.5 ui-text-12", r.session.pr ? PR_TONE[listRow({ ...card, rows: [r] }).prTone] : "text-faint")}>{c.pr}</div>
+            </div>
+          );
+        })}
         {card.orphans.length > 0 && <div className="mt-4 ui-text-11.5 font-medium text-faint">Worktrees without a session {card.orphans.length}</div>}
         {card.orphans.map((w) => (
           <div key={w.path} className="mt-2 flex items-center gap-2 ui-text-12.5 text-muted">
