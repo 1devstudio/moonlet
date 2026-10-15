@@ -25,9 +25,40 @@ pub struct TrackersConfig {
     pub jira: TrackerSettings,
     #[serde(skip_serializing_if = "TrackerSettings::is_default")]
     pub clickup: TrackerSettings,
+    /// What links a session to a task without a stored link (X44).
+    #[serde(skip_serializing_if = "LinkRules::is_default")]
+    pub link: LinkRules,
     /// Signed-in accounts of Linear, Jira and ClickUp (GitHub uses `gh`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<Connection>,
+}
+
+/// "Link a session to an issue when…" (X44 Branch names and linking).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LinkRules {
+    /// Its branch name contains the issue key.
+    pub branch: bool,
+    /// Its pull request mentions the key or closes the issue.
+    pub pr: bool,
+    /// Its name looks like an issue title: only ever a suggestion.
+    pub title: bool,
+}
+
+impl Default for LinkRules {
+    fn default() -> Self {
+        Self {
+            branch: true,
+            pr: true,
+            title: true,
+        }
+    }
+}
+
+impl LinkRules {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// One signed-in account of a tracker on one site; its token is in the Keychain
@@ -45,6 +76,9 @@ pub struct Connection {
     pub auth: String,
     #[serde(default)]
     pub sources: Vec<Source>,
+    /// Tracker state name → column, where the user changed the default (X44).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub states: std::collections::BTreeMap<String, crate::states::Column>,
 }
 
 /// A team, project or list the user shows tasks from, with where its
@@ -256,6 +290,7 @@ workspace = "local/acme"
                     project: "p1".into(),
                     workspace: "local/acme".into()
                 }],
+                states: Default::default(),
             }]
         );
         assert_eq!(parse(&to_toml(&c)).unwrap(), c);
@@ -265,5 +300,40 @@ workspace = "local/acme"
         );
         // Each tracker has its own branch names and rules.
         assert_eq!(c.jira.rules.session_starts, Rule::Auto);
+    }
+
+    #[test]
+    fn state_mapping_and_link_rules() {
+        let text = r#"
+[link]
+pr = false
+
+[[connections]]
+id = "linear:acme"
+kind = "linear"
+site = "acme"
+account = "Ada Lovelace"
+auth = "api_key"
+
+[connections.states]
+QA = "in_review"
+Backlog = "todo"
+"#;
+        let c = parse(text).unwrap();
+        assert_eq!(
+            (c.link.branch, c.link.pr, c.link.title),
+            (true, false, true)
+        );
+        assert_eq!(
+            c.connections[0].states.get("QA"),
+            Some(&crate::states::Column::InReview)
+        );
+        assert_eq!(parse(&to_toml(&c)).unwrap(), c);
+        // At their defaults, neither is written.
+        let plain = to_toml(&TrackersConfig::default());
+        assert!(
+            !plain.contains("[link]") && !plain.contains("states"),
+            "{plain}"
+        );
     }
 }

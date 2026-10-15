@@ -12,6 +12,8 @@ import { GITHUB_RULES, githubConnection, RULE_SETTINGS as SETTINGS, SYNC_INTERVA
 import { AddTracker, ConnectionRow } from "./TrackerConnections";
 import { IconButton } from "../ui";
 import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, SwitchRow } from "./controls";
+import { DEFAULT_LINK } from "../../lib/tasks";
+import { wsKey } from "../../lib/workspaces";
 
 
 const NAME = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
@@ -42,6 +44,18 @@ export function TrackersPage() {
   useEffect(check, [ws?.host]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = (next: TrackersConfig) => void saveTrackersConfig(next).catch(errorToast);
   const github = config.github;
+  const link = config.link ?? DEFAULT_LINK;
+  const workspaces = useStore((s) => s.workspaces);
+  const data = useTasks((t) => t.data);
+  const wsRows = Object.entries(workspaces).flatMap(([host, list]) =>
+    list.map((w) => {
+      const key = wsKey(host, w.id);
+      const NAMES = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
+      const repos = (data[key]?.sources ?? []).filter((x) => !x.includes(":")).map((r) => `GitHub ${r}`);
+      const others = (config.connections ?? []).flatMap((c) => c.sources.filter((s) => s.workspace === key).map((s) => `${NAMES[c.kind]} ${s.name}`));
+      return { key, name: w.name, sources: [...repos, ...others] };
+    }),
+  );
   const setGithub = (patch: Partial<TrackersConfig["github"]>) => save({ ...config, github: { ...github, ...patch } });
   const templateId = useId();
   const maxId = useId();
@@ -117,6 +131,26 @@ export function TrackersPage() {
               }}
             />
           </Row>
+        </Card>
+      </Section>
+      <Section title="Linking" hint="The issue key in the branch name is what links a worktree to its task, even one made outside moonlet.">
+        <Card>
+          <SwitchRow setting="link-branch" label="Link a session when its branch name contains the issue key" on={link.branch} onChange={(branch) => save({ ...config, link: { ...link, branch } })} />
+          <SwitchRow setting="link-pr" label="Link a session when its pull request mentions the key or closes the issue" on={link.pr} onChange={(pr) => save({ ...config, link: { ...link, pr } })} />
+          <SwitchRow
+            setting="link-title"
+            label="Suggest a task whose title is a session's name"
+            hint="Only ever a suggestion: it never links by itself."
+            on={link.title}
+            onChange={(title) => save({ ...config, link: { ...link, title } })}
+          />
+        </Card>
+      </Section>
+      <Section title="Where each workspace gets its tasks" hint="Tasks mode shows the sources of the workspace you are in.">
+        <Card>
+          {wsRows.map((w) => (
+            <Row key={w.key} label={w.name} hint={w.sources.length ? w.sources.join(" · ") : "No source: a project with a GitHub origin, or a team, project or list picked under Sources"} setting={`ws-sources-${w.key}`} />
+          ))}
         </Card>
       </Section>
       <Section title="Sync">

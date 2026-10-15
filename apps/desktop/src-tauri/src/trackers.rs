@@ -221,9 +221,11 @@ pub async fn tracker_connect(req: ConnectRequest) -> Res<Connected> {
     secrets::store().set(&id, &secret).map_err(fail)?;
     let path = crate::trackers_path();
     let mut config: TrackersConfig = crate::read_trackers(&path).map_err(fail)?;
-    let sources = config.connections.iter().find(|c| c.id == id).map(|c| c.sources.clone()).unwrap_or_default();
+    // Reconnecting keeps what the user picked: sources and state mapping.
+    let old = config.connections.iter().find(|c| c.id == id).cloned();
+    let (sources, states) = old.map(|c| (c.sources, c.states)).unwrap_or_default();
     config.connections.retain(|c| c.id != id);
-    let connection = Connection { id: id.clone(), kind: req.kind, site, account, auth: auth.into(), sources };
+    let connection = Connection { id: id.clone(), kind: req.kind, site, account, auth: auth.into(), sources, states };
     config.connections.push(connection.clone());
     crate::write_trackers(&path, &config).map_err(fail)?;
     let sources = tracker_sources(id).await?;
@@ -231,7 +233,15 @@ pub async fn tracker_connect(req: ConnectRequest) -> Res<Connected> {
 }
 
 fn placeholder(kind: TrackerKind, site: &str) -> Connection {
-    Connection { id: connection_id(kind, site), kind, site: site.into(), account: String::new(), auth: "token".into(), sources: vec![] }
+    Connection {
+        id: connection_id(kind, site),
+        kind,
+        site: site.into(),
+        account: String::new(),
+        auth: "token".into(),
+        sources: vec![],
+        states: Default::default(),
+    }
 }
 
 /// Forgets a connection: its token and its entry. Session links stay (X44).
@@ -336,6 +346,40 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
     }
 }
 
+/// A tracker state and the column it lands in by default.
+#[derive(Serialize)]
+pub struct StateChoice {
+    pub name: String,
+    pub column: Column,
+}
+
+/// The states of a source, for the state mapping (X44 Workflow states).
+#[tauri::command]
+pub async fn tracker_states(id: String, source: String) -> Res<Vec<StateChoice>> {
+    let s = Session::load(&id)?;
+    let source = safe_id(&source)?.to_string();
+    let named = |kind, list: Vec<(String, String)>| -> Vec<StateChoice> {
+        list.into_iter()
+            .map(|(name, category)| StateChoice { column: moonlet_trackers::states::default_column(kind, &category, &name), name })
+            .collect()
+    };
+    Ok(match s.conn.kind {
+        TrackerKind::Linear => {
+            let states = linear::parse_states(&s.linear(linear::STATES, json!({ "team": source })).await?)?;
+            named(TrackerKind::Linear, states.into_iter().map(|x| (x.name, x.kind)).collect())
+        }
+        TrackerKind::Jira => {
+            let raw = s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/project/{source}/statuses"))?).await?;
+            named(TrackerKind::Jira, jira::parse_project_statuses(&raw)?)
+        }
+        TrackerKind::Clickup => {
+            let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/list/{source}"))?).await?;
+            named(TrackerKind::Clickup, clickup::parse_statuses(&raw)?.into_iter().map(|x| (x.name, x.kind)).collect())
+        }
+        TrackerKind::Github => vec![],
+    })
+}
+
 #[derive(Deserialize)]
 pub struct MoveRequest {
     pub id: String,
@@ -344,6 +388,10 @@ pub struct MoveRequest {
     /// Its team, project or list (`TrackerRef.source`).
     pub source: String,
     pub column: Option<Column>,
+    /// The state to move to, from the user's state mapping; else the first
+    /// state of `column`.
+    #[serde(default)]
+    pub state: Option<String>,
     #[serde(default)]
     pub assign_me: bool,
     #[serde(default)]
@@ -362,7 +410,8 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             let mut input = json!({});
             if let Some(column) = req.column {
                 let states = linear::parse_states(&s.linear(linear::STATES, json!({ "team": req.source })).await?)?;
-                let state = linear::state_for(&states, column).ok_or_else(|| fail(format!("{} has no state for that column", req.source)))?;
+                let named = req.state.as_deref().and_then(|n| states.iter().find(|s| s.name == n));
+                let state = named.or_else(|| linear::state_for(&states, column)).ok_or_else(|| fail(format!("{} has no state for that column", req.source)))?;
                 input["stateId"] = json!(state.id);
             }
             if req.assign_me {
@@ -381,7 +430,8 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             if let Some(column) = req.column {
                 let path = format!("/rest/api/3/issue/{}/transitions", req.task);
                 let ts = jira::parse_transitions(&s.jira_send(s.jira(reqwest::Method::GET, &path)?).await?)?;
-                let t = jira::transition_to(&ts, column).ok_or_else(|| fail("No Jira transition leads to that column from here"))?;
+                let named = req.state.as_deref().and_then(|n| ts.iter().find(|t| t.to == n));
+                let t = named.or_else(|| jira::transition_to(&ts, column)).ok_or_else(|| fail("No Jira transition leads to that column from here"))?;
                 s.jira_send(s.jira(reqwest::Method::POST, &path)?.json(&jira::transition_body(&t.id))).await?;
             }
             if req.assign_me {
@@ -398,7 +448,8 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             let mut body = json!({});
             if let Some(column) = req.column {
                 let list = clickup::parse_statuses(&s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/list/{}", req.source))?).await?)?;
-                let status = clickup::status_for(&list, column).ok_or_else(|| fail("this list has no status for that column"))?;
+                let named = req.state.as_deref().and_then(|n| list.iter().find(|s| s.name == n));
+                let status = named.or_else(|| clickup::status_for(&list, column)).ok_or_else(|| fail("this list has no status for that column"))?;
                 body["status"] = json!(status.name);
             }
             if req.assign_me {

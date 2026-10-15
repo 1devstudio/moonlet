@@ -159,6 +159,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
   const attention = useTasks((t) => t.attention[c.id]);
   const [editing, setEditing] = useState<{ key: string; name: string }[] | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [statesOpen, setStatesOpen] = useState(false);
   const sources = async () => {
     try {
       setEditing(await hostsApi.trackerSources(c.id));
@@ -188,6 +189,9 @@ export function ConnectionRow({ c }: { c: Connection }) {
           <Button size="sm" variant="ghost" onClick={() => void sources()}>
             Sources
           </Button>
+          <Button size="sm" variant="ghost" disabled={!c.sources.length} onClick={() => setStatesOpen(true)}>
+            States
+          </Button>
           <Button size="sm" variant="ghost" onClick={() => void disconnect()}>
             Disconnect
           </Button>
@@ -199,6 +203,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
         </Dialog>
       )}
       {reconnecting && <ConnectTracker kind={c.kind} reconnect={c} onClose={() => setReconnecting(false)} />}
+      {statesOpen && <StatesEditor c={c} onClose={() => setStatesOpen(false)} />}
     </>
   );
 }
@@ -218,5 +223,73 @@ export function AddTracker() {
       </div>
       {kind && <ConnectTracker kind={kind} onClose={() => setKind(null)} />}
     </>
+  );
+}
+
+const COLUMN_CHOICES = [
+  ["todo", "Todo"],
+  ["in_progress", "In Progress"],
+  ["in_review", "In Review"],
+  ["done", "Done"],
+  ["hidden", "Not shown"],
+] as const;
+
+/** Workflow states (X44): each state of a source and the column it lands in. */
+export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => void }) {
+  const [source, setSource] = useState(c.sources[0]?.key ?? "");
+  const [states, setStates] = useState<{ name: string; column: string }[] | null>(null);
+  const [mapping, setMapping] = useState<Record<string, string>>(c.states ?? {});
+  useEffect(() => {
+    if (!source) return;
+    setStates(null);
+    hostsApi.trackerStates(c.id, source).then(setStates, (e) => errorToast(message(e)));
+  }, [c.id, source]);
+  const save = async () => {
+    const config = trackersConfig(useTasks.getState());
+    // Only states moved off their default column are kept.
+    const defaults = Object.fromEntries((states ?? []).map((s) => [s.name, s.column]));
+    const kept = Object.fromEntries(Object.entries(mapping).filter(([name, col]) => defaults[name] === undefined || defaults[name] !== col));
+    const connections = (config.connections ?? []).map((x) => (x.id === c.id ? { ...x, states: kept as Connection["states"] } : x));
+    try {
+      await saveTrackersConfig({ ...config, connections });
+      onClose();
+    } catch (e) {
+      errorToast(message(e));
+    }
+  };
+  return (
+    <Dialog title={`${NAME[c.kind]} workflow states`} onClose={onClose} width={520}>
+      <p className="mb-2 ui-text-12.5 text-muted">moonlet groups tasks into four columns. Filled in from the tracker's state types; change them if your team uses its own.</p>
+      {c.sources.length > 1 && (
+        <select aria-label="Source" className={`${inputCls} mb-2`} value={source} onChange={(e) => setSource(e.target.value)}>
+          {c.sources.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      )}
+      {!source && <p className="ui-text-12.5 text-muted">Pick a source first.</p>}
+      {source && !states && <p className="ui-text-12.5 text-muted">Loading states…</p>}
+      <div role="list" aria-label="States" className="flex flex-col gap-1">
+        {(states ?? []).map((s) => (
+          <div key={s.name} role="listitem" className="flex items-center gap-2 ui-text-12.5">
+            <span className="min-w-0 flex-1 truncate text-fg">{s.name}</span>
+            <select aria-label={`Column for ${s.name}`} className={`${inputCls} w-[140px]`} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value }))}>
+              {COLUMN_CHOICES.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Button size="sm" variant="primary" disabled={!states} onClick={() => void save()}>
+          Save
+        </Button>
+      </div>
+    </Dialog>
   );
 }

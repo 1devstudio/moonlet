@@ -10,8 +10,9 @@ import { askConfirm } from "./confirm";
 import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
-import { type Column, githubRepo, type Task, type TaskStart, taskFromGh } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh } from "./tasks";
 import { workspaceConnections } from "./trackerSources";
+import { applyStateMapping, targetState } from "./stateMapping";
 import { type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
@@ -54,6 +55,8 @@ interface TasksState {
   activity: Record<string, ActivityEntry[]>;
   /** Find a task: the text the board is filtered by. */
   query: string;
+  /** Tasks whose Keep in step switch is off, by `connection key` (X46 Task tab). */
+  paused: Record<string, true>;
 }
 
 /** One tracker's branch names and rules. */
@@ -81,6 +84,8 @@ export interface Connection {
   account: string;
   auth: string;
   sources: Source[];
+  /** Tracker state name → column, where the user changed the default (X44). */
+  states?: Record<string, Column>;
 }
 
 /** `~/.moonlet/trackers.toml` as `moonlet-trackers` reads it (X44). */
@@ -91,6 +96,7 @@ export interface TrackersConfig {
   jira?: TrackerSettings;
   clickup?: TrackerSettings;
   connections?: Connection[];
+  link?: LinkRules;
 }
 
 const DEFAULT_TRACKER: TrackerSettings = { branch_template: "", max_length: 48, rules: DEFAULT_RULES };
@@ -114,6 +120,7 @@ export const useTasks = create<TasksState>(() => ({
   attention: {},
   activity: {},
   query: "",
+  paused: storedPaused(),
 }));
 
 function storedLayout(): "board" | "list" {
@@ -135,7 +142,7 @@ export const trackersConfig = (t: { config: TrackersConfig | null }) => t.config
 
 /** The file leaves out trackers at their defaults; put them back. */
 function withDefaults(c: Partial<TrackersConfig>): TrackersConfig {
-  return { ...c, sync: { ...DEFAULT_CONFIG.sync, ...c.sync }, github: c.github ?? DEFAULT_TRACKER, connections: c.connections ?? [] };
+  return { ...c, sync: { ...DEFAULT_CONFIG.sync, ...c.sync }, github: c.github ?? DEFAULT_TRACKER, connections: c.connections ?? [], link: { ...DEFAULT_LINK, ...c.link } };
 }
 
 /** Reads `trackers.toml` once; a broken file shows its error and the defaults apply. */
@@ -229,7 +236,10 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
       try {
         const list = await hostsApi.trackerTasks(c.id, true);
         useTasks.setState((t) => (t.attention[c.id] ? { attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== c.id)) } : {}));
-        return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
+        return applyStateMapping(
+          list.filter((t) => t.tracker && c.keys.includes(t.tracker.source)),
+          trackersConfig(useTasks.getState()).connections,
+        );
       } catch (e) {
         const err = e as { auth?: boolean; message?: string };
         error = err.message ?? message(e);
@@ -294,7 +304,13 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       subagents: sessionTerminals(s, host, x.id).reduce((n, t) => n + (t.subagents ?? 0), 0),
       originRepo: data.repos[x.project_id] ?? null,
     }));
-  return { tasks: data.tasks, sessions, worktrees: data.worktrees, sessionStartRule: (t) => trackerSettings(config, t.connection).rules.session_starts };
+  return {
+    tasks: data.tasks,
+    sessions,
+    worktrees: data.worktrees,
+    sessionStartRule: (t) => rulesFor(config, t).session_starts,
+    link: config.link ?? DEFAULT_LINK,
+  };
 }
 
 /** The project path of a workspace project in GitHub repository `repo`. */
@@ -317,7 +333,14 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
   if (start.github) return assignToMe(host, workspaceId, start.github);
   if (!start.tracker) return;
   try {
-    await hostsApi.trackerUpdate({ id: start.ref.connection, task: start.tracker.id, source: start.tracker.source, column: "in_progress", assign_me: true });
+    await hostsApi.trackerUpdate({
+      id: start.ref.connection,
+      task: start.tracker.id,
+      source: start.tracker.source,
+      column: "in_progress",
+      state: stateFor(start.ref.connection, "in_progress"),
+      assign_me: true,
+    });
     movedByMoonlet.add(`${start.ref.connection} ${start.key}`);
     recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you");
   } catch (e) {
@@ -352,7 +375,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
     } else if (plan.kind === "move") {
       const t = card.task.tracker;
       if (!t) return;
-      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column });
+      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column, state: stateFor(card.task.connection, plan.column) });
       movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
       recordActivity(card.task, `moonlet moved it to ${COLUMN_LABEL[plan.column]}`);
       toast(`Moved ${card.task.key} to ${COLUMN_LABEL[plan.column]}`);
@@ -444,7 +467,7 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       await rpc(host, M.ghTaskUpdate, close ? { path, number: task.github.number, close: true } : { path, number: task.github.number, reopen: true });
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
-      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column });
+      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, state: stateFor(task.connection, column) });
       recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
     } else return;
     movedByMoonlet.add(`${task.connection} ${task.key}`);
@@ -452,4 +475,38 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
   } catch (e) {
     errorToast((e as { message?: string }).message ?? e);
   }
+}
+
+/** The state a move to `column` uses for a connection, from its state mapping (X44). */
+function stateFor(connection: string, column: Exclude<Column, "hidden">): string | null {
+  return targetState(trackersConfig(useTasks.getState()).connections?.find((c) => c.id === connection), column);
+}
+
+const OFF: Rules = { session_starts: "off", pr_opens: "off", all_merged: "off", pr_comment: "off", issue_done: "off" };
+
+/** The rules for a task: its tracker's, or all off when its Keep in step switch is off (X46). */
+export function rulesFor(config: TrackersConfig, task: Pick<Task, "connection" | "key">): Rules {
+  return useTasks.getState().paused[`${task.connection} ${task.key}`] ? OFF : trackerSettings(config, task.connection).rules;
+}
+
+function storedPaused(): Record<string, true> {
+  try {
+    return JSON.parse(readStored("tasks.paused") ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+/** The Task tab's "Keep <tracker> in step" switch for one task. */
+export function setKeepInStep(task: Pick<Task, "connection" | "key">, on: boolean) {
+  const id = `${task.connection} ${task.key}`;
+  const paused = { ...useTasks.getState().paused };
+  if (on) delete paused[id];
+  else paused[id] = true;
+  try {
+    writeStored("tasks.paused", JSON.stringify(paused));
+  } catch {
+    /* storage unavailable */
+  }
+  useTasks.setState({ paused });
 }

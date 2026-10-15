@@ -109,6 +109,16 @@ describe("taskForSession (X46 links)", () => {
     expect(taskForSession(session({}), pr(13894, "Fix skills"), "cli/cli", tasks)).toBe(gh);
   });
 
+  it("follows the link rules: no branch or PR matches when they are off (X44)", () => {
+    const off = { branch: false, pr: true, title: true };
+    expect(taskForSession(session({ branch: "moon-142-remote-hosts" }), null, null, tasks, off)).toBe(null);
+    expect(taskForSession(session({}), pr(7, "MOON-144: tabs"), null, tasks, off)).toBe(tabs);
+    expect(taskForSession(session({}), pr(7, "MOON-144: tabs"), null, tasks, { branch: true, pr: false, title: true })).toBe(null);
+    // A stored link always counts.
+    const stored = session({ task: { connection: "linear:acme", key: "MOON-144", url: "" } });
+    expect(taskForSession(stored, null, null, tasks, { branch: false, pr: false, title: false })).toBe(tabs);
+  });
+
   it("links nothing after the user unlinked it, and nothing when no task matches", () => {
     expect(taskForSession(session({ branch: "moon-142-x", task_unlinked: true }), null, null, tasks)).toBe(null);
     expect(taskForSession(session({ branch: "zsh-perf" }), pr(9, "Speed up zsh"), "cli/cli", tasks)).toBe(null);
