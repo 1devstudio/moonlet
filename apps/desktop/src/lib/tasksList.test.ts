@@ -102,3 +102,15 @@ describe("Tasks list (X45 List)", () => {
     expect(rows["MOON-151"]).toMatchObject({ sum: "none", worktrees: 0 });
   });
 });
+
+describe("a group with both notes (X45 List)", () => {
+  it("joins them", () => {
+    const b = tasksBoard({
+      tasks: [task("MOON-170", "todo"), task("MOON-171", "todo")],
+      sessions: [session("Waiting", "moon-170-wait", { state: "blocked" }), session("Guard", "moon-171-guard", { state: "working" })],
+      worktrees: [],
+      sessionStartRule: "suggest",
+    });
+    expect(listGroups(b).find((g) => g.name === "Todo")).toMatchObject({ note: "1 needs you · 2 out of sync", noteTone: "blocked" });
+  });
+});

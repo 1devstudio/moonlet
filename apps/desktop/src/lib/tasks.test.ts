@@ -16,6 +16,11 @@ describe("mentionsKey (X44 keys)", () => {
     expect(mentionsKey("moon-1420-and-moon-142", "MOON-142")).toBe(true);
     expect(mentionsKey("anything", "")).toBe(false);
   });
+
+  it("needs the key's own hyphen", () => {
+    expect(mentionsKey("feat/moon_142", "MOON-142")).toBe(false);
+    expect(mentionsKey("feat_moon-142", "MOON-142")).toBe(true);
+  });
 });
 
 describe("githubBranchNumber", () => {

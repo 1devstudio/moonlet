@@ -185,6 +185,31 @@ describe("syncTasks (X44 Sync)", () => {
   });
 });
 
+describe("syncTasks timer (X44 Sync)", () => {
+  it("refreshes on the chosen interval, and sets no timer when Sync is manual", async () => {
+    answers["git.origin_url"] = () => "https://github.com/acme/web.git";
+    answers["gh.tasks"] = () => [issue];
+    answers["project.worktrees"] = () => [];
+    vi.useFakeTimers();
+    try {
+      const synced = () => useTasks.getState().data["local/personal"]?.syncedAt;
+      for (const [interval, after] of [
+        [60, 160_000],
+        [0, 100_000],
+      ]) {
+        vi.setSystemTime(100_000);
+        const stop = syncTasks("local", "personal", interval);
+        await vi.waitFor(() => expect(synced()).toBe(100_000));
+        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.waitFor(() => expect(synced()).toBe(after));
+        stop();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("a linked task changed outside moonlet (X44 Sync)", () => {
   it("is announced once, and not at all with the switch off", async () => {
     shown.length = 0;
@@ -215,6 +240,8 @@ describe("a linked task changed outside moonlet (X44 Sync)", () => {
     answers["gh.tasks"] = () => [{ ...issue, closed: true, state_reason: "completed" }];
     await refreshTasks("local", "personal", 2_000);
     await vi.waitFor(() => expect(shown).toEqual([{ title: "acme/web#12 was closed", body: "Fix checkout button" }]));
+    // The notice also goes into the task's Activity.
+    expect(activityOf({ connection: "github:github.com", key: "acme/web#12" }).map((e) => e.text)).toContain("Outside moonlet: acme/web#12 was closed");
 
     useTasks.setState({ config: { ...DEFAULT_CONFIG, sync: { interval: 60, notify: false } } });
     answers["gh.tasks"] = () => [issue];
