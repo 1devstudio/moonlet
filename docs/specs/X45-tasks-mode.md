@@ -97,6 +97,7 @@ States: a workspace with no source shows the "Connect a task tracker" panel; "Lo
 
 - Kept in the app's local storage: the mode per workspace, Board or List, the List's open rows, each task's Keep in step switch and Activity, and the automatic fixes already made (X46). The view and chips put off with Not now last until the app quits.
 - The board is computed in the app from tasks, sessions (`Session.task`, X46), PR state (X2), git stats and worktrees; nothing about the board is stored.
+- Building the board grows with tasks times sessions and worktrees, not with tasks squared: a workspace with 2000 issues, 60 sessions and 60 worktrees builds it in well under a second, so the app stays responsive while it rebuilds during an agent's work.
 
 ## Security considerations
 
@@ -113,7 +114,7 @@ Titles, descriptions and labels from trackers are untrusted and shown as plain t
 
 ## Test plan
 
-- Vitest in `apps/desktop/src/lib/`: the board's columns, card rows and meta, amber outline, each out-of-sync case and drafts (`tasksBoard.test.ts`); fixes, Not now, rules and Clean up's confirm (`keepInStep.test.ts`); views, counts, the header summary and the footer (`tasksView.test.ts`); list groups, notes and rows (`tasksList.test.ts`); the state menu, initials, Find a task and Activity (`taskDetails.test.ts`); the mode switch, moves, Activity and failures with Retry (`tasksStore.test.ts`).
+- Vitest in `apps/desktop/src/lib/`: the board's columns, card rows and meta, amber outline, each out-of-sync case, drafts and building a board of 2000 issues (`tasksBoard.test.ts`); fixes, Not now, rules and Clean up's confirm (`keepInStep.test.ts`); views, counts, the header summary and the footer (`tasksView.test.ts`); list groups, notes and rows (`tasksList.test.ts`); the state menu, initials, Find a task and Activity (`taskDetails.test.ts`); the mode switch, moves, Activity and failures with Retry (`tasksStore.test.ts`).
 - Daemon tests for `project.worktrees` with a worktree made by `git worktree add`, adopting it and removing it.
 - e2e (`tasks-mode.e2e.ts`) with a stub `gh`: open Tasks mode, see a card with its session, open the session from the card, list sessions without a task, start a session from a task, the list layout, Find a task, and close an issue from the detail's state menu.
 
