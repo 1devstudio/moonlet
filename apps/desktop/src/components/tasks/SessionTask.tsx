@@ -77,6 +77,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
         <h2 className="mt-1 ui-text-15 font-medium text-fg">{card.task.title}</h2>
         <div className="mt-1 ui-text-12 text-faint">
           {["No priority", "Low priority", "Medium priority", "High priority"][card.task.priority] ?? "No priority"}
+          {card.task.cycle !== undefined && ` · Cycle ${card.task.cycle}`}
           {card.task.assignees.length > 0 && ` · ${card.task.assignees.join(", ")}`}
         </div>
         {card.task.description && <p className="selectable mt-2 line-clamp-6 whitespace-pre-wrap ui-text-12.5 text-muted">{card.task.description}</p>}

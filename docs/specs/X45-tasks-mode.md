@@ -24,20 +24,20 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 - [x] The sidebar header has a two-button mode switch, Sessions and Tasks, titled `Sessions ⌃⌘T` and `Tasks ⌃⌘T`. ⌃⌘T toggles between them; it is a Run action (X19) and can be rebound. (`runActions.test.ts`, `tasksStore.test.ts`, `tasks-mode.e2e.ts`)
 - [x] The Tasks button shows an accent dot and the label `Tasks, <n> out of sync` when tasks are out of sync. (The shown workspace's tasks are checked every 5 minutes in Sessions mode too; `tasksView.test.ts`.)
-- [ ] With no source in the current workspace, the Tasks button opens the "Connect a task tracker" popover instead: Linear, Jira Cloud, ClickUp and GitHub Issues rows (each opening its connect flow, X44), "Open Settings › Task trackers" and "Not now".
-- [ ] The mode is remembered per workspace across restarts.
+- [ ] With no source in the current workspace, the Tasks button opens the "Connect a task tracker" popover instead: Linear, Jira Cloud, ClickUp and GitHub Issues rows (each opening its connect flow, X44), "Open Settings › Task trackers" and "Not now". (Partly: Tasks mode opens and shows the "Connect a task tracker" panel in the centre instead of a popover.)
+- [x] The mode is remembered per workspace across restarts.
 
 ### Sidebar in Tasks mode
 
 - [x] Rows: workspace switcher, mode switch, "Find a task ⌘K", **Views**, **Trackers**, and a footer `<tracker> synced <age>` with a refresh button. (Find a task is a filter field; ⌘K stays the Run action palette.)
-- [ ] Views, each with a count: My issues, Current cycle (Linear cycle, Jira active sprint; hidden when the source has neither), In review, Out of sync (count in the accent colour), Sessions without a task.
-- [ ] Trackers lists each source as `<tracker> · <source>` with its key prefix, and `Connect…` for a tracker not connected yet.
+- [ ] Views, each with a count: My issues, Current cycle (Linear cycle, Jira active sprint; hidden when the source has neither), In review, Out of sync (count in the accent colour), Sessions without a task. (Partly: no Current cycle view yet, see Out of scope.)
+- [x] Trackers lists each source as `<tracker> · <source>` with its key prefix, and `Connect…` for a tracker not connected yet.
 
 ### Board
 
-- [ ] The header shows the view name and a line such as `Moonlet · Cycle 14 · Oct 7 – Oct 20 · 9 tasks · 6 sessions`, then filters (`Assignee: me`, `Hide empty Done`), the Board / List switch and Refresh.
-- [ ] Columns Todo, In Progress and In Review, each with its glyph and count. Done is a narrow collapsed column with its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`); clicking it opens List.
-- [ ] **Card:** key, priority bars, project (when different from the workspace's main one), assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`. (Partly: no project name yet. `taskDetails.test.ts` initials.)
+- [ ] The header shows the view name and a line such as `Moonlet · Cycle 14 · Oct 7 – Oct 20 · 9 tasks · 6 sessions`, then filters (`Assignee: me`, `Hide empty Done`), the Board / List switch and Refresh. (Partly: the title and the summary; no filters yet.)
+- [x] Columns Todo, In Progress and In Review, each with its glyph and count. Done is a narrow collapsed column with its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`); clicking it opens List. (`tasks-mode.e2e.ts`)
+- [x] **Card:** key, priority bars, project (when different from the workspace's main one), assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`. (The source shows when a workspace has more than one. `taskDetails.test.ts` initials.)
 - [x] **Row meta**, first match wins: `needs you` (amber) when the session waits on the user; `#<n>` in its PR state colour, `#<n> merged` or `#<n> ✕` for failing checks; `◑ <n>` when the agent has running subagents (X42); otherwise `+<added>`. (`tasksBoard.test.ts`)
 - [x] The card is outlined amber when any session needs the user, and highlighted with the accent when selected. (`tasksBoard.test.ts`)
 - [x] Task state is shown by shape (empty ring Todo, half Progress, three-quarters Review, filled check Done); agent state by colour, the same `StateGlyph` as the Sessions sidebar.
@@ -47,19 +47,19 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 A task is out of sync when the work and the tracker disagree. Each case has a chip and a fix:
 
 - [x] **PR merged:** every session on the task has a merged PR and the task is not Done → `#<n> merged`, fix **Move to Done**. (`tasksBoard.test.ts`, `keepInStep.test.ts`; GitHub closes the issue)
-- [ ] **Work started:** the task is Todo and a session on it is running → `Session running`, fix **In Progress**. Only shown when the "session starts" rule (X46) is not Automatically.
+- [x] **Work started:** the task is Todo and a session on it is running → `Session running`, fix **In Progress**. Only shown when the "session starts" rule (X46) is not Automatically. (`tasksBoard.test.ts`)
 - [x] **Done, still open:** the task is Done and still has sessions that are not archived, or worktrees → `<n> session, <n> worktree`, fix **Clean up**: archive the sessions and remove the worktrees after a confirm, which warns about uncommitted changes. (`keepInStep.test.ts`, `a_worktree_without_a_session_can_be_removed`)
 - [x] Out of sync tasks are listed by the Out of sync view and counted on the Tasks button. (`tasksView.test.ts`)
 - [x] **Not now** on the detail hides that chip until the task or its sessions change. (`keepInStep.test.ts` driftKey, withoutPutOff)
 
 ### Detail panel
 
-- [ ] Header: tracker mark, key, copy key, `Open in <tracker>`, more, close.
+- [x] Header: tracker mark, key, copy key, `Open in <tracker>`, more, close. (No "more" menu yet.)
 - [x] Title, then State (a menu listing the columns; picking one moves the issue), Assignee, Priority, Labels, and the description cut to four lines with **More**. (`taskDetails.test.ts` stateOptions, `tasksStore.test.ts` moveTask, `tasks-mode.e2e.ts`)
 - [x] An out-of-sync block explains why and offers the fix and **Not now**.
-- [ ] **Sessions** with a count and `+ New session`. Each session card: glyph, name, **Open** (↵ on the first), `project/branch`, diff stat, one line per agent (icon, name, state with time), and the PR line (`#131 open · 7/7 checks · 1 approval`, or `No pull request · Create PR ⇧⌘P`).
-- [ ] With no session: "No sessions yet. Starting one names the branch after the issue and moves it to In Progress." and **Start a session** (X46).
-- [ ] **Worktrees without a session**: branch, how it was made or its last commit, **Start session** (adopts the worktree, X46) and remove (with confirm).
+- [ ] **Sessions** with a count and `+ New session`. Each session card: glyph, name, **Open** (↵ on the first), `project/branch`, diff stat, one line per agent (icon, name, state with time), and the PR line (`#131 open · 7/7 checks · 1 approval`, or `No pull request · Create PR ⇧⌘P`). (Partly: each session's branch and PR; no agent lines yet.)
+- [x] With no session: "No sessions yet. Starting one names the branch after the issue and moves it to In Progress." and **Start a session** (X46).
+- [x] **Worktrees without a session**: branch, how it was made or its last commit, **Start session** (adopts the worktree, X46) and remove (with confirm).
 - [x] **Activity**: moonlet's own events for the task (session started from it, PR opened, moved by moonlet, worktree found), newest first. (`taskDetails.test.ts` appendActivity, `tasksStore.test.ts`, `tasks-mode.e2e.ts`)
 
 ### List
@@ -68,7 +68,7 @@ A task is out of sync when the work and the tracker disagree. Each case has a ch
 - [x] A row: expand toggle, key, title, drift chip, session glyphs with a summary (`2 working`, `needs you`, `1 worktree`, `none`), PR summary, worktree count, updated time. A row with a session that needs the user has a faint amber background. (`tasksList.test.ts`)
 - [x] An expanded row lists sessions (glyph, name, agent with state, branch, diff stat, Open), worktrees (`worktree, no session`, Start session) and, when empty, `Start a session for <key>`. (`tasks-mode.e2e.ts`)
 - [x] "Expand all" toggles every row.
-- [ ] **Sessions without a task** lists sessions of the workspace with no task: glyph, name, `project/branch`, a hint (`Looks like CDK-41 Changelog themes`, or `No matching issue`) and **Link to task** (X46).
+- [x] **Sessions without a task** lists sessions of the workspace with no task: glyph, name, `project/branch`, a hint (`Looks like CDK-41 Changelog themes`, or `No matching issue`) and **Link to task** (X46). (`tasksBoard.test.ts`, `tasks-mode.e2e.ts`)
 
 ### Find a task
 
@@ -95,6 +95,9 @@ Empty states: a workspace with no source shows "No task tracker in this workspac
 Titles, descriptions and labels from trackers are untrusted and rendered as text or sanitised Markdown. Clean up archives sessions and removes worktrees only after a confirm, which names any uncommitted changes.
 
 ## Out of scope
+
+- A Current cycle view and the header's filters (Assignee, Hide empty Done): the board shows the user's issues, or all open issues of a source set to show them.
+- ⌘K searching tasks: ⌘K stays the Run action palette; "Find a task" in the Tasks sidebar filters the board, and the link dialog takes pasted keys and URLs.
 
 - Creating tasks ("New task in this column") and drag and drop between columns.
 - Activity from the tracker's own history and comments.

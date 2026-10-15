@@ -22,6 +22,9 @@ pub struct TrackerTask {
     /// Markdown.
     pub description: String,
     pub updated_ms: u64,
+    /// Linear's cycle number, when the issue is in one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<u64>,
     /// What moves and comments need: the tracker's own ids and state.
     pub tracker: TrackerRef,
 }
@@ -72,6 +75,7 @@ mod tests {
             labels: vec!["sidebar".into()],
             description: "Add a Hosts section.".into(),
             updated_ms: 1_789_528_295_000,
+            cycle: None,
             tracker: TrackerRef {
                 id: "a1b2".into(),
                 state: "In Progress".into(),

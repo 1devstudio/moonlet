@@ -131,6 +131,8 @@ describe("Linear tracker", () => {
     await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
     await expect($('//section[@aria-label="In Progress"]//article[starts-with(@aria-label, "ENG-123")]')).toBeDisplayed({ wait: 15_000 });
     await expect($('//section[@aria-label="Todo"]//article[starts-with(@aria-label, "ENG-124")]')).toBeDisplayed();
+    await $('//section[@aria-label="In Progress"]//article[starts-with(@aria-label, "ENG-123")]//button[normalize-space()="Retry failed webhook deliveries"]').click();
+    await expect($('//aside[@aria-label="Task detail"]').$(sel.text("· Cycle 42"))).toBeDisplayed();
   });
 
   it("moves the issue to In Progress and assigns it when a session starts from it", async () => {

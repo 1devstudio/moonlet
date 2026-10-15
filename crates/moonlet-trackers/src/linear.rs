@@ -185,6 +185,7 @@ pub fn parse_issues(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, Ap
                     .as_str()
                     .and_then(crate::time::timestamp_ms)
                     .unwrap_or(0),
+                cycle: i["cycle"]["number"].as_u64(),
                 tracker: TrackerRef {
                     id: i["id"].as_str().unwrap_or_default().into(),
                     state: state_name.into(),
@@ -226,6 +227,7 @@ mod tests {
                 labels: vec!["Bug".into(), "Backend".into()],
                 description: "Webhooks that fail with a 5xx should be retried.\n\n- [ ] Exponential backoff\n- [ ] Give up after 24h".into(),
                 updated_ms: 1_791_969_164_512,
+                cycle: Some(42),
                 tracker: TrackerRef {
                     id: "1a2b3c4d-0000-4000-8000-000000000123".into(),
                     state: "In Progress".into(),
@@ -242,6 +244,7 @@ mod tests {
             (Column::Todo, 0, "")
         );
         assert_eq!((tasks[2].column, tasks[2].priority), (Column::Done, 1));
+        assert_eq!([tasks[0].cycle, tasks[1].cycle, tasks[2].cycle], [Some(42), None, Some(41)]);
         // `priority` is a Float in Linear's schema.
         let float = br#"{"data":{"issues":{"nodes":[{"identifier":"ENG-1","priority":2.0,"state":{"type":"started","name":"In Progress"},"team":{"key":"ENG"}}]}}}"#;
         assert_eq!(parse_issues(float, "linear:acme").unwrap()[0].priority, 3);

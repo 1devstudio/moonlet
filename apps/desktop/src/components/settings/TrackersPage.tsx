@@ -174,7 +174,7 @@ export function TrackersPage() {
         </Card>
       </Section>
       <p className="flex items-center gap-2 ui-text-12 text-muted">
-        <Lock size={13} /> Saved to ~/.moonlet/trackers.toml on this Mac. GitHub uses gh's own login; moonletd only stores which issue each session is linked to.
+        <Lock size={13} /> Tokens are kept in the macOS Keychain on this Mac and never sent to remote hosts. moonletd only stores which issue each session is linked to. Settings are saved to ~/.moonlet/trackers.toml.
       </p>
     </>
   );
