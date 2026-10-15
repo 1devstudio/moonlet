@@ -482,13 +482,24 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         std::fs::write(dir.path().join("x.txt"), "1").unwrap();
         std::fs::write(dir.path().join("y.txt"), "2").unwrap();
-        let m = rx.recv_timeout(Duration::from_secs(5)).expect("fs.changed");
-        let Message::Event { name, data } = m else {
-            panic!()
+        // FSEvents can first deliver an earlier batch (the temp dir itself),
+        // so wait for the event that names x.txt rather than take the first.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen = Vec::new();
+        let found = loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let Ok(m) = rx.recv_timeout(left) else { break false };
+            let Message::Event { name, data } = m else {
+                panic!()
+            };
+            assert_eq!(name, methods::EV_FS_CHANGED);
+            let ch: FsChanged = serde_json::from_value(data).unwrap();
+            if ch.paths.iter().any(|p| p.ends_with("x.txt")) {
+                break true;
+            }
+            seen.extend(ch.paths);
         };
-        assert_eq!(name, methods::EV_FS_CHANGED);
-        let ch: FsChanged = serde_json::from_value(data).unwrap();
-        assert!(ch.paths.iter().any(|p| p.ends_with("x.txt")));
+        assert!(found, "no fs.changed named x.txt within 5s; saw {seen:?}");
         w.release_client(1);
     }
 
