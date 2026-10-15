@@ -2,7 +2,7 @@
 
 import type { Column } from "./tasks";
 import { trackerName } from "./tasks";
-import type { Connection } from "./tasksStore";
+import type { Connection, Source } from "./tasksStore";
 
 export interface WorkspaceConnection {
   id: string;
@@ -56,4 +56,41 @@ export function sourceList(wsKey: string, repos: string[], connections: Connecti
 export function changedStates(states: { name: string; column: Column }[], mapping: Record<string, Column>): Record<string, Column> {
   const defaults = Object.fromEntries(states.map((s) => [s.name, s.column]));
   return Object.fromEntries(Object.entries(mapping).filter(([name, column]) => defaults[name] !== column));
+}
+
+const SOURCE_WORD: Record<Connection["kind"], string> = { linear: "team", jira: "project", clickup: "list" };
+
+/** What one source is in a tracker, for the Sources dialog: `Jira project` (X44). */
+export function sourceNoun(kind: Connection["kind"]): string {
+  return `${trackerName(kind)} ${SOURCE_WORD[kind]}`;
+}
+
+/** A Sources dialog row with no source picked yet. */
+export const blankSource = (): Source => ({ key: "", name: "", project: "", workspace: "" });
+
+/** The rows the Sources dialog opens with: the saved sources, or one empty row (X44). */
+export function sourceRows(saved: Source[]): Source[] {
+  return saved.length ? saved : [blankSource()];
+}
+
+/**
+ * What the picker in row `i` offers: the visible sources no other row shows in
+ * the same workspace. A saved source the account no longer sees stays in its own row.
+ */
+export function sourceChoices(visible: { key: string; name: string }[], rows: Source[], i: number): { key: string; name: string }[] {
+  const own = rows[i];
+  const taken = new Set(rows.filter((r, j) => j !== i && r.key && r.workspace === own.workspace).map((r) => r.key));
+  const gone = own.key && !visible.some((c) => c.key === own.key) ? [{ key: own.key, name: own.name }] : [];
+  return [...gone, ...visible.filter((c) => !taken.has(c.key))];
+}
+
+/** The Sources dialog's rows as saved: those with a source picked, once per workspace (X44). */
+export function sourcesToSave(rows: Source[]): Source[] {
+  const seen = new Set<string>();
+  return rows.filter((r) => {
+    const id = `${r.workspace} ${r.key}`;
+    if (!r.key || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
