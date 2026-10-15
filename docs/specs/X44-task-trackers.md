@@ -25,21 +25,21 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 ### Connections
 
-- [ ] Settings has a **Task trackers** page under App, after Notifications. Its nav entry shows a dot when a connection needs attention. (Partly: the page is there, `settingsPage.test.ts`, `task-trackers.e2e.ts`; no dot yet.)
+- [x] Settings has a **Task trackers** page under App, after Notifications. Its nav entry shows a dot when a connection needs attention (`1 connection needs attention`). (`settingsPage.test.ts`, `task-trackers.e2e.ts`)
 - [x] The page lists GitHub Issues first, then one row per Linear, Jira or ClickUp connection: `<tracker> · <site>`, a status line `Connected as <name> · <auth> · <n> sources` (`pick what to show` before any source), and **Sources**, **States** and **Disconnect**. A connection whose token was rejected shows the tracker's message in red, with **Reconnect**. (`trackersPage.test.ts` connectionLine, `task-trackers.e2e.ts`)
 - [x] **Add tracker** offers Connect Linear, Connect Jira Cloud and Connect ClickUp. GitHub Issues needs no connecting. More than one connection of the same tracker is allowed (two Jira sites, two Linear organisations): a connection is one tracker and site. (`task-trackers.e2e.ts`, `config.rs` connections_with_their_sources)
-- [ ] Disconnect asks first ("moonlet forgets the token for <site> and stops showing its issues. Sessions keep their links."), deletes the token from the Keychain and removes the connection, with its sources, from `trackers.toml`. Session links (X46) stay, and reconnecting the same tracker and site gets the same connection id back, so the links resolve again. (Partly: the stable id is tested, `config.rs` connections_with_their_sources; Disconnect itself has no test yet.)
+- [x] Disconnect asks first ("moonlet forgets the token for <site> and stops showing its issues. Sessions keep their links."), deletes the token from the Keychain and removes the connection, with its sources, from `trackers.toml`. Session links (X46) stay, and reconnecting the same tracker and site gets the same connection id back, so the links resolve again. (`task-trackers.e2e.ts`; the stable id, `config.rs` connections_with_their_sources)
 
 ### Signing in
 
 - [ ] **Linear OAuth:** moonlet opens Linear's authorize URL with a PKCE `S256` challenge and the loopback redirect `http://127.0.0.1:53682/callback` (a fixed port, since Linear's redirect must match exactly). The callback's `state` must match; the code is exchanged with the verifier and no client secret. The tokens go to the Keychain. The access token is refreshed a minute before it expires, one refresh at a time; a token without an expiry is never refreshed. A sign-in that lapsed says "Sign in to Linear again". The button shows only in a build made with `MOONLET_LINEAR_CLIENT_ID`. (Partly: it waits for the maintainer's registered OAuth app, so no real sign-in has run; one refresh at a time has no test yet. `the_loopback_listener_waits_for_the_callback_with_its_state`, `a_silent_connection_does_not_hold_up_the_callback`, `oauth.rs` the_callback_gives_the_code_only_with_the_right_state and a_token_is_refreshed_a_minute_before_it_expires.)
 - [x] **Linear API key** is accepted instead of OAuth. (`task-trackers.e2e.ts` against a mock of Linear's API)
-- [x] **Jira Cloud:** site, email and API token; requests use basic auth. Only a `*.atlassian.net` or `*.jira.com` host gets the token. Jira API tokens expire, and Jira's API does not say when, so moonlet does not warn ahead. A rejected token can make Jira's search come back empty rather than refused, so each sync asks Jira who the user is first. When Jira answers 401, the row shows "Jira no longer accepts the API token for <site>. It may have expired or been revoked. Create a new token and paste it here." Reconnect keeps the site and asks for the email and a new token. (`jira.rs` a_rejected_token_needs_reconnecting, `only_a_jira_cloud_host_gets_the_token`)
+- [x] **Jira Cloud:** site, email and API token; requests use basic auth. Only a `*.atlassian.net` or `*.jira.com` host gets the token. Jira API tokens expire, and Jira's API does not say when, so moonlet does not warn ahead. A rejected token can make Jira's search come back empty rather than refused, so each sync asks Jira who the user is first. When Jira answers 401, the row shows "Jira no longer accepts the API token for <site>. It may have expired or been revoked. Create a new token and paste it here." Reconnect keeps the site and email, saved with the connection, and asks only for a new token. (`jira.rs` a_rejected_token_needs_reconnecting, `only_a_jira_cloud_host_gets_the_token`, `config.rs` a_jira_connection_keeps_its_email_for_reconnecting)
 - [x] **ClickUp:** the personal token is sent as the raw `Authorization` header value. The connection is the account's first ClickUp workspace. (`clickup.rs`)
 - [x] **GitHub Issues:** the row shows `Connected as <login> · uses gh on <host>` from `gh.whoami` on the shown workspace's host, or `gh is not signed in on <host> · run gh auth login there`, or `gh is not installed on <host>`. **Check again** asks again. (`the_github_login_comes_from_gh`, `a_gh_without_a_login_says_so`, `trackersPage.test.ts`, `task-trackers.e2e.ts`)
 - [x] Connect and Reconnect check the sign-in, then show `Signed in as <name> · <n> sources visible`, or the tracker's error in the dialog. (`task-trackers.e2e.ts`)
 - [x] A request answered with 401 marks the connection as needing attention and stops polling it until the user connects again (Reconnect, or signing in with Linear again). The last good tasks stay. The message names the tracker and what to do: Linear OAuth "Sign in to Linear again"; a Linear API key "Linear no longer accepts this token. Create a new one and paste it here."; ClickUp the same words with ClickUp's error code in brackets; Jira the message above. (`tasksStore.test.ts` marks a connection whose token stopped working; `jira.rs`, `clickup.rs` a_rejected_token_needs_a_new_one, `linear.rs` an_unauthenticated_answer_asks_to_sign_in_again)
-- [ ] The Jira and ClickUp connect dialogs say "The token is saved in the macOS Keychain." and, for Jira, "Tokens expire. moonlet tells you when Jira stops accepting it." (Partly: no test yet.)
+- [x] The Jira and ClickUp connect dialogs say "The token is saved in the macOS Keychain." and, for Jira, "Tokens expire. moonlet tells you when Jira stops accepting it." (`task-trackers.e2e.ts`)
 
 ### Sources
 
@@ -84,7 +84,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 - [x] Every change saves to `trackers.toml` at once, and quick changes in a row all land. A `trackers.toml` that could not be read is never written over: saving shows an error instead. (`tasksStore.test.ts` saveTrackersConfig, `task-trackers.e2e.ts`)
 - [x] Settings search finds GitHub's rules and branch name, the sync interval and each connected tracker's own branch name. (`settingsSearch.test.ts`)
-- [ ] A line at the bottom of the page reads: "Tokens are kept in the macOS Keychain on this Mac and never sent to remote hosts. moonletd only stores which issue each session is linked to. Settings are saved to ~/.moonlet/trackers.toml." (Partly: no test yet.)
+- [x] A line at the bottom of the page reads: "Tokens are kept in the macOS Keychain on this Mac and never sent to remote hosts. moonletd only stores which issue each session is linked to. Settings are saved to ~/.moonlet/trackers.toml." (`task-trackers.e2e.ts`)
 
 ## UI
 
@@ -107,6 +107,7 @@ No daemon RPCs for Linear, Jira or ClickUp: the desktop app's Rust side makes th
 - `tracker_connect {kind, site?, email?, token}` → `{connection, sources}`; `tracker_oauth_available` → whether this build can sign in with Linear; `tracker_oauth_linear` → opens the browser and resolves with `{connection, sources}` when the callback arrives.
 - `tracker_disconnect {id}`; `tracker_sources {id}` → `[{key, name}]`; `tracker_states {id, source}` → `[{name, column}]`, each state with its default column.
 - `tracker_tasks {id, mine}` → normalised tasks of the connection's sources.
+- `tracker_task {id, key}` → one task by its key, or none (X46: a pasted key or URL).
 - `tracker_update {id, task, source, column?, assign_me?, comment?}` moves an issue (the Rust side picks the state, X46), assigns it to the user and/or comments on it.
 - `trackers_config` → `trackers.toml` or its defaults; `trackers_save {config}` writes it.
 - `task_branch_name {kind, template?, key, title, number?, max_len?}` and `task_parse_pasted {input}` (X46).
@@ -115,6 +116,7 @@ GitHub goes through the daemon, because `gh` runs on the project's host:
 
 - `gh.tasks {path, mine}` → the repository's 100 most recently updated issues, open and closed (so recently closed ones fill Done), only those assigned to the user when `mine` (the app always asks for `mine`): `{repo, number, title, body, url, closed, state_reason, assignees, labels, updated_ms, closing_prs}`. `closing_prs` are the same repository's PRs that close the issue. Bodies are cut to 4000 characters.
 - `gh.task_update {path, number, assign_me?, close?, reopen?}`.
+- `gh.task {path, repo, number}` → one issue of any `owner/name` repository (X46: a pasted key or URL).
 - `gh.whoami {}` → the login `gh` is signed in as on the host, or gh's error.
 
 ## Data and config

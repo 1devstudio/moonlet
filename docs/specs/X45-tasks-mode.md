@@ -37,11 +37,11 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 - [ ] The header shows the view name and a summary such as `9 tasks · 6 sessions`, then filters (`Assignee: me`, `Hide empty Done`) and the Board / List switch. (Partly: the name, the summary and the switch, `tasksView.test.ts` boardSummary; no filters, see Out of scope.)
 - [x] Columns Todo, In Progress and In Review, each with its glyph and count. (`tasks-mode.e2e.ts`)
-- [ ] Done is a narrow column, a button with its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`); clicking it opens List. (Partly: the badge's count is tested, `tasksList.test.ts`; the button has no test yet.)
+- [x] Done is a narrow column, a button with its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`); clicking it opens List. (`tasksList.test.ts` cleanUpCount, `tasks-mode.e2e.ts`)
 - [x] **Card:** key, priority bars, the source (repository, team, project or list) when the workspace has more than one, assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`, and **Start** (or **Start session** on the worktree). (`taskDetails.test.ts` initials, `tasksBoard.test.ts`, `tasks-mode.e2e.ts`)
 - [x] **Row meta**, first match wins: `needs you` (amber) when the session waits on the user; `#<n>` in its PR state colour, `#<n> merged` or `#<n> ✕` for failing checks; `◑ <n>` when the agent has running subagents (X42); otherwise `+<added>`. (`tasksBoard.test.ts`)
 - [x] The card is outlined amber when any session needs the user, and highlighted with the accent when selected. (`tasksBoard.test.ts`)
-- [ ] Task state is shown by shape (empty ring Todo, half In Progress, three-quarters In Review, filled check Done); agent state by colour, the same `StateGlyph` as the Sessions sidebar. (Partly: no test of the shapes yet.)
+- [x] Task state is shown by shape (empty ring Todo, half In Progress, three-quarters In Review, filled check Done); agent state by colour, the same `StateGlyph` as the Sessions sidebar. (`taskDetails.test.ts` glyphShape)
 
 ### Out of sync
 
@@ -70,7 +70,7 @@ A task is out of sync when the work and the tracker disagree. Each case has an O
 - [x] Groups In Progress, In Review, Todo and Done with counts. Every group but Done notes both `<n> needs you` and `<n> out of sync`; Done is collapsed to a line noting `<n> needs clean-up`. (`tasksList.test.ts`, `tasks-mode.e2e.ts`)
 - [x] A row: expand toggle, key, title, Out of sync chip with its fix, session glyphs with a summary (`2 working`, `needs you`, `1 session`, `1 worktree`, `none`), PR summary, worktree count, updated time (kept current). A row with a session that needs the user has a faint amber background. (`tasksList.test.ts`)
 - [x] An expanded row lists sessions (glyph, name, branch, meta), worktrees (`worktree, no session`, Start session) and, when empty, `Start a session for <key>`. (`tasks-mode.e2e.ts`)
-- [ ] "Expand all" opens every row, then "Collapse all" closes them. (Partly: no test yet.)
+- [x] "Expand all" opens every row, then "Collapse all" closes them. Open rows are remembered across restarts. (`tasks-mode.e2e.ts`, `tasksStore.test.ts` the List layout's open rows)
 - [x] **Sessions without a task** lists sessions of the workspace with no task: glyph, name, branch, a hint (`Looks like CDK-41 Changelog themes`, or `No matching issue`) and **Link to task** (X46). (`tasksBoard.test.ts`, `tasks-mode.e2e.ts`)
 
 ## UI
@@ -86,7 +86,7 @@ States: a workspace with no source shows the "Connect a task tracker" panel; "Lo
 
 ## Data and config
 
-- Kept in the app's local storage: the mode per workspace, Board or List, each task's Keep in step switch and Activity, and the automatic fixes already made (X46). The view, open rows and chips put off with Not now last until the app quits.
+- Kept in the app's local storage: the mode per workspace, Board or List, the List's open rows, each task's Keep in step switch and Activity, and the automatic fixes already made (X46). The view and chips put off with Not now last until the app quits.
 - The board is computed in the app from tasks, sessions (`Session.task`, X46), PR state (X2), git stats and worktrees; nothing about the board is stored.
 
 ## Security considerations
