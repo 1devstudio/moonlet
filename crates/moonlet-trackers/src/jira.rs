@@ -1,6 +1,6 @@
 //! Jira Cloud's REST API v3 (X44): requests and their answers as moonlet's tasks.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::states::Column;
 use crate::task::{TrackerRef, TrackerTask};
@@ -54,6 +54,21 @@ pub fn next_page(raw: &[u8]) -> Option<String> {
         return None;
     }
     v["nextPageToken"].as_str().map(String::from)
+}
+
+/// One issue by its key (X46: a key pasted into the link dialog). `key` must
+/// already be checked as a plain id.
+pub fn issue_path(key: &str) -> String {
+    format!("/rest/api/3/issue/{key}?fields={}", FIELDS.join(","))
+}
+
+/// The issue of [`issue_path`] as a task of `connection` on `site`.
+pub fn parse_issue(raw: &[u8], connection: &str, site: &str) -> Result<TrackerTask, ApiError> {
+    let issue: Value = parse(raw)?;
+    let wrapped = serde_json::json!({ "issues": [issue] }).to_string();
+    parse_search(wrapped.as_bytes(), connection, site)?
+        .pop()
+        .ok_or_else(|| ApiError::new("Jira sent no issue"))
 }
 
 /// The issues of a search as tasks of `connection` on `site`.
@@ -188,10 +203,15 @@ pub fn parse_transitions(raw: &[u8]) -> Result<Vec<Transition>, ApiError> {
 }
 
 /// The first transition whose status lands in `column`.
-pub fn transition_to(transitions: &[Transition], column: Column) -> Option<&Transition> {
-    transitions
-        .iter()
-        .find(|t| crate::states::default_column(TrackerKind::Jira, &t.to_category, &t.to) == column)
+pub fn transition_to<'a>(
+    transitions: &'a [Transition],
+    column: Column,
+    mapping: &crate::states::Mapping,
+) -> Option<&'a Transition> {
+    crate::states::pick(transitions, column, mapping, |t| {
+        let natural = crate::states::default_column(TrackerKind::Jira, &t.to_category, &t.to);
+        (natural, t.to.as_str())
+    })
 }
 
 pub fn transition_body(id: &str) -> Value {
@@ -238,6 +258,22 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn one_issue_by_its_key() {
+        let list: serde_json::Value = serde_json::from_slice(&fixture("jira-search.json")).unwrap();
+        let one = list["issues"][0].to_string();
+        let site = "acme.atlassian.net";
+        let t = parse_issue(one.as_bytes(), "jira:acme.atlassian.net", site).unwrap();
+        assert_eq!(
+            (t.key.as_str(), t.title.as_str(), t.tracker.state.as_str()),
+            ("EX-1", "Main order flow broken", "In Progress")
+        );
+        assert_eq!(
+            issue_path("OPS-12"),
+            "/rest/api/3/issue/OPS-12?fields=summary,status,priority,assignee,labels,updated,description,project"
+        );
     }
 
     #[test]
@@ -309,15 +345,18 @@ mod tests {
     fn the_transition_that_reaches_a_column() {
         let t = parse_transitions(&fixture("jira-transitions.json")).unwrap();
         assert_eq!(
-            transition_to(&t, Column::InProgress).map(|t| t.id.as_str()),
+            transition_to(&t, Column::InProgress, &Default::default()).map(|t| t.id.as_str()),
             Some("21")
         );
         assert_eq!(
-            transition_to(&t, Column::Done).map(|t| t.id.as_str()),
+            transition_to(&t, Column::Done, &Default::default()).map(|t| t.id.as_str()),
             Some("31")
         );
         // This workflow has no review state.
-        assert_eq!(transition_to(&t, Column::InReview), None);
+        assert_eq!(
+            transition_to(&t, Column::InReview, &Default::default()),
+            None
+        );
     }
 
     #[test]

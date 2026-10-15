@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyStateMapping, targetState } from "./stateMapping";
+import { applyStateMapping } from "./stateMapping";
 import type { Task } from "./tasks";
 import type { Connection } from "./tasksStore";
 
@@ -36,9 +36,4 @@ describe("state mapping (X44 Workflow states)", () => {
     ]);
   });
 
-  it("moves to the first state mapped to a column, or lets the tracker pick", () => {
-    expect(targetState(conn, "in_review")).toBe("QA");
-    expect(targetState(conn, "done")).toBe(null);
-    expect(targetState({ ...conn, states: undefined }, "todo")).toBe(null);
-  });
 });

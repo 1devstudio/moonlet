@@ -49,8 +49,9 @@ export const hostsApi = {
     invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_connect", { req }),
   trackerDisconnect: (id: string) => invoke("tracker_disconnect", { id }),
   trackerSources: (id: string) => invoke<{ key: string; name: string }[]>("tracker_sources", { id }),
+  trackerTask: (id: string, key: string) => invoke<import("./tasks").Task | null>("tracker_task", { id, key }),
   trackerTasks: (id: string, mine: boolean) => invoke<import("./tasks").Task[]>("tracker_tasks", { id, mine }),
-  trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; state?: string | null; assign_me?: boolean; comment?: string | null }) =>
+  trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; assign_me?: boolean; comment?: string | null }) =>
     invoke("tracker_update", { req }),
   trackerOauthAvailable: () => invoke<boolean>("tracker_oauth_available"),
   trackerOauthLinear: () => invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_oauth_linear"),

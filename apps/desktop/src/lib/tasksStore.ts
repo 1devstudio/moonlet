@@ -3,17 +3,18 @@
 
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
-import { latestPerKey } from "./prPoll";
+import { focusThrottle, latestPerKey } from "./prPoll";
 import { type GhTask, M, type Project, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
-import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, type Rules } from "./keepInStep";
+import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh } from "./tasks";
+import type { Pasted } from "./taskLinking";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, trackerOf } from "./tasks";
 import { workspaceConnections } from "./trackerSources";
-import { applyStateMapping, targetState } from "./stateMapping";
-import { type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
+import { applyStateMapping } from "./stateMapping";
+import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
 
@@ -45,6 +46,8 @@ interface TasksState {
   notNow: Record<string, true>;
   /** `trackers.toml`; null until read. */
   config: TrackersConfig | null;
+  /** Why `trackers.toml` could not be read, if it could not. */
+  configError: string | null;
   /** Board or List (X45). */
   layout: "board" | "list";
   /** List rows open, by `connection key`. */
@@ -87,6 +90,8 @@ export interface Connection {
   site: string;
   account: string;
   auth: string;
+  /** Jira's sign-in email, kept so Reconnect asks only for a new token. */
+  email?: string;
   sources: Source[];
   /** Tracker state name → column, where the user changed the default (X44). */
   states?: Record<string, Column>;
@@ -109,8 +114,8 @@ export const DEFAULT_CONFIG: TrackersConfig = { sync: { interval: 60, notify: tr
 
 /** A tracker's branch names and rules (GitHub's, or a connection's tracker). */
 export function trackerSettings(config: TrackersConfig, connection: string): TrackerSettings {
-  const kind = connection.split(":")[0] as "github" | "linear" | "jira" | "clickup";
-  return config[kind] ?? DEFAULT_TRACKER;
+  const kind = trackerOf(connection);
+  return (kind && config[kind]) || DEFAULT_TRACKER;
 }
 
 export const useTasks = create<TasksState>(() => ({
@@ -119,14 +124,35 @@ export const useTasks = create<TasksState>(() => ({
   selected: null,
   notNow: {},
   config: null,
+  configError: null,
   layout: storedLayout(),
-  expanded: {},
+  expanded: storedExpanded(),
   attention: {},
   activity: {},
   query: "",
   paused: storedPaused(),
   failures: {},
 }));
+
+function storedExpanded(): Record<string, boolean> {
+  try {
+    return JSON.parse(readStored("tasks.expanded") ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+/** The List layout's open rows by task id, kept across restarts (X45). */
+export function setExpanded(expanded: Record<string, boolean>) {
+  const open = Object.fromEntries(Object.entries(expanded).filter(([, on]) => on));
+  useTasks.setState({ expanded: open });
+  writeStored("tasks.expanded", JSON.stringify(open));
+}
+
+export function toggleExpanded(id: string) {
+  const now = useTasks.getState().expanded;
+  setExpanded({ ...now, [id]: !now[id] });
+}
 
 function storedLayout(): "board" | "list" {
   try {
@@ -154,15 +180,43 @@ function withDefaults(c: Partial<TrackersConfig>): TrackersConfig {
 export async function loadTrackersConfig(force = false) {
   if (useTasks.getState().config && !force) return;
   try {
-    useTasks.setState({ config: withDefaults(await hostsApi.trackersConfig()) });
+    useTasks.setState({ config: withDefaults(await hostsApi.trackersConfig()), configError: null });
   } catch (e) {
+    useTasks.setState({ configError: message(e) });
     errorToast(e);
   }
 }
 
-export async function saveTrackersConfig(config: TrackersConfig) {
-  await hostsApi.trackersSave(config);
-  useTasks.setState({ config });
+let saving: Promise<void> = Promise.resolve();
+let saveRound = 0;
+
+/**
+ * Changes `trackers.toml`. `update` gets the settings as they are when it
+ * runs, so quick changes in a row all land; writes go out in order. A file
+ * that could not be read is never written over with the defaults.
+ */
+export function saveTrackersConfig(update: (c: TrackersConfig) => TrackersConfig): Promise<void> {
+  const { config, configError } = useTasks.getState();
+  if (configError) return Promise.reject(new Error(`~/.moonlet/trackers.toml could not be read (${configError}), so it is left as it is`));
+  if (!config) return Promise.reject(new Error("Task tracker settings are still loading"));
+  const next = update(config);
+  useTasks.setState({ config: next });
+  // A write that fails drops the changes queued behind it, which were built
+  // on it, and shows the file as it is again.
+  const asOf = saveRound;
+  const write = saving.then(async () => {
+    if (asOf !== saveRound) throw new Error("An earlier change to the task tracker settings could not be saved");
+    try {
+      await hostsApi.trackersSave(next);
+    } catch (e) {
+      await loadTrackersConfig(true);
+      // After the reload: a change made while it ran was built on the failed one.
+      saveRound++;
+      throw e;
+    }
+  });
+  saving = write.catch(() => {});
+  return write;
 }
 
 /** Fixes moonlet already made by itself, by `driftKey`, so each happens once (X46). */
@@ -238,16 +292,21 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const conns = workspaceConnections(trackersConfig(useTasks.getState()).connections, key);
   const fromTrackers = await Promise.all(
     conns.map(async (c) => {
+      // A rejected token is not tried again until the user reconnects (X44).
+      // Its own row and the Settings dot say so; the workspace's other
+      // sources keep syncing.
+      if (useTasks.getState().attention[c.id] !== undefined) {
+        failed.add(c.id);
+        return [];
+      }
       try {
-        // A source set to "All open issues" needs everyone's; the others keep the account's.
-        const mine = c.all.length === 0;
-        const fetched = await hostsApi.trackerTasks(c.id, mine);
-        const list = mine ? fetched : fetched.filter((t) => c.all.includes(t.tracker?.source ?? "") || t.assignees.includes(c.account));
-        useTasks.setState((t) => (t.attention[c.id] ? { attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== c.id)) } : {}));
-        return applyStateMapping(
-          list.filter((t) => t.tracker && c.keys.includes(t.tracker.source)),
-          trackersConfig(useTasks.getState()).connections,
-        );
+        // The account's own, as the tracker decides who that is; a source set
+        // to "All open issues" also takes everyone's.
+        const shownAll = (t: Task) => c.all.includes(t.tracker?.source ?? "");
+        const mine = await hostsApi.trackerTasks(c.id, true);
+        const everyone = c.all.length ? (await hostsApi.trackerTasks(c.id, false)).filter(shownAll) : [];
+        const list = [...everyone, ...mine.filter((t) => !shownAll(t))];
+        return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
       } catch (e) {
         const err = e as { auth?: boolean; message?: string };
         error = err.message ?? message(e);
@@ -276,11 +335,18 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     error,
   };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next } }));
-  if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev?.tasks ?? null, next);
+  // Compared as the board shows them: with the state mapping as saved now.
+  const mapped = { ...next, tasks: mappedTasks(next.tasks) };
+  if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev ? mappedTasks(prev.tasks) : null, mapped);
+  else forgetSeenMoves(mapped.tasks);
 }
 
-/** Tasks moonlet itself moved since the last sync, `connection key` (their move is not news). */
-const movedByMoonlet = new Set<string>();
+/**
+ * Tasks moonlet itself moved, `connection key` → the column it moved them to.
+ * Their move is not news; each entry stays until a sync shows that column, so
+ * a sync that started before the move cannot report it.
+ */
+const movedByMoonlet = new Map<string, Task["column"]>();
 
 /** "Notify when a task changes state outside moonlet" (X44): linked tasks only. */
 function notifyOutsideMoves(host: string, workspaceId: string, before: Task[] | null, data: TasksData) {
@@ -288,10 +354,23 @@ function notifyOutsideMoves(host: string, workspaceId: string, before: Task[] | 
   const linked = new Set(Object.values(board).flat().filter((c) => c.rows.length).map((c) => `${c.task.connection} ${c.task.key}`));
   for (const m of outsideMoves(before, data.tasks, linked, movedByMoonlet)) {
     void notify(m.text, m.title);
-    const t = data.tasks.find((x) => x.key === m.key);
+    const t = data.tasks.find((x) => `${x.connection} ${x.key}` === m.id);
     if (t) recordActivity(t, `Outside moonlet: ${m.text}`);
   }
-  movedByMoonlet.clear();
+  forgetSeenMoves(data.tasks);
+}
+
+function forgetSeenMoves(tasks: Task[]) {
+  for (const t of tasks) {
+    const id = `${t.connection} ${t.key}`;
+    const to = movedByMoonlet.get(id);
+    if (to && (to === t.column || (to === "done" && t.column === "hidden"))) movedByMoonlet.delete(id);
+  }
+}
+
+/** Tasks in the columns the user's state mapping puts them in (X44). */
+export function mappedTasks(tasks: Task[]): Task[] {
+  return applyStateMapping(tasks, trackersConfig(useTasks.getState()).connections);
 }
 
 /** What the board needs of a workspace's sessions (X45). */
@@ -313,7 +392,8 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       originRepo: data.repos[x.project_id] ?? null,
     }));
   return {
-    tasks: data.tasks,
+    // The mapping as saved now, so a change shows without a sync (X44).
+    tasks: applyStateMapping(data.tasks, config.connections),
     sessions,
     worktrees: data.worktrees,
     sessionStartRule: (t) => rulesFor(config, t).session_starts,
@@ -328,6 +408,29 @@ function repoPath(host: string, workspaceId: string, repo: string): string | nul
   return useStore.getState().projects[host]?.find((p) => p.id === id)?.path ?? null;
 }
 
+/**
+ * The task a pasted key or URL names when it is not among the loaded ones
+ * (X46 link dialog): GitHub through the project's `gh` (`#7` is that number
+ * in `originRepo`), else each connection of the named tracker and site.
+ * Null when none has it.
+ */
+export async function lookUpPasted(host: string, projectPath: string, p: Pasted, originRepo: string | null): Promise<Task | null> {
+  if (p.kind === "github") {
+    const m = /^(?:(.+))?#(\d+)$/.exec(p.key);
+    const repo = m?.[1] ?? originRepo;
+    if (!m || !repo) return null;
+    const gh = await rpc<GhTask>(host, M.ghTask, { path: projectPath, repo, number: Number(m[2]) }).catch(() => null);
+    return gh ? taskFromGh(gh, GITHUB) : null;
+  }
+  const site = p.site?.toLowerCase();
+  const conns = (trackersConfig(useTasks.getState()).connections ?? []).filter((c) => (!p.kind || c.kind === p.kind) && (!site || c.site.toLowerCase() === site));
+  for (const c of conns) {
+    const found = await hostsApi.trackerTask(c.id, p.key).catch(() => null);
+    if (found) return found;
+  }
+  return null;
+}
+
 /** "Not now" on a chip: hidden until the task or its sessions change. */
 export function putOffDrift(card: Card) {
   useTasks.setState((t) => ({ notNow: { ...t.notNow, [driftKey(card)]: true } }));
@@ -340,52 +443,76 @@ const COLUMN_LABEL = { todo: "Todo", in_progress: "In Progress", in_review: "In 
 export async function startedFromTask(host: string, workspaceId: string, start: TaskStart) {
   if (start.github) return assignToMe(host, workspaceId, start.github);
   if (!start.tracker) return;
+  const id = `${start.ref.connection} ${start.key}`;
+  movedByMoonlet.set(id, "in_progress");
   try {
     await hostsApi.trackerUpdate({
       id: start.ref.connection,
       task: start.tracker.id,
       source: start.tracker.source,
       column: "in_progress",
-      state: stateFor(start.ref.connection, "in_progress"),
       assign_me: true,
     });
-    movedByMoonlet.add(`${start.ref.connection} ${start.key}`);
     recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you");
   } catch (e) {
+    movedByMoonlet.delete(id);
     errorToast((e as { message?: string }).message ?? e);
   }
 }
 
 /** Assigns a GitHub issue to the user, as the "session starts" rule does (X46). */
 export async function assignToMe(host: string, workspaceId: string, github: { repo: string; number: number }) {
-  const path = repoPath(host, workspaceId, github.repo);
-  if (!path) return;
+  const key = `${github.repo}#${github.number}`;
   try {
+    const path = repoPath(host, workspaceId, github.repo);
+    if (!path) throw new Error(`No project in this workspace has ${github.repo} as its origin`);
     await rpc(host, M.ghTaskUpdate, { path, number: github.number, assign_me: true });
-    recordActivity({ connection: GITHUB, key: `${github.repo}#${github.number}` }, "moonlet assigned it to you");
+    recordActivity({ connection: GITHUB, key }, "moonlet assigned it to you");
   } catch (e) {
-    errorToast(e);
+    toast(`${key}: ${message(e)}`, "error");
   }
 }
 
-/** The chip's button (X45): close the issue, move it, or clean up after a done task. */
-export async function fixDrift(host: string, workspaceId: string, card: Card) {
+/** A connection the user signed in to again, or forgot: its attention dot goes (X44). */
+export function reconnected(id: string) {
+  useTasks.setState((t) => ({ attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== id)) }));
+}
+
+/** A task's card on the workspace's board as it is now. */
+function currentCard(host: string, workspaceId: string, id: string): Card | undefined {
+  const data = useTasks.getState().data[wsKey(host, workspaceId)];
+  if (!data) return undefined;
+  const config = trackersConfig(useTasks.getState());
+  const board = applyRules(tasksBoard(boardInput(useStore.getState(), host, workspaceId, data, config)), (c) => rulesFor(config, c.task));
+  return Object.values(board)
+    .flat()
+    .find((c) => `${c.task.connection} ${c.task.key}` === id);
+}
+
+/** Runs a chip's fix; true when it was done (a declined Clean up is not). */
+export async function fixDrift(host: string, workspaceId: string, card: Card): Promise<boolean> {
   const plan = driftFix(card);
-  if (!plan) return;
-  retries.set(`${card.task.connection} ${card.task.key}`, () => fixDrift(host, workspaceId, card));
+  if (!plan) return false;
+  const id = `${card.task.connection} ${card.task.key}`;
+  // Retry looks again: the task may have moved since, or need another fix.
+  retries.set(id, async () => {
+    const now = currentCard(host, workspaceId, id);
+    if (now?.drift) await fixDrift(host, workspaceId, now);
+    else setFailure(card.task, null);
+  });
   try {
     if (plan.kind === "github") {
       const path = repoPath(host, workspaceId, plan.repo);
-      if (!path) return;
+      if (!path) throw new Error(`No project in this workspace has ${plan.repo} as its origin`);
+      movedByMoonlet.set(id, "done");
       await rpc(host, M.ghTaskUpdate, { path, number: plan.number, close: true });
-      movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
       recordActivity(card.task, "moonlet closed it: every session's PR is merged");
       toast(`Closed ${card.task.key}`);
     } else if (plan.kind === "move") {
       const t = card.task.tracker;
-      if (!t) return;
-      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column, state: stateFor(card.task.connection, plan.column) });
-      movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
+      if (!t) return false;
+      movedByMoonlet.set(id, plan.column);
+      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column });
       recordActivity(card.task, `moonlet moved it to ${COLUMN_LABEL[plan.column]}`);
       toast(`Moved ${card.task.key} to ${COLUMN_LABEL[plan.column]}`);
     } else {
@@ -402,23 +529,125 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
         action: "Clean up",
         variant: dirty.length ? "danger" : "primary",
       });
-      if (!ok) return;
+      if (!ok) return false;
       for (const s of sessions) await rpc(host, M.sessionArchive, { id: s.id, remove_worktree: true });
       for (const w of card.orphans) if (w.project) await rpc(host, M.projectWorktreeRemove, { id: w.project, path: w.path });
       recordActivity(card.task, "moonlet archived its sessions and removed their worktrees");
     }
     setFailure(card.task, null);
     await refreshTasks(host, workspaceId);
+    return true;
   } catch (e) {
+    movedByMoonlet.delete(id);
     setFailure(card.task, (e as { message?: string }).message ?? message(e));
+    return false;
   }
+}
+
+// Automatic fixes tried since the app started: a failure shows on its task
+// with Retry instead of being tried again on every board change.
+// Failures are kept across restarts, so "not tried again by itself" holds.
+const AUTO_FAILED_KEY = "tasks.autoFailed";
+const autoTried = new Set<string>(storedList(AUTO_FAILED_KEY));
+
+function storedList(name: string): string[] {
+  try {
+    const v = JSON.parse(readStored(name) ?? "[]");
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+/** An automatic fix or comment that failed: shown with Retry, not tried again by itself. */
+function autoFailed(key: string) {
+  autoTried.add(key);
+  writeStored(AUTO_FAILED_KEY, JSON.stringify([...new Set([...storedList(AUTO_FAILED_KEY), key])].slice(-200)));
+}
+
+/**
+ * The rules at Automatically, run once each (X46): chips' fixes and PR-link
+ * comments. Each is remembered across restarts only when it worked.
+ */
+export async function runAutoFixes(host: string, workspaceId: string, board: Board, rulesOf: (c: Card) => Rules, now = Date.now()) {
+  const done = autoFixed();
+  // "PR opened" in each task's Activity, once per PR (X45).
+  for (const card of Object.values(board).flat())
+    for (const { session } of card.rows) {
+      const pr = session.pr;
+      const key = `opened ${card.task.connection} ${card.task.key} ${pr?.url}`;
+      if (pr?.state !== "open" || pr.draft || done[key]) continue;
+      markAutoFixed(key);
+      recordActivity(card.task, `PR #${pr.number} opened: ${pr.title}`, now);
+    }
+  for (const card of autoFixes(board, rulesOf, done)) {
+    const key = driftKey(card);
+    if (autoTried.has(key)) continue;
+    autoTried.add(key);
+    if (await fixDrift(host, workspaceId, card)) markAutoFixed(key);
+    else autoFailed(key);
+  }
+  for (const c of prComments(board, rulesOf, done)) {
+    const t = c.card.task.tracker;
+    if (!t || autoTried.has(c.key)) continue;
+    autoTried.add(c.key);
+    const id = `${c.card.task.connection} ${c.card.task.key}`;
+    // A task shows one failure: the comment's own only when nothing else failed.
+    const comment = async () => {
+      try {
+        await hostsApi.trackerUpdate({ id: c.card.task.connection, task: t.id, source: t.source, comment: c.text });
+        markAutoFixed(c.key);
+        if (failedBy.get(id) === "comment") setFailure(c.card.task, null);
+        recordActivity(c.card.task, "moonlet commented with the pull request's link");
+      } catch (e) {
+        autoFailed(c.key);
+        // The task already shows another failure: its Retry sends the comment too.
+        const before = failureOf(c.card.task) ? retries.get(id) : undefined;
+        retries.set(id, async () => {
+          await before?.();
+          await comment();
+        });
+        if (!before) setFailure(c.card.task, (e as { message?: string }).message ?? message(e), "comment");
+      }
+    };
+    await comment();
+  }
+}
+
+/**
+ * Keeps a workspace's tasks fresh while Tasks mode shows it (X44 Sync): now,
+ * every `interval` seconds and when the window comes to the front, at most
+ * every 15 s. Manual (0) refreshes only now and on demand. Returns the stop.
+ */
+export function syncTasks(host: string, workspaceId: string, interval: number): () => void {
+  const sync = () => void refreshTasks(host, workspaceId);
+  sync();
+  if (interval <= 0) return () => {};
+  const due = focusThrottle(15_000);
+  const onFocus = () => due(Date.now()) && sync();
+  window.addEventListener("focus", onFocus);
+  const timer = setInterval(sync, interval * 1000);
+  return () => {
+    window.removeEventListener("focus", onFocus);
+    clearInterval(timer);
+  };
 }
 
 /** Loads a workspace's tasks when a linked session opens outside Tasks mode, at most once a minute (X46). */
 export function ensureTasks(host: string, workspaceId: string, now = Date.now()) {
-  const d = useTasks.getState().data[wsKey(host, workspaceId)];
-  if (!d || d.syncedAt === null || now - d.syncedAt > 60_000) void refreshTasks(host, workspaceId, now);
+  const key = wsKey(host, workspaceId);
+  if (ensuring.has(key)) return;
+  const d = useTasks.getState().data[key];
+  // Once there is a list: never by itself under manual Sync, else at most a
+  // minute after the last try, whether or not it worked.
+  const last = Math.max(ensuredAt.get(key) ?? -Infinity, d?.syncedAt ?? -Infinity);
+  if (d && (trackersConfig(useTasks.getState()).sync.interval === 0 || now - last < 60_000)) return;
+  ensuring.add(key);
+  ensuredAt.set(key, now);
+  void refreshTasks(host, workspaceId, now).finally(() => ensuring.delete(key));
 }
+const ensuring = new Set<string>();
+const ensuredAt = new Map<string, number>();
 
 /** Links a session to a task, or unlinks it with null (X46). */
 export async function linkTask(host: string, sessionId: string, task: Task | null) {
@@ -469,31 +698,41 @@ export function recordActivity(task: Pick<Task, "connection" | "key">, text: str
 
 /** The state menu (X45 detail, X46 task bar): move a tracker issue, or close or reopen a GitHub issue. */
 export async function moveTask(host: string, workspaceId: string, task: Task, column: Exclude<Column, "hidden"> | null, now = Date.now()) {
-  retries.set(`${task.connection} ${task.key}`, () => moveTask(host, workspaceId, task, column));
+  const id = `${task.connection} ${task.key}`;
+  retries.set(id, () => moveTask(host, workspaceId, task, column));
   try {
     if (task.github) {
       const path = repoPath(host, workspaceId, task.github.repo);
-      if (!path) return;
+      if (!path) throw new Error(`No project in this workspace has ${task.github.repo} as its origin`);
       const close = column === "done";
+      movedByMoonlet.set(id, close ? "done" : "open");
       await rpc(host, M.ghTaskUpdate, close ? { path, number: task.github.number, close: true } : { path, number: task.github.number, reopen: true });
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
-      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, state: stateFor(task.connection, column) });
+      movedByMoonlet.set(id, column);
+      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column });
       recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
     } else return;
-    movedByMoonlet.add(`${task.connection} ${task.key}`);
     setFailure(task, null);
     void refreshTasks(host, workspaceId);
   } catch (e) {
-    setFailure(task, (e as { message?: string }).message ?? message(e));
+    movedByMoonlet.delete(id);
+    const why = (e as { message?: string }).message ?? message(e);
+    setFailure(task, why);
+    toast(`${task.key}: ${why}`, "error");
   }
 }
 
 /** What to run again for a task whose last action failed. */
 const retries = new Map<string, () => Promise<void>>();
 
-function setFailure(task: Pick<Task, "connection" | "key">, error: string | null) {
+/** What made a task's shown failure: a chip fix or move, or a PR-link comment. */
+const failedBy = new Map<string, "action" | "comment">();
+
+function setFailure(task: Pick<Task, "connection" | "key">, error: string | null, by: "action" | "comment" = "action") {
   const id = `${task.connection} ${task.key}`;
+  if (error) failedBy.set(id, by);
+  else failedBy.delete(id);
   useTasks.setState((t) => {
     const failures = { ...t.failures };
     if (error) failures[id] = error;
@@ -510,11 +749,6 @@ export function failureOf(task: Pick<Task, "connection" | "key">): string | unde
 /** Retry on a task's failed action. */
 export async function retryTask(task: Pick<Task, "connection" | "key">) {
   await retries.get(`${task.connection} ${task.key}`)?.();
-}
-
-/** The state a move to `column` uses for a connection, from its state mapping (X44). */
-function stateFor(connection: string, column: Exclude<Column, "hidden">): string | null {
-  return targetState(trackersConfig(useTasks.getState()).connections?.find((c) => c.id === connection), column);
 }
 
 const OFF: Rules = { session_starts: "off", pr_opens: "off", all_merged: "off", pr_comment: "off", issue_done: "off" };

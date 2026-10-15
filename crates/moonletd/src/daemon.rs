@@ -567,6 +567,10 @@ impl Daemon {
                 git::gh_task_update(&path(&r.path), r.number, r.assign_me, r.close, r.reopen).await.map_err(internal)?;
                 ok(true)
             }
+            m::GH_TASK => {
+                let r: m::GhTaskGet = params(p)?;
+                ok(git::gh_task(&path(&r.path), &r.repo, r.number).await.map_err(internal)?)
+            }
             m::GH_TASKS => {
                 let r: m::GhTasks = params(p)?;
                 ok(git::gh_tasks(&path(&r.path), r.mine).await.map_err(internal)?)

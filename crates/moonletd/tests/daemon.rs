@@ -1155,6 +1155,30 @@ async fn fake_gh_daemon(script: &str) -> (TestDaemon, Vec<tempfile::TempDir>) {
 }
 
 #[tokio::test]
+async fn one_github_issue_by_its_number_through_gh() {
+    // A fake gh that prints one issue as `gh issue view --json` does.
+    let (d, dirs) = fake_gh_daemon(
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\ncat <<'JSON'\n{\"number\":7,\"title\":\"Gift cards\",\"body\":\"\",\"url\":\"https://github.com/acme/web/issues/7\",\"state\":\"OPEN\",\"stateReason\":\"\",\"assignees\":[],\"labels\":[],\"updatedAt\":\"2026-10-14T09:00:00Z\",\"closedByPullRequestsReferences\":[]}\nJSON\n",
+    )
+    .await;
+    let mut c = d.client().await;
+    let (repo, _) = project_with_repo(&d, &mut c).await;
+    let task: serde_json::Value = c
+        .request(methods::GH_TASK, serde_json::json!({"path": repo, "repo": "acme/web", "number": 7}))
+        .await
+        .unwrap();
+    assert_eq!((task["repo"].as_str(), task["number"].as_u64(), task["title"].as_str()), (Some("acme/web"), Some(7), Some("Gift cards")));
+    let asked = std::fs::read_to_string(dirs[0].path().join("gh.log")).unwrap();
+    assert!(asked.starts_with("issue view 7 --repo acme/web --json "), "{asked}");
+    // Only an owner/name repository reaches gh.
+    let err = c
+        .request::<_, serde_json::Value>(methods::GH_TASK, serde_json::json!({"path": repo, "repo": "--help", "number": 7}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not a GitHub repository"), "{err}");
+}
+
+#[tokio::test]
 async fn task_updates_reach_github_through_gh() {
     // A fake gh that records what it was asked to do.
     let (d, dirs) = fake_gh_daemon("#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n").await;

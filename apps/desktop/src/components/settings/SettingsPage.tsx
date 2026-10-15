@@ -9,6 +9,7 @@ import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
 import { updateStatus } from "../../lib/updater";
 import { useStore } from "../../lib/store";
+import { useTasks } from "../../lib/tasksStore";
 import { IconButton, Kbd, cx } from "../ui";
 import { WorkspaceMark } from "../WorkspaceSwitcher";
 import { PageBody } from "./controls";
@@ -63,6 +64,7 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
   const profiles = useStore((s) => s.profiles.local);
   const defaultAccount = useStore((s) => s.defaultAccounts.local);
   const version = useStore((s) => s.appVersion);
+  const attention = useTasks((t) => Object.keys(t.attention).length);
   const status = useStore((s) => updateStatus(s.update, s.updateChecking, s.updateError));
   const groups = useMemo(
     () =>
@@ -70,12 +72,13 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
         remoteHosts: Object.values(hosts).filter((h) => h.remote).length,
         phones,
         profilesNeedSignIn: profilesNeedSignIn(workspaces ?? [], profiles ?? [], defaultAccount ?? null),
+        trackersNeedAttention: attention,
         workspaces: hostOrder(Object.keys(allWorkspaces)).flatMap((h) =>
           (allWorkspaces[h] ?? []).map((w) => ({ host: h, id: w.id, name: w.name, color: w.color, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null })),
         ),
         projects: hostOrder(Object.keys(allProjects)).flatMap((h) => (allProjects[h] ?? []).map((p) => ({ host: h, id: p.id, name: p.name, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null }))),
       }),
-    [hosts, phones, workspaces, profiles, defaultAccount, allWorkspaces, allProjects],
+    [hosts, phones, workspaces, profiles, defaultAccount, allWorkspaces, allProjects, attention],
   );
   return (
     <nav aria-label="Settings" className="flex h-full w-[248px] shrink-0 flex-col border-r border-border bg-panel">

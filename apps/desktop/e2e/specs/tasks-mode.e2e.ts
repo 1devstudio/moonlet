@@ -47,6 +47,20 @@ const ISSUES = JSON.stringify([
   },
 ]);
 
+// `gh issue view 99 --repo acme/other`: an issue outside the workspace's repositories.
+const OTHER_ISSUE = JSON.stringify({
+  number: 99,
+  title: "Shared design tokens",
+  body: "",
+  url: "https://github.com/acme/other/issues/99",
+  state: "OPEN",
+  stateReason: "",
+  assignees: [],
+  labels: [],
+  updatedAt: "2026-10-12T10:00:00Z",
+  closedByPullRequestsReferences: [],
+});
+
 const LINKED = "Checkout on Safari";
 const tasksButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]');
 const sessionsButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[@aria-label="Sessions"]');
@@ -58,7 +72,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -66,8 +80,19 @@ describe("Tasks mode", () => {
     linkedId = rpc<{ id: string }>(w, "session.create", { project_id: projectId(w), name: LINKED, branch: "12-fix-checkout", agent: "none" }).id;
   });
 
+  // The app keeps the layout and open rows across restarts, and localStorage
+  // outlives a run: start and end from the defaults.
+  const forgetLayout = () => browser.execute(() => ["moonlet.tasks.layout", "moonlet.tasks.expanded"].forEach((k) => localStorage.removeItem(k)));
+  before(async () => {
+    await forgetLayout();
+    // The store read them when the app started.
+    await browser.refresh();
+    await tasksButton().waitForDisplayed({ timeout: 15_000 });
+  });
+
   after(async () => {
     if (await sessionsButton().isExisting()) await sessionsButton().click();
+    await forgetLayout();
     await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId(w));
     for (const s of rpc<Session[]>(w, "session.list", {})) {
       // The seeded session is shared with other specs: unlink it, don't archive it.
@@ -107,11 +132,12 @@ describe("Tasks mode", () => {
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), projectId(w));
     await card("acme/storefront#15", "Todo").$(sel.button("Start")).click();
     await expect($(sel.text("For acme/storefront#15"))).toBeDisplayed();
-    await expect($(sel.text("15-gift-cards-at-checkout"))).toBeDisplayed({ wait: 10_000 });
     await expect($('//textarea[@placeholder="What do you want to work on?"]')).toHaveValue("acme/storefront#15 · Gift cards at checkout");
     // Keep in step: "session starts" is Automatically, so the issue is assigned (X46).
     await expect($('//label[normalize-space()="Assign acme/storefront#15 to me"]/input')).toBeSelected();
-    await $(sel.button("Create")).click();
+    // ⌘↵ at once, without waiting for the branch name to show: Create waits for it.
+    await $('//textarea[@placeholder="What do you want to work on?"]').click();
+    await browser.keys(["Meta", "Enter"]);
 
     await expect($(sel.sessionRow("Gift cards at checkout"))).toBeDisplayed({ wait: 30_000 });
     await expect(sessionsButton()).toHaveAttribute("aria-pressed", "true");
@@ -119,6 +145,41 @@ describe("Tasks mode", () => {
     expect(created?.branch).toBe("15-gift-cards-at-checkout");
     expect(created?.task).toEqual({ connection: "github:github.com", key: "acme/storefront#15", url: "https://github.com/acme/storefront/issues/15" });
     await browser.waitUntil(() => asked().includes("issue edit 15 --add-assignee @me"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+  });
+
+  it("starts a session on a worktree made outside moonlet, keeping its project", async () => {
+    const dir = join(w.root, "wt-12-orphan-fix");
+    git("worktree", "add", "-q", "-b", "12-orphan-fix", dir);
+    try {
+      await tasksButton().click();
+      await $('//button[@title="Refresh tasks"]').click();
+      // #12 has sessions, so its worktree without one is in the detail panel.
+      await card("acme/storefront#12", "In Progress").$('//button[normalize-space()="Fix checkout button"]').click();
+      const start = $('//aside[@aria-label="Task detail"]').$(sel.button("Start session"));
+      await start.waitForDisplayed({ timeout: 15_000 });
+      await start.click();
+      await expect($(sel.text("12-orphan-fix · existing worktree"))).toBeDisplayed({ wait: 10_000 });
+      // The worktree belongs to its project: the picker stays put.
+      await expect($('//button[@title="This worktree belongs to this project"]')).toBeDisabled();
+      await $(sel.button("Create")).click();
+      await browser.waitUntil(() => rpc<(Session & { branch?: string })[]>(w, "session.list", {}).some((x) => x.branch === "12-orphan-fix"), {
+        timeout: 15_000,
+        timeoutMsg: "no session on the existing worktree",
+      });
+    } finally {
+      for (const x of rpc<(Session & { branch?: string })[]>(w, "session.list", {})) if (x.branch === "12-orphan-fix") rpc(w, "session.archive", { id: x.id });
+      try {
+        git("worktree", "remove", "--force", dir);
+      } catch {
+        // Archiving removed it already.
+      }
+      try {
+        git("branch", "-D", "12-orphan-fix");
+      } catch {
+        // Already gone.
+      }
+      if (await sessionsButton().isExisting()) await sessionsButton().click();
+    }
   });
 
   it("puts Closes #N in the new PR of a session working on a GitHub issue", async () => {
@@ -145,8 +206,12 @@ describe("Tasks mode", () => {
     await tasksButton().click();
     await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "Sessions without a task")]').click();
     await $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]//button[normalize-space()="Link to task"]`).click();
+    // An issue outside the workspace's tasks is asked of gh.
+    await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "https://github.com/acme/other/issues/99");
+    await expect($('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/other#99"]]')).toBeDisplayed({ wait: 10_000 });
+    // ↵ at once links the pasted task: it waits for the lookup.
     await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "#12");
-    await $('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/storefront#12"]]').click();
+    await browser.keys("Enter");
     await browser.waitUntil(() => rpc<Session[]>(w, "session.list", {}).find((x) => x.name === SESSION)?.task?.key === "acme/storefront#12", {
       timeout: 10_000,
       timeoutMsg: "the seeded session was not linked to acme/storefront#12",
@@ -162,6 +227,17 @@ describe("Tasks mode", () => {
     await row.$('button[aria-label="Expand acme/storefront#15"]').click();
     await expect(row.$('//button[normalize-space()="Gift cards at checkout"]')).toBeDisplayed();
     await expect($('//section[@aria-label="Todo"]')).toBeDisplayed();
+    // Expand all opens every row; Collapse all closes them.
+    const twelve = $('button[aria-label="Expand acme/storefront#12"], button[aria-label="Collapse acme/storefront#12"]');
+    await $(sel.button("Expand all")).click();
+    await expect(twelve).toHaveAttribute("aria-expanded", "true");
+    await $(sel.button("Collapse all")).click();
+    await expect(twelve).toHaveAttribute("aria-expanded", "false");
+    await expect(row.$('button[aria-label="Expand acme/storefront#15"]')).toHaveAttribute("aria-expanded", "false");
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+    // The board's Done column opens the list.
+    await $('//button[starts-with(@aria-label, "Done: ")]').click();
+    await expect($('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]')).toHaveAttribute("aria-pressed", "true");
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
 
@@ -170,6 +246,18 @@ describe("Tasks mode", () => {
     const row = $(sel.sessionRow("Gift cards at checkout"));
     await expect(row.$('//span[@title="acme/storefront#15 · Gift cards at checkout"]')).toBeDisplayed({ wait: 10_000 });
     await expect(row.$(sel.text("acme/storefront#15"))).toBeDisplayed();
+  });
+
+  it("groups the sidebar's sessions by task, each group headed by its task", async () => {
+    type Sec = { id: string; project_ids: string[]; view: { group_by: string; sort_by: string; filter: string[] } };
+    const sec = rpc<Sec[]>(w, "section.list", {}).find((x) => x.project_ids.includes(projectId(w)))!;
+    rpc(w, "section.update", { id: sec.id, view: { ...sec.view, group_by: "task" } });
+    try {
+      await expect($(sel.text("acme/storefront#15 Gift cards at checkout"))).toBeDisplayed({ wait: 10_000 });
+      await expect($(sel.text("No task"))).toBeDisplayed();
+    } finally {
+      rpc(w, "section.update", { id: sec.id, view: sec.view });
+    }
   });
 
   it("finds a task by its title, and closes an issue from the detail's state menu", async () => {

@@ -26,11 +26,39 @@ pub fn issues_query(mine: bool) -> String {
     let recent = r#"or: [{ state: { type: { nin: ["completed", "canceled"] } } }, { updatedAt: { gt: "-P14D" } }]"#;
     format!(
         "query Issues($teams: [String!], $after: String) {{ issues(first: 100, after: $after, \
-         filter: {{ team: {{ key: {{ in: $teams }} }}{who}, {recent} }}) {{ nodes {{ id identifier title description url \
-         branchName priority updatedAt state {{ id name type }} assignee {{ id name }} labels {{ nodes {{ name }} }} \
-         cycle {{ number }} team {{ key }} }} pageInfo {{ hasNextPage endCursor }} }} }}"
+         filter: {{ team: {{ key: {{ in: $teams }} }}{who}, {recent} }}) {{ nodes {{ {ISSUE_FIELDS} }} \
+         pageInfo {{ hasNextPage endCursor }} }} }}"
     )
 }
+
+/// What a task needs of a Linear issue.
+const ISSUE_FIELDS: &str = "id identifier title description url branchName priority updatedAt \
+     state { id name type } assignee { id name } labels { nodes { name } } cycle { number } team { key }";
+
+/// One issue by its key, such as `MOON-142` (X46: a key pasted into the link dialog).
+pub fn issue_query() -> String {
+    format!("query Issue($id: String!) {{ issue(id: $id) {{ {ISSUE_FIELDS} }} }}")
+}
+
+/// The issue of [`issue_query`], or `None` when Linear knows no such key.
+pub fn parse_issue(raw: &[u8], connection: &str) -> Result<Option<TrackerTask>, ApiError> {
+    let v: Value = serde_json::from_slice(raw)
+        .map_err(|e| ApiError::new(format!("Linear answered with something else: {e}")))?;
+    // An unknown key comes back as `issue: null` with "Entity not found";
+    // any other error stays an error.
+    let not_found = v["errors"][0]["message"]
+        .as_str()
+        .is_some_and(|m| m.starts_with("Entity not found"));
+    if v["data"]["issue"].is_null() && not_found {
+        return Ok(None);
+    }
+    let issue = &data(raw)?["issue"];
+    Ok((!issue.is_null()).then(|| issue_task(issue, connection)))
+}
+
+/// What a rejected API key says (X44).
+pub const REJECTED: &str =
+    "Linear no longer accepts this token. Create a new one and paste it here.";
 
 /// The answer's `data`, or the error it carries.
 fn data(raw: &[u8]) -> Result<Value, ApiError> {
@@ -38,15 +66,22 @@ fn data(raw: &[u8]) -> Result<Value, ApiError> {
         .map_err(|e| ApiError::new(format!("Linear answered with something else: {e}")))?;
     if let Some(e) = v["errors"].as_array().and_then(|e| e.first()) {
         let ext = &e["extensions"];
-        return Err(ApiError {
-            auth: ext["type"]
-                .as_str()
-                .is_some_and(|t| t.contains("authentication")),
-            message: ext["userPresentableMessage"]
+        let auth = ext["type"]
+            .as_str()
+            .is_some_and(|t| t.contains("authentication"));
+        // A rejected token reads the same however Linear sends it (X44); the
+        // app words it for an OAuth sign-in.
+        let message = if auth {
+            REJECTED
+        } else {
+            ext["userPresentableMessage"]
                 .as_str()
                 .or(e["message"].as_str())
                 .unwrap_or("Linear refused the request")
-                .into(),
+        };
+        return Err(ApiError {
+            auth,
+            message: message.into(),
         });
     }
     Ok(v["data"].clone())
@@ -95,11 +130,16 @@ pub fn parse_success(raw: &[u8], field: &str) -> Result<(), ApiError> {
     }
 }
 
-/// The state a move to `column` uses: the first state in that column.
-pub fn state_for(states: &[State], column: crate::states::Column) -> Option<&State> {
-    states
-        .iter()
-        .find(|s| crate::states::default_column(TrackerKind::Linear, &s.kind, &s.name) == column)
+/// The state a move to `column` uses, by the user's state mapping (X44).
+pub fn state_for<'a>(
+    states: &'a [State],
+    column: crate::states::Column,
+    mapping: &crate::states::Mapping,
+) -> Option<&'a State> {
+    crate::states::pick(states, column, mapping, |s| {
+        let natural = crate::states::default_column(TrackerKind::Linear, &s.kind, &s.name);
+        (natural, s.name.as_str())
+    })
 }
 
 /// `(organisation urlKey, viewer name)`.
@@ -158,48 +198,51 @@ pub fn parse_states(raw: &[u8]) -> Result<Vec<State>, ApiError> {
 pub fn parse_issues(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, ApiError> {
     let d = data(raw)?;
     Ok(nodes(&d["issues"])
-        .map(|i| {
-            let state = &i["state"];
-            let state_name = state["name"].as_str().unwrap_or_default();
-            TrackerTask {
-                connection: connection.into(),
-                key: i["identifier"].as_str().unwrap_or_default().into(),
-                title: i["title"].as_str().unwrap_or_default().into(),
-                url: crate::task::web_url(&i["url"]).unwrap_or_default(),
-                column: crate::states::default_column(
-                    TrackerKind::Linear,
-                    state["type"].as_str().unwrap_or_default(),
-                    state_name,
-                ),
-                priority: crate::priority::linear_bars(i["priority"].as_f64().unwrap_or(0.0) as u8),
-                assignees: i["assignee"]["name"]
-                    .as_str()
-                    .map(String::from)
-                    .into_iter()
-                    .collect(),
-                labels: nodes(&i["labels"])
-                    .filter_map(|l| l["name"].as_str().map(String::from))
-                    .collect(),
-                description: i["description"].as_str().unwrap_or_default().into(),
-                updated_ms: i["updatedAt"]
-                    .as_str()
-                    .and_then(crate::time::timestamp_ms)
-                    .unwrap_or(0),
-                cycle: i["cycle"]["number"].as_u64(),
-                tracker: TrackerRef {
-                    id: i["id"].as_str().unwrap_or_default().into(),
-                    state: state_name.into(),
-                    source: i["team"]["key"].as_str().unwrap_or_default().into(),
-                },
-            }
-        })
+        .map(|i| issue_task(i, connection))
         .collect())
+}
+
+fn issue_task(i: &Value, connection: &str) -> TrackerTask {
+    let state = &i["state"];
+    let state_name = state["name"].as_str().unwrap_or_default();
+    TrackerTask {
+        connection: connection.into(),
+        key: i["identifier"].as_str().unwrap_or_default().into(),
+        title: i["title"].as_str().unwrap_or_default().into(),
+        url: crate::task::web_url(&i["url"]).unwrap_or_default(),
+        column: crate::states::default_column(
+            TrackerKind::Linear,
+            state["type"].as_str().unwrap_or_default(),
+            state_name,
+        ),
+        priority: crate::priority::linear_bars(i["priority"].as_f64().unwrap_or(0.0) as u8),
+        assignees: i["assignee"]["name"]
+            .as_str()
+            .map(String::from)
+            .into_iter()
+            .collect(),
+        labels: nodes(&i["labels"])
+            .filter_map(|l| l["name"].as_str().map(String::from))
+            .collect(),
+        description: i["description"].as_str().unwrap_or_default().into(),
+        updated_ms: i["updatedAt"]
+            .as_str()
+            .and_then(crate::time::timestamp_ms)
+            .unwrap_or(0),
+        cycle: i["cycle"]["number"].as_u64(),
+        tracker: TrackerRef {
+            id: i["id"].as_str().unwrap_or_default().into(),
+            state: state_name.into(),
+            source: i["team"]["key"].as_str().unwrap_or_default().into(),
+        },
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::states::Column;
+    use crate::states::Mapping;
     use crate::task::{TrackerRef, TrackerTask};
 
     fn fixture(name: &str) -> Vec<u8> {
@@ -208,6 +251,25 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn one_issue_by_its_key() {
+        let list: serde_json::Value =
+            serde_json::from_slice(&fixture("linear-issues.json")).unwrap();
+        let node = &list["data"]["issues"]["nodes"][0];
+        let one = serde_json::json!({ "data": { "issue": node } }).to_string();
+        let t = parse_issue(one.as_bytes(), "linear:acme").unwrap().unwrap();
+        assert_eq!(
+            (t.key.as_str(), t.title.as_str(), t.tracker.state.as_str()),
+            ("ENG-123", "Retry failed webhook deliveries", "In Progress")
+        );
+        // Linear answers a key it does not know with `issue: null` and an error.
+        let missing =
+            br#"{"data":{"issue":null},"errors":[{"message":"Entity not found: Issue"}]}"#;
+        assert_eq!(parse_issue(missing, "linear:acme").unwrap(), None);
+        assert!(issue_query()
+            .starts_with("query Issue($id: String!) { issue(id: $id) { id identifier title"));
     }
 
     #[test]
@@ -244,7 +306,10 @@ mod tests {
             (Column::Todo, 0, "")
         );
         assert_eq!((tasks[2].column, tasks[2].priority), (Column::Done, 1));
-        assert_eq!([tasks[0].cycle, tasks[1].cycle, tasks[2].cycle], [Some(42), None, Some(41)]);
+        assert_eq!(
+            [tasks[0].cycle, tasks[1].cycle, tasks[2].cycle],
+            [Some(42), None, Some(41)]
+        );
         // `priority` is a Float in Linear's schema.
         let float = br#"{"data":{"issues":{"nodes":[{"identifier":"ENG-1","priority":2.0,"state":{"type":"started","name":"In Progress"},"team":{"key":"ENG"}}]}}}"#;
         assert_eq!(parse_issues(float, "linear:acme").unwrap()[0].priority, 3);
@@ -299,11 +364,13 @@ mod tests {
         // The state a move to a column picks: the first of that column, by position.
         let states = parse_states(&fixture("linear-states.json")).unwrap();
         assert_eq!(
-            state_for(&states, crate::states::Column::InReview).map(|s| s.name.as_str()),
+            state_for(&states, crate::states::Column::InReview, &Mapping::new())
+                .map(|s| s.name.as_str()),
             Some("In Review")
         );
         assert_eq!(
-            state_for(&states, crate::states::Column::Done).map(|s| s.name.as_str()),
+            state_for(&states, crate::states::Column::Done, &Mapping::new())
+                .map(|s| s.name.as_str()),
             Some("Done")
         );
     }
@@ -317,9 +384,28 @@ mod tests {
         ]}}}"#;
         let states = parse_states(raw).unwrap();
         assert_eq!(
-            state_for(&states, crate::states::Column::InProgress).map(|s| s.name.as_str()),
+            state_for(&states, crate::states::Column::InProgress, &Mapping::new())
+                .map(|s| s.name.as_str()),
             Some("In Progress")
         );
+    }
+
+    #[test]
+    fn a_move_follows_the_users_state_mapping() {
+        let states = parse_states(&fixture("linear-states.json")).unwrap();
+        let name = |m: &Mapping, c| state_for(&states, c, m).map(|s| s.name.clone());
+        // Backlog mapped onto Todo: a move to Todo still lands on Todo.
+        let backlog = Mapping::from([("Backlog".to_string(), Column::Todo)]);
+        assert_eq!(name(&backlog, Column::Todo).as_deref(), Some("Todo"));
+        // In Progress mapped onto In Review: a move to In Progress has nowhere to go…
+        let moved = Mapping::from([("In Progress".to_string(), Column::InReview)]);
+        assert_eq!(name(&moved, Column::InProgress), None);
+        // …unless another state is mapped onto it.
+        let both = Mapping::from([
+            ("In Progress".to_string(), Column::InReview),
+            ("Backlog".to_string(), Column::InProgress),
+        ]);
+        assert_eq!(name(&both, Column::InProgress).as_deref(), Some("Backlog"));
     }
 
     #[test]
@@ -359,7 +445,19 @@ mod tests {
         assert!(err.auth);
         assert_eq!(
             err.message,
-            "You need to authenticate to access this operation."
+            "Linear no longer accepts this token. Create a new one and paste it here."
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_is_no_issue_but_other_errors_stay_errors() {
+        let missing = br#"{"data":{"issue":null},"errors":[{"message":"Entity not found: Issue","extensions":{"type":"invalid input"}}]}"#;
+        assert_eq!(parse_issue(missing, "linear:acme").unwrap(), None);
+        assert!(parse_issue(&fixture("linear-error-ratelimited.json"), "linear:acme").is_err());
+        assert!(
+            parse_issue(&fixture("linear-error-auth.json"), "linear:acme")
+                .unwrap_err()
+                .auth
         );
     }
 }

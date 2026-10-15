@@ -3,19 +3,18 @@
 import { Copy, ExternalLink, GitBranch, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { focusThrottle } from "../../lib/prPoll";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
-import { type Column, type Task, taskStart } from "../../lib/tasks";
-import { findTasks, initials, stateOptions } from "../../lib/taskDetails";
+import { type Column, type Task, taskStart, trackerName } from "../../lib/tasks";
+import { findTasks, glyphShape, initials, stateOptions } from "../../lib/taskDetails";
 import { type Board, type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { activityOf, autoFixed, boardInput, ensureTasks, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, moveTask, putOffDrift, recordActivity, refreshTasks, retryTask, rulesFor, setLayout, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
-import { listGroups, listRow } from "../../lib/tasksList";
-import { applyRules, autoFixes, driftKey, prComments, startAction, withoutPutOff } from "../../lib/keepInStep";
-import { hostsApi } from "../../lib/daemon";
-import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
+import { activityOf, boardInput, ensureTasks, failureOf, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, moveTask, putOffDrift, refreshTasks, retryTask, rulesFor, runAutoFixes, setExpanded, setLayout, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { cleanUpCount, listGroups, listRow } from "../../lib/tasksList";
+import { applyRules, removeWorktreeAsk, startAction, withoutPutOff } from "../../lib/keepInStep";
+import { effectiveKeys, keyLabel } from "../../lib/runActions";
+import { boardSummary, sourceLabels, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
@@ -39,8 +38,9 @@ const TONE: Record<CardRow["meta"]["tone"], string> = {
 
 /** Task state by shape: ring Todo, half In Progress, three quarters In Review, filled check Done. */
 export function TaskGlyph({ column, size = 14 }: { column: Column; size?: number }) {
-  const done = column === "done";
-  const pie = column === "in_progress" ? "M7 7 L7 4 A3 3 0 0 1 7 10 Z" : column === "in_review" ? "M7 7 L7 4 A3 3 0 1 1 4 7 Z" : "";
+  const shape = glyphShape(column);
+  const done = shape === "check";
+  const pie = shape === "half" ? "M7 7 L7 4 A3 3 0 0 1 7 10 Z" : shape === "three-quarters" ? "M7 7 L7 4 A3 3 0 1 1 4 7 Z" : "";
   return (
     <svg viewBox="0 0 14 14" width={size} height={size} className={cx("shrink-0", done ? "text-merged" : column === "todo" ? "text-muted" : "text-fg")} aria-hidden="true">
       <circle cx="7" cy="7" r="5.5" fill={done ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" />
@@ -57,39 +57,14 @@ function useTaskSync() {
   // Settings › Task trackers › Sync; 0 is "manual" (X44).
   const interval = useTasks((t) => trackersConfig(t).sync.interval);
   useEffect(() => void loadTrackersConfig(), []);
-  useEffect(() => {
-    if (!ws) return;
-    const sync = () => void refreshTasks(ws.host, ws.id);
-    sync();
-    const due = focusThrottle(15_000);
-    const onFocus = () => due(Date.now()) && sync();
-    window.addEventListener("focus", onFocus);
-    const timer = interval > 0 ? setInterval(sync, interval * 1000) : undefined;
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      clearInterval(timer);
-    };
-  }, [ws, interval]);
+  useEffect(() => (ws ? syncTasks(ws.host, ws.id, interval) : undefined), [ws, interval]);
   // "Every session's PR is merged" at Automatically closes the issue, once (X46).
   const { board } = useWorkspaceBoard(ws);
   const config = useTasks((t) => trackersConfig(t));
   const paused = useTasks((t) => t.paused);
   useEffect(() => {
     if (!ws || !board) return;
-    const rulesOf = (c: Card) => rulesFor(config, c.task);
-    for (const card of autoFixes(board, rulesOf, autoFixed())) {
-      markAutoFixed(driftKey(card));
-      void fixDrift(ws.host, ws.id, card);
-    }
-    for (const c of prComments(board, rulesOf, autoFixed())) {
-      markAutoFixed(c.key);
-      const t = c.card.task.tracker;
-      if (t)
-        void hostsApi
-          .trackerUpdate({ id: c.card.task.connection, task: t.id, source: t.source, comment: c.text })
-          .then(() => recordActivity(c.card.task, "moonlet commented the pull request's link"))
-          .catch((e) => errorToast(e?.message ?? e));
-    }
+    void runAutoFixes(ws.host, ws.id, board, (c: Card) => rulesFor(config, c.task));
   }, [ws, board, config, paused]);
 }
 
@@ -126,9 +101,8 @@ export function TasksSidebar() {
   const trackers = useMemo(() => {
     if (!ws || !data) return [];
     const github = data.sources.filter((x) => !x.includes(":")).map((repo) => ({ name: `GitHub · ${repo}`, attention: undefined as string | undefined }));
-    const NAME = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
     const others = (config.connections ?? []).flatMap((c) =>
-      c.sources.filter((s) => s.workspace === wsKey(ws.host, ws.id)).map((s) => ({ name: `${NAME[c.kind]} · ${s.name}`, attention: attention[c.id] })),
+      c.sources.filter((s) => s.workspace === wsKey(ws.host, ws.id)).map((s) => ({ name: `${trackerName(c.kind)} · ${s.name}`, attention: attention[c.id] })),
     );
     return [...github, ...others];
   }, [ws, data, config, attention]);
@@ -275,7 +249,7 @@ function TaskCard({ host, workspaceId, card, selected, source }: { host: string;
 }
 
 function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: string; card: Card }) {
-  const failure = useTasks((t) => t.failures[`${card.task.connection} ${card.task.key}`]);
+  const failure = useTasks(() => failureOf(card.task));
   return (
     <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
@@ -284,7 +258,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
           <Copy size={13} />
         </IconButton>
         <a href={card.task.url} target="_blank" rel="noreferrer" className="ml-auto flex items-center gap-1 ui-text-12 text-muted hover:text-fg">
-          Open in GitHub <ExternalLink size={12} />
+          Open in {trackerName(card.task.connection)} <ExternalLink size={12} />
         </a>
         <IconButton title="Close detail" onClick={() => useTasks.setState({ selected: null })}>
           <X size={14} />
@@ -424,6 +398,7 @@ export function TasksMode() {
   }
   if (!board) return null;
   const shown = findTasks(viewBoard(board, view), query);
+  const labelOf = sourceLabels(data.tasks);
   const cards = Object.values(board).flat();
   const detail = cards.find((c) => `${c.task.connection} ${c.task.key}` === selected);
   return (
@@ -464,22 +439,22 @@ export function TasksMode() {
                 </div>
                 <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                   {shown[col.id].map((c) => (
-                    <TaskCard key={c.task.key} host={ws.host} workspaceId={ws.id} card={c} selected={c === detail} source={data.sources.length > 1 ? sourceLabel(c.task) : undefined} />
+                    <TaskCard key={c.task.key} host={ws.host} workspaceId={ws.id} card={c} selected={c === detail} source={labelOf(c.task)} />
                   ))}
                 </div>
               </section>
             ))}
-            <section
-              aria-label={`Done: ${shown.done.length} tasks`}
-              role="button"
+            <button
+              aria-label={`Done: ${shown.done.length} tasks${cleanUpCount(shown) ? `, ${cleanUpCount(shown)} needs clean-up` : ""}`}
               title="Open the list"
               onClick={() => setLayout("list")}
-              className="flex w-[64px] shrink-0 cursor-default flex-col items-center gap-2 pt-0.5 ui-text-13 text-muted hover:text-fg"
+              className="flex w-[64px] shrink-0 cursor-default flex-col items-center gap-2 self-start pt-0.5 ui-text-13 text-muted hover:text-fg"
             >
               <TaskGlyph column="done" />
               Done
               <span className="font-mono ui-text-12 text-faint">{shown.done.length}</span>
-            </section>
+              {cleanUpCount(shown) > 0 && <span className="text-center ui-text-11 text-accent">{cleanUpCount(shown)} needs clean-up</span>}
+            </button>
           </div>
         )}
       </div>
@@ -500,16 +475,19 @@ export function ModeSwitch() {
     return () => clearInterval(timer);
   }, [ws]);
   const drift = board ? outOfSync(board).length : 0;
+  // The switch's shortcut as the user has it (Settings › Shortcuts).
+  const key = keyLabel(effectiveKeys(useStore((s) => s.settings.shortcuts)).tasks ?? "");
+  const titled = (name: string) => (key ? `${name} ${key}` : name);
   const item = "no-drag relative flex h-[26px] w-[30px] items-center justify-center rounded-[5px]";
   return (
     <div role="group" aria-label="Mode" className="ml-auto flex shrink-0 items-center gap-0.5 rounded-md bg-panel-2 p-0.5">
-      <button aria-label="Sessions" aria-pressed={!tasks} title="Sessions  ⌃⌘T" onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
+      <button aria-label="Sessions" aria-pressed={!tasks} title={titled("Sessions")} onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
         <SquareTerminal size={14} />
       </button>
       <button
         aria-label={drift ? `Tasks, ${drift} out of sync` : "Tasks"}
         aria-pressed={tasks}
-        title="Tasks  ⌃⌘T"
+        title={titled("Tasks")}
         onClick={() => !tasks && toggleTasksMode()}
         className={cx(item, tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}
       >
@@ -547,14 +525,15 @@ const NOTE_TONE = { blocked: "text-blocked", accent: "text-accent", faint: "text
 /** The List layout: groups by column, rows that open into their sessions and worktrees (X45). */
 function TasksList({ host, workspaceId, board }: { host: string; workspaceId: string; board: Board }) {
   const expanded = useTasks((t) => t.expanded);
+  const now = useNow(true);
   const groups = listGroups(board);
   const keyOf = (c: Card) => `${c.task.connection} ${c.task.key}`;
   const all = groups.flatMap((g) => (g.column === "done" ? [] : g.cards));
   const allOpen = all.length > 0 && all.every((c) => expanded[keyOf(c)]);
-  const toggle = (c: Card) => useTasks.setState((t) => ({ expanded: { ...t.expanded, [keyOf(c)]: !t.expanded[keyOf(c)] } }));
+  const toggle = (c: Card) => toggleExpanded(keyOf(c));
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
-      <button className="mb-2 ui-text-12 text-muted hover:text-fg" onClick={() => useTasks.setState({ expanded: allOpen ? {} : Object.fromEntries(all.map((c) => [keyOf(c), true])) })}>
+      <button className="mb-2 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(all.map((c) => [keyOf(c), true])))}>
         {allOpen ? "Collapse all" : "Expand all"}
       </button>
       {groups.map((g) => (
@@ -596,7 +575,7 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
                       {r.worktrees}
                     </span>
                     <span title="Updated" className="w-[80px] text-right ui-text-12 text-faint">
-                      {c.task.updatedMs ? ago(Date.now() - c.task.updatedMs) : ""}
+                      {c.task.updatedMs ? ago(now - c.task.updatedMs) : ""}
                     </span>
                   </div>
                   {open && (
@@ -690,22 +669,13 @@ function Activity({ task }: { task: Task }) {
   );
 }
 
-/** Where a task comes from, on its card when a workspace has several sources: the repository or the team, project or list. */
-function sourceLabel(task: Task): string {
-  return task.github ? task.github.repo.split("/")[1] : (task.tracker?.source ?? "");
-}
 
 /** Removes a worktree without a session, after a confirm that names lost changes (X45 detail). */
 async function removeWorktree(host: string, w: BoardWorktree) {
   if (!w.project) return;
   const st = await rpc<{ files: unknown[] }>(host, M.gitStatus, { path: w.path }).catch(() => null);
   const dirty = !!st?.files.length;
-  const ok = await askConfirm({
-    title: `Remove ${w.branch}?`,
-    message: dirty ? `${w.path} has uncommitted changes, which will be lost. Its branch is kept.` : `The worktree at ${w.path} goes; its branch is kept.`,
-    action: "Remove",
-    variant: dirty ? "danger" : "primary",
-  });
+  const ok = await askConfirm(removeWorktreeAsk(w.path, w.branch ?? w.path, dirty));
   if (!ok) return;
   try {
     await rpc(host, M.projectWorktreeRemove, { id: w.project, path: w.path });
