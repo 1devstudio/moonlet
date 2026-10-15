@@ -3,7 +3,7 @@
 - **Status:** implemented (2026-10-04). Unit tests pass and `afplay` was checked from the shell; the sound has not been heard from inside the app yet.
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** A3, journeys J2 and J3
-- **Related:** [A3](A3-sidebar-and-notifications.md) (attention events, notifications)
+- **Related:** [A3](A3-sidebar-and-notifications.md) (attention events, notifications), [X47](X47-quieter-notifications.md) (repeat "done" stays silent, mute all sounds)
 
 ## Summary
 
@@ -18,7 +18,7 @@ A3 notifies through macOS notifications, which only fire when moonlet is not foc
 
 ## Behaviour and acceptance criteria
 
-- [x] A sound plays on every `agent.attention` event (blocked, done, error), local or remote. The daemon only sends one per state change, so a sound means a real transition.
+- [x] A sound plays on every `agent.attention` event (blocked, done, error), local or remote. The daemon only sends one per state change, so a sound means a real transition. Since X47, a repeat "done" within 90 s and "Mute all sounds" stay silent.
 - [x] No sound when moonlet is focused and the agent's tab is the active tab of the selected session (the same "visible" check that suppresses the unread mark).
 - [x] Defaults: needs you = Glass, done = Hero, failed = Basso. Each can be set to any macOS system sound or Off. Off plays nothing.
 - [x] A missing or unknown stored value falls back to the default for that event (`soundFor`, unit-tested).

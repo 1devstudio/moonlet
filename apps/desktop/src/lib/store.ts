@@ -31,7 +31,8 @@ import {
 } from "./protocol";
 import { sanitize } from "./sanitize";
 import { DEFAULT_MODE } from "./agents";
-import { DEFAULT_SOUNDS, soundFor, type SoundSettings } from "./sounds";
+import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
+import { DoneBursts, alertFor, type BannerSettings } from "./alerts";
 import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { avatarUrl } from "./projectAvatar";
@@ -69,6 +70,10 @@ export interface Settings {
   defaultMode: string;
   /** Sound per attention event, "" for off (X10). */
   sounds: SoundSettings;
+  /** Desktop notification per attention event; a missing one is on (X47). */
+  banners?: Partial<BannerSettings>;
+  /** Every sound off, from the bell in the sidebar footer (X47). */
+  muted?: boolean;
   /** Runs of tool calls folded into one row, or one row per call (X14). */
   toolCalls: ToolCallView;
   /** Custom keyboard shortcuts from the Run action modal (X19). */
@@ -606,6 +611,7 @@ export function focusTerminal(host: string, session: number) {
     return { selected: { host, session: ws }, unread, showHistory: false, ...showSessionWorkspace(s, host, ws) };
   });
   if (tab) setLayout(host, ws, { ...layout, active: tab.id, focused: session });
+  doneBursts.seen(sesKey(host, ws));
   updateBadge();
 }
 
@@ -619,6 +625,7 @@ export function selectSession(host: string, id: string) {
       return { unread };
     });
   }
+  doneBursts.seen(sesKey(host, id));
   updateBadge();
   void refreshGit(host, id);
 }
@@ -804,6 +811,8 @@ function isVisible(host: string, session: number): boolean {
   return !!layout && tabOf(layout, session)?.id === layout.active;
 }
 
+const doneBursts = new DoneBursts();
+
 async function onAttention(host: string, a: Attention) {
   const s = get();
   const chatInView = !!s.terminals[host]?.[a.terminal]?.chat;
@@ -827,13 +836,14 @@ async function onAttention(host: string, a: Attention) {
   }
   const focused = document.hasFocus();
   const visible = focused && isVisible(host, a.terminal);
-  if (!visible) {
+  const burstKey = a.session_id ? sesKey(host, a.session_id) : termKey(host, a.terminal);
+  const alert = doneBursts.alert(burstKey, { state: a.state, focused, visible, settings: s.settings, now: Date.now() });
+  if (alert.unread) {
     set((st) => ({ unread: { ...st.unread, [termKey(host, a.terminal)]: a.state } }));
     updateBadge();
-    const sound = soundFor(s.settings.sounds, a.state);
-    if (sound) void hostsApi.playSound(sound).catch(() => {});
   }
-  if (!focused || (s.settings.notifyWhenFocused && !visible)) {
+  if (alert.sound) void hostsApi.playSound(alert.sound).catch(() => {});
+  if (alert.banner) {
     const ws = a.session_id ? s.sessions[host]?.find((w) => w.id === a.session_id) : undefined;
     const verb = a.state === "blocked" ? "needs you" : a.state === "error" ? "failed" : "is done";
     const where = ws ? ws.name : sanitize(a.title, 60);
@@ -850,13 +860,13 @@ async function onReadRequest(host: string, req: ReadRequest) {
   const s = get();
   const focused = document.hasFocus();
   const inView = focused && s.selected?.host === host && s.selected.session === req.session_id;
-  if (!inView) {
+  const alert = alertFor({ state: "blocked", focused, visible: inView, settings: s.settings, now: Date.now() });
+  if (alert.unread) {
     set((st) => ({ unread: { ...st.unread, [termKey(host, req.caller)]: "blocked" } }));
     updateBadge();
-    const sound = soundFor(s.settings.sounds, "blocked");
-    if (sound) void hostsApi.playSound(sound).catch(() => {});
   }
-  if (!focused || (s.settings.notifyWhenFocused && !inView)) {
+  if (alert.sound) void hostsApi.playSound(alert.sound).catch(() => {});
+  if (alert.banner) {
     const ws = s.sessions[host]?.find((w) => w.id === req.session_id);
     const hostLabel = host === "local" ? "" : ` · ${host}`;
     await notify(`${ws?.name ?? "A session"} needs you${hostLabel}`, `Wants to read terminal ${sanitize(req.title, 60)}`);

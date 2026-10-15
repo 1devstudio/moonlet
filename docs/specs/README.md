@@ -82,3 +82,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X41 | Worker link and project identity | P1 | 4 | draft | [X41-worker-link-and-project-identity.md](X41-worker-link-and-project-identity.md) |
 | X42 | Agents view: the subagents a chat launches | P1 | 3 | implemented (look unchecked in app) | [X42-subagents-view.md](X42-subagents-view.md) |
 | X43 | Settings page (nav, app pages, workspace and project pages, shortcuts, search) | P1 | 3 | implemented (look unchecked in app) | [X43-settings-page.md](X43-settings-page.md) |
+| X47 | Quieter notifications: one done per turn with subagents, per-event banners, mute | P1 | 3 | implemented (unheard in app) | [X47-quieter-notifications.md](X47-quieter-notifications.md) |

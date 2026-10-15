@@ -1,0 +1,70 @@
+// How moonlet gets the user's attention for an agent event (A3, X10, X47).
+
+import { soundFor, type SoundEvent, type SoundSettings } from "./sounds";
+
+/** Another "done" for the same session this soon after the last one stays silent (X47). */
+export const DONE_BURST_MS = 90_000;
+
+/** Desktop notification per event, on unless set to false (X47). */
+export type BannerSettings = Record<SoundEvent, boolean>;
+
+export interface AlertSettings {
+  notifyWhenFocused: boolean;
+  sounds?: Partial<SoundSettings>;
+  banners?: Partial<BannerSettings>;
+  /** Every sound off, from the bell in the sidebar footer (X47). */
+  muted?: boolean;
+}
+
+/** Whether an event sends a desktop notification at all. */
+export function bannerOn(banners: Partial<BannerSettings> | undefined, state: string): boolean {
+  return banners?.[state as SoundEvent] !== false;
+}
+
+export interface AlertInput {
+  /** The agent state of the `agent.attention` event. */
+  state: string;
+  /** moonlet's window has focus. */
+  focused: boolean;
+  /** The agent's tab is the one on screen. */
+  visible: boolean;
+  settings: AlertSettings;
+  /** When this session last alerted a "done", in ms. */
+  lastDoneAt?: number;
+  now: number;
+}
+
+export interface Alert {
+  /** The system sound to play, or null. */
+  sound: string | null;
+  /** Whether to send a desktop notification. */
+  banner: boolean;
+  /** Whether the agent's tab gets the unread mark, also when the alert is silenced. */
+  unread: boolean;
+}
+
+export function alertFor(input: AlertInput): Alert {
+  const { state, focused, visible, settings, lastDoneAt, now } = input;
+  const unread = !visible;
+  if (state === "done" && lastDoneAt !== undefined && now - lastDoneAt < DONE_BURST_MS) return { sound: null, banner: false, unread };
+  const sound = visible || settings.muted ? null : soundFor(settings.sounds, state);
+  const banner = bannerOn(settings.banners, state) && (!focused || (settings.notifyWhenFocused && !visible));
+  return { sound, banner, unread };
+}
+
+/** Each session's last alerted "done", for the burst rule (X47). */
+export class DoneBursts {
+  private last = new Map<string, number>();
+
+  /** The alert for an event of `session`. A "done" that alerts starts a new burst. */
+  alert(session: string, input: Omit<AlertInput, "lastDoneAt">): Alert {
+    const a = alertFor({ ...input, lastDoneAt: this.last.get(session) });
+    if (input.state === "done" && (a.sound || a.banner)) this.last.set(session, input.now);
+    return a;
+  }
+
+  /** The user looked at `session`: its next "done" alerts again. */
+  seen(session: string) {
+    this.last.delete(session);
+  }
+}
