@@ -36,7 +36,7 @@ export interface Task {
 /** A GitHub issue from `gh.tasks` as a task. */
 export function taskFromGh(gh: GhTask, connection: string): Task {
   return {
-    // `gh.tasks` asks for the user's issues only.
+    // The user's own unless the sync says otherwise (X45 Assignee: me).
     mine: true,
     connection,
     key: `${gh.repo}#${gh.number}`,
