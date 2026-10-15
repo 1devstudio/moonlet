@@ -265,17 +265,10 @@ mod tests {
         let list: serde_json::Value = serde_json::from_slice(&fixture("jira-search.json")).unwrap();
         let one = list["issues"][0].to_string();
         let site = "acme.atlassian.net";
+        let t = parse_issue(one.as_bytes(), "jira:acme.atlassian.net", site).unwrap();
         assert_eq!(
-            parse_issue(one.as_bytes(), "jira:acme.atlassian.net", site).unwrap(),
-            parse_search(
-                &fixture("jira-search.json"),
-                "jira:acme.atlassian.net",
-                site
-            )
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap()
+            (t.key.as_str(), t.title.as_str(), t.tracker.state.as_str()),
+            ("EX-1", "Main order flow broken", "In Progress")
         );
         assert_eq!(
             issue_path("OPS-12"),

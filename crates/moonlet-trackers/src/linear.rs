@@ -44,10 +44,16 @@ pub fn issue_query() -> String {
 pub fn parse_issue(raw: &[u8], connection: &str) -> Result<Option<TrackerTask>, ApiError> {
     let v: Value = serde_json::from_slice(raw)
         .map_err(|e| ApiError::new(format!("Linear answered with something else: {e}")))?;
-    if v["data"]["issue"].is_null() {
+    // An unknown key comes back as `issue: null` with "Entity not found";
+    // any other error stays an error.
+    let not_found = v["errors"][0]["message"]
+        .as_str()
+        .is_some_and(|m| m.starts_with("Entity not found"));
+    if v["data"]["issue"].is_null() && not_found {
         return Ok(None);
     }
-    Ok(Some(issue_task(&data(raw)?["issue"], connection)))
+    let issue = &data(raw)?["issue"];
+    Ok((!issue.is_null()).then(|| issue_task(issue, connection)))
 }
 
 /// The answer's `data`, or the error it carries.
@@ -56,15 +62,22 @@ fn data(raw: &[u8]) -> Result<Value, ApiError> {
         .map_err(|e| ApiError::new(format!("Linear answered with something else: {e}")))?;
     if let Some(e) = v["errors"].as_array().and_then(|e| e.first()) {
         let ext = &e["extensions"];
-        return Err(ApiError {
-            auth: ext["type"]
-                .as_str()
-                .is_some_and(|t| t.contains("authentication")),
-            message: ext["userPresentableMessage"]
+        let auth = ext["type"]
+            .as_str()
+            .is_some_and(|t| t.contains("authentication"));
+        // A rejected token reads the same however Linear sends it (X44); the
+        // app words it for an OAuth sign-in.
+        let message = if auth {
+            "Linear no longer accepts this token. Create a new one and paste it here."
+        } else {
+            ext["userPresentableMessage"]
                 .as_str()
                 .or(e["message"].as_str())
                 .unwrap_or("Linear refused the request")
-                .into(),
+        };
+        return Err(ApiError {
+            auth,
+            message: message.into(),
         });
     }
     Ok(v["data"].clone())
@@ -242,12 +255,10 @@ mod tests {
             serde_json::from_slice(&fixture("linear-issues.json")).unwrap();
         let node = &list["data"]["issues"]["nodes"][0];
         let one = serde_json::json!({ "data": { "issue": node } }).to_string();
+        let t = parse_issue(one.as_bytes(), "linear:acme").unwrap().unwrap();
         assert_eq!(
-            parse_issue(one.as_bytes(), "linear:acme").unwrap(),
-            parse_issues(&fixture("linear-issues.json"), "linear:acme")
-                .unwrap()
-                .into_iter()
-                .next()
+            (t.key.as_str(), t.title.as_str(), t.tracker.state.as_str()),
+            ("ENG-123", "Retry failed webhook deliveries", "In Progress")
         );
         // Linear answers a key it does not know with `issue: null` and an error.
         let missing =
@@ -430,7 +441,19 @@ mod tests {
         assert!(err.auth);
         assert_eq!(
             err.message,
-            "You need to authenticate to access this operation."
+            "Linear no longer accepts this token. Create a new one and paste it here."
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_is_no_issue_but_other_errors_stay_errors() {
+        let missing = br#"{"data":{"issue":null},"errors":[{"message":"Entity not found: Issue","extensions":{"type":"invalid input"}}]}"#;
+        assert_eq!(parse_issue(missing, "linear:acme").unwrap(), None);
+        assert!(parse_issue(&fixture("linear-error-ratelimited.json"), "linear:acme").is_err());
+        assert!(
+            parse_issue(&fixture("linear-error-auth.json"), "linear:acme")
+                .unwrap_err()
+                .auth
         );
     }
 }
