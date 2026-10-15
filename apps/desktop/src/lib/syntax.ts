@@ -84,9 +84,10 @@ type Highlighter = Awaited<ReturnType<typeof createHighlighter>>;
 /**
  * Loads grammars and themes and tokenizes lines for Monaco. Tokens are named
  * `t<colour>` or `t<colour>.f<font style>` after the current theme's colour
- * map, and `theme()` has a rule for each.
+ * map, and `theme()` has a rule for each. A line's tokenizing stops after
+ * `timeLimitMs` and leaves the rest uncoloured; 0 means no limit.
  */
-export function createSyntax() {
+export function createSyntax({ timeLimitMs = 500 }: { timeLimitMs?: number } = {}) {
   let highlighter: Promise<Highlighter> | null = null;
   let loaded: Highlighter | null = null;
   let colorMap: string[] = [];
@@ -109,7 +110,7 @@ export function createSyntax() {
     },
 
     tokenize(lang: string, line: string, state: StateStack): LineTokens {
-      const r = loaded!.getLanguage(lang).tokenizeLine2(line, state, 500);
+      const r = loaded!.getLanguage(lang).tokenizeLine2(line, state, timeLimitMs);
       const tokens = [];
       for (let i = 0; i < r.tokens.length; i += 2) {
         const meta = r.tokens[i + 1];
