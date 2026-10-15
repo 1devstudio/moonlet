@@ -21,6 +21,9 @@ const TOKEN_PAGE: Record<Connection["kind"], string> = {
   clickup: "https://app.clickup.com/settings/apps",
 };
 
+/** The Sources and States dialogs' menus, as tall as a text field (X44). */
+const selectCls = `${inputCls} menu-select`;
+
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
 /** Which sources a connection shows, in which workspace and starting in which project. */
@@ -56,7 +59,7 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
             <div key={i} role="listitem" aria-label={r.name || "New source"} className={`${grid} ui-text-12.5`}>
               <select
                 aria-label={`Source ${i + 1}`}
-                className={inputCls}
+                className={selectCls}
                 value={r.key}
                 onChange={(e) => set(i, { key: e.target.value, name: choices.find((c) => c.key === e.target.value)?.name ?? "" })}
               >
@@ -67,7 +70,7 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
                   </option>
                 ))}
               </select>
-              <select aria-label={`Workspace for ${r.name}`} className={inputCls} value={r.workspace} onChange={(e) => set(i, { workspace: e.target.value })}>
+              <select aria-label={`Workspace for ${r.name}`} className={selectCls} value={r.workspace} onChange={(e) => set(i, { workspace: e.target.value })}>
                 <option value="">Workspace…</option>
                 {wsOptions.map((w) => (
                   <option key={w.value} value={w.value}>
@@ -301,7 +304,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
     <Dialog title={`${NAME[c.kind]} workflow states`} onClose={onClose} width={520}>
       <p className="mb-2 ui-text-12.5 text-muted">moonlet groups tasks into four columns. Filled in from the tracker's state types; change them if your team uses its own.</p>
       {c.sources.length > 1 && (
-        <select aria-label="Source" className={`${inputCls} mb-2`} value={source} onChange={(e) => setSource(e.target.value)}>
+        <select aria-label="Source" className={`${selectCls} mb-2`} value={source} onChange={(e) => setSource(e.target.value)}>
           {c.sources.map((s) => (
             <option key={s.key} value={s.key}>
               {s.name}
@@ -315,7 +318,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
         {(states ?? []).map((s) => (
           <div key={s.name} role="listitem" className="flex items-center gap-2 ui-text-12.5">
             <span className="min-w-0 flex-1 truncate text-fg">{s.name}</span>
-            <select aria-label={`Column for ${s.name}`} className={`${inputCls} w-[140px]`} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value as Column }))}>
+            <select aria-label={`Column for ${s.name}`} className={`${selectCls} w-[140px]`} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value as Column }))}>
               {COLUMN_CHOICES.map(([id, label]) => (
                 <option key={id} value={id}>
                   {label}
