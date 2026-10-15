@@ -316,9 +316,9 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
       {source && !states && <p className="ui-text-12.5 text-muted">Loading states…</p>}
       <div role="list" aria-label="States" className="flex flex-col gap-1">
         {(states ?? []).map((s) => (
-          <div key={s.name} role="listitem" className="flex items-center gap-2 ui-text-12.5">
-            <span className="min-w-0 flex-1 truncate text-fg">{s.name}</span>
-            <select aria-label={`Column for ${s.name}`} className={`${selectCls} w-[140px]`} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value as Column }))}>
+          <div key={s.name} role="listitem" className="grid grid-cols-[minmax(0,1fr)_160px] items-center gap-2 ui-text-12.5">
+            <span className="truncate text-fg">{s.name}</span>
+            <select aria-label={`Column for ${s.name}`} className={selectCls} value={mapping[s.name] ?? s.column} onChange={(e) => setMapping((m) => ({ ...m, [s.name]: e.target.value as Column }))}>
               {COLUMN_CHOICES.map(([id, label]) => (
                 <option key={id} value={id}>
                   {label}
