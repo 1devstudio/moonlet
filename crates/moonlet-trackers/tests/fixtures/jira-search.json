@@ -1,0 +1,174 @@
+{
+  "issues": [
+    {
+      "expand": "",
+      "id": "10002",
+      "key": "EX-1",
+      "self": "https://your-domain.atlassian.net/rest/api/3/issue/10002",
+      "fields": {
+        "summary": "Main order flow broken",
+        "status": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/status/3",
+          "id": "3",
+          "name": "In Progress",
+          "statusCategory": {
+            "self": "https://your-domain.atlassian.net/rest/api/3/statuscategory/4",
+            "id": 4,
+            "key": "indeterminate",
+            "colorName": "yellow",
+            "name": "In Progress"
+          }
+        },
+        "priority": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/priority/2",
+          "id": "2",
+          "name": "High"
+        },
+        "assignee": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/user?accountId=5b10a2844c20165700ede21g",
+          "accountId": "5b10a2844c20165700ede21g",
+          "displayName": "Mia Krystof",
+          "active": true
+        },
+        "labels": ["backend", "checkout"],
+        "updated": "2026-10-14T09:12:44.512+0000",
+        "description": {
+          "type": "doc",
+          "version": 1,
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "text": "Orders fail at the payment step." }
+              ]
+            },
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        { "type": "text", "text": "Happens on Safari only" }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        { "type": "text", "text": "Started after the 3.2 release" }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "expand": "",
+      "id": "10003",
+      "key": "EX-2",
+      "self": "https://your-domain.atlassian.net/rest/api/3/issue/10003",
+      "fields": {
+        "summary": "Add retry to webhook sender",
+        "status": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/status/10000",
+          "id": "10000",
+          "name": "To Do",
+          "statusCategory": {
+            "self": "https://your-domain.atlassian.net/rest/api/3/statuscategory/2",
+            "id": 2,
+            "key": "new",
+            "colorName": "blue-gray",
+            "name": "To Do"
+          }
+        },
+        "priority": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/priority/3",
+          "id": "3",
+          "name": "Medium"
+        },
+        "assignee": null,
+        "labels": [],
+        "updated": "2026-10-13T16:40:02.001+0000",
+        "description": {
+          "type": "doc",
+          "version": 1,
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "text": "Checklist:" }
+              ]
+            },
+            {
+              "type": "taskList",
+              "attrs": { "localId": "b3f6a1d2-0000-4000-8000-000000000001" },
+              "content": [
+                {
+                  "type": "taskItem",
+                  "attrs": { "localId": "b3f6a1d2-0000-4000-8000-000000000002", "state": "DONE" },
+                  "content": [
+                    { "type": "text", "text": "Exponential backoff" }
+                  ]
+                },
+                {
+                  "type": "taskItem",
+                  "attrs": { "localId": "b3f6a1d2-0000-4000-8000-000000000003", "state": "TODO" },
+                  "content": [
+                    { "type": "text", "text": "Give up after 24h" }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "expand": "",
+      "id": "10004",
+      "key": "EX-3",
+      "self": "https://your-domain.atlassian.net/rest/api/3/issue/10004",
+      "fields": {
+        "summary": "Upgrade to Node 22",
+        "status": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/status/10001",
+          "id": "10001",
+          "name": "Done",
+          "statusCategory": {
+            "self": "https://your-domain.atlassian.net/rest/api/3/statuscategory/3",
+            "id": 3,
+            "key": "done",
+            "colorName": "green",
+            "name": "Done"
+          }
+        },
+        "priority": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/priority/4",
+          "id": "4",
+          "name": "Low"
+        },
+        "assignee": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/user?accountId=5b10a2844c20165700ede21g",
+          "accountId": "5b10a2844c20165700ede21g",
+          "displayName": "Mia Krystof",
+          "active": true
+        },
+        "labels": ["chore"],
+        "updated": "2026-10-01T08:00:00.000+0000",
+        "description": null
+      }
+    }
+  ],
+  "isLast": true
+}

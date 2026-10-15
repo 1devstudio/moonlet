@@ -1,0 +1,26 @@
+{
+  "isLast": false,
+  "maxResults": 2,
+  "nextPage": "https://your-domain.atlassian.net/rest/api/3/project/search?startAt=2&maxResults=2",
+  "self": "https://your-domain.atlassian.net/rest/api/3/project/search?startAt=0&maxResults=2",
+  "startAt": 0,
+  "total": 7,
+  "values": [
+    {
+      "id": "10000",
+      "key": "EX",
+      "name": "Example",
+      "self": "https://your-domain.atlassian.net/rest/api/3/project/EX",
+      "simplified": false,
+      "style": "classic"
+    },
+    {
+      "id": "10001",
+      "key": "ABC",
+      "name": "Alphabetical",
+      "self": "https://your-domain.atlassian.net/rest/api/3/project/ABC",
+      "simplified": false,
+      "style": "classic"
+    }
+  ]
+}

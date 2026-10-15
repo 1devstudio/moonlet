@@ -1,0 +1,21 @@
+{
+  "data": {
+    "issueUpdate": {
+      "success": true,
+      "lastSyncId": 1873364,
+      "issue": {
+        "id": "1a2b3c4d-0000-4000-8000-000000000124",
+        "identifier": "ENG-124",
+        "state": {
+          "id": "a1000000-0000-4000-8000-000000000002",
+          "name": "In Progress",
+          "type": "started"
+        },
+        "assignee": {
+          "id": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+          "name": "Ada Lovelace"
+        }
+      }
+    }
+  }
+}

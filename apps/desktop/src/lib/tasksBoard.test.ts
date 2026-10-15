@@ -138,6 +138,14 @@ describe("out of sync (X45)", () => {
     expect(only(task("MOON-153", "todo"), running, "auto").drift).toBe(null);
   });
 
+  it("PR open: a tracker issue not yet In Review has a session with an open PR", () => {
+    const open = [session("Hosts", "moon-142-hosts", { pr: pr(131, "open") })];
+    expect(only(task("MOON-142", "in_progress"), open).drift).toEqual({ kind: "pr_open", text: "#131 open", fix: "Move to In Review" });
+    expect(only(task("MOON-142", "in_review"), open).drift).toBe(null);
+    // A GitHub issue's column already follows its PR.
+    expect(only(gh(7), [session("Fix", "7-fix", { pr: pr(70, "open") })]).drift).toBe(null);
+  });
+
   it("done, still open: a Done task still has sessions or worktrees", () => {
     const left = [session("Codex hooks", "moon-131-hooks", { pr: pr(119, "merged") })];
     expect(only(task("MOON-131", "done"), left).drift).toEqual({ kind: "done_open", text: "1 session, 1 worktree", fix: "Clean up" });

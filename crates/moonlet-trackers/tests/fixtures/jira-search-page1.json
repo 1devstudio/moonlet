@@ -1,0 +1,15 @@
+{
+  "issues": [
+    {
+      "expand": "",
+      "id": "10002",
+      "key": "EX-1",
+      "self": "https://your-domain.atlassian.net/rest/api/3/issue/10002",
+      "fields": {
+        "summary": "Main order flow broken"
+      }
+    }
+  ],
+  "nextPageToken": "CAEaAggD",
+  "isLast": false
+}

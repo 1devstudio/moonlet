@@ -32,12 +32,14 @@ export interface BoardWorktree {
   project?: string;
 }
 
+type StartRule = "auto" | "suggest" | "off";
+
 export interface BoardInput {
   tasks: Task[];
   sessions: BoardSession[];
   worktrees: BoardWorktree[];
-  /** The "session starts" Keep in step rule (X46). */
-  sessionStartRule: "auto" | "suggest" | "off";
+  /** The "session starts" Keep in step rule (X46), or each task's tracker's. */
+  sessionStartRule: StartRule | ((task: Task) => StartRule);
 }
 
 export interface RowMeta {
@@ -65,7 +67,7 @@ export interface Card {
 
 /** How a task's tracker state disagrees with its work, and the fix (X45). */
 export interface Drift {
-  kind: "merged" | "started" | "done_open";
+  kind: "merged" | "started" | "pr_open" | "done_open";
   text: string;
   fix: string;
 }
@@ -88,11 +90,15 @@ function rowMeta(s: BoardSession): RowMeta {
 
 const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-function drift(column: Card["column"], trackerColumn: Task["column"], sessions: BoardSession[], orphans: BoardWorktree[], rule: BoardInput["sessionStartRule"]): Drift | null {
+function drift(column: Card["column"], trackerColumn: Task["column"], sessions: BoardSession[], orphans: BoardWorktree[], rule: StartRule): Drift | null {
   const prs = sessions.map((s) => s.pr);
   if (column !== "done" && prs.length && prs.every((p) => p?.state === "merged")) {
     const last = prs[prs.length - 1];
     return { kind: "merged", text: `#${last?.number} merged`, fix: "Move to Done" };
+  }
+  const open = prs.find((p) => p?.state === "open");
+  if (open && (trackerColumn === "todo" || trackerColumn === "in_progress")) {
+    return { kind: "pr_open", text: `#${open.number} open`, fix: "Move to In Review" };
   }
   if (trackerColumn === "todo" && sessions.length && rule !== "auto") {
     return { kind: "started", text: "Session running", fix: "In Progress" };
@@ -127,7 +133,7 @@ export function tasksBoard(input: BoardInput): Board {
       rows: sessions.map((session) => ({ session, meta: rowMeta(session) })),
       needsYou: sessions.some((s) => s.state === "blocked"),
       orphans,
-      drift: drift(column, task.column, sessions, orphans, input.sessionStartRule),
+      drift: drift(column, task.column, sessions, orphans, typeof input.sessionStartRule === "function" ? input.sessionStartRule(task) : input.sessionStartRule),
       empty: sessions.length ? null : orphans.length ? `${orphans.length} ${orphans.length === 1 ? "worktree" : "worktrees"}, no session` : "No sessions",
     });
   }

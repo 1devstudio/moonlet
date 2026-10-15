@@ -44,6 +44,14 @@ export const hostsApi = {
   service: (action: "install" | "uninstall" | "status") => invoke<{ installed: boolean; loaded: boolean; plist: string }>("daemon_service", { action }),
   appInfo: () => invoke<{ version: string }>("app_info"),
   claudeLatest: () => invoke<string>("claude_latest_version"),
+  /** Linear, Jira and ClickUp from the app (X44): sign in, sources, tasks, moves. */
+  trackerConnect: (req: { kind: "linear" | "jira" | "clickup"; site?: string; email?: string; token: string }) =>
+    invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_connect", { req }),
+  trackerDisconnect: (id: string) => invoke("tracker_disconnect", { id }),
+  trackerSources: (id: string) => invoke<{ key: string; name: string }[]>("tracker_sources", { id }),
+  trackerTasks: (id: string, mine: boolean) => invoke<import("./tasks").Task[]>("tracker_tasks", { id, mine }),
+  trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; assign_me?: boolean; comment?: string | null }) =>
+    invoke("tracker_update", { req }),
   /** `~/.moonlet/trackers.toml`, or its defaults (X44). */
   trackersConfig: () => invoke<import("./tasksStore").TrackersConfig>("trackers_config"),
   trackersSave: (config: import("./tasksStore").TrackersConfig) => invoke("trackers_save", { config }),
