@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { hostsApi } from "../../lib/daemon";
 import type { Session } from "../../lib/protocol";
 import { selectSession, useStore } from "../../lib/store";
-import { acceptanceCriteria, enterChoice, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
+import { acceptanceCriteria, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
 import { ensureTasks, linkTask, lookUpPasted, mappedTasks, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
@@ -158,23 +158,29 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   const latest = useRef(tasks);
   latest.current = tasks;
   const [lookup] = useState(() => pasteLookup());
-  const linking = useRef(false);
   const latestChoices = useRef<ReturnType<typeof linkChoices>>({ suggested: [], recent: [] });
   const loaded = !!data;
+  // What the last lookup was asked with, so new tasks or a repository force a new one.
+  const askedWith = useRef("");
   useEffect(() => {
-    // What was pasted before no longer counts, so ↵ cannot link it.
+    const context = `${loaded} ${originRepo}`;
+    const force = askedWith.current !== "" && askedWith.current !== context;
+    askedWith.current = context;
     setPasted(null);
-    const l = lookup;
-    void l
-      .start(async () => {
-        const p = await hostsApi.parsePasted(query);
-        // A task outside the loaded ones is asked of its tracker.
-        return p ? (findPasted(p, latest.current, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null;
-      })
+    void lookup
+      .query(
+        query,
+        async () => {
+          const p = await hostsApi.parsePasted(query);
+          // A task outside the loaded ones is asked of its tracker.
+          return p ? (findPasted(p, latest.current, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null;
+        },
+        force,
+      )
       .then((found) => found !== undefined && setPasted(found));
-    return () => l.cancel();
     // Once the workspace's tasks and repository arrive, `#12` is looked up again.
   }, [query, host, ws?.path, originRepo, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => lookup.cancel(), [lookup]);
   if (!ws) return null;
   const choices = linkChoices(ws, tasks, pasted ? "" : query, sessionsOf);
   latestChoices.current = choices;
@@ -201,15 +207,11 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== "Enter" || linking.current) return;
+            if (e.key !== "Enter") return;
             e.preventDefault();
             // A paste still being looked up decides what ↵ links, from the
-            // lists as they are when it ends; a cancelled lookup links nothing.
-            linking.current = true;
-            void enterChoice(lookup, () => latestChoices.current).then((first) => {
-              if (first) pick(first);
-              else linking.current = false;
-            });
+            // lists as they are when it ends, once.
+            void lookup.enter(() => latestChoices.current, pick);
           }}
         />
       </label>
@@ -224,7 +226,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
         {!pasted && choices.recent.length > 0 && (
           <section aria-label="Recent">
             <div className="px-2 ui-text-11.5 font-medium text-faint">Recent</div>
-            {choices.recent.slice(0, 20).map((t) => row(t))}
+            {choices.recent.map((t) => row(t))}
           </section>
         )}
         {!pasted && !choices.suggested.length && !choices.recent.length && <p className="px-2 ui-text-12.5 text-muted">No tasks match.</p>}
