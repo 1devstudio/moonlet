@@ -410,6 +410,16 @@ body:not(.kbd-nav) button:focus {
   font-size: calc(--value(number) * 1px * var(--ui-scale, 1));
 }
 
+/* A <select> drawn by us, not by macOS: the native popup button ignores
+   height and padding. The chevrons stand in for the native arrows. */
+.menu-select {
+  appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238c8c8c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 15 5 5 5-5'/%3E%3Cpath d='m7 9 5-5 5 5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
 /* Agent messages (X6). */
 .chat-md {
   font-size: calc(14px * var(--ui-scale, 1));
