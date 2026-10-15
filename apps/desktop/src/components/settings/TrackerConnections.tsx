@@ -41,16 +41,15 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
       errorToast(message(e));
     }
   };
-  const grid = "grid grid-cols-[minmax(0,1fr)_120px_130px_130px_24px] items-center gap-2";
+  const grid = "grid grid-cols-[minmax(0,1fr)_150px_150px_24px] items-center gap-2";
   return (
     <div className="flex flex-col gap-2">
       <div className="ui-text-12.5 text-muted">
-        Add the {noun}s whose issues Tasks mode shows. For each, pick the workspace that shows it, whose issues it shows and the moonlet project its sessions start in.
+        Add the {noun}s whose issues Tasks mode shows. For each, pick the workspace that shows it and the moonlet project its sessions start in.
       </div>
       <div className={`${grid} ui-text-11.5 text-faint`} aria-hidden>
         <span>{noun}</span>
         <span>Workspace</span>
-        <span>Shows</span>
         <span>moonlet project</span>
       </div>
       <div role="list" aria-label="Sources" className="flex max-h-[300px] flex-col gap-1 overflow-y-auto">
@@ -78,10 +77,6 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
                     {w.label}
                   </option>
                 ))}
-              </select>
-              <select aria-label={`What ${r.name} shows`} className={inputCls} value={r.all ? "all" : "mine"} onChange={(e) => set(i, { all: e.target.value === "all" })}>
-                <option value="mine">Assigned to me</option>
-                <option value="all">All open issues</option>
               </select>
               <select aria-label={`Project for ${r.name}`} className={inputCls} value={r.project} disabled={!r.workspace} onChange={(e) => set(i, { project: e.target.value })}>
                 <option value="">Project…</option>
