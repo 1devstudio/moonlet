@@ -187,9 +187,10 @@ describe("stripView (X42)", () => {
       ],
       title: null,
       counts: [
-        { state: "running", text: "2 running" },
-        { state: "done", text: "2 done" },
+        { state: "running", text: "2 running", lead: true },
+        { state: "done", text: "2 done", lead: false },
       ],
+      label: "2 running, 2 done",
       flash: false,
       finished: false,
       collapsed: false,
@@ -230,6 +231,7 @@ describe("stripView (X42)", () => {
       ],
       title: "All done",
       counts: [],
+      label: "All done",
       flash: true,
       finished: true,
       collapsed: false,
@@ -323,6 +325,28 @@ describe("stripView (X42)", () => {
       { key: "a4", state: "stopped", phase: "pop" },
       { key: "a2", state: "running", phase: "on" },
     ]);
+  });
+
+  it("leads with the alert when no count shows", () => {
+    // One agent, waiting for the user: no running or done count comes first.
+    expect(stripView(withItems([running("a5", T0)], [ask2]), T0 + 1_000, 0)).toMatchObject({
+      title: null,
+      counts: [],
+      alert: { tone: "blocked", text: "1 needs you", lead: true },
+      label: "1 needs you",
+    });
+    // Every agent failed.
+    expect(stripView(withItems([audit]), T0 + 99_000, 0)).toMatchObject({
+      counts: [],
+      alert: { tone: "error", text: "1 failed", lead: true },
+      label: "1 failed",
+      button: "retry",
+    });
+    // After a count, the alert follows it.
+    expect(stripView(withItems([done("a1", T0, 10_000), audit]), T0 + 99_000, 0)).toMatchObject({
+      counts: [{ state: "done", text: "1 done", lead: true }],
+      alert: { tone: "error", text: "1 failed", lead: false },
+    });
   });
 
   it("shows the done count green for a moment after an agent finishes", () => {

@@ -28,7 +28,7 @@ export function AgentsStrip({ host, id, st, onSend }: { host: string; id: number
   return (
     <div aria-label="Agents" aria-hidden={view.collapsed} inert={view.collapsed} className={cx("agents-strip", view.collapsed && "collapsed")}>
       <div className="flex h-full items-center gap-2.5 pl-3.5 pr-2 ui-text-12.5">
-        <span role="img" aria-label={view.counts.map((c) => c.text).join(", ") || view.title || view.alert?.text} className="-mr-1 flex shrink-0 items-center">
+        <span role="img" aria-label={view.label} className="-mr-1 flex shrink-0 items-center">
           {view.dots.map((d) => (
             <span key={d.key} className={cx("agents-dot", AGENT_STATE[d.state].dot, d.state === "running" && "pulse", d.phase !== "on" && d.phase)} />
           ))}
@@ -42,14 +42,14 @@ export function AgentsStrip({ host, id, st, onSend }: { host: string; id: number
               {view.title}
             </span>
           ) : null}
-          {view.counts.map((c, i) => (
+          {view.counts.map((c) => (
             <span key={c.state} className={cx(c.state === "done" && "agents-done-count", c.state === "done" && view.flash && "text-done")}>
-              {`${view.title || i ? " · " : ""}${c.text}`}
+              {`${c.lead ? "" : " · "}${c.text}`}
             </span>
           ))}
           {view.alert && (
             <span className={cx("agents-fade-in", view.alert.tone === "blocked" ? "text-blocked" : "text-error")}>
-              {`${view.title || view.counts.length ? " · " : ""}${view.alert.text}`}
+              {`${view.alert.lead ? "" : " · "}${view.alert.text}`}
             </span>
           )}
         </span>
