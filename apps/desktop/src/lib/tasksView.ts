@@ -93,3 +93,9 @@ export function sourceLabels(tasks: Task[]): (task: Task) => string | undefined 
   for (const t of sources.values()) counts.set(short(t), (counts.get(short(t)) ?? 0) + 1);
   return (t) => ((counts.get(short(t)) ?? 0) > 1 ? full(t) : short(t));
 }
+
+/** The mode switch's titles, with the shortcut as bound, and the Tasks button's label and dot (X45). */
+export function modeSwitch(key: string, outOfSync: number): { sessions: string; tasks: string; label: string; dot: boolean } {
+  const titled = (name: string) => (key ? `${name} ${key}` : name);
+  return { sessions: titled("Sessions"), tasks: titled("Tasks"), label: outOfSync ? `Tasks, ${outOfSync} out of sync` : "Tasks", dot: outOfSync > 0 };
+}

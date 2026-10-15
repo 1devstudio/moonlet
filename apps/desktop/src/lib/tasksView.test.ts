@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./tasks";
 import { type BoardSession, tasksBoard } from "./tasksBoard";
-import { boardSummary, sessionTaskLines, sourceLabels, syncedLabel, viewBoard, viewCounts } from "./tasksView";
+import { boardSummary, modeSwitch, sessionTaskLines, sourceLabels, syncedLabel, viewBoard, viewCounts } from "./tasksView";
 
 const task = (key: string, column: Task["column"]): Task => ({
   connection: "github:github.com",
@@ -102,5 +102,14 @@ describe("sourceLabels (X45 card)", () => {
     expect(repos(t("github:github.com", "other/web#2", undefined, "other/web"))).toBe("other/web");
     const teams = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("linear:globex", "ENG-2", "ENG")]);
     expect(teams(t("linear:globex", "ENG-2", "ENG"))).toBe("globex ENG");
+  });
+});
+
+describe("modeSwitch (X45 mode switch)", () => {
+  it("titles both buttons with the shortcut as bound, and names what is out of sync", () => {
+    expect(modeSwitch("⌃⌘T", 0)).toEqual({ sessions: "Sessions ⌃⌘T", tasks: "Tasks ⌃⌘T", label: "Tasks", dot: false });
+    expect(modeSwitch("⌥T", 3)).toEqual({ sessions: "Sessions ⌥T", tasks: "Tasks ⌥T", label: "Tasks, 3 out of sync", dot: true });
+    // Unbound in Settings › Shortcuts: no key in the titles.
+    expect(modeSwitch("", 0)).toMatchObject({ sessions: "Sessions", tasks: "Tasks" });
   });
 });

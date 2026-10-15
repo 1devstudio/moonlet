@@ -637,6 +637,13 @@ export function syncTasks(host: string, workspaceId: string, interval: number): 
   };
 }
 
+/** The out-of-sync dot needs the tasks: asked for now and every 5 minutes, also in Sessions mode (X45). Returns the stop. */
+export function pollTasks(host: string, workspaceId: string): () => void {
+  ensureTasks(host, workspaceId);
+  const timer = setInterval(() => ensureTasks(host, workspaceId), 300_000);
+  return () => clearInterval(timer);
+}
+
 /** Loads a workspace's tasks when a linked session opens outside Tasks mode, at most once a minute (X46). */
 export function ensureTasks(host: string, workspaceId: string, now = Date.now()) {
   const key = wsKey(host, workspaceId);
