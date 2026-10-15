@@ -11,6 +11,7 @@ import { closesIssue, withCloses } from "../lib/keepInStep";
 import { githubRepo } from "../lib/tasks";
 import { useTasks } from "../lib/tasksStore";
 import { NewWorkspaceDialog } from "./WorkspaceDialogs";
+import { LinkTaskDialog } from "./tasks/SessionTask";
 
 const close = () => useStore.setState({ dialog: null });
 
@@ -286,6 +287,8 @@ export function Dialogs() {
       return <NewWorkspaceDialog />;
     case "new-session":
       return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} task={dialog.task} worktree={dialog.worktree} />;
+    case "link-task":
+      return <LinkTaskDialog host={dialog.host} sessionId={dialog.session} />;
     case "commit":
       return <CommitDialog />;
     case "create-pr":

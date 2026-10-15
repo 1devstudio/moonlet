@@ -19,6 +19,7 @@ import { FileLinks, useProjectFiles } from "./AgentView";
 import { useNow } from "../lib/useNow";
 import { FilesPanel } from "./FilesPanel";
 import { cx, prTone } from "./ui";
+import { TaskTab, useSessionTask } from "./tasks/SessionTask";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
@@ -248,7 +249,11 @@ function useSessionAgents(host: string, ws: Session) {
 }
 
 export function RightPanel({ host, ws }: { host: string; ws: Session }) {
-  const tab = useStore((s) => s.rightTab);
+  // The Task tab is there for a session linked to a task (X46); otherwise Files stands in.
+  const linked = !!useSessionTask(host, ws);
+  const chosen = useStore((s) => s.rightTab);
+  const tab = chosen === "task" && !linked ? "files" : chosen;
+  const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...TABS] : TABS;
   const plan = useSessionPlan(host, ws);
   const agents = useSessionAgents(host, ws);
   // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
@@ -264,7 +269,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
     <div className="flex h-full flex-col bg-panel">
       <TopActions host={host} ws={ws} />
       <div role="tablist" className="flex h-[38px] shrink-0 items-stretch border-b border-border px-2">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             id={`right-tab-${t.id}`}
@@ -291,7 +296,9 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
         className="min-h-0 flex-1 overflow-y-auto bg-bg"
       >
         <Suspense fallback={null}>
-          {tab === "plan" ? (
+          {tab === "task" ? (
+            <TaskTab host={host} ws={ws} />
+          ) : tab === "plan" ? (
             <FileLinks.Provider value={{ host, wsId: ws.id, cwd: ws.path, exists }}>
               <PlanPanel view={plan} />
             </FileLinks.Provider>
