@@ -1001,6 +1001,13 @@ pub async fn gh_tasks(repo: &Path, mine: bool) -> Result<Vec<moonlet_proto::type
     parse_gh_tasks(&gh(repo, &args).await?)
 }
 
+/// The GitHub login `gh` is signed in as (X44). Fails with gh's own message,
+/// such as "please run: gh auth login", when it is not.
+pub async fn gh_whoami() -> Result<String> {
+    let out = gh(Path::new("/"), &["api", "user", "--jq", ".login"]).await?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
 /// Assigns issue `number` to the user and/or closes it as completed (X46).
 pub async fn gh_task_update(repo: &Path, number: u64, assign_me: bool, close: bool) -> Result<()> {
     let n = number.to_string();

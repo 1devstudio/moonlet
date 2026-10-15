@@ -10,6 +10,8 @@ import { soundFor } from "./sounds";
 import { bannerOn } from "./alerts";
 import type { Settings } from "./store";
 import { WORKSPACE_COLORS } from "./workspaces";
+import type { TrackersConfig } from "./tasksStore";
+import { GITHUB_RULES, RULE_SETTINGS, SYNC_INTERVALS } from "./trackersPage";
 
 export interface SearchContext {
   settings: Settings;
@@ -23,6 +25,8 @@ export interface SearchContext {
   workspaces: { host: string; id: string; name: string; color: WorkspaceColor; profile: string }[];
   /** `config`: the project's `.moonlet/config.toml`, once read. */
   projects: { host: string; id: string; name: string; base_branch: string; config?: ProjectConfig | null }[];
+  /** `trackers.toml` (X44), once read. */
+  trackers?: TrackersConfig;
 }
 
 interface Entry {
@@ -56,6 +60,18 @@ const DEFAULT_AGENTS = [
 ];
 const n = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
 const labelOf = (list: readonly { id: string; label: string }[], id: string) => list.find((x) => x.id === id)?.label ?? id;
+
+/** Settings › Task trackers rows as `[setting, label, value, also]`. */
+function trackerEntries(t: TrackersConfig | undefined): [string | undefined, string, string, string?][] {
+  if (!t) return [];
+  return [
+    [undefined, "Task trackers", "GitHub", "linear jira clickup issues connect"],
+    ...GITHUB_RULES.map((r): [string, string, string] => [`rule-${r.id}`, `${r.when} → ${r.then}`, labelOf(RULE_SETTINGS, t.github.rules[r.id])]),
+    ["branch-template", "Branch name for new sessions", t.github.branch_template || "{number}-{title}", "template"],
+    ["branch-max", "Max length of branch names", String(t.github.max_length)],
+    ["sync-interval", "Refresh issues", SYNC_INTERVALS.find((i) => i.value === t.sync.interval)?.label ?? `Every ${t.sync.interval} s`, "sync"],
+  ];
+}
 
 function index(c: SearchContext): Entry[] {
   const s = c.settings;
@@ -93,6 +109,7 @@ function index(c: SearchContext): Entry[] {
     app("notifications", "App › Notifications", "sound-blocked", "Sound when an agent needs you", soundFor(s.sounds, "blocked") ?? "Off"),
     app("notifications", "App › Notifications", "sound-done", "Sound when an agent is done", soundFor(s.sounds, "done") ?? "Off"),
     app("notifications", "App › Notifications", "sound-error", "Sound when an agent fails", soundFor(s.sounds, "error") ?? "Off"),
+    ...trackerEntries(c.trackers).map(([setting, label, value, also]) => app("trackers", "App › Task trackers", setting, label, value, also)),
     app("shortcuts", "App › Keyboard shortcuts", undefined, "Keyboard shortcuts", custom ? `${custom} custom` : "", "keys bindings"),
     ...ACTIONS.map((a) => app("shortcuts", "App › Keyboard shortcuts", `shortcut-${a.id}`, a.label, keys[a.id] ? keyLabel(keys[a.id]) : "Not set", "shortcut key")),
     app("profiles", "Claude Code › Profiles", undefined, "Claude profiles", n(c.profiles, "profile"), "sign in account"),

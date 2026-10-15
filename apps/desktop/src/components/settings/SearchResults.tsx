@@ -10,6 +10,7 @@ import type { SearchContext, SearchResult } from "../../lib/settingsSearch";
 import { useStore } from "../../lib/store";
 import { cx } from "../ui";
 import { PageBody, PageHeading } from "./controls";
+import { trackersConfig, useTasks } from "../../lib/tasksStore";
 
 /** What the search needs from the store. Projects' configs are read when a
  * search starts, for their scripts' values. */
@@ -21,6 +22,7 @@ export function useSearchContext(phones: number, searching: boolean): SearchCont
   const workspaces = useStore((s) => s.workspaces);
   const projects = useStore((s) => s.projects);
   const profiles = useStore((s) => s.profiles);
+  const trackers = useTasks((t) => trackersConfig(t));
   const [configs, setConfigs] = useState<Record<string, ProjectConfig | null>>({});
   useEffect(() => {
     if (!searching) return;
@@ -43,8 +45,9 @@ export function useSearchContext(phones: number, searching: boolean): SearchCont
       phones,
       workspaces: Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ host, id: w.id, name: w.name, color: w.color, profile: profileName(w, profiles[host] ?? []) }))),
       projects: Object.entries(projects).flatMap(([host, list]) => list.map((p) => ({ host, id: p.id, name: p.name, base_branch: p.base_branch, config: configs[`${host}/${p.id}`] }))),
+      trackers,
     }),
-    [settings, appVersion, claudeInstalled, hosts, workspaces, projects, profiles, phones, configs],
+    [settings, appVersion, claudeInstalled, hosts, workspaces, projects, profiles, phones, configs, trackers],
   );
 }
 

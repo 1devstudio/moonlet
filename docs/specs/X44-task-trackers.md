@@ -26,7 +26,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 ### Connections
 
-- [ ] Settings has a **Task trackers** page under App, after Notifications. Its nav entry shows a dot when a connection needs attention.
+- [x] Settings has a **Task trackers** page under App, after Notifications. Its nav entry shows a dot when a connection needs attention. (The dot comes with connections that can fail; `settingsPage.test.ts`, `task-trackers.e2e.ts`.)
 - [ ] The page lists one row per connection: tracker mark, name, site, status dot and line, and actions. Connected rows show `Connected as <name> · <auth> · <n> teams · synced <age>` with **Sync now** and **Configure**. A failed row shows the error in red (for example `API token rejected · Acme issues are stale`) with **Reconnect**. Trackers not connected show **Connect**.
 - [ ] **Add tracker** offers the four trackers. More than one connection of the same tracker is allowed (two Jira sites, two Linear organisations).
 - [ ] Disconnect asks first, deletes the token from the Keychain and removes the connection's sources from every workspace. Session links (X46) stay, and reconnecting the same tracker and site gets the same connection id back, so the links resolve again.
@@ -37,7 +37,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 - [ ] **Linear API key** is accepted instead of OAuth.
 - [ ] **Jira Cloud:** site, email and API token; requests use basic auth. Jira API tokens expire, and Jira's API does not say when, so moonlet does not warn ahead. When Jira answers 401 to a token that worked before, the connection shows `API token rejected · <workspace> issues are stale` and Reconnect explains: "Jira no longer accepts the API token for <site>. It may have expired or been revoked. Create a new token and paste it here." The Reconnect dialog keeps the site and email and only asks for the new token.
 - [ ] **ClickUp:** the personal token is sent as the raw `Authorization` header value.
-- [ ] **GitHub Issues:** connecting checks `gh auth status` on each project's host. A host without a login shows `gh is not signed in on <host>` with the `gh auth login` command to copy. Reading a project board needs the `read:project` scope and moving its items the `project` scope; without them the page shows `gh auth refresh -s project` to copy, and project sources are unavailable.
+- [ ] **GitHub Issues:** connecting checks `gh auth status` on each project's host. (Shipped: the page shows `Connected as <login> · uses gh on <host>` from `gh.whoami` on the shown workspace's host, or `gh is not signed in on <host> · run gh auth login there`; `the_github_login_comes_from_gh`, `a_gh_without_a_login_says_so`, `trackersPage.test.ts`, `task-trackers.e2e.ts`.) A host without a login shows `gh is not signed in on <host>` with the `gh auth login` command to copy. Reading a project board needs the `read:project` scope and moving its items the `project` scope; without them the page shows `gh auth refresh -s project` to copy, and project sources are unavailable.
 - [ ] **Test again** re-runs the check and shows the account name and the number of visible sources, or the tracker's error message.
 - [ ] A request answered with 401 marks the connection as needing attention and stops polling it until the user reconnects. The message names the tracker and what to do: Linear OAuth "Sign in to Linear again", an API key or token "<tracker> no longer accepts this token. Create a new one and paste it here."
 - [ ] The Jira and ClickUp connect dialogs say "The token is saved in the macOS Keychain." and, for Jira, "Tokens expire. moonlet tells you when Jira stops accepting it."
@@ -52,7 +52,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 ### States
 
-- [ ] moonlet groups tasks into **Todo**, **In Progress**, **In Review** and **Done**, plus **Not shown**.
+- [x] moonlet groups tasks into **Todo**, **In Progress**, **In Review** and **Done**, plus **Not shown**. (`states.rs`, `tasksBoard.test.ts`)
 - [ ] The page lists each column with the tracker states mapped onto it, removable chips and an add button. Defaults:
 
 | Column | Linear (state type) | Jira (status category) | ClickUp (status type) | GitHub |
@@ -64,19 +64,19 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 | Not shown | `backlog`, `triage`, `canceled` | — | — | closed as not planned |
 
 - [ ] A GitHub project board source maps its Status field options instead, like Linear states (defaults by name: "Todo" or "To do", "In Progress", a name with the word "review" or "QA", and "Done"; other options are not shown).
-- [ ] Priority is shown as 0–3 bars: Linear Urgent and High are 3, Medium 2, Low 1, none 0; Jira Highest, High, Blocker and Critical 3, Medium and Major 2, Low, Lowest, Minor and Trivial 1 (Jira's default scheme and its older one); ClickUp urgent and high 3, normal 2, low 1; GitHub has none.
-- [ ] "Named like review or QA" means the state name has the word "review" or "QA" in it ("In Review", "Code review", "Ready for QA"), not just those letters ("Preview" is not review).
+- [x] Priority is shown as 0–3 bars: Linear Urgent and High are 3, Medium 2, Low 1, none 0; Jira Highest, High, Blocker and Critical 3, Medium and Major 2, Low, Lowest, Minor and Trivial 1 (Jira's default scheme and its older one); ClickUp urgent and high 3, normal 2, low 1; GitHub has none. (`priority.rs`)
+- [x] "Named like review or QA" means the state name has the word "review" or "QA" in it ("In Review", "Code review", "Ready for QA"), not just those letters ("Preview" is not review). (`states.rs`)
 
 ### Branch names and linking
 
 - [ ] "Branch name for new sessions" is a template with `{key}`, `{title}`, `{number}`, `{user}` and `{type}`, cut to "Max length" (default 48). The preview shows the result for a real issue. Defaults: `{key}-{title}` for Linear, Jira and ClickUp, `{number}-{title}` for GitHub (the same as `gh issue develop`). Left empty, Linear uses the issue's own branch name.
 - [ ] "Link a session to an issue when": its branch name contains the issue key (on; for GitHub, its branch starts with `<number>-` and its project's `origin` is the issue's repository), its pull request mentions the key or closes the issue (on), its name looks like an issue title (off, and only ever a suggestion).
-- [ ] Keys: Linear and Jira `ABC-123`; ClickUp the custom task ID when the workspace has them, otherwise `CU-<task id>`; GitHub `<owner>/<repo>#<number>` (a pasted `#42` means that number in the current project's repository). Matching is case-insensitive and needs no letter or digit right before or after the key, so `moon-142-x` and `feat_moon-142` match `MOON-142` and `moon-1420` does not.
+- [x] Keys: Linear and Jira `ABC-123`; ClickUp the custom task ID when the workspace has them, otherwise `CU-<task id>`; GitHub `<owner>/<repo>#<number>` (a pasted `#42` means that number in the current project's repository). Matching is case-insensitive and needs no letter or digit right before or after the key, so `moon-142-x` and `feat_moon-142` match `MOON-142` and `moon-1420` does not. (`refs.rs`, `tasks.test.ts`)
 
 ### Sync
 
-- [ ] Issues refresh every minute by default (options: 30 s, 1 min, 5 min, manual), and when the window comes to the front at most every 15 s.
-- [ ] Sync failures keep the last good list and show its age; they never empty the board.
+- [x] Issues refresh every minute by default (options: 30 s, 1 min, 5 min, manual), and when the window comes to the front at most every 15 s. (`task-trackers.e2e.ts` saves it; the interval is read by Tasks mode.)
+- [x] Sync failures keep the last good list and show its age; they never empty the board. (`tasksStore.test.ts`)
 - [ ] "Notify when a task changes state outside moonlet" (on by default) sends a notification when a task with a session moves to another column and moonlet did not move it.
 - [ ] A line at the bottom of the page reads: "Tokens are kept in the macOS Keychain on this Mac and never sent to remote hosts. moonletd only stores which issue each session is linked to."
 
@@ -92,17 +92,19 @@ No daemon RPCs for Linear, Jira or ClickUp: the desktop app's Rust side makes th
 
 - `tracker_connect {kind, site?, email?, token?}` → `{connection, account, sources}`; `tracker_oauth_start {kind}` → opens the browser and resolves when the callback arrives.
 - `tracker_disconnect {id}`, `tracker_test {id}`, `tracker_sources {id}`.
+- `trackers_config` → `trackers.toml` or its defaults; `trackers_save {config}` writes it (shipped).
 - `tracker_tasks {id, source_ids}` → normalised tasks; `tracker_transition {id, key, column}`; `tracker_assign_me {id, key}`; `tracker_comment {id, key, body}`.
 
 GitHub goes through the daemon, because `gh` runs on the project's host:
 
 - `gh.tasks {path, mine}` → the repository's 100 most recently updated issues, open and closed (so recently closed ones fill Done), only those assigned to the user when `mine`: `{repo, number, title, body, url, closed, state_reason, assignees, labels, updated_ms, closing_prs}`. `closing_prs` are the same repository's PRs that close the issue. Project board status needs the `read:project` scope (`gh` fails with "requires one of the following scopes: ['read:project']" without it) and comes with project board sources.
-- `gh.task_update {path, number, assign_me?, close?, project_status?}`.
+- `gh.task_update {path, number, assign_me?, close?}` (project status later).
+- `gh.whoami {}` → the login `gh` is signed in as on the host, or gh's error.
 
 ## Data and config
 
 - A connection's id is its tracker and site: `linear:<organisation>`, `jira:<host>`, `clickup:<workspace id>`, `github:<host>`. It is what session links store, so a link survives reconnecting and resolves on another Mac that connects the same account.
-- `~/.moonlet/trackers.toml` on the Mac running the app: connections (id, kind, site, account name, auth kind, never the token), sources, state mapping, rules, branch template, sync interval. Written with `toml_edit` so comments survive.
+- `~/.moonlet/trackers.toml` on the Mac running the app: connections (id, kind, site, account name, auth kind, never the token), sources, state mapping, rules, branch template, sync interval. The app owns the file and rewrites it whole (a header comment says so), so comments added by hand do not survive. Today it holds `[sync] interval` and `[github]` `branch_template`, `max_length` and `rules`; connections, sources and state mapping join with the other trackers.
 - Tokens: Keychain generic passwords, service `dev.onedevstudio.moonlet.trackers`, account `<connection id>`.
 - A cache of the last good task list per connection in `~/.moonlet/cache/tasks-<id>.json`, so Tasks mode opens instantly.
 - Optional per project in `.moonlet/config.toml`: `[tasks] sources = ["linear:MOON"]`, which pre-fills the repository of a matching source.

@@ -131,6 +131,9 @@ export interface TaskStart {
   github?: { repo: string; number: number };
   /** The composer's "session starts" checkbox (Keep in step), when it does anything. */
   assign?: { label: string; checked: boolean } | null;
+  /** The connection's branch template and max length (X44); the tracker's default when absent. */
+  template?: string;
+  maxLen?: number;
 }
 
 /** The composer's preset for starting a session from `task`; `repos` are the projects' `owner/repo` by id. */

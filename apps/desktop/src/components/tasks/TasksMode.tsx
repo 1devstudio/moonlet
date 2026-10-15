@@ -7,12 +7,13 @@ import { focusThrottle } from "../../lib/prPoll";
 import { selectSession, shownWorkspace, useStore } from "../../lib/store";
 import { type Column, taskStart } from "../../lib/tasks";
 import { type BoardWorktree, type Card, type CardRow, outOfSync, sessionsWithoutTask, tasksBoard } from "../../lib/tasksBoard";
-import { boardInput, fixDrift, isTasksMode, leaveTasksMode, putOffDrift, refreshTasks, toggleTasksMode, useTasks } from "../../lib/tasksStore";
-import { startAction, withoutPutOff } from "../../lib/keepInStep";
+import { autoFixed, boardInput, fixDrift, isTasksMode, leaveTasksMode, loadTrackersConfig, markAutoFixed, putOffDrift, refreshTasks, toggleTasksMode, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { applyRules, autoFixes, driftKey, startAction, withoutPutOff } from "../../lib/keepInStep";
 import { boardSummary, syncedLabel, TASK_VIEWS, type TaskView, viewBoard, viewCounts } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Empty, IconButton, StateGlyph } from "../ui";
+import { goSettings } from "../../lib/settingsNavigation";
 
 const COLUMNS: { id: Exclude<Column, "hidden" | "done">; label: string }[] = [
   { id: "todo", label: "Todo" },
@@ -46,6 +47,9 @@ export function TaskGlyph({ column, size = 14 }: { column: Column; size?: number
  *  every minute, and when the window comes to the front (at most every 15 s). */
 function useTaskSync() {
   const ws = useStore((s) => shownWorkspace(s));
+  // Settings › Task trackers › Sync; 0 is "manual" (X44).
+  const interval = useTasks((t) => trackersConfig(t).sync.interval);
+  useEffect(() => void loadTrackersConfig(), []);
   useEffect(() => {
     if (!ws) return;
     const sync = () => void refreshTasks(ws.host, ws.id);
@@ -53,12 +57,22 @@ function useTaskSync() {
     const due = focusThrottle(15_000);
     const onFocus = () => due(Date.now()) && sync();
     window.addEventListener("focus", onFocus);
-    const timer = setInterval(sync, 60_000);
+    const timer = interval > 0 ? setInterval(sync, interval * 1000) : undefined;
     return () => {
       window.removeEventListener("focus", onFocus);
       clearInterval(timer);
     };
-  }, [ws]);
+  }, [ws, interval]);
+  // "Every session's PR is merged" at Automatically closes the issue, once (X46).
+  const { board } = useWorkspaceBoard(ws);
+  const rules = useTasks((t) => trackersConfig(t).github.rules);
+  useEffect(() => {
+    if (!ws || !board) return;
+    for (const card of autoFixes(board, rules, autoFixed())) {
+      markAutoFixed(driftKey(card));
+      void fixDrift(ws.host, ws.id, card);
+    }
+  }, [ws, board, rules]);
 }
 
 /** The shown workspace's tasks and their board. */
@@ -71,13 +85,14 @@ function useWorkspaceTasks() {
 export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
   const data = useTasks((t) => (ws ? t.data[wsKey(ws.host, ws.id)] : undefined));
   const notNow = useTasks((t) => t.notNow);
+  const rules = useTasks((t) => trackersConfig(t).github.rules);
   // What the board reads of the main store; other changes (terminal output) don't rebuild it.
   const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads]));
   return useMemo(() => {
     if (!ws || !data) return { ws, data, board: null, unlinked: [] };
-    const input = boardInput(useStore.getState(), ws.host, ws.id, data);
-    return { ws, data, board: withoutPutOff(tasksBoard(input), notNow), unlinked: sessionsWithoutTask(input.sessions, data.tasks) };
-  }, [ws, data, notNow, ...deps]);
+    const input = boardInput(useStore.getState(), ws.host, ws.id, data, rules);
+    return { ws, data, board: withoutPutOff(applyRules(tasksBoard(input), rules), notNow), unlinked: sessionsWithoutTask(input.sessions, data.tasks) };
+  }, [ws, data, notNow, rules, ...deps]);
 }
 
 /** The sidebar body in Tasks mode: views with counts, then the sync line. */
@@ -130,8 +145,13 @@ function openSession(host: string, sessionId: string) {
 /** Opens the new-session composer for a task, or for one of its worktrees without a session (X46). */
 export function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
-  // The "session starts" rule at its default, Automatically, until X44's connection page sets it.
-  const start = { ...taskStart(card.task, data?.repos ?? {}), assign: startAction(card.task, "auto") };
+  const github = trackersConfig(useTasks.getState()).github;
+  const start = {
+    ...taskStart(card.task, data?.repos ?? {}),
+    assign: startAction(card.task, github.rules.session_starts),
+    template: github.branch_template || undefined,
+    maxLen: github.max_length,
+  };
   useStore.setState({
     dialog: {
       kind: "new-session",
@@ -265,9 +285,34 @@ export function TasksMode() {
   if (!data) return <Empty title="Loading tasks…" />;
   if (data.sources.length === 0) {
     return (
-      <Empty title="No task tracker in this workspace">
-        Tasks mode shows the issues of this workspace's projects. Projects with a GitHub origin show their GitHub issues here.
-      </Empty>
+      <div className="flex h-full items-start justify-center pt-[12vh]">
+        <section role="dialog" aria-labelledby="connect-tracker" className="w-[440px] rounded-xl border border-border-strong bg-panel p-5">
+          <h2 id="connect-tracker" className="ui-text-15 font-medium text-fg">
+            Connect a task tracker
+          </h2>
+          <p className="mt-1 ui-text-12.5 text-muted">Tasks mode shows your issues with the sessions, worktrees and PRs working on them. This workspace has no tracker yet.</p>
+          <div className="mt-3 flex flex-col divide-y divide-border rounded-lg border border-border">
+            <div className="px-3 py-2">
+              <div className="ui-text-13 text-fg">GitHub Issues</div>
+              <div className="ui-text-12 text-muted">Uses your gh login · add a project with a GitHub origin to this workspace</div>
+            </div>
+            {["Linear", "Jira Cloud", "ClickUp"].map((t) => (
+              <div key={t} className="px-3 py-2">
+                <div className="ui-text-13 text-fg">{t}</div>
+                <div className="ui-text-12 text-faint">Coming in a later release</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex justify-between">
+            <Button size="sm" variant="ghost" onClick={() => void goSettings({ page: "trackers" })}>
+              Open Settings › Task trackers
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => leaveTasksMode()}>
+              Not now
+            </Button>
+          </div>
+        </section>
+      </div>
     );
   }
   if (!board) return null;
