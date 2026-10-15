@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRules, autoFixes, cleanUpMessage, closesIssue, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, startAction, withCloses, withoutPutOff } from "./keepInStep";
+import { applyRules, autoFixes, cleanUpMessage, removeWorktreeAsk, closesIssue, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, startAction, withCloses, withoutPutOff } from "./keepInStep";
 import type { Task } from "./tasks";
 import type { BoardSession, Card } from "./tasksBoard";
 
@@ -59,6 +59,21 @@ describe("driftFix (X45 out of sync, X46 Keep in step)", () => {
   });
 });
 
+describe("removeWorktreeAsk (X45: remove a worktree from a task)", () => {
+  it("warns when uncommitted changes would be lost", () => {
+    expect(removeWorktreeAsk("/w/moon-131-old", "moon-131-old", false)).toEqual({
+      title: "Remove moon-131-old?",
+      message: "The worktree at /w/moon-131-old goes; its branch is kept.",
+      action: "Remove",
+      variant: "primary",
+    });
+    expect(removeWorktreeAsk("/w/moon-131-old", "moon-131-old", true)).toMatchObject({
+      message: "/w/moon-131-old has uncommitted changes, which will be lost. Its branch is kept.",
+      variant: "danger",
+    });
+  });
+});
+
 describe("cleanUpMessage", () => {
   it("names what goes and warns about uncommitted changes", () => {
     expect(cleanUpMessage(1, 1, [])).toBe("Archive 1 session and remove 1 worktree?");
@@ -108,6 +123,14 @@ describe("Closes #N in a new PR (X46: a PR opens)", () => {
     expect(closesIssue(facts({}), "acme/web", [issue])).toBe(null);
   });
 
+  it("follows the link rules and the task's own comment rule", () => {
+    const noBranch = { branch: false, pr: true, title: true };
+    expect(closesIssue(facts({ branch: "7-fix" }), "acme/web", [issue], noBranch)).toBe(null);
+    // The Task tab's Keep in step switch, or the rule set to Off.
+    expect(closesIssue(facts({ branch: "7-fix" }), "acme/web", [issue], undefined, () => "off")).toBe(null);
+    expect(closesIssue(facts({ branch: "7-fix" }), "acme/web", [issue], undefined, () => "suggest")).toBe(7);
+  });
+
   it("adds the line once", () => {
     expect(withCloses("- Fix the button", 7)).toBe("- Fix the button\n\nCloses #7");
     expect(withCloses("", 7)).toBe("Closes #7");
@@ -128,6 +151,13 @@ describe("rules from Settings › Task trackers (X44, X46)", () => {
     expect(Object.values(off).flat().map((c) => c.drift)).toEqual([null, null]);
     const on = applyRules(board, () => DEFAULT_RULES);
     expect(Object.values(on).flat().map((c) => c.drift?.kind)).toEqual(["merged", "done_open"]);
+  });
+
+  it("drops the work-started chip too when its rule is Off, as the Keep in step switch does", () => {
+    const started = card(task("MOON-153", "todo"), { kind: "started", text: "Session running", fix: "In Progress" }, [session("guard", "/w/guard")]);
+    const b = { todo: [started], in_progress: [], in_review: [], done: [] };
+    expect(applyRules(b, () => ({ ...DEFAULT_RULES, session_starts: "off" })).todo[0].drift).toBe(null);
+    expect(applyRules(b, () => DEFAULT_RULES).todo[0].drift?.kind).toBe("started");
   });
 
   it("closes merged GitHub issues by itself when the rule is Automatically, once per situation", () => {
@@ -155,15 +185,29 @@ describe("outsideMoves (X44: notify when a task changes state outside moonlet)",
     const before = [task("MOON-142", "in_review"), task("MOON-151", "todo"), gh(7, "open"), gh(8, "open")];
     const after = [task("MOON-142", "in_progress"), task("MOON-151", "in_progress"), gh(7, "done"), gh(8, "done")];
     const linked = new Set(["linear:acme MOON-142", "github:github.com acme/web#7", "github:github.com acme/web#8"]);
-    const byMoonlet = new Set(["github:github.com acme/web#8"]);
+    // moonlet closed #8 itself.
+    const byMoonlet = new Map([["github:github.com acme/web#8", "done" as const]]);
     expect(outsideMoves(before, after, linked, byMoonlet)).toEqual([
-      { key: "MOON-142", title: "MOON-142", text: "MOON-142 moved to In Progress" },
-      { key: "acme/web#7", title: "acme/web#7", text: "acme/web#7 was closed" },
+      { id: "linear:acme MOON-142", title: "MOON-142", text: "MOON-142 moved to In Progress" },
+      { id: "github:github.com acme/web#7", title: "acme/web#7", text: "acme/web#7 was closed" },
     ]);
   });
 
+  it("names a move moonlet made only when the task ends up elsewhere", () => {
+    const linked = new Set(["linear:acme MOON-142"]);
+    const byMoonlet = new Map([["linear:acme MOON-142", "in_review" as const]]);
+    expect(outsideMoves([task("MOON-142", "in_progress")], [task("MOON-142", "done")], linked, byMoonlet)).toEqual([
+      { id: "linear:acme MOON-142", title: "MOON-142", text: "MOON-142 moved to Done" },
+    ]);
+  });
+
+  it("does not say a closed GitHub issue was closed again when only its reason changed", () => {
+    const linked = new Set(["github:github.com acme/web#7"]);
+    expect(outsideMoves([gh(7, "done")], [gh(7, "hidden")], linked, new Map())).toEqual([]);
+  });
+
   it("says nothing on the first sync", () => {
-    expect(outsideMoves(null, [task("MOON-142", "done")], new Set(["linear:acme MOON-142"]), new Set())).toEqual([]);
+    expect(outsideMoves(null, [task("MOON-142", "done")], new Set(["linear:acme MOON-142"]), new Map())).toEqual([]);
   });
 });
 
@@ -175,9 +219,12 @@ describe("prComments (X46: a pull request opens → comment its link)", () => {
     const ghCard = card(task("acme/web#7", "open", { repo: "acme/web", number: 7, closingPrs: [] }), null, [{ ...session("fix", "/w/fix"), pr: open(70, "u") }]);
     const board = { todo: [], in_progress: [ghCard], in_review: [hosts], done: [] };
     expect(prComments(board, () => DEFAULT_RULES, {})).toEqual([
-      { card: hosts, key: "comment linear:acme MOON-142 #131", text: "Opened a pull request: Hosts section https://github.com/acme/app/pull/131" },
+      { card: hosts, key: "comment linear:acme MOON-142 https://github.com/acme/app/pull/131", text: "Opened a pull request: Hosts section https://github.com/acme/app/pull/131" },
     ]);
-    expect(prComments(board, () => DEFAULT_RULES, { "comment linear:acme MOON-142 #131": true })).toEqual([]);
+    expect(prComments(board, () => DEFAULT_RULES, { "comment linear:acme MOON-142 https://github.com/acme/app/pull/131": true })).toEqual([]);
     expect(prComments(board, () => ({ ...DEFAULT_RULES, pr_comment: "off" }), {})).toEqual([]);
+    // A draft is not opened yet.
+    const draft = card(linearTask, null, [{ ...session("hosts", "/w/hosts"), pr: { ...open(131, "https://github.com/acme/app/pull/131"), draft: true } }]);
+    expect(prComments({ todo: [], in_progress: [], in_review: [draft], done: [] }, () => DEFAULT_RULES, {})).toEqual([]);
   });
 });

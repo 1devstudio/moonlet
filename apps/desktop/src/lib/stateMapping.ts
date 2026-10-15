@@ -1,6 +1,6 @@
 // Which tracker state lands in which column, per connection (X44 Workflow states).
 
-import type { Column, Task } from "./tasks";
+import type { Task } from "./tasks";
 import type { Connection } from "./tasksStore";
 
 /** Tasks with each connection's state mapping applied; unmapped states keep their default column. */
@@ -12,7 +12,3 @@ export function applyStateMapping(tasks: Task[], connections: Connection[] | und
   });
 }
 
-/** The state a move to `column` uses: the first one mapped to it, or null for the tracker's default. */
-export function targetState(connection: Connection | undefined, column: Exclude<Column, "hidden">): string | null {
-  return Object.entries(connection?.states ?? {}).find(([, c]) => c === column)?.[0] ?? null;
-}

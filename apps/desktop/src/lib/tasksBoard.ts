@@ -90,6 +90,9 @@ function rowMeta(s: BoardSession): RowMeta {
   return { text: `+${s.additions}`, tone: "faint" };
 }
 
+/** An open PR that is ready for review; a draft does not count (X46). */
+const isOpen = (pr: PullRequest | null | undefined) => pr?.state === "open" && !pr.draft;
+
 const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 function drift(column: Card["column"], trackerColumn: Task["column"], sessions: BoardSession[], orphans: BoardWorktree[], rule: StartRule): Drift | null {
@@ -98,12 +101,15 @@ function drift(column: Card["column"], trackerColumn: Task["column"], sessions: 
     const last = prs[prs.length - 1];
     return { kind: "merged", text: `#${last?.number} merged`, fix: "Move to Done" };
   }
-  const open = prs.find((p) => p?.state === "open");
+  const open = prs.find(isOpen);
   if (open && (trackerColumn === "todo" || trackerColumn === "in_progress")) {
     return { kind: "pr_open", text: `#${open.number} open`, fix: "Move to In Review" };
   }
-  if (trackerColumn === "todo" && sessions.length && rule !== "auto") {
-    return { kind: "started", text: "Session running", fix: "In Progress" };
+  // Under Automatically too: a session linked by its branch was not started
+  // from the task, so nothing moved it (X46).
+  if (trackerColumn === "todo" && sessions.length && rule !== "off") {
+    const running = sessions.some((s) => s.state === "working" || s.state === "blocked");
+    return { kind: "started", text: running ? "Session running" : "Session open", fix: "In Progress" };
   }
   const worktrees = sessions.length + orphans.length;
   if (column === "done" && worktrees) {
@@ -115,7 +121,7 @@ function drift(column: Card["column"], trackerColumn: Task["column"], sessions: 
 
 /** Where an open GitHub issue goes: by the work on it (X44 "States"). */
 function workColumn(sessions: BoardSession[]): Card["column"] {
-  if (sessions.some((s) => s.pr?.state === "open")) return "in_review";
+  if (sessions.some((s) => isOpen(s.pr))) return "in_review";
   return sessions.length ? "in_progress" : "todo";
 }
 
@@ -158,7 +164,8 @@ const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
  */
 export function sessionsWithoutTask(sessions: BoardSession[], tasks: Task[], link: LinkRules = DEFAULT_LINK): { session: BoardSession; hint: string }[] {
   return sessions
-    .filter((s) => !s.archived && !taskForSession(s, s.pr, s.originRepo, tasks, link))
+    // A stored link counts even when its task is not among the loaded ones.
+    .filter((s) => !s.archived && !s.task && !taskForSession(s, s.pr, s.originRepo, tasks, link))
     .map((session) => {
       if (!link.title) return { session, hint: "" };
       const like = tasks.find((t) => words(t.title) === words(session.name));

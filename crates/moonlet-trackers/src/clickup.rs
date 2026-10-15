@@ -90,13 +90,18 @@ pub fn tasks_path(
 }
 
 /// One list's tasks from its two passes (see [`tasks_path`]): the open pass
-/// minus done ones (any age, since ClickUp's `include_closed` only covers
-/// "closed"-type statuses), then the recent pass's tasks not already in.
-pub fn merge_passes(open: Vec<TrackerTask>, recent: Vec<TrackerTask>) -> Vec<TrackerTask> {
-    let mut out: Vec<TrackerTask> = open
-        .into_iter()
-        .filter(|t| !matches!(t.column, Column::Done | Column::Hidden))
-        .collect();
+/// minus those in Done (any age, since ClickUp's `include_closed` only covers
+/// "closed"-type statuses), by the user's state `mapping` where it has one,
+/// then the recent pass's tasks not already in.
+pub fn merge_passes(
+    open: Vec<TrackerTask>,
+    recent: Vec<TrackerTask>,
+    mapping: &crate::states::Mapping,
+) -> Vec<TrackerTask> {
+    let done = |t: &TrackerTask| {
+        mapping.get(&t.tracker.state).copied().unwrap_or(t.column) == Column::Done
+    };
+    let mut out: Vec<TrackerTask> = open.into_iter().filter(|t| !done(t)).collect();
     let mut seen: std::collections::HashSet<String> = out.iter().map(|t| t.key.clone()).collect();
     out.extend(recent.into_iter().filter(|t| seen.insert(t.key.clone())));
     out
@@ -107,6 +112,24 @@ pub fn more_pages(raw: &[u8]) -> bool {
     parse(raw)
         .map(|v| v["last_page"].as_bool() == Some(false))
         .unwrap_or(false)
+}
+
+/// One task by its key (X46: a key pasted into the link dialog): `CU-<id>`
+/// by its id, a custom id within ClickUp workspace `team`.
+pub fn task_path(key: &str, team: &str) -> String {
+    match key.strip_prefix("CU-") {
+        Some(id) => format!("/task/{id}"),
+        None => format!("/task/{key}?custom_task_ids=true&team_id={team}"),
+    }
+}
+
+/// The task of [`task_path`] as a task of `connection`.
+pub fn parse_task(raw: &[u8], connection: &str) -> Result<TrackerTask, ApiError> {
+    let task = parse(raw)?;
+    let wrapped = json!({ "tasks": [task] }).to_string();
+    parse_tasks(wrapped.as_bytes(), connection)?
+        .pop()
+        .ok_or_else(|| ApiError::new("ClickUp sent no task"))
 }
 
 pub fn parse_tasks(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, ApiError> {
@@ -192,10 +215,15 @@ pub fn parse_statuses(raw: &[u8]) -> Result<Vec<Status>, ApiError> {
 }
 
 /// The first status of a list in `column`.
-pub fn status_for(statuses: &[Status], column: Column) -> Option<&Status> {
-    statuses
-        .iter()
-        .find(|s| crate::states::default_column(TrackerKind::Clickup, &s.kind, &s.name) == column)
+pub fn status_for<'a>(
+    statuses: &'a [Status],
+    column: Column,
+    mapping: &crate::states::Mapping,
+) -> Option<&'a Status> {
+    crate::states::pick(statuses, column, mapping, |s| {
+        let natural = crate::states::default_column(TrackerKind::Clickup, &s.kind, &s.name);
+        (natural, s.name.as_str())
+    })
 }
 
 pub fn comment_body(text: &str) -> Value {
@@ -236,6 +264,23 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn one_task_by_its_key() {
+        let list: serde_json::Value =
+            serde_json::from_slice(&fixture("clickup-tasks.json")).unwrap();
+        let one = list["tasks"][0].to_string();
+        let t = parse_task(one.as_bytes(), "clickup:9012345").unwrap();
+        assert_eq!(
+            (t.key.as_str(), t.title.as_str(), t.tracker.state.as_str()),
+            ("CU-9hx", "Fix login bug", "in progress")
+        );
+        assert_eq!(task_path("CU-86abc123", "9012345"), "/task/86abc123");
+        assert_eq!(
+            task_path("MOON-12", "9012345"),
+            "/task/MOON-12?custom_task_ids=true&team_id=9012345"
+        );
     }
 
     #[test]
@@ -292,10 +337,13 @@ mod tests {
         );
         let statuses = parse_statuses(&fixture("clickup-list.json")).unwrap();
         assert_eq!(
-            status_for(&statuses, Column::Done).map(|s| s.name.as_str()),
+            status_for(&statuses, Column::Done, &Default::default()).map(|s| s.name.as_str()),
             Some("complete")
         );
-        assert_eq!(status_for(&statuses, Column::InReview), None);
+        assert_eq!(
+            status_for(&statuses, Column::InReview, &Default::default()),
+            None
+        );
     }
 
     #[test]
@@ -316,11 +364,42 @@ mod tests {
             with("CU-a", Column::InProgress),
             with("CU-new", Column::Done),
         ];
-        let keys: Vec<String> = merge_passes(open, recent)
+        let keys: Vec<String> = merge_passes(open, recent, &Default::default())
             .into_iter()
             .map(|t| t.key)
             .collect();
         assert_eq!(keys, ["CU-a", "CU-new"]);
+    }
+
+    #[test]
+    fn the_open_pass_follows_the_users_state_mapping() {
+        let all = parse_tasks(&fixture("clickup-tasks.json"), "clickup:9012345").unwrap();
+        let with = |key: &str, column: Column, state: &str| {
+            let mut t = TrackerTask {
+                key: key.into(),
+                column,
+                ..all[0].clone()
+            };
+            t.tracker.state = state.into();
+            t
+        };
+        // "shipped" is a done-type status the user maps to In Review: its old
+        // tasks stay; "parked" is mapped to Done: its old tasks go.
+        let mapping = crate::states::Mapping::from([
+            ("shipped".to_string(), Column::InReview),
+            ("parked".to_string(), Column::Done),
+        ]);
+        let open = vec![
+            with("CU-s", Column::Done, "shipped"),
+            with("CU-p", Column::InProgress, "parked"),
+            // A status not shown is no Done: kept.
+            with("CU-h", Column::Hidden, "on hold"),
+        ];
+        let keys: Vec<String> = merge_passes(open, vec![], &mapping)
+            .into_iter()
+            .map(|t| t.key)
+            .collect();
+        assert_eq!(keys, ["CU-s", "CU-h"]);
     }
 
     #[test]

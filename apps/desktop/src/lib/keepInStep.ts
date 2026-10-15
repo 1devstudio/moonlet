@@ -1,7 +1,7 @@
 // Keep <tracker> in step (X46): what moonlet does in the tracker when the
 // work moves, and the fixes behind the out-of-sync chips (X45).
 
-import { type Column, type SessionLinkFacts, type Task, taskForSession } from "./tasks";
+import { type Column, DEFAULT_LINK, type LinkRules, type SessionLinkFacts, type Task, taskForSession } from "./tasks";
 import type { Board, Card } from "./tasksBoard";
 
 /** A rule's setting (X44 connection page; spec defaults until then). */
@@ -36,6 +36,16 @@ export function cleanUpMessage(sessions: number, worktrees: number, dirty: strin
   return `${what}? ${names} ${dirty.length === 1 ? "has" : "have"} uncommitted changes, which will be lost.`;
 }
 
+/** The confirm before removing a worktree that no session uses (X45). */
+export function removeWorktreeAsk(path: string, branch: string, dirty: boolean) {
+  return {
+    title: `Remove ${branch}?`,
+    message: dirty ? `${path} has uncommitted changes, which will be lost. Its branch is kept.` : `The worktree at ${path} goes; its branch is kept.`,
+    action: "Remove",
+    variant: dirty ? ("danger" as const) : ("primary" as const),
+  };
+}
+
 /** Names a chip's situation; "Not now" hides the chip until this changes. */
 export function driftKey(card: Card): string {
   const work = card.rows.map((r) => `${r.session.id}:${r.session.pr?.number ?? ""}:${r.session.pr?.state ?? ""}`).join(",");
@@ -62,12 +72,22 @@ export function withoutPutOff(board: Board, notNow: Record<string, true>): Board
  * the `Closes #N` line of its PR: from the board's tasks when loaded, else
  * from the session's stored link.
  */
-export function closesIssue(s: SessionLinkFacts, originRepo: string | null, tasks: Task[]): number | null {
+export function closesIssue(
+  s: SessionLinkFacts,
+  originRepo: string | null,
+  tasks: Task[],
+  link: LinkRules = DEFAULT_LINK,
+  commentRule: (task: Pick<Task, "connection" | "key">) => RuleSetting = () => "auto",
+): number | null {
   if (!originRepo) return null;
-  const t = taskForSession(s, null, originRepo, tasks);
-  if (t?.github) return t.github.repo.toLowerCase() === originRepo.toLowerCase() ? t.github.number : null;
+  const t = taskForSession(s, null, originRepo, tasks, link);
+  if (t?.github) {
+    const same = t.github.repo.toLowerCase() === originRepo.toLowerCase();
+    return same && commentRule(t) !== "off" ? t.github.number : null;
+  }
   const m = s.task?.connection.startsWith("github:") ? /^(.+)#(\d+)$/.exec(s.task.key) : null;
-  return m && m[1].toLowerCase() === originRepo.toLowerCase() ? Number(m[2]) : null;
+  if (!m || m[1].toLowerCase() !== originRepo.toLowerCase() || commentRule(s.task!) === "off") return null;
+  return Number(m[2]);
 }
 
 /** A PR body with `Closes #N`, so merging the PR closes the issue; added once. */
@@ -98,7 +118,7 @@ const RULE_OF: Record<NonNullable<Card["drift"]>["kind"], keyof Rules> = {
 
 /** The board with the chips of rules turned Off removed; `rulesOf` gives a card's tracker's rules. */
 export function applyRules(board: Board, rulesOf: (c: Card) => Rules): Board {
-  const off = (c: Card) => !!c.drift && c.drift.kind !== "started" && rulesOf(c)[RULE_OF[c.drift.kind]] === "off";
+  const off = (c: Card) => !!c.drift && rulesOf(c)[RULE_OF[c.drift.kind]] === "off";
   const strip = (cards: Card[]) => cards.map((c) => (off(c) ? { ...c, drift: null } : c));
   return { todo: strip(board.todo), in_progress: strip(board.in_progress), in_review: strip(board.in_review), done: strip(board.done) };
 }
@@ -126,15 +146,22 @@ const COLUMN_TEXT: Record<Exclude<Column, "hidden">, string> = { todo: "Todo", i
  * moonlet moving them, for a notification (X44). `linked` and `byMoonlet`
  * hold `connection key`s; nothing on the first sync (`before` null).
  */
-export function outsideMoves(before: Task[] | null, after: Task[], linked: Set<string>, byMoonlet: Set<string>): { key: string; title: string; text: string }[] {
+export function outsideMoves(before: Task[] | null, after: Task[], linked: Set<string>, byMoonlet: Map<string, Task["column"]>): { id: string; title: string; text: string }[] {
   if (!before) return [];
   const was = new Map(before.map((t) => [`${t.connection} ${t.key}`, t.column]));
+  const closed = (c: Task["column"]) => c === "done" || c === "hidden";
   return after.flatMap((t) => {
     const id = `${t.connection} ${t.key}`;
     const from = was.get(id);
-    if (!from || from === t.column || !linked.has(id) || byMoonlet.has(id)) return [];
-    if (t.github) return t.column === "done" || t.column === "hidden" ? [{ key: t.key, title: t.title, text: `${t.key} was closed` }] : from === "done" || from === "hidden" ? [{ key: t.key, title: t.title, text: `${t.key} was reopened` }] : [];
-    return t.column === "open" || t.column === "hidden" ? [] : [{ key: t.key, title: t.title, text: `${t.key} moved to ${COLUMN_TEXT[t.column]}` }];
+    // moonlet's own move is not news; a task that ended up elsewhere is.
+    if (!from || from === t.column || !linked.has(id) || byMoonlet.get(id) === t.column) return [];
+    const say = (text: string) => [{ id, title: t.title, text }];
+    if (t.github) {
+      if (closed(t.column) === closed(from)) return [];
+      if (closed(t.column)) return byMoonlet.get(id) === "done" ? [] : say(`${t.key} was closed`);
+      return say(`${t.key} was reopened`);
+    }
+    return t.column === "open" || t.column === "hidden" ? [] : say(`${t.key} moved to ${COLUMN_TEXT[t.column]}`);
   });
 }
 
@@ -150,8 +177,9 @@ export function prComments(board: Board, rulesOf: (c: Card) => Rules, done: Reco
       if (card.task.github || !card.task.tracker || rulesOf(card).pr_comment !== "auto") return [];
       return card.rows.flatMap(({ session }) => {
         const pr = session.pr;
-        const key = `comment ${card.task.connection} ${card.task.key} #${pr?.number}`;
-        if (pr?.state !== "open" || done[key]) return [];
+        // Keyed by the PR's URL: two repositories can both have a #12.
+        const key = `comment ${card.task.connection} ${card.task.key} ${pr?.url}`;
+        if (pr?.state !== "open" || pr.draft || done[key]) return [];
         return [{ card, key, text: `Opened a pull request: ${pr.title} ${pr.url}` }];
       });
     });

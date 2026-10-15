@@ -40,17 +40,36 @@ export function linkChoices(
   session: { name: string; branch: string },
   tasks: Task[],
   query: string,
-): { suggested: { task: Task; reason: string }[]; recent: Task[] } {
+  sessionsOf?: (t: Task) => number,
+): LinkChoices {
   const q = query.trim().toLowerCase();
   const matches = (t: Task) => !q || t.key.toLowerCase().includes(q) || t.title.toLowerCase().includes(q);
+  // `Title matches the session name · In Progress · no sessions`
+  const why = (task: Task, first: string) => {
+    if (!sessionsOf) return first;
+    const n = sessionsOf(task);
+    return [first, STATE[task.column], n ? `${n} session${n === 1 ? "" : "s"}` : "no sessions"].join(" · ");
+  };
   const suggested = tasks.flatMap((task) => {
     if (!matches(task)) return [];
-    if (words(task.title) === words(session.name)) return [{ task, reason: "Title matches the session name" }];
-    if (!task.github && mentionsKey(session.branch, task.key)) return [{ task, reason: "Branch carries the key" }];
+    if (words(task.title) === words(session.name)) return [{ task, reason: why(task, "Title matches the session name") }];
+    if (!task.github && mentionsKey(session.branch, task.key)) return [{ task, reason: why(task, "Branch carries the key") }];
     return [];
   });
   const recent = tasks.filter((t) => matches(t) && !suggested.some((s) => s.task === t)).sort((a, b) => b.updatedMs - a.updatedMs);
   return { suggested, recent };
+}
+
+export interface LinkChoices {
+  suggested: { task: Task; reason: string }[];
+  recent: Task[];
+}
+
+const STATE: Record<Task["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done", open: "Open", hidden: "Not shown" };
+
+/** What ↵ links in the dialog: the pasted task, else the first suggested, else the first of the rest. */
+export function firstChoice(pasted: Task | null, choices: LinkChoices): Task | null {
+  return pasted ?? choices.suggested[0]?.task ?? choices.recent[0] ?? null;
 }
 
 /** A pasted key or URL as `moonlet-trackers` reads it. */
@@ -65,4 +84,52 @@ export function findPasted(p: Pasted, tasks: Task[], originRepo: string | null):
   const key = p.key.startsWith("#") ? (originRepo ? `${originRepo}${p.key}` : null) : p.key;
   if (!key) return null;
   return tasks.find((t) => t.key.toLowerCase() === key.toLowerCase() && (!p.kind || t.connection.startsWith(`${p.kind}:`))) ?? null;
+}
+
+/**
+ * The link dialog's lookups of what was typed or pasted (X46): one at a time,
+ * after a short pause. A lookup that a newer one replaced, or that was
+ * cancelled, ends as `undefined`, so ↵ never links from it.
+ */
+export function pasteLookup(delayMs = 200) {
+  let current: Promise<Task | null | undefined> = Promise.resolve(null);
+  // Ends the lookup under way as `undefined`; a result it finds later is ignored.
+  let stop = () => {};
+  return {
+    start(run: () => Promise<Task | null>): Promise<Task | null | undefined> {
+      stop();
+      current = new Promise((resolve) => {
+        const timer = setTimeout(async () => resolve(await run().catch(() => null)), delayMs);
+        stop = () => {
+          clearTimeout(timer);
+          resolve(undefined);
+        };
+      });
+      return current;
+    },
+    cancel() {
+      stop();
+    },
+    /**
+     * What ↵ links: the task of the lookup under way, following any newer
+     * lookup that replaces it; `undefined` once lookups were cancelled.
+     */
+    async settled(): Promise<Task | null | undefined> {
+      for (;;) {
+        const waiting = current;
+        const found = await waiting;
+        if (waiting === current) return found;
+      }
+    },
+  };
+}
+
+/**
+ * What ↵ links in the dialog once the lookup under way ends: the pasted task,
+ * else the first of the lists as they are then (`lists`), not as they were
+ * when ↵ was pressed. Nothing once the lookup was cancelled.
+ */
+export async function enterChoice(lookup: ReturnType<typeof pasteLookup>, lists: () => LinkChoices): Promise<Task | null> {
+  const found = await lookup.settled();
+  return found === undefined ? null : firstChoice(found, lists());
 }

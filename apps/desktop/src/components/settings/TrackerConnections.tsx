@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
-import { type Connection, loadTrackersConfig, saveTrackersConfig, type Source, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { type Connection, loadTrackersConfig, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
 import { wsKey } from "../../lib/workspaces";
 import { Button, Dialog, Field, inputCls } from "../ui";
@@ -32,11 +32,9 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
   const wsOptions = Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ value: wsKey(host, w.id), label: w.name, host })));
   const set = (key: string, patch: Partial<Source>) => setRows((r) => r.map((x) => (x.key === key ? { ...x, ...patch } : x)));
   const save = async () => {
-    const config = trackersConfig(useTasks.getState());
     const sources = rows.filter((r) => on[r.key]);
-    const connections = (config.connections ?? []).map((c) => (c.id === connection.id ? { ...c, sources } : c));
     try {
-      await saveTrackersConfig({ ...config, connections });
+      await saveTrackersConfig((config) => ({ ...config, connections: (config.connections ?? []).map((c) => (c.id === connection.id ? { ...c, sources } : c)) }));
       onDone();
     } catch (e) {
       errorToast(message(e));
@@ -91,7 +89,7 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
 /** Connect (or reconnect) a tracker with a token, then pick its sources. */
 export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection["kind"]; reconnect?: Connection; onClose: () => void }) {
   const [site, setSite] = useState(reconnect?.site ?? "");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(reconnect?.email ?? "");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +104,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
     try {
       const r = await hostsApi.trackerOauthLinear();
       await loadTrackersConfig(true);
+      reconnected(r.connection.id);
       setDone(r);
     } catch (e) {
       setError(message(e));
@@ -119,6 +118,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
     try {
       const r = await hostsApi.trackerConnect({ kind, site, email, token });
       await loadTrackersConfig(true);
+      reconnected(r.connection.id);
       setDone(r);
     } catch (e) {
       setError(message(e));
@@ -145,7 +145,12 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
               <p className="ui-text-12 text-muted">Opens the browser. Or use an API key:</p>
             </>
           )}
-          {kind === "jira" && (
+          {kind === "jira" && reconnect?.email && (
+            <p className="ui-text-12.5 text-muted">
+              {reconnect.site} as {reconnect.email}
+            </p>
+          )}
+          {kind === "jira" && !reconnect?.email && (
             <>
               <Field label="Site">
                 <input className={inputCls} placeholder="acme.atlassian.net" value={site} onChange={(e) => setSite(e.target.value)} />
@@ -166,7 +171,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
             <input className={inputCls} type="password" value={token} onChange={(e) => setToken(e.target.value)} />
           </Field>
           <p className="ui-text-12 text-muted">
-            The token is saved in the macOS Keychain.{kind === "jira" ? " Tokens expire; moonlet tells you when Jira stops accepting it." : ""}
+            The token is saved in the macOS Keychain.{kind === "jira" ? " Tokens expire. moonlet tells you when Jira stops accepting it." : ""}
           </p>
           {error && <p className="ui-text-12.5 text-error">{error}</p>}
           <div className="flex justify-end gap-2">
@@ -201,6 +206,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
     if (!ok) return;
     try {
       await hostsApi.trackerDisconnect(c.id);
+      reconnected(c.id);
       await loadTrackersConfig(true);
     } catch (e) {
       errorToast(message(e));
@@ -274,13 +280,11 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
     hostsApi.trackerStates(c.id, source).then(setStates, (e) => errorToast(message(e)));
   }, [c.id, source]);
   const save = async () => {
-    const config = trackersConfig(useTasks.getState());
     // Only states moved off their default column are kept.
     const defaults = Object.fromEntries((states ?? []).map((s) => [s.name, s.column]));
-    const kept = Object.fromEntries(Object.entries(mapping).filter(([name, col]) => defaults[name] === undefined || defaults[name] !== col));
-    const connections = (config.connections ?? []).map((x) => (x.id === c.id ? { ...x, states: kept as Connection["states"] } : x));
+    const kept = Object.fromEntries(Object.entries(mapping).filter(([name, col]) => defaults[name] !== col));
     try {
-      await saveTrackersConfig({ ...config, connections });
+      await saveTrackersConfig((config) => ({ ...config, connections: (config.connections ?? []).map((x) => (x.id === c.id ? { ...x, states: kept as Connection["states"] } : x)) }));
       onClose();
     } catch (e) {
       errorToast(message(e));

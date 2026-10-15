@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { acceptanceCriteria, findPasted, linkChoices } from "./taskLinking";
+import { describe, expect, it, vi } from "vitest";
+import { acceptanceCriteria, enterChoice, findPasted, firstChoice, linkChoices, pasteLookup } from "./taskLinking";
 import type { Task } from "./tasks";
 
 const task = (key: string, title: string, o: Partial<Task> = {}): Task => ({
@@ -52,6 +52,21 @@ describe("linkChoices (X46 link dialog)", () => {
     expect(b.suggested.map((s) => [s.task.key, s.reason])).toEqual([["CDK-38", "Branch carries the key"]]);
   });
 
+  it("names the task's state and how many sessions it has in the reason", () => {
+    const c = linkChoices({ name: "Changelog themes", branch: "themes" }, tasks, "", (t) => (t.key === "CDK-41" ? 0 : 2));
+    expect(c.suggested.map((s) => s.reason)).toEqual(["Title matches the session name · In Progress · no sessions"]);
+    const b = linkChoices({ name: "Retries", branch: "cdk-38-retries" }, tasks, "", () => 1);
+    expect(b.suggested.map((s) => s.reason)).toEqual(["Branch carries the key · Todo · 1 session"]);
+  });
+
+  it("↵ links the pasted task, else the first suggested, else the first of the rest", () => {
+    const c = linkChoices({ name: "Changelog themes", branch: "themes" }, tasks, "");
+    expect(firstChoice(retry, c)).toBe(retry);
+    expect(firstChoice(null, c)).toBe(themes);
+    expect(firstChoice(null, linkChoices({ name: "x", branch: "x" }, tasks, ""))).toBe(dark);
+    expect(firstChoice(null, linkChoices({ name: "x", branch: "x" }, tasks, "nothing"))).toBe(null);
+  });
+
   it("lists the rest by most recently updated, and filters both by the typed text", () => {
     const c = linkChoices({ name: "Changelog themes", branch: "themes" }, tasks, "");
     expect(c.recent.map((t) => t.key)).toEqual(["CDK-44", "CDK-38"]);
@@ -72,5 +87,78 @@ describe("findPasted", () => {
     expect(findPasted({ kind: "github", key: "#42", site: null }, tasks, "acme/web")).toBe(gh);
     expect(findPasted({ kind: "github", key: "#42", site: null }, tasks, "other/repo")).toBe(null);
     expect(findPasted({ kind: "jira", key: "OPS-12", site: "acme.atlassian.net" }, tasks, null)).toBe(null);
+  });
+});
+
+describe("pasteLookup (X46 link dialog)", () => {
+  const found = task("MOON-12", "Remote hosts");
+  it("ends a replaced or cancelled lookup as cancelled, so ↵ links nothing from it", async () => {
+    const l = pasteLookup(0);
+    const first = l.start(() => Promise.resolve(found));
+    const second = l.start(() => Promise.resolve(null));
+    expect(await first).toBe(undefined);
+    expect(await second).toBe(null);
+    const third = l.start(() => new Promise((r) => setTimeout(() => r(found), 10)));
+    l.cancel();
+    expect(await third).toBe(undefined);
+    expect(await l.settled()).toBe(undefined);
+  });
+
+  it("ends a lookup already asking its tracker as cancelled when a newer one starts", async () => {
+    const l = pasteLookup(0);
+    const slow = l.start(() => new Promise((r) => setTimeout(() => r(found), 20)));
+    await new Promise((r) => setTimeout(r, 5));
+    void l.start(() => Promise.resolve(null));
+    expect(await slow).toBe(undefined);
+  });
+
+  it("↵ waiting on a lookup follows the one that replaced it", async () => {
+    const l = pasteLookup(0);
+    void l.start(() => new Promise((r) => setTimeout(() => r(null), 20)));
+    const waiting = l.settled();
+    void l.start(() => Promise.resolve(found));
+    expect(await waiting).toBe(found);
+  });
+
+  it("a replaced lookup ends at once, without waiting out its pause", async () => {
+    vi.useFakeTimers();
+    try {
+      const l = pasteLookup(200);
+      let first: Task | null | undefined = null;
+      void l.start(() => Promise.resolve(found)).then((t) => (first = t));
+      void l.start(() => Promise.resolve(null));
+      await Promise.resolve();
+      expect(first).toBe(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives ↵ the task the current lookup finds", async () => {
+    const l = pasteLookup(0);
+    void l.start(() => Promise.resolve(found));
+    expect(await l.settled()).toBe(found);
+  });
+});
+
+describe("enterChoice (X46: what ↵ links)", () => {
+  const a = task("MOON-1", "Remote hosts");
+  const b = task("MOON-2", "Block styling");
+  it("picks from the lists as they are when the lookup ends, not when ↵ was pressed", async () => {
+    const l = pasteLookup(0);
+    let lists = { suggested: [], recent: [a] };
+    void l.start(() => new Promise((r) => setTimeout(() => r(null), 10)));
+    const picked = enterChoice(l, () => lists);
+    // The user edits the query while the lookup runs; the dialog shows new lists.
+    lists = { suggested: [], recent: [b] };
+    expect(await picked).toBe(b);
+  });
+
+  it("picks nothing once the lookup was cancelled", async () => {
+    const l = pasteLookup(0);
+    void l.start(() => new Promise((r) => setTimeout(() => r(a), 10)));
+    const picked = enterChoice(l, () => ({ suggested: [], recent: [b] }));
+    l.cancel();
+    expect(await picked).toBe(null);
   });
 });

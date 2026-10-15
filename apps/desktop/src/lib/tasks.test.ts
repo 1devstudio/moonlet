@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GhTask } from "./protocol";
-import { githubBranchNumber, githubRepo, mentionsKey, type Task, taskForSession, taskFromGh, taskStart } from "./tasks";
+import { githubBranchNumber, githubRepo, mentionsKey, type Task, taskForSession, taskFromGh, taskStart, trackerName, trackerOf } from "./tasks";
 
 describe("mentionsKey (X44 keys)", () => {
   it("finds the key in a branch or PR title, ignoring case", () => {
@@ -160,5 +160,19 @@ describe("taskStart (X46 starting a session from a task)", () => {
   it("sends only the title line when the issue has no description, and names no project it can't place", () => {
     const s = taskStart({ ...hosts, description: "" }, { web: "acme/web" });
     expect([s.kind, s.firstMessage, s.project, s.number]).toEqual(["linear", "MOON-142 · Remote hosts sidebar", null, undefined]);
+  });
+});
+
+describe("trackerOf and trackerName", () => {
+  it("read the tracker from a connection id", () => {
+    expect(["github:github.com", "linear:acme", "jira:acme.atlassian.net", "clickup:9012345"].map((c) => [trackerOf(c), trackerName(c)])).toEqual([
+      ["github", "GitHub"],
+      ["linear", "Linear"],
+      ["jira", "Jira"],
+      ["clickup", "ClickUp"],
+    ]);
+    expect(trackerOf("trello:x")).toBe(null);
+    expect(trackerOf("constructor:x")).toBe(null);
+    expect(trackerName("trello:x")).toBe("tracker");
   });
 });

@@ -1,6 +1,7 @@
 // Views, counts and labels of the Tasks mode sidebar and header (X45).
 
 import { ago } from "./mobile";
+import type { Task } from "./tasks";
 import { type Board, outOfSync } from "./tasksBoard";
 
 /** The sidebar's views. Current cycle joins with trackers that have cycles. */
@@ -75,4 +76,20 @@ export function sessionTaskLines(board: Board): Record<string, SessionTaskLine> 
     }
   }
   return out;
+}
+
+/**
+ * A card's source (X45): the repository, or the team, project or list, named
+ * only when the workspace's tasks come from more than one.
+ */
+export function sourceLabels(tasks: Task[]): (task: Task) => string | undefined {
+  const of = (t: Task) => (t.github ? `gh ${t.github.repo}` : `${t.connection} ${t.tracker?.source ?? ""}`);
+  const short = (t: Task) => (t.github ? t.github.repo.split("/")[1] : (t.tracker?.source ?? ""));
+  // `acme/web`, or `globex ENG` (site and team), when the short name is shared.
+  const full = (t: Task) => (t.github ? t.github.repo : `${t.connection.split(":").slice(1).join(":")} ${t.tracker?.source ?? ""}`);
+  const sources = new Map(tasks.map((t) => [of(t), t]));
+  if (sources.size < 2) return () => undefined;
+  const counts = new Map<string, number>();
+  for (const t of sources.values()) counts.set(short(t), (counts.get(short(t)) ?? 0) + 1);
+  return (t) => ((counts.get(short(t)) ?? 0) > 1 ? full(t) : short(t));
 }

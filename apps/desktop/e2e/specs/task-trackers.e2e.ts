@@ -43,12 +43,23 @@ describe("Task trackers settings", () => {
     // Back at the defaults, GitHub's section is left out of the file.
     await browser.waitUntil(() => !readFileSync(file, "utf8").includes("session_starts"), { timeout: 10_000 });
   });
+
+  it("says where tokens are kept, on the page and in the Jira dialog", async () => {
+    await expect(
+      $(sel.text("Tokens are kept in the macOS Keychain on this Mac and never sent to remote hosts. moonletd only stores which issue each session is linked to. Settings are saved to ~/.moonlet/trackers.toml.")),
+    ).toBeDisplayed();
+    await $(sel.settingsButton("Connect Jira Cloud")).click();
+    await expect($('//div[@role="dialog"]').$(sel.text("The token is saved in the macOS Keychain. Tokens expire. moonlet tells you when Jira stops accepting it."))).toBeDisplayed();
+    await $('//div[@role="dialog"]//button[normalize-space()="Cancel"]').click();
+  });
 });
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "crates", "moonlet-trackers", "tests", "fixtures");
 const answer = (name: string) => readFileSync(join(fixtures, name), "utf8");
 const moves: { id: string; input: Record<string, string> }[] = [];
 let server: Server;
+/** Answer every request as Linear does for a token it no longer accepts. */
+let rejecting = false;
 
 /** Linear's GraphQL endpoint: an answer per query, and a record of every move. */
 function linear(query: string, variables: Record<string, unknown>): string {
@@ -79,7 +90,7 @@ describe("Linear tracker", () => {
       req.on("end", () => {
         const { query, variables } = JSON.parse(body || "{}");
         res.setHeader("content-type", "application/json");
-        res.end(req.url === "/linear/graphql" && req.headers.authorization === "lin_api_e2e" ? linear(query, variables ?? {}) : JSON.stringify({ errors: [{ message: "Authentication required", extensions: { type: "authentication error" } }] }));
+        res.end(!rejecting && req.url === "/linear/graphql" && req.headers.authorization === "lin_api_e2e" ? linear(query, variables ?? {}) : JSON.stringify({ errors: [{ message: "Authentication required", extensions: { type: "authentication error" } }] }));
       });
     });
     await new Promise<void>((r) => server.listen(trackerPort(w.root), "127.0.0.1", () => r()));
@@ -148,5 +159,26 @@ describe("Linear tracker", () => {
       input: { stateId: "a1000000-0000-4000-8000-000000000002", assigneeId: "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f" },
     });
     await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId);
+  });
+
+  it("stops asking Linear once it rejects the token, and the Settings nav shows a dot", async () => {
+    rejecting = true;
+    await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
+    await $('//button[@title="Refresh tasks"]').click();
+    await openSettings("Task trackers");
+    await expect($('//*[@role="img"][@aria-label="1 connection needs attention"]')).toBeDisplayed({ wait: 15_000 });
+    rejecting = false;
+  });
+
+  it("disconnects after asking: the token and the connection are gone", async () => {
+    await $(sel.settingsButton("Disconnect")).click();
+    await expect($(sel.text("moonlet forgets the token for acme and stops showing its issues. Sessions keep their links."))).toBeDisplayed({ wait: 10_000 });
+    await $('//div[@role="dialog"]//button[normalize-space()="Disconnect"]').click();
+    await browser.waitUntil(() => !readFileSync(join(w.home, "trackers.toml"), "utf8").includes("linear:acme"), {
+      timeout: 10_000,
+      timeoutMsg: readFileSync(join(w.home, "trackers.toml"), "utf8"),
+    });
+    expect(readFileSync(join(w.home, "secrets.json"), "utf8")).not.toContain("lin_api_e2e");
+    await expect($('//*[@role="img"][@aria-label="1 connection needs attention"]')).not.toBeExisting();
   });
 });

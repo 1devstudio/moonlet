@@ -280,11 +280,17 @@ export function Composer({
   useEffect(() => ta.current?.focus(), []);
 
   // The branch a task names (X44 template); an adopted worktree keeps its own.
+  // Create waits for it, so a quick ⌘↵ still gets the task's branch.
+  const taskBranchLoad = useRef<Promise<string | null>>(Promise.resolve(null));
   useEffect(() => {
-    if (!task || worktree) return setTaskBranch(null);
-    void hostsApi
+    if (!task || worktree) {
+      taskBranchLoad.current = Promise.resolve(null);
+      return setTaskBranch(null);
+    }
+    taskBranchLoad.current = hostsApi
       .taskBranch({ kind: task.kind, key: task.key, title: task.title, number: task.number, template: task.template, maxLen: task.maxLen })
-      .then(setTaskBranch, () => setTaskBranch(null));
+      .catch(() => null);
+    void taskBranchLoad.current.then(setTaskBranch);
   }, [task, worktree]);
 
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
@@ -339,6 +345,7 @@ export function Composer({
     if (!current || busy) return;
     setBusy(true);
     try {
+      const named = task && !worktree ? await taskBranchLoad.current : null;
       const s = await rpc<Session>(current.host, M.sessionCreate, {
         project_id: current.project.id,
         prompt: prompt.trim() || null,
@@ -351,7 +358,7 @@ export function Composer({
         mode: choice.agent === "claude" ? mode : null,
         from: from && !from.existing ? from.ref : null,
         existing_branch: !!from?.existing,
-        branch: from?.existing ? from.ref : !worktree && task && taskBranch ? taskBranch : null,
+        branch: from?.existing ? from.ref : named,
         pr: pr?.number ?? null,
         add_dirs: choice.agent === "none" ? [] : addDirs,
         workspace_id: workspaceFor(current.host),
@@ -400,10 +407,16 @@ export function Composer({
             items={projectItems}
             width={300}
             trigger={(open) => (
-              <button className="flex items-center gap-2 rounded-md px-1 py-1 ui-text-14 font-medium hover:bg-hover" onClick={open}>
+              // An existing worktree belongs to its project: the picker stays put.
+              <button
+                className="flex items-center gap-2 rounded-md px-1 py-1 ui-text-14 font-medium hover:bg-hover disabled:hover:bg-transparent"
+                onClick={open}
+                disabled={!!worktree}
+                title={worktree ? "This worktree belongs to this project" : undefined}
+              >
                 {current.project.name}
                 {current.host !== "local" && <span className="font-mono ui-text-12 text-faint">@{current.host}</span>}
-                <ChevronDown size={14} className="text-muted" />
+                {!worktree && <ChevronDown size={14} className="text-muted" />}
               </button>
             )}
           />

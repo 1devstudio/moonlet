@@ -74,11 +74,14 @@ pub struct Connection {
     pub account: String,
     /// `api_key`, `token` or `oauth`.
     pub auth: String,
+    /// Jira's sign-in email, so Reconnect asks only for a new token (X44).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
     #[serde(default)]
     pub sources: Vec<Source>,
     /// Tracker state name → column, where the user changed the default (X44).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub states: std::collections::BTreeMap<String, crate::states::Column>,
+    pub states: crate::states::Mapping,
 }
 
 /// A team, project or list the user shows tasks from, with where its
@@ -279,6 +282,7 @@ project = "p1"
 workspace = "local/acme"
 "#;
         let c = parse(text).unwrap();
+        assert_eq!(c.connections[0].email, None);
         assert_eq!(
             c.connections,
             [Connection {
@@ -287,6 +291,7 @@ workspace = "local/acme"
                 site: "acme.atlassian.net".into(),
                 account: "Sam Rivera".into(),
                 auth: "token".into(),
+                email: None,
                 sources: vec![Source {
                     key: "OPS".into(),
                     name: "Operations".into(),
@@ -304,6 +309,22 @@ workspace = "local/acme"
         );
         // Each tracker has its own branch names and rules.
         assert_eq!(c.jira.rules.session_starts, Rule::Auto);
+    }
+
+    #[test]
+    fn a_jira_connection_keeps_its_email_for_reconnecting() {
+        let text = r#"
+[[connections]]
+id = "jira:acme.atlassian.net"
+kind = "jira"
+site = "acme.atlassian.net"
+account = "Sam Rivera"
+auth = "token"
+email = "sam@acme.example"
+"#;
+        let c = parse(text).unwrap();
+        assert_eq!(c.connections[0].email.as_deref(), Some("sam@acme.example"));
+        assert!(to_toml(&c).contains("email = \"sam@acme.example\""));
     }
 
     #[test]

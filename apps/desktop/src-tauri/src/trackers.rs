@@ -99,16 +99,17 @@ impl Session {
     async fn load(id: &str) -> Res<Self> {
         let config = crate::read_trackers(&crate::trackers_path()).map_err(fail)?;
         let conn = config.connections.into_iter().find(|c| c.id == id).ok_or_else(|| fail(format!("no connection {id}")))?;
-        let again = || TrackerError { auth: true, message: format!("Sign in to {} again", conn.site) };
-        let secret = secrets::store().get(id).ok_or_else(again)?;
+        let again = sign_in_again;
+        let missing = || TrackerError { auth: true, message: format!("No saved token for {}; reconnect it", conn.site) };
+        let secret = secrets::store().get(id).ok_or_else(missing)?;
         if conn.auth != "oauth" {
             return Ok(Self { conn, token: secret });
         }
         // OAuth: the access token, refreshed shortly before it expires.
-        let mut tokens: moonlet_trackers::oauth::Tokens = serde_json::from_str(&secret).map_err(|_| again())?;
-        let now = moonlet_core::paths::now_ms();
-        if now + 60_000 >= tokens.expires_ms {
-            let (Some(client_id), Some(refresh)) = (LINEAR_CLIENT_ID, tokens.refresh.clone()) else { return Err(again()) };
+        let read = || serde_json::from_str::<moonlet_trackers::oauth::Tokens>(&secrets::store().get(id).ok_or_else(again)?).map_err(|_| again());
+        let save = |t: &moonlet_trackers::oauth::Tokens| secrets::store().set(id, &serde_json::to_string(t).map_err(fail)?).map_err(fail);
+        let refresh = |refresh: String| async move {
+            let Some(client_id) = LINEAR_CLIENT_ID else { return Err(again()) };
             let (status, body) = send(
                 client()?
                     .post(linear::TOKEN)
@@ -119,14 +120,19 @@ impl Session {
             if !(200..300).contains(&status) {
                 return Err(again());
             }
-            tokens = moonlet_trackers::oauth::parse_tokens(&body, now)?;
-            secrets::store().set(id, &serde_json::to_string(&tokens).map_err(fail)?).map_err(fail)?;
-        }
-        Ok(Self { conn, token: tokens.access })
+            Ok(moonlet_trackers::oauth::parse_tokens(&body, moonlet_core::paths::now_ms())?)
+        };
+        let token = fresh_access(read, save, moonlet_core::paths::now_ms, refresh).await?;
+        Ok(Self { conn, token })
     }
 
     async fn linear(&self, query: &str, variables: Value) -> Res<Vec<u8>> {
         linear_request(&self.token, &self.conn.auth, query, variables).await
+    }
+
+    /// A Linear parse result, with a rejected OAuth sign-in worded as such.
+    fn linear_ok<T>(&self, r: Result<T, ApiError>) -> Res<T> {
+        r.map_err(|e| linear_error(e, &self.conn.auth))
     }
 
     fn jira(&self, method: reqwest::Method, path: &str) -> Res<reqwest::RequestBuilder> {
@@ -162,6 +168,43 @@ impl Session {
     }
 }
 
+/// A Linear error as the user reads it: a rejected OAuth sign-in asks to sign in again (X44).
+fn linear_error(e: ApiError, auth: &str) -> TrackerError {
+    if e.auth && auth == "oauth" {
+        sign_in_again()
+    } else {
+        e.into()
+    }
+}
+
+/// An OAuth access token that is good for at least a minute. Each refresh
+/// spends the refresh token, so refreshes run one at a time, and a command
+/// that waited uses the tokens the first one saved (X44).
+async fn fresh_access<F, Fut>(
+    read: impl Fn() -> Res<moonlet_trackers::oauth::Tokens>,
+    save: impl Fn(&moonlet_trackers::oauth::Tokens) -> Res<()>,
+    now: impl Fn() -> u64,
+    refresh: F,
+) -> Res<String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Res<moonlet_trackers::oauth::Tokens>>,
+{
+    let tokens = read()?;
+    if !tokens.needs_refresh(now()) {
+        return Ok(tokens.access);
+    }
+    let _one = REFRESHING.lock().await;
+    let tokens = read()?;
+    if !tokens.needs_refresh(now()) {
+        return Ok(tokens.access);
+    }
+    let token = tokens.refresh.ok_or_else(sign_in_again)?;
+    let fresh = refresh(token).await?;
+    save(&fresh)?;
+    Ok(fresh.access)
+}
+
 async fn linear_request(token: &str, auth: &str, query: &str, variables: Value) -> Res<Vec<u8>> {
     // Personal API keys go as they are; OAuth tokens as Bearer.
     let header = if auth == "oauth" { format!("Bearer {token}") } else { token.to_string() };
@@ -173,10 +216,17 @@ async fn linear_request(token: &str, auth: &str, query: &str, variables: Value) 
     )
     .await?;
     if status == 401 {
-        return Err(TrackerError { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here.".into() });
+        return Err(linear_error(ApiError { auth: true, message: linear::REJECTED.into() }, auth));
     }
     Ok(body)
 }
+
+/// What a Linear OAuth connection whose sign-in ran out says (X44).
+fn sign_in_again() -> TrackerError {
+    TrackerError { auth: true, message: "Sign in to Linear again".into() }
+}
+/// One OAuth refresh at a time (see `Session::load`).
+static REFRESHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Linear's OAuth app, when this build has one (X44). Without it the app
 /// signs in with an API key.
@@ -335,7 +385,9 @@ async fn save_connection(kind: TrackerKind, site: String, account: String, secre
     let old = config.connections.iter().find(|c| c.id == id).cloned();
     let (sources, states) = old.map(|c| (c.sources, c.states)).unwrap_or_default();
     config.connections.retain(|c| c.id != id);
-    let connection = Connection { id: id.clone(), kind, site, account, auth: auth.into(), sources, states };
+    // Jira's secret is `email:token`; the email is not secret and fills Reconnect.
+    let email = (kind == TrackerKind::Jira).then(|| secret.split_once(':').map(|(e, _)| e.to_string())).flatten();
+    let connection = Connection { id: id.clone(), kind, site, account, auth: auth.into(), email, sources, states };
     config.connections.push(connection.clone());
     crate::write_trackers(&path, &config).map_err(fail)?;
     let sources = tracker_sources(id).await?;
@@ -349,6 +401,7 @@ fn placeholder(kind: TrackerKind, site: &str) -> Connection {
         site: site.into(),
         account: String::new(),
         auth: "token".into(),
+        email: None,
         sources: vec![],
         states: Default::default(),
     }
@@ -369,7 +422,7 @@ pub fn tracker_disconnect(id: String) -> Res<()> {
 pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
     let s = Session::load(&id).await?;
     Ok(match s.conn.kind {
-        TrackerKind::Linear => pairs(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?)?),
+        TrackerKind::Linear => pairs(s.linear_ok(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?))?),
         TrackerKind::Jira => pairs(jira::parse_projects(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/project/search?maxResults=100")?).await?)?),
         TrackerKind::Clickup => {
             let team = safe_id(&s.conn.site)?;
@@ -388,6 +441,38 @@ pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
     })
 }
 
+/// One task of a connection by its key, wherever it is (X46: a key or URL
+/// pasted into the link dialog); `None` when the tracker has no such task.
+#[tauri::command]
+pub async fn tracker_task(id: String, key: String) -> Res<Option<TrackerTask>> {
+    let s = Session::load(&id).await?;
+    safe_id(&key)?;
+    match s.conn.kind {
+        TrackerKind::Linear => {
+            let raw = s.linear(&linear::issue_query(), json!({ "id": key })).await?;
+            s.linear_ok(linear::parse_issue(&raw, &s.conn.id))
+        }
+        TrackerKind::Jira => {
+            let (status, body) = send(s.jira(reqwest::Method::GET, &jira::issue_path(&key))?).await?;
+            match status {
+                404 => Ok(None),
+                200..300 => Ok(Some(jira::parse_issue(&body, &s.conn.id, &s.conn.site)?)),
+                _ => Err(jira::parse_error(status, &body, &s.conn.site).into()),
+            }
+        }
+        TrackerKind::Clickup => {
+            let team = safe_id(&s.conn.site)?;
+            let (status, body) = send(s.clickup(reqwest::Method::GET, &clickup::task_path(&key, team))?).await?;
+            match status {
+                404 => Ok(None),
+                200..300 => Ok(Some(clickup::parse_task(&body, &s.conn.id)?)),
+                _ => Err(clickup::parse_error(status, &body).into()),
+            }
+        }
+        TrackerKind::Github => Ok(None),
+    }
+}
+
 /// The tasks of a connection's sources: the user's, or all open ones.
 #[tauri::command]
 pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
@@ -404,7 +489,7 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
             // At most 500 issues, as for Jira.
             for _ in 0..5 {
                 let raw = s.linear(&query, json!({ "teams": keys, "after": after })).await?;
-                out.extend(linear::parse_issues(&raw, &s.conn.id)?);
+                out.extend(s.linear_ok(linear::parse_issues(&raw, &s.conn.id))?);
                 after = linear::next_page(&raw);
                 if after.is_none() {
                     break;
@@ -448,7 +533,7 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
                     }
                 }
                 let [open, recent] = passes;
-                out.extend(clickup::merge_passes(open, recent));
+                out.extend(clickup::merge_passes(open, recent, &s.conn.states));
             }
             Ok(out)
         }
@@ -475,7 +560,7 @@ pub async fn tracker_states(id: String, source: String) -> Res<Vec<StateChoice>>
     };
     Ok(match s.conn.kind {
         TrackerKind::Linear => {
-            let states = linear::parse_states(&s.linear(linear::STATES, json!({ "team": source })).await?)?;
+            let states = s.linear_ok(linear::parse_states(&s.linear(linear::STATES, json!({ "team": source })).await?))?;
             named(TrackerKind::Linear, states.into_iter().map(|x| (x.name, x.kind)).collect())
         }
         TrackerKind::Jira => {
@@ -498,10 +583,6 @@ pub struct MoveRequest {
     /// Its team, project or list (`TrackerRef.source`).
     pub source: String,
     pub column: Option<Column>,
-    /// The state to move to, from the user's state mapping; else the first
-    /// state of `column`.
-    #[serde(default)]
-    pub state: Option<String>,
     #[serde(default)]
     pub assign_me: bool,
     #[serde(default)]
@@ -519,29 +600,27 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
         TrackerKind::Linear => {
             let mut input = json!({});
             if let Some(column) = req.column {
-                let states = linear::parse_states(&s.linear(linear::STATES, json!({ "team": req.source })).await?)?;
-                let named = req.state.as_deref().and_then(|n| states.iter().find(|s| s.name == n));
-                let state = named.or_else(|| linear::state_for(&states, column)).ok_or_else(|| fail(format!("{} has no state for that column", req.source)))?;
+                let states = s.linear_ok(linear::parse_states(&s.linear(linear::STATES, json!({ "team": req.source })).await?))?;
+                let state = linear::state_for(&states, column, &s.conn.states).ok_or_else(|| fail(format!("{} has no state for that column", req.source)))?;
                 input["stateId"] = json!(state.id);
             }
             if req.assign_me {
                 let raw = s.linear(linear::VIEWER, json!({})).await?;
-                input["assigneeId"] = json!(linear::parse_viewer_id(&raw)?);
+                input["assigneeId"] = json!(s.linear_ok(linear::parse_viewer_id(&raw))?);
             }
             if input.as_object().is_some_and(|o| !o.is_empty()) {
-                linear::parse_success(&s.linear(linear::ISSUE_UPDATE, json!({ "id": req.task, "input": input })).await?, "issueUpdate")?;
+                s.linear_ok(linear::parse_success(&s.linear(linear::ISSUE_UPDATE, json!({ "id": req.task, "input": input })).await?, "issueUpdate"))?;
             }
             if let Some(text) = req.comment {
                 let raw = s.linear(linear::COMMENT, json!({ "input": { "issueId": req.task, "body": text } })).await?;
-                linear::parse_success(&raw, "commentCreate")?;
+                s.linear_ok(linear::parse_success(&raw, "commentCreate"))?;
             }
         }
         TrackerKind::Jira => {
             if let Some(column) = req.column {
                 let path = format!("/rest/api/3/issue/{}/transitions", req.task);
                 let ts = jira::parse_transitions(&s.jira_send(s.jira(reqwest::Method::GET, &path)?).await?)?;
-                let named = req.state.as_deref().and_then(|n| ts.iter().find(|t| t.to == n));
-                let t = named.or_else(|| jira::transition_to(&ts, column)).ok_or_else(|| fail("No Jira transition leads to that column from here"))?;
+                let t = jira::transition_to(&ts, column, &s.conn.states).ok_or_else(|| fail("No Jira transition leads to that column from here"))?;
                 s.jira_send(s.jira(reqwest::Method::POST, &path)?.json(&jira::transition_body(&t.id))).await?;
             }
             if req.assign_me {
@@ -558,8 +637,7 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
             let mut body = json!({});
             if let Some(column) = req.column {
                 let list = clickup::parse_statuses(&s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/list/{}", req.source))?).await?)?;
-                let named = req.state.as_deref().and_then(|n| list.iter().find(|s| s.name == n));
-                let status = named.or_else(|| clickup::status_for(&list, column)).ok_or_else(|| fail("this list has no status for that column"))?;
+                let status = clickup::status_for(&list, column, &s.conn.states).ok_or_else(|| fail("this list has no status for that column"))?;
                 body["status"] = json!(status.name);
             }
             if req.assign_me {
@@ -583,6 +661,45 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moonlet_trackers::oauth::Tokens;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn two_commands_at_once_spend_the_refresh_token_once() {
+        // Linear issues a new refresh token on each refresh and refuses the old one.
+        let saved = Arc::new(Mutex::new(Tokens { access: "a1".into(), refresh: Some("r1".into()), expires_ms: 0 }));
+        let load = || {
+            let saved = saved.clone();
+            async move {
+                fresh_access(
+                    || Ok(saved.lock().unwrap().clone()),
+                    |t: &Tokens| Ok(*saved.lock().unwrap() = t.clone()),
+                    || 1_000,
+                    |refresh: String| {
+                        let saved = saved.clone();
+                        async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                            if saved.lock().unwrap().refresh.as_deref() != Some(refresh.as_str()) {
+                                return Err(fail("invalid_grant"));
+                            }
+                            Ok(Tokens { access: "a2".into(), refresh: Some("r2".into()), expires_ms: u64::MAX })
+                        }
+                    },
+                )
+                .await
+            }
+        };
+        let (one, two) = tokio::join!(load(), load());
+        assert_eq!((one.unwrap(), two.unwrap()), ("a2".to_string(), "a2".to_string()));
+    }
+
+    #[test]
+    fn a_rejected_linear_token_reads_as_its_kind_of_sign_in() {
+        let rejected = || ApiError { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here.".into() };
+        assert_eq!(linear_error(rejected(), "oauth").message, "Sign in to Linear again");
+        assert_eq!(linear_error(rejected(), "api_key").message, "Linear no longer accepts this token. Create a new one and paste it here.");
+        assert_eq!(linear_error(ApiError::new("Rate limit exceeded"), "oauth").message, "Rate limit exceeded");
+    }
 
     #[tokio::test]
     async fn a_silent_connection_does_not_hold_up_the_callback() {

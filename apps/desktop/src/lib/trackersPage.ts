@@ -50,7 +50,7 @@ export function trackerRules(kind: Connection["kind"]): { id: keyof Rules; when:
   return [
     { id: "session_starts", when: `A session starts from ${kind === "clickup" ? "a task" : "an issue"}`, then: "move it to In Progress and assign it to me", hint: `Only from Todo or a state not shown; an ${issue} further along is left alone.` },
     { id: "pr_opens", when: "A pull request opens", then: `move the ${issue} to In Review`, hint: "When a session's pull request is open; Suggest shows a one-click fix instead." },
-    { id: "all_merged", when: "Every session's PR is merged", then: `move the ${issue} to Done`, hint: "Off by default in teams where QA closes issues." },
+    { id: "all_merged", when: "Every session's PR is merged", then: `move the ${issue} to Done`, hint: "Set it to Off in teams where QA closes issues." },
     { id: "pr_comment", when: "A pull request opens", then: `comment on the ${issue} with its link`, hint: "Once per pull request." },
     { id: "issue_done", when: `The ${issue} moves to Done`, then: "archive its sessions and remove their worktrees", hint: "Always asks first.", auto: false },
   ];

@@ -112,6 +112,8 @@ pub const GH_PRS: &str = "gh.prs";
 /// `{path, mine}` → the repository's 100 most recently updated issues, open
 /// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
 pub const GH_TASKS: &str = "gh.tasks";
+/// One issue of any repository by its number (X46: a pasted key or URL).
+pub const GH_TASK: &str = "gh.task";
 /// `{path, number, assign_me?, close?, reopen?}`: assigns a GitHub issue to
 /// the user, closes it as completed or reopens it (X46 Keep in step).
 pub const GH_TASK_UPDATE: &str = "gh.task_update";
@@ -652,6 +654,15 @@ pub struct GhTasks {
     pub path: String,
     #[serde(default)]
     pub mine: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhTaskGet {
+    /// Any directory inside a repository, for `gh`'s host and sign-in.
+    pub path: String,
+    /// `owner/name`.
+    pub repo: String,
+    pub number: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

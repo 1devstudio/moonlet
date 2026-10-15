@@ -2,20 +2,19 @@
 // panel's Task tab and the link dialog.
 
 import { ChevronLeft, ChevronRight, ExternalLink, GitBranch, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { hostsApi } from "../../lib/daemon";
 import type { Session } from "../../lib/protocol";
 import { selectSession, useStore } from "../../lib/store";
-import { acceptanceCriteria, findPasted, linkChoices } from "../../lib/taskLinking";
-import type { Task } from "../../lib/tasks";
+import { acceptanceCriteria, enterChoice, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
+import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
-import { ensureTasks, linkTask, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
+import { ensureTasks, linkTask, lookUpPasted, mappedTasks, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
-import { Button, cx, Dialog, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
+import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
 
 const COLUMN_LABEL: Record<Card["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };
-const trackerName = (t: Task) => ({ github: "GitHub", linear: "Linear", jira: "Jira", clickup: "ClickUp" })[t.connection.split(":")[0]] ?? "tracker";
 
 /** The card of the task a session works on, loading its workspace's tasks when needed. */
 export function useSessionTask(host: string, ws: Session): Card | null {
@@ -35,8 +34,8 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
   const go = (d: number) => selectSession(host, card.rows[(at + d + card.rows.length) % card.rows.length].session.id);
   return (
     <div role="region" aria-label="Task" className="flex h-[34px] shrink-0 items-center gap-2 border-b border-border bg-panel px-4 ui-text-12.5">
-      <button className="flex items-center gap-1.5 text-muted hover:text-fg" onClick={() => openInTasksMode(card.task)}>
-        Tasks <Kbd>⌃⌘T</Kbd>
+      <button className="flex items-center gap-1.5 text-muted hover:text-fg" title="Show this task in Tasks mode" onClick={() => openInTasksMode(card.task)}>
+        Tasks
       </button>
       <span className="text-faint">/</span>
       <TaskGlyph column={card.column} size={13} />
@@ -55,7 +54,7 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
         </div>
       )}
       <a href={card.task.url} target="_blank" rel="noreferrer" className="ml-auto flex shrink-0 items-center gap-1 text-muted hover:text-fg">
-        {trackerName(card.task)} <ExternalLink size={12} />
+        {trackerName(card.task.connection)} <ExternalLink size={12} />
       </a>
     </div>
   );
@@ -142,23 +141,43 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   const [query, setQuery] = useState("");
   const [pasted, setPasted] = useState<Task | null>(null);
   const close = () => useStore.setState({ dialog: null });
-  const tasks = data?.tasks ?? [];
+  const config = useTasks((t) => t.config);
+  const tasks = useMemo(() => mappedTasks(data?.tasks ?? []), [data, config]); // eslint-disable-line react-hooks/exhaustive-deps
   const originRepo = ws ? (data?.repos[ws.project_id] ?? null) : null;
+  const boardRef = useMemo(() => (ws?.workspace_id ? { host, id: ws.workspace_id } : null), [host, ws?.workspace_id]);
+  const { board } = useWorkspaceBoard(boardRef);
+  const sessionsOf = useMemo(() => {
+    const n = new Map(Object.values(board ?? {}).flat().map((c) => [`${c.task.connection} ${c.task.key}`, c.rows.length]));
+    return (t: Task) => n.get(`${t.connection} ${t.key}`) ?? 0;
+  }, [board]);
   useEffect(() => {
     if (ws?.workspace_id) ensureTasks(host, ws.workspace_id);
   }, [host, ws?.workspace_id]);
+  // The latest tasks, read when a lookup runs, so a background sync does not
+  // throw away what was pasted.
+  const latest = useRef(tasks);
+  latest.current = tasks;
+  const [lookup] = useState(() => pasteLookup());
+  const linking = useRef(false);
+  const latestChoices = useRef<ReturnType<typeof linkChoices>>({ suggested: [], recent: [] });
+  const loaded = !!data;
   useEffect(() => {
-    let live = true;
-    void hostsApi.parsePasted(query).then(
-      (p) => live && setPasted(p ? findPasted(p, tasks, originRepo) : null),
-      () => live && setPasted(null),
-    );
-    return () => {
-      live = false;
-    };
-  }, [query, tasks, originRepo]);
+    // What was pasted before no longer counts, so ↵ cannot link it.
+    setPasted(null);
+    const l = lookup;
+    void l
+      .start(async () => {
+        const p = await hostsApi.parsePasted(query);
+        // A task outside the loaded ones is asked of its tracker.
+        return p ? (findPasted(p, latest.current, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null;
+      })
+      .then((found) => found !== undefined && setPasted(found));
+    return () => l.cancel();
+    // Once the workspace's tasks and repository arrive, `#12` is looked up again.
+  }, [query, host, ws?.path, originRepo, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ws) return null;
-  const choices = linkChoices(ws, tasks, pasted ? "" : query);
+  const choices = linkChoices(ws, tasks, pasted ? "" : query, sessionsOf);
+  latestChoices.current = choices;
   const pick = (t: Task) => {
     close();
     void linkTask(host, ws.id, t);
@@ -175,7 +194,24 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
       <label className="flex items-center gap-2">
         <Search size={14} className="text-muted" />
         <span className="sr-only">Search tasks</span>
-        <input autoFocus className={inputCls} placeholder="Search tasks, or paste a key or URL" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input
+          autoFocus
+          className={inputCls}
+          placeholder="Search tasks, or paste a key or URL"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || linking.current) return;
+            e.preventDefault();
+            // A paste still being looked up decides what ↵ links, from the
+            // lists as they are when it ends; a cancelled lookup links nothing.
+            linking.current = true;
+            void enterChoice(lookup, () => latestChoices.current).then((first) => {
+              if (first) pick(first);
+              else linking.current = false;
+            });
+          }}
+        />
       </label>
       <div className="mt-3 flex max-h-[360px] flex-col gap-3 overflow-y-auto">
         {pasted && <section aria-label="Pasted">{row(pasted, "Pasted")}</section>}
@@ -193,7 +229,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
         )}
         {!pasted && !choices.suggested.length && !choices.recent.length && <p className="px-2 ui-text-12.5 text-muted">No tasks match.</p>}
       </div>
-      <p className="mt-3 ui-text-11.5 text-faint">Links live in moonlet. The issue gets a link back to the PR when one opens.</p>
+      <p className="mt-3 ui-text-11.5 text-faint">Links live in moonlet; the tracker hears of a PR only through Keep in step.</p>
     </Dialog>
   );
 }
@@ -203,9 +239,9 @@ function KeepInStep({ task }: { task: Task }) {
   const on = useTasks((t) => !t.paused[`${task.connection} ${task.key}`]);
   return (
     <label className="flex items-start gap-2 rounded-lg border border-border px-3 py-2 ui-text-12.5">
-      <input type="checkbox" role="switch" aria-label={`Keep ${trackerName(task)} in step`} checked={on} onChange={(e) => setKeepInStep(task, e.target.checked)} className="mt-0.5" />
+      <input type="checkbox" role="switch" aria-label={`Keep ${trackerName(task.connection)} in step`} checked={on} onChange={(e) => setKeepInStep(task, e.target.checked)} className="mt-0.5" />
       <span>
-        <span className="text-fg">Keep {trackerName(task)} in step</span>
+        <span className="text-fg">Keep {trackerName(task.connection)} in step</span>
         <span className="block text-muted">
           {on ? "Starting sessions, opening and merging their PRs move this issue as Settings › Task trackers says." : "moonlet leaves this issue alone, and shows no out-of-sync chips for it."}
         </span>

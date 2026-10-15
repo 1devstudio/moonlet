@@ -131,11 +131,21 @@ describe("out of sync (X45)", () => {
     expect(only(gh(7), [session("Fix", "7-fix", { pr: pr(70, "merged") })]).drift?.fix).toBe("Move to Done");
   });
 
-  it("work started: a Todo task has a session, unless starting a session moves it automatically", () => {
+  it("work started: a Todo task has a session, unless the rule is Off", () => {
     const running = [session("Force-push guard", "moon-153-guard", { state: "working" })];
     expect(only(task("MOON-153", "todo"), running, "suggest").drift).toEqual({ kind: "started", text: "Session running", fix: "In Progress" });
-    expect(only(task("MOON-153", "todo"), running, "off").drift?.kind).toBe("started");
-    expect(only(task("MOON-153", "todo"), running, "auto").drift).toBe(null);
+    // A session linked by its branch was not started from the task, so the
+    // Automatically rule never moved it.
+    expect(only(task("MOON-153", "todo"), running, "auto").drift?.kind).toBe("started");
+    expect(only(task("MOON-153", "todo"), running, "off").drift).toBe(null);
+    const idle = [session("Force-push guard", "moon-153-guard")];
+    expect(only(task("MOON-153", "todo"), idle, "suggest").drift?.text).toBe("Session open");
+  });
+
+  it("a draft PR is not an open one", () => {
+    const draft = [session("Hosts", "moon-142-hosts", { pr: { ...pr(131, "open"), draft: true } })];
+    expect(only(task("MOON-142", "in_progress"), draft).drift).toBe(null);
+    expect(only(gh(7), [session("Fix", "7-fix", { pr: { ...pr(70, "open"), draft: true } })]).column).toBe("in_progress");
   });
 
   it("PR open: a tracker issue not yet In Review has a session with an open PR", () => {
@@ -165,6 +175,8 @@ describe("sessions without a task (X45 list)", () => {
       session("Notion sync retries", "cdk-38-notion-retries"),
       session("Old", "old", { archived: true }),
       session("Unlinked by hand", "cdk-38-x", { task_unlinked: true }),
+      // Linked by hand to a task outside the loaded ones: it has a task.
+      session("Rotate keys", "rotate", { task: { connection: "jira:ops.atlassian.net", key: "OPS-12", url: "" } }),
     ];
     expect(sessionsWithoutTask(sessions, tasks).map((u) => [u.session.name, u.hint])).toEqual([
       ["Changelog themes", "Looks like CDK-41 Changelog themes"],

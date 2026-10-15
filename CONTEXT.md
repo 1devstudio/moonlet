@@ -22,6 +22,6 @@ These terms are used the same way in the UI, the code, the protocol and the docs
 | **Project identity** | What makes two folders on different hosts the same project: the repository's origin and its first commit, never its path. | `ProjectIdentity` |
 | **Task** | An issue in a task tracker (a Linear or Jira issue, a ClickUp task, a GitHub issue), shown in Tasks mode with the sessions working on it. A session works on at most one task; a task can have several sessions. | `Task` |
 | **Tracker** | An issue tracker product moonlet connects to: Linear, Jira Cloud, ClickUp or GitHub Issues. | `TrackerKind` |
-| **Connection** | One signed-in account of a tracker on one site, such as Jira on `acme.atlassian.net`. A tracker can have several connections. | `TrackerConnection` |
-| **Source** | One team, project, list or repository of a connection that a workspace shows tasks from, with the repository its sessions start in. | `TaskSource` |
-| **Out of sync** | A task whose tracker state disagrees with its work, such as an issue still In Review when every session's PR is merged. Shown with a one-click fix. | `drift` |
+| **Connection** | One signed-in account of Linear, Jira Cloud or ClickUp on one site (a Linear organisation, a Jira site such as `acme.atlassian.net`, a ClickUp workspace). Its id is its tracker and site, such as `jira:acme.atlassian.net`. A tracker can have several connections. GitHub Issues has none of its own: it uses `gh`'s login, with the id `github:github.com`. | `Connection` |
+| **Source** | One Linear team, Jira project, ClickUp list or GitHub repository that a workspace shows tasks from, with the project its sessions start in. Known by its connection and its key (team key, project key or list id). | `Source` |
+| **Out of sync** | A task whose tracker state disagrees with its work, such as an issue still In Review when every session's PR is merged. Shown as an Out of sync chip with a one-click fix. | `Drift` |
