@@ -89,6 +89,19 @@ pub fn tasks_path(
     p
 }
 
+/// One list's tasks from its two passes (see [`tasks_path`]): the open pass
+/// minus done ones (any age, since ClickUp's `include_closed` only covers
+/// "closed"-type statuses), then the recent pass's tasks not already in.
+pub fn merge_passes(open: Vec<TrackerTask>, recent: Vec<TrackerTask>) -> Vec<TrackerTask> {
+    let mut out: Vec<TrackerTask> = open
+        .into_iter()
+        .filter(|t| !matches!(t.column, Column::Done | Column::Hidden))
+        .collect();
+    let mut seen: std::collections::HashSet<String> = out.iter().map(|t| t.key.clone()).collect();
+    out.extend(recent.into_iter().filter(|t| seen.insert(t.key.clone())));
+    out
+}
+
 /// Whether another page of tasks follows.
 pub fn more_pages(raw: &[u8]) -> bool {
     parse(raw)
@@ -281,6 +294,31 @@ mod tests {
             Some("complete")
         );
         assert_eq!(status_for(&statuses, Column::InReview), None);
+    }
+
+    #[test]
+    fn the_two_passes_make_open_tasks_and_recent_closed_ones() {
+        let all = parse_tasks(&fixture("clickup-tasks.json"), "clickup:9012345").unwrap();
+        let with = |key: &str, column: Column| TrackerTask {
+            key: key.into(),
+            column,
+            ..all[0].clone()
+        };
+        // Pass one: open tasks of any age; a "done"-type status there is old.
+        let open = vec![
+            with("CU-a", Column::InProgress),
+            with("CU-old", Column::Done),
+        ];
+        // Pass two: tasks updated lately, closed or not.
+        let recent = vec![
+            with("CU-a", Column::InProgress),
+            with("CU-new", Column::Done),
+        ];
+        let keys: Vec<String> = merge_passes(open, recent)
+            .into_iter()
+            .map(|t| t.key)
+            .collect();
+        assert_eq!(keys, ["CU-a", "CU-new"]);
     }
 
     #[test]
