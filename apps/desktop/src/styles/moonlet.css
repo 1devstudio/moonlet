@@ -420,6 +420,12 @@ body:not(.kbd-nav) button:focus {
   background-position: right 8px center;
 }
 
+/* One height for a dialog's menus and the buttons beside them, growing
+   with the UI text size. Unlayered, so it wins over a Button's own h-*. */
+.field-height {
+  height: calc(32px * var(--ui-scale, 1));
+}
+
 /* Agent messages (X6). */
 .chat-md {
   font-size: calc(14px * var(--ui-scale, 1));

@@ -22,7 +22,7 @@ const TOKEN_PAGE: Record<Connection["kind"], string> = {
 };
 
 /** The Sources and States dialogs' menus, as tall as a text field (X44). */
-const selectCls = `${inputCls} menu-select`;
+const selectCls = `${inputCls} menu-select field-height`;
 
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
@@ -85,7 +85,7 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
           );
         })}
       </div>
-      <Button size="sm" className="self-start" disabled={!canAdd} onClick={() => setRows((rs) => [...rs, blankSource()])}>
+      <Button size="sm" className="field-height self-start" disabled={!canAdd} onClick={() => setRows((rs) => [...rs, blankSource()])}>
         <Plus size={12} /> Add source
       </Button>
       <div className="mt-2 flex justify-end gap-2">
