@@ -240,6 +240,29 @@ describe("a linked task changed outside moonlet (X44 Sync)", () => {
   });
 });
 
+describe("outside changes with a state mapping (X44)", () => {
+  it("does not announce a move moonlet made onto a state the user mapped to that column", async () => {
+    shown.length = 0;
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const lt = (state: string, column: string) => ({ connection: "linear:acme", key: "MOON-1", title: "Hosts", url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "i1", state, source: "MOON" } });
+    useTasks.setState({
+      config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "Moonlet", project: "", workspace: "local/personal" }], states: { QA: "in_progress", "In Progress": "in_review" } }] },
+    });
+    useStore.setState({ sessions: { local: [{ id: "s1", project_id: "web", name: "Hosts", branch: "hosts", base: "main", path: "/w/hosts", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: { connection: "linear:acme", key: "MOON-1", url: "" } }] } });
+    answers["tracker_tasks linear:acme"] = () => [lt("Todo", "todo")];
+    await refreshTasks("local", "personal", 1_000);
+    const t = useTasks.getState().data["local/personal"].tasks[0];
+    // moonlet moves it to In Progress, which in this team is the QA state (by default In Review).
+    await moveTask("local", "personal", t, "in_progress", 1_500);
+    answers["tracker_tasks linear:acme"] = () => [lt("QA", "in_review")];
+    await refreshTasks("local", "personal", 2_000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shown).toEqual([]);
+    useTasks.setState({ config: null });
+  });
+});
+
 describe("tasks from Linear, Jira and ClickUp (X44)", () => {
   const linearTask = (key: string, source: string) => ({
     connection: "linear:acme",

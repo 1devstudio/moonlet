@@ -320,8 +320,10 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     error,
   };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next } }));
-  if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev?.tasks ?? null, next);
-  else forgetSeenMoves(next.tasks);
+  // Compared as the board shows them: with the state mapping as saved now.
+  const mapped = { ...next, tasks: mappedTasks(next.tasks) };
+  if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev ? mappedTasks(prev.tasks) : null, mapped);
+  else forgetSeenMoves(mapped.tasks);
 }
 
 /**
@@ -349,6 +351,11 @@ function forgetSeenMoves(tasks: Task[]) {
     const to = movedByMoonlet.get(id);
     if (to && (to === t.column || (to === "done" && t.column === "hidden"))) movedByMoonlet.delete(id);
   }
+}
+
+/** Tasks in the columns the user's state mapping puts them in (X44). */
+export function mappedTasks(tasks: Task[]): Task[] {
+  return applyStateMapping(tasks, trackersConfig(useTasks.getState()).connections);
 }
 
 /** What the board needs of a workspace's sessions (X45). */
