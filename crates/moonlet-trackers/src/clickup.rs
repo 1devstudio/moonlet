@@ -392,12 +392,14 @@ mod tests {
         let open = vec![
             with("CU-s", Column::Done, "shipped"),
             with("CU-p", Column::InProgress, "parked"),
+            // A status not shown is no Done: kept.
+            with("CU-h", Column::Hidden, "on hold"),
         ];
         let keys: Vec<String> = merge_passes(open, vec![], &mapping)
             .into_iter()
             .map(|t| t.key)
             .collect();
-        assert_eq!(keys, ["CU-s"]);
+        assert_eq!(keys, ["CU-s", "CU-h"]);
     }
 
     #[test]

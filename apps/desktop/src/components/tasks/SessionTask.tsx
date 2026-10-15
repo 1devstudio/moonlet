@@ -157,7 +157,8 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   // throw away what was pasted.
   const latest = useRef(tasks);
   latest.current = tasks;
-  const lookup = useRef(pasteLookup());
+  const lookup = useRef<ReturnType<typeof pasteLookup>>(null as never);
+  lookup.current ??= pasteLookup();
   const linking = useRef(false);
   const loaded = !!data;
   useEffect(() => {

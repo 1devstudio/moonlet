@@ -104,6 +104,22 @@ describe("pasteLookup (X46 link dialog)", () => {
     expect(await l.settled()).toBe(undefined);
   });
 
+  it("ends a lookup already asking its tracker as cancelled when a newer one starts", async () => {
+    const l = pasteLookup(0);
+    const slow = l.start(() => new Promise((r) => setTimeout(() => r(found), 20)));
+    await new Promise((r) => setTimeout(r, 5));
+    void l.start(() => Promise.resolve(null));
+    expect(await slow).toBe(undefined);
+  });
+
+  it("↵ waiting on a lookup follows the one that replaced it", async () => {
+    const l = pasteLookup(0);
+    void l.start(() => new Promise((r) => setTimeout(() => r(null), 20)));
+    const waiting = l.settled();
+    void l.start(() => Promise.resolve(found));
+    expect(await waiting).toBe(found);
+  });
+
   it("gives ↵ the task the current lookup finds", async () => {
     const l = pasteLookup(0);
     void l.start(() => Promise.resolve(found));
