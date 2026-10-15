@@ -31,5 +31,6 @@ export default defineConfig({
   server: { port: 1421, strictPort: true, host: process.env.TAURI_DEV_HOST || false, watch: { ignored: ["**/src-tauri/**"] } },
   envPrefix: ["VITE_", "TAURI_ENV_"],
   build: { target: "safari17", sourcemap: false, chunkSizeWarningLimit: 4000 },
-  test: { environment: "jsdom" },
+  // Node 25+ has its own localStorage, which hides jsdom's: turn it off.
+  test: { environment: "jsdom", execArgv: ["--no-experimental-webstorage"] },
 });
