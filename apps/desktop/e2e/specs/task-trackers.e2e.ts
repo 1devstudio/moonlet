@@ -8,7 +8,7 @@ import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
-import { choose, closeSettings, fill, openSettings, PROJECT, projectId, rpc, sel, trackerPort, world } from "../fixtures";
+import { choose, closeSettings, fill, openSettings, PROJECT, rpc, sel, trackerPort, world } from "../fixtures";
 
 const w = world();
 const fakeGh = join(w.root, "bin", "gh");
@@ -133,7 +133,7 @@ describe("Linear tracker", () => {
     await $('//div[@role="dialog"]//button[normalize-space()="Connect"]').click();
     await expect($(sel.text("Signed in as Ada Lovelace · 2 sources visible"))).toBeDisplayed({ wait: 15_000 });
     // Sources are added row by row: the first row starts empty, a second is added, then removed.
-    await expect($('//div[@role="dialog"]').$(sel.text("Add the Linear teams whose issues Tasks mode shows. For each, pick the workspace that shows it and the moonlet project its sessions start in."))).toBeDisplayed();
+    await expect($('//div[@role="dialog"]').$(sel.text("Add the Linear teams whose issues Tasks mode shows, and the workspace that shows each. Which moonlet projects their sessions start in is under each project's settings."))).toBeDisplayed();
     await choose('//div[@role="dialog"]//select[@aria-label="Source 1"]', "ENG");
     await $('//div[@role="dialog"]//button[normalize-space()="Add source"]').click();
     await choose('//div[@role="dialog"]//select[@aria-label="Source 2"]', "DES");
@@ -142,7 +142,6 @@ describe("Linear tracker", () => {
     const eng = '//div[@role="listitem"][@aria-label="Engineering"]';
     const ws = rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
     await choose(`${eng}//select[@aria-label="Workspace for Engineering"]`, `local/${ws}`);
-    await choose(`${eng}//select[@aria-label="Project for Engineering"]`, projectId(w));
     await $('//div[@role="dialog"]//button[normalize-space()="Save and sync"]').click();
     await expect($(sel.text("Connected as Ada Lovelace · API key · 1 source"))).toBeDisplayed({ wait: 10_000 });
     const toml = readFileSync(join(w.home, "trackers.toml"), "utf8");
@@ -162,6 +161,16 @@ describe("Linear tracker", () => {
       timeout: 10_000,
       timeoutMsg: readFileSync(join(w.home, "trackers.toml"), "utf8"),
     });
+    await closeSettings();
+  });
+
+  it("links the team to the project in Project settings", async () => {
+    await openSettings(PROJECT);
+    await choose('//select[@aria-label="Link a tracker project"]', "linear:acme/ENG");
+    await expect($(sel.text("Linear team Engineering (ENG)"))).toBeDisplayed();
+    await $(sel.settingsButton("Save")).click();
+    const config = () => readFileSync(join(w.repo, ".moonlet", "config.toml"), "utf8");
+    await browser.waitUntil(() => config().includes('trackers = ["linear:acme/ENG"]'), { timeout: 10_000, timeoutMsg: config() });
     await closeSettings();
   });
 
@@ -192,6 +201,10 @@ describe("Linear tracker", () => {
     await $('//section[@aria-label="Todo"]//article[starts-with(@aria-label, "ENG-124")]').$(sel.button("Start")).click();
     await expect($('//label[normalize-space()="Move ENG-124 to In Progress and assign it to me"]/input')).toBeSelected();
     await expect($(sel.text("eng-124-add-dark-mode-to-settings-page"))).toBeDisplayed({ wait: 10_000 });
+    // The project menu puts the project that links ENG first (X44).
+    await $(`//button[normalize-space()=${JSON.stringify(PROJECT)}]`).click();
+    await expect($(sel.text("Linked to ENG-124"))).toBeDisplayed();
+    await browser.keys("Escape");
     await $(sel.button("Create")).click();
     await browser.waitUntil(() => moves.length > 0, { timeout: 15_000, timeoutMsg: "Linear never got the move" });
     expect(moves[0]).toEqual({

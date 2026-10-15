@@ -17,7 +17,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
    - **Linear:** an API key. "Sign in with Linear" (OAuth with PKCE) shows only in a build with Linear's client ID.
    - **Jira Cloud:** site (`acme.atlassian.net`), email and API token, with a "Create one" link to Atlassian's token page.
    - **ClickUp:** a personal API token (`pk_…`), with a "Create one" link to ClickUp's Apps settings.
-4. moonlet checks the sign-in ("Signed in as Sam · 4 sources visible") and lists what the account can see. The user adds a row per source to show (a Jira project, Linear team or ClickUp list, picked from a menu) and picks, for each, the workspace that shows it and the moonlet project its sessions start in.
+4. moonlet checks the sign-in ("Signed in as Sam · 4 sources visible") and lists what the account can see. The user adds a row per source to show (a Jira project, Linear team or ClickUp list, picked from a menu) and picks, for each, the workspace that shows it. Each moonlet project's settings name the tracker projects its sessions start from.
 5. **Save and sync.** The connection's row reads `Connected as Sam · API key · 1 source`.
 6. On the row, **Sources** and **States** change the sources and the state mapping. Below the connections, each connected tracker has its Keep in step rules (X46) and branch name; then come GitHub's rules and branch names, Linking, the workspaces' sources and Sync.
 
@@ -49,8 +49,9 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 
 - [x] A source is one Linear team, Jira project or ClickUp list (the lists of each space), or a GitHub repository. It is known by its connection and its key: the team key, the project key or the list id. (`linear.rs` the_viewer_teams_and_states, `jira.rs` myself_and_projects, `clickup.rs` user_workspaces_spaces_lists_and_statuses)
 - [x] The lists inside each ClickUp space's folders are sources too. (`clickup.rs` the_lists_inside_a_spaces_folders_are_sources)
-- [x] Each Linear, Jira or ClickUp source has a **project** (the moonlet project its sessions start in) and a **workspace** (X32). Whose issues it shows follows Tasks mode's `Assignee: me` filter (X45): on, the account's own as the tracker decides who that is (Jira `currentUser()`, ClickUp the account's user id); off, everyone's open issues too. A `trackers.toml` written with a source's old `all` setting still loads; the setting is dropped. (`trackerSources.test.ts`, `tasksStore.test.ts` Assignee: me decides whose issues are fetched, `task-trackers.e2e.ts` shows everyone's open issues once Assignee: me is off, `config.rs` connections_with_their_sources, `jira.rs` the_search_and_write_bodies, `clickup.rs` requests and user_workspaces_spaces_lists_and_statuses)
-- [x] The Sources dialog says what a source is in the tracker ("Add the Jira projects whose issues Tasks mode shows…") above column headers (`Jira project`, Workspace, moonlet project). It lists one row per source shown, or one empty row when there is none. **Add source** adds an empty row (one at a time). Each row's menu offers the sources no other row shows in the same workspace, so one source can show in several workspaces; a saved source the account no longer sees stays in its own row. Each row has a remove button. **Save and sync** saves the rows with a source picked, once per workspace. (`trackerSources.test.ts` sourceNoun, sourceRows, sourceChoices, sourcesToSave; `task-trackers.e2e.ts` adds and removes a row)
+- [x] Each Linear, Jira or ClickUp source has a **workspace** (X32). Whose issues it shows follows Tasks mode's `Assignee: me` filter (X45): on, the account's own as the tracker decides who that is (Jira `currentUser()`, ClickUp the account's user id); off, everyone's open issues too. A `trackers.toml` written with a source's old `all` or `project` setting still loads; those settings are dropped. (`trackerSources.test.ts`, `tasksStore.test.ts` Assignee: me decides whose issues are fetched, `task-trackers.e2e.ts` shows everyone's open issues once Assignee: me is off, `config.rs` connections_with_their_sources, `jira.rs` the_search_and_write_bodies, `clickup.rs` requests and user_workspaces_spaces_lists_and_statuses)
+- [x] Which moonlet projects a source's sessions start in is set per project, in Project settings › Task trackers (X8): the project lists the tracker projects, teams or lists it handles, picked from the connections' sources, and keeps them in its `.moonlet/config.toml` as `trackers = ["<connection>/<key>"]`. Several projects can link the same source; linking is optional. (`project_config.rs` keeps_the_tracker_projects_it_handles, `projectSettings.test.ts`, `trackerSources.test.ts` projectTrackers, `task-trackers.e2e.ts` links the team to the project in Project settings)
+- [x] The Sources dialog says what a source is in the tracker ("Add the Jira projects whose issues Tasks mode shows…") above column headers (`Jira project`, Workspace). It lists one row per source shown, or one empty row when there is none. **Add source** adds an empty row (one at a time). Each row's menu offers the sources no other row shows in the same workspace, so one source can show in several workspaces; a saved source the account no longer sees stays in its own row. Each row has a remove button. **Save and sync** saves the rows with a source picked, once per workspace. (`trackerSources.test.ts` sourceNoun, sourceRows, sourceChoices, sourcesToSave; `task-trackers.e2e.ts` adds and removes a row)
 - [x] For Linear, the account's own issues are those Linear's `isMe` gives. (`linear.rs` assigned_to_me_is_linears_own_is_me)
 - [x] "Where each workspace gets its tasks" lists each workspace with its sources (`GitHub acme/web · Linear Engineering`). A source whose connection needs attention is outlined red with its reason. (`trackerSources.test.ts` sourceList)
 - [x] A workspace's GitHub sources are its projects whose `origin` is on github.com. They show the issues assigned to the user. (`tasksStore.test.ts` refreshTasks)
@@ -111,7 +112,7 @@ The designs are the "Settings · Task trackers", "Connect Jira" and "Tasks with 
 - **Where each workspace gets its tasks.**
 - **Sync:** Refresh issues and the notification switch.
 
-Dialogs: Connect or Reconnect (sign-in, then sources), Sources (a row per source shown, with its workspace and moonlet project, **Add source** and a remove button per row, then **Save and sync**) and States (each state's column, then **Save**). A failure shows the tracker's message in the dialog or on the row.
+Dialogs: Connect or Reconnect (sign-in, then sources), Sources (a row per source shown, with its workspace, **Add source** and a remove button per row, then **Save and sync**) and States (each state's column, then **Save**). A failure shows the tracker's message in the dialog or on the row.
 
 ## Protocol and RPCs
 
@@ -139,7 +140,7 @@ GitHub goes through the daemon, because `gh` runs on the project's host:
   - `[sync]`: `interval` (seconds, `0` for only when I refresh) and `notify`.
   - `[github]`, `[linear]`, `[jira]`, `[clickup]`: `branch_template` (empty for the default) and `max_length`, and the Keep in step rules under `[<tracker>.rules]`. Rules and branch names are per tracker, not per connection.
   - `[link]`: `branch`, `pr`, `title`.
-  - `[[connections]]`: `id`, `kind`, `site`, `account`, `auth` (`api_key`, `token` or `oauth`), never the token; `[[connections.sources]]` with `key`, `name`, `project` and `workspace`; `[connections.states]` mapping a state name to a column.
+  - `[[connections]]`: `id`, `kind`, `site`, `account`, `auth` (`api_key`, `token` or `oauth`), never the token; `[[connections.sources]]` with `key`, `name` and `workspace`; `[connections.states]` mapping a state name to a column.
 - Tokens: Keychain generic passwords, service `dev.onedevstudio.moonlet.trackers`, account `<connection id>`. A Linear OAuth sign-in is kept as its access token, refresh token and expiry. e2e builds, and builds for other systems, keep tokens in `~/.moonlet/secrets.json`, readable only by the user.
 
 ## Security considerations
@@ -159,7 +160,7 @@ GitHub goes through the daemon, because `gh` runs on the project's host:
 - OAuth for Jira and ClickUp. Both need a client secret, which a desktop app built from a public repository cannot keep. A small token-exchange server may add it later.
 - Rules or branch names per connection or per source.
 - The view each workspace opens Tasks mode on (X45 has no Current cycle view yet).
-- A cache of the last good tasks on disk, and pre-filling a source's project from `.moonlet/config.toml`.
+- A cache of the last good tasks on disk.
 - Jira Server and Data Center, GitHub Enterprise Server.
 - Creating issues and editing fields other than state and assignee.
 - Tasks on the phone app.

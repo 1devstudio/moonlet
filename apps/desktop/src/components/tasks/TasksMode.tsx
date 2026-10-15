@@ -185,7 +185,9 @@ export function startSession(host: string, workspaceId: string, card: Card, work
     dialog: {
       kind: "new-session",
       host,
-      project: start.project ?? undefined,
+      // An adopted worktree stays in its project; otherwise the composer
+      // offers the projects that link the issue's source (X44).
+      project: worktree?.project,
       workspace: workspaceId,
       task: start,
       worktree: worktree?.branch ? { path: worktree.path, branch: worktree.branch } : undefined,

@@ -22,6 +22,8 @@ export interface Form {
   default_agent: string;
   base_branch: string;
   agents: AgentRow[];
+  /** Tracker projects, teams or lists it handles, `<connection>/<key>` (X44). */
+  trackers: string[];
 }
 
 export interface Errors {
@@ -69,6 +71,7 @@ export function toForm(c: ProjectConfig): Form {
     default_agent: c.default_agent ?? "",
     base_branch: c.base_branch ?? "",
     agents: Object.entries(c.agents ?? {}).map(([name, cmd]) => ({ id: newRowId(), name, cmd })),
+    trackers: c.trackers ?? [],
   };
 }
 
@@ -82,6 +85,7 @@ export function fromForm(f: Form): ProjectConfig {
     default_agent: s(f.default_agent),
     base_branch: s(f.base_branch),
     agents: Object.fromEntries(f.agents.map((a) => [a.name.trim(), a.cmd.trim()])),
+    trackers: f.trackers,
   };
 }
 

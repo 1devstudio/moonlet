@@ -84,16 +84,14 @@ pub struct Connection {
     pub states: crate::states::Mapping,
 }
 
-/// A team, project or list the user shows tasks from, with where its
-/// sessions start (X44 Sources).
+/// A team, project or list the user shows tasks from, and the workspace
+/// that shows it (X44 Sources). The projects its sessions start in are in
+/// each project's Project settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     /// The team key, project key or list id.
     pub key: String,
     pub name: String,
-    /// The moonlet project its sessions start in; empty until chosen.
-    #[serde(default)]
-    pub project: String,
     /// `host/workspaceId` of the workspace that shows it; empty until chosen.
     #[serde(default)]
     pub workspace: String,
@@ -277,7 +275,8 @@ key = "OPS"
 name = "Operations"
 project = "p1"
 workspace = "local/acme"
-# Written before Assignee: me took its place (X45); read and dropped.
+# Written before Assignee: me and Project settings took their place
+# (X45, X44); read and dropped.
 all = true
 "#;
         let c = parse(text).unwrap();
@@ -294,7 +293,6 @@ all = true
                 sources: vec![Source {
                     key: "OPS".into(),
                     name: "Operations".into(),
-                    project: "p1".into(),
                     workspace: "local/acme".into(),
                 }],
                 states: Default::default(),
@@ -302,6 +300,7 @@ all = true
         );
         assert_eq!(parse(&to_toml(&c)).unwrap(), c);
         assert!(!to_toml(&c).contains("all ="), "{}", to_toml(&c));
+        assert!(!to_toml(&c).contains("project ="), "{}", to_toml(&c));
         assert_eq!(
             connection_id(crate::TrackerKind::Jira, "ACME.atlassian.net"),
             "jira:acme.atlassian.net"

@@ -88,7 +88,7 @@ Keyboard: Escape cancels (asks first if there are unsaved changes), ⌘↵ saves
 ## Data and config
 
 - File: `<project path>/.moonlet/config.toml`, the main checkout's copy. That is the copy the daemon already reads for every session. A session's worktree has its own checked-out copy, which moonlet does not read. The dialog footer says which file it edits.
-- Keys: `setup`, `run`, `archive`, `default_agent`, `base_branch`, `[agents]`. They are unchanged from X1 and X5, so nothing needs migrating.
+- Keys: `setup`, `run`, `archive`, `default_agent`, `base_branch`, `[agents]`. They are unchanged from X1 and X5, so nothing needs migrating. X44 adds `trackers`, the tracker projects the project's sessions start from (`["jira:acme.atlassian.net/ABC"]`), edited under **Task trackers**.
 - Writing uses `toml_edit` (already a dependency of `moonlet-core`, used by the hook installer).
 - Reveal in Finder uses the `opener:allow-reveal-item-in-dir` permission, added to `capabilities/default.json` for X8.
 - `Project.base_branch` in the daemon state follows the saved `base_branch` (see above).

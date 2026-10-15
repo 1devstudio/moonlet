@@ -143,3 +143,11 @@ export function lastActive(terminals: Record<number, { session_id?: string; last
     .filter((t) => t.session_id === s.id)
     .reduce((m, t) => Math.max(m, t.last_output_at), s.created_at);
 }
+
+/**
+ * A session row's right-click menu. Link to task… is there for a session
+ * without a task in a workspace with a task source (X46).
+ */
+export function sessionMenu(s: { linked: boolean; sources: boolean }): ("open" | "link-task" | "archive")[] {
+  return ["open", ...(!s.linked && s.sources ? (["link-task"] as const) : []), "archive"];
+}

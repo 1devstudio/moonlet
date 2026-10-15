@@ -8,8 +8,6 @@ export interface WorkspaceConnection {
   id: string;
   /** The team keys, project keys or list ids shown in the workspace. */
   keys: string[];
-  /** The project each source's sessions start in, by key (chosen ones only). */
-  projects: Record<string, string>;
   /** Who the connection is signed in as, to tell the account's issues. */
   account: string;
 }
@@ -23,7 +21,6 @@ export function workspaceConnections(connections: Connection[] | undefined, wsKe
       {
         id: c.id,
         keys: here.map((s) => s.key),
-        projects: Object.fromEntries(here.filter((s) => s.project).map((s) => [s.key, s.project])),
         account: c.account,
       },
     ];
@@ -63,7 +60,7 @@ export function sourceNoun(kind: Connection["kind"]): string {
 }
 
 /** A Sources dialog row with no source picked yet. */
-export const blankSource = (): Source => ({ key: "", name: "", project: "", workspace: "" });
+export const blankSource = (): Source => ({ key: "", name: "", workspace: "" });
 
 /** The rows the Sources dialog opens with: the saved sources, or one empty row (X44). */
 export function sourceRows(saved: Source[]): Source[] {
@@ -90,4 +87,27 @@ export function sourcesToSave(rows: Source[]): Source[] {
     seen.add(id);
     return true;
   });
+}
+
+export interface TrackerLink {
+  /** `<connection>/<key>`, as `.moonlet/config.toml` keeps it. */
+  id: string;
+  label: string;
+}
+
+/**
+ * Project settings › Task trackers (X44): the tracker projects a project
+ * handles, named, and the connections' other sources it can add.
+ */
+export function projectTrackers(connections: Connection[] | undefined, linked: string[]): { linked: TrackerLink[]; choices: TrackerLink[] } {
+  const known = new Map<string, TrackerLink>();
+  for (const c of connections ?? [])
+    for (const s of c.sources) {
+      const id = `${c.id}/${s.key}`;
+      if (!known.has(id)) known.set(id, { id, label: `${sourceNoun(c.kind)} ${s.name} (${s.key})` });
+    }
+  return {
+    linked: linked.map((id) => known.get(id) ?? { id, label: id }),
+    choices: [...known.values()].filter((l) => !linked.includes(l.id)),
+  };
 }

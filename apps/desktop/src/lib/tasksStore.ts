@@ -4,7 +4,7 @@
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhTask, M, type Project, type Worktree } from "./protocol";
+import { type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
@@ -28,8 +28,8 @@ export interface TasksData {
   sources: string[];
   /** Each project's GitHub `owner/repo`, by project id. */
   repos: Record<string, string | null>;
-  /** The project a tracker source's sessions start in, by `connection source`. */
-  sourceProjects?: Record<string, string>;
+  /** The projects that link a tracker source in Project settings, by `connection source` (X44). */
+  sourceProjects?: Record<string, string[]>;
   /** The last good sync; null before the first. */
   syncedAt: number | null;
   /** Why the last sync failed; the last good list stays. */
@@ -77,8 +77,6 @@ export interface TrackerSettings {
 export interface Source {
   key: string;
   name: string;
-  /** The project its sessions start in. */
-  project: string;
   /** `host/workspaceId`. */
   workspace: string;
 }
@@ -318,7 +316,11 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
             })
         : [];
       const worktrees = await rpc<Worktree[]>(host, M.projectWorktrees, { id: p.id }).catch(() => []);
-      return { id: p.id, repo, issues, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo, project: p.id })) };
+      // The tracker projects its sessions start from (X44 Project settings › Task trackers).
+      const trackers = await rpc<ProjectConfig>(host, M.projectConfig, { id: p.id })
+        .then((c) => c.trackers ?? [])
+        .catch(() => []);
+      return { id: p.id, repo, issues, trackers, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo, project: p.id })) };
     }),
   );
   // Linear, Jira and ClickUp sources of this workspace (X44).
@@ -354,7 +356,13 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   if (!isLatest()) return;
   const sources = [...new Set(per.flatMap((x) => (x.repo ? [x.repo] : []))), ...conns.map((c) => c.id)];
   const repos = Object.fromEntries(per.map((x) => [x.id, x.repo]));
-  const sourceProjects = Object.fromEntries(conns.flatMap((c) => Object.entries(c.projects).map(([k, p]) => [`${c.id} ${k}`, p])));
+  const sourceProjects: Record<string, string[]> = {};
+  for (const x of per)
+    for (const t of x.trackers) {
+      const at = t.indexOf("/");
+      const source = `${t.slice(0, at)} ${t.slice(at + 1)}`;
+      if (at > 0) sourceProjects[source] = [...(sourceProjects[source] ?? []), x.id];
+    }
   const tasks = new Map<string, Task>();
   for (const x of per) for (const { gh, mine } of x.issues) tasks.set(`${GITHUB} ${gh.repo}#${gh.number}`, { ...taskFromGh(gh, GITHUB), mine });
   for (const t of fromTrackers.flat()) tasks.set(`${t.connection} ${t.key}`, t);

@@ -4,7 +4,7 @@ import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizont
 import { hostsApi, rpc } from "../lib/daemon";
 import type { TaskStart } from "../lib/tasks";
 import { branchUser, leaveTasksMode, startedFromTask } from "../lib/tasksStore";
-import { composerOptions, composerTarget } from "../lib/workspaces";
+import { composerOptions, composerPick, composerProjects, composerTarget } from "../lib/workspaces";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
@@ -241,10 +241,10 @@ export function Composer({
   /** Every option is in the target workspace when there is one (X32). */
   const workspaceFor = (host: string) => (target?.host === host ? target.id : null);
   const currentProject = useStore((s) => (s.selected ? s.sessions[s.selected.host]?.find((x) => x.id === s.selected!.session)?.project_id : undefined));
-  const initial =
-    options.find((o) => o.host === presetHost && o.project.id === presetProject) ??
-    options.find((o) => o.host === selected?.host && o.project.id === currentProject) ??
-    options[0];
+  // Started from an issue, the projects that link its tracker project (X44).
+  const linked = presetTask?.projects ?? [];
+  const initial = composerPick(options, { host: presetHost, preset: presetProject, linked, current: selected && currentProject ? { host: selected.host, id: currentProject } : null });
+  const [projectQuery, setProjectQuery] = useState("");
   const [pick, setPick] = useState(initial ? { host: initial.host, id: initial.project.id } : null);
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
 
@@ -310,13 +310,18 @@ export function Composer({
     if (current) saveChoice(current.project.id, c);
   };
 
+  const projectItem = (o: (typeof options)[number]): MenuItem => ({
+    label: o.project.name,
+    hint: [o.section, o.host !== "local" ? o.host : null].filter(Boolean).join(" · "),
+    checked: !!pick && pick.host === o.host && pick.id === o.project.id,
+    onSelect: () => setPick({ host: o.host, id: o.project.id }),
+  });
+  const found = composerProjects(options, linked, projectQuery);
   const projectItems: MenuItem[] = [
-    ...options.map((o) => ({
-      label: o.project.name,
-      hint: [o.section, o.host !== "local" ? o.host : null].filter(Boolean).join(" · "),
-      checked: !!pick && pick.host === o.host && pick.id === o.project.id,
-      onSelect: () => setPick({ host: o.host, id: o.project.id }),
-    })),
+    ...(found.linked.length ? [{ kind: "label" as const, label: `Linked to ${task?.key ?? "the issue"}` }, ...found.linked.map(projectItem)] : []),
+    ...(found.linked.length && found.others.length ? [{ kind: "label" as const, label: "Other projects" }] : []),
+    ...found.others.map(projectItem),
+    ...(found.linked.length + found.others.length ? [] : [{ kind: "label" as const, label: "No project matches" }]),
     { kind: "divider" },
     { label: "Add project…", icon: <FolderPlus size={14} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "add-project" } }) },
   ];
@@ -379,7 +384,7 @@ export function Composer({
     }
   };
 
-  if (!current) {
+  if (!options.length) {
     return (
       <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[14vh]" onMouseDown={close}>
         <div className="w-[560px] rounded-2xl border border-border-strong bg-[#1f1f1f] p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
@@ -406,6 +411,7 @@ export function Composer({
           <Menu
             items={projectItems}
             width={300}
+            search={{ placeholder: "Search projects…", query: projectQuery, onQuery: setProjectQuery }}
             trigger={(open) => (
               // An existing worktree belongs to its project: the picker stays put.
               <button
@@ -414,8 +420,8 @@ export function Composer({
                 disabled={!!worktree}
                 title={worktree ? "This worktree belongs to this project" : undefined}
               >
-                {current.project.name}
-                {current.host !== "local" && <span className="font-mono ui-text-12 text-faint">@{current.host}</span>}
+                {current ? current.project.name : <span className="text-muted">Choose a project</span>}
+                {current && current.host !== "local" && <span className="font-mono ui-text-12 text-faint">@{current.host}</span>}
                 {!worktree && <ChevronDown size={14} className="text-muted" />}
               </button>
             )}
@@ -480,20 +486,22 @@ export function Composer({
             </div>
           )}
           <span className="ml-auto" />
-          <SourcePicker
-            host={current.host}
-            project={current.project}
-            onIssue={(i) => {
-              setIssue(i);
-              setPrompt((p) => p || `Resolve #${i.number}: ${i.title}\n\n${i.body.trim()}\n\n${i.url}`.trim());
-              ta.current?.focus();
-            }}
-            onPr={(p) => {
-              setPr(p);
-              setFrom(null);
-              ta.current?.focus();
-            }}
-          />
+          {current && (
+            <SourcePicker
+              host={current.host}
+              project={current.project}
+              onIssue={(i) => {
+                setIssue(i);
+                setPrompt((p) => p || `Resolve #${i.number}: ${i.title}\n\n${i.body.trim()}\n\n${i.url}`.trim());
+                ta.current?.focus();
+              }}
+              onPr={(p) => {
+                setPr(p);
+                setFrom(null);
+                ta.current?.focus();
+              }}
+            />
+          )}
         </div>
         {task?.assign && (
           <label className="flex items-center gap-2 border-b border-border px-6 py-2 ui-text-12.5 text-muted">
@@ -507,7 +515,7 @@ export function Composer({
             <input
               autoFocus
               list="moonlet-composer-branches"
-              placeholder={editingFrom === "existing" ? "Existing branch, e.g. feature/login" : `Branch, tag or commit (default ${current.project.base_branch})`}
+              placeholder={editingFrom === "existing" ? "Existing branch, e.g. feature/login" : `Branch, tag or commit (default ${current?.project.base_branch ?? "base"})`}
               className="flex-1 bg-transparent font-mono ui-text-13.5 outline-none placeholder:text-faint"
               onKeyDown={(e) => {
                 e.stopPropagation();
@@ -547,7 +555,8 @@ export function Composer({
           <span className="ml-auto" />
           <PlusMenu variant="composer" onAttach={() => void attach()} onAddDir={() => void addDir()} />
           <button
-            disabled={busy}
+            disabled={busy || !current}
+            title={current ? undefined : "Choose a project first"}
             className="flex items-center gap-2 rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg hover:bg-white disabled:opacity-50"
             onClick={() => void create()}
           >

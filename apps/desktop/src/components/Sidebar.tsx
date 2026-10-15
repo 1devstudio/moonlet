@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, type Group } from "../lib/sidebar";
+import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, sessionMenu, type Group } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -286,6 +286,8 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   const badge = sessionBadge({ creating, state, merged: pr?.state === "merged", git, agents });
   const { lines, sources } = useContext(TaskLines);
   const line = lines[s.id];
+  // In a workspace with a task source, a session without a task says so (X46).
+  const noTask = !line && sources;
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
   if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
@@ -303,46 +305,57 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
         e.preventDefault();
         onMenu(e);
       }}
+      // The design's row: inset and rounded. Line 1 is the glyph (in a 15px
+      // column under the project's mark), the name and the badge; the task
+      // line sits under the name.
       className={cx(
-        "group relative flex w-full cursor-default items-center gap-3 pl-[30px] pr-4 text-left transition-colors",
-        line ? "h-[50px]" : "h-[38px]",
-        selected ? "bg-selected" : "hover:bg-panel-2",
+        "group relative mx-2 flex cursor-default flex-col justify-center gap-[3px] rounded-md px-2 text-left transition-colors",
+        line || noTask ? "min-h-[46px] py-1" : "h-[38px]",
+        selected ? "bg-selected shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-panel-2",
       )}
     >
-      {selected && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
-      {notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
-      {renaming ? (
-        <InlineInput
-          initial={s.name}
-          onDone={(v) => {
-            setRenaming(false);
-            if (v && v !== s.name) void rpc(host, M.sessionUpdate, { id: s.id, name: v }).catch(errorToast);
-          }}
-        />
-      ) : (
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className={cx("truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
-          {line && (
-            <span title={`${line.key} · ${line.title}`} className={cx("flex items-center gap-1.5 truncate ui-text-11.5", line.outOfSync ? "text-accent-2" : "text-faint")}>
-              <TaskGlyph column={line.column} size={10} />
-              <span className="font-mono">{line.key}</span>
-              <span className="truncate">{line.text}</span>
-            </span>
-          )}
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="flex w-[15px] shrink-0 justify-center">{notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}</span>
+        {renaming ? (
+          <InlineInput
+            initial={s.name}
+            onDone={(v) => {
+              setRenaming(false);
+              if (v && v !== s.name) void rpc(host, M.sessionUpdate, { id: s.id, name: v }).catch(errorToast);
+            }}
+          />
+        ) : (
+          <span className={cx("min-w-0 flex-1 truncate ui-text-13", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+        )}
+        {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
+      </span>
+      {line && (
+        <span title={`${line.key} · ${line.title}`} className="flex min-w-0 items-center gap-2 ui-text-11.5 text-faint">
+          <span aria-hidden className="w-[15px] shrink-0" />
+          <span className="flex min-w-0 items-center gap-1.5">
+            <TaskGlyph column={line.column} size={11} />
+            <span className="shrink-0 font-mono ui-text-11 text-muted">{line.key}</span>
+            <span className={cx("truncate", line.outOfSync && "text-accent-2")}>{line.text}</span>
+          </span>
         </span>
       )}
-      {!renaming && !line && sources && (
-        <button
-          className="hidden shrink-0 ui-text-11.5 text-faint hover:text-fg group-hover:block"
-          onClick={(e) => {
-            e.stopPropagation();
-            useStore.setState({ dialog: { kind: "link-task", host, session: s.id } });
-          }}
-        >
-          No task · Link
-        </button>
+      {noTask && (
+        <span className="flex min-w-0 items-center gap-2 ui-text-11.5 text-faint">
+          <span aria-hidden className="w-[15px] shrink-0" />
+          <span className="flex items-center gap-1">
+            No task ·
+            <button
+              className="text-accent-2 hover:text-accent"
+              onClick={(e) => {
+                e.stopPropagation();
+                useStore.setState({ dialog: { kind: "link-task", host, session: s.id } });
+              }}
+            >
+              Link
+            </button>
+          </span>
+        </span>
       )}
-      {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-12 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
     </div>
   );
 }
@@ -357,11 +370,11 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
     >
       <div className="relative h-[38px] overflow-hidden bg-panel">
         <ArchiveLoader loader={a.loader} />
-        <div className="relative flex h-[38px] w-1/2 items-center gap-3 pl-[30px]">
+        <div className="relative flex h-[38px] w-1/2 items-center gap-2 pl-4">
           <span role="status" aria-label={a.done ? "Archived" : "Archiving"} className="flex w-[15px] shrink-0 justify-center text-muted">
             {a.done ? <StateGlyph state="done" size={15} /> : <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />}
           </span>
-          <span className="min-w-0 flex-1 truncate ui-text-14 text-[#cfcfcf]">{name}</span>
+          <span className="min-w-0 flex-1 truncate ui-text-13 text-[#cfcfcf]">{name}</span>
         </div>
       </div>
     </div>
@@ -388,14 +401,14 @@ function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; wo
     <div className="mb-1 rounded-md">
       {header && (
         <div
-          className="group flex h-[38px] items-center gap-2.5 pl-4 pr-3"
+          className="group flex h-[38px] items-center gap-2 pl-4 pr-3"
           onContextMenu={(e) => {
             if (g.kind !== "project") return;
             e.preventDefault();
             onRowMenu({ projectId: g.projectId }, e);
           }}
         >
-          <button onClick={toggle} className={cx("flex min-w-0 items-center gap-2.5 text-left", g.kind !== "project" && "flex-1")}>
+          <button onClick={toggle} className={cx("flex min-w-0 items-center gap-2 text-left", g.kind !== "project" && "flex-1")}>
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
           </button>
@@ -581,7 +594,8 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
     };
   }, [onClose]);
   const { host, session: s, section: sec } = m;
-  const items = s ? sessionItems(host, s) : m.projectId ? projectItems(host, m.projectId, sec) : [];
+  const { lines, sources } = useContext(TaskLines);
+  const items = s ? sessionItems(host, s, { linked: !!lines[s.id], sources }) : m.projectId ? projectItems(host, m.projectId, sec) : [];
   return (
     <div
       className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
@@ -617,18 +631,26 @@ function projectItems(host: string, projectId: string, sec: Section): MenuItem[]
   ];
 }
 
-function sessionItems(host: string, s: Session): MenuItem[] {
-  return [
-    { label: "Open", onSelect: () => selectSession(host, s.id) },
-    { kind: "divider" },
-    {
-      label: "Archive",
-      icon: <Archive size={14} className="text-muted" />,
-      onSelect: () => {
-        void archiveSession({ host, ws: s });
-      },
-    },
-  ];
+function sessionItems(host: string, s: Session, task: { linked: boolean; sources: boolean }): MenuItem[] {
+  return sessionMenu(task).flatMap((id): MenuItem[] => {
+    switch (id) {
+      case "open":
+        return [{ label: "Open", onSelect: () => selectSession(host, s.id) }];
+      case "link-task":
+        return [{ label: "Link to task…", icon: <Link2 size={14} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "link-task", host, session: s.id } }) }];
+      case "archive":
+        return [
+          { kind: "divider" },
+          {
+            label: "Archive",
+            icon: <Archive size={14} className="text-muted" />,
+            onSelect: () => {
+              void archiveSession({ host, ws: s });
+            },
+          },
+        ];
+    }
+  });
 }
 
 function HistoryList() {
