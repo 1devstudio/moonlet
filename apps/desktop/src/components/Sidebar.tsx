@@ -303,14 +303,15 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
         e.preventDefault();
         onMenu(e);
       }}
+      // The design's row: inset and rounded, the glyph in a 15px column under
+      // the project's mark, the name and the task line under the project's name.
       className={cx(
-        "group relative flex w-full cursor-default items-center gap-3 pl-[30px] pr-4 text-left transition-colors",
-        line ? "h-[50px]" : "h-[38px]",
-        selected ? "bg-selected" : "hover:bg-panel-2",
+        "group relative mx-2 flex cursor-default items-center gap-2 rounded-md px-2 text-left transition-colors",
+        line ? "min-h-[46px] py-1" : "h-[38px]",
+        selected ? "bg-selected shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-panel-2",
       )}
     >
-      {selected && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
-      {notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
+      <span className="flex w-[15px] shrink-0 justify-center">{notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}</span>
       {renaming ? (
         <InlineInput
           initial={s.name}
@@ -320,18 +321,18 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
           }}
         />
       ) : (
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className={cx("truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+        <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+          <span className={cx("truncate ui-text-13", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
           {line && (
-            <span title={`${line.key} · ${line.title}`} className={cx("flex items-center gap-1.5 truncate ui-text-11.5", line.outOfSync ? "text-accent-2" : "text-faint")}>
-              <TaskGlyph column={line.column} size={10} />
-              <span className="font-mono">{line.key}</span>
-              <span className="truncate">{line.text}</span>
+            <span title={`${line.key} · ${line.title}`} className="flex min-w-0 items-center gap-1.5 ui-text-11.5 text-faint">
+              <TaskGlyph column={line.column} size={11} />
+              <span className="shrink-0 font-mono ui-text-11 text-muted">{line.key}</span>
+              <span className={cx("truncate", line.outOfSync && "text-accent-2")}>{line.text}</span>
             </span>
           )}
         </span>
       )}
-      {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-12 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
+      {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
     </div>
   );
 }
@@ -346,11 +347,11 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
     >
       <div className="relative h-[38px] overflow-hidden bg-panel">
         <ArchiveLoader loader={a.loader} />
-        <div className="relative flex h-[38px] w-1/2 items-center gap-3 pl-[30px]">
+        <div className="relative flex h-[38px] w-1/2 items-center gap-2 pl-4">
           <span role="status" aria-label={a.done ? "Archived" : "Archiving"} className="flex w-[15px] shrink-0 justify-center text-muted">
             {a.done ? <StateGlyph state="done" size={15} /> : <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />}
           </span>
-          <span className="min-w-0 flex-1 truncate ui-text-14 text-[#cfcfcf]">{name}</span>
+          <span className="min-w-0 flex-1 truncate ui-text-13 text-[#cfcfcf]">{name}</span>
         </div>
       </div>
     </div>
@@ -377,14 +378,14 @@ function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; wo
     <div className="mb-1 rounded-md">
       {header && (
         <div
-          className="group flex h-[38px] items-center gap-2.5 pl-4 pr-3"
+          className="group flex h-[38px] items-center gap-2 pl-4 pr-3"
           onContextMenu={(e) => {
             if (g.kind !== "project") return;
             e.preventDefault();
             onRowMenu({ projectId: g.projectId }, e);
           }}
         >
-          <button onClick={toggle} className={cx("flex min-w-0 items-center gap-2.5 text-left", g.kind !== "project" && "flex-1")}>
+          <button onClick={toggle} className={cx("flex min-w-0 items-center gap-2 text-left", g.kind !== "project" && "flex-1")}>
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
           </button>
