@@ -398,7 +398,7 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
 
   it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
     sent.length = 0;
-    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } });
+    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", project: null, tracker: { id: "issue-2", source: "MOON" } }, { session: "Drag", assign: true });
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
   });
 });
@@ -697,7 +697,62 @@ describe("automatic fixes and failures, second review round (X46)", () => {
 
   it("starting a session on a GitHub issue whose repository is in no project says so", async () => {
     useStore.setState({ toasts: [] });
-    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", project: null, github: { repo: "else/where", number: 3 } });
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", project: null, github: { repo: "else/where", number: 3 } }, { session: "x", assign: true });
     expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["else/where#3: No project in this workspace has else/where as its origin"]);
+  });
+});
+
+describe("open spec lines: Activity, comments, drafts and toasts (X45, X46)", () => {
+  const lt = (key: string, column: "todo" | "in_progress" | "in_review") => ({ connection: "linear:acme", key, title: key, url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: `i-${key}`, state: "x", source: "MOON" } });
+  const pr = (o: object = {}) => ({ number: 131, url: "https://github.com/acme/app/pull/131", state: "open", title: "Hosts", checks: [], review_decision: null, ...o });
+  const rowWith = (id: string, p: object) => ({ session: { id, name: id, branch: id, path: `/w/${id}`, archived: false, task: null, task_unlinked: false, state: "idle" as const, pr: pr(p), additions: 0, subagents: 0, originRepo: null }, meta: { text: "#131", tone: "open" as const } });
+  const boardOf = (t: ReturnType<typeof lt>, rows: ReturnType<typeof rowWith>[]) => ({ todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows, needsYou: false, orphans: [], empty: null, drift: null }], done: [] });
+  const start = (key: string) => ({ ref: { connection: "linear:acme", key, url: "" }, kind: "linear" as const, key, title: key, firstMessage: "", project: null, tracker: { id: `i-${key}`, source: "MOON" } });
+
+  it("records that a session started from the task, and moves and assigns it only when asked", async () => {
+    sent.length = 0;
+    await startedFromTask("local", "personal", start("MOON-301"), { session: "Drag sessions", assign: false }, 1_000);
+    expect(activityOf({ connection: "linear:acme", key: "MOON-301" }).map((e) => e.text)).toEqual(["Session “Drag sessions” started from it"]);
+    expect(sent).toEqual([]);
+    await startedFromTask("local", "personal", start("MOON-302"), { session: "Hosts", assign: true }, 2_000);
+    expect(activityOf({ connection: "linear:acme", key: "MOON-302" }).map((e) => e.text)).toEqual(["moonlet moved it to In Progress and assigned it to you", "Session “Hosts” started from it"]);
+  });
+
+  it("says why when the move or assignment of a tracker issue fails", async () => {
+    useStore.setState({ toasts: [] });
+    failNext.push({ message: "Linear is not answering" });
+    await startedFromTask("local", "personal", start("MOON-303"), { session: "x", assign: true }, 3_000);
+    expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["MOON-303: Linear is not answering"]);
+  });
+
+  it("records the comment moonlet posts, remembers it only once it worked, and shows a failed one with Retry", async () => {
+    sent.length = 0;
+    const t = lt("MOON-304", "in_review");
+    const b = boardOf(t, [rowWith("s304", {})]);
+    failNext.push({ message: "Linear is not answering" });
+    await runAutoFixes("local", "personal", b, () => DEFAULT_RULES, 4_000);
+    expect(Object.keys(autoFixed()).filter((k) => k.startsWith("comment") && k.includes("MOON-304"))).toEqual([]);
+    expect(failureOf(t)).toBe("Linear is not answering");
+    await retryTask(t);
+    expect(sent).toEqual([{ id: "linear:acme", task: "i-MOON-304", source: "MOON", comment: "Opened a pull request: Hosts https://github.com/acme/app/pull/131" }]);
+    expect(failureOf(t)).toBe(undefined);
+    expect(Object.keys(autoFixed()).filter((k) => k.startsWith("comment") && k.includes("MOON-304"))).toHaveLength(1);
+    expect(activityOf(t).map((e) => e.text)).toContain("moonlet commented with the pull request's link");
+  });
+
+  it("adds no PR opened for a draft", async () => {
+    const t = lt("MOON-305", "in_review");
+    await runAutoFixes("local", "personal", boardOf(t, [rowWith("s305", { draft: true })]), () => ({ ...DEFAULT_RULES, pr_comment: "off" }), 5_000);
+    expect(activityOf(t)).toEqual([]);
+  });
+
+  it("records an assignment on GitHub", async () => {
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = () => [issue];
+    answers["gh.task_update"] = () => true;
+    await refreshTasks("local", "personal", 1_000);
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "acme/web#12", url: "" }, kind: "github", key: "acme/web#12", title: "Fix", firstMessage: "", project: null, github: { repo: "acme/web", number: 12 } }, { session: "Fix", assign: true }, 6_000);
+    expect(activityOf({ connection: "github:github.com", key: "acme/web#12" }).map((e) => e.text)).toContain("moonlet assigned it to you");
   });
 });

@@ -263,7 +263,8 @@ export function workspaceProjects(s: StoreState, host: string, workspaceId: stri
   return (s.projects[host] ?? []).filter((p) => ids.has(p.id));
 }
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** An error's text: an Error's or a Tauri command's `{ message }`, else the value. */
+const message = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
 const syncs = latestPerKey();
 
 /** Reads a workspace's GitHub issues and worktrees. A failed read keeps the last good list. */
@@ -440,7 +441,10 @@ const COLUMN_LABEL = { todo: "Todo", in_progress: "In Progress", in_review: "In 
 
 /** The "session starts" rule after a session started from a task with the box ticked (X46):
  *  a GitHub issue is assigned; a tracker issue moves to In Progress and is assigned. */
-export async function startedFromTask(host: string, workspaceId: string, start: TaskStart) {
+export async function startedFromTask(host: string, workspaceId: string, start: TaskStart, opts: { session: string; assign: boolean }, now = Date.now()) {
+  recordActivity({ connection: start.ref.connection, key: start.key }, `Session “${opts.session}” started from it`, now);
+  // Keep in step: the "session starts" rule, as the composer's box was left.
+  if (!opts.assign) return;
   if (start.github) return assignToMe(host, workspaceId, start.github);
   if (!start.tracker) return;
   const id = `${start.ref.connection} ${start.key}`;
@@ -453,10 +457,10 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
       column: "in_progress",
       assign_me: true,
     });
-    recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you");
+    recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you", now + 1);
   } catch (e) {
     movedByMoonlet.delete(id);
-    errorToast((e as { message?: string }).message ?? e);
+    toast(`${start.key}: ${message(e)}`, "error");
   }
 }
 
@@ -539,7 +543,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
     return true;
   } catch (e) {
     movedByMoonlet.delete(id);
-    setFailure(card.task, (e as { message?: string }).message ?? message(e));
+    setFailure(card.task, message(e));
     return false;
   }
 }
@@ -607,7 +611,7 @@ export async function runAutoFixes(host: string, workspaceId: string, board: Boa
           await before?.();
           await comment();
         });
-        if (!before) setFailure(c.card.task, (e as { message?: string }).message ?? message(e), "comment");
+        if (!before) setFailure(c.card.task, message(e), "comment");
       }
     };
     await comment();
@@ -717,7 +721,7 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
     void refreshTasks(host, workspaceId);
   } catch (e) {
     movedByMoonlet.delete(id);
-    const why = (e as { message?: string }).message ?? message(e);
+    const why = message(e);
     setFailure(task, why);
     toast(`${task.key}: ${why}`, "error");
   }
