@@ -313,24 +313,22 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
             let me = if mine { clickup::parse_user_id(&s.clickup_send(s.clickup(reqwest::Method::GET, "/user")?).await?)? } else { String::new() };
             // Open tasks, and closed ones of the last 14 days for the Done column.
             let since = moonlet_core::paths::now_ms().saturating_sub(14 * 86_400_000);
-            let mut out: Vec<TrackerTask> = Vec::new();
+            let mut out = Vec::new();
             for list in &keys {
                 let list = safe_id(list)?;
-                for closed_since in [None, Some(since)] {
+                let mut passes = [Vec::new(), Vec::new()];
+                for (pass, closed_since) in passes.iter_mut().zip([None, Some(since)]) {
                     for page in 0..5 {
                         let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, closed_since);
                         let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &path)?).await?;
-                        for t in clickup::parse_tasks(&raw, &s.conn.id)? {
-                            // An open task updated lately comes in both passes.
-                            if !out.iter().any(|x| x.key == t.key) {
-                                out.push(t);
-                            }
-                        }
+                        pass.extend(clickup::parse_tasks(&raw, &s.conn.id)?);
                         if !clickup::more_pages(&raw) {
                             break;
                         }
                     }
                 }
+                let [open, recent] = passes;
+                out.extend(clickup::merge_passes(open, recent));
             }
             Ok(out)
         }
