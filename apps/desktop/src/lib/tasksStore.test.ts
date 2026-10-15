@@ -54,6 +54,7 @@ const issue: GhTask = {
 };
 
 beforeEach(() => {
+  configDelay.ms = 0;
   for (const k of Object.keys(answers)) delete answers[k];
   useTasks.setState({ data: {} });
   useStore.setState({
@@ -457,9 +458,9 @@ describe("saveTrackersConfig", () => {
     // Made after the failure, while the file is still reloading.
     await new Promise((r) => setTimeout(r, 12));
     const during = saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, interval: 30 } }));
-    await Promise.allSettled([failing, during]);
-    expect(saved.map((c) => (c as { sync: object }).sync)).not.toContainEqual({ interval: 30, notify: false });
-    configDelay.ms = 0;
+    const results = await Promise.allSettled([failing, during]);
+    expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+    expect(saved).toEqual([]);
     useTasks.setState({ config: null });
   });
 

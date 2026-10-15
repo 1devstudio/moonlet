@@ -94,24 +94,37 @@ export function findPasted(p: Pasted, tasks: Task[], originRepo: string | null):
 export function pasteLookup(delayMs = 200) {
   let round = 0;
   let current: Promise<Task | null | undefined> = Promise.resolve(null);
+  let stop = () => {};
   return {
     start(run: () => Promise<Task | null>): Promise<Task | null | undefined> {
+      stop();
       const mine = ++round;
-      current = new Promise((resolve) =>
-        setTimeout(async () => {
-          if (mine !== round) return resolve(undefined);
+      current = new Promise((resolve) => {
+        const timer = setTimeout(async () => {
           const found = await run().catch(() => null);
           resolve(mine === round ? found : undefined);
-        }, delayMs),
-      );
+        }, delayMs);
+        stop = () => {
+          clearTimeout(timer);
+          resolve(undefined);
+        };
+      });
       return current;
     },
     cancel() {
       round++;
+      stop();
     },
-    /** The current lookup's task: what ↵ links, or `undefined` once it was replaced or cancelled. */
-    settled(): Promise<Task | null | undefined> {
-      return current;
+    /**
+     * What ↵ links: the task of the lookup under way, following any newer
+     * lookup that replaces it; `undefined` once lookups were cancelled.
+     */
+    async settled(): Promise<Task | null | undefined> {
+      for (;;) {
+        const waiting = current;
+        const found = await waiting;
+        if (waiting === current) return found;
+      }
     },
   };
 }
