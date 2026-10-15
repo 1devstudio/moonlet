@@ -432,6 +432,20 @@ describe("saveTrackersConfig", () => {
     useTasks.setState({ config: null });
   });
 
+  it("drops a change queued behind a write that failed, so the file and the page agree", async () => {
+    saved.length = 0;
+    await loadTrackersConfig(true);
+    saveFails.push(new Error("disk full"));
+    const results = await Promise.allSettled([
+      saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, notify: false } })),
+      saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, interval: 30 } })),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+    expect(saved).toEqual([]);
+    expect(trackersConfig(useTasks.getState()).sync).toEqual({ interval: 300, notify: true });
+    useTasks.setState({ config: null });
+  });
+
   it("does not write over a file it could not read", async () => {
     saved.length = 0;
     configFails.push(new Error("TOML parse error at line 3"));
@@ -612,6 +626,18 @@ describe("automatic fixes and failures, second review round (X46)", () => {
     failNext.push({ message: "Linear is not answering" });
     await runAutoFixes("local", "personal", board, () => DEFAULT_RULES, 1_000);
     expect(failureOf(t)).toBe("Linear is not answering");
+  });
+
+  it("when the fix and its PR-link comment both fail, Retry sends both", async () => {
+    sent.length = 0;
+    const t = lt("MOON-204", "in_progress");
+    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [row("s204")], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
+    failNext.push({ message: "Linear is not answering" }, { message: "Linear is not answering" });
+    await runAutoFixes("local", "personal", board, () => DEFAULT_RULES, 1_000);
+    expect(sent).toEqual([]);
+    useTasks.setState({ data: { "local/personal": { tasks: [t], worktrees: [], sources: ["linear:acme"], repos: {}, sourceProjects: {}, syncedAt: 1, error: null } } });
+    await retryTask(t);
+    expect(sent.map((x) => ("comment" in x ? "comment" : "move"))).toContain("comment");
   });
 
   it("does not try a failed automatic fix again by itself after a restart", async () => {

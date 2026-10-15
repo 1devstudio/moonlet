@@ -99,7 +99,7 @@ impl Session {
     async fn load(id: &str) -> Res<Self> {
         let config = crate::read_trackers(&crate::trackers_path()).map_err(fail)?;
         let conn = config.connections.into_iter().find(|c| c.id == id).ok_or_else(|| fail(format!("no connection {id}")))?;
-        let again = || TrackerError { auth: true, message: LINEAR_AGAIN.into() };
+        let again = sign_in_again;
         let missing = || TrackerError { auth: true, message: format!("No saved token for {}; reconnect it", conn.site) };
         let secret = secrets::store().get(id).ok_or_else(missing)?;
         if conn.auth != "oauth" {
@@ -171,7 +171,7 @@ impl Session {
 /// A Linear error as the user reads it: a rejected OAuth sign-in asks to sign in again (X44).
 fn linear_error(e: ApiError, auth: &str) -> TrackerError {
     if e.auth && auth == "oauth" {
-        TrackerError { auth: true, message: LINEAR_AGAIN.into() }
+        sign_in_again()
     } else {
         e.into()
     }
@@ -199,7 +199,7 @@ where
     if !tokens.needs_refresh(now()) {
         return Ok(tokens.access);
     }
-    let token = tokens.refresh.ok_or_else(|| TrackerError { auth: true, message: LINEAR_AGAIN.into() })?;
+    let token = tokens.refresh.ok_or_else(sign_in_again)?;
     let fresh = refresh(token).await?;
     save(&fresh)?;
     Ok(fresh.access)
@@ -216,14 +216,15 @@ async fn linear_request(token: &str, auth: &str, query: &str, variables: Value) 
     )
     .await?;
     if status == 401 {
-        let message = if auth == "oauth" { LINEAR_AGAIN } else { "Linear no longer accepts this token. Create a new one and paste it here." };
-        return Err(TrackerError { auth: true, message: message.into() });
+        return Err(linear_error(ApiError { auth: true, message: linear::REJECTED.into() }, auth));
     }
     Ok(body)
 }
 
 /// What a Linear OAuth connection whose sign-in ran out says (X44).
-const LINEAR_AGAIN: &str = "Sign in to Linear again";
+fn sign_in_again() -> TrackerError {
+    TrackerError { auth: true, message: "Sign in to Linear again".into() }
+}
 /// One OAuth refresh at a time (see `Session::load`).
 static REFRESHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -532,7 +533,7 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
                     }
                 }
                 let [open, recent] = passes;
-                out.extend(clickup::merge_passes(open, recent));
+                out.extend(clickup::merge_passes(open, recent, &s.conn.states));
             }
             Ok(out)
         }
