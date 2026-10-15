@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { hostsApi } from "../../lib/daemon";
 import type { Session } from "../../lib/protocol";
 import { selectSession, useStore } from "../../lib/store";
-import { acceptanceCriteria, findPasted, firstChoice, linkChoices, pasteLookup } from "../../lib/taskLinking";
+import { acceptanceCriteria, enterChoice, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
 import { ensureTasks, linkTask, lookUpPasted, mappedTasks, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
@@ -203,12 +203,10 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
           onKeyDown={(e) => {
             if (e.key !== "Enter" || linking.current) return;
             e.preventDefault();
-            // A paste still being looked up decides what ↵ links; a lookup
-            // that was replaced or cancelled links nothing.
+            // A paste still being looked up decides what ↵ links, from the
+            // lists as they are when it ends; a cancelled lookup links nothing.
             linking.current = true;
-            void lookup.settled().then((found) => {
-              // The lists as they are when the lookup ends, not when ↵ was pressed.
-              const first = found === undefined ? null : firstChoice(found, latestChoices.current);
+            void enterChoice(lookup, () => latestChoices.current).then((first) => {
               if (first) pick(first);
               else linking.current = false;
             });
