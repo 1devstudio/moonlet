@@ -11,7 +11,7 @@ import { connectionLine } from "../../lib/trackersPage";
 import { blankSource, changedStates, sourceChoices, sourceNoun, sourceRows, sourcesToSave } from "../../lib/trackerSources";
 import type { Column } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
-import { Button, Dialog, Field, IconButton, inputCls } from "../ui";
+import { Button, Dialog, Field, IconButton, inputCls, TrackerIcon } from "../ui";
 import { Row, Status } from "./controls";
 
 const NAME: Record<Connection["kind"], string> = { linear: "Linear", jira: "Jira Cloud", clickup: "ClickUp" };
@@ -260,10 +260,10 @@ export function AddTracker() {
   useEffect(() => void loadTrackersConfig(), []);
   return (
     <>
-      <div className="flex gap-1.5">
+      <div className="flex flex-wrap gap-2">
         {(["linear", "jira", "clickup"] as const).map((k) => (
-          <Button key={k} size="sm" variant="ghost" onClick={() => setKind(k)}>
-            Connect {NAME[k]}
+          <Button key={k} className="field-height" onClick={() => setKind(k)}>
+            <TrackerIcon kind={k} /> Connect {NAME[k]}
           </Button>
         ))}
       </div>
