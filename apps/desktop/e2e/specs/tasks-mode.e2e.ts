@@ -80,8 +80,19 @@ describe("Tasks mode", () => {
     linkedId = rpc<{ id: string }>(w, "session.create", { project_id: projectId(w), name: LINKED, branch: "12-fix-checkout", agent: "none" }).id;
   });
 
+  // The app keeps the layout and open rows across restarts, and localStorage
+  // outlives a run: start and end from the defaults.
+  const forgetLayout = () => browser.execute(() => ["moonlet.tasks.layout", "moonlet.tasks.expanded"].forEach((k) => localStorage.removeItem(k)));
+  before(async () => {
+    await forgetLayout();
+    // The store read them when the app started.
+    await browser.refresh();
+    await tasksButton().waitForDisplayed({ timeout: 15_000 });
+  });
+
   after(async () => {
     if (await sessionsButton().isExisting()) await sessionsButton().click();
+    await forgetLayout();
     await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId(w));
     for (const s of rpc<Session[]>(w, "session.list", {})) {
       // The seeded session is shared with other specs: unlink it, don't archive it.
@@ -181,6 +192,17 @@ describe("Tasks mode", () => {
     await row.$('button[aria-label="Expand acme/storefront#15"]').click();
     await expect(row.$('//button[normalize-space()="Gift cards at checkout"]')).toBeDisplayed();
     await expect($('//section[@aria-label="Todo"]')).toBeDisplayed();
+    // Expand all opens every row; Collapse all closes them.
+    const twelve = $('button[aria-label="Expand acme/storefront#12"], button[aria-label="Collapse acme/storefront#12"]');
+    await $(sel.button("Expand all")).click();
+    await expect(twelve).toHaveAttribute("aria-expanded", "true");
+    await $(sel.button("Collapse all")).click();
+    await expect(twelve).toHaveAttribute("aria-expanded", "false");
+    await expect(row.$('button[aria-label="Expand acme/storefront#15"]')).toHaveAttribute("aria-expanded", "false");
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+    // The board's Done column opens the list.
+    await $('//button[starts-with(@aria-label, "Done: ")]').click();
+    await expect($('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]')).toHaveAttribute("aria-pressed", "true");
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
 
