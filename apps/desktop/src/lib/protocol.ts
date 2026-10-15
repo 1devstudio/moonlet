@@ -564,6 +564,7 @@ export const M = {
   shellCommands: "shell.commands",
   ghPrs: "gh.prs",
   ghTasks: "gh.tasks",
+  ghTask: "gh.task",
   ghTaskUpdate: "gh.task_update",
   ghWhoami: "gh.whoami",
   workspaceList: "workspace.list",

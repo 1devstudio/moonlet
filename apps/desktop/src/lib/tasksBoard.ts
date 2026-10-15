@@ -164,7 +164,8 @@ const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
  */
 export function sessionsWithoutTask(sessions: BoardSession[], tasks: Task[], link: LinkRules = DEFAULT_LINK): { session: BoardSession; hint: string }[] {
   return sessions
-    .filter((s) => !s.archived && !taskForSession(s, s.pr, s.originRepo, tasks, link))
+    // A stored link counts even when its task is not among the loaded ones.
+    .filter((s) => !s.archived && !s.task && !taskForSession(s, s.pr, s.originRepo, tasks, link))
     .map((session) => {
       if (!link.title) return { session, hint: "" };
       const like = tasks.find((t) => words(t.title) === words(session.name));

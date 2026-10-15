@@ -10,6 +10,7 @@ import { askConfirm } from "./confirm";
 import { autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
+import type { Pasted } from "./taskLinking";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, trackerOf } from "./tasks";
 import { workspaceConnections } from "./trackerSources";
 import { applyStateMapping } from "./stateMapping";
@@ -383,6 +384,29 @@ function repoPath(host: string, workspaceId: string, repo: string): string | nul
   const repos = useTasks.getState().data[wsKey(host, workspaceId)]?.repos ?? {};
   const id = Object.keys(repos).find((p) => repos[p]?.toLowerCase() === repo.toLowerCase());
   return useStore.getState().projects[host]?.find((p) => p.id === id)?.path ?? null;
+}
+
+/**
+ * The task a pasted key or URL names when it is not among the loaded ones
+ * (X46 link dialog): GitHub through the project's `gh` (`#7` is that number
+ * in `originRepo`), else each connection of the named tracker and site.
+ * Null when none has it.
+ */
+export async function lookUpPasted(host: string, projectPath: string, p: Pasted, originRepo: string | null): Promise<Task | null> {
+  if (p.kind === "github") {
+    const m = /^(?:(.+))?#(\d+)$/.exec(p.key);
+    const repo = m?.[1] ?? originRepo;
+    if (!m || !repo) return null;
+    const gh = await rpc<GhTask>(host, M.ghTask, { path: projectPath, repo, number: Number(m[2]) }).catch(() => null);
+    return gh ? taskFromGh(gh, GITHUB) : null;
+  }
+  const site = p.site?.toLowerCase();
+  const conns = (trackersConfig(useTasks.getState()).connections ?? []).filter((c) => (!p.kind || c.kind === p.kind) && (!site || c.site.toLowerCase() === site));
+  for (const c of conns) {
+    const found = await hostsApi.trackerTask(c.id, p.key).catch(() => null);
+    if (found) return found;
+  }
+  return null;
 }
 
 /** "Not now" on a chip: hidden until the task or its sessions change. */

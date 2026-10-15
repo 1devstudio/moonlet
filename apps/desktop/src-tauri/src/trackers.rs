@@ -406,6 +406,38 @@ pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
     })
 }
 
+/// One task of a connection by its key, wherever it is (X46: a key or URL
+/// pasted into the link dialog); `None` when the tracker has no such task.
+#[tauri::command]
+pub async fn tracker_task(id: String, key: String) -> Res<Option<TrackerTask>> {
+    let s = Session::load(&id).await?;
+    safe_id(&key)?;
+    match s.conn.kind {
+        TrackerKind::Linear => {
+            let raw = s.linear(&linear::issue_query(), json!({ "id": key })).await?;
+            Ok(linear::parse_issue(&raw, &s.conn.id)?)
+        }
+        TrackerKind::Jira => {
+            let (status, body) = send(s.jira(reqwest::Method::GET, &jira::issue_path(&key))?).await?;
+            match status {
+                404 => Ok(None),
+                200..300 => Ok(Some(jira::parse_issue(&body, &s.conn.id, &s.conn.site)?)),
+                _ => Err(jira::parse_error(status, &body, &s.conn.site).into()),
+            }
+        }
+        TrackerKind::Clickup => {
+            let team = safe_id(&s.conn.site)?;
+            let (status, body) = send(s.clickup(reqwest::Method::GET, &clickup::task_path(&key, team))?).await?;
+            match status {
+                404 => Ok(None),
+                200..300 => Ok(Some(clickup::parse_task(&body, &s.conn.id)?)),
+                _ => Err(clickup::parse_error(status, &body).into()),
+            }
+        }
+        TrackerKind::Github => Ok(None),
+    }
+}
+
 /// The tasks of a connection's sources: the user's, or all open ones.
 #[tauri::command]
 pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {

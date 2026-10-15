@@ -56,6 +56,21 @@ pub fn next_page(raw: &[u8]) -> Option<String> {
     v["nextPageToken"].as_str().map(String::from)
 }
 
+/// One issue by its key (X46: a key pasted into the link dialog). `key` must
+/// already be checked as a plain id.
+pub fn issue_path(key: &str) -> String {
+    format!("/rest/api/3/issue/{key}?fields={}", FIELDS.join(","))
+}
+
+/// The issue of [`issue_path`] as a task of `connection` on `site`.
+pub fn parse_issue(raw: &[u8], connection: &str, site: &str) -> Result<TrackerTask, ApiError> {
+    let issue: Value = parse(raw)?;
+    let wrapped = serde_json::json!({ "issues": [issue] }).to_string();
+    parse_search(wrapped.as_bytes(), connection, site)?
+        .pop()
+        .ok_or_else(|| ApiError::new("Jira sent no issue"))
+}
+
 /// The issues of a search as tasks of `connection` on `site`.
 pub fn parse_search(
     raw: &[u8],
@@ -243,6 +258,29 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn one_issue_by_its_key() {
+        let list: serde_json::Value = serde_json::from_slice(&fixture("jira-search.json")).unwrap();
+        let one = list["issues"][0].to_string();
+        let site = "acme.atlassian.net";
+        assert_eq!(
+            parse_issue(one.as_bytes(), "jira:acme.atlassian.net", site).unwrap(),
+            parse_search(
+                &fixture("jira-search.json"),
+                "jira:acme.atlassian.net",
+                site
+            )
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+        );
+        assert_eq!(
+            issue_path("OPS-12"),
+            "/rest/api/3/issue/OPS-12?fields=summary,status,priority,assignee,labels,updated,description,project"
+        );
     }
 
     #[test]
