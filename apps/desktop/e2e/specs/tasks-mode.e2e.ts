@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { choose, fill, PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
+import { choose, closeSettings, fill, openSettings, PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
 
 interface Session {
   id: string;
@@ -305,16 +305,11 @@ describe("Tasks mode", () => {
     expect([s?.task ?? null, s?.task_unlinked]).toEqual([null, true]);
   });
 
-  it("links a session without a task from its row or its right-click menu", async () => {
+  it("offers Link to task… in a session's right-click menu", async () => {
     if (await sessionsButton().isExisting()) await sessionsButton().click();
     const row = sel.sessionRow(SESSION);
     await expect($(row)).toBeDisplayed({ wait: 10_000 });
-    // The row's second line says so, with Link (X46).
-    await expect($(`${row}//span[starts-with(normalize-space(), "No task ·")]`)).toBeDisplayed();
-    await $(`${row}//button[normalize-space()="Link"]`).click();
-    await expect($(`//div[@role="dialog"]`).$(sel.text(`Link “${SESSION}” to a task`))).toBeDisplayed();
-    await browser.keys("Escape");
-    await expect($(`//div[@role="dialog"]`)).not.toBeExisting();
+    await expect($(`${row}//*[contains(normalize-space(), "No task")]`)).not.toBeExisting();
     // The embedded driver has no right click: send the contextmenu event itself.
     await browser.execute((xp: string) => {
       const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
@@ -382,11 +377,30 @@ describe("Tasks mode", () => {
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
 
-  it("shows a linked session's task under its name in the sidebar", async () => {
+  const rowStyle = async (option: string) => {
+    await openSettings("Appearance");
+    await $(sel.settingsOption("Session rows", option)).click();
+    await expect($(sel.settingsOption("Session rows", option))).toHaveAttribute("aria-checked", "true");
+    await closeSettings();
+  };
+
+  it("A · shows a linked session's issue number in a column, its prefix on the project heading (X48)", async () => {
     await sessionsButton().click();
-    const row = $(sel.sessionRow("Gift cards at checkout"));
-    await expect(row.$('//span[@title="acme/storefront#15 · Gift cards at checkout"]')).toBeDisplayed({ wait: 10_000 });
-    await expect(row.$(sel.text("acme/storefront#15"))).toBeDisplayed();
+    await rowStyle("A · Issue number column");
+    await expect($(`${sel.sessionRow("Gift cards at checkout")}//span[normalize-space()="15"]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($(`//aside//button[.//span[normalize-space()=${JSON.stringify(PROJECT)}]]//span[normalize-space()="#"]`)).toBeDisplayed();
+    await expect($(sel.sessionRow("Gift cards at checkout"))).toHaveAttribute("title", /^acme\/storefront#15 · In Progress · Gift cards at checkout/);
+  });
+
+  it("B · puts the sessions under a line for their task, those without a task last (X48)", async () => {
+    await rowStyle("B · Task as a sub-header");
+    try {
+      await expect($('//aside//div[@title="acme/storefront#15 · Gift cards at checkout"]')).toBeDisplayed({ wait: 10_000 });
+      await expect($('//aside//div[@title="Not linked to a task"]')).toBeDisplayed();
+      await expect($(`${sel.sessionRow("Gift cards at checkout")}//span[normalize-space()="15"]`)).not.toBeExisting();
+    } finally {
+      await rowStyle("A · Issue number column");
+    }
   });
 
   it("groups the sidebar's sessions by task, each group headed by its task", async () => {

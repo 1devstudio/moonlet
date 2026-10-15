@@ -18,6 +18,8 @@ import { appUpdateLine, claudeUpdateLine, daemonLine } from "../../lib/settingsP
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
 import { ThemeSample } from "./ThemeSample";
+import { ROW_STYLES, rowStyle } from "../../lib/sessionRows";
+import { SessionRowsPreview } from "../Sidebar";
 
 const go = (page: "appearance") => useStore.setState({ settingsPage: { page } });
 
@@ -156,6 +158,9 @@ export function GeneralPage() {
 
 export function AppearancePage() {
   const term = useStore((s) => s.settings.term);
+  const rows = useStore((s) => rowStyle(s.settings.sessionRows));
+  const rowsId = useId();
+  const pickRows = (i: number) => updateSettings({ sessionRows: ROW_STYLES[i].id });
   const theme = useStore((s) => resolveEditorTheme(s.settings.editorTheme));
   const setSize = (fontSize: number) => updateSettings({ term: { ...term, fontSize } });
   // Typed digits apply on Enter or when the field is left, kept in range.
@@ -168,7 +173,7 @@ export function AppearancePage() {
   };
   return (
     <>
-      <PageHeading title="Appearance">Text size across the app, and the colours of files and diffs.</PageHeading>
+      <PageHeading title="Appearance">Text size across the app, how session rows show their task, and the colours of files and diffs.</PageHeading>
       <Section title="Text">
         <Card>
           <Row setting="font-size" label="Font size" htmlFor="settings-font-size" hint="Scales all of moonlet's text. Terminals use this size too.">
@@ -198,6 +203,28 @@ export function AppearancePage() {
           </div>
         </Card>
       </Section>
+      <section aria-labelledby={rowsId} className="flex flex-col gap-2.5" data-setting="session-rows">
+        <h2 id={rowsId} className="m-0 px-0.5 ui-text-11.5 font-semibold uppercase tracking-[0.08em] text-muted">
+          Session rows
+        </h2>
+        <div role="radiogroup" aria-labelledby={rowsId} className="flex gap-2.5">
+          {ROW_STYLES.map((o, i) => (
+            <button
+              key={o.id}
+              type="button"
+              {...radioProps(i, ROW_STYLES.findIndex((x) => x.id === rows), ROW_STYLES.length, pickRows)}
+              className={cx("flex min-w-0 flex-1 flex-col items-stretch gap-2.5 rounded-[10px] border px-4 py-3.5 text-left", rows === o.id ? "border-accent bg-selected" : "border-border bg-panel hover:bg-panel-2")}
+            >
+              <span className="flex flex-col gap-1">
+                <span className="ui-text-13">{o.label}</span>
+                <span className="ui-text-12 text-muted">{o.hint}</span>
+              </span>
+              <SessionRowsPreview style={o.id} />
+            </button>
+          ))}
+        </div>
+        <span className="px-0.5 ui-text-12 text-muted">How a session in the sidebar shows the task it works on. Right-click a session to link it to a task.</span>
+      </section>
       <Section title="Editor and diffs">
         <Card>
           <Row setting="editor-theme" label="Colour theme of files and diffs" htmlFor="settings-theme" hint="Syntax colours in editor tabs and the Changes diff.">

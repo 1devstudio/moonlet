@@ -2,6 +2,7 @@
 // mirrors it per host from RPCs and events, plus UI-only state.
 
 import { create } from "zustand";
+import type { RowStyle } from "./sessionRows";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -85,6 +86,8 @@ export interface Settings {
   editorTheme: string;
   /** Look for a new moonlet release at launch and every six hours (X35). */
   autoUpdateCheck: boolean;
+  /** How session rows show their task: A, a number column, or B, task lines (X48). */
+  sessionRows?: RowStyle;
   /** The Claude Code release the user said Later to (X36). */
   claudeUpdateDismissed?: string | null;
 }
