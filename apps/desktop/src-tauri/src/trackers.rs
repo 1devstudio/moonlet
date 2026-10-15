@@ -106,18 +106,10 @@ impl Session {
             return Ok(Self { conn, token: secret });
         }
         // OAuth: the access token, refreshed shortly before it expires.
-        let read = |secret: &str| serde_json::from_str::<moonlet_trackers::oauth::Tokens>(secret).map_err(|_| again());
-        let mut tokens = read(&secret)?;
-        if tokens.needs_refresh(moonlet_core::paths::now_ms()) {
-            // Each refresh spends the refresh token, so one at a time; a
-            // command that waited uses the token the first one saved.
-            let _one = REFRESHING.lock().await;
-            tokens = read(&secrets::store().get(id).ok_or_else(again)?)?;
-            let now = moonlet_core::paths::now_ms();
-            if !tokens.needs_refresh(now) {
-                return Ok(Self { conn, token: tokens.access });
-            }
-            let (Some(client_id), Some(refresh)) = (LINEAR_CLIENT_ID, tokens.refresh.clone()) else { return Err(again()) };
+        let read = || serde_json::from_str::<moonlet_trackers::oauth::Tokens>(&secrets::store().get(id).ok_or_else(again)?).map_err(|_| again());
+        let save = |t: &moonlet_trackers::oauth::Tokens| secrets::store().set(id, &serde_json::to_string(t).map_err(fail)?).map_err(fail);
+        let refresh = |refresh: String| async move {
+            let Some(client_id) = LINEAR_CLIENT_ID else { return Err(again()) };
             let (status, body) = send(
                 client()?
                     .post(linear::TOKEN)
@@ -128,10 +120,10 @@ impl Session {
             if !(200..300).contains(&status) {
                 return Err(again());
             }
-            tokens = moonlet_trackers::oauth::parse_tokens(&body, now)?;
-            secrets::store().set(id, &serde_json::to_string(&tokens).map_err(fail)?).map_err(fail)?;
-        }
-        Ok(Self { conn, token: tokens.access })
+            Ok(moonlet_trackers::oauth::parse_tokens(&body, moonlet_core::paths::now_ms())?)
+        };
+        let token = fresh_access(read, save, moonlet_core::paths::now_ms, refresh).await?;
+        Ok(Self { conn, token })
     }
 
     async fn linear(&self, query: &str, variables: Value) -> Res<Vec<u8>> {
@@ -139,14 +131,8 @@ impl Session {
     }
 
     /// A Linear parse result, with a rejected OAuth sign-in worded as such.
-    fn linear_ok<T>(&self, r: Result<T, moonlet_trackers::ApiError>) -> Res<T> {
-        r.map_err(|e| {
-            if e.auth && self.conn.auth == "oauth" {
-                TrackerError { auth: true, message: LINEAR_AGAIN.into() }
-            } else {
-                e.into()
-            }
-        })
+    fn linear_ok<T>(&self, r: Result<T, ApiError>) -> Res<T> {
+        r.map_err(|e| linear_error(e, &self.conn.auth))
     }
 
     fn jira(&self, method: reqwest::Method, path: &str) -> Res<reqwest::RequestBuilder> {
@@ -180,6 +166,43 @@ impl Session {
         }
         Ok(body)
     }
+}
+
+/// A Linear error as the user reads it: a rejected OAuth sign-in asks to sign in again (X44).
+fn linear_error(e: ApiError, auth: &str) -> TrackerError {
+    if e.auth && auth == "oauth" {
+        TrackerError { auth: true, message: LINEAR_AGAIN.into() }
+    } else {
+        e.into()
+    }
+}
+
+/// An OAuth access token that is good for at least a minute. Each refresh
+/// spends the refresh token, so refreshes run one at a time, and a command
+/// that waited uses the tokens the first one saved (X44).
+async fn fresh_access<F, Fut>(
+    read: impl Fn() -> Res<moonlet_trackers::oauth::Tokens>,
+    save: impl Fn(&moonlet_trackers::oauth::Tokens) -> Res<()>,
+    now: impl Fn() -> u64,
+    refresh: F,
+) -> Res<String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Res<moonlet_trackers::oauth::Tokens>>,
+{
+    let tokens = read()?;
+    if !tokens.needs_refresh(now()) {
+        return Ok(tokens.access);
+    }
+    let _one = REFRESHING.lock().await;
+    let tokens = read()?;
+    if !tokens.needs_refresh(now()) {
+        return Ok(tokens.access);
+    }
+    let token = tokens.refresh.ok_or_else(|| TrackerError { auth: true, message: LINEAR_AGAIN.into() })?;
+    let fresh = refresh(token).await?;
+    save(&fresh)?;
+    Ok(fresh.access)
 }
 
 async fn linear_request(token: &str, auth: &str, query: &str, variables: Value) -> Res<Vec<u8>> {
@@ -637,6 +660,45 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moonlet_trackers::oauth::Tokens;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn two_commands_at_once_spend_the_refresh_token_once() {
+        // Linear issues a new refresh token on each refresh and refuses the old one.
+        let saved = Arc::new(Mutex::new(Tokens { access: "a1".into(), refresh: Some("r1".into()), expires_ms: 0 }));
+        let load = || {
+            let saved = saved.clone();
+            async move {
+                fresh_access(
+                    || Ok(saved.lock().unwrap().clone()),
+                    |t: &Tokens| Ok(*saved.lock().unwrap() = t.clone()),
+                    || 1_000,
+                    |refresh: String| {
+                        let saved = saved.clone();
+                        async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                            if saved.lock().unwrap().refresh.as_deref() != Some(refresh.as_str()) {
+                                return Err(fail("invalid_grant"));
+                            }
+                            Ok(Tokens { access: "a2".into(), refresh: Some("r2".into()), expires_ms: u64::MAX })
+                        }
+                    },
+                )
+                .await
+            }
+        };
+        let (one, two) = tokio::join!(load(), load());
+        assert_eq!((one.unwrap(), two.unwrap()), ("a2".to_string(), "a2".to_string()));
+    }
+
+    #[test]
+    fn a_rejected_linear_token_reads_as_its_kind_of_sign_in() {
+        let rejected = || ApiError { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here.".into() };
+        assert_eq!(linear_error(rejected(), "oauth").message, "Sign in to Linear again");
+        assert_eq!(linear_error(rejected(), "api_key").message, "Linear no longer accepts this token. Create a new one and paste it here.");
+        assert_eq!(linear_error(ApiError::new("Rate limit exceeded"), "oauth").message, "Rate limit exceeded");
+    }
 
     #[tokio::test]
     async fn a_silent_connection_does_not_hold_up_the_callback() {
