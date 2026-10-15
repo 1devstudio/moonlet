@@ -74,10 +74,14 @@ fn cut(name: &str, max_len: usize) -> String {
 fn clean(raw: &str) -> String {
     let mut out = String::new();
     let lower = raw.to_lowercase();
-    let folded = lower.chars().flat_map(|c| match fold(c) {
-        Some(ascii) => ascii.chars().collect::<Vec<_>>(),
-        None => vec![c],
-    });
+    // Combining accents (U+0300–U+036F), as in a decomposed "é", go too.
+    let folded = lower
+        .chars()
+        .filter(|c| !('\u{300}'..='\u{36f}').contains(c))
+        .flat_map(|c| match fold(c) {
+            Some(ascii) => ascii.chars().collect::<Vec<_>>(),
+            None => vec![c],
+        });
     for c in folded {
         if c.is_ascii_alphanumeric() {
             out.push(c);
@@ -192,6 +196,20 @@ mod tests {
         assert_eq!(
             branch_name("{nope}-{title}", &moon_151(), 48),
             "drag-sessions-between-sections"
+        );
+    }
+
+    #[test]
+    fn decomposed_accents_are_dropped_too() {
+        // macOS often hands over "é" as "e" plus a combining accent.
+        let vars = BranchVars {
+            key: "OPS-8",
+            title: "Re\u{301}sume\u{301} I\u{307}zmir",
+            ..moon_151()
+        };
+        assert_eq!(
+            branch_name("{key}-{title}", &vars, 48),
+            "ops-8-resume-izmir"
         );
     }
 

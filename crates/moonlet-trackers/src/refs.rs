@@ -55,12 +55,14 @@ fn parse_bare(input: &str) -> Option<Pasted> {
     None
 }
 
-/// `ABC-123` in upper case: letters and digits starting with a letter, `-`,
-/// then digits.
+/// `ABC-123` in upper case: letters, digits and `_` starting with a letter
+/// (Jira allows `_` in project keys), `-`, then digits.
 fn issue_key(input: &str) -> Option<String> {
     let (prefix, id) = input.split_once('-')?;
     let prefix_ok = prefix.starts_with(|c: char| c.is_ascii_alphabetic())
-        && prefix.chars().all(|c| c.is_ascii_alphanumeric());
+        && prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
     let id_ok = !id.is_empty() && id.chars().all(|c| c.is_ascii_digit());
     (prefix_ok && id_ok).then(|| input.to_ascii_uppercase())
 }
@@ -252,6 +254,18 @@ mod tests {
                 key: "CU-12".into(),
                 site: None
             })
+        );
+    }
+
+    #[test]
+    fn a_jira_project_key_may_hold_an_underscore() {
+        assert_eq!(
+            parse_pasted("https://acme.atlassian.net/browse/MY_PROJ-12").map(|p| p.key),
+            Some("MY_PROJ-12".into())
+        );
+        assert_eq!(
+            parse_pasted("my_proj-12").map(|p| p.key),
+            Some("MY_PROJ-12".into())
         );
     }
 
