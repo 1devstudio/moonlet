@@ -29,6 +29,11 @@ const ctx: SearchContext = {
 const shown = (q: string) => searchSettings(q, ctx).map((r) => [r.before + r.hit + r.after, r.path, r.value]);
 
 describe("searching settings (X43)", () => {
+  it("finds the session row style with the style chosen (X48)", () => {
+    expect(shown("session rows")).toEqual([["Session rows", "App › Appearance", "A · Issue number column"]]);
+    expect(searchSettings("session rows", { ...ctx, settings: { ...ctx.settings, sessionRows: "task" } })[0].value).toBe("B · Task as a sub-header");
+  });
+
   it("finds every setting whose name has the words, with its page and current value", () => {
     expect(shown("claude")).toEqual([
       ["Claude Code version", "App › General › Updates", "2.1.292"],

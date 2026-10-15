@@ -14,6 +14,7 @@ import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { ModeSwitch, TaskGlyph, TasksSidebar, useWorkspaceBoard } from "./tasks/TasksMode";
 import { sessionTaskLines, type SessionTaskLine } from "../lib/tasksView";
+import { numberColumn, rowStyle, taskGroups, type RowStyle, type TaskGroup } from "../lib/sessionRows";
 import { isTasksMode } from "../lib/tasksStore";
 import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
@@ -272,7 +273,68 @@ interface RowMenuState {
 
 const BADGE_TONE = { muted: "text-muted", blocked: "text-blocked", agents: "text-faint", merged: "text-merged", diff: "text-muted" };
 
-function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e: React.MouseEvent) => void }) {
+/**
+ * One session row's look (X48), shared by the sidebar and the Settings
+ * preview: the glyph, style A's number cell, the name and the badge on one
+ * line. `nested` is style B's indented 34px row under a task line.
+ */
+function RowView({
+  glyph,
+  cell,
+  name,
+  badge,
+  selected,
+  nested,
+  ...rest
+}: {
+  glyph: ReactNode;
+  cell?: { text: string; outOfSync: boolean; width: number };
+  name: ReactNode;
+  badge?: { text: string; tone: keyof typeof BADGE_TONE } | null;
+  selected: boolean;
+  nested?: boolean;
+} & React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      {...rest}
+      className={cx(
+        "group relative mx-2 flex cursor-default items-center gap-2.5 rounded-md pr-2 text-left transition-colors",
+        nested ? "h-[34px] pl-[calc(0.5rem+20px)]" : "h-[38px] pl-2",
+        selected ? "bg-selected shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-panel-2",
+      )}
+    >
+      <span className="flex w-[15px] shrink-0 justify-center">{glyph}</span>
+      {cell && cell.width > 0 && (
+        <span style={{ width: `${Math.max(cell.width, 3)}ch` }} className={cx("shrink-0 text-right font-mono ui-text-11.5 tabular-nums", cell.outOfSync ? "text-accent-2" : "text-faint")}>
+          {cell.text}
+        </span>
+      )}
+      {name}
+      {badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
+    </div>
+  );
+}
+
+/** Style B's quiet line for a task, above its sessions (X48). */
+function TaskLineHeader({ g }: { g: TaskGroup }) {
+  return (
+    <div title={g.key ? `${g.key} · ${g.title}` : "Not linked to a task"} className="mx-2 flex h-[24px] items-center gap-[7px] px-2 ui-text-11.5 text-faint">
+      <span className="mx-[2px] flex shrink-0">
+        {g.column ? (
+          <TaskGlyph column={g.column} size={11} />
+        ) : (
+          <svg width="11" height="11" viewBox="0 0 14 14" aria-hidden="true">
+            <circle cx="7" cy="7" r="5.5" fill="none" stroke="#5e5e5e" strokeWidth="1.6" strokeDasharray="2 2" />
+          </svg>
+        )}
+      </span>
+      {g.key && <span className={cx("shrink-0 font-mono ui-text-11", g.outOfSync ? "text-accent-2" : "text-muted")}>{g.key}</span>}
+      <span className="min-w-0 flex-1 truncate">{g.outOfSync ? `${g.title} · out of sync` : g.title}</span>
+    </div>
+  );
+}
+
+function SessionRow({ host, s, onMenu, cell, nested }: { host: string; s: Session; onMenu: (e: React.MouseEvent) => void; cell?: { text: string; outOfSync: boolean; width: number }; nested?: boolean }) {
   const selected = useStore((st) => !st.showHistory && st.selected?.host === host && st.selected.session === s.id);
   const state = useStore((st) => sessionState(st, host, s.id));
   const git = useStore((st) => st.git[sesKey(host, s.id)]);
@@ -284,18 +346,18 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
   // Running subagents of the session's chats (X42).
   const agents = useStore((st) => sessionTerminals(st, host, s.id).reduce((n, x) => n + (x.subagents ?? 0), 0));
   const badge = sessionBadge({ creating, state, merged: pr?.state === "merged", git, agents });
-  const { lines, sources } = useContext(TaskLines);
+  const { lines } = useContext(TaskLines);
   const line = lines[s.id];
-  // In a workspace with a task source, a session without a task says so (X46).
-  const noTask = !line && sources;
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
   if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
+  // Hovering shows the task's key, state and title (X48), then the branch.
+  const task = line ? `${line.key} · ${line.text} · ${line.title}\n` : "";
   return (
-    <div
+    <RowView
       role="button"
       aria-current={selected ? "true" : undefined}
-      title={`${s.branch} → ${s.base}${host !== "local" ? ` · ${host}` : ""}${from ? `\n${from}` : ""}`}
+      title={`${task}${s.branch} → ${s.base}${host !== "local" ? ` · ${host}` : ""}${from ? `\n${from}` : ""}`}
       onClick={() => {
         useStore.setState({ showHistory: false });
         selectSession(host, s.id);
@@ -305,18 +367,13 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
         e.preventDefault();
         onMenu(e);
       }}
-      // The design's row: inset and rounded. Line 1 is the glyph (in a 15px
-      // column under the project's mark), the name and the badge; the task
-      // line sits under the name.
-      className={cx(
-        "group relative mx-2 flex cursor-default flex-col justify-center gap-[3px] rounded-md px-2 text-left transition-colors",
-        line || noTask ? "min-h-[46px] py-1" : "h-[38px]",
-        selected ? "bg-selected shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-panel-2",
-      )}
-    >
-      <span className="flex min-w-0 items-center gap-2">
-        <span className="flex w-[15px] shrink-0 justify-center">{notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}</span>
-        {renaming ? (
+      selected={selected}
+      nested={nested}
+      cell={cell}
+      glyph={notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
+      badge={renaming ? null : badge}
+      name={
+        renaming ? (
           <InlineInput
             initial={s.name}
             onDone={(v) => {
@@ -326,36 +383,57 @@ function SessionRow({ host, s, onMenu }: { host: string; s: Session; onMenu: (e:
           />
         ) : (
           <span className={cx("min-w-0 flex-1 truncate ui-text-13", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
-        )}
-        {!renaming && badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
-      </span>
-      {line && (
-        <span title={`${line.key} · ${line.title}`} className="flex min-w-0 items-center gap-2 ui-text-11.5 text-faint">
-          <span aria-hidden className="w-[15px] shrink-0" />
-          <span className="flex min-w-0 items-center gap-1.5">
-            <TaskGlyph column={line.column} size={11} />
-            <span className="shrink-0 font-mono ui-text-11 text-muted">{line.key}</span>
-            <span className={cx("truncate", line.outOfSync && "text-accent-2")}>{line.text}</span>
-          </span>
-        </span>
-      )}
-      {noTask && (
-        <span className="flex min-w-0 items-center gap-2 ui-text-11.5 text-faint">
-          <span aria-hidden className="w-[15px] shrink-0" />
-          <span className="flex items-center gap-1">
-            No task ·
-            <button
-              className="text-accent-2 hover:text-accent"
-              onClick={(e) => {
-                e.stopPropagation();
-                useStore.setState({ dialog: { kind: "link-task", host, session: s.id } });
-              }}
-            >
-              Link
-            </button>
-          </span>
-        </span>
-      )}
+        )
+      }
+    />
+  );
+}
+
+/** Sample sessions for the Settings preview of each row style (X48). */
+const PREVIEW: { id: string; name: string; state: "working" | "blocked" | "idle"; pr?: "merged"; badge: { text: string; tone: keyof typeof BADGE_TONE }; task?: Omit<SessionTaskLine, "text"> }[] = [
+  { id: "1", name: "Remote hosts sidebar", state: "working", badge: { text: "+412 -38", tone: "diff" }, task: { key: "MOON-142", title: "Remote hosts sidebar", column: "in_progress", outOfSync: false } },
+  { id: "2", name: "Hosts section spike", state: "idle", badge: { text: "+46 -3", tone: "diff" }, task: { key: "MOON-142", title: "Remote hosts sidebar", column: "in_progress", outOfSync: false } },
+  { id: "3", name: "File tabs", state: "idle", pr: "merged", badge: { text: "merged", tone: "merged" }, task: { key: "MOON-144", title: "File tabs", column: "in_review", outOfSync: true } },
+  { id: "4", name: "Zsh startup profiling", state: "idle", badge: { text: "+22 -9", tone: "diff" } },
+];
+
+/** Settings › Appearance › Session rows: the sample sessions drawn in `style` (X48). */
+export function SessionRowsPreview({ style }: { style: RowStyle }) {
+  const lines = Object.fromEntries(PREVIEW.flatMap((p) => (p.task ? [[p.id, p.task]] : [])));
+  const ids = PREVIEW.map((p) => p.id);
+  const column = style === "number" ? numberColumn(ids, lines) : null;
+  const tasks = style === "task" ? taskGroups(ids, lines, { sources: true, groupedByTask: false }) : null;
+  const row = (id: string, nested?: boolean) => {
+    const p = PREVIEW.find((x) => x.id === id)!;
+    return (
+      <RowView
+        key={id}
+        aria-hidden
+        selected={id === "1"}
+        nested={nested}
+        cell={column ? { ...column.cells[id], width: column.width } : undefined}
+        glyph={p.state !== "idle" ? <StateGlyph state={p.state} size={15} /> : <BranchIcon state={p.pr} />}
+        badge={p.badge}
+        name={<span className={cx("min-w-0 flex-1 truncate ui-text-13", id === "1" ? "text-fg" : "text-[#cfcfcf]")}>{p.name}</span>}
+      />
+    );
+  };
+  return (
+    <div className="pointer-events-none flex flex-col rounded-lg border border-border bg-panel py-1.5">
+      <div className="flex h-[30px] items-center gap-2 pl-4 pr-3">
+        <span className="truncate ui-text-13 font-semibold text-[#d6d6d6]">moonlet</span>
+        {column?.prefix && <span className="font-mono ui-text-11.5 text-faint">{column.prefix}</span>}
+      </div>
+      {!tasks && ids.map((id) => row(id))}
+      {tasks?.map((t) => (
+        <div key={t.key || "none"} className="flex flex-col">
+          <TaskLineHeader g={t} />
+          <div className="relative flex flex-col">
+            <span aria-hidden className="absolute bottom-[10px] left-[calc(1rem+7.5px)] top-0 w-px bg-border-strong" />
+            {t.ids.map((id) => row(id, true))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -388,11 +466,21 @@ function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; wo
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const toggle = () => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }));
   const heading = groupHeading(g);
+  // How rows show their task (X48): A, a number column; B, task lines.
+  const style = useStore((s) => rowStyle(s.settings.sessionRows));
+  const { lines, sources } = useContext(TaskLines);
+  const ids = g.sessions.map((s) => s.id);
+  const column = style === "number" && sources ? numberColumn(ids, lines) : null;
+  const tasks = style === "task" ? taskGroups(ids, lines, { sources, groupedByTask: g.kind === "task" }) : null;
+  const row = (s: Session, nested?: boolean) => (
+    <SessionRow key={s.id} host={host} s={s} nested={nested} cell={column ? { ...column.cells[s.id], width: column.width } : undefined} onMenu={(e) => onRowMenu({ session: s }, e)} />
+  );
   const header =
     heading === "project" ? (
       <>
         <ProjectMark host={host} projectId={g.projectId!} />
         <span className="truncate ui-text-14 font-semibold text-[#d6d6d6]">{g.label}</span>
+        {column?.prefix && <span className="shrink-0 font-mono ui-text-11.5 text-faint">{column.prefix}</span>}
       </>
     ) : heading === "label" ? (
       <span className={cx("truncate ui-text-11.5 font-medium text-muted", g.kind === "status" && "uppercase tracking-[0.1em]")}>{g.label}</span>
@@ -431,7 +519,17 @@ function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; wo
           )}
         </div>
       )}
-      {!collapsed && g.sessions.map((s) => <SessionRow key={s.id} host={host} s={s} onMenu={(e) => onRowMenu({ session: s }, e)} />)}
+      {!collapsed && !tasks && g.sessions.map((s) => row(s))}
+      {!collapsed &&
+        tasks?.map((t) => (
+          <div key={t.key || "none"} className="flex flex-col">
+            <TaskLineHeader g={t} />
+            <div className="relative flex flex-col">
+              <span aria-hidden className="absolute bottom-[10px] left-[calc(1rem+7.5px)] top-0 w-px bg-border-strong" />
+              {t.ids.map((id) => row(g.sessions.find((s) => s.id === id)!, true))}
+            </div>
+          </div>
+        ))}
     </div>
   );
 }
