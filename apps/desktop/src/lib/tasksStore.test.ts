@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -825,5 +825,17 @@ describe("the header's filters (X45)", () => {
     const restarted = await import("./tasksStore");
     expect(restarted.useTasks.getState().filters).toEqual({ mine: true, hideEmptyDone: false });
     setFilters({ mine: false, hideEmptyDone: false });
+  });
+});
+
+describe("branchUser (X44 {user} in branch names)", () => {
+  it("is the first name of the tracker account, or the gh login, asked once per host", async () => {
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Ada Lovelace", auth: "api_key", sources: [] }] } });
+    expect(await branchUser("local", "linear:acme")).toBe("ada");
+    answers["gh.whoami"] = () => "sam-rivera";
+    expect(await branchUser("local", "github:github.com")).toBe("sam-rivera");
+    answers["gh.whoami"] = () => "someone-else";
+    expect(await branchUser("local", "github:github.com")).toBe("sam-rivera");
+    useTasks.setState({ config: null });
   });
 });

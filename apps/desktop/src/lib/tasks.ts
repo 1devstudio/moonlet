@@ -25,6 +25,8 @@ export interface Task {
   cycle?: number;
   /** Assigned to the user, as the tracker (or `gh`) said; for Assignee: me (X45). */
   mine?: boolean;
+  /** Jira's issue type ("Bug", "Story"). */
+  issueType?: string;
   /** GitHub issues: what links a branch or PR to it. */
   github?: { repo: string; number: number; closingPrs: number[] };
   /** Linear, Jira and ClickUp issues: their id, state name and team/project/list in the tracker. */
@@ -168,6 +170,10 @@ export interface TaskStart {
   /** The connection's branch template and max length (X44); the tracker's default when absent. */
   template?: string;
   maxLen?: number;
+  /** `{type}` in the branch template: Jira's issue type, else the first label. */
+  issueType?: string;
+  /** `{user}` in the branch template (see `branchUser`). */
+  user?: string;
 }
 
 /**
@@ -188,5 +194,6 @@ export function taskStart(task: Task, repos: Record<string, string | null>, sour
     project: (repo && Object.keys(repos).find((id) => repos[id]?.toLowerCase() === repo)) || (task.tracker && sourceProjects[`${task.connection} ${task.tracker.source}`]) || null,
     ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
     ...(task.tracker && { tracker: { id: task.tracker.id, source: task.tracker.source } }),
+    ...((task.issueType ?? task.labels[0]) && { issueType: task.issueType ?? task.labels[0] }),
   };
 }
