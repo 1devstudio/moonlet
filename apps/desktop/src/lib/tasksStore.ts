@@ -9,7 +9,7 @@ import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorksp
 import { askConfirm } from "./confirm";
 import { cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
-import { githubRepo, type Task, taskFromGh } from "./tasks";
+import { githubRepo, type Task, type TaskStart, taskFromGh } from "./tasks";
 import { workspaceConnections } from "./trackerSources";
 import { type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { TaskView } from "./tasksView";
@@ -126,11 +126,16 @@ export function setLayout(layout: "board" | "list") {
 /** The settings in effect: the file's, or the defaults before it is read. */
 export const trackersConfig = (t: { config: TrackersConfig | null }) => t.config ?? DEFAULT_CONFIG;
 
+/** The file leaves out trackers at their defaults; put them back. */
+function withDefaults(c: Partial<TrackersConfig>): TrackersConfig {
+  return { ...c, sync: { ...DEFAULT_CONFIG.sync, ...c.sync }, github: c.github ?? DEFAULT_TRACKER, connections: c.connections ?? [] };
+}
+
 /** Reads `trackers.toml` once; a broken file shows its error and the defaults apply. */
 export async function loadTrackersConfig(force = false) {
   if (useTasks.getState().config && !force) return;
   try {
-    useTasks.setState({ config: await hostsApi.trackersConfig() });
+    useTasks.setState({ config: withDefaults(await hostsApi.trackersConfig()) });
   } catch (e) {
     errorToast(e);
   }
@@ -194,12 +199,15 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const isLatest = syncs.start(key);
   const projects = workspaceProjects(useStore.getState(), host, workspaceId);
   let error: string | null = null;
+  // Sources that failed this time keep their last good tasks; the others are fresh.
+  const failed = new Set<string>();
   const per = await Promise.all(
     projects.map(async (p) => {
       const repo = githubRepo(await rpc<string | null>(host, M.gitOriginUrl, { path: p.path }).catch(() => null));
       const issues = repo
         ? await rpc<GhTask[]>(host, M.ghTasks, { path: p.path, mine: true }).catch((e) => {
             error = message(e);
+            failed.add(GITHUB);
             return [];
           })
         : [];
@@ -218,6 +226,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
       } catch (e) {
         const err = e as { auth?: boolean; message?: string };
         error = err.message ?? message(e);
+        failed.add(c.id);
         if (err.auth) useTasks.setState((t) => ({ attention: { ...t.attention, [c.id]: error ?? "" } }));
         return [];
       }
@@ -231,10 +240,16 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   for (const x of per) for (const gh of x.issues) tasks.set(`${GITHUB} ${gh.repo}#${gh.number}`, taskFromGh(gh, GITHUB));
   for (const t of fromTrackers.flat()) tasks.set(`${t.connection} ${t.key}`, t);
   const prev = useTasks.getState().data[key];
-  const next: TasksData =
-    error && prev
-      ? { ...prev, sources, repos, sourceProjects, error }
-      : { tasks: [...tasks.values()], worktrees: per.flatMap((x) => x.worktrees), sources, repos, sourceProjects, syncedAt: error ? null : now, error };
+  for (const t of prev?.tasks ?? []) if (failed.has(t.connection) && !tasks.has(`${t.connection} ${t.key}`)) tasks.set(`${t.connection} ${t.key}`, t);
+  const next: TasksData = {
+    tasks: [...tasks.values()],
+    worktrees: per.flatMap((x) => x.worktrees),
+    sources,
+    repos,
+    sourceProjects,
+    syncedAt: error ? (prev?.syncedAt ?? null) : now,
+    error,
+  };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next } }));
   if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev?.tasks ?? null, next);
 }
@@ -283,6 +298,21 @@ export function putOffDrift(card: Card) {
   useTasks.setState((t) => ({ notNow: { ...t.notNow, [driftKey(card)]: true } }));
 }
 
+const COLUMN_LABEL = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" } as const;
+
+/** The "session starts" rule after a session started from a task with the box ticked (X46):
+ *  a GitHub issue is assigned; a tracker issue moves to In Progress and is assigned. */
+export async function startedFromTask(host: string, workspaceId: string, start: TaskStart) {
+  if (start.github) return assignToMe(host, workspaceId, start.github);
+  if (!start.tracker) return;
+  try {
+    await hostsApi.trackerUpdate({ id: start.ref.connection, task: start.tracker.id, source: start.tracker.source, column: "in_progress", assign_me: true });
+    movedByMoonlet.add(`${start.ref.connection} ${start.key}`);
+  } catch (e) {
+    errorToast((e as { message?: string }).message ?? e);
+  }
+}
+
 /** Assigns a GitHub issue to the user, as the "session starts" rule does (X46). */
 export async function assignToMe(host: string, workspaceId: string, github: { repo: string; number: number }) {
   const path = repoPath(host, workspaceId, github.repo);
@@ -306,8 +336,11 @@ export async function fixDrift(host: string, workspaceId: string, card: Card) {
       movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
       toast(`Closed ${card.task.key}`);
     } else if (plan.kind === "move") {
-      toast(`Moving ${card.task.key} comes with its tracker's connection (X44)`);
-      return;
+      const t = card.task.tracker;
+      if (!t) return;
+      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column });
+      movedByMoonlet.add(`${card.task.connection} ${card.task.key}`);
+      toast(`Moved ${card.task.key} to ${COLUMN_LABEL[plan.column]}`);
     } else {
       const sessions = useStore.getState().sessions[host]?.filter((s) => plan.sessions.includes(s.id)) ?? [];
       const paths = [...sessions.map((s) => s.path), ...plan.worktrees];
