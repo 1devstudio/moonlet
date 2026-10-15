@@ -2,7 +2,7 @@
 // panel's Task tab and the link dialog.
 
 import { ChevronLeft, ChevronRight, ExternalLink, GitBranch, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { hostsApi } from "../../lib/daemon";
 import type { Session } from "../../lib/protocol";
 import { selectSession, useStore } from "../../lib/store";
@@ -153,25 +153,35 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   useEffect(() => {
     if (ws?.workspace_id) ensureTasks(host, ws.workspace_id);
   }, [host, ws?.workspace_id]);
+  // The latest tasks and repository, read when a lookup runs, so a background
+  // sync does not throw away what was pasted.
+  const latest = useRef({ tasks, originRepo });
+  latest.current = { tasks, originRepo };
+  // The lookup for the current query; ↵ waits for it.
+  const lookup = useRef<Promise<Task | null>>(Promise.resolve(null));
+  const cancel = useRef(() => {});
   useEffect(() => {
     let live = true;
     // What was pasted before no longer counts, so ↵ cannot link it.
     setPasted(null);
-    const timer = setTimeout(() => {
-      void hostsApi.parsePasted(query).then(
-        async (p) => {
-          // A task outside the loaded ones is asked of its tracker.
-          const found = p ? (findPasted(p, tasks, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null;
-          if (live) setPasted(found);
-        },
-        () => live && setPasted(null),
-      );
-    }, 200);
+    lookup.current = new Promise<Task | null>((resolve) => {
+      const timer = setTimeout(async () => {
+        const p = await hostsApi.parsePasted(query).catch(() => null);
+        const { tasks, originRepo } = latest.current;
+        // A task outside the loaded ones is asked of its tracker.
+        resolve(p ? (findPasted(p, tasks, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null);
+      }, 200);
+      cancel.current = () => {
+        clearTimeout(timer);
+        resolve(null);
+      };
+    });
+    void lookup.current.then((found) => live && setPasted(found));
     return () => {
       live = false;
-      clearTimeout(timer);
+      cancel.current();
     };
-  }, [query, tasks, originRepo, host, ws?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [query, host, ws?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ws) return null;
   const choices = linkChoices(ws, tasks, pasted ? "" : query, sessionsOf);
   const pick = (t: Task) => {
@@ -197,8 +207,13 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            const first = e.key === "Enter" ? firstChoice(pasted, choices) : null;
-            if (first) pick(first);
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            // A paste still being looked up decides what ↵ links.
+            void lookup.current.then((found) => {
+              const first = firstChoice(found, choices);
+              if (first) pick(first);
+            });
           }}
         />
       </label>

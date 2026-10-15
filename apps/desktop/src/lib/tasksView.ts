@@ -84,6 +84,12 @@ export function sessionTaskLines(board: Board): Record<string, SessionTaskLine> 
  */
 export function sourceLabels(tasks: Task[]): (task: Task) => string | undefined {
   const of = (t: Task) => (t.github ? `gh ${t.github.repo}` : `${t.connection} ${t.tracker?.source ?? ""}`);
-  const many = new Set(tasks.map(of)).size > 1;
-  return (t) => (many ? (t.github ? t.github.repo.split("/")[1] : (t.tracker?.source ?? "")) : undefined);
+  const short = (t: Task) => (t.github ? t.github.repo.split("/")[1] : (t.tracker?.source ?? ""));
+  // `acme/web`, or `globex ENG` (site and team), when the short name is shared.
+  const full = (t: Task) => (t.github ? t.github.repo : `${t.connection.split(":").slice(1).join(":")} ${t.tracker?.source ?? ""}`);
+  const sources = new Map(tasks.map((t) => [of(t), t]));
+  if (sources.size < 2) return () => undefined;
+  const counts = new Map<string, number>();
+  for (const t of sources.values()) counts.set(short(t), (counts.get(short(t)) ?? 0) + 1);
+  return (t) => ((counts.get(short(t)) ?? 0) > 1 ? full(t) : short(t));
 }

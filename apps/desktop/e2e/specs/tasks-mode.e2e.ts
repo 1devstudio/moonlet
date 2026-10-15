@@ -209,9 +209,8 @@ describe("Tasks mode", () => {
     // An issue outside the workspace's tasks is asked of gh.
     await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "https://github.com/acme/other/issues/99");
     await expect($('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/other#99"]]')).toBeDisplayed({ wait: 10_000 });
+    // ↵ at once links the pasted task: it waits for the lookup.
     await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "#12");
-    await expect($('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/storefront#12"]]')).toBeDisplayed({ wait: 10_000 });
-    // ↵ links the pasted task.
     await browser.keys("Enter");
     await browser.waitUntil(() => rpc<Session[]>(w, "session.list", {}).find((x) => x.name === SESSION)?.task?.key === "acme/storefront#12", {
       timeout: 10_000,
