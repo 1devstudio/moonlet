@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { hostsApi } from "../../lib/daemon";
 import type { Session } from "../../lib/protocol";
 import { selectSession, useStore } from "../../lib/store";
-import { acceptanceCriteria, findPasted, firstChoice, linkChoices } from "../../lib/taskLinking";
+import { acceptanceCriteria, findPasted, firstChoice, linkChoices, pasteLookup } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
 import { ensureTasks, linkTask, lookUpPasted, mappedTasks, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
@@ -153,35 +153,27 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   useEffect(() => {
     if (ws?.workspace_id) ensureTasks(host, ws.workspace_id);
   }, [host, ws?.workspace_id]);
-  // The latest tasks and repository, read when a lookup runs, so a background
-  // sync does not throw away what was pasted.
-  const latest = useRef({ tasks, originRepo });
-  latest.current = { tasks, originRepo };
-  // The lookup for the current query; ↵ waits for it.
-  const lookup = useRef<Promise<Task | null>>(Promise.resolve(null));
-  const cancel = useRef(() => {});
+  // The latest tasks, read when a lookup runs, so a background sync does not
+  // throw away what was pasted.
+  const latest = useRef(tasks);
+  latest.current = tasks;
+  const lookup = useRef(pasteLookup());
+  const linking = useRef(false);
+  const loaded = !!data;
   useEffect(() => {
-    let live = true;
     // What was pasted before no longer counts, so ↵ cannot link it.
     setPasted(null);
-    lookup.current = new Promise<Task | null>((resolve) => {
-      const timer = setTimeout(async () => {
-        const p = await hostsApi.parsePasted(query).catch(() => null);
-        const { tasks, originRepo } = latest.current;
+    const l = lookup.current;
+    void l
+      .start(async () => {
+        const p = await hostsApi.parsePasted(query);
         // A task outside the loaded ones is asked of its tracker.
-        resolve(p ? (findPasted(p, tasks, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null);
-      }, 200);
-      cancel.current = () => {
-        clearTimeout(timer);
-        resolve(null);
-      };
-    });
-    void lookup.current.then((found) => live && setPasted(found));
-    return () => {
-      live = false;
-      cancel.current();
-    };
-  }, [query, host, ws?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+        return p ? (findPasted(p, latest.current, originRepo) ?? (ws ? await lookUpPasted(host, ws.path, p, originRepo) : null)) : null;
+      })
+      .then((found) => found !== undefined && setPasted(found));
+    return () => l.cancel();
+    // Once the workspace's tasks and repository arrive, `#12` is looked up again.
+  }, [query, host, ws?.path, originRepo, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ws) return null;
   const choices = linkChoices(ws, tasks, pasted ? "" : query, sessionsOf);
   const pick = (t: Task) => {
@@ -207,12 +199,15 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== "Enter") return;
+            if (e.key !== "Enter" || linking.current) return;
             e.preventDefault();
-            // A paste still being looked up decides what ↵ links.
-            void lookup.current.then((found) => {
-              const first = firstChoice(found, choices);
+            // A paste still being looked up decides what ↵ links; a lookup
+            // that was replaced or cancelled links nothing.
+            linking.current = true;
+            void lookup.current.settled().then((found) => {
+              const first = found === undefined ? null : firstChoice(found, choices);
               if (first) pick(first);
+              else linking.current = false;
             });
           }}
         />
