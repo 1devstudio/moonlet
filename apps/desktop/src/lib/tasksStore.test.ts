@@ -12,7 +12,8 @@ vi.mock("./daemon", () => ({
   }),
   sendInput: vi.fn(),
   hostsApi: {
-    trackersConfig: () => (configFails.length ? Promise.reject(configFails.shift()) : Promise.resolve({ sync: { interval: 300, notify: true } })),
+    trackersConfig: () =>
+      new Promise((r) => setTimeout(r, configDelay.ms)).then(() => (configFails.length ? Promise.reject(configFails.shift()) : { sync: { interval: 300, notify: true } })),
     trackersSave: (c: object) => new Promise<void>((r, no) => setTimeout(() => (saveFails.length ? no(saveFails.shift()) : (saved.push(c), r())), 5)),
     trackerUpdate: (req: object) => (failNext.length ? Promise.reject(failNext.shift()) : (sent.push(req), Promise.resolve())),
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
@@ -27,6 +28,7 @@ const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
 const sent = vi.hoisted(() => [] as object[]);
 const failNext = vi.hoisted(() => [] as object[]);
 const configFails = vi.hoisted(() => [] as object[]);
+const configDelay = vi.hoisted(() => ({ ms: 0 }));
 const saved = vi.hoisted(() => [] as object[]);
 const saveFails = vi.hoisted(() => [] as object[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
@@ -443,6 +445,21 @@ describe("saveTrackersConfig", () => {
     expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
     expect(saved).toEqual([]);
     expect(trackersConfig(useTasks.getState()).sync).toEqual({ interval: 300, notify: true });
+    useTasks.setState({ config: null });
+  });
+
+  it("a change made while a failed write reloads the file is dropped too", async () => {
+    saved.length = 0;
+    await loadTrackersConfig(true);
+    saveFails.push(new Error("disk full"));
+    configDelay.ms = 30;
+    const failing = saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, notify: false } }));
+    // Made after the failure, while the file is still reloading.
+    await new Promise((r) => setTimeout(r, 12));
+    const during = saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, interval: 30 } }));
+    await Promise.allSettled([failing, during]);
+    expect(saved.map((c) => (c as { sync: object }).sync)).not.toContainEqual({ interval: 30, notify: false });
+    configDelay.ms = 0;
     useTasks.setState({ config: null });
   });
 

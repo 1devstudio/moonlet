@@ -209,8 +209,9 @@ export function saveTrackersConfig(update: (c: TrackersConfig) => TrackersConfig
     try {
       await hostsApi.trackersSave(next);
     } catch (e) {
-      saveRound++;
       await loadTrackersConfig(true);
+      // After the reload: a change made while it ran was built on the failed one.
+      saveRound++;
       throw e;
     }
   });
