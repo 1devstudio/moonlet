@@ -17,7 +17,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
    - **Linear:** an API key. "Sign in with Linear" (OAuth with PKCE) shows only in a build with Linear's client ID.
    - **Jira Cloud:** site (`acme.atlassian.net`), email and API token, with a "Create one" link to Atlassian's token page.
    - **ClickUp:** a personal API token (`pk_…`), with a "Create one" link to ClickUp's Apps settings.
-4. moonlet checks the sign-in ("Signed in as Sam · 4 sources visible") and lists what the account can see. The user ticks the sources to show and picks, for each, the workspace that shows it, what it shows and the project its sessions start in.
+4. moonlet checks the sign-in ("Signed in as Sam · 4 sources visible") and lists what the account can see. The user adds a row per source to show (a Jira project, Linear team or ClickUp list, picked from a menu) and picks, for each, the workspace that shows it, what it shows and the moonlet project its sessions start in.
 5. **Save and sync.** The connection's row reads `Connected as Sam · API key · 1 source`.
 6. On the row, **Sources** and **States** change the sources and the state mapping. Below the connections, each connected tracker has its Keep in step rules (X46) and branch name; then come GitHub's rules and branch names, Linking, the workspaces' sources and Sync.
 
@@ -50,6 +50,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 - [x] A source is one Linear team, Jira project or ClickUp list (the lists of each space), or a GitHub repository. It is known by its connection and its key: the team key, the project key or the list id. (`linear.rs` the_viewer_teams_and_states, `jira.rs` myself_and_projects, `clickup.rs` user_workspaces_spaces_lists_and_statuses)
 - [x] The lists inside each ClickUp space's folders are sources too. (`clickup.rs` the_lists_inside_a_spaces_folders_are_sources)
 - [x] Each Linear, Jira or ClickUp source has a **project** (the moonlet project its sessions start in), a **workspace** (X32) and a **Shows** filter: `Assigned to me` (default) or `All open issues`. Assigned to me uses the tracker's own idea of who the user is (Jira `currentUser()`, ClickUp the account's user id); All open issues also takes everyone else's. (`trackerSources.test.ts`, `tasksStore.test.ts` Shows, `task-trackers.e2e.ts`, `jira.rs` the_search_and_write_bodies, `clickup.rs` requests and user_workspaces_spaces_lists_and_statuses)
+- [x] The Sources dialog says what a source is in the tracker ("Add the Jira projects whose issues Tasks mode shows…") above column headers (`Jira project`, Workspace, Shows, moonlet project). It lists one row per source shown, or one empty row when there is none. **Add source** adds an empty row (one at a time). Each row's menu offers the sources no other row shows in the same workspace, so one source can show in several workspaces; a saved source the account no longer sees stays in its own row. Each row has a remove button. **Save and sync** saves the rows with a source picked, once per workspace. (`trackerSources.test.ts` sourceNoun, sourceRows, sourceChoices, sourcesToSave; `task-trackers.e2e.ts` adds and removes a row)
 - [x] For Linear, Assigned to me uses Linear's own `isMe`. (`linear.rs` assigned_to_me_is_linears_own_is_me)
 - [x] "Where each workspace gets its tasks" lists each workspace with its sources (`GitHub acme/web · Linear Engineering`). A source whose connection needs attention is outlined red with its reason. (`trackerSources.test.ts` sourceList)
 - [x] A workspace's GitHub sources are its projects whose `origin` is on github.com. They show the issues assigned to the user. (`tasksStore.test.ts` refreshTasks)
@@ -110,7 +111,7 @@ The designs are the "Settings · Task trackers", "Connect Jira" and "Tasks with 
 - **Where each workspace gets its tasks.**
 - **Sync:** Refresh issues and the notification switch.
 
-Dialogs: Connect or Reconnect (sign-in, then sources), Sources (each source's tick, workspace, Shows and project, then **Save and sync**) and States (each state's column, then **Save**). A failure shows the tracker's message in the dialog or on the row.
+Dialogs: Connect or Reconnect (sign-in, then sources), Sources (a row per source shown, with its workspace, Shows and moonlet project, **Add source** and a remove button per row, then **Save and sync**) and States (each state's column, then **Save**). A failure shows the tracker's message in the dialog or on the row.
 
 ## Protocol and RPCs
 
