@@ -56,6 +56,8 @@ A dialog, `min(560px, 90vw)` wide, titled **Project settings**, with the project
 - **Agents**
   - Default agent: a select with Claude, Codex, then the custom agents. A first option "None (ask each time)" leaves the key unset.
   - Custom agents: a list of rows (name, command, remove ×) and an **Add agent** button. New rows start empty with the name field focused.
+- **Task trackers** (X44)
+  - Tracker projects: the tracker projects, teams or lists whose sessions start in this project, each with an unlink ×, and a "Link a tracker project…" menu of the connections' other sources.
 - **Git**
   - Base branch: input, placeholder "Default: <git default branch>".
 - **Git**: the Base branch hint reads "New sessions branch from here, and Changes compare against it."

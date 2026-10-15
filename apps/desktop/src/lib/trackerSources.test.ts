@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changedStates, projectTrackers, sourceList, sourceChoices, sourceNoun, sourceRows, sourcesToSave, workspaceConnections } from "./trackerSources";
+import { changedStates, parseTrackerLink, projectTrackers, trackerLink, sourceList, sourceChoices, sourceNoun, sourceRows, sourcesToSave, workspaceConnections } from "./trackerSources";
 import type { Connection } from "./tasksStore";
 
 const conn = (id: string, sources: Connection["sources"]): Connection => ({ id, kind: id.split(":")[0] as Connection["kind"], site: id.split(":")[1], account: "Sam", auth: "token", sources });
@@ -127,5 +127,15 @@ describe("projectTrackers (X44 Project settings › Task trackers)", () => {
       ],
     });
     expect(projectTrackers(undefined, [])).toEqual({ linked: [], choices: [] });
+  });
+});
+
+describe("trackerLink and parseTrackerLink (X44 trackers in .moonlet/config.toml)", () => {
+  it("writes and reads a project's link to a tracker source", () => {
+    expect(trackerLink("jira:acme.atlassian.net", "ABC")).toBe("jira:acme.atlassian.net/ABC");
+    expect(parseTrackerLink("jira:acme.atlassian.net/ABC")).toEqual({ connection: "jira:acme.atlassian.net", key: "ABC" });
+    expect(parseTrackerLink("clickup:9012/901")).toEqual({ connection: "clickup:9012", key: "901" });
+    expect(parseTrackerLink("ABC")).toBe(null);
+    expect(parseTrackerLink("jira:acme.atlassian.net/")).toBe(null);
   });
 });

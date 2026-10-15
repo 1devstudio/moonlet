@@ -4,10 +4,10 @@
 
 import type { SessionTaskLine } from "./tasksView";
 
-/** A key's prefix and number: `MOON-142` → `MOON-` and `142`; a GitHub `owner/repo#12` → `#` and `12`. */
+/** A key's prefix and number: `MOON-142` → `MOON-` and `142`; a GitHub `owner/repo#12` → `owner/repo#` and `12`. */
 export function splitKey(key: string): { prefix: string; number: string } {
   const hash = key.lastIndexOf("#");
-  if (hash >= 0) return { prefix: "#", number: key.slice(hash + 1) };
+  if (hash >= 0) return { prefix: key.slice(0, hash + 1), number: key.slice(hash + 1) };
   const dash = key.lastIndexOf("-");
   return { prefix: key.slice(0, dash + 1), number: key.slice(dash + 1) };
 }
@@ -19,20 +19,21 @@ export interface NumberCell {
 
 /**
  * Style A's column for one heading's sessions (`ids`, in row order): the
- * prefix the heading shows when every linked session shares it, each row's
- * number (the whole key when prefixes differ, blank without a task), and the
- * column's width in characters, 0 when no session has a task.
+ * prefix a project heading shows when every linked session shares it (`#`
+ * for one GitHub repository), each row's number (the whole key when prefixes
+ * differ or there is no project heading to show the prefix, blank without a
+ * task), and the column's width in characters, 0 when no session has a task.
  */
-export function numberColumn(ids: string[], lines: Record<string, { key: string; outOfSync: boolean } | undefined>): { prefix: string | null; cells: Record<string, NumberCell>; width: number } {
+export function numberColumn(ids: string[], lines: Record<string, { key: string; outOfSync: boolean } | undefined>, o: { heading: boolean }): { prefix: string | null; cells: Record<string, NumberCell>; width: number } {
   const prefixes = new Set(ids.flatMap((id) => (lines[id] ? [splitKey(lines[id].key).prefix] : [])));
-  const prefix = prefixes.size === 1 ? [...prefixes][0] : null;
+  const shared = o.heading && prefixes.size === 1 ? [...prefixes][0] : null;
   const cells: Record<string, NumberCell> = {};
   for (const id of ids) {
     const l = lines[id];
-    cells[id] = { text: !l ? "" : prefix !== null ? splitKey(l.key).number : l.key, outOfSync: !!l?.outOfSync };
+    cells[id] = { text: !l ? "" : shared !== null ? splitKey(l.key).number : l.key, outOfSync: !!l?.outOfSync };
   }
   const width = Math.max(0, ...Object.values(cells).map((c) => c.text.length));
-  return { prefix, cells, width };
+  return { prefix: shared?.endsWith("#") ? "#" : shared, cells, width };
 }
 
 export interface TaskGroup {
