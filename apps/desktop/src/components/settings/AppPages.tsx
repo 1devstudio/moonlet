@@ -11,6 +11,7 @@ import { claudeOffer } from "../../lib/claudeUpdate";
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../../lib/agents";
 import type { ToolCallView } from "../../lib/chat";
 import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../../lib/sounds";
+import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
 import { appUpdateLine, claudeUpdateLine, daemonLine } from "../../lib/settingsPage";
@@ -335,9 +336,13 @@ export function AgentsPage() {
   );
 }
 
+const BANNER_LABELS = { blocked: "an agent needs you", done: "an agent is done", error: "an agent fails" } as const;
+
 export function NotificationsPage() {
   const focused = useStore((s) => s.settings.notifyWhenFocused);
   const sounds = useStore((s) => s.settings.sounds);
+  const banners = useStore((s) => s.settings.banners);
+  const muted = useStore((s) => !!s.settings.muted);
   return (
     <>
       <PageHeading title="Notifications">How moonlet gets your attention when an agent finishes, fails or needs you.</PageHeading>
@@ -350,10 +355,20 @@ export function NotificationsPage() {
             on={focused}
             onChange={(on) => updateSettings({ notifyWhenFocused: on })}
           />
+          {SOUND_EVENTS.map((ev) => (
+            <SwitchRow
+              key={ev.id}
+              setting={`banner-${ev.id}`}
+              label={`Notification when ${BANNER_LABELS[ev.id]}`}
+              on={bannerOn(banners, ev.id)}
+              onChange={(on) => updateSettings({ banners: { ...banners, [ev.id]: on } })}
+            />
+          ))}
         </Card>
       </Section>
       <Section title="Sounds" hint="Played when you are not watching the agent. macOS system sounds.">
         <Card>
+          <SwitchRow setting="muted" label="Mute all sounds" hint="Also the bell in the sidebar footer." on={muted} onChange={(on) => updateSettings({ muted: on })} />
           {SOUND_EVENTS.map((ev) => {
             const current = soundFor(sounds, ev.id) ?? "";
             const id = `settings-sound-${ev.id}`;
