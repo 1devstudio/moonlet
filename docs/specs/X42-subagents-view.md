@@ -28,6 +28,7 @@ Daemon (PR 1):
 
 - [x] Claude's `system` `task_started` line adds a subagent to the chat's state: its task id, the id of the `Agent` tool call that launched it, its description, its type and its prompt, with status `running`. (`subagents_follow_task_events`)
 - [x] A `task_started` line whose `task_type` is not an agent's, such as `local_bash` for a long or backgrounded Bash call, adds no subagent: that call stays in the transcript's tool calls. (`a_long_bash_call_is_not_a_subagent`)
+- [x] A `task_started` line without `task_type`, as Claude sent before it had one, adds a subagent. (`a_task_without_a_type_is_a_subagent`)
 - [x] A `task_progress` line sets the agent's activity (its `description`, such as "Running Create made.txt and echo made"), its tokens and its tool-call count. (`subagents_follow_task_events`)
 - [x] A `task_notification` line ends the agent as `done` (`completed`), `failed` (`failed`) or `stopped` (`stopped`, `killed`), with the final token count and the duration. A done agent keeps the summary as its report; a failed one keeps the error from `task_updated`, else the summary. (`subagents_follow_task_events`, `a_failed_subagent_keeps_its_error`, `stopping_a_subagent_sends_stop_task`)
 - [x] An `assistant` line from inside a subagent (`parent_tool_use_id` set) adds its tool calls to that agent's tool list, with name, one-line summary and `+a −r` counts for edits, and sets the agent's model. The matching `user` line marks each call `ok` or `error`. None of these lines reaches the main transcript. (`subagent_tool_calls_stay_with_their_agent`)
@@ -120,7 +121,7 @@ Dot colours: running accent (pulsing), needs you `blocked`, done `done` (then hi
 
 Captured from claude 2.1.296 (haiku, `--permission-prompt-tool stdio`, hooks off). The full runs are in `crates/moonlet-core/src/chat/fixtures/claude-subagents.jsonl` and `claude-subagent-stop.jsonl`. Subagents run in the background: the `Agent` call returns "Async agent launched successfully" at once, and the main turn's `result` can arrive before they finish. Claude then starts a new turn by itself when an agent finishes.
 
-    {"type":"system","subtype":"task_started","task_id":"a9e80d60e7a0f792f","tool_use_id":"toolu_01NfShBYwC6foFSEmz7fW9Rw","description":"Touch a file","subagent_type":"general-purpose","is_backgrounded":true,"prompt":"Run the Bash command: …"}
+    {"type":"system","subtype":"task_started","task_id":"a9e80d60e7a0f792f","tool_use_id":"toolu_01NfShBYwC6foFSEmz7fW9Rw","description":"Touch a file","subagent_type":"general-purpose","is_backgrounded":true,"task_type":"local_agent","prompt":"Run the Bash command: …"}
     {"type":"system","subtype":"task_progress","task_id":"a9e80d60e7a0f792f","description":"Running Create made.txt and echo made","usage":{"total_tokens":9712,"tool_uses":1,"duration_ms":1617},"last_tool_name":"Bash"}
     {"type":"control_request","request_id":"b45af96a-…","request":{"subtype":"can_use_tool","tool_name":"Bash",…,"tool_use_id":"toolu_01QJw5gE4rZn9mBtLEZNTxkW","agent_id":"a9e80d60e7a0f792f"}}
     {"type":"control_cancel_request","request_id":"b45af96a-…"}                       ← after stop_task
