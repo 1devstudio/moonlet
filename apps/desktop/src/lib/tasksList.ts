@@ -1,5 +1,6 @@
 // Tasks mode's List layout (X45): groups by column and one summary per task.
 
+import { ago } from "./mobile";
 import type { AgentState } from "./protocol";
 import type { Board, Card } from "./tasksBoard";
 
@@ -46,12 +47,16 @@ export interface ListRow {
   worktrees: number;
   /** A session waits on the user: the row is tinted amber. */
   needsYou: boolean;
+  /** The Out of sync chip with its fix, if any. */
+  chip: string | null;
+  /** How long ago the task changed, as of `now`. */
+  updated: string;
 }
 
 const PASSING = new Set(["success", "neutral", "skipped"]);
 
 /** A task's row: its sessions' glyphs and a summary, its PR, its worktrees. */
-export function listRow(card: Card): ListRow {
+export function listRow(card: Card, now = Date.now()): ListRow {
   const sessions = card.rows.map((r) => r.session);
   const working = sessions.filter((s) => s.state === "working").length;
   const sum = card.needsYou
@@ -81,5 +86,7 @@ export function listRow(card: Card): ListRow {
     ...pr,
     worktrees: sessions.length + card.orphans.length,
     needsYou: card.needsYou,
+    chip: card.drift ? `${card.drift.text} · ${card.drift.fix}` : null,
+    updated: card.task.updatedMs ? ago(now - card.task.updatedMs) : "",
   };
 }

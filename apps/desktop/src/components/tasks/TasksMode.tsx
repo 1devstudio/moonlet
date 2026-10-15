@@ -582,7 +582,7 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
           </div>
           {g.column !== "done" &&
             g.cards.map((c) => {
-              const r = listRow(c);
+              const r = listRow(c, now);
               const open = !!expanded[keyOf(c)];
               return (
                 <div key={keyOf(c)} role="row" aria-label={`${c.task.key} ${c.task.title}`} className={cx("border-b border-border", r.needsYou && "bg-blocked/[0.04]")}>
@@ -594,9 +594,9 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
                     <button className="min-w-0 flex-1 truncate text-left ui-text-13.5 text-fg hover:underline" onClick={() => useTasks.setState({ selected: keyOf(c) })}>
                       {c.task.title}
                     </button>
-                    {c.drift && (
+                    {r.chip && (
                       <button className="ui-text-12 text-accent hover:underline" onClick={() => void fixDrift(host, workspaceId, c)}>
-                        {c.drift.text} · {c.drift.fix}
+                        {r.chip}
                       </button>
                     )}
                     <span title="Sessions" className="flex items-center gap-1">
@@ -611,7 +611,7 @@ function TasksList({ host, workspaceId, board }: { host: string; workspaceId: st
                       {r.worktrees}
                     </span>
                     <span title="Updated" className="w-[80px] text-right ui-text-12 text-faint">
-                      {c.task.updatedMs ? ago(now - c.task.updatedMs) : ""}
+                      {r.updated}
                     </span>
                   </div>
                   {open && (
