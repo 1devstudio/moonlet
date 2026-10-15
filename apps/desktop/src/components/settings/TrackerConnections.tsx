@@ -206,6 +206,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
     if (!ok) return;
     try {
       await hostsApi.trackerDisconnect(c.id);
+      reconnected(c.id);
       await loadTrackersConfig(true);
     } catch (e) {
       errorToast(message(e));

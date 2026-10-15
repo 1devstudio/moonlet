@@ -7,7 +7,7 @@ import { focusThrottle, latestPerKey } from "./prPoll";
 import { type GhTask, M, type Project, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
-import { autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
+import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
@@ -195,13 +195,18 @@ let saving: Promise<void> = Promise.resolve();
  * that could not be read is never written over with the defaults.
  */
 export function saveTrackersConfig(update: (c: TrackersConfig) => TrackersConfig): Promise<void> {
-  const unread = useTasks.getState().configError;
-  if (unread) return Promise.reject(new Error(`~/.moonlet/trackers.toml could not be read (${unread}), so it is left as it is`));
-  const next = update(trackersConfig(useTasks.getState()));
+  const { config, configError } = useTasks.getState();
+  if (configError) return Promise.reject(new Error(`~/.moonlet/trackers.toml could not be read (${configError}), so it is left as it is`));
+  if (!config) return Promise.reject(new Error("Task tracker settings are still loading"));
+  const next = update(config);
   useTasks.setState({ config: next });
   const write = saving.then(async () => void (await hostsApi.trackersSave(next)));
-  saving = write.catch(() => {});
-  return write;
+  // A failed write shows the file as it is again.
+  saving = write.catch(() => loadTrackersConfig(true));
+  return write.catch(async (e) => {
+    await saving;
+    throw e;
+  });
 }
 
 /** Fixes moonlet already made by itself, by `driftKey`, so each happens once (X46). */
@@ -278,9 +283,9 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const fromTrackers = await Promise.all(
     conns.map(async (c) => {
       // A rejected token is not tried again until the user reconnects (X44).
-      const rejected = useTasks.getState().attention[c.id];
-      if (rejected !== undefined) {
-        error = rejected;
+      // Its own row and the Settings dot say so; the workspace's other
+      // sources keep syncing.
+      if (useTasks.getState().attention[c.id] !== undefined) {
         failed.add(c.id);
         return [];
       }
@@ -447,18 +452,18 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
 
 /** Assigns a GitHub issue to the user, as the "session starts" rule does (X46). */
 export async function assignToMe(host: string, workspaceId: string, github: { repo: string; number: number }) {
-  const path = repoPath(host, workspaceId, github.repo);
-  if (!path) return;
+  const key = `${github.repo}#${github.number}`;
   try {
+    const path = repoPath(host, workspaceId, github.repo);
+    if (!path) throw new Error(`No project in this workspace has ${github.repo} as its origin`);
     await rpc(host, M.ghTaskUpdate, { path, number: github.number, assign_me: true });
-    recordActivity({ connection: GITHUB, key: `${github.repo}#${github.number}` }, "moonlet assigned it to you");
+    recordActivity({ connection: GITHUB, key }, "moonlet assigned it to you");
   } catch (e) {
-    errorToast(e);
+    toast(`${key}: ${message(e)}`, "error");
   }
 }
 
-/** The chip's button (X45): close the issue, move it, or clean up after a done task. */
-/** A connection the user signed in to again: its tasks load once more (X44). */
+/** A connection the user signed in to again, or forgot: its attention dot goes (X44). */
 export function reconnected(id: string) {
   useTasks.setState((t) => ({ attention: Object.fromEntries(Object.entries(t.attention).filter(([k]) => k !== id)) }));
 }
@@ -468,7 +473,7 @@ function currentCard(host: string, workspaceId: string, id: string): Card | unde
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
   if (!data) return undefined;
   const config = trackersConfig(useTasks.getState());
-  const board = tasksBoard(boardInput(useStore.getState(), host, workspaceId, data, config));
+  const board = applyRules(tasksBoard(boardInput(useStore.getState(), host, workspaceId, data, config)), (c) => rulesFor(config, c.task));
   return Object.values(board)
     .flat()
     .find((c) => `${c.task.connection} ${c.task.key}` === id);
@@ -531,7 +536,24 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
 
 // Automatic fixes tried since the app started: a failure shows on its task
 // with Retry instead of being tried again on every board change.
-const autoTried = new Set<string>();
+// Failures are kept across restarts, so "not tried again by itself" holds.
+const AUTO_FAILED_KEY = "tasks.autoFailed";
+const autoTried = new Set<string>(storedList(AUTO_FAILED_KEY));
+
+function storedList(name: string): string[] {
+  try {
+    const v = JSON.parse(readStored(name) ?? "[]");
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+/** An automatic fix or comment that failed: shown with Retry, not tried again by itself. */
+function autoFailed(key: string) {
+  autoTried.add(key);
+  writeStored(AUTO_FAILED_KEY, JSON.stringify([...new Set([...storedList(AUTO_FAILED_KEY), key])].slice(-200)));
+}
 
 /**
  * The rules at Automatically, run once each (X46): chips' fixes and PR-link
@@ -553,22 +575,27 @@ export async function runAutoFixes(host: string, workspaceId: string, board: Boa
     if (autoTried.has(key)) continue;
     autoTried.add(key);
     if (await fixDrift(host, workspaceId, card)) markAutoFixed(key);
+    else autoFailed(key);
   }
   for (const c of prComments(board, rulesOf, done)) {
     const t = c.card.task.tracker;
     if (!t || autoTried.has(c.key)) continue;
     autoTried.add(c.key);
+    const id = `${c.card.task.connection} ${c.card.task.key}`;
+    // A task shows one failure: the comment's own only when nothing else failed.
     const comment = async () => {
       try {
         await hostsApi.trackerUpdate({ id: c.card.task.connection, task: t.id, source: t.source, comment: c.text });
         markAutoFixed(c.key);
-        setFailure(c.card.task, null);
+        if (failedBy.get(id) === "comment") setFailure(c.card.task, null);
         recordActivity(c.card.task, "moonlet commented with the pull request's link");
       } catch (e) {
-        setFailure(c.card.task, (e as { message?: string }).message ?? message(e));
+        autoFailed(c.key);
+        if (failureOf(c.card.task)) return;
+        retries.set(id, comment);
+        setFailure(c.card.task, (e as { message?: string }).message ?? message(e), "comment");
       }
     };
-    retries.set(`${c.card.task.connection} ${c.card.task.key}`, comment);
     await comment();
   }
 }
@@ -685,8 +712,13 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
 /** What to run again for a task whose last action failed. */
 const retries = new Map<string, () => Promise<void>>();
 
-function setFailure(task: Pick<Task, "connection" | "key">, error: string | null) {
+/** What made a task's shown failure: a chip fix or move, or a PR-link comment. */
+const failedBy = new Map<string, "action" | "comment">();
+
+function setFailure(task: Pick<Task, "connection" | "key">, error: string | null, by: "action" | "comment" = "action") {
   const id = `${task.connection} ${task.key}`;
+  if (error) failedBy.set(id, by);
+  else failedBy.delete(id);
   useTasks.setState((t) => {
     const failures = { ...t.failures };
     if (error) failures[id] = error;

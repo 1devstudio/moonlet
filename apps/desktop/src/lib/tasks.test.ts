@@ -172,6 +172,7 @@ describe("trackerOf and trackerName", () => {
       ["clickup", "ClickUp"],
     ]);
     expect(trackerOf("trello:x")).toBe(null);
+    expect(trackerOf("constructor:x")).toBe(null);
     expect(trackerName("trello:x")).toBe("tracker");
   });
 });

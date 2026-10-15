@@ -179,5 +179,6 @@ describe("Linear tracker", () => {
       timeoutMsg: readFileSync(join(w.home, "trackers.toml"), "utf8"),
     });
     expect(readFileSync(join(w.home, "secrets.json"), "utf8")).not.toContain("lin_api_e2e");
+    await expect($('//*[@role="img"][@aria-label="1 connection needs attention"]')).not.toBeExisting();
   });
 });
