@@ -92,18 +92,14 @@ export function findPasted(p: Pasted, tasks: Task[], originRepo: string | null):
  * cancelled, ends as `undefined`, so ↵ never links from it.
  */
 export function pasteLookup(delayMs = 200) {
-  let round = 0;
   let current: Promise<Task | null | undefined> = Promise.resolve(null);
+  // Ends the lookup under way as `undefined`; a result it finds later is ignored.
   let stop = () => {};
   return {
     start(run: () => Promise<Task | null>): Promise<Task | null | undefined> {
       stop();
-      const mine = ++round;
       current = new Promise((resolve) => {
-        const timer = setTimeout(async () => {
-          const found = await run().catch(() => null);
-          resolve(mine === round ? found : undefined);
-        }, delayMs);
+        const timer = setTimeout(async () => resolve(await run().catch(() => null)), delayMs);
         stop = () => {
           clearTimeout(timer);
           resolve(undefined);
@@ -112,7 +108,6 @@ export function pasteLookup(delayMs = 200) {
       return current;
     },
     cancel() {
-      round++;
       stop();
     },
     /**
