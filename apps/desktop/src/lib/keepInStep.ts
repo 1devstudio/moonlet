@@ -75,3 +75,34 @@ export function withCloses(body: string, issue: number | null): string {
   if (issue === null || new RegExp(`\\bCloses #${issue}\\b`, "i").test(body)) return body;
   return body.trim() ? `${body.trimEnd()}\n\nCloses #${issue}` : `Closes #${issue}`;
 }
+
+/** The five rules of a connection (`trackers.toml` `[github.rules]`, X44). */
+export interface Rules {
+  session_starts: RuleSetting;
+  pr_opens: RuleSetting;
+  all_merged: RuleSetting;
+  pr_comment: RuleSetting;
+  issue_done: RuleSetting;
+}
+
+/** The spec's defaults, as `moonlet-trackers` writes them for an empty file. */
+export const DEFAULT_RULES: Rules = { session_starts: "auto", pr_opens: "auto", all_merged: "suggest", pr_comment: "auto", issue_done: "suggest" };
+
+/** The board with the chips of rules turned Off removed. */
+export function applyRules(board: Board, rules: Rules): Board {
+  const off = (c: Card) => (c.drift?.kind === "merged" && rules.all_merged === "off") || (c.drift?.kind === "done_open" && rules.issue_done === "off");
+  const strip = (cards: Card[]) => cards.map((c) => (off(c) ? { ...c, drift: null } : c));
+  return { todo: strip(board.todo), in_progress: strip(board.in_progress), in_review: strip(board.in_review), done: strip(board.done) };
+}
+
+/**
+ * The fixes moonlet makes by itself: a merged GitHub issue closes when
+ * "every session's PR is merged" is Automatically, once per situation
+ * (`done` holds the `driftKey`s already acted on).
+ */
+export function autoFixes(board: Board, rules: Rules, done: Record<string, true>): Card[] {
+  if (rules.all_merged !== "auto") return [];
+  return Object.values(board)
+    .flat()
+    .filter((c) => c.drift?.kind === "merged" && c.task.github && !done[driftKey(c)]);
+}

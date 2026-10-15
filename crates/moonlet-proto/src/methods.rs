@@ -115,6 +115,8 @@ pub const GH_TASKS: &str = "gh.tasks";
 /// `{path, number, assign_me?, close?}`: assigns a GitHub issue to the user
 /// or closes it as completed (X46 Keep in step).
 pub const GH_TASK_UPDATE: &str = "gh.task_update";
+/// `{}` → the GitHub login `gh` is signed in as on this host (X44 GitHub connection).
+pub const GH_WHOAMI: &str = "gh.whoami";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
 pub const GH_PR_STACK: &str = "gh.pr_stack";
 

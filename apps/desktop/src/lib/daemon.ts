@@ -44,6 +44,9 @@ export const hostsApi = {
   service: (action: "install" | "uninstall" | "status") => invoke<{ installed: boolean; loaded: boolean; plist: string }>("daemon_service", { action }),
   appInfo: () => invoke<{ version: string }>("app_info"),
   claudeLatest: () => invoke<string>("claude_latest_version"),
+  /** `~/.moonlet/trackers.toml`, or its defaults (X44). */
+  trackersConfig: () => invoke<import("./tasksStore").TrackersConfig>("trackers_config"),
+  trackersSave: (config: import("./tasksStore").TrackersConfig) => invoke("trackers_save", { config }),
   /** A key or issue URL pasted into the link dialog, or null (X46). */
   parsePasted: (input: string) => invoke<import("./taskLinking").Pasted | null>("task_parse_pasted", { input }),
   /** The branch for a session started from a task (X46); `kind` is the tracker. */

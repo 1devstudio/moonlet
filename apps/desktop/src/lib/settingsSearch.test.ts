@@ -117,3 +117,18 @@ describe("moving through the search results (X43)", () => {
     expect(moveSelection(2, 6, "a")).toBeNull();
   });
 });
+
+describe("Task trackers in the search (X44)", () => {
+  const trackers = {
+    sync: { interval: 300 },
+    github: { branch_template: "", max_length: 48, rules: { session_starts: "auto", pr_opens: "auto", all_merged: "suggest", pr_comment: "off", issue_done: "suggest" } },
+  } as const;
+  const found = (q: string) => searchSettings(q, { ...ctx, trackers }).map((r) => [r.before + r.hit + r.after, r.path, r.value]);
+
+  it("finds the branch template, the rules and the sync interval with their values", () => {
+    expect(found("branch name for")).toEqual([["Branch name for new sessions", "App › Task trackers", "{number}-{title}"]]);
+    expect(found("close the issue")).toEqual([["Every session's PR is merged → close the issue", "App › Task trackers", "Suggest"]]);
+    expect(found("closes #")).toEqual([["A pull request opens → add Closes #<number> to it", "App › Task trackers", "Off"]]);
+    expect(found("refresh issues")).toEqual([["Refresh issues", "App › Task trackers", "Every 5 minutes"]]);
+  });
+});

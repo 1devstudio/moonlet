@@ -3,7 +3,7 @@
 // underneath, so terminals and agents keep running.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Bell, Bot, ChevronRight, Folder, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X } from "lucide-react";
+import { ArrowLeft, Bell, Bot, ChevronRight, Folder, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
 import { escapeAction, hostOrder, profilesNeedSignIn, routeKey, settingsCrumbs, settingsNav, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
@@ -17,6 +17,7 @@ import { SearchResults, useSearchContext } from "./SearchResults";
 import { ShortcutsPage } from "./ShortcutsPage";
 import { WorkspacePage } from "./WorkspacePage";
 import { AgentsPage, AppearancePage, GeneralPage, NotificationsPage, TerminalPage } from "./AppPages";
+import { TrackersPage } from "./TrackersPage";
 import { HooksPage, ProfilesPage } from "./ClaudePages";
 import { HostsPage, PhonesPage, useMobileStatus } from "./MachinePages";
 
@@ -26,6 +27,7 @@ const ICONS: Record<AppPage, typeof Settings> = {
   terminal: SquareTerminal,
   agents: Bot,
   notifications: Bell,
+  trackers: ListChecks,
   shortcuts: Keyboard,
   profiles: User,
   hooks: Link2,
@@ -152,6 +154,8 @@ function AppPageBody({ route, mobile }: { route: { page: AppPage }; mobile: Retu
       return <AgentsPage />;
     case "notifications":
       return <NotificationsPage />;
+    case "trackers":
+      return <TrackersPage />;
     case "shortcuts":
       return <ShortcutsPage />;
     case "profiles":

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanUpMessage, closesIssue, driftFix, driftKey, startAction, withCloses, withoutPutOff } from "./keepInStep";
+import { applyRules, autoFixes, cleanUpMessage, closesIssue, DEFAULT_RULES, driftFix, driftKey, startAction, withCloses, withoutPutOff } from "./keepInStep";
 import type { Task } from "./tasks";
 import type { BoardSession, Card } from "./tasksBoard";
 
@@ -113,5 +113,27 @@ describe("Closes #N in a new PR (X46: a PR opens)", () => {
     expect(withCloses("", 7)).toBe("Closes #7");
     expect(withCloses("- Fix\n\nCloses #7", 7)).toBe("- Fix\n\nCloses #7");
     expect(withCloses("- Fix", null)).toBe("- Fix");
+  });
+});
+
+describe("rules from Settings › Task trackers (X44, X46)", () => {
+  const merged = { kind: "merged" as const, text: "#70 merged", fix: "Move to Done" };
+  const doneOpen = { kind: "done_open" as const, text: "1 session, 1 worktree", fix: "Clean up" };
+  const gh7 = card(task("acme/web#7", "open", { repo: "acme/web", number: 7, closingPrs: [] }), merged, [session("fix", "/w/fix", 70)]);
+  const old = card(task("MOON-131", "done"), doneOpen, [session("hooks", "/w/hooks", 119)]);
+  const board = { todo: [], in_progress: [gh7], in_review: [], done: [old] };
+
+  it("drops a chip whose rule is Off", () => {
+    const off = applyRules(board, { ...DEFAULT_RULES, all_merged: "off", issue_done: "off" });
+    expect(Object.values(off).flat().map((c) => c.drift)).toEqual([null, null]);
+    const on = applyRules(board, DEFAULT_RULES);
+    expect(Object.values(on).flat().map((c) => c.drift?.kind)).toEqual(["merged", "done_open"]);
+  });
+
+  it("closes merged GitHub issues by itself when the rule is Automatically, once per situation", () => {
+    expect(autoFixes(board, DEFAULT_RULES, {})).toEqual([]);
+    const auto = { ...DEFAULT_RULES, all_merged: "auto" as const };
+    expect(autoFixes(board, auto, {}).map((c) => c.task.key)).toEqual(["acme/web#7"]);
+    expect(autoFixes(board, auto, { [driftKey(gh7)]: true })).toEqual([]);
   });
 });

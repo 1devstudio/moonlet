@@ -283,7 +283,7 @@ export function Composer({
   useEffect(() => {
     if (!task || worktree) return setTaskBranch(null);
     void hostsApi
-      .taskBranch({ kind: task.kind, key: task.key, title: task.title, number: task.number })
+      .taskBranch({ kind: task.kind, key: task.key, title: task.title, number: task.number, template: task.template, maxLen: task.maxLen })
       .then(setTaskBranch, () => setTaskBranch(null));
   }, [task, worktree]);
 
