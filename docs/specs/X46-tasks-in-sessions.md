@@ -37,11 +37,11 @@ A session can belong to a task. The link is made when a session starts from a ta
   The user can edit it before sending.
 - [ ] `+ New session` in the detail and `Start a session for <key>` in the list open the same composer. (Partly: built; those two buttons have no test yet.)
 - [x] Project: the source's project (X44); for a GitHub issue, the project whose `origin` is the issue's repository. Branch: the tracker's template filled in and cut to the max length (X44), then made unique the same way session branches are (`-2`, `-3`). (`tasks.test.ts` taskStart, `a_task_branch_follows_the_trackers_default_template`, `tasks-mode.e2e.ts`)
-- [ ] A quick ⌘↵ waits for the branch name. (Partly: built; the wait has no test yet.)
+- [x] A quick ⌘↵ waits for the branch name. (`tasks-mode.e2e.ts`)
 - [x] "Move <key> to In Progress and assign it to me" is shown and ticked when the "session starts" rule is Automatically, shown unticked when it is Suggest, and hidden when Off. It only acts on a task in Todo (or a state not shown); a task further along is left alone. For a GitHub repository issue it reads "Assign <key> to me", and if the assignment fails an error toast says why. (`keepInStep.test.ts` startAction, `tasksStore.test.ts` moves a tracker issue to In Progress and assigns it, starting a session on a GitHub issue whose repository is in no project says so; `tasks-mode.e2e.ts`, `task-trackers.e2e.ts`)
 - [ ] If the move or the assignment of a Linear, Jira or ClickUp issue fails, an error toast says why. (Partly: built; that toast has no test yet.)
-- [x] **Start session** on a worktree without a session creates a session on that worktree and branch instead of making a new one. A worktree is matched by its real path, so `/var/…` and `/private/var/…` name the same one. (`worktrees_made_outside_moonlet_are_listed_and_can_be_adopted`)
-- [ ] The project picker stays on the worktree's project. (Partly: built; it has no test yet.)
+- [x] **Start session** on a worktree without a session creates a session on that worktree and branch instead of making a new one. A worktree is matched by its real path, so `/var/…` and `/private/var/…` name the same one. (`worktrees_made_outside_moonlet_are_listed_and_can_be_adopted`, `tasks-mode.e2e.ts`)
+- [x] The project picker stays on the worktree's project. (`tasks-mode.e2e.ts`)
 - [x] The new session is stored with its link. (`tasks-mode.e2e.ts`)
 - [ ] The task's Activity records that a session started from it. (Partly: built; the entry has no test yet.)
 
