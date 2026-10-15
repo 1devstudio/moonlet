@@ -20,9 +20,9 @@ A session can belong to a task. The link is made when a session starts from a ta
 
 ### Links
 
-- [ ] A session has at most one task: `{connection, key, url}`, with the connection id of X44. It is stored by the daemon with the session.
+- [x] A session has at most one task: `{connection, key, url}`, with the connection id of X44. It is stored by the daemon with the session. (`a_session_started_from_a_task_keeps_its_link`)
 - [ ] A session is linked to a task when (first match wins): it has a stored link; its branch name contains the key (if that rule is on, X44); its PR closes the issue or mentions the key (if that rule is on). Links found from the branch or PR are not stored, so renaming a branch or a reconnect never leaves a stale link.
-- [ ] A stored link can be removed with **Unlink**; then branch and PR matches are ignored for that session until it is linked again.
+- [ ] A stored link can be removed with **Unlink**; then branch and PR matches are ignored for that session until it is linked again. (Daemon side done: `task_unlinked`, `a_session_can_be_linked_to_a_task_and_unlinked`.)
 - [ ] A worktree whose branch carries a task's key and that no session uses is a "worktree without a session" on that task (X45).
 
 ### Starting a session from a task
@@ -77,9 +77,9 @@ The designs are the "Session opened from a task" and "Link a session · Start fr
 
 ## Protocol and RPCs
 
-- `Session` gains `task: Option<TaskRef>`, `TaskRef {connection, key, url}`.
-- `session.create` gains `task` and `worktree` (an existing worktree path to adopt).
-- `session.update` gains `task` (`null` unlinks).
+- `Session` gains `task: Option<TaskRef>`, `TaskRef {connection, key, url}`, and `task_unlinked: bool` (set by an unlink, cleared by the next link).
+- `session.create` gains `task` and `worktree`: the path of a linked worktree of the project to adopt, with its branch. It fails when the path is not one of the project's worktrees, is on a detached HEAD, or is used by a session that is not archived.
+- `session.update` gains `task`: a task links to it, `null` unlinks, absent leaves the link alone.
 - No new events: `sessions.changed` already carries sessions.
 
 ## Data and config
