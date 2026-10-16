@@ -398,7 +398,7 @@ function SessionRow({ host, s, onMenu, cell, nested }: { host: string; s: Sessio
             }}
           />
         ) : (
-          <span className={cx("min-w-0 flex-1 truncate ui-text-13", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+          <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
         )
       }
     />
@@ -430,7 +430,7 @@ export function SessionRowsPreview({ style }: { style: RowStyle }) {
         cell={cellOf(column, id)}
         glyph={p.state !== "idle" ? <StateGlyph state={p.state} size={15} /> : <BranchIcon state={p.pr} />}
         badge={p.badge}
-        name={<span className={cx("min-w-0 flex-1 truncate ui-text-13", id === "1" ? "text-fg" : "text-[#cfcfcf]")}>{p.name}</span>}
+        name={<span className={cx("min-w-0 flex-1 truncate ui-text-14", id === "1" ? "text-fg" : "text-[#cfcfcf]")}>{p.name}</span>}
       />
     );
   };
@@ -460,7 +460,7 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
           <span role="status" aria-label={a.done ? "Archived" : "Archiving"} className="flex w-[15px] shrink-0 justify-center text-muted">
             {a.done ? <StateGlyph state="done" size={15} /> : <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />}
           </span>
-          <span className="min-w-0 flex-1 truncate ui-text-13 text-[#cfcfcf]">{name}</span>
+          <span className="min-w-0 flex-1 truncate ui-text-14 text-[#cfcfcf]">{name}</span>
         </div>
       </div>
     </div>
