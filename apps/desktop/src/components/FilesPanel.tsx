@@ -72,7 +72,7 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
             aria-selected={selected === e.path}
             title={e.path}
             className={cx(
-              "group mx-2 flex h-[30px] cursor-default items-center gap-2.5 rounded-md pr-1 font-mono ui-text-13",
+              "group mx-2 flex h-[30px] cursor-default items-center gap-2.5 rounded-md pr-1 font-mono ui-text-14",
               selected === e.path ? "bg-raised" : "hover:bg-panel-2",
               e.ignored ? "text-faint" : "text-fg",
             )}
