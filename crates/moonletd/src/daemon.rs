@@ -310,6 +310,10 @@ impl Daemon {
                 self.chats.unqueue(r.id, &r.message).map_err(internal)?;
                 ok(true)
             }
+            m::CHAT_ASIDE => {
+                let r: m::ChatAside = params(p)?;
+                ok(self.chats.aside(r.id, &r.text).await.map_err(internal)?)
+            }
             m::CHAT_STOP_AGENT => {
                 let r: m::ChatStopAgent = params(p)?;
                 self.chats.stop_agent(r.id, &r.agent).map_err(internal)?;
