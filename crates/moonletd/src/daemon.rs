@@ -300,6 +300,17 @@ impl Daemon {
                 self.chats.interrupt(r.id).map_err(internal)?;
                 ok(true)
             }
+            m::CHAT_SEND_NOW => {
+                let r: m::ChatQueued = params(p)?;
+                self.chats.send_now(r.id, r.message.as_deref()).map_err(internal)?;
+                ok(true)
+            }
+            m::CHAT_UNQUEUE => {
+                let r: m::ChatQueued = params(p)?;
+                let message = r.message.ok_or_else(|| RpcError::new("invalid_params", "message is required"))?;
+                self.chats.unqueue(r.id, &message).map_err(internal)?;
+                ok(true)
+            }
             m::CHAT_STOP_AGENT => {
                 let r: m::ChatStopAgent = params(p)?;
                 self.chats.stop_agent(r.id, &r.agent).map_err(internal)?;
