@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatImage, ChatState, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, QueuedMessage, Subagent, SubagentTool};
+use moonlet_proto::types::{AsideAnswer, ChatImage, ChatState, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, QueuedMessage, Subagent, SubagentTool};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, SignIns, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
@@ -245,6 +245,37 @@ fn result_text(content: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     }
+}
+
+/// The arguments of the separate Claude that answers an aside (X49): it
+/// forks the chat's conversation, cannot use tools and saves nothing.
+/// `running` is the summary of a tool call the main turn still runs, which
+/// the fork would otherwise take for interrupted.
+pub fn aside_args(cfg: &ChatConfig, session: &str, question: &str, running: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = ["-p", "--resume", session, "--fork-session", "--no-session-persistence", "--tools", "", "--output-format", "json"].map(String::from).to_vec();
+    if let Some(m) = &cfg.model {
+        args.extend(["--model".into(), m.clone()]);
+    }
+    let mut prompt = "This is a side question, asked while you work. Answer it from the conversation so far, briefly; you cannot use tools here.".to_string();
+    if let Some(t) = running {
+        prompt.push_str(&format!(" Your tool call `{t}` is still running in the main session: it was not interrupted."));
+    }
+    args.push(format!("{prompt}\n\n{question}"));
+    args
+}
+
+/// An aside's answer from its Claude's `--output-format json` result, or
+/// the error it reported.
+pub fn aside_answer(stdout: &str, stderr: &str) -> anyhow::Result<AsideAnswer> {
+    let Ok(v) = serde_json::from_str::<Value>(stdout.trim()) else {
+        let err = stderr.trim();
+        anyhow::bail!("{}", if err.is_empty() { "Claude gave no answer." } else { err });
+    };
+    let text = v["result"].as_str().unwrap_or_default().to_string();
+    if v["is_error"].as_bool().unwrap_or(false) || v["subtype"] != "success" {
+        anyhow::bail!("{}", if text.is_empty() { "The aside failed." } else { &text });
+    }
+    Ok(AsideAnswer { text, cost_usd: v["total_cost_usd"].as_f64().unwrap_or(0.0), duration_ms: v["duration_ms"].as_u64().unwrap_or(0) })
 }
 
 impl Adapter for Claude {
@@ -731,7 +762,7 @@ impl Adapter for Claude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moonlet_proto::types::{ContextCategory, ContextUsage, McpServer, QueuedMessage};
+    use moonlet_proto::types::{AsideAnswer, ContextCategory, ContextUsage, McpServer, QueuedMessage};
 
     fn replay(fixture: &str, a: &mut Claude, st: &mut ChatState) -> Vec<Out> {
         fixture.lines().flat_map(|l| a.on_line(l, st)).collect()
@@ -1100,6 +1131,47 @@ mod tests {
         a.on_line(r#"{"type":"result","subtype":"success","is_error":false,"result":"4"}"#, &mut st);
         assert_eq!(st.status, "done");
         assert!(st.items.iter().all(|i| i.text != "Interrupted"));
+    }
+
+    #[test]
+    fn an_aside_forks_the_conversation_without_tools_or_a_saved_session() {
+        let cfg = ChatConfig { agent: "claude".into(), model: Some("opus".into()), cwd: "/r".into(), ..Default::default() };
+        let args = aside_args(&cfg, "sess-1", "which port is the api on?", Some("pnpm stack:check"));
+        assert_eq!(
+            args,
+            [
+                "-p",
+                "--resume",
+                "sess-1",
+                "--fork-session",
+                "--no-session-persistence",
+                "--tools",
+                "",
+                "--output-format",
+                "json",
+                "--model",
+                "opus",
+                "This is a side question, asked while you work. Answer it from the conversation so far, briefly; you cannot use tools here. \
+                 Your tool call `pnpm stack:check` is still running in the main session: it was not interrupted.\n\nwhich port is the api on?",
+            ]
+        );
+        let idle = aside_args(&ChatConfig::default(), "sess-1", "and the web port?", None);
+        assert_eq!(idle.last().unwrap(), "This is a side question, asked while you work. Answer it from the conversation so far, briefly; you cannot use tools here.\n\nand the web port?");
+    }
+
+    #[test]
+    fn an_asides_answer_carries_its_text_cost_and_time() {
+        let answer = aside_answer(include_str!("fixtures/claude-aside.json"), "").unwrap();
+        assert_eq!(answer, AsideAnswer { text: "Teal.".into(), cost_usd: 0.00278639, duration_ms: 1493 });
+    }
+
+    #[test]
+    fn a_failed_aside_reports_claudes_error() {
+        // Claude Code 2.1.301 resuming an unknown session: exit 1, nothing on stdout.
+        let err = aside_answer("", "No conversation found with session ID: 00000000-dead-4000-8000-000000000000\n").unwrap_err();
+        assert_eq!(err.to_string(), "No conversation found with session ID: 00000000-dead-4000-8000-000000000000");
+        let err = aside_answer(r#"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","duration_ms":0,"total_cost_usd":0}"#, "").unwrap_err();
+        assert_eq!(err.to_string(), "Not logged in · Please run /login");
     }
 
     #[test]
