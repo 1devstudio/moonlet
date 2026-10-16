@@ -362,6 +362,31 @@ impl ChatManager {
         Ok(())
     }
 
+    /// Asks the agent to read a queued message now, or every queued one
+    /// without `message` (X49).
+    pub fn send_now(&self, id: TerminalId, message: Option<&str>) -> Result<()> {
+        self.with_queued(id, message, |a, m, st| a.send_now(m, st))
+    }
+
+    /// Takes a queued message out of the agent's queue (X49).
+    pub fn unqueue(&self, id: TerminalId, message: &str) -> Result<()> {
+        self.with_queued(id, Some(message), |a, m, st| a.unqueue(m.unwrap_or_default(), st))
+    }
+
+    fn with_queued(&self, id: TerminalId, message: Option<&str>, f: impl FnOnce(&mut dyn Adapter, Option<&str>, &mut ChatState) -> Vec<Out>) -> Result<()> {
+        let chat = self.get(id)?;
+        let mut inner = chat.inner.lock().unwrap();
+        match message {
+            Some(m) if !inner.state.queued.iter().any(|q| q.id == m) => bail!("no queued message {m}"),
+            None if inner.state.queued.is_empty() => bail!("no queued messages"),
+            _ => {}
+        }
+        let Inner { adapter, state, .. } = &mut *inner;
+        let outs = f(adapter.as_deref_mut().context("agent not running")?, message, state);
+        self.apply(&chat, &mut inner, outs);
+        Ok(())
+    }
+
     /// Stops one running subagent (X42).
     pub fn stop_agent(&self, id: TerminalId, agent: &str) -> Result<()> {
         let chat = self.get(id)?;
@@ -546,6 +571,7 @@ impl ChatManager {
                 let id = super::local_id("system");
                 upsert(&mut inner.state, item(id, "system", "Interrupted by a daemon restart"));
             }
+            super::undeliver(&mut inner.state);
             self.save(&chat, &mut inner);
             n += 1;
         }
@@ -616,6 +642,7 @@ impl ChatManager {
             outs.push(Out::Item(Box::new(it.clone())));
         }
         outs.push(upsert(&mut inner.state, item(super::local_id("system"), "system", note)));
+        outs.extend(super::undeliver(&mut inner.state));
         outs.push(Out::State);
         self.apply(chat, inner, outs);
     }
@@ -741,6 +768,11 @@ impl ChatManager {
                 let msg = if tail.is_empty() { format!("The agent exited{code}.") } else { format!("The agent exited{code}:\n{tail}") };
                 mgr.fail(&c, &mut inner, &msg);
             }
+            let mut outs = super::undeliver(&mut inner.state);
+            if !outs.is_empty() {
+                outs.push(Out::State);
+                mgr.apply(&c, &mut inner, outs);
+            }
             mgr.save(&c, &mut inner);
         });
 
@@ -843,6 +875,16 @@ while IFS= read -r line; do
     *'"mode":"auto"'*)
       echo '{"type":"system","subtype":"status","status":null,"permissionMode":"auto"}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
+    *'run a long command'*)
+      echo '{"type":"assistant","message":{"id":"m5","content":[{"type":"tool_use","id":"t6","name":"Bash","input":{"command":"pnpm stack:check"}}]}}' ;;
+    *'queue this'*) ;;
+    *'crash now'*) exit 3 ;;
+    *'"send_now":true'*)
+      uuid=$(printf '%s' "$line" | sed 's/.*"message_uuid":"\([^"]*\)".*/\1/')
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{}}'
+      echo '{"type":"command_lifecycle","command_uuid":"'"$uuid"'","state":"started"}'
+      echo '{"type":"assistant","message":{"id":"m6","content":[{"type":"text","text":"Port 4000."}]}}'
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
     *'launch an agent'*)
       echo '{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_1","description":"List files","subagent_type":"general-purpose","is_backgrounded":true,"prompt":"List the files."}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
@@ -927,6 +969,80 @@ done
         terms.kill(info.id, true).unwrap();
         assert!(!chats.is_chat(info.id));
         assert!(!dir.path().join("chats").join(format!("{}.json", info.id)).exists());
+    }
+
+    /// A chat whose agent runs `pnpm stack:check` and holds "queue this" (X49).
+    async fn holding_a_queued_message(chats: &ChatManager, cwd: &Path) -> TerminalId {
+        let id = chats.create(ChatCreate { cwd: cwd.display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "run a long command", &[]).unwrap();
+        wait_for(chats, id, |s| s.items.iter().any(|i| i.tool.is_some())).await;
+        chats.send(id, "queue this", &[]).unwrap();
+        assert_eq!(chats.state(id).unwrap().queued.len(), 1);
+        id
+    }
+
+    fn last_two(st: &ChatState) -> Vec<(&str, &str)> {
+        st.items[st.items.len() - 2..].iter().map(|i| (i.kind.as_str(), i.text.as_str())).collect()
+    }
+
+    #[tokio::test]
+    async fn a_message_still_queued_when_the_agent_stops_is_not_delivered() {
+        let (dir, _terms, chats) = setup().await;
+        let id = holding_a_queued_message(&chats, dir.path()).await;
+        chats.stop(id, false);
+        let st = chats.state(id).unwrap();
+        assert!(st.queued.is_empty());
+        assert_eq!(last_two(&st), [("user", "queue this"), ("system", "Not delivered: Claude stopped before reading this message.")]);
+    }
+
+    #[tokio::test]
+    async fn send_now_delivers_a_queued_message_in_place_of_the_running_turn() {
+        let (dir, _terms, chats) = setup().await;
+        let id = holding_a_queued_message(&chats, dir.path()).await;
+        let message = chats.state(id).unwrap().queued[0].id.clone();
+        chats.send_now(id, Some(&message)).unwrap();
+        let st = wait_for(&chats, id, |s| s.status == "done").await;
+        let shown: Vec<(&str, &str)> = st.items.iter().filter(|i| i.tool.is_none()).map(|i| (i.kind.as_str(), i.text.as_str())).collect();
+        assert_eq!(shown[shown.len() - 3..], [("system", "Interrupted"), ("user", "queue this"), ("assistant", "Port 4000.")]);
+    }
+
+    #[tokio::test]
+    async fn only_a_queued_message_can_be_unqueued() {
+        let (dir, _terms, chats) = setup().await;
+        let id = holding_a_queued_message(&chats, dir.path()).await;
+        let err = chats.unqueue(id, "not-a-queued-message").unwrap_err();
+        assert_eq!(err.to_string(), "no queued message not-a-queued-message");
+        let message = chats.state(id).unwrap().queued[0].id.clone();
+        chats.unqueue(id, &message).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_message_queued_when_the_agent_crashes_is_not_delivered() {
+        let (dir, _terms, chats) = setup().await;
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "run a long command", &[]).unwrap();
+        wait_for(&chats, id, |s| s.items.iter().any(|i| i.tool.is_some())).await;
+        chats.send(id, "crash now", &[]).unwrap();
+        let st = wait_for(&chats, id, |s| s.status == "error").await;
+        assert!(st.queued.is_empty());
+        let shown: Vec<(&str, &str)> = st.items.iter().map(|i| (i.kind.as_str(), i.text.as_str())).collect();
+        assert_eq!(shown[shown.len() - 3..], [("error", "The agent exited (code 3)."), ("user", "crash now"), ("system", "Not delivered: Claude stopped before reading this message.")]);
+    }
+
+    #[tokio::test]
+    async fn a_message_still_queued_at_a_daemon_restart_is_not_delivered() {
+        let (dir, terms, chats) = setup().await;
+        let id = holding_a_queued_message(&chats, dir.path()).await;
+        chats.save_all();
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
+        let chats2 = ChatManager::new(terms2, dir.path().join("chats"));
+        chats2.restore();
+        let st = chats2.state(id).unwrap();
+        assert!(st.queued.is_empty());
+        assert_eq!(last_two(&st), [("user", "queue this"), ("system", "Not delivered: Claude stopped before reading this message.")]);
+        chats.shutdown();
     }
 
     /// X40: the phone's Inbox reads every chat's pending asks at once,

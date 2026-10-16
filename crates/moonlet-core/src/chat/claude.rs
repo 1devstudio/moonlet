@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatImage, ChatState, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, Subagent, SubagentTool};
+use moonlet_proto::types::{ChatImage, ChatState, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, QueuedMessage, Subagent, SubagentTool};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, SignIns, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
@@ -39,11 +39,12 @@ impl Claude {
         Out::Write(json!({"type": "control_request", "request_id": id, "request": request}).to_string())
     }
 
-    fn user_line(text: &str, images: &[ChatImage]) -> String {
+    fn user_line(uuid: &str, text: &str, images: &[ChatImage]) -> String {
         let mut content: Vec<Value> = if text.is_empty() { vec![] } else { vec![json!({"type": "text", "text": text})] };
         content.extend(images.iter().map(|i| json!({"type": "image", "source": {"type": "base64", "media_type": i.media_type, "data": i.data}})));
         json!({
             "type": "user",
+            "uuid": uuid,
             "message": {"role": "user", "content": content},
             "parent_tool_use_id": null,
         })
@@ -442,6 +443,33 @@ impl Adapter for Claude {
                     }
                 }
             }
+            // What became of a message sent with a uuid (X49).
+            "command_lifecycle" => {
+                let id = v["command_uuid"].as_str().unwrap_or_default();
+                let Some(at) = st.queued.iter().position(|q| q.id == id) else { return out };
+                match v["state"].as_str().unwrap_or("") {
+                    "started" => {
+                        let q = st.queued.remove(at);
+                        out.push(upsert(st, item(super::local_id("user"), "user", q.text)));
+                        // A message read after its turn ended starts the next one.
+                        if st.status != "working" && st.status != "blocked" {
+                            st.turn_started_at = Some(now_ms());
+                            st.status = "working".into();
+                        }
+                        out.push(Out::State);
+                    }
+                    "cancelled" => {
+                        st.queued.remove(at);
+                        out.push(Out::State);
+                    }
+                    "discarded" | "refused" => {
+                        let q = st.queued.remove(at);
+                        out.push(upsert(st, item(super::local_id("error"), "error", format!("Claude did not take this message: {}", q.text))));
+                        out.push(Out::State);
+                    }
+                    _ => {}
+                }
+            }
             // Replies to our own control requests.
             "control_response" => {
                 let resp = &v["response"];
@@ -467,6 +495,9 @@ impl Adapter for Claude {
                         _ => self.sign_ins.fail(&name, resp["error"].as_str().unwrap_or("Sign-in failed."), st),
                     }
                     out.push(Out::State);
+                } else if rid.starts_with("send-now-") && resp["response"]["send_now"] != "stopped" {
+                    // The turn goes on, taking the message in (X49).
+                    self.interrupted = false;
                 } else if rid.starts_with("mcp-reconnect-") {
                     // Connected or not, the status shows how it went.
                     out.push(self.control("mcp-status", json!({"subtype": "mcp_status"})));
@@ -576,11 +607,17 @@ impl Adapter for Claude {
     }
 
     fn send(&mut self, text: &str, images: &[ChatImage], st: &mut ChatState) -> Vec<Out> {
-        let id = super::local_id("user");
-        let mut out = vec![upsert(st, item(id, "user", user_text(text, images))), Out::Write(Self::user_line(text, images))];
-        if st.status != "working" && st.status != "blocked" {
-            st.turn_started_at = Some(now_ms());
+        // The uuid makes Claude report when it reads the message (X49).
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let line = Out::Write(Self::user_line(&uuid, text, images));
+        // During a turn Claude reads the message only when the running step
+        // ends: it waits in the queue until Claude says it started.
+        if st.status == "working" || st.status == "blocked" {
+            st.queued.push(QueuedMessage { id: uuid, text: user_text(text, images), sending: false });
+            return vec![line, Out::State];
         }
+        let mut out = vec![upsert(st, item(super::local_id("user"), "user", user_text(text, images))), line];
+        st.turn_started_at = Some(now_ms());
         st.status = "working".into();
         out.push(Out::State);
         out
@@ -649,6 +686,24 @@ impl Adapter for Claude {
         vec![self.control("stop", json!({"subtype": "stop_task", "task_id": agent}))]
     }
 
+    fn send_now(&mut self, message: Option<&str>, st: &mut ChatState) -> Vec<Out> {
+        let mut req = json!({"subtype": "interrupt", "send_now": true});
+        if let Some(m) = message {
+            req["message_uuid"] = json!(m);
+        }
+        for q in st.queued.iter_mut().filter(|q| message.is_none_or(|m| m == q.id)) {
+            q.sending = true;
+        }
+        // Claude may stop the turn for it; its reply says whether it did.
+        self.interrupted = true;
+        vec![self.control("send-now", req), Out::State]
+    }
+
+    // Claude reports the message cancelled; until then it stays queued.
+    fn unqueue(&mut self, message: &str, _st: &mut ChatState) -> Vec<Out> {
+        vec![self.control("unqueue", json!({"subtype": "cancel_async_message", "message_uuid": message}))]
+    }
+
     fn interrupt(&mut self, st: &mut ChatState) -> Vec<Out> {
         let req = json!({"type": "control_request", "request_id": self.next_id("interrupt"), "request": {"subtype": "interrupt"}});
         let mut out = Vec::new();
@@ -670,7 +725,7 @@ impl Adapter for Claude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moonlet_proto::types::{ContextCategory, ContextUsage, McpServer};
+    use moonlet_proto::types::{ContextCategory, ContextUsage, McpServer, QueuedMessage};
 
     fn replay(fixture: &str, a: &mut Claude, st: &mut ChatState) -> Vec<Out> {
         fixture.lines().flat_map(|l| a.on_line(l, st)).collect()
@@ -935,6 +990,129 @@ mod tests {
         a.on_line(r#"{"type":"result","subtype":"success","is_error":false}"#, &mut st);
         assert_eq!(st.status, "idle");
         assert!(st.items.iter().all(|i| i.turn.is_none()));
+    }
+
+    /// Captured from Claude Code 2.1.301 (haiku, hooks off): a message sent
+    /// while `ping` ran, read when the tool call returned (X49). Its uuid in
+    /// the capture was `33333333-…`.
+    const QUEUE: &str = include_str!("fixtures/claude-queue.jsonl");
+    /// The same with "say BANANA" (`22222222-…`) withdrawn by
+    /// `cancel_async_message`, then "what is 2+2?" (`11111111-…`) sent now.
+    const SEND_NOW: &str = include_str!("fixtures/claude-send-now.jsonl");
+
+    /// The uuid a user line was written with.
+    fn written_uuid(outs: &[Out]) -> String {
+        writes(outs).iter().find(|w| w["type"] == "user").expect("a user line")["uuid"].as_str().expect("a uuid").to_string()
+    }
+
+    fn texts(st: &ChatState) -> Vec<(String, String)> {
+        st.items.iter().map(|i| (i.kind.clone(), i.tool.as_ref().map_or(i.text.clone(), |t| t.summary.clone()))).collect()
+    }
+
+    #[test]
+    fn a_message_sent_during_a_tool_call_waits_in_the_queue_until_claude_reads_it() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        a.send("Run ping, then echo second", &[], &mut st);
+        replay(&until(QUEUE, "task_started"), &mut a, &mut st);
+
+        let outs = a.send("also tell me 2+2", &[], &mut st);
+        let id = written_uuid(&outs);
+        assert_eq!(st.queued, vec![QueuedMessage { id: id.clone(), text: "also tell me 2+2".into(), sending: false }]);
+        assert_eq!(texts(&st).last().unwrap(), &("tool".to_string(), "ping -c 15 -i 1 127.0.0.1 > /dev/null; echo pinged".to_string()));
+
+        let rest = QUEUE[until(QUEUE, "task_started").len()..].replace("33333333-3333-4333-8333-333333333333", &id);
+        replay(&rest, &mut a, &mut st);
+        assert!(st.queued.is_empty());
+        let shown = texts(&st);
+        let at = shown.iter().position(|(k, t)| k == "user" && t == "also tell me 2+2").expect("the message in the transcript");
+        assert_eq!(shown[at - 1].1, "ping -c 15 -i 1 127.0.0.1 > /dev/null; echo pinged", "read after the tool call returned");
+        assert_eq!(shown[at + 1..].iter().find(|(k, _)| k == "tool").unwrap().1, "echo second");
+        assert_eq!(st.status, "done");
+    }
+
+    /// The send-now capture up to the running `ping`, with a chat working on it.
+    fn pinging() -> (Claude, ChatState) {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        a.send("Run ping, then reply done", &[], &mut st);
+        replay(&until(SEND_NOW, "task_started"), &mut a, &mut st);
+        (a, st)
+    }
+
+    #[test]
+    fn unqueueing_withdraws_the_message_from_claudes_queue() {
+        let (mut a, mut st) = pinging();
+        let id = written_uuid(&a.send("say BANANA", &[], &mut st));
+
+        let outs = a.unqueue(&id, &mut st);
+        let w = writes(&outs);
+        assert_eq!(w[0]["request"], json!({"subtype": "cancel_async_message", "message_uuid": id}));
+        assert_eq!(st.queued.len(), 1, "queued until Claude says it is cancelled");
+
+        let cancelled = &SEND_NOW[until(SEND_NOW, "task_started").len()..until(SEND_NOW, r#""request_id":"c1""#).len()];
+        replay(&cancelled.replace("22222222-2222-4222-8222-222222222222", &id), &mut a, &mut st);
+        assert!(st.queued.is_empty());
+        assert!(st.items.iter().all(|i| !i.text.contains("BANANA")));
+    }
+
+    #[test]
+    fn send_now_asks_claude_to_take_the_message_and_the_stopped_turn_is_not_an_error() {
+        let (mut a, mut st) = pinging();
+        let id = written_uuid(&a.send("what is 2+2?", &[], &mut st));
+
+        let outs = a.send_now(Some(&id), &mut st);
+        assert_eq!(writes(&outs)[0]["request"], json!({"subtype": "interrupt", "send_now": true, "message_uuid": id}));
+        assert_eq!(st.queued, vec![QueuedMessage { id: id.clone(), text: "what is 2+2?".into(), sending: true }]);
+
+        let rest = &SEND_NOW[until(SEND_NOW, r#""request_id":"c1""#).len()..];
+        replay(&rest.replace("11111111-1111-4111-8111-111111111111", &id), &mut a, &mut st);
+        assert!(st.queued.is_empty());
+        let shown: Vec<(String, String)> = texts(&st).into_iter().filter(|(k, _)| k != "thinking").collect();
+        assert_eq!(
+            shown[1..],
+            [
+                ("tool".to_string(), "ping -c 40 -i 1 127.0.0.1 > /dev/null; echo pinged".to_string()),
+                ("system".to_string(), "Interrupted".to_string()),
+                ("user".to_string(), "what is 2+2?".to_string()),
+                ("assistant".to_string(), "4".to_string()),
+            ]
+        );
+        assert_eq!(st.status, "done");
+    }
+
+    #[test]
+    fn a_turn_that_takes_the_message_in_without_stopping_ends_as_usual() {
+        let (mut a, mut st) = pinging();
+        let id = written_uuid(&a.send("what is 2+2?", &[], &mut st));
+        let rid = writes(&a.send_now(Some(&id), &mut st))[0]["request_id"].as_str().unwrap().to_string();
+        // Claude's reply when it moves the running command to the background.
+        a.on_line(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": {"still_queued": [id], "send_now": "delivering"}}}).to_string(), &mut st);
+        a.on_line(r#"{"type":"result","subtype":"success","is_error":false,"result":"4"}"#, &mut st);
+        assert_eq!(st.status, "done");
+        assert!(st.items.iter().all(|i| i.text != "Interrupted"));
+    }
+
+    #[test]
+    fn a_message_claude_refuses_leaves_the_queue_with_an_error() {
+        let (mut a, mut st) = pinging();
+        let id = written_uuid(&a.send("what is 2+2?", &[], &mut st));
+        a.on_line(&json!({"type": "command_lifecycle", "command_uuid": id, "state": "refused", "session_id": "s"}).to_string(), &mut st);
+        assert!(st.queued.is_empty());
+        let last = st.items.last().unwrap();
+        assert_eq!((last.kind.as_str(), last.text.as_str()), ("error", "Claude did not take this message: what is 2+2?"));
+    }
+
+    #[test]
+    fn send_now_without_a_message_sends_every_queued_one() {
+        let (mut a, mut st) = pinging();
+        a.send("also bump the e2e timeout", &[], &mut st);
+        a.send("which port is the api on?", &[], &mut st);
+        let outs = a.send_now(None, &mut st);
+        assert_eq!(writes(&outs)[0]["request"], json!({"subtype": "interrupt", "send_now": true}));
+        assert!(st.queued.iter().all(|q| q.sending));
     }
 
     // Captured from Claude Code 2.1.296 with a signed-out CLAUDE_CONFIG_DIR.
