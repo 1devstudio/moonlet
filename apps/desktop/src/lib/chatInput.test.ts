@@ -22,18 +22,18 @@ describe("chat input layout (X51)", () => {
   });
 
   it("shows everything when wide: the full spend, effort, esc to stop and ⌥↵", () => {
-    expect(inputLayout(760)).toEqual({ tier: "wide", padX: 24, insetX: 16, escHint: true, asideHint: true, percent: true, cost: "full", effort: true, modeLabel: true, longPlaceholder: true });
+    expect(inputLayout(760)).toEqual({ tier: "wide", padX: 24, insetX: 16, escHint: true, asideHint: true, showPercent: true, cost: "full", effort: true, modeLabel: true, longPlaceholder: true });
   });
 
   it("keeps only the dollars of the spend at medium", () => {
-    expect(inputLayout(560)).toEqual({ tier: "medium", padX: 24, insetX: 16, escHint: true, asideHint: true, percent: true, cost: "short", effort: true, modeLabel: true, longPlaceholder: true });
+    expect(inputLayout(560)).toEqual({ tier: "medium", padX: 24, insetX: 16, escHint: true, asideHint: true, showPercent: true, cost: "short", effort: true, modeLabel: true, longPlaceholder: true });
   });
 
   it("drops the spend, effort and hints when narrow", () => {
-    expect(inputLayout(420)).toEqual({ tier: "narrow", padX: 16, insetX: 16, escHint: false, asideHint: false, percent: true, cost: null, effort: false, modeLabel: true, longPlaceholder: false });
+    expect(inputLayout(420)).toEqual({ tier: "narrow", padX: 16, insetX: 16, escHint: false, asideHint: false, showPercent: true, cost: null, effort: false, modeLabel: true, longPlaceholder: false });
   });
 
   it("keeps the ring and the mode's icon alone when compact", () => {
-    expect(inputLayout(320)).toEqual({ tier: "compact", padX: 12, insetX: 12, escHint: false, asideHint: false, percent: false, cost: null, effort: false, modeLabel: false, longPlaceholder: false });
+    expect(inputLayout(320)).toEqual({ tier: "compact", padX: 12, insetX: 12, escHint: false, asideHint: false, showPercent: false, cost: null, effort: false, modeLabel: false, longPlaceholder: false });
   });
 });
