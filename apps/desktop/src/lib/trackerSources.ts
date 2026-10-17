@@ -1,22 +1,29 @@
 // Which Linear, Jira and ClickUp sources each workspace shows (X44).
 
+import { originText } from "./addBoard";
 import { type BoardConfig, sourceKeyOf } from "./boards";
 import type { Column } from "./tasks";
 import { trackerName, trackerOf } from "./tasks";
 import type { Connection, Source } from "./tasksStore";
 
-export interface SourceEntry {
-  /** The board's id, for its settings (X50). */
+/** A board in Settings › Task trackers › Boards (X50). */
+export interface BoardEntry {
   id: string;
+  connection: string;
   tracker: string;
   name: string;
-  /** Why its connection needs attention, if it does (X44). */
-  attention: string | undefined;
+  /** What it is built from: `Jira board 10`, `Linear team ENG`. */
+  origin: string;
+  pinned: boolean;
+  /** Why its connection needs attention (X44), shown in red. */
+  attention?: string;
 }
 
-/** A workspace's boards, by tracker and name, with why a board's connection needs attention (X44, X50). */
-export function sourceList(wsKey: string, boards: BoardConfig[] | undefined, attention: Record<string, string>): SourceEntry[] {
-  return (boards ?? []).filter((b) => b.workspace === wsKey).map((b) => ({ id: b.id, tracker: trackerName(b.connection), name: b.name, attention: attention[b.connection] }));
+/** A workspace's boards with their tracker, origin and pin, and why a board's connection needs attention (X44, X50). */
+export function boardList(wsKey: string, boards: BoardConfig[] | undefined, attention: Record<string, string>): BoardEntry[] {
+  return (boards ?? [])
+    .filter((b) => b.workspace === wsKey)
+    .map((b) => ({ id: b.id, connection: b.connection, tracker: trackerName(b.connection), name: b.name, origin: originText(b.origin), pinned: b.pinned !== false, attention: attention[b.connection] }));
 }
 
 /** The States dialog's mapping as saved: only states moved off their default column (X44). */

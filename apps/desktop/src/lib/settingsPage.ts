@@ -11,7 +11,10 @@ import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./
 /** The app-wide pages, in nav order. */
 export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
 
-export type SettingsRoute = { page: AppPage } | { page: "workspace"; host: string; id: string } | { page: "project"; host: string; id: string; focus?: "run" };
+export type SettingsRoute =
+  /** `focus` is a row's `data-setting`, scrolled to and highlighted (X50 Manage › Boards). */
+  | { page: AppPage; focus?: string }
+  | { page: "workspace"; host: string; id: string } | { page: "project"; host: string; id: string; focus?: "run" };
 
 export interface NavEntry {
   /** Unique within the nav. */

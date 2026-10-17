@@ -8,12 +8,14 @@ import { hostsApi, rpc } from "../../lib/daemon";
 import type { RuleSetting } from "../../lib/keepInStep";
 import { M } from "../../lib/protocol";
 import { errorToast, shownWorkspace, useStore } from "../../lib/store";
-import { sourceList } from "../../lib/trackerSources";
-import { branchUser, loadTrackersConfig, openAddBoard, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { type BoardEntry, boardList } from "../../lib/trackerSources";
+import { branchUser, loadTrackersConfig, openAddBoard, removeBoard, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { GITHUB_RULES, githubConnection, previewTask, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
 import { AddTracker, ConnectionRow } from "./TrackerConnections";
 import { Button, cx, IconButton } from "../ui";
-import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, SwitchRow } from "./controls";
+import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, Switch, SwitchRow } from "./controls";
+import { withPinned } from "../../lib/boards";
+import { BoardMark } from "../tasks/TasksMode";
 import { DEFAULT_LINK, type TrackerKind } from "../../lib/tasks";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 
@@ -48,12 +50,11 @@ export function TrackersPage() {
   const github = config.github;
   const link = config.link ?? DEFAULT_LINK;
   const workspaces = useStore((s) => s.workspaces);
-  const data = useTasks((t) => t.data);
   const attention = useTasks((t) => t.attention);
   const wsRows = Object.entries(workspaces).flatMap(([host, list]) =>
     list.map((w) => {
       const key = wsKey(host, w.id);
-      return { key, name: w.name, loaded: !!data[key], sources: sourceList(key, config.boards, attention) };
+      return { key, name: w.name, boards: boardList(key, config.boards, attention) };
     }),
   );
   const setGithub = (patch: Partial<TrackersConfig["github"]>) => save((c) => ({ ...c, github: { ...c.github, ...patch } }));
@@ -159,45 +160,25 @@ export function TrackersPage() {
           />
         </Card>
       </Section>
-      <Section title="Boards" hint="Tasks mode shows the boards of the workspace you are in.">
-        <Card>
+      <div data-setting="boards">
+        <Section title="Boards" hint="Tasks mode shows the boards of the workspace you are in; a pinned one is in its sidebar.">
           {wsRows.map((w) => {
             const { host, id } = parseWsKey(w.key);
-            const open = (board?: string) => openAddBoard(host, id, board);
             return (
-              <Row
-                key={w.key}
-                label={w.name}
-                hint={
-                  w.sources.length ? (
-                    <span className="flex flex-wrap gap-1.5">
-                      {w.sources.map((x) => (
-                        // A board whose connection failed is outlined red, with its reason.
-                        <button
-                          key={x.id}
-                          title={x.attention ?? `Board settings for ${x.name}`}
-                          aria-label={x.attention ? `${x.tracker} ${x.name}: ${x.attention}` : `Board settings for ${x.name}`}
-                          onClick={() => open(x.id)}
-                          className={cx("rounded px-1 hover:bg-panel-2 hover:text-fg", x.attention && "outline outline-1 outline-error text-error")}
-                        >
-                          {x.tracker} {x.name}
-                        </button>
-                      ))}
-                    </span>
-                  ) : (
-                    "No board yet"
-                  )
-                }
-                setting={`ws-boards-${w.key}`}
-              >
-                <Button size="sm" className="field-height" onClick={() => open()}>
-                  Add a board
-                </Button>
-              </Row>
+              <Card key={w.key}>
+                <Row label={w.name} hint={w.boards.length ? undefined : "No board yet"} setting={`ws-boards-${w.key}`}>
+                  <Button size="sm" className="field-height" onClick={() => openAddBoard(host, id)}>
+                    Add a board
+                  </Button>
+                </Row>
+                {w.boards.map((x) => (
+                  <BoardRow key={x.id} entry={x} onSettings={() => openAddBoard(host, id, x.id)} onPin={(pinned) => save((c) => ({ ...c, boards: withPinned(c.boards ?? [], x.id, pinned) }))} />
+                ))}
+              </Card>
             );
           })}
-        </Card>
-      </Section>
+        </Section>
+      </div>
       <Section title="Sync">
         <Card>
           <Row label="Refresh issues" hint={config.sync.interval > 0 ? "Also refreshes whenever the window comes to the front, at most every 15 s." : "Refreshes when Tasks mode opens and when you press Refresh."} htmlFor={intervalId} setting="sync-interval">
@@ -251,5 +232,30 @@ function BranchPreview({ kind, template, maxLen, placeholders }: { kind: Tracker
         </>
       )}
     </span>
+  );
+}
+
+/** One board in Settings › Task trackers › Boards (X50): its mark, name and origin, Pinned, Board settings and Remove. */
+function BoardRow({ entry, onSettings, onPin }: { entry: BoardEntry; onSettings: () => void; onPin: (pinned: boolean) => void }) {
+  const pinId = useId();
+  return (
+    <div role="group" aria-label={entry.name} data-setting={`board-${entry.id}`} className="flex items-center gap-3 border-t border-border px-4 py-2.5">
+      <BoardMark connection={entry.connection} size={14} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate ui-text-13 text-fg">{entry.name}</div>
+        {/* A board whose connection needs attention says why, in red (X44). */}
+        <div className={cx("truncate ui-text-12", entry.attention ? "text-error" : "text-faint")}>{entry.attention ?? entry.origin}</div>
+      </div>
+      <span id={pinId} className="ui-text-12 text-muted">
+        Pinned
+      </span>
+      <Switch on={entry.pinned} onChange={onPin} labelledBy={pinId} />
+      <Button size="sm" variant="ghost" className="field-height" onClick={onSettings}>
+        Board settings
+      </Button>
+      <Button size="sm" variant="ghost" className="field-height" onClick={() => void removeBoard(entry).catch(errorToast)}>
+        Remove
+      </Button>
+    </div>
   );
 }

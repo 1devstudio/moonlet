@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, pickAssignee, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -359,5 +359,16 @@ describe("assigneeOf and pickAssignee (X50 header: Assignee)", () => {
     const upgraded = { "*": { to: "anyone" as const, over: "me" as const } };
     expect(assigneeOf(board("web"), upgraded)).toBe("anyone");
     expect(pickAssignee({ ...upgraded, old: { to: "anyone", over: "me" } }, board("ops"), "me", ["ops", "web"])).toEqual({ ...upgraded, ops: { to: "me", over: "me" } });
+  });
+});
+
+describe("withPinned (X50 Settings › Boards: Pinned)", () => {
+  it("pins or unpins a board, writing only an unpinned one", () => {
+    const boards: BoardConfig[] = [
+      { id: "a", name: "A", connection: "linear:acme", workspace: "local/w", origin: { kind: "linear_team", team: "A" } },
+      { id: "b", name: "B", connection: "linear:acme", workspace: "local/w", origin: { kind: "linear_team", team: "B" }, pinned: false },
+    ];
+    expect(withPinned(boards, "a", false).map((b) => b.pinned)).toEqual([false, false]);
+    expect(withPinned(boards, "b", true)).toEqual([boards[0], { id: "b", name: "B", connection: "linear:acme", workspace: "local/w", origin: { kind: "linear_team", team: "B" } }]);
   });
 });

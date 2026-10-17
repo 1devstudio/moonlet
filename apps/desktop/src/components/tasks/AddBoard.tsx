@@ -24,11 +24,10 @@ import {
   toBoard,
 } from "../../lib/addBoard";
 import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, jiraBoardType, type Origin, type StartRule } from "../../lib/boards";
-import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
 import { type Task, trackerName, trackerOf } from "../../lib/tasks";
-import { GITHUB, openBoard, previewBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
+import { GITHUB, openBoard, previewBoard, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { Button, cx, IconButton, inputCls } from "../ui";
 import { BoardMark, TaskGlyph } from "./TasksMode";
@@ -182,11 +181,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   };
   const remove = async () => {
     if (!editing) return;
-    const sure = await askConfirm({ title: `Remove ${editing.name}?`, message: "It goes from Tasks mode. Sessions keep their links.", action: "Remove", variant: "danger" });
-    if (!sure) return;
     try {
-      await saveTrackersConfig((c) => ({ ...c, boards: (c.boards ?? []).filter((b) => b.id !== editing.id) }));
-      close();
+      if (await removeBoard(editing)) close();
     } catch (e) {
       errorToast(e);
     }
