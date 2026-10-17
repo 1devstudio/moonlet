@@ -125,7 +125,7 @@ pub struct Board {
     pub labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Assignee::is_me")]
     pub assignee: Assignee,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Finished::is_default")]
     pub finished: Finished,
     /// In the board's order. Empty until the first sync reads the tracker's
     /// own statuses (a board migrated from a source, X50).
@@ -135,9 +135,9 @@ pub struct Board {
     /// columns are read: state name → category.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub states: crate::states::Mapping,
-    /// Where new sessions from the board start, first match wins.
+    /// Where new sessions from the board start (X50 "start in" rules).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<RepoRule>,
+    pub rules: Vec<StartRule>,
     /// The fields its cards show besides the X45 card.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cards: Vec<CardField>,
@@ -213,37 +213,81 @@ impl Default for Finished {
     }
 }
 
-/// `Finished::Sprint` as the string `"sprint"`.
-mod sprint {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error};
-
-    pub fn serialize<S: Serializer>(s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str("sprint")
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<(), D::Error> {
-        match String::deserialize(d)?.as_str() {
-            "sprint" => Ok(()),
-            other => Err(D::Error::custom(format!(
-                "finished is a number of days or \"sprint\", not \"{other}\""
-            ))),
-        }
+impl Finished {
+    fn is_default(&self) -> bool {
+        *self == Finished::default()
     }
 }
+
+/// A unit variant written as a fixed string: `Finished::Sprint` as
+/// `"sprint"`, `When::Default` as `"default"`.
+macro_rules! fixed_str {
+    ($module:ident, $text:literal) => {
+        mod $module {
+            use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+            pub fn serialize<S: Serializer>(s: S) -> Result<S::Ok, S::Error> {
+                s.serialize_str($text)
+            }
+
+            pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<(), D::Error> {
+                let got = String::deserialize(d)?;
+                if got == $text {
+                    Ok(())
+                } else {
+                    Err(D::Error::custom(format!(
+                        "expected \"{}\", not \"{got}\"",
+                        $text
+                    )))
+                }
+            }
+        }
+    };
+}
+
+fixed_str!(sprint, "sprint");
+fixed_str!(default_rule, "default");
 
 /// One of a board's columns, named as the tracker names it (X50).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoardColumn {
     pub name: String,
-    /// The tracker's statuses in it: Jira status ids, else state names.
+    /// The tracker's statuses in it: status or state ids where the tracker
+    /// has them (Jira, Linear), else names (ClickUp; a GitHub repository's
+    /// `open`, `completed`, `not_planned`).
     pub statuses: Vec<String>,
     /// What moonlet treats it as, for out of sync and Keep in step.
-    pub category: crate::states::Column,
+    pub category: Category,
     #[serde(default, skip_serializing_if = "Show::is_show")]
     pub show: Show,
     /// Jira's column limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wip: Option<u32>,
+}
+
+/// What moonlet treats a board column as (X50). Hiding a column is its
+/// `show`, not a category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Category {
+    Todo,
+    InProgress,
+    InReview,
+    Done,
+}
+
+impl Category {
+    /// The category of a state's default column; a state not shown has none.
+    pub fn of(column: crate::states::Column) -> Option<Self> {
+        use crate::states::Column;
+        match column {
+            Column::Todo => Some(Category::Todo),
+            Column::InProgress => Some(Category::InProgress),
+            Column::InReview => Some(Category::InReview),
+            Column::Done => Some(Category::Done),
+            Column::Hidden => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,7 +307,7 @@ impl Show {
 
 /// "New sessions from this board start in": `project` when `when` matches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RepoRule {
+pub struct StartRule {
     pub when: When,
     /// The moonlet project's id.
     pub project: String,
@@ -280,24 +324,6 @@ pub enum When {
     Label {
         label: String,
     },
-}
-
-/// `When::Default` as the string `"default"`.
-mod default_rule {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error};
-
-    pub fn serialize<S: Serializer>(s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str("default")
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<(), D::Error> {
-        match String::deserialize(d)?.as_str() {
-            "default" => Ok(()),
-            other => Err(D::Error::custom(format!(
-                "a rule's when is \"default\", a component or a label, not \"{other}\""
-            ))),
-        }
-    }
 }
 
 /// "Cards show" (X50 Add a board, step 4).
@@ -588,32 +614,32 @@ project = "ui-kit"
                     BoardColumn {
                         name: "Backlog".into(),
                         statuses: vec!["10000".into()],
-                        category: crate::states::Column::Todo,
+                        category: Category::Todo,
                         show: Show::Hide,
                         wip: None,
                     },
                     BoardColumn {
                         name: "In Progress".into(),
                         statuses: vec!["3".into(), "10012".into()],
-                        category: crate::states::Column::InProgress,
+                        category: Category::InProgress,
                         show: Show::Show,
                         wip: Some(4),
                     },
                     BoardColumn {
                         name: "Done".into(),
                         statuses: vec!["10001".into(), "10015".into()],
-                        category: crate::states::Column::Done,
+                        category: Category::Done,
                         show: Show::Fold,
                         wip: None,
                     },
                 ],
                 states: Default::default(),
                 rules: vec![
-                    RepoRule {
+                    StartRule {
                         when: When::Default,
                         project: "website".into(),
                     },
-                    RepoRule {
+                    StartRule {
                         when: When::Component {
                             component: "design-system".into()
                         },
@@ -662,6 +688,31 @@ origin = { kind = "linear_team", team = "MOON" }
                 "{key} in {written}"
             );
         }
+    }
+
+    #[test]
+    fn a_board_at_its_default_finished_rule_does_not_write_it() {
+        let text = "[[boards]]\nid = \"b\"\nname = \"n\"\nconnection = \"c\"\nworkspace = \"w\"\norigin = { kind = \"jql\", query = \"q\" }\n";
+        let c = parse(text).unwrap();
+        assert_eq!(c.boards[0].finished, Finished::Days(14));
+        assert!(!to_toml(&c).contains("finished"), "{}", to_toml(&c));
+        let seven = parse(&format!("{text}finished = 7\n")).unwrap();
+        assert!(to_toml(&seven).contains("finished = 7"));
+    }
+
+    #[test]
+    fn a_columns_category_is_one_of_four_and_hiding_is_its_show() {
+        let column = |category: &str| {
+            format!(
+                "[[boards]]\nid = \"b\"\nname = \"n\"\nconnection = \"c\"\nworkspace = \"w\"\norigin = {{ kind = \"jql\", query = \"q\" }}\n[[boards.columns]]\nname = \"Backlog\"\nstatuses = []\ncategory = \"{category}\"\nshow = \"hide\"\n"
+            )
+        };
+        assert_eq!(
+            parse(&column("todo")).unwrap().boards[0].columns[0].category,
+            Category::Todo
+        );
+        let err = parse(&column("hidden")).unwrap_err();
+        assert!(err.contains("hidden"), "{err}");
     }
 
     #[test]
