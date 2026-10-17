@@ -78,7 +78,9 @@ pub fn board_columns(
         .collect()
 }
 
-/// What a GitHub Project's issue with no Status shows under (X50), as GitHub names it.
+/// The column a GitHub Project's issue with no Status shows under (X50), as
+/// GitHub names it. Its status is `""`, so an option a team named "No Status"
+/// stays an option.
 pub const NO_STATUS: &str = "No Status";
 
 /// A GitHub Project's columns (X50): No Status first, as GitHub shows it,
@@ -89,7 +91,7 @@ pub fn project_columns(options: &[String]) -> Vec<crate::config::BoardColumn> {
         options.iter().map(|n| (n.clone(), String::new())).collect();
     let mut out = vec![BoardColumn {
         name: NO_STATUS.into(),
-        statuses: vec![NO_STATUS.into()],
+        statuses: vec![String::new()],
         category: Category::Todo,
         show: Show::Show,
         wip: None,
@@ -135,8 +137,8 @@ fn looks_like_review(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TrackerKind::*;
     use crate::config::{Category, Show};
+    use crate::TrackerKind::*;
 
     #[test]
     fn a_clickup_lists_statuses_as_board_columns() {
@@ -329,12 +331,7 @@ mod tests {
                 .map(|c| (c.name.as_str(), c.statuses.clone(), c.category, c.show))
                 .collect::<Vec<_>>(),
             [
-                (
-                    "No Status",
-                    vec!["No Status".to_string()],
-                    Category::Todo,
-                    Show::Show
-                ),
+                ("No Status", vec![String::new()], Category::Todo, Show::Show),
                 ("Todo", vec!["Todo".to_string()], Category::Todo, Show::Show),
                 (
                     "In Progress",

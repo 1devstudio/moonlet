@@ -250,7 +250,15 @@ export function matchColumns(saved: BoardColumn[] | undefined, fresh: BoardColum
     const { show: _, ...tracker } = match;
     return [{ ...tracker, category: s.category, ...(s.show && { show: s.show }) }];
   });
-  return [...kept, ...fresh.filter((f) => !used.has(f))];
+  // A column new in the tracker goes where the tracker has it: before the next column the board had.
+  const out = [...kept];
+  fresh.forEach((f, i) => {
+    if (used.has(f)) return;
+    const next = fresh.slice(i + 1).find((n) => used.has(n));
+    const at = next ? out.findIndex((c) => c.statuses.some((id) => next.statuses.includes(id))) : -1;
+    out.splice(at < 0 ? out.length : at, 0, f);
+  });
+  return out;
 }
 
 /**
@@ -372,9 +380,6 @@ export function byDefaultHint(linked: string[], projects: { id: string; name: st
   return `The projects that link it: ${linked.length ? linked.map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") : "none yet"}`;
 }
 
-/** A GitHub Project's column for issues with no Status (X50), as GitHub names it. */
-export const NO_STATUS = "No Status";
-
 /** A GitHub Project as moves need it (X50): its id, its Status field and the field's options. */
 export interface ProjectMeta {
   id: string;
@@ -384,12 +389,12 @@ export interface ProjectMeta {
 
 /**
  * The `gh.project_move` that sets `item`'s Status to the option named
- * `status`, or clears it for No Status; null when the Project has no such
- * option.
+ * `status`, or clears it for `""`, the status of No Status (an option a team
+ * named "No Status" is an option); null when the Project has no such option.
  */
 export function projectMove(project: ProjectMeta, item: string, status: string): { project: string; item: string; field: string; option: string | null } | null {
   if (!project.field) return null;
-  if (status === NO_STATUS) return { project: project.id, item, field: project.field, option: null };
+  if (status === "") return { project: project.id, item, field: project.field, option: null };
   const option = project.options.find((o) => o.name === status);
   return option ? { project: project.id, item, field: project.field, option: option.id } : null;
 }
