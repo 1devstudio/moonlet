@@ -5,6 +5,8 @@
 use moonlet_trackers::config::{Connection, TrackersConfig, connection_id};
 use moonlet_trackers::states::Column;
 use moonlet_trackers::task::TrackerTask;
+use moonlet_trackers::config::{BoardColumn, Finished, Origin};
+use moonlet_trackers::jira_board::{self, BoardIssue, BoardSetup, JiraBoard, Sprint};
 use moonlet_trackers::{ApiError, TrackerKind, clickup, jira, linear};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -540,6 +542,99 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
         }
         TrackerKind::Github => Ok(vec![]),
     }
+}
+
+/// The Jira boards a connection can show (X50 Add a board, step 1), at most 5 pages.
+#[tauri::command]
+pub async fn tracker_boards(id: String) -> Res<Vec<JiraBoard>> {
+    let s = Session::load(&id).await?;
+    if s.conn.kind != TrackerKind::Jira {
+        return Ok(vec![]);
+    }
+    let mut out = Vec::new();
+    for _ in 0..5 {
+        let path = format!("/rest/agile/1.0/board?maxResults=50&startAt={}", out.len());
+        let (page, last) = jira_board::parse_boards(&s.jira_send(s.jira(reqwest::Method::GET, &path)?).await?)?;
+        let empty = page.is_empty();
+        out.extend(page);
+        if last || empty {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+impl Session {
+    /// A Jira board's configuration with each column's suggested category.
+    async fn jira_setup(&self, board: u64) -> Res<BoardSetup> {
+        let config = self.jira_send(self.jira(reqwest::Method::GET, &format!("/rest/agile/1.0/board/{board}/configuration"))?).await?;
+        let statuses = self.jira_send(self.jira(reqwest::Method::GET, "/rest/api/3/status")?).await?;
+        Ok(jira_board::parse_board_config(&config, &jira_board::parse_statuses(&statuses)?)?)
+    }
+}
+
+/// A Jira board's columns, filter and estimation (X50 Add a board, step 3).
+#[tauri::command]
+pub async fn tracker_board_setup(id: String, board: u64) -> Res<BoardSetup> {
+    Session::load(&id).await?.jira_setup(board).await
+}
+
+/// What `tracker_board_tasks` searches with: a board's origin and filters.
+#[derive(Deserialize)]
+pub struct BoardQuery {
+    pub id: String,
+    pub origin: Origin,
+    #[serde(default)]
+    pub narrow: String,
+    pub mine: bool,
+    pub finished: Finished,
+}
+
+#[derive(Serialize)]
+pub struct BoardTasks {
+    pub issues: Vec<BoardIssue>,
+    pub sprint: Option<Sprint>,
+    /// A Jira board's columns as Jira has them now, to match the saved ones.
+    pub columns: Option<Vec<BoardColumn>>,
+}
+
+/// A board's issues (X50 Sync): a Jira board's filter and sub-filter, or a
+/// JQL board's query, with moonlet's narrowing; at most 5 pages.
+#[tauri::command]
+pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
+    let s = Session::load(&query.id).await?;
+    let (filter, sub_query, points, board, columns) = match &query.origin {
+        Origin::JiraBoard { board } => {
+            let setup = s.jira_setup(*board).await?;
+            let filter_id = safe_id(&setup.filter_id)?.to_string();
+            let filter = jira_board::parse_filter(&s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/filter/{filter_id}"))?).await?)?;
+            (filter, setup.sub_query, setup.estimation, Some(*board), Some(setup.columns))
+        }
+        Origin::Jql { query: jql } => {
+            // A token Jira no longer accepts makes searches come back empty, not
+            // refused: ask who we are first, which does fail.
+            s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
+            (jql.clone(), None, None, None, None)
+        }
+        _ => return Ok(BoardTasks { issues: vec![], sprint: None, columns: None }),
+    };
+    let sprint_field = jira_board::sprint_field(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/field")?).await?)?;
+    let jql = jira_board::board_jql(&filter, sub_query.as_deref(), &query.narrow, query.mine, query.finished);
+    let mut issues = Vec::new();
+    let mut sprint = None;
+    let mut token: Option<String> = None;
+    for _ in 0..5 {
+        let body = jira_board::board_search_body(&jql, sprint_field.as_deref(), points.as_deref(), token.as_deref());
+        let raw = s.jira_send(s.jira(reqwest::Method::POST, "/rest/api/3/search/jql")?.json(&body)).await?;
+        let (page, found) = jira_board::parse_board_search(&raw, &s.conn.id, &s.conn.site, sprint_field.as_deref(), points.as_deref(), board)?;
+        issues.extend(page);
+        sprint = sprint.or(found);
+        token = jira::next_page(&raw);
+        if token.is_none() || issues.len() >= 500 {
+            break;
+        }
+    }
+    Ok(BoardTasks { issues, sprint, columns })
 }
 
 /// A tracker state and the column it lands in by default.

@@ -9,6 +9,7 @@ pub mod branch;
 pub mod clickup;
 pub mod config;
 pub mod jira;
+pub mod jira_board;
 pub mod linear;
 pub mod oauth;
 pub mod priority;

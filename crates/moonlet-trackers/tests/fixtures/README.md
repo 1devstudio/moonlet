@@ -1,11 +1,12 @@
 # Tracker API fixtures
 
-Gathered on 2026-10-15 from the trackers' official API documentation; no live account was used. Each file is one of:
+Gathered on 2026-10-15 from the trackers' official API documentation; no live account was used. The X50 board files were added on 2026-10-17 from a real Jira Cloud site. Each file is one of:
 
 - **VERBATIM**: a documented example response or request body, trimmed to the fields moonlet reads (field names and nesting unchanged).
 - **VERBATIM+**: a documented example with small, noted edits (a second item added, text replaced).
 - **SCHEMA**: built from the official schema where the docs give no example (Linear has none).
 - **CAPTURED**: a real error answer to a deliberately invalid token.
+- **CAPTURED, SANITISED**: a real answer from a live site, trimmed to the fields moonlet reads, with every name, email, project key, label, summary, URL and account id replaced by made-up ones (ids of boards, statuses, filters and fields are kept).
 
 | File | Kind | Source |
 |---|---|---|
@@ -23,3 +24,10 @@ Gathered on 2026-10-15 from the trackers' official API documentation; no live ac
 | `clickup-user.json`, `clickup-teams.json`, `clickup-spaces.json`, `clickup-folders.json`, `clickup-list.json`, `clickup-comment.json` | VERBATIM | https://developer.clickup.com/reference (append `.md` to a page for its OpenAPI) |
 | `clickup-lists.json`, `clickup-tasks.json`, `clickup-update-task-request.json`, `clickup-comment-request.json` | VERBATIM+ | same; tasks use the object form of `assignees` and `tags` from the Get Task example |
 | `clickup-error-401.json`, `clickup-error-no-header.json` | CAPTURED | a bad token, and no Authorization header |
+| `jira-boards.json` | CAPTURED, SANITISED | `GET /rest/agile/1.0/board`; four of the site's boards (Scrum, Kanban, simple, and one with no project) |
+| `jira-board-scrum-configuration.json` | CAPTURED, SANITISED | `GET /rest/agile/1.0/board/{id}/configuration` of a Scrum board; `max` added on one column in the documented `columnConfig` shape, since none of the site's columns had a limit |
+| `jira-board-kanban-configuration.json` | CAPTURED, SANITISED | the same for a Kanban board: a Backlog column with no status, and a sub-filter |
+| `jira-filter-scrum.json`, `jira-filter-kanban.json` | CAPTURED, SANITISED | `GET /rest/api/3/filter/{id}` of each board's filter, trimmed to `id`, `name`, `jql` |
+| `jira-statuses.json` | CAPTURED, SANITISED | `GET /rest/api/3/status`, the statuses the two boards use |
+| `jira-fields.json` | CAPTURED, SANITISED | `GET /rest/api/3/field`: the sprint field, the board's Story Points field and the site's other "Story point estimate" |
+| `jira-board-search.json` | CAPTURED, SANITISED | four issues of an active sprint from the site's issue search (taken through the Atlassian MCP connector, whose wrapper is replaced by `/rest/api/3/search/jql`'s `{issues, isLast}`); the sprint's `boardId` set to the Scrum board's, and one component added |

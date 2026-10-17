@@ -145,3 +145,11 @@ const ORIGIN_KINDS: { [K in Origin["kind"]]: { label: string; key: (o: Extract<O
 
 export const originLabel = (o: Origin) => ORIGIN_KINDS[o.kind].label;
 export const originKey = (o: Origin) => (ORIGIN_KINDS[o.kind].key as (o: Origin) => string)(o);
+
+/** A Jira board's issue as `tracker_board_tasks` sends it. */
+export type BoardIssue = Task & { statusId: string };
+
+/** A board issue as a task: its status id goes with the tracker's state. */
+export function taskFromBoardIssue({ statusId, ...task }: BoardIssue): Task {
+  return { ...task, tracker: task.tracker && { ...task.tracker, statusId } };
+}

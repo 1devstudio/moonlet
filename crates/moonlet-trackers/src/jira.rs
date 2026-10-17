@@ -7,7 +7,7 @@ use crate::task::{TrackerRef, TrackerTask};
 use crate::{ApiError, TrackerKind};
 
 /// The fields a search asks for.
-const FIELDS: [&str; 9] = [
+pub(crate) const FIELDS: [&str; 9] = [
     "summary",
     "status",
     "priority",
