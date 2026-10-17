@@ -190,6 +190,9 @@ export interface TaskStart {
   user?: string;
 }
 
+/** How a tracker project is named in the links of the projects that start from it (X44): `connection key`. */
+export const sourceKey = (connection: string, key: string) => `${connection} ${key}`;
+
 /**
  * The composer's preset for starting a session from `task`. `repos` are the
  * projects' `owner/repo` by id; `sourceProjects` the projects that link a
@@ -205,7 +208,7 @@ export function taskStart(task: Task, repos: Record<string, string | null>, sour
     title: task.title,
     number: task.github?.number,
     firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
-    projects: repo ? Object.keys(repos).filter((id) => repos[id]?.toLowerCase() === repo).slice(0, 1) : task.tracker ? (sourceProjects[`${task.connection} ${task.tracker.source}`] ?? []) : [],
+    projects: repo ? Object.keys(repos).filter((id) => repos[id]?.toLowerCase() === repo).slice(0, 1) : task.tracker ? (sourceProjects[sourceKey(task.connection, task.tracker.source)] ?? []) : [],
     ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
     ...(task.tracker && { tracker: { id: task.tracker.id, source: task.tracker.source } }),
     ...((task.issueType ?? task.labels[0]) && { issueType: task.issueType ?? task.labels[0] }),

@@ -183,7 +183,7 @@ export function TasksSidebar() {
         <div className="flex items-center gap-2 px-4 py-2 ui-text-12 text-faint">
           <RotateCw size={12} className="shrink-0" />
           <span className={cx("min-w-0 flex-1 truncate", data.error && "text-error")} title={data.error ?? undefined}>
-            {data.error ? `Sync failed · ${data.error}` : syncedLabel(footerTracker((config.boards ?? []).filter((b) => ws && b.workspace === wsKey(ws.host, ws.id))), data.syncedAt, now)}
+            {data.error ? `Sync failed · ${data.error}` : syncedLabel(footerTracker(shown?.board ?? null), data.syncedAt, now)}
           </span>
           <span aria-hidden="true" className={cx("h-1.5 w-1.5 rounded-full", data.error ? "bg-error" : "bg-done")} />
         </div>

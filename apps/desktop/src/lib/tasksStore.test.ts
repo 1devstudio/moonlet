@@ -540,7 +540,8 @@ describe("boards (X50 Sync)", () => {
   it("removes a board only after asking, and leaves the sessions and their task links alone", async () => {
     const link = { connection: "linear:acme", key: "MOON-1", url: "" };
     useStore.setState({ sessions: { local: [{ id: "s1", project_id: "web", name: "Hosts", branch: "moon-1-hosts", base: "main", path: "/w/hosts", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: link }] } });
-    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [board()] } });
+    const other = board({ id: "des", name: "Design", origin: { kind: "linear_team" as const, team: "DES" } });
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [board(), other] } });
     saved.length = 0;
     vi.mocked(rpc).mockClear();
     // Kept: nothing saved.
@@ -552,7 +553,8 @@ describe("boards (X50 Sync)", () => {
     const removed = removeBoard(board());
     answerConfirm(true, false);
     expect(await removed).toBe(true);
-    expect((saved.at(-1) as { boards?: unknown[] }).boards).toEqual([]);
+    // Only that board goes.
+    expect((saved.at(-1) as { boards?: { id: string }[] }).boards?.map((b) => b.id)).toEqual(["des"]);
     // No session is touched: it keeps its link to the task.
     expect(vi.mocked(rpc).mock.calls.filter(([, method]) => String(method).startsWith("session."))).toEqual([]);
     expect(useStore.getState().sessions.local[0].task).toEqual(link);

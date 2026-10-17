@@ -2,7 +2,7 @@
 // own columns. `BoardConfig` mirrors `moonlet-trackers::config::Board`, as
 // saved in `trackers.toml`; `tasksBoard` builds what is drawn.
 
-import { type Column, type Task, type TrackerKind, trackerName, trackerOf } from "./tasks";
+import { type Column, sourceKey, type Task, type TrackerKind, trackerName, trackerOf } from "./tasks";
 import type { Connection, Source, TrackersConfig } from "./tasksStore";
 import { trackerLink } from "./trackerSources";
 
@@ -360,12 +360,14 @@ export function withColumnShow(board: BoardConfig, name: string, show: ColumnSho
  */
 export function linkedProjects(board: Pick<BoardConfig, "connection" | "origin">, sourceProjects: Record<string, string[]>): string[] {
   const key = sourceKeyOf(board);
-  const sources = Object.keys(sourceProjects).filter((s) => (key ? s === `${board.connection} ${key}` : s.startsWith(`${board.connection} `)));
+  const sources = Object.keys(sourceProjects).filter((s) => (key ? s === sourceKey(board.connection, key) : s.startsWith(sourceKey(board.connection, ""))));
   return [...new Set(sources.flatMap((s) => sourceProjects[s]))];
 }
 
-/** The sidebar footer's tracker (X50): the one the workspace's boards come from, or Tasks when several. */
-export function footerTracker(boards: Pick<BoardConfig, "connection">[]): string {
-  const names = [...new Set(boards.map((b) => trackerName(b.connection)))];
-  return names.length === 1 ? names[0] : names.length ? "Tasks" : "GitHub";
+/** The sidebar footer's tracker (X50): the shown board's, else GitHub, whose repositories every workspace syncs. */
+export const footerTracker = (shown: Pick<BoardConfig, "connection"> | null): string => (shown ? trackerName(shown.connection) : "GitHub");
+
+/** Add a board's By default hint: the projects that link the tracker project (`linked`, ids), by name where known. */
+export function byDefaultHint(linked: string[], projects: { id: string; name: string }[]): string {
+  return `The projects that link it: ${linked.length ? linked.map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") : "none yet"}`;
 }
