@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alreadyAdded, canContinue, cardChoices, clash, columnAt, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { alreadyAdded, byGroup, canContinue, cardChoices, clash, columnAt, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -162,5 +162,23 @@ describe("Board settings (X50)", () => {
     const { cards: _, ...unpicked } = board;
     expect(draftFromBoard(unpicked).cards).toEqual(["issue_type", "points", "assignee"]);
     expect(toBoard(draftFromBoard(unpicked)).cards).toBe(undefined);
+  });
+});
+
+describe("Add a board, step 1 groups (X50 ClickUp)", () => {
+  it("groups a connection's lists by space and folder, in the order they came", () => {
+    const rows = [
+      { key: "901", name: "Q4", group: "Engineering › Roadmap" },
+      { key: "902", name: "Bugs", group: "Engineering" },
+      { key: "903", name: "Q1", group: "Engineering › Roadmap" },
+      { key: "904", name: "Launch", group: "Marketing" },
+    ];
+    expect(byGroup(rows).map((g) => [g.group, g.rows.map((r) => r.key)])).toEqual([
+      ["Engineering › Roadmap", ["901", "903"]],
+      ["Engineering", ["902"]],
+      ["Marketing", ["904"]],
+    ]);
+    // Linear's teams and Jira's boards come as one group with no name.
+    expect(byGroup<{ key: string; group?: string }>([{ key: "ENG" }, { key: "DES" }]).map((g) => [g.group, g.rows.length])).toEqual([[null, 2]]);
   });
 });
