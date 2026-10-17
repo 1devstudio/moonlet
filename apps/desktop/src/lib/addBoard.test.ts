@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alreadyAdded, byGroup, canContinue, cardChoices, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { alreadyAdded, byGroup, canContinue, cardChoices, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -194,6 +194,15 @@ describe("Add a board, step 3 polish (X50)", () => {
     const suggested = { "Design Review": "in_review", Done: "done" } as const;
     expect(changedCategories(columnAt(WEB, 3, { category: "in_progress" }), suggested)).toEqual(["Design Review"]);
     expect(changedCategories(WEB, suggested)).toEqual([]);
+  });
+
+  it("takes the columns' categories as suggested when they first come, and again for a new source", () => {
+    const first = suggestedOf({}, WEB);
+    expect(first).toEqual({ Backlog: "todo", "Selected for Development": "todo", "In Progress": "in_progress", "Design Review": "in_review", Done: "done" });
+    // A change keeps the first suggestion; Board settings start from the board's columns as saved.
+    expect(suggestedOf(first, columnAt(WEB, 3, { category: "in_progress" }))).toBe(first);
+    // A new source clears the columns, and its own come as suggested.
+    expect(suggestedOf(first, [])).toEqual({});
   });
 
   it("links a Jira board's filter for editing in Jira", () => {

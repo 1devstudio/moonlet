@@ -483,7 +483,8 @@ describe("Jira and ClickUp trackers", () => {
       const rows = [...document.querySelectorAll<HTMLElement>('[role="dialog"] [role="row"][aria-label]')];
       const at = (name: string) => rows.find((r) => r.getAttribute("aria-label") === name)!;
       const data = new DataTransfer();
-      at("Done").dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: data }));
+      // A column drags by its grip.
+      document.querySelector<HTMLElement>('[role="dialog"] [aria-label="Drag Done"]')!.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: data }));
       at("Open").dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data }));
       at("Open").dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
     });
@@ -526,10 +527,13 @@ describe("Jira and ClickUp trackers", () => {
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
     await $(`(${dialog}//button[.//span[normalize-space()="Jira Cloud"]])[1]`).click();
     await $(`${dialog}//button[.//span[normalize-space()="A JQL query"]]`).click();
+    // Each step's footer says what moonlet does with the tracker.
+    await expect($(`${dialog}//*[normalize-space()="moonlet reads the board's configuration; it never changes it in Jira."]`)).toBeDisplayed();
     await fill(`${dialog}//textarea`, "project = EX");
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     // Step 2 counts what the query brings.
     await expect($(`${dialog}//p[contains(normalize-space(), "3 issues match")]`)).toBeDisplayed({ wait: 15_000 });
+    await expect($(`${dialog}//*[normalize-space()="Counts update as you type."]`)).toBeDisplayed();
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     // Step 3: a column per status the issues are in.
     await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
@@ -541,6 +545,7 @@ describe("Jira and ClickUp trackers", () => {
     await fill(`${dialog}//textarea`, "project = EX AND type = Bug");
     await $(`${dialog}//nav//button[.//span[normalize-space()="Finish"]]`).click();
     await fill(`${dialog}//label[.//span[normalize-space()="Name"]]//input`, "EX query");
+    await expect($(`${dialog}//*[normalize-space()="Saved to ~/.moonlet/trackers.toml."]`)).toBeDisplayed();
     await $(`${dialog}//button[normalize-space()="Create board"]`).click();
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX query"]]')).toBeDisplayed({ wait: 10_000 });
     await expect($('//button[starts-with(@aria-label, "Switch board, current: EX query")]')).toBeDisplayed();
@@ -550,6 +555,11 @@ describe("Jira and ClickUp trackers", () => {
     await $('//button[normalize-space()="Board settings…"]').click();
     const settings = '//div[@role="dialog"][@aria-label="Board settings"]';
     await expect($(settings)).toBeDisplayed({ wait: 10_000 });
+    // Board settings outline a category changed from the board's own.
+    await $(`${settings}//nav//button[.//span[normalize-space()="Columns"]]`).click();
+    await choose(`${settings}//div[@role="row"][@aria-label="In Progress"]//select`, "in_review");
+    await expect($(`${settings}//div[@role="row"][@aria-label="In Progress"]//select`)).toHaveAttribute("data-changed", "true");
+    await choose(`${settings}//div[@role="row"][@aria-label="In Progress"]//select`, "in_progress");
     await $(`${settings}//nav//button[.//span[normalize-space()="Finish"]]`).click();
     await fill(`${settings}//label[.//span[normalize-space()="Name"]]//input`, "EX issues");
     await $(`${settings}//button[normalize-space()="Save"]`).click();

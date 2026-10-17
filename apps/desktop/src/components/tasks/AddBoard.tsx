@@ -16,6 +16,7 @@ import {
   draftFromBoard,
   finishedChoices,
   jiraFilterUrl,
+  suggestedOf,
   jiraSprints,
   moveColumn,
   newDraft,
@@ -207,10 +208,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     { id: GITHUB, name: "GitHub", site: "via gh login" },
   ];
   const sample = (preview?.tasks ?? []).slice(0, 3);
-  useEffect(() => {
-    if (!draft.columns.length) setSuggested({});
-    else if (!editing && !Object.keys(suggested).length) setSuggested(Object.fromEntries(draft.columns.map((c) => [c.name, c.category])));
-  }, [draft.columns]);
+  useEffect(() => setSuggested((prev) => suggestedOf(prev, draft.columns)), [draft.columns]);
   const changed = changedCategories(draft.columns, suggested);
   const site = (config.connections ?? []).find((c) => c.id === draft.connection)?.site;
   const moveAt = (i: number, by: number) => setDraft((d) => ({ ...d, columns: moveColumn(d.columns, i, by) }));
@@ -502,18 +500,32 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       key={c.name}
                       role="row"
                       aria-label={c.name}
-                      draggable
-                      onDragStart={() => (dragged.current = i)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={() => {
+                      // Only a column dragged by its grip lands here.
+                      onDragOver={(e) => dragged.current !== null && e.preventDefault()}
+                      onDrop={(e) => {
                         const from = dragged.current;
                         dragged.current = null;
-                        if (from !== null) setDraft((d) => ({ ...d, columns: dropColumn(d.columns, from, i) }));
+                        if (from === null) return;
+                        e.preventDefault();
+                        setDraft((d) => ({ ...d, columns: dropColumn(d.columns, from, i) }));
                       }}
                       className={cx("grid items-center gap-2 border-b border-border px-2 py-1.5 last:border-b-0", grid)}
                     >
                       <span className="flex items-center">
-                        <GripVertical size={12} className="cursor-grab text-faint" aria-hidden />
+                        <span
+                          draggable
+                          title={`Drag ${c.name}`}
+                          aria-label={`Drag ${c.name}`}
+                          onDragStart={(e) => {
+                            dragged.current = i;
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/plain", c.name);
+                          }}
+                          onDragEnd={() => (dragged.current = null)}
+                          className="cursor-grab text-faint"
+                        >
+                          <GripVertical size={12} />
+                        </span>
                         <IconButton title={`Move ${c.name} up`} onClick={() => moveAt(i, -1)}>
                           <ArrowUp size={12} />
                         </IconButton>
@@ -527,7 +539,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       </span>
                       <span className="flex items-center gap-1.5">
                         <TaskGlyph column={c.category} size={12} />
-                        <select aria-label={`Category of ${c.name}`} data-changed={changed.includes(c.name) || undefined} className={cx(selectCls, changed.includes(c.name) && "!border-accent")} value={c.category} onChange={(e) => setColumn(i, { category: e.target.value as BoardColumn["category"] })}>
+                        <select aria-label={`Category of ${c.name}`} data-changed={changed.includes(c.name) || undefined} title={changed.includes(c.name) ? `Suggested: ${CATEGORY_LABEL[suggested[c.name] ?? c.category]}` : undefined} className={cx(selectCls, changed.includes(c.name) && "!border-accent")} value={c.category} onChange={(e) => setColumn(i, { category: e.target.value as BoardColumn["category"] })}>
                           {CATEGORY_CHOICES.map(([id, label]) => (
                             <option key={id} value={id}>
                               {label}
@@ -547,7 +559,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                   ))}
                 </div>
                 <p className="ui-text-12 text-faint">
-                  Suggested from each status's {trackerName(draft.connection ?? "")} category. Change one where your team means something else. A hidden column's issues are not shown.
+                  Suggested from each status's {trackerName(draft.connection ?? "")} category. Change one where your team means something else. A hidden column's issues are not shown or counted.
                 </p>
               </div>
             )}
