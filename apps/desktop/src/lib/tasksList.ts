@@ -17,9 +17,12 @@ export interface ListGroup {
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 /** A group's note: a Done group's clean-ups, another's tasks that need the user and those out of sync. */
+/** Done tasks among `cards` that still have sessions or worktrees: a Done column's clean-ups. */
+export const cleanUps = (cards: Card[]) => cards.filter((c) => c.drift?.kind === "done_open").length;
+
 function groupNote(cards: Card[], done: boolean): Pick<ListGroup, "note" | "noteTone"> {
   if (done) {
-    const leftovers = cards.filter((c) => c.drift?.kind === "done_open").length;
+    const leftovers = cleanUps(cards);
     return { note: leftovers ? `${leftovers} needs clean-up` : "", noteTone: leftovers ? "accent" : "faint" };
   }
   const needs = cards.filter((c) => c.needsYou).length;

@@ -136,6 +136,11 @@ describe("Tasks mode", () => {
     await expect(card("acme/storefront#15", "Open")).toBeDisplayed();
     await expect(card("acme/storefront#12", "Open").$(sel.text(LINKED))).toBeDisplayed();
     await expect(card("acme/storefront#15", "Open").$(sel.text("No sessions"))).toBeDisplayed();
+    // The board's name opens the board switcher, with this workspace's boards (X50).
+    await $('//button[starts-with(@aria-label, "Switch board, current: acme/storefront")]').click();
+    await expect($('//input[@placeholder="Find a board, team or project"]')).toBeDisplayed();
+    await expect($('//button[.//span[normalize-space()="acme/storefront"]][.//span[contains(normalize-space(), "Repository")]]')).toBeDisplayed();
+    await browser.keys("Escape");
   });
 
   it("opens a session from its card in Sessions mode", async () => {

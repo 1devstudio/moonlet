@@ -69,10 +69,10 @@ export function startAction(task: Task, rule: RuleSetting): { label: string; che
   return { label: `Move ${task.key} to In Progress and assign it to me`, checked: rule === "auto" };
 }
 
-/** The board without the chips put off with "Not now". */
 /** A card without the chip the user put off with Not now. */
 export const withoutPutOffCard = (c: Card, notNow: Record<string, true>): Card => (c.drift && notNow[driftKey(c)] ? { ...c, drift: null } : c);
 
+/** The board without the chips put off with "Not now". */
 export function withoutPutOff(board: Board, notNow: Record<string, true>): Board {
   const strip = (cards: Card[]) => cards.map((c) => withoutPutOffCard(c, notNow));
   return { todo: strip(board.todo), in_progress: strip(board.in_progress), in_review: strip(board.in_review), done: strip(board.done) };
@@ -127,10 +127,10 @@ const RULE_OF: Record<NonNullable<Card["drift"]>["kind"], keyof Rules> = {
   done_open: "issue_done",
 };
 
-/** The board with the chips of rules turned Off removed; `rulesOf` gives a card's tracker's rules. */
 /** A card without a chip whose rule is Off (X46). */
 export const withRules = (c: Card, rulesOf: (c: Card) => Rules): Card => (c.drift && rulesOf(c)[RULE_OF[c.drift.kind]] === "off" ? { ...c, drift: null } : c);
 
+/** The board with the chips of rules turned Off removed; `rulesOf` gives a card's tracker's rules. */
 export function applyRules(board: Board, rulesOf: (c: Card) => Rules): Board {
   const strip = (cards: Card[]) => cards.map((c) => withRules(c, rulesOf));
   return { todo: strip(board.todo), in_progress: strip(board.in_progress), in_review: strip(board.in_review), done: strip(board.done) };

@@ -19,6 +19,7 @@ import {
   leaveTasksMode,
   loadTrackersConfig,
   moveTask,
+  openBoard,
   pollTasks,
   putOffDrift,
   refreshTasks,
@@ -38,16 +39,16 @@ import {
   trackerSettings,
   useTasks,
 } from "../../lib/tasksStore";
-import { boardListGroups, listRow } from "../../lib/tasksList";
+import { boardListGroups, cleanUps, listRow } from "../../lib/tasksList";
 import { removeWorktreeAsk, startAction, withoutPutOffCard, withRules } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch, syncedLabel } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
-import { wsKey } from "../../lib/workspaces";
-import { type BoardConfig, workspaceBoards } from "../../lib/boards";
-import { boardSubtitle, type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
-import { Button, cx, Empty, IconButton, Kbd, StateGlyph, TrackerIcon } from "../ui";
+import { parseWsKey, wsKey } from "../../lib/workspaces";
+import { type BoardColumn, type BoardConfig, CATEGORY_LABEL, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
+import { asBoard, boardHeader, boardStats, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph, TrackerIcon } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
@@ -100,9 +101,6 @@ function useWorkspaceTasks() {
   return useWorkspaceBoard(ws);
 }
 
-/** What a category reads as on a column's status line (X50). */
-const CATEGORY_LABEL: Record<Exclude<Column, "hidden">, string> = { todo: "To do", in_progress: "In progress", in_review: "In review", done: "Done" };
-
 /**
  * A workspace's boards laid out (X50), for Tasks mode and a session's task
  * (X46): `board` gathers every board's cards by category, with each board's
@@ -118,7 +116,7 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
   // What the board reads of the main store; other changes (terminal output) don't rebuild it.
   const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads]));
   return useMemo(() => {
-    if (!ws || !data) return { ws, data, board: null, unlinked: [], shown: null };
+    if (!ws || !data) return { ws, data, board: null, unlinked: [], shown: null, all: [] };
     const key = wsKey(ws.host, ws.id);
     const input = boardInput(useStore.getState(), ws.host, ws.id, data, config);
     // A chip whose rule is Off, or that the user put off with Not now, is not shown.
@@ -126,7 +124,7 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
     const all = workspaceViews(workspaceBoards(config.boards, key, shownId), data, input).map((b) => ({ ...b, views: mapCards(b.views, clean) }));
     const shownBoard = shownBoardOf(config.boards, key, shownId);
     const shown = shownBoard ? { board: shownBoard, views: all.find((b) => b.board.id === shownBoard.id)?.views ?? [] } : null;
-    return { ws, data, board: asBoard(all), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link), shown };
+    return { ws, data, board: asBoard(all), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link), shown, all };
   }, [ws, data, notNow, config, paused, shownId, ...deps]);
 }
 
@@ -229,7 +227,7 @@ export function startSession(host: string, workspaceId: string, card: Card, work
   });
 }
 
-function TaskCard({ host, workspaceId, card, selected, source }: { host: string; workspaceId: string; card: Card; selected: boolean; source?: string }) {
+function TaskCard({ host, workspaceId, card, selected }: { host: string; workspaceId: string; card: Card; selected: boolean }) {
   const pick = () => useTasks.setState({ selected: `${card.task.connection} ${card.task.key}` });
   return (
     <article
@@ -245,7 +243,6 @@ function TaskCard({ host, workspaceId, card, selected, source }: { host: string;
         {card.task.key}
         {card.task.issueType && <span className="font-sans text-faint">{card.task.issueType}</span>}
         <PriorityBars n={card.task.priority} />
-        {source && <span className="truncate font-sans text-faint">{source}</span>}
         {card.task.points !== undefined && <span className="ml-auto">{card.task.points} pt</span>}
         {card.task.assignees[0] && (
           <span title={`Assigned to ${card.task.assignees[0]}`} className={cx("rounded-full bg-panel-2 px-1.5 font-sans ui-text-10.5 text-muted", card.task.points === undefined && "ml-auto")}>
@@ -420,7 +417,8 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
 /** The centre in Tasks mode (X50): the shown board's header and columns or list, and the selected task's detail. */
 export function TasksMode() {
   useTaskSync();
-  const { ws, data, board, unlinked, shown } = useWorkspaceTasks();
+  const { ws, data, board, unlinked, shown, all } = useWorkspaceTasks();
+  const connections = useTasks((t) => t.config?.connections);
   const layout = useTasks((t) => t.layout);
   const query = useTasks((t) => t.query);
   const filters = useTasks((t) => t.filters);
@@ -428,13 +426,16 @@ export function TasksMode() {
   if (!ws) return null;
   if (!data) return <Empty title="Loading tasks…" />;
   if (!shown) {
+    const connected = (connections ?? []).length > 0;
     return (
       <div className="flex h-full items-start justify-center pt-[12vh]">
         <section role="dialog" aria-labelledby="connect-tracker" className="w-[440px] rounded-xl border border-border-strong bg-panel p-5">
           <h2 id="connect-tracker" className="ui-text-15 font-medium text-fg">
-            Connect a task tracker
+            {connected ? "Add a board" : "Connect a task tracker"}
           </h2>
-          <p className="mt-1 ui-text-12.5 text-muted">Tasks mode shows your issues with the sessions, worktrees and PRs working on them. This workspace has no board yet.</p>
+          <p className="mt-1 ui-text-12.5 text-muted">
+            {connected ? "This workspace has no board yet. Pick one of your trackers' boards, teams or lists, or a GitHub repository." : "Tasks mode shows your issues with the sessions, worktrees and PRs working on them. This workspace has no board yet."}
+          </p>
           <div className="mt-3 flex flex-col divide-y divide-border rounded-lg border border-border">
             <div className="px-3 py-2">
               <div className="ui-text-13 text-fg">GitHub Issues</div>
@@ -467,17 +468,18 @@ export function TasksMode() {
   const views = mapCards(shown.views, (c) => (keepCard(c, filters) && findsTask(c.task, query) ? c : null));
   const cards = board ? Object.values(board).flat() : [];
   const detail = cards.find((c) => taskId(c.task) === selected);
-  const sprint = shown.board.finished === "sprint" ? data.boards?.[shown.board.id]?.sprint : null;
-  const count = views.reduce((n, v) => n + v.cards.length, 0);
-  const sessions = views.reduce((n, v) => n + v.cards.reduce((m, c) => m + c.rows.length, 0), 0);
-  const site = shown.board.origin.kind === "github_repo" ? shown.board.origin.repo : (trackersConfig(useTasks.getState()).connections?.find((c) => c.id === shown.board.connection)?.site ?? "");
+  const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
+  const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint ?? null, site, views.flatMap((v) => v.cards));
+  const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id]?.sprint ?? null)]));
+  const listCards = views.flatMap((v) => (v.folded ? [] : v.cards));
   return (
     <div className="flex h-full min-w-0">
       <div className="flex min-w-0 flex-1 flex-col">
         <header data-tauri-drag-region className="drag flex h-[56px] shrink-0 items-center gap-3 px-5">
-          <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={sprint ? `${shown.board.name} · ${sprint.name}` : shown.board.name} subtitle={boardSubtitle(shown.board.connection, site, sprint ? { startMs: sprint.startMs, endMs: sprint.endMs } : null, count, sessions)} />
+          <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={header.title} subtitle={header.subtitle} stats={stats} />
           <div className="ml-auto flex shrink-0 items-center gap-2">
-            <Filters board={shown.board} columns={shown.views} />
+            {layout === "list" && <ExpandAll cards={listCards} />}
+            <Filters board={shown.board} columns={syncedColumns(shown.board, null)} />
             <LayoutSwitch />
             <IconButton title="Refresh tasks" onClick={() => void refreshTasks(ws.host, ws.id)}>
               <RotateCw size={13} />
@@ -497,19 +499,21 @@ export function TasksMode() {
                     <div className="flex items-center gap-2 ui-text-13 font-medium text-fg">
                       <span className="min-w-0 truncate">{v.name}</span>
                       <span className="font-mono ui-text-12 font-normal text-faint">{v.cards.length}</span>
-                      <Menu
-                        align="right"
-                        width={190}
-                        items={[
-                          { label: "Fold", onSelect: () => setColumnShow(shown.board.id, v.name, "fold") },
-                          { label: "Hide", onSelect: () => setColumnShow(shown.board.id, v.name, "hide") },
-                        ]}
-                        trigger={(open) => (
-                          <IconButton title={`${v.name} options`} className="ml-auto" onClick={open}>
-                            <MoreHorizontal size={14} />
-                          </IconButton>
-                        )}
-                      />
+                      <div className="ml-auto">
+                        <Menu
+                          align="right"
+                          width={190}
+                          items={[
+                            { label: "Fold", onSelect: () => setColumnShow(shown.board.id, v.name, "fold") },
+                            { label: "Hide", onSelect: () => setColumnShow(shown.board.id, v.name, "hide") },
+                          ]}
+                          trigger={(open) => (
+                            <IconButton title={`${v.name} options`} onClick={open}>
+                              <MoreHorizontal size={14} />
+                            </IconButton>
+                          )}
+                        />
+                      </div>
                     </div>
                     <div className="mt-0.5 flex items-center gap-1.5 ui-text-11.5 text-faint">
                       <TaskGlyph column={v.category} size={11} />
@@ -540,7 +544,7 @@ export function TasksMode() {
 
 /** A folded column (X50): a narrow strip with its name written down, its count and its clean-ups; clicking unfolds it. */
 function FoldedColumn({ boardId, view }: { boardId: string; view: ColumnView }) {
-  const cleanUp = view.cards.filter((c) => c.drift?.kind === "done_open").length;
+  const cleanUp = cleanUps(view.cards);
   const n = view.cards.length;
   return (
     <button
@@ -558,23 +562,21 @@ function FoldedColumn({ boardId, view }: { boardId: string; view: ColumnView }) 
 }
 
 /** The header's title (X50): the board's name and sprint, which opens the board switcher, over its subtitle. */
-function BoardSwitcher({ host, workspaceId, shown, title, subtitle }: { host: string; workspaceId: string; shown: BoardConfig; title: string; subtitle: string }) {
+function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { host: string; workspaceId: string; shown: BoardConfig; title: string; subtitle: string; stats: Parameters<typeof switcherGroups>[4] }) {
   const boards = useTasks((t) => trackersConfig(t).boards);
   const workspaces = useStore((s) => s.workspaces);
   const [query, setQuery] = useState("");
   const names = Object.fromEntries(Object.entries(workspaces).flatMap(([h, list]) => list.map((w) => [wsKey(h, w.id), w.name])));
-  const items: MenuItem[] = switcherGroups(boards ?? [], wsKey(host, workspaceId), query, names, {}).flatMap((g) => [
+  const items: MenuItem[] = switcherGroups(boards ?? [], wsKey(host, workspaceId), query, names, stats).flatMap((g) => [
     { kind: "label" as const, label: `${g.name} · ${g.hint}` },
     ...g.rows.map((r) => ({
       label: r.board.name,
-      description: [r.kind, r.meta].filter(Boolean).join(" · "),
+      description: [r.kind, r.meta, r.sessions?.text].filter(Boolean).join(" · "),
       checked: r.board.id === shown.id,
       icon: <BoardMark connection={r.board.connection} />,
       onSelect: () => {
-        const [h, ...id] = r.board.workspace.split("/");
-        const wid = id.join("/");
-        if (h !== host || wid !== workspaceId) useStore.setState({ workspace: { host: h, id: wid } });
-        showBoard(h, wid, r.board.id);
+        const to = parseWsKey(r.board.workspace);
+        openBoard(to.host, to.id, r.board.id);
       },
     })),
   ]);
@@ -629,10 +631,8 @@ export function ModeSwitch() {
 }
 
 /** Assignee: me, the Columns menu and Hide empty Done in the header (X45, X50). */
-function Filters({ board, columns }: { board: BoardConfig; columns: ColumnView[] }) {
+function Filters({ board, columns }: { board: BoardConfig; columns: BoardColumn[] }) {
   const filters = useTasks((t) => t.filters);
-  const boards = useTasks((t) => t.config?.boards);
-  const all = useMemo(() => boards?.find((b) => b.id === board.id)?.columns ?? [], [boards, board.id]);
   const item = (id: keyof typeof filters, label: string) => (
     <button
       aria-pressed={filters[id]}
@@ -649,19 +649,30 @@ function Filters({ board, columns }: { board: BoardConfig; columns: ColumnView[]
       <Menu
         align="right"
         width={220}
-        items={all.map((c) => ({
+        items={columns.map((c) => ({
           kind: "submenu" as const,
           label: c.name,
           items: (["show", "fold", "hide"] as const).map((v) => ({ label: v === "show" ? "Show" : v === "fold" ? "Fold" : "Hide", checked: show(c) === v, onSelect: () => setColumnShow(board.id, c.name, v) })),
         }))}
         trigger={(open) => (
           <button onClick={open} className="no-drag whitespace-nowrap rounded-md border border-border px-2 py-1 ui-text-12 text-muted hover:text-fg">
-            {columnsSummary(all.length ? all : columns.map((v) => ({ name: v.name, statuses: [], category: v.category, ...(v.folded ? { show: "fold" as const } : {}) })))}
+            {columnsSummary(columns)}
           </button>
         )}
       />
       {item("hideEmptyDone", "Hide empty Done")}
     </div>
+  );
+}
+
+/** Expand all or Collapse all, in the header of the List (X45, X50). */
+function ExpandAll({ cards }: { cards: Card[] }) {
+  const expanded = useTasks((t) => t.expanded);
+  const allOpen = cards.length > 0 && cards.every((c) => expanded[taskId(c.task)]);
+  return (
+    <button className="no-drag whitespace-nowrap rounded-md border border-border px-2 py-1 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(cards.map((c) => [taskId(c.task), true])))}>
+      {allOpen ? "Collapse all" : "Expand all"}
+    </button>
   );
 }
 
@@ -696,14 +707,9 @@ function TasksList({ host, workspaceId, views, unlinked }: { host: string; works
   const now = useNow(true);
   const groups = boardListGroups(views);
   const keyOf = (c: Card) => taskId(c.task);
-  const all = groups.flatMap((g) => (g.folded ? [] : g.cards));
-  const allOpen = all.length > 0 && all.every((c) => expanded[keyOf(c)]);
   const toggle = (c: Card) => toggleExpanded(keyOf(c));
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
-      <button className="mb-2 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(all.map((c) => [keyOf(c), true])))}>
-        {allOpen ? "Collapse all" : "Expand all"}
-      </button>
       {groups.map((g) => (
         <section key={g.name} aria-label={g.name} className="mb-4">
           <div className="flex items-center gap-2 border-b border-border pb-1.5 ui-text-13 text-fg">
@@ -824,16 +830,16 @@ function PriorityBars({ n }: { n: number }) {
  * status (X50); otherwise the four columns, or Open and Closed on GitHub.
  */
 export function StateMenu({ host, workspaceId, task }: { host: string; workspaceId: string; task: Task }) {
-  useTasks((t) => t.config);
-  const columns = task.github ? [] : taskColumns(host, workspaceId, task);
+  // The board's columns as saved, and the task's board after each sync.
+  const boards = useTasks((t) => t.config?.boards);
+  const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
+  const columns = useMemo(() => (task.github ? [] : taskColumns(host, workspaceId, task)), [boards, data, task, host, workspaceId]);
   if (columns.length) {
-    const choices = stateChoices(columns, task);
-    const status = task.tracker?.statusId || task.tracker?.state;
-    const current = choices.findIndex((c) => columns.find((col) => col.name === c.label)?.statuses.includes(status ?? ""));
+    const { choices, current } = stateChoices(columns, task);
     return (
       <select
         aria-label={`State of ${task.key}`}
-        className="rounded-md border border-border-strong bg-panel-2 px-1.5 py-0.5 ui-text-12.5 text-fg"
+        className={cx(inputCls, "menu-select field-height")}
         value={current}
         onChange={(e) => {
           const c = choices[Number(e.target.value)];

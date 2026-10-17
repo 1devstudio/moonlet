@@ -22,7 +22,7 @@ export interface ColumnView {
  * state's name; a GitHub repository issue's is `open`, `completed` or
  * `not_planned` (how it was closed).
  */
-function statusKey(task: Task): string {
+export function statusKey(task: Task): string {
   if (task.github) return task.column === "open" ? "open" : task.column === "done" ? "completed" : "not_planned";
   return task.tracker?.statusId || task.tracker?.state || "";
 }
