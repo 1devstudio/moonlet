@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, canMoveProjectItems, projectMove, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, projectMove, projectMoveLock, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -428,9 +428,12 @@ describe("projectMove (X50 moving a GitHub Project item)", () => {
     expect(projectMove({ ...project, field: null }, "PVTI_10", "Done")).toBe(null);
   });
 
-  it("is open only with gh's project scope", () => {
-    expect(canMoveProjectItems(["repo", "project"])).toBe(true);
-    expect(canMoveProjectItems(["repo", "read:project"])).toBe(false);
-    expect(canMoveProjectItems(undefined)).toBe(false);
+  it("locks a Project item's State menu without gh's project scope, saying what to run", () => {
+    const item = { github: { repo: "acme/web", number: 10, closingPrs: [], project: { id: "PVT_1", item: "PVTI_10", status: null } } };
+    expect(projectMoveLock(item, ["repo", "read:project"])).toBe("Moving needs gh's project scope: run gh auth refresh -s project");
+    expect(projectMoveLock(item, ["repo", "project"])).toBe(null);
+    // Not known yet, or not a Project's item: open.
+    expect(projectMoveLock(item, undefined)).toBe(null);
+    expect(projectMoveLock({ github: { repo: "acme/web", number: 10, closingPrs: [] } }, [])).toBe(null);
   });
 });

@@ -66,11 +66,13 @@ describe("driftFix (X45 out of sync, X46 Keep in step)", () => {
   });
 
   it("on a GitHub Project's board, sets the item's Status to the next column's, whatever its category (X50)", () => {
-    const item = task("acme/web#10", "in_progress", { repo: "acme/web", number: 10, closingPrs: [], project: { item: "PVTI_10", status: "In Progress" } });
+    const item = task("acme/web#10", "in_progress", { repo: "acme/web", number: 10, closingPrs: [], project: { id: "PVT_1", item: "PVTI_10", status: "In Progress" } });
     const drift = { kind: "merged" as const, text: "#31 merged", fix: "Move to Done", to: { column: "Done", category: "done" as const, statuses: ["Done"] } };
-    expect(driftFix(card(item, drift))).toEqual({ kind: "project", item: "PVTI_10", status: "Done", name: "Done" });
+    expect(driftFix(card(item, drift))).toEqual({ kind: "project", item: "PVTI_10", status: "Done", name: "Done", column: "done" });
     const review = { ...drift, kind: "pr_open" as const, fix: "Move to In review", to: { column: "In review", category: "in_review" as const, statuses: ["In review"] } };
-    expect(driftFix(card(item, review))).toEqual({ kind: "project", item: "PVTI_10", status: "In review", name: "In review" });
+    expect(driftFix(card(item, review))).toEqual({ kind: "project", item: "PVTI_10", status: "In review", name: "In review", column: "in_review" });
+    // Without a next column, a Project's item is never closed as a repository's issue is.
+    expect(driftFix(card(item, { kind: "merged", text: "#31 merged", fix: "Move to Done" }))).toBe(null);
   });
 
   it("cleans up a done task's sessions and worktrees", () => {
@@ -202,6 +204,16 @@ describe("rules from Settings › Task trackers (X44, X46)", () => {
     expect(autoFixes(b, () => DEFAULT_RULES, {}).map((c) => c.task.key)).toEqual(["MOON-142"]);
     expect(Object.values(applyRules(b, () => ({ ...DEFAULT_RULES, pr_opens: "off" }))).flat()[0].drift).toBe(null);
     expect(autoFixes(b, () => ({ ...DEFAULT_RULES, pr_opens: "suggest" }), {})).toEqual([]);
+  });
+});
+
+describe("outsideMoves on a GitHub Project (X50)", () => {
+  it("names a Project item that changed column outside moonlet, as a tracker's issue, not as closed", () => {
+    const item = (column: Task["column"]) => task("acme/web#10", column, { repo: "acme/web", number: 10, closingPrs: [], project: { id: "PVT_1", item: "PVTI_10", status: null } });
+    const linked = new Set(["github:github.com acme/web#10"]);
+    expect(outsideMoves([item("todo")], [item("in_progress")], linked, new Map())).toEqual([{ id: "github:github.com acme/web#10", title: "acme/web#10", text: "acme/web#10 moved to In Progress" }]);
+    // moonlet's own move to Done is not news.
+    expect(outsideMoves([item("in_progress")], [item("done")], linked, new Map([["github:github.com acme/web#10", "done" as const]]))).toEqual([]);
   });
 });
 

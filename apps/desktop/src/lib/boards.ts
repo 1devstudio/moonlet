@@ -385,5 +385,12 @@ export function projectMove(project: ProjectMeta, item: string, status: string):
   return project.field && option ? { project: project.id, item, field: project.field, option: option.id } : null;
 }
 
-/** Whether gh may set a Project item's Status: it needs the `project` scope (X50). */
-export const canMoveProjectItems = (scopes: string[] | undefined) => !!scopes?.includes("project");
+/**
+ * Why a task's State menu is locked (X50): a GitHub Project's item moves only
+ * with gh's `project` scope. Null while the scopes are not known yet, and for
+ * any other task.
+ */
+export function projectMoveLock(task: Pick<Task, "github">, scopes: string[] | undefined): string | null {
+  if (!task.github?.project || scopes === undefined || scopes.includes("project")) return null;
+  return "Moving needs gh's project scope: run gh auth refresh -s project";
+}

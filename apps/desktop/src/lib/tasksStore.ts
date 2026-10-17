@@ -496,6 +496,14 @@ interface BoardRead {
   error: string | null;
 }
 
+/** When each host's gh scopes were last read. */
+const scopesReadAt = new Map<string, number>();
+
+/** Refresh reads everything again: gh's scopes too, at the next GitHub Project sync. */
+export function forgetGhScopes(host: string) {
+  scopesReadAt.delete(host);
+}
+
 /** The user's own items, then the others' that `keep` lets join (Assignee: anyone), each once by `key`. */
 function ownAndOthers<T>(own: T[], all: T[] | null, key: (t: T) => string | number, keep: (t: T) => boolean = () => true): { it: T; mine: boolean }[] {
   const ownKeys = new Set(own.map(key));
@@ -538,13 +546,16 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
       const [own, all] = await Promise.all([ask(true), everyoneToo ? ask(false) : null]);
       const list = ownAndOthers(own.items, all?.items ?? null, (i) => i.item);
       const columns = await hostsApi.githubProjectColumns(own.options.map((o) => o.name));
-      // Whether its items can be moved: gh's project scope (X50).
-      void rpc<string[]>(host, M.ghScopes, {}).then(
-        (scopes) => useTasks.setState((t) => ({ ghScopes: { ...t.ghScopes, [host]: scopes } })),
-        () => {},
-      );
+      // Whether its items can be moved: gh's project scope (X50), read at most once a minute.
+      if (Date.now() - (scopesReadAt.get(host) ?? 0) > 60_000) {
+        scopesReadAt.set(host, Date.now());
+        void rpc<string[]>(host, M.ghScopes, {}).then(
+          (scopes) => useTasks.setState((t) => ({ ghScopes: { ...t.ghScopes, [host]: scopes } })),
+          () => scopesReadAt.delete(host),
+        );
+      }
       const project = { id: own.id, field: own.status_field, options: own.options };
-      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB), mine })), columns, sprint: null, project, error: null };
+      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id), mine })), columns, sprint: null, project, error: null };
     } catch (e) {
       return none(message(e));
     }
@@ -643,7 +654,7 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
  * category, and that column's name; no status when the task is on no board
  * with columns.
  */
-function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connection" | "key">, category: Category, status?: string): { status?: string; name: string } {
+function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connection" | "key" | "github">, category: Category, status?: string): { status?: string; name: string } {
   const columns = taskColumns(host, workspaceId, task);
   const to = status ?? statusFor(columns, category) ?? undefined;
   // Named as the tracker names the column (X50).
@@ -653,17 +664,24 @@ function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connec
 /** Sets a GitHub Project item's Status to `status` (X50), through gh on `host`. */
 async function moveProjectItem(host: string, workspaceId: string, task: Task, status: string) {
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
-  const meta = Object.values(data?.boards ?? {}).find((b) => b.project && b.keys.includes(taskId(task)))?.project;
-  const item = task.github?.project?.item;
+  // The item's own Project: the same issue can be on two.
+  const own = task.github?.project;
+  const meta = Object.values(data?.boards ?? {}).find((b) => b.project && b.project.id === own?.id)?.project;
+  const item = own?.item;
   const req = meta && item ? projectMove(meta, item, status) : null;
   if (!req) throw new Error(`The Project has no Status called ${status}`);
   await rpc(host, M.ghProjectMove, req);
 }
 
 /** The columns of the board `task` came from (X50), or none. */
-export function taskColumns(host: string, workspaceId: string, task: Pick<Task, "connection" | "key">): BoardColumn[] {
+export function taskColumns(host: string, workspaceId: string, task: Pick<Task, "connection" | "key" | "github">): BoardColumn[] {
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
-  const board = trackersConfig(useTasks.getState()).boards?.find((b) => data?.boards?.[b.id]?.keys.includes(taskId(task)));
+  // A GitHub Project's item belongs to its own Project's board.
+  const projectId = task.github?.project?.id;
+  const board = trackersConfig(useTasks.getState()).boards?.find((b) => {
+    const d = data?.boards?.[b.id];
+    return projectId ? d?.project?.id === projectId : d?.keys.includes(taskId(task));
+  });
   return board ? syncedColumns(board, null) : [];
 }
 
@@ -810,6 +828,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
       recordActivity(card.task, "moonlet closed it: every session's PR is merged");
       toast(`Closed ${card.task.key}`);
     } else if (plan.kind === "project") {
+      movedByMoonlet.set(id, plan.column);
       await moveProjectItem(host, workspaceId, card.task, plan.status);
       recordActivity(card.task, `moonlet moved it to ${plan.name}`);
       toast(`Moved ${card.task.key} to ${plan.name}`);
@@ -1016,10 +1035,13 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
   const id = `${task.connection} ${task.key}`;
   retries.set(id, () => moveTask(host, workspaceId, task, column, Date.now(), toStatus));
   try {
-    if (task.github?.project && column) {
-      // A GitHub Project's item: its Status, set to the column's (X50).
+    if (task.github?.project) {
+      // A GitHub Project's item: its Status, set to the column's (X50); never the issue itself.
+      if (!column) return;
       const { status, name } = boardTarget(host, workspaceId, task, column, toStatus);
-      await moveProjectItem(host, workspaceId, task, status ?? name);
+      if (!status) throw new Error(`The Project has no ${name} column`);
+      movedByMoonlet.set(id, column);
+      await moveProjectItem(host, workspaceId, task, status);
       recordActivity(task, `moonlet moved it to ${name}`, now);
     } else if (task.github) {
       const path = repoPath(host, workspaceId, task.github.repo);
