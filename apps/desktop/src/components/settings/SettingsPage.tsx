@@ -200,6 +200,11 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const [flash, setFlash] = useState<{ setting: string; at: number } | null>(null);
+  // A route that names a row, such as Manage's Boards (X50), opens on it.
+  const focus = "focus" in route && route.page !== "project" ? route.focus : undefined;
+  useEffect(() => {
+    if (focus) setFlash({ setting: focus, at: Date.now() });
+  }, [focus]);
   const searchRef = useRef<HTMLInputElement>(null);
   const searching = !!query.trim();
   const searchCtx = useSearchContext(mobile?.devices.length ?? 0, searching);

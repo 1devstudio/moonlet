@@ -153,6 +153,28 @@ describe("Tasks mode", () => {
     await $('//div[@role="dialog"][@aria-label="Add a board"]').waitForExist({ reverse: true });
   });
 
+  it("opens Settings at Boards from the switcher's Manage, where a board is unpinned and pinned again (X50)", async () => {
+    await $('//button[starts-with(@aria-label, "Switch board, current: acme/storefront")]').click();
+    await $('//button[.//span[normalize-space()="Manage"]]').click();
+    const row = '//div[@role="group"][@aria-label="acme/storefront"]';
+    await expect($(row)).toBeDisplayed({ wait: 10_000 });
+    await expect($('//div[@data-setting="boards"]')).toHaveAttribute("data-flash", "true");
+    await expect($(`${row}//*[normalize-space()="GitHub acme/storefront"]`)).toBeDisplayed();
+    const pin = `${row}//button[@role="switch"]`;
+    await expect($(pin)).toHaveAttribute("aria-checked", "true");
+    await $(pin).click();
+    await expect($(pin)).toHaveAttribute("aria-checked", "false");
+    await closeSettings();
+    // Unpinned, it leaves the sidebar; it is still the board shown.
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="acme/storefront"]]')).not.toBeExisting({ wait: 10_000 });
+    await expect($('//button[starts-with(@aria-label, "Switch board, current: acme/storefront")]')).toBeDisplayed();
+    await openSettings("Task trackers");
+    await $(pin).click();
+    await expect($(pin)).toHaveAttribute("aria-checked", "true");
+    await closeSettings();
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="acme/storefront"]]')).toBeDisplayed({ wait: 10_000 });
+  });
+
   it("opens a session from its card in Sessions mode", async () => {
     await card("acme/storefront#12", "Open").$(`.//button[.//span[normalize-space()=${JSON.stringify(LINKED)}]]`).click();
     await expect(sessionsButton()).toHaveAttribute("aria-pressed", "true");

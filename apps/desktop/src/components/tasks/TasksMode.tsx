@@ -619,7 +619,7 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
   ]);
   const footer: MenuItem[] = [
     { label: "New board", icon: <Plus size={13} />, onSelect: () => openAddBoard(host, workspaceId) },
-    { label: "Manage", onSelect: () => void goSettings({ page: "trackers" }) },
+    { label: "Manage", onSelect: () => void goSettings({ page: "trackers", focus: "boards" }) },
   ];
   return (
     <div className="flex min-w-0 items-center gap-2.5">

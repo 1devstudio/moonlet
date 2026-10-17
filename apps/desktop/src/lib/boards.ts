@@ -47,6 +47,15 @@ export interface StartRule {
 
 export type CardField = "issue_type" | "points" | "assignee" | "parent" | "due" | "labels";
 
+/** `boards` with board `id` pinned in the sidebar or not; pinned, the default, is not written (X50). */
+export function withPinned(boards: BoardConfig[], id: string, pinned: boolean): BoardConfig[] {
+  return boards.map((b) => {
+    if (b.id !== id) return b;
+    const { pinned: _, ...rest } = b;
+    return pinned ? rest : { ...rest, pinned: false };
+  });
+}
+
 /** Whose issues a board shows (X50): the user's, or anyone's with others' dimmed. */
 export type Assignee = "me" | "anyone";
 

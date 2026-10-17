@@ -160,6 +160,14 @@ function storedShownBoard(): Record<string, string> {
   }
 }
 
+/** Removes `board` after asking (X50): it goes from Tasks mode; sessions keep their links. False when the user keeps it. */
+export async function removeBoard(board: Pick<BoardConfig, "id" | "name">): Promise<boolean> {
+  const sure = await askConfirm({ title: `Remove ${board.name}?`, message: "It goes from Tasks mode. Sessions keep their links.", action: "Remove", variant: "danger" });
+  if (!sure) return false;
+  await saveTrackersConfig((c) => ({ ...c, boards: (c.boards ?? []).filter((b) => b.id !== board.id) }));
+  return true;
+}
+
 /**
  * Opens Add a board for workspace `workspace` of `host`, starting on
  * `connection` when given (the Connect dialog's end), or with `board` that
