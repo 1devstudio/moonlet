@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  Clock,
   Copy,
   CornerDownLeft,
   ExternalLink,
@@ -20,6 +21,7 @@ import {
   ListTodo,
   Loader2,
   MessageCircleQuestionMark,
+  MessageSquareDashed,
   MoreHorizontal,
   Search,
   ShieldAlert,
@@ -65,7 +67,8 @@ import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
 import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { openAgents, openChanges, openFileTab } from "../lib/actions";
-import { type ChatItem, type ChatState, M, type PermissionAsk, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
+import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
+import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, sendNowLabel, sendNowParams, sendNowWarning, unqueued, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
@@ -85,7 +88,7 @@ import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
-import { AgentIcon, Button, StateGlyph, cx, inputCls } from "./ui";
+import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
 import { ClaudeAuthDialog } from "./Profiles";
 
 // ------------------------------------------------------------ messages
@@ -705,9 +708,130 @@ export function QuestionCard({ ask, onAnswer }: { ask: PermissionAsk; onAnswer: 
   );
 }
 
+// ------------------------------------------------------------ queued messages (X49)
+
+/** A line of the queued area, its command in mono. */
+function LineText({ line }: { line: Line }) {
+  return (
+    <span>
+      {line.text}
+      {line.command && (
+        <>
+          {" "}
+          <span className="font-mono ui-text-11.5">{line.command}</span>
+        </>
+      )}
+      {line.tail && (line.tail.startsWith("…") ? line.tail : ` ${line.tail}`)}
+    </span>
+  );
+}
+
+/** "Interrupted by you · pnpm stack:check stopped at 8:12" between a stopped turn and what follows. */
+function InterruptedDivider({ line }: { line: Line }) {
+  return (
+    <div className="py-1.5 text-center ui-text-12 text-faint">
+      {line.text} <span className="font-mono">{line.command}</span> {line.tail}
+    </div>
+  );
+}
+
+/**
+ * Messages Claude has not read yet, after the transcript, with Send now
+ * and Ask aside under the last. `onRing` rings the running command's row
+ * while Send now would stop it.
+ */
+function QueuedArea({
+  queued,
+  running,
+  onSendNow,
+  onAside,
+  onRing,
+}: {
+  queued: QueuedMessage[];
+  running: Running | null;
+  onSendNow: () => void;
+  onAside: () => void;
+  onRing: (ring: boolean) => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const now = useNow(hover);
+  const { line, tone, ring } = queuedHeader(queued, running, hover ? sendNowWarning(running, now) : null);
+  const sending = tone === "sending";
+  useEffect(() => onRing(ring), [ring]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onRing(false), []); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <section aria-label="Queued messages" className="moonlet-card-in flex flex-col items-end gap-1.5 pb-0.5 pt-2.5">
+      <div className={cx("flex items-center gap-1.5 ui-text-12", sending ? "text-muted" : tone === "warn" ? "text-blocked" : "text-faint")}>
+        {sending ? <Loader2 size={12} className="spin text-accent" /> : tone === "warn" ? <Square size={9} fill="currentColor" /> : <Clock size={12} />}
+        <LineText line={line} />
+      </div>
+      {queued.map((q) => (
+        <div key={q.id} className="selectable max-w-[85%] whitespace-pre-wrap break-words rounded-[16px_16px_6px_16px] border border-dashed border-[#3a3a3a] px-[13px] py-[7px] ui-text-14 leading-relaxed text-[#b8b8b8]">
+          {q.text}
+        </div>
+      ))}
+      {!sending && (
+        <div className="flex items-center gap-1">
+          <span className="inline-flex" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+            <Button size="sm" variant="subtle" title={running ? `Stops ${running.summary} and sends this now` : "Interrupts Claude's reply and sends this now"} onClick={onSendNow}>
+              <CornerDownLeft size={12} /> {sendNowLabel(queued)}
+            </Button>
+          </span>
+          <Button size="sm" variant="ghost" title="Answer on the side without touching the running turn" onClick={onAside}>
+            <MessageSquareDashed size={12} /> Ask aside
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () => void; onClose: () => void }) {
+  const done = !!(aside.answer || aside.error);
+  return (
+    <section aria-label="Aside" className="moonlet-card-in mt-3 flex flex-col gap-2.5 rounded-xl border border-border-strong bg-panel-2 py-2.5 pl-3.5 pr-2.5">
+      <div className="flex h-6 items-center gap-2 ui-text-12 text-muted">
+        <MessageSquareDashed size={13} className="text-accent" />
+        <span className="font-medium text-fg">Aside</span>
+        <span>Not added to the session · can't run tools</span>
+        <span className="flex-1" />
+        <IconButton title="Close aside (esc)" onClick={onClose}>
+          <X size={14} />
+        </IconButton>
+      </div>
+      <div className="selectable whitespace-pre-wrap break-words ui-text-14 leading-normal">{aside.question}</div>
+      {aside.answer ? (
+        <div className="ui-text-13.5 leading-[1.55]">
+          <Markdown text={aside.answer.text} />
+        </div>
+      ) : aside.error ? (
+        <div className="selectable whitespace-pre-wrap ui-text-13 text-[#f2a7a7]">{aside.error}</div>
+      ) : (
+        <div className="flex items-center gap-2 ui-text-13">
+          <Loader2 size={12} className="spin text-accent" />
+          <span className="chat-shimmer">Answering from the conversation</span>
+        </div>
+      )}
+      {done && (
+        <div className="flex items-center gap-1 pt-0.5">
+          {aside.answer && <span className="font-mono ui-text-11.5 text-faint">{asideFooter(aside.answer)}</span>}
+          <span className="flex-1" />
+          <Button size="sm" variant="ghost" title="Put it back in the queue for the main session" onClick={onRequeue}>
+            Queue for Claude
+          </Button>
+          <Button size="sm" variant="subtle" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ------------------------------------------------------------ editor
 
 const fileCache = new Map<string, Promise<string[]>>();
+
 function projectFiles(host: string, root: string, fresh = false): Promise<string[]> {
   const key = `${host}|${root}`;
   let p = fresh ? undefined : fileCache.get(key);
@@ -736,6 +860,7 @@ function ChatEditor({
   focusSignal = 0,
   onCancel,
   onAttach,
+  onAside,
   handle,
   top,
 }: {
@@ -754,7 +879,7 @@ function ChatEditor({
   onCycleMode?: () => void;
   /** Text scale (see uiScale): the height is re-measured when it changes. */
   scale: number;
-  placeholder?: string;
+  placeholder: string;
   /** Focuses the editor each time it changes, such as Keep planning (X24). */
   focusSignal?: number;
   /** Escape in the empty editor, before it would stop the agent. */
@@ -763,6 +888,8 @@ function ChatEditor({
   top?: React.ReactNode;
   /** ⌘U: attach files (X29). */
   onAttach?: () => void;
+  /** ⌥↵: ask the typed text aside instead of queueing it (X49). */
+  onAside?: (text: string) => void;
   /** Lets the `+` menu edit the input (X29). */
   handle?: Ref<EditorHandle>;
 }) {
@@ -897,6 +1024,14 @@ function ChatEditor({
     } else if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       send();
+    } else if (e.key === "Enter" && e.altKey && onAside) {
+      e.preventDefault();
+      const t = text.trim();
+      if (!t) return;
+      onAside(t);
+      setText("");
+      setCaret(0);
+      setWalk(null);
     } else if ((e.key === "Tab" || (e.key === "ArrowRight" && el.selectionStart === text.length)) && ghost) {
       e.preventDefault();
       set(text + (e.key === "ArrowRight" && e.altKey ? firstWord(ghost) : ghost));
@@ -971,7 +1106,7 @@ function ChatEditor({
               rows={1}
               spellCheck={false}
               value={text}
-              placeholder={placeholder ?? (working ? "Queue a message…" : "Ask for a change, @ to mention a file, / for commands")}
+              placeholder={placeholder}
               onChange={(e) => {
                 setText(e.target.value);
                 setCaret(e.target.selectionStart);
@@ -983,6 +1118,11 @@ function ChatEditor({
               className="relative block w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
             />
           </div>
+          {onAside && (
+            <span className="flex shrink-0 items-center gap-1.5 self-end whitespace-nowrap pb-1 ui-text-12 text-faint">
+              <Kbd>⌥↵</Kbd> ask aside
+            </span>
+          )}
           <button title="Send (↵)" className="flex shrink-0 self-end pb-0.5 text-faint hover:text-fg" onClick={send}>
             <CornerDownLeft size={18} strokeWidth={1.8} />
           </button>
@@ -1195,6 +1335,43 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     void call(M.chatSend, { text, images });
   };
   const stop = () => void call(M.chatInterrupt, {});
+  // Queued messages (X49): Send now, Ask aside, and the aside's card.
+  const queued = st?.queued ?? [];
+  const running = useMemo(() => (st && queued.length ? waitingOn(st.items) : null), [st, queued.length]);
+  const [ring, setRing] = useState(false);
+  const [aside, setAside] = useState<Aside | null>(null);
+  const askAside = (question: string) => {
+    stick.current = true;
+    setAside({ question });
+    rpc<AsideAnswer>(host, M.chatAside, { id, text: question }).then(
+      (answer) => setAside((cur) => asideSettled(cur, question, { answer })),
+      (e) => setAside((cur) => asideSettled(cur, question, { error: String(e?.message ?? e) })),
+    );
+  };
+  // Ask aside on a queued message: asked once Claude gives the message back,
+  // not at all if Claude read it first.
+  const [unqueuing, setUnqueuing] = useState<QueuedMessage | null>(null);
+  const asideLast = () => {
+    const last = queued[queued.length - 1];
+    if (!last) return;
+    setUnqueuing(last);
+    rpc(host, M.chatUnqueue, { id, message: last.id }).catch((e) => {
+      setUnqueuing(null);
+      errorToast(e);
+    });
+  };
+  useEffect(() => {
+    if (!unqueuing || !st) return;
+    const outcome = unqueued(st, unqueuing.id);
+    if (outcome === "waiting") return;
+    setUnqueuing(null);
+    if (outcome === "cancelled") askAside(unqueuing.text);
+    else toast("Claude read the message before it could be asked aside");
+  }, [st, unqueuing]); // eslint-disable-line react-hooks/exhaustive-deps
+  const requeue = () => {
+    if (aside) void call(M.chatSend, { text: aside.question, images: [] });
+    setAside(null);
+  };
   const cost = st ? costLine(st) : null;
   const editor = useRef<EditorHandle>(null);
   // Attached images go with the next message, other files become @mentions (X29).
@@ -1356,11 +1533,35 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                   const ids = b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id);
                   const hasPlan = plan?.itemId && ids.includes(plan.itemId);
                   const after = (placed.after[b.kind === "item" ? b.item.id : b.id] ?? []).map((n, i) => <AgentNoteView key={`${b.kind === "item" ? b.item.id : b.id}-note-${i}`} note={n} />);
-                  return [view, ...(hasPlan ? [planCard] : []), ...after];
+                  const divider = b.kind === "item" && b.item.kind === "system" ? interruptedLine(st.items, st.items.indexOf(b.item)) : null;
+                  // The command Send now would stop is ringed while it is pointed at (X49).
+                  const shown = divider ? (
+                    <InterruptedDivider key={ids[0]} line={divider} />
+                  ) : running && ids.includes(running.id) ? (
+                    <div key={`ring-${ids[0]}`} className={cx("rounded-lg border transition-colors", ring ? "border-[rgba(242,201,76,0.45)]" : "border-transparent")}>
+                      {view}
+                    </div>
+                  ) : (
+                    view
+                  );
+                  return [shown, ...(hasPlan ? [planCard] : []), ...after];
                 }),
               ]
             )}
             {plan && !plan.itemId && planCard}
+            {queued.length > 0 && (
+              <QueuedArea
+                queued={queued}
+                running={running}
+                onSendNow={() => {
+                  stick.current = true;
+                  void call(M.chatSendNow, sendNowParams(queued));
+                }}
+                onAside={asideLast}
+                onRing={setRing}
+              />
+            )}
+            {aside && <AsideCard aside={aside} onRequeue={requeue} onClose={() => setAside(null)} />}
             {st?.pending.map((ask) => {
               if (planOf(ask)) return null;
               return isQuestion(ask) ? (
@@ -1401,10 +1602,11 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           onStop={stop}
           onCycleMode={agent === "claude" ? () => modeMenu.pick(nextMode(modeMenu.mode, modeMenu.bypassOn)) : undefined}
           scale={scale}
-          placeholder={revising ? "What should change in the plan?" : undefined}
+          placeholder={revising ? "What should change in the plan?" : composerPlaceholder(agent, working)}
           focusSignal={focusSignal}
-          onCancel={revising ? () => setRevise(null) : undefined}
+          onCancel={revising ? () => setRevise(null) : aside ? () => setAside(null) : undefined}
           onAttach={() => void attach()}
+          onAside={canAskAside(agent, working, revising) ? askAside : undefined}
           handle={editor}
           top={st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
         />
@@ -1437,6 +1639,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                 <Loader2 size={12} className="spin text-accent" />
                 <span className="chat-shimmer">Working</span>
                 {st.turn_started_at && <span className="text-faint">{elapsed(now - st.turn_started_at)}</span>}
+                {queuedCount(queued) && <span className="text-faint">{queuedCount(queued)}</span>}
                 <span className="text-faint">· esc to stop</span>
               </>
             ) : st?.status === "blocked" ? (
@@ -1446,7 +1649,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               </>
             ) : null}
           </div>
-          <div className="flex items-center justify-end gap-1 ui-text-13">
+          <div className="flex items-center justify-end gap-1 whitespace-nowrap ui-text-13">
             {working && (
               <Button size="sm" variant="ghost" onClick={stop} title="Stop (⌘.)">
                 <Square size={10} fill="currentColor" /> Stop

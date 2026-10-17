@@ -6,7 +6,8 @@ import { ArrowUp, ListChecks, MessageCircleQuestion, Plus, Square, SquareTermina
 import { rpc } from "@desktop/lib/daemon";
 import { askQuestions, chatBlocks, chatDraft, chatKey, loadChat, questionAnswers, saveChatDraft, turnRunning, useChat } from "@desktop/lib/chat";
 import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
-import { M, type PermissionAsk, type Session } from "@desktop/lib/protocol";
+import { type ChatState, M, type PermissionAsk, type Session } from "@desktop/lib/protocol";
+import { queuedHeader, waitingOn } from "@desktop/lib/queued";
 import { showScreen, useApp } from "../lib/app";
 import { answerAsk, answerQuestion } from "../lib/answers";
 import { STATE_COLOR } from "../lib/palette";
@@ -107,6 +108,23 @@ function DockedQuestion({ host, terminal, ask }: { host: string; terminal: numbe
   );
 }
 
+function QueuedView({ st }: { st: ChatState }) {
+  const { line } = queuedHeader(st.queued, waitingOn(st.items), null);
+  return (
+    <section aria-label="Queued messages" className="flex flex-col items-end gap-1.5">
+      <div className="text-[12px] text-faint">
+        {line.text} {line.command && <span className="font-mono text-[11.5px]">{line.command}</span>}
+        {line.tail}
+      </div>
+      {st.queued.map((q) => (
+        <div key={q.id} className="selectable max-w-[85%] rounded-[14px] rounded-br-[4px] border border-dashed border-[#3a3a3a] px-3.5 py-2.5 text-[14.5px] leading-[1.45] whitespace-pre-wrap text-[#b8b8b8]">
+          {q.text}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function Composer({ host, terminal, running }: { host: string; terminal: number; running: boolean }) {
   const [text, setTextState] = useState(() => chatDraft(host, terminal));
   const setText = (t: string) => {
@@ -162,7 +180,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [blocks.length, st?.items[st.items.length - 1]?.text.length]);
+  }, [blocks.length, st?.items[st.items.length - 1]?.text.length, st?.queued.length]);
 
   if (terminal === null) return <div className="p-6 text-[14px] text-muted">This session has no agent conversation. Its terminal is in the Terminal tab.</div>;
   if (!st) return <div className="p-6 text-[14px] text-muted">Loading the conversation…</div>;
@@ -176,6 +194,8 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
         {blocks.map((b) => (
           <ChatBlockView key={b.kind === "tools" ? b.id : b.item.id} block={b} cwd={session.path} />
         ))}
+        {/* Messages Claude has not read yet (X49). */}
+        {st.queued.length > 0 && <QueuedView st={st} />}
         {st.status === "working" && !ask && <div className="text-[13px] text-muted italic">Working…</div>}
       </main>
       {ask &&
