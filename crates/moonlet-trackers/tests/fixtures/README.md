@@ -30,4 +30,4 @@ Gathered on 2026-10-15 from the trackers' official API documentation; no live ac
 | `jira-filter-scrum.json`, `jira-filter-kanban.json` | CAPTURED, SANITISED | `GET /rest/api/3/filter/{id}` of each board's filter, trimmed to `id`, `name`, `jql` |
 | `jira-statuses.json` | CAPTURED, SANITISED | `GET /rest/api/3/status`, the statuses the two boards use |
 | `jira-fields.json` | CAPTURED, SANITISED | `GET /rest/api/3/field`: the sprint field, the board's Story Points field and the site's other "Story point estimate" |
-| `jira-board-search.json` | CAPTURED, SANITISED | four issues of an active sprint from the site's issue search (taken through the Atlassian MCP connector, whose wrapper is replaced by `/rest/api/3/search/jql`'s `{issues, isLast}`); the sprint's `boardId` set to the Scrum board's, and one component added |
+| `jira-board-search.json` | CAPTURED, SANITISED | four issues of an active sprint from the site's issue search (taken through the Atlassian MCP connector, whose wrapper is replaced by `/rest/api/3/search/jql`'s `{issues, isLast}`); the sprint's `boardId` set to the Scrum board's, one component added, and one due date set |

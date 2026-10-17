@@ -102,6 +102,10 @@ mod tests {
             Column::InReview
         );
         assert_eq!(default_column(Linear, "started", "QA"), Column::InReview);
+        assert_eq!(
+            default_column(Linear, "started", "Reviewing"),
+            Column::InReview
+        );
         // "review" must be a word: a "Preview" state is still in progress.
         assert_eq!(
             default_column(Linear, "started", "Preview"),

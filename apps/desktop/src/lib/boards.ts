@@ -153,3 +153,23 @@ export type BoardIssue = Task & { statusId: string };
 export function taskFromBoardIssue({ statusId, ...task }: BoardIssue): Task {
   return { ...task, tracker: task.tracker && { ...task.tracker, statusId } };
 }
+
+/**
+ * A board's saved columns matched to the tracker's on a sync (X50), by
+ * status id: a saved column keeps its place, folding and category and takes
+ * the tracker's name, statuses and WIP; a tracker column no saved one shares
+ * a status with is added at the end with its defaults; a saved column whose
+ * statuses are all gone is dropped.
+ */
+export function matchColumns(saved: BoardColumn[] | undefined, fresh: BoardColumn[]): BoardColumn[] {
+  if (!saved?.length) return fresh;
+  const used = new Set<BoardColumn>();
+  const kept = saved.flatMap((s) => {
+    const match = fresh.find((f) => !used.has(f) && f.statuses.some((id) => s.statuses.includes(id)));
+    if (!match) return [];
+    used.add(match);
+    const { show: _, ...tracker } = match;
+    return [{ ...tracker, category: s.category, ...(s.show && { show: s.show }) }];
+  });
+  return [...kept, ...fresh.filter((f) => !used.has(f))];
+}

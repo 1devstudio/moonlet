@@ -19,7 +19,7 @@ pub(crate) const FIELDS: [&str; 9] = [
     "issuetype",
 ];
 
-fn parse(raw: &[u8]) -> Result<Value, ApiError> {
+pub(crate) fn parse(raw: &[u8]) -> Result<Value, ApiError> {
     serde_json::from_slice(raw)
         .map_err(|e| ApiError::new(format!("Jira answered with something else: {e}")))
 }

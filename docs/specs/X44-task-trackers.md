@@ -71,7 +71,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 | Done | `completed` | `done` | `closed`, `done` | closed as completed |
 | Not shown | `backlog`, `triage`, `canceled` | — | — | closed as not planned |
 
-- [ ] A GitHub project board source maps its Status field options instead, like Linear states (defaults by name: "Todo" or "To do", "In Progress", a name with the word "review" or "QA", and "Done"; other options are not shown). (Deferred, see Out of scope; the name defaults are in `states.rs`.)
+- [ ] A GitHub project board source maps its Status field options instead, like Linear states (defaults by name: "Todo" or "To do", "In Progress", a name with a word starting with "review", or the word "QA", and "Done"; other options are not shown). (Deferred, see Out of scope; the name defaults are in `states.rs`.)
 - [x] Priority is shown as 0–3 bars: Linear Urgent and High are 3, Medium 2, Low 1, none 0; Jira Highest, High, Blocker and Critical 3, Medium and Major 2, Low, Lowest, Minor and Trivial 1 (Jira's default scheme and its older one); ClickUp urgent and high 3, normal 2, low 1; GitHub has none. (`priority.rs`)
 - [x] "Named like review or QA" means the state name has a word that starts with "review", or the word "QA" ("In Review", "Code review", "Needs Reviews", "Ready for QA"), not just those letters ("Preview" is not review). (`states.rs` jira_status_categories)
 
