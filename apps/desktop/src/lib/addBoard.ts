@@ -229,3 +229,19 @@ export function byGroup<T extends { group?: string }>(rows: T[]): { group: strin
   for (const r of rows) groups.set(r.group ?? null, [...(groups.get(r.group ?? null) ?? []), r]);
   return [...groups].map(([group, list]) => ({ group, rows: list }));
 }
+
+/** Step 3's drag and drop: `columns` with column `from` dropped at place `to`. */
+export function dropColumn(columns: BoardColumn[], from: number, to: number): BoardColumn[] {
+  if (from === to) return columns;
+  const next = columns.filter((_, i) => i !== from);
+  next.splice(to, 0, columns[from]);
+  return next;
+}
+
+/** The columns whose category the user changed from the one suggested (`suggested`, by name), which step 3 outlines. */
+export function changedCategories(columns: BoardColumn[], suggested: Partial<Record<string, BoardColumn["category"]>>): string[] {
+  return columns.filter((c) => suggested[c.name] !== undefined && suggested[c.name] !== c.category).map((c) => c.name);
+}
+
+/** Where a Jira board's filter is edited (X50 Edit in Jira). */
+export const jiraFilterUrl = (site: string, filterId: string) => `https://${site}/issues/?filter=${encodeURIComponent(filterId)}`;

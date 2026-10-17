@@ -1,18 +1,21 @@
 // Add a board (X50): four steps, Source, Issues, Columns and Finish, for a
 // Jira board or query, a Linear team, a GitHub repository or a ClickUp list.
 
-import { ArrowDown, ArrowUp, ArrowRight, Check, Lock, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowRight, Check, GripVertical, Lock, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   alreadyAdded,
   byGroup,
   canContinue,
   cardChoices,
+  changedCategories,
   clash,
   columnAt,
+  dropColumn,
   type Draft,
   draftFromBoard,
   finishedChoices,
+  jiraFilterUrl,
   jiraSprints,
   moveColumn,
   newDraft,
@@ -66,6 +69,11 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const [build, setBuild] = useState<"board" | "jql">("board");
   // The board's filter: undefined while it is read, null when Jira does not share it.
   const [filterJql, setFilterJql] = useState<string | null | undefined>(undefined);
+  const [filterId, setFilterId] = useState<string | null>(null);
+  // Each column's category as the tracker suggested it, to outline one the user changed.
+  const [suggested, setSuggested] = useState<Partial<Record<string, BoardColumn["category"]>>>({});
+  // The row being dragged in step 3.
+  const dragged = useRef<number | null>(null);
   const [preview, setPreview] = useState<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null } | null>(null);
   const tracker = draft.connection ? (trackerOf(draft.connection) ?? "github") : null;
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
@@ -117,12 +125,14 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   // A Jira board's filter and columns; an answer for a board no longer picked is dropped.
   useEffect(() => {
     setFilterJql(undefined);
+    setFilterId(null);
     if (!draft.connection || draft.origin?.kind !== "jira_board") return;
     let stale = false;
     hostsApi.trackerBoardSetup(draft.connection, draft.origin.board).then(
       (setup) => {
         if (stale) return;
         setFilterJql(setup.filterJql ?? null);
+        setFilterId(setup.filterId);
         setDraft((d) => (d.columns.length ? d : { ...d, columns: setup.columns }));
       },
       (e) => !stale && errorToast(e),
@@ -197,6 +207,12 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     { id: GITHUB, name: "GitHub", site: "via gh login" },
   ];
   const sample = (preview?.tasks ?? []).slice(0, 3);
+  useEffect(() => {
+    if (!draft.columns.length) setSuggested({});
+    else if (!editing && !Object.keys(suggested).length) setSuggested(Object.fromEntries(draft.columns.map((c) => [c.name, c.category])));
+  }, [draft.columns]);
+  const changed = changedCategories(draft.columns, suggested);
+  const site = (config.connections ?? []).find((c) => c.id === draft.connection)?.site;
   const moveAt = (i: number, by: number) => setDraft((d) => ({ ...d, columns: moveColumn(d.columns, i, by) }));
   const setColumn = (i: number, patch: Parameters<typeof columnAt>[2]) => setDraft((d) => ({ ...d, columns: columnAt(d.columns, i, patch) }));
   // WIP limits are Jira's alone.
@@ -373,6 +389,11 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                     <div className="flex items-center gap-2 rounded-lg border border-border bg-bg/40 px-3 py-2 font-mono ui-text-12.5 text-muted">
                       <Lock size={12} />
                       <span className="min-w-0 flex-1 truncate">{filterJql === undefined ? "Reading the board's filter…" : (filterJql ?? "Jira did not share the board's filter")}</span>
+                      {site && filterId && (
+                        <a href={jiraFilterUrl(site, filterId)} target="_blank" rel="noreferrer" className="shrink-0 font-sans ui-text-12 text-accent hover:underline">
+                          Edit in Jira
+                        </a>
+                      )}
                     </div>
                   </section>
                 )}
@@ -477,8 +498,22 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                     {wip && <span>WIP</span>}
                   </div>
                   {draft.columns.map((c, i) => (
-                    <div key={c.name} role="row" aria-label={c.name} className={cx("grid items-center gap-2 border-b border-border px-2 py-1.5 last:border-b-0", grid)}>
-                      <span className="flex">
+                    <div
+                      key={c.name}
+                      role="row"
+                      aria-label={c.name}
+                      draggable
+                      onDragStart={() => (dragged.current = i)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={() => {
+                        const from = dragged.current;
+                        dragged.current = null;
+                        if (from !== null) setDraft((d) => ({ ...d, columns: dropColumn(d.columns, from, i) }));
+                      }}
+                      className={cx("grid items-center gap-2 border-b border-border px-2 py-1.5 last:border-b-0", grid)}
+                    >
+                      <span className="flex items-center">
+                        <GripVertical size={12} className="cursor-grab text-faint" aria-hidden />
                         <IconButton title={`Move ${c.name} up`} onClick={() => moveAt(i, -1)}>
                           <ArrowUp size={12} />
                         </IconButton>
@@ -492,7 +527,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       </span>
                       <span className="flex items-center gap-1.5">
                         <TaskGlyph column={c.category} size={12} />
-                        <select aria-label={`Category of ${c.name}`} className={selectCls} value={c.category} onChange={(e) => setColumn(i, { category: e.target.value as BoardColumn["category"] })}>
+                        <select aria-label={`Category of ${c.name}`} data-changed={changed.includes(c.name) || undefined} className={cx(selectCls, changed.includes(c.name) && "!border-accent")} value={c.category} onChange={(e) => setColumn(i, { category: e.target.value as BoardColumn["category"] })}>
                           {CATEGORY_CHOICES.map(([id, label]) => (
                             <option key={id} value={id}>
                               {label}
@@ -623,7 +658,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
               {clashText && draft.step === 4 ? clashText : null}
               {draft.step === 1 && `moonlet reads the board's configuration; it never changes it in ${trackerName(draft.connection ?? "jira")}.`}
               {draft.step === 2 && "Counts update as you type."}
-              {draft.step === 3 && `Order and folding are moonlet-only and don't change ${trackerName(draft.connection ?? "jira")}.`}
+              {draft.step === 3 && `Drag to reorder. Order and folding are moonlet-only and don't change ${trackerName(draft.connection ?? "jira")}.`}
               {draft.step === 4 && !clashText && "Saved to ~/.moonlet/trackers.toml."}
             </span>
             {editing && (

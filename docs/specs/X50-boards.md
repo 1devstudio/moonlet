@@ -43,7 +43,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 - [x] The wizard is a dialog with four steps listed on the left: Source, Issues, Columns, Finish. A step already done shows a check and can be clicked. The footnote reads "Every choice can be changed later from the board's ⋯ menu › Board settings." (`task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings)
 - [x] **Back** and **Continue** move between steps; the last step has **Create board**. Continue waits until the step is complete: a board picked, or a query that Jira accepts. (`addBoard.test.ts` waits for a board, a non-empty query, columns and a name; `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings)
-- [ ] Each step's footer says what moonlet does with the tracker. Step 1: "moonlet reads the board's configuration; it never changes it in Jira" (or Linear, GitHub, ClickUp). Step 2: "Counts update as you type." Step 3: "Drag to reorder. Order and folding are moonlet-only and don't change <tracker>." Step 4: "Saved to ~/.moonlet/trackers.toml." (Partly: step 3 says only the second sentence, since columns move with up and down buttons, not by dragging.)
+- [x] Each step's footer says what moonlet does with the tracker. Step 1: "moonlet reads the board's configuration; it never changes it in Jira" (or Linear, GitHub, ClickUp). Step 2: "Counts update as you type." Step 3: "Drag to reorder. Order and folding are moonlet-only and don't change <tracker>." Step 4: "Saved to ~/.moonlet/trackers.toml." (`task-trackers.e2e.ts` adds an existing Jira board: its filter with Edit in Jira, a changed category outlined, a column dragged (X50))
 
 #### 1. Source
 
@@ -62,7 +62,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 #### 2. Issues
 
-- [ ] **Jira board:** the board's filter is shown read-only, with **Edit in Jira**. Below it, "Narrow it down in moonlet · optional JQL, added with AND". A `jql` board has its query here instead. (Partly: no Edit in Jira link yet. `jira_board.rs` a_boards_query_is_its_filter_and_moonlets_narrowing_in_the_filters_order)
+- [x] **Jira board:** the board's filter is shown read-only, with **Edit in Jira**. Below it, "Narrow it down in moonlet · optional JQL, added with AND". A `jql` board has its query here instead. (`addBoard.test.ts` links a Jira board's filter for editing in Jira; `task-trackers.e2e.ts` adds an existing Jira board: its filter with Edit in Jira, a changed category outlined, a column dragged (X50); `jira_board.rs` a_boards_query_is_its_filter_and_moonlets_narrowing_in_the_filters_order)
 - [x] **Linear, GitHub and ClickUp:** an optional label filter. A GitHub Project has no label filter, since its view's filter stays in GitHub. (`tasksStore.test.ts` keeps only the issues with any of a board's labels, whatever their case)
 - [x] "Show issues assigned to": **Me** or **Anyone**. Under Anyone, other people's issues are dimmed. The header's Assignee filter can still switch it. (`addBoard.test.ts` makes the board, leaving out what is at its default; `boards.test.ts` is the user's pick for the board while the board's own setting is the one it was made over, else that setting, forgets the picks of boards that are gone, and keeps an upgrade's Assignee: anyone for boards at me)
 - [ ] "Finished issues":
@@ -82,7 +82,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - Show / Fold / Hide
   - WIP
 
-  (Partly: up and down buttons instead of a drag handle. `addBoard.test.ts` moves a column up or down, and sets its category and how it shows; `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings)
+  Up and down buttons move a column too, for the keyboard. (Partly: a Jira column lists its statuses by id, not by name. `addBoard.test.ts` moves a column up or down, and sets its category and how it shows, drops a dragged column where it lands; `task-trackers.e2e.ts` adds an existing Jira board: its filter with Edit in Jira, a changed category outlined, a column dragged (X50); `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings)
 - [ ] Where columns come from:
   - Jira board: Jira's columns, their statuses and their WIP limits (max).
   - JQL board: one column per status its issues are in, ordered by category; a status seen later gets a column of its own, and no column goes by itself, since its statuses may just have no issue today. A status can be dragged onto another column to group them, as the design's "which you can then group and order" says. (`boards.test.ts` only adds columns to a JQL board, since its columns come from the statuses its issues happen to be in)
@@ -90,7 +90,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - GitHub Project: the Status field's options. A repository: Open and Closed.
   - ClickUp: the list's statuses.
 - [ ] A column's category is suggested from its statuses: Jira's status category, Linear's state type, ClickUp's status type, and for GitHub the option's name. A column named like "review" or "QA" is suggested as In review (X44's rule).
-- [ ] A changed category is outlined in the accent colour. The note under the table says: "Suggested from each status's <tracker> category. Change one where your team means something else." A hidden column's issues are not shown and not counted, out of sync included. (Partly: a changed category is not outlined yet.)
+- [x] A changed category is outlined in the accent colour. The note under the table says: "Suggested from each status's <tracker> category. Change one where your team means something else." A hidden column's issues are not shown and not counted, out of sync included. (`addBoard.test.ts` names the columns whose category differs from the one suggested; `task-trackers.e2e.ts` adds an existing Jira board: its filter with Edit in Jira, a changed category outlined, a column dragged (X50))
 - [ ] Defaults: Done-category columns are folded. Jira's backlog column and a column with no status, and Linear's `backlog`, `triage` and `canceled` states, are hidden. A GitHub repository's Closed holds issues closed as completed and as not planned.
 - [x] WIP is shown only for Jira boards; Linear, GitHub and ClickUp have no WIP limits. (Seen in the app; React components have no unit tests.)
 
