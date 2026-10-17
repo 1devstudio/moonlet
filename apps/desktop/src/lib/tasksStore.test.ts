@@ -467,6 +467,16 @@ describe("boards (X50 Sync)", () => {
     expect(useTasks.getState().data["local/personal"].error).toBe("cannot reach Linear");
     // The board that failed says why on its own (X50: a board whose origin is gone); the other doesn't.
     expect([useTasks.getState().data["local/personal"].boards?.moon?.error, useTasks.getState().data["local/personal"].boards?.des?.error]).toEqual(["cannot reach Linear", undefined]);
+    // A board that never read keeps no sprint, so no "No active sprint" either.
+    const ops = board({ id: "ops", name: "OPS", origin: { kind: "linear_team" as const, team: "OPS" }, finished: "sprint" as const });
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: [], boards: [...boards, ops] } });
+    answers["tracker_tasks linear:acme"] = ({ id }) => {
+      if (id === "OPS") throw { auth: false, message: "Linear: Entity not found: Team" };
+      return [lt("MOON-1", "Todo"), des("DES-2")];
+    };
+    await refreshTasks("local", "personal", 2_500);
+    expect(useTasks.getState().data["local/personal"].boards?.ops).toEqual({ keys: [], error: "Linear: Entity not found: Team" });
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: [], boards } });
     // Once it reads again, the error goes.
     answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo"), des("DES-2")];
     await refreshTasks("local", "personal", 3_000);

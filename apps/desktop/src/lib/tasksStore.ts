@@ -42,7 +42,8 @@ export interface TasksData {
 /** What a sync read for one board (X50). */
 export interface BoardData {
   keys: string[];
-  sprint: { id: number; name: string; startMs: number; endMs: number } | null;
+  /** The sprint or cycle it follows: null once a sync found none, absent before the board ever read. */
+  sprint?: { id: number; name: string; startMs: number; endMs: number } | null;
   /** A Jira board's type as its last sync read it: `scrum`, `kanban`, `simple`. */
   kind?: string;
   /** Why the board's last sync failed (a Jira board deleted, a team archived); its last good tasks stay. */
@@ -425,7 +426,8 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
       // The board keeps its last good tasks, and says why it failed.
       const last = prev?.boards?.[b.id];
       if (last) for (const t of prev?.tasks ?? []) if (last.keys.includes(taskId(t)) && !tasks.has(taskId(t))) tasks.set(taskId(t), t);
-      const { error: _, ...kept } = last ?? { keys: [], sprint: null };
+      // A board that never read has no sprint yet, rather than none.
+      const { error: _, ...kept } = last ?? { keys: [] };
       boardData[b.id] = { ...kept, ...(r.error && { error: r.error }) };
       continue;
     }
