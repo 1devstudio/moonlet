@@ -15,6 +15,7 @@ import {
   boardInput,
   failureOf,
   fixDrift,
+  forgetGhScopes,
   isTasksMode,
   leaveTasksMode,
   loadTrackersConfig,
@@ -47,7 +48,7 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, canMoveProjectItems, cardFields, footerTracker, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
@@ -490,7 +491,13 @@ export function TasksMode() {
             {layout === "list" && <ExpandAll cards={listCards} />}
             <Filters board={shown.board} columns={syncedColumns(shown.board, null)} />
             <LayoutSwitch />
-            <IconButton title="Refresh tasks" onClick={() => void refreshTasks(ws.host, ws.id)}>
+            <IconButton
+              title="Refresh tasks"
+              onClick={() => {
+                forgetGhScopes(ws.host);
+                void refreshTasks(ws.host, ws.id);
+              }}
+            >
               <RotateCw size={13} />
             </IconButton>
           </div>
@@ -891,14 +898,15 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
   const columns = useMemo(() => (task.github && !task.github.project ? [] : taskColumns(host, workspaceId, task)), [boards, data, task, host, workspaceId]);
   const scopes = useTasks((t) => t.ghScopes[host]);
   // Setting a Project item's Status needs gh's project scope: without it the menu says what to run.
-  const locked = !!task.github?.project && scopes !== undefined && !canMoveProjectItems(scopes);
+  const lock = projectMoveLock(task, scopes);
+  const locked = lock !== null;
   if (columns.length) {
     const { choices, current } = stateChoices(columns, task);
     const select = (
       <select
         aria-label={`State of ${task.key}`}
         disabled={locked}
-        title={locked ? "Moving needs gh's project scope: run gh auth refresh -s project" : undefined}
+        title={lock ?? undefined}
         className={cx(inputCls, "menu-select field-height")}
         value={current}
         onChange={(e) => {
@@ -918,12 +926,12 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
     return (
       <span className="flex flex-col gap-1">
         {select}
-        <span className="ui-text-11.5 text-faint">
-          Moving needs gh's project scope: run <code className="font-mono">gh auth refresh -s project</code>
-        </span>
+        <span className="ui-text-11.5 text-faint">{lock}</span>
       </span>
     );
   }
+  // A Project's item before its board's columns are known: no Open/Closed to fall back on.
+  if (task.github?.project) return <span className="ui-text-12.5 text-muted">{task.github.project.status ?? "No Status"}</span>;
   const options = stateOptions(task);
   const current = options.findIndex((o) => o.current);
   return (

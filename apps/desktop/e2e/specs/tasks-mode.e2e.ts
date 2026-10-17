@@ -216,7 +216,7 @@ describe("Tasks mode", () => {
     try {
       await $('//button[@title="Refresh tasks"]').click();
       await expect($(state)).toBeDisabled({ wait: 15_000 });
-      await expect($('//span[starts-with(normalize-space(), "Moving needs gh\'s project scope")]//code[normalize-space()="gh auth refresh -s project"]')).toBeDisplayed();
+      await expect($('//span[normalize-space()="Moving needs gh\'s project scope: run gh auth refresh -s project"]')).toBeDisplayed();
     } finally {
       rmSync(ghNoMove, { force: true });
     }
