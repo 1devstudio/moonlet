@@ -230,6 +230,8 @@ interface State extends UiPersist {
     | { kind: "create-pr" }
     /** Link a session to a task (X46). */
     | { kind: "link-task"; host: string; session: string }
+    /** Add a board, or a board's settings when `board` is given (X50). */
+    | { kind: "add-board"; host: string; workspace: string; board?: string }
     | { kind: "palette" }
     | { kind: "commit" };
   /** The open confirm modal, above any dialog (X23). */
