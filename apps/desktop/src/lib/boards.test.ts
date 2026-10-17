@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type BoardColumn, type BoardConfig, boardRows, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, migrateWorkspace, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { type BoardColumn, type BoardConfig, boardRows, syncedColumns, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
-describe("migrateWorkspace (X50 Boards replace sources)", () => {
+describe("migrateSources (X50 Boards replace sources)", () => {
   const config: TrackersConfig = {
     ...DEFAULT_CONFIG,
     connections: [
@@ -30,23 +30,23 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
     ],
   };
 
-  it("turns the workspace's sources and GitHub repositories into pinned boards", () => {
-    // Two projects of the workspace share a repository: one board.
-    const after = migrateWorkspace(config, "local/acme", ["acme/storefront", "acme/storefront"]);
+  it("turns every workspace's sources into pinned boards as soon as the file loads, keeping each connection's state mapping", () => {
+    const after = migrateSources(config);
     expect(after.boards).toEqual([
-      {
-        id: "github:github.com/acme/storefront@local/acme",
-        name: "acme/storefront",
-        connection: "github:github.com",
-        workspace: "local/acme",
-        origin: { kind: "github_repo", repo: "acme/storefront" },
-      },
       {
         id: "jira:acme.atlassian.net/OPS@local/acme",
         name: "Operations",
         connection: "jira:acme.atlassian.net",
         workspace: "local/acme",
         origin: { kind: "jql", query: "project = OPS" },
+        states: { QA: "in_review", Backlog: "hidden" },
+      },
+      {
+        id: "jira:acme.atlassian.net/PLAT@local/other",
+        name: "Platform",
+        connection: "jira:acme.atlassian.net",
+        workspace: "local/other",
+        origin: { kind: "jql", query: "project = PLAT" },
         states: { QA: "in_review", Backlog: "hidden" },
       },
       {
@@ -57,33 +57,34 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
         origin: { kind: "linear_team", team: "MOON" },
       },
     ]);
-    expect(after.migrated).toEqual(["local/acme", "local/acme github:github.com/acme/storefront"]);
-  });
-
-  it("keeps other workspaces' sources until they open, and drops a connection's states with its last source", () => {
-    const withUnchosen: TrackersConfig = {
-      ...config,
-      connections: config.connections?.map((c) => (c.kind === "linear" ? { ...c, sources: [...c.sources, { key: "DES", name: "Design", workspace: "" }] } : c)),
-    };
-    const after = migrateWorkspace(withUnchosen, "local/acme", []);
-    // A source no workspace was ever chosen for showed nowhere: it goes too.
     expect(after.connections?.map((c) => [c.id, c.sources, c.states])).toEqual([
-      ["jira:acme.atlassian.net", [{ key: "PLAT", name: "Platform", workspace: "local/other" }], { QA: "in_review", Backlog: "hidden" }],
+      ["jira:acme.atlassian.net", [], undefined],
       ["linear:1devstudio", [], undefined],
     ]);
   });
 
-  it("migrates a workspace once, so a board removed later stays removed", () => {
-    const after = migrateWorkspace(config, "local/acme", ["acme/storefront"]);
-    expect(migrateWorkspace({ ...after, boards: [] }, "local/acme", ["acme/storefront"]).boards).toEqual([]);
-  });
-
-  it("gives a repository its board the first sync that sees it, even after the workspace migrated", () => {
-    // The origin could not be read on the first sync (a host offline, a remote added later).
-    const first = migrateWorkspace(config, "local/acme", []);
-    const later = migrateWorkspace(first, "local/acme", ["acme/web"]);
-    expect(later.boards?.map((b) => b.id).at(-1)).toBe("github:github.com/acme/web@local/acme");
-    expect(migrateWorkspace(later, "local/acme", ["acme/web"])).toBe(later);
+  it("drops a source no workspace was chosen for, skips one that already has its board, and leaves a file without sources as it is", () => {
+    const odd: TrackersConfig = {
+      ...DEFAULT_CONFIG,
+      boards: [{ id: "linear:1devstudio/MOON@local/acme", name: "Moonlet", connection: "linear:1devstudio", workspace: "local/acme", origin: { kind: "linear_team", team: "MOON" }, pinned: false }],
+      connections: [
+        {
+          id: "linear:1devstudio",
+          kind: "linear",
+          site: "1devstudio",
+          account: "Sam",
+          auth: "api_key",
+          sources: [
+            { key: "MOON", name: "Moonlet", workspace: "local/acme" },
+            { key: "DES", name: "Design", workspace: "" },
+          ],
+        },
+      ],
+    };
+    const after = migrateSources(odd);
+    expect(after.boards).toEqual(odd.boards);
+    expect(after.connections?.[0].sources).toEqual([]);
+    expect(migrateSources(after)).toBe(after);
   });
 
   it("makes a ClickUp list a list board", () => {
@@ -91,7 +92,30 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
       ...DEFAULT_CONFIG,
       connections: [{ id: "clickup:9012", kind: "clickup", site: "9012", account: "Sam", auth: "token", sources: [{ key: "901", name: "Sprint", workspace: "local/acme" }] }],
     };
-    expect(migrateWorkspace(clickup, "local/acme", []).boards?.map((b) => b.origin)).toEqual([{ kind: "clickup_list", list: "901" }]);
+    expect(migrateSources(clickup).boards?.map((b) => b.origin)).toEqual([{ kind: "clickup_list", list: "901" }]);
+  });
+});
+
+describe("addRepoBoards (X50 a workspace's GitHub repositories)", () => {
+  it("gives each repository of a workspace's projects its board once, whatever its case", () => {
+    const after = addRepoBoards(DEFAULT_CONFIG, "local/acme", ["acme/storefront", "Acme/Storefront"]);
+    expect(after.boards).toEqual([
+      { id: "github:github.com/acme/storefront@local/acme", name: "acme/storefront", connection: "github:github.com", workspace: "local/acme", origin: { kind: "github_repo", repo: "acme/storefront" } },
+    ]);
+    expect(after.migrated).toEqual(["local/acme github:github.com/acme/storefront"]);
+  });
+
+  it("keeps a board removed later removed", () => {
+    const after = addRepoBoards(DEFAULT_CONFIG, "local/acme", ["acme/storefront"]);
+    expect(addRepoBoards({ ...after, boards: [] }, "local/acme", ["acme/storefront"]).boards).toEqual([]);
+  });
+
+  it("gives a repository seen on a later sync its board then (a host offline, a remote added later)", () => {
+    const first = addRepoBoards(DEFAULT_CONFIG, "local/acme", []);
+    expect(first).toBe(DEFAULT_CONFIG);
+    const later = addRepoBoards(first, "local/acme", ["acme/web"]);
+    expect(later.boards?.map((b) => b.id)).toEqual(["github:github.com/acme/web@local/acme"]);
+    expect(addRepoBoards(later, "local/acme", ["acme/web"])).toBe(later);
   });
 });
 
@@ -269,5 +293,28 @@ describe("withStates (X44 States dialog on a board, X50)", () => {
         { name: "QA", statuses: ["QA"], category: "in_review" },
       ],
     });
+  });
+});
+
+describe("syncedColumns (X50 a board's columns after a sync)", () => {
+  const base = { id: "b", name: "b", connection: "jira:acme.atlassian.net", workspace: "local/w" };
+  const todo: BoardColumn = { name: "To Do", statuses: ["10000"], category: "todo" };
+  const review: BoardColumn = { name: "Needs Reviews", statuses: ["10018"], category: "in_review", show: "fold" };
+  it("only adds columns to a JQL board, since its columns come from the statuses its issues happen to be in", () => {
+    const board: BoardConfig = { ...base, origin: { kind: "jql", query: "project = OPS" }, columns: [todo, review] };
+    // No issue is in review today: the folded column stays.
+    expect(syncedColumns(board, [{ name: "To Do", statuses: ["10000"], category: "todo" }, { name: "QA", statuses: ["5"], category: "in_review" }])).toEqual([
+      todo,
+      review,
+      { name: "QA", statuses: ["5"], category: "in_review" },
+    ]);
+  });
+
+  it("matches a Jira board's, starts from the tracker's with the old mapping, and keeps what it has without news", () => {
+    const board: BoardConfig = { ...base, origin: { kind: "jira_board", board: 10 }, columns: [todo, review] };
+    expect(syncedColumns(board, [todo])).toEqual([todo]);
+    expect(syncedColumns({ ...board, columns: undefined, states: { "To Do": "hidden" } }, [todo])).toEqual([{ ...todo, show: "hide" }]);
+    expect(syncedColumns(board, null)).toEqual([todo, review]);
+    expect(syncedColumns({ ...base, origin: { kind: "github_repo", repo: "acme/web" } }, null)).toEqual(GITHUB_REPO_COLUMNS);
   });
 });

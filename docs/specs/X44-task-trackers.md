@@ -60,7 +60,7 @@ moonlet connects to the issue trackers a user already works in, so Tasks mode (X
 ### States
 
 - [x] moonlet groups tasks into **Todo**, **In Progress**, **In Review** and **Done**, plus **Not shown**. (`states.rs`, `tasksBoard.test.ts`)
-- [x] Each connection's **States** dialog lists the states of one of its sources (a picker when it has several), each with a column menu: Todo, In Progress, In Review, Done or Not shown. It starts from the defaults below. Since X50 the dialog picks one of the connection's boards: a state moved to another column is saved with that board in `trackers.toml` (its `states`, and its columns' categories when it has columns), and the board uses a saved mapping at once. Moves follow the mapping too (X46). (`stateMapping.test.ts`, `tasksStore.test.ts` the state mapping, `boards.test.ts` keeps the mapping for the board's first columns, and applies it to columns it already has, `task-trackers.e2e.ts` maps a workflow state to another column, saved with the board)
+- [x] Each connection's **States** dialog lists the states of one of its sources (a picker when it has several), each with a column menu: Todo, In Progress, In Review, Done or Not shown. It starts from the defaults below. Since X50 the dialog picks one of the connection's boards: a state moved to another column is saved with that board in `trackers.toml` (its `states`, and its columns' categories when it has columns), and the board uses a saved mapping at once. Moves follow the mapping too (X46). (`tasksStore.test.ts` places tasks by the board's columns as saved now, without waiting for a sync, `boards.test.ts` keeps the mapping for the board's first columns, and applies it to columns it already has, `task-trackers.e2e.ts` maps a workflow state to another column, saved with the board)
 - [x] Only states moved off their default column are saved. (`trackerSources.test.ts` changedStates)
 
 | Column | Linear (state type) | Jira (status category) | ClickUp (status type) | GitHub |
@@ -121,7 +121,7 @@ No daemon RPCs for Linear, Jira or ClickUp: the desktop app's Rust side makes th
 
 - `tracker_connect {kind, site?, email?, token}` → `{connection, sources}`; `tracker_oauth_available` → whether this build can sign in with Linear; `tracker_oauth_linear` → opens the browser and resolves with `{connection, sources}` when the callback arrives.
 - `tracker_disconnect {id}`; `tracker_sources {id}` → `[{key, name}]`; `tracker_states {id, source}` → `[{name, column}]`, each state with its default column.
-- `tracker_tasks {id, mine}` → normalised tasks of the connection's sources.
+- `tracker_tasks {id, mine}` → normalised tasks of the connection's sources. (Since X50: `tracker_board_tasks`, one board at a time.)
 - `tracker_task {id, key}` → one task by its key, or none (X46: a pasted key or URL).
 - `tracker_update {id, task, source, column?, assign_me?, comment?}` moves an issue (the Rust side picks the state, X46), assigns it to the user and/or comments on it.
 - `trackers_config` → `trackers.toml` or its defaults; `trackers_save {config}` writes it.
@@ -171,7 +171,7 @@ GitHub goes through the daemon, because `gh` runs on the project's host:
 - Rust unit tests in `crates/moonlet-trackers` against captured, sanitised responses from each tracker: task parsing, sources, states and the state a move picks, priority, pasted keys and URLs (`refs.rs`), branch names, Jira's document format to Markdown, OAuth helpers, `trackers.toml`, error messages and request bodies.
 - Rust tests in the app's Tauri side (`apps/desktop/src-tauri`): the Jira host check, ids in request paths, the OAuth loopback listener, pasted keys and branch names as the app gets them, reading `trackers.toml`.
 - Core and daemon tests for `gh.tasks` parsing with captured `gh` output (`git.rs`), `gh.whoami` and `gh.task_update` with a stub `gh` (`daemon.rs`).
-- Vitest in `apps/desktop/src/lib/`: key matching (`tasks.test.ts`), the status lines and rule wording (`trackersPage.test.ts`), sources per workspace (`trackerSources.test.ts`), the state mapping (`stateMapping.test.ts`), sync, Assignee: me fetching, rejected tokens, outside changes and saving (`tasksStore.test.ts`, `keepInStep.test.ts`), settings search and nav (`settingsSearch.test.ts`, `settingsPage.test.ts`).
+- Vitest in `apps/desktop/src/lib/`: key matching (`tasks.test.ts`), the status lines and rule wording (`trackersPage.test.ts`), sources per workspace (`trackerSources.test.ts`), the state mapping (`boards.test.ts`, `tasksStore.test.ts`), sync, Assignee: me fetching, rejected tokens, outside changes and saving (`tasksStore.test.ts`, `keepInStep.test.ts`), settings search and nav (`settingsSearch.test.ts`, `settingsPage.test.ts`).
 - e2e (`task-trackers.e2e.ts`): GitHub's login through a stub `gh`, a rule saved to `trackers.toml`, Linear connected with an API key against a mock server, a state mapped to another column, its issues in Tasks mode, and a session started from one moving it.
 
 ## Open questions

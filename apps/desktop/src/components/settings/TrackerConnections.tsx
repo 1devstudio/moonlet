@@ -38,6 +38,14 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
   const set = (i: number, patch: Partial<Source>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const canAdd = !rows.some((r) => !r.key);
   const save = async () => {
+    // Removing a board asks first (X50).
+    const kept = new Set(rowsToBoards(connection, rows, boards).map((b) => b.id));
+    const gone = (boards ?? []).filter((b) => !kept.has(b.id));
+    if (gone.length) {
+      const names = gone.map((b) => b.name).join(", ");
+      const ok = await askConfirm({ title: gone.length === 1 ? `Remove ${names}?` : `Remove ${gone.length} boards?`, message: `${names} ${gone.length === 1 ? "goes" : "go"} from Tasks mode. Sessions keep their links.`, action: "Remove", variant: "danger" });
+      if (!ok) return;
+    }
     try {
       await saveTrackersConfig((config) => ({ ...config, boards: rowsToBoards(connection, rows, config.boards) }));
       onDone();
