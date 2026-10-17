@@ -4,6 +4,7 @@ import type { AgentState } from "../lib/protocol";
 import { fromOtherDialog, tabWrap } from "../lib/modal";
 
 import { cx } from "../lib/cx";
+import { trackerOf } from "../lib/tasks";
 
 export { cx };
 
@@ -160,6 +161,13 @@ export function TrackerIcon({ kind, size = 14 }: { kind: keyof typeof TRACKER_MA
       <path d={m.d} />
     </svg>
   );
+}
+
+/** A board's tracker mark: Linear, Jira and ClickUp's logos, GH for GitHub. */
+export function BoardMark({ connection, size = 12 }: { connection: string; size?: 12 | 14 }) {
+  const kind = trackerOf(connection);
+  if (kind && kind !== "github") return <TrackerIcon kind={kind} size={size} />;
+  return <span className={cx("shrink-0 text-center font-mono font-semibold", size === 12 ? "w-3 ui-text-9 text-muted" : "ui-text-10.5 text-fg")}>GH</span>;
 }
 
 export function DiffStat({ add, del, className }: { add: number; del: number; className?: string }) {

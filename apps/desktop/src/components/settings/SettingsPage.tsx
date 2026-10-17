@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Bell, Bot, ChevronRight, Folder, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
-import { escapeAction, hostOrder, profilesNeedSignIn, routeKey, settingsCrumbs, settingsNav, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
+import { escapeAction, hostOrder, profilesNeedSignIn, routeFocus, routeKey, settingsCrumbs, settingsNav, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
 import { updateStatus } from "../../lib/updater";
@@ -201,10 +201,10 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
   const [selected, setSelected] = useState(0);
   const [flash, setFlash] = useState<{ setting: string; at: number } | null>(null);
   // A route that names a row, such as Manage's Boards (X50), opens on it.
-  const focus = "focus" in route && route.page !== "project" ? route.focus : undefined;
+  const focus = routeFocus(route);
   useEffect(() => {
     if (focus) setFlash({ setting: focus, at: Date.now() });
-  }, [focus]);
+  }, [route]);
   const searchRef = useRef<HTMLInputElement>(null);
   const searching = !!query.trim();
   const searchCtx = useSearchContext(mobile?.devices.length ?? 0, searching);

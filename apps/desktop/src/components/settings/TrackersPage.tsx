@@ -12,10 +12,9 @@ import { type BoardEntry, boardList } from "../../lib/trackerSources";
 import { branchUser, loadTrackersConfig, openAddBoard, removeBoard, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { GITHUB_RULES, githubConnection, previewTask, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
 import { AddTracker, ConnectionRow } from "./TrackerConnections";
-import { Button, cx, IconButton } from "../ui";
+import { BoardMark, Button, cx, IconButton } from "../ui";
 import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, Switch, SwitchRow } from "./controls";
 import { withPinned } from "../../lib/boards";
-import { BoardMark } from "../tasks/TasksMode";
 import { DEFAULT_LINK, type TrackerKind } from "../../lib/tasks";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 
