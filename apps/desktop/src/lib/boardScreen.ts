@@ -154,5 +154,3 @@ export function cardFace(
   };
 }
 
-/** A card of someone else's issue with no session on it: dimmed under Assignee: anyone (X50). */
-export const isDimmed = (card: { task: Pick<Task, "mine">; rows: unknown[] }) => card.task.mine === false && card.rows.length === 0;
