@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
+import { migrateSources } from "./boards";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -13,13 +14,21 @@ vi.mock("./daemon", () => ({
   sendInput: vi.fn(),
   hostsApi: {
     trackersConfig: () =>
-      new Promise((r) => setTimeout(r, configDelay.ms)).then(() => (configFails.length ? Promise.reject(configFails.shift()) : { sync: { interval: 300, notify: true } })),
+      new Promise((r) => setTimeout(r, configDelay.ms)).then(() => (configFails.length ? Promise.reject(configFails.shift()) : (file.config ?? { sync: { interval: 300, notify: true } }))),
     trackersSave: (c: object) => new Promise<void>((r, no) => setTimeout(() => (saveFails.length ? no(saveFails.shift()) : (saved.push(c), r())), 5)),
     trackerUpdate: (req: object) => (failNext.length ? Promise.reject(failNext.shift()) : (sent.push(req), Promise.resolve())),
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
-    trackerTasks: (id: string, mine: boolean) => {
-      const answer = answers[`tracker_tasks ${id}${mine ? "" : " all"}`] ?? answers[`tracker_tasks ${id}`];
-      return answer ? Promise.resolve().then(() => answer({})) : Promise.reject(new Error(`no tracker_tasks ${id}`));
+    // A Linear team's or ClickUp list's board (X50): that source's issues
+    // from the tracker_tasks answers, and its columns when a test gives them.
+    trackerBoardTasks: (q: { id: string; origin: { team?: string; list?: string; query?: string }; mine: boolean }) => {
+      const answer = answers[`tracker_tasks ${q.id}${q.mine ? "" : " all"}`] ?? answers[`tracker_tasks ${q.id}`];
+      if (!answer) return Promise.reject(new Error(`no tracker_board_tasks ${q.id}`));
+      const source = q.origin.team ?? q.origin.list;
+      return Promise.resolve().then(() => ({
+        issues: (answer({ id: source }) as { tracker?: { source: string } }[]).filter((t) => !source || t.tracker?.source === source).map((t) => ({ ...t, statusId: "" })),
+        sprint: null,
+        columns: answers[`board_columns ${q.id}`]?.({}) ?? null,
+      }));
     },
   },
 }));
@@ -29,6 +38,8 @@ const sent = vi.hoisted(() => [] as object[]);
 const failNext = vi.hoisted(() => [] as object[]);
 const configFails = vi.hoisted(() => [] as object[]);
 const configDelay = vi.hoisted(() => ({ ms: 0 }));
+/** What trackers.toml holds, when a test gives it. */
+const file = vi.hoisted(() => ({ config: null as object | null }));
 const saved = vi.hoisted(() => [] as object[]);
 const saveFails = vi.hoisted(() => [] as object[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
@@ -277,11 +288,18 @@ describe("outside changes with a state mapping (X44)", () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
     const lt = (state: string, column: string) => ({ connection: "linear:acme", key: "MOON-1", title: "Hosts", url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "i1", state, source: "MOON" } });
+    // As the file loads: the source is a board carrying the mapping (X50).
     useTasks.setState({
-      config: { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "Moonlet", workspace: "local/personal" }], states: { QA: "in_progress", "In Progress": "in_review" } }] },
+      config: migrateSources({ ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "Moonlet", workspace: "local/personal" }], states: { QA: "in_progress", "In Progress": "in_review" } }] }),
     });
     useStore.setState({ sessions: { local: [{ id: "s1", project_id: "web", name: "Hosts", branch: "hosts", base: "main", path: "/w/hosts", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: { connection: "linear:acme", key: "MOON-1", url: "" } }] } });
     answers["tracker_tasks linear:acme"] = () => [lt("Todo", "todo")];
+    // The team's states as the board's columns; the old mapping (X44) gives their categories (X50).
+    answers["board_columns linear:acme"] = () => [
+      { name: "Todo", statuses: ["Todo"], category: "todo" },
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
+      { name: "QA", statuses: ["QA"], category: "in_review" },
+    ];
     await refreshTasks("local", "personal", 1_000);
     const t = useTasks.getState().data["local/personal"].tasks[0];
     // moonlet moves it to In Progress, which in this team is the QA state (by default In Review).
@@ -308,10 +326,12 @@ describe("tasks from Linear, Jira and ClickUp (X44)", () => {
     updatedMs: 0,
     tracker: { id: key, state: "Todo", source },
   });
-  const config = (sources: { key: string; workspace: string }[]) => ({
-    ...DEFAULT_CONFIG,
-    connections: [{ id: "linear:acme", kind: "linear" as const, site: "acme", account: "Sam", auth: "api_key", sources: sources.map((x) => ({ ...x, name: x.key })) }],
-  });
+  // A file with sources, as it is once loaded: one board per source (X50).
+  const config = (sources: { key: string; workspace: string }[]) =>
+    migrateSources({
+      ...DEFAULT_CONFIG,
+      connections: [{ id: "linear:acme", kind: "linear" as const, site: "acme", account: "Sam", auth: "api_key", sources: sources.map((x) => ({ ...x, name: x.key })) }],
+    });
 
   it("adds the tasks of the workspace's sources, and the projects that link them", async () => {
     answers["git.origin_url"] = () => null;
@@ -368,6 +388,111 @@ describe("tasks from Linear, Jira and ClickUp (X44)", () => {
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key)).toEqual(["MOON-2"]);
     expect(useTasks.getState().attention).toEqual({});
     useTasks.setState({ config: null, attention: {} });
+  });
+});
+
+describe("boards (X50 Sync)", () => {
+  const lt = (key: string, state: string) => ({ connection: "linear:acme", key, title: key, url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: key, state, source: "MOON" } });
+  const board = (o: object = {}) => ({ id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" }, ...o });
+
+  it("turns the file's sources into boards when it loads, and gives the workspace's repository its board on the first sync", async () => {
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = () => [issue];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    saved.length = 0;
+    file.config = { sync: { interval: 300, notify: true }, connections: [{ id: "linear:acme", kind: "linear", site: "acme", account: "Sam", auth: "api_key", sources: [{ key: "MOON", name: "Moonlet", workspace: "local/acme" }] }] };
+    useTasks.setState({ config: null, attention: {} });
+    try {
+      await refreshTasks("local", "personal", 1_000);
+      // Written to trackers.toml: the source as a board in its workspace, then the repository's board here.
+      await vi.waitFor(() =>
+        expect((saved.at(-1) as { boards?: { name: string; workspace: string }[] })?.boards?.map((b) => [b.name, b.workspace])).toEqual([
+          ["Moonlet", "local/acme"],
+          ["acme/web", "local/personal"],
+        ]),
+      );
+      expect((saved.at(-1) as { connections: { sources: unknown[] }[] }).connections[0].sources).toEqual([]);
+      expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key)).toEqual(["acme/web#12"]);
+    } finally {
+      file.config = null;
+      useTasks.setState({ config: null });
+    }
+  });
+
+  it("keeps a board's columns as its tracker has them, with the user's folding, and places tasks by their column", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "In Review"), lt("MOON-2", "Triage")];
+    answers["board_columns linear:acme"] = () => [
+      { name: "Triage", statuses: ["Triage"], category: "todo", show: "hide" },
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
+      { name: "In Review", statuses: ["In Review"], category: "in_review" },
+    ];
+    // The user folded In Progress; In Review is new in Linear.
+    useTasks.setState({
+      config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [board({ columns: [{ name: "In Progress", statuses: ["In Progress"], category: "in_progress", show: "fold" }] })] },
+      attention: {},
+    });
+    await refreshTasks("local", "personal", 1_000);
+    expect(useTasks.getState().config?.boards?.[0].columns).toEqual([
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress", show: "fold" },
+      { name: "Triage", statuses: ["Triage"], category: "todo", show: "hide" },
+      { name: "In Review", statuses: ["In Review"], category: "in_review" },
+    ]);
+    expect(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.column])).toEqual([
+      ["MOON-1", "in_review"],
+      ["MOON-2", "hidden"],
+    ]);
+    useTasks.setState({ config: null });
+  });
+
+  it("keeps a failed board's own last tasks, and takes its connection's other boards fresh", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const des = (key: string) => ({ ...lt(key, "Todo"), tracker: { id: key, state: "Todo", source: "DES" } });
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo"), des("DES-1")];
+    const boards = [board(), board({ id: "des", name: "Design", origin: { kind: "linear_team" as const, team: "DES" } })];
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: [], boards }, attention: {} });
+    await refreshTasks("local", "personal", 1_000);
+    answers["tracker_tasks linear:acme"] = ({ id }) => {
+      if (id === "MOON") throw { auth: false, message: "cannot reach Linear" };
+      return [des("DES-2")];
+    };
+    await refreshTasks("local", "personal", 2_000);
+    expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1"]);
+    expect(useTasks.getState().data["local/personal"].error).toBe("cannot reach Linear");
+    useTasks.setState({ config: null });
+  });
+
+  it("moves a task to the first status of its board's column of that category", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    // The team's In Progress column holds "Doing" first.
+    const columns = [
+      { name: "Todo", statuses: ["Todo"], category: "todo" as const },
+      { name: "In Progress", statuses: ["Doing", "In Progress"], category: "in_progress" as const },
+    ];
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [board({ columns })] }, attention: {} });
+    await refreshTasks("local", "personal", 1_000);
+    sent.length = 0;
+    await moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_500);
+    expect(sent).toEqual([{ id: "linear:acme", task: "MOON-1", source: "MOON", column: "in_progress", status: "Doing" }]);
+    useTasks.setState({ config: null });
+  });
+
+  it("syncs the board shown even when it is not pinned, keeping each board's tasks apart", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [board({ pinned: false })] }, attention: {} });
+    await refreshTasks("local", "personal", 1_000);
+    expect(useTasks.getState().data["local/personal"].tasks).toEqual([]);
+    showBoard("local", "personal", "moon");
+    await vi.waitFor(() => expect(useTasks.getState().data["local/personal"].boards?.moon).toEqual({ keys: ["linear:acme MOON-1"], sprint: null }));
+    expect(useTasks.getState().shownBoard["local/personal"]).toBe("moon");
+    useTasks.setState({ config: null, shownBoard: {} });
   });
 });
 
@@ -606,7 +731,7 @@ describe("Assignee: me decides whose issues are fetched (X45)", () => {
     answers["tracker_tasks linear:acme all"] = () => [lt("MOON-1", "MOON", ["Kim"]), lt("MOON-2", "MOON", ["Sam"]), lt("DES-1", "DES", ["Kim"]), lt("DES-3", "DES", ["Sam"])];
     // The tracker's own "assigned to me": DES-3 belongs to another Sam.
     answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "MOON", ["Sam"]), lt("MOON-9", "MOON", ["Sam"])];
-    useTasks.setState({ config: { ...DEFAULT_CONFIG, connections: [linear] }, filters: { mine: true, hideEmptyDone: false } });
+    useTasks.setState({ config: migrateSources({ ...DEFAULT_CONFIG, connections: [linear] }), filters: { mine: true, hideEmptyDone: false } });
     await refreshTasks("local", "personal", 1_000);
     expect(shown()).toEqual({ "MOON-2": true, "MOON-9": true });
     useTasks.setState({ filters: { mine: false, hideEmptyDone: false } });
@@ -659,13 +784,13 @@ describe("Assignee: me decides whose issues are fetched (X45)", () => {
   });
 });
 
-describe("the state mapping (X44 Workflow states)", () => {
-  it("places tasks by the mapping saved now, without waiting for a sync", () => {
+describe("the state mapping (X44 Workflow states, on a board X50)", () => {
+  it("places tasks by the board's columns as saved now, without waiting for a sync", () => {
     const qa = { connection: "linear:acme", key: "ENG-1", title: "x", url: "", column: "in_progress" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "i1", state: "QA", source: "ENG" } };
-    const data = { tasks: [qa], worktrees: [], sources: ["linear:acme"], repos: {}, sourceProjects: {}, syncedAt: 1, error: null };
-    const config = { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear" as const, site: "acme", account: "Ada", auth: "api_key", sources: [], states: { QA: "in_review" as const } }] };
-    expect(boardInput(useStore.getState(), "local", "personal", data, config).tasks.map((t) => t.column)).toEqual(["in_review"]);
-    expect(boardInput(useStore.getState(), "local", "personal", data, DEFAULT_CONFIG).tasks.map((t) => t.column)).toEqual(["in_progress"]);
+    const data = { tasks: [qa], worktrees: [], sources: ["linear:acme"], repos: {}, sourceProjects: {}, syncedAt: 1, error: null, boards: { eng: { keys: ["linear:acme ENG-1"], sprint: null } } };
+    const board = (category: "in_progress" | "in_review") => ({ id: "eng", name: "Engineering", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "ENG" }, columns: [{ name: "QA", statuses: ["QA"], category }] });
+    expect(boardInput(useStore.getState(), "local", "personal", data, { ...DEFAULT_CONFIG, boards: [board("in_review")] }).tasks.map((t) => t.column)).toEqual(["in_review"]);
+    expect(boardInput(useStore.getState(), "local", "personal", data, { ...DEFAULT_CONFIG, boards: [board("in_progress")] }).tasks.map((t) => t.column)).toEqual(["in_progress"]);
   });
 });
 

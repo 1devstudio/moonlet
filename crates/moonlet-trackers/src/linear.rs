@@ -130,6 +130,11 @@ pub fn parse_success(raw: &[u8], field: &str) -> Result<(), ApiError> {
     }
 }
 
+/// A board column's state (X50), given by its id or name.
+pub fn state_named<'a>(states: &'a [State], status: &str) -> Option<&'a State> {
+    states.iter().find(|s| s.id == status || s.name == status)
+}
+
 /// The state a move to `column` uses, by the user's state mapping (X44).
 pub fn state_for<'a>(
     states: &'a [State],
@@ -315,6 +320,20 @@ mod tests {
         // `priority` is a Float in Linear's schema.
         let float = br#"{"data":{"issues":{"nodes":[{"identifier":"ENG-1","priority":2.0,"state":{"type":"started","name":"In Progress"},"team":{"key":"ENG"}}]}}}"#;
         assert_eq!(parse_issues(float, "linear:acme").unwrap()[0].priority, 3);
+    }
+
+    #[test]
+    fn a_board_columns_state_by_its_id_or_name() {
+        let states = parse_states(&fixture("linear-states.json")).unwrap();
+        assert_eq!(
+            state_named(&states, "In Review").map(|s| s.id.as_str()),
+            Some("a1000000-0000-4000-8000-000000000004")
+        );
+        assert_eq!(
+            state_named(&states, "a1000000-0000-4000-8000-000000000003").map(|s| s.name.as_str()),
+            Some("Done")
+        );
+        assert_eq!(state_named(&states, "Shipped"), None);
     }
 
     #[test]
