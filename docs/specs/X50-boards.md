@@ -64,7 +64,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 - [ ] **Jira board:** the board's filter is shown read-only, with **Edit in Jira**. Below it, "Narrow it down in moonlet · optional JQL, added with AND". A `jql` board has its query here instead. (Partly: no Edit in Jira link yet. `jira_board.rs` a_boards_query_is_its_filter_and_moonlets_narrowing_in_the_filters_order)
 - [x] **Linear, GitHub and ClickUp:** an optional label filter. A GitHub Project has no label filter, since its view's filter stays in GitHub. (`tasksStore.test.ts` keeps only the issues with any of a board's labels, whatever their case)
-- [ ] "Show issues assigned to": **Me** or **Anyone**. Under Anyone, other people's issues are dimmed. The header's Assignee filter can still switch it. (Partly: the choice is saved, but the header's one Assignee switch decides for every board. `addBoard.test.ts` makes the board, leaving out what is at its default)
+- [ ] "Show issues assigned to": **Me** or **Anyone**. Under Anyone, other people's issues are dimmed. The header's Assignee filter can still switch it. (`addBoard.test.ts` makes the board, leaving out what is at its default; `boardScreen.test.ts` is what the user picked for the board in the app, else the board's own setting, else me)
 - [ ] "Finished issues":
   - **Hide after 14 days**, the default for boards without sprints.
   - **Follow the active sprint** on a Jira Scrum or team-managed board, **Follow the active cycle** on a Linear team with cycles.
@@ -139,7 +139,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - The counts are those of the shown board after its filters.
 
   (`boardColumns.test.ts` names the tracker, its site, the sprint's dates and the counts, Jira counting issues; `boardScreen.test.ts` titles the board with the sprint it follows, and sums up what the filters show)
-- [ ] The header's controls are: (Partly: Assignee: me is one switch for every board, not kept per board. `boardScreen.test.ts` counts the shown and folded columns; `tasks-mode.e2e.ts` counts done tasks left to clean up on the folded Closed column, and filters the board, shows the same tasks as a list whose rows open into their sessions, and unfolds and folds a column)
+- [x] The header's controls are: (`boardScreen.test.ts` is what the user picked for the board in the app, else the board's own setting, else me; `tasksStore.test.ts` takes only the account's issues on a board at Assignee: me, and everyone's open issues on one at anyone, fetches everyone's issues as soon as a board's Assignee is set to anyone, and keeps that per board; `task-trackers.e2e.ts` shows everyone's open issues once the board's Assignee is anyone, others' dimmed (X50); `boardScreen.test.ts` counts the shown and folded columns; `tasks-mode.e2e.ts` counts done tasks left to clean up on the folded Closed column, and filters the board, shows the same tasks as a list whose rows open into their sessions, and unfolds and folds a column)
   - **Assignee: me / anyone**, a menu that starts from the board's own setting; a change is kept per board in the app, not written to the board.
   - **Columns `<n>` · `<n>` folded**, a menu that shows, folds or hides each column (saved to the board).
   - **Hide empty Done**.

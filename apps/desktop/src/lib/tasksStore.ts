@@ -2,6 +2,7 @@
 // between Sessions and Tasks (X44, X45).
 
 import { addRepoBoards, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
+import { assigneeOf } from "./boardScreen";
 import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
@@ -62,8 +63,10 @@ interface TasksState {
   layout: "board" | "list";
   /** List rows open, by `connection key`. */
   expanded: Record<string, boolean>;
-  /** The header's filters, kept across restarts (X45). */
-  filters: BoardFilters;
+  /** Hide empty Done in the header, kept across restarts (X45). */
+  filters: Omit<BoardFilters, "mine">;
+  /** Assignee picked in the header, by board id, kept in the app across restarts, not written to the board (X50). */
+  assignee: Record<string, "me" | "anyone">;
   /** Connections whose token stopped working, with what to do (X44). */
   attention: Record<string, string>;
   /** What moonlet did about each task, by `connection key` (X45 Activity). */
@@ -141,6 +144,7 @@ export const useTasks = create<TasksState>(() => ({
   layout: storedLayout(),
   expanded: storedExpanded(),
   filters: storedFilters(),
+  assignee: storedAssignee(),
   attention: {},
   activity: {},
   query: "",
@@ -183,24 +187,38 @@ export function showBoard(host: string, workspaceId: string, id: string) {
   void refreshTasks(host, workspaceId);
 }
 
-function storedFilters(): BoardFilters {
+function storedFilters(): Omit<BoardFilters, "mine"> {
   try {
-    // Assignee: me starts on, as the trackers' "Assigned to me" did (X45).
-    const f = JSON.parse(readStored("tasks.filters") ?? "{}");
-    return { mine: f.mine !== false, hideEmptyDone: f.hideEmptyDone === true };
+    return { hideEmptyDone: JSON.parse(readStored("tasks.filters") ?? "{}").hideEmptyDone === true };
   } catch {
-    return { mine: true, hideEmptyDone: false };
+    return { hideEmptyDone: false };
   }
 }
 
-/** Assignee: me and Hide empty Done in the header (X45). */
-export function setFilters(filters: BoardFilters) {
-  const was = useTasks.getState().filters;
+/** Hide empty Done in the header (X45). */
+export function setFilters(filters: Omit<BoardFilters, "mine">) {
   useTasks.setState({ filters });
   writeStored("tasks.filters", JSON.stringify(filters));
-  // Everyone's issues are only fetched with Assignee: me off: ask for them now.
-  if (was.mine && !filters.mine)
-    for (const key of Object.keys(useTasks.getState().data)) {
+}
+
+function storedAssignee(): Record<string, "me" | "anyone"> {
+  try {
+    return JSON.parse(readStored("tasks.assignee") ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+/** The header's Assignee for board `boardId` (X50), kept in the app; switching to anyone fetches everyone's issues now. */
+export function setAssignee(boardId: string, to: "me" | "anyone") {
+  const assignee = { ...useTasks.getState().assignee, [boardId]: to };
+  useTasks.setState({ assignee });
+  writeStored("tasks.assignee", JSON.stringify(assignee));
+  const board = trackersConfig(useTasks.getState()).boards?.find((b) => b.id === boardId);
+  // A board not saved (trackers.toml unreadable) is in every workspace that shows it.
+  const keys = board ? [board.workspace] : Object.keys(useTasks.getState().data);
+  if (to === "anyone")
+    for (const key of keys) {
       const { host, id } = parseWsKey(key);
       void refreshTasks(host, id);
     }
@@ -359,7 +377,6 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   await loadTrackersConfig();
   const projects = workspaceProjects(useStore.getState(), host, workspaceId);
   let error: string | null = null;
-  const everyoneToo = !useTasks.getState().filters.mine;
   const per = await Promise.all(
     projects.map(async (p) => {
       const repo = githubRepo(await rpc<string | null>(host, M.gitOriginUrl, { path: p.path }).catch(() => null));
@@ -380,7 +397,8 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   const boards = useTasks.getState().configError
     ? addRepoBoards(DEFAULT_CONFIG, key, repoList).boards ?? []
     : workspaceBoards(trackersConfig(useTasks.getState()).boards, key, useTasks.getState().shownBoard[key] ?? null);
-  const read = await Promise.all(boards.map((b) => readBoard(host, b, per, everyoneToo)));
+  const chosen = useTasks.getState().assignee;
+  const read = await Promise.all(boards.map((b) => readBoard(host, b, per, assigneeOf(b, chosen) === "anyone")));
   if (!isLatest()) return;
   const prev = useTasks.getState().data[key];
   const tasks = new Map<string, Task>();
