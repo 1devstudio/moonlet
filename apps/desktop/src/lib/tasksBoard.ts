@@ -72,6 +72,8 @@ export interface Card {
   drift: Drift | null;
   /** On a board (X50): its column, as the tracker names it. */
   columnName?: string;
+  /** On a board (X50): a line about the card, `Assigned to Kim Park`. */
+  note?: string;
 }
 
 /** How a task's tracker state disagrees with its work, and the fix (X45). */

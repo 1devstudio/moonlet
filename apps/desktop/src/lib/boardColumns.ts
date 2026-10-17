@@ -61,10 +61,35 @@ export function boardView(columns: BoardColumn[], input: BoardInput): ColumnView
   const shape = boardShape(columns);
   return columns.flatMap((c, i) => {
     if (c.show === "hide") return [];
-    const here = byColumn[i].map((card) => ({ ...card, columnName: c.name, drift: onBoard(columns, i, shape, card.drift) }));
+    const here = byColumn[i].map((card) => {
+      const drift = onBoard(columns, i, shape, card.drift);
+      const note = noteOf(card, columns, i, card.drift?.kind === "merged" && !drift);
+      return { ...card, columnName: c.name, drift, ...(note && { note }) };
+    });
     const wip = c.wip ? { count: here.length, max: c.wip, full: here.length >= c.wip } : undefined;
     return [{ name: c.name, category: c.category, folded: c.show === "fold", cards: here, ...(wip ? { wip } : {}) }];
   });
+}
+
+const PASSING = new Set(["success", "neutral", "skipped"]);
+
+/**
+ * A card's note line (X50 Cards), the first that applies: whose issue it is
+ * when someone else's has no session on it, a merged PR waiting as expected
+ * (`expected`: out of sync left it alone), or the agent fixing failing checks.
+ */
+function noteOf(card: Card, columns: BoardColumn[], i: number, expected: boolean): string | null {
+  if (!card.rows.length && card.task.mine === false && card.task.assignees[0]) return `Assigned to ${card.task.assignees[0]}`;
+  if (expected) {
+    const next = columns.slice(i + 1).find((c) => c.show !== "hide");
+    return next ? `Merged · waiting for ${next.name}, as expected` : "Merged, as expected";
+  }
+  for (const { session } of card.rows) {
+    const failing = (session.pr?.checks ?? []).filter((c) => c.conclusion && !PASSING.has(c.conclusion)).length;
+    const agent = session.agents?.find((a) => a.state === "working");
+    if (failing && agent) return `${agent.name} is fixing ${failing} failing ${failing === 1 ? "check" : "checks"}`;
+  }
+  return null;
 }
 
 const RANK: Record<Column, number> = { hidden: -1, todo: 0, in_progress: 1, in_review: 2, done: 3 };
