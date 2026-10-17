@@ -1,8 +1,8 @@
 // Add a board (X50): the wizard's four steps as data, what each waits for,
 // the tracker's defaults, and the board it makes.
 
-import { type BoardColumn, type BoardConfig, boardId, type CardField, type Origin, originKey, type StartRule } from "./boards";
-import { mentionsKey, type Task, type TrackerKind, trackerOf } from "./tasks";
+import { type BoardColumn, type BoardConfig, boardId, type CardField, type ColumnShow, type Origin, originKey, type StartRule } from "./boards";
+import { type Column, mentionsKey, type Task, type TrackerKind, trackerOf } from "./tasks";
 
 export type Step = 1 | 2 | 3 | 4;
 
@@ -24,6 +24,8 @@ export interface Draft {
   rules: StartRule[];
   cards: CardField[];
   pinned: boolean;
+  /** An X44 source's state mapping, kept as the board carries it. */
+  states?: Record<string, Column>;
 }
 
 export const STEPS: { name: string; sub: string; title: string }[] = [
@@ -41,6 +43,34 @@ export function newDraft(wsKey: string): Draft {
 /** The card fields a tracker's boards start with (X50 Cards show). */
 const CARDS: Record<TrackerKind, CardField[]> = { jira: ["issue_type", "points", "assignee"], linear: ["points", "assignee"], github: ["assignee"], clickup: ["assignee"] };
 
+/** The card fields a tracker has, as step 4 names them. */
+const CARD_CHOICES: Record<TrackerKind, [CardField, string][]> = {
+  jira: [
+    ["issue_type", "Issue type"],
+    ["points", "Story points"],
+    ["assignee", "Assignee"],
+    ["parent", "Epic"],
+    ["due", "Due date"],
+  ],
+  linear: [
+    ["points", "Estimate"],
+    ["assignee", "Assignee"],
+    ["parent", "Parent"],
+    ["due", "Due date"],
+  ],
+  github: [["assignee", "Assignee"]],
+  clickup: [
+    ["assignee", "Assignee"],
+    ["due", "Due date"],
+  ],
+};
+
+/** "Cards show": the fields `tracker` has, with their names. */
+export const cardChoices = (tracker: TrackerKind) => CARD_CHOICES[tracker];
+
+/** Whether a Jira board of type `boardKind` has sprints: Scrum and team-managed ones do; an unknown type is taken as none. */
+const hasSprints = (boardKind: string | undefined) => !!boardKind && boardKind !== "kanban";
+
 /**
  * The draft once the user picks what the board is built from: named after
  * it, following the sprint of a Scrum or team-managed board, with the
@@ -48,7 +78,7 @@ const CARDS: Record<TrackerKind, CardField[]> = { jira: ["issue_type", "points",
  */
 export function pickOrigin(draft: Draft, connection: string, origin: Origin, name: string, boardKind?: string): Draft {
   const tracker = trackerOf(connection) ?? "github";
-  const sprints = tracker === "jira" && origin.kind === "jira_board" && boardKind !== "kanban";
+  const sprints = tracker === "jira" && origin.kind === "jira_board" && hasSprints(boardKind);
   return { ...draft, connection, origin, boardKind, name, columns: [], finished: sprints ? "sprint" : 14, cards: CARDS[tracker] };
 }
 
@@ -57,20 +87,25 @@ export function alreadyAdded(boards: BoardConfig[] | undefined, wsKey: string, c
   return (boards ?? []).some((b) => b.workspace === wsKey && b.connection === connection && b.origin.kind === origin.kind && originKey(b.origin) === originKey(origin));
 }
 
-/** "Finished issues": 14 days, or the sprint or cycle where the board has one. */
-export function finishedChoices(tracker: TrackerKind, boardKind?: string): { value: number | "sprint"; label: string }[] {
+/** "Finished issues": 14 days, or the sprint or cycle where the board has one, or already follows it. */
+export function finishedChoices(tracker: TrackerKind, boardKind?: string, current?: number | "sprint"): { value: number | "sprint"; label: string }[] {
   const days = { value: 14, label: "Hide after 14 days" };
-  if (tracker === "jira" && boardKind && boardKind !== "kanban") return [days, { value: "sprint", label: "Follow the active sprint" }];
+  if (tracker === "jira" && (hasSprints(boardKind) || current === "sprint")) return [days, { value: "sprint", label: "Follow the active sprint" }];
   if (tracker === "linear") return [days, { value: "sprint", label: "Follow the active cycle" }];
   return [days];
 }
 
-/** Whether Continue (or Create board) can go on: a board picked or a query, a query the tracker accepts, a shown column, a name. */
-export function canContinue(d: Draft, previewError: string | null): boolean {
+/**
+ * Whether Continue (or Create board, or Save) can go on: a board picked or a
+ * query, a query the tracker checked (`check`, null until it answers) and
+ * accepted, a shown column, a name.
+ */
+export function canContinue(d: Draft, check: { error: string | null } | null): boolean {
   if (!d.origin || !d.connection) return false;
   if (d.origin.kind === "jql" && !d.origin.query.trim()) return false;
   if (d.step === 1) return true;
-  if (d.step === 2) return !previewError;
+  if (d.step === 2) return !!check && !check.error;
+  if (check?.error) return false;
   const shown = d.columns.some((c) => c.show !== "hide");
   if (d.step === 3) return shown;
   return shown && !!d.name.trim() && !!d.workspace;
@@ -89,7 +124,7 @@ export function previewLine(issues: Task[], branches: string[], connection: stri
 }
 
 /** What the board is built from, as the summary card names it. */
-function originText(o: Origin): string {
+export function originText(o: Origin): string {
   switch (o.kind) {
     case "jira_board":
       return `Jira board ${o.board}`;
@@ -132,6 +167,7 @@ export function toBoard(d: Draft): BoardConfig {
     ...(d.rules.length && { rules: d.rules }),
     ...(d.cards.length && { cards: d.cards }),
     ...(!d.pinned && { pinned: false as const }),
+    ...(d.states && { states: d.states }),
   };
 }
 
@@ -151,5 +187,37 @@ export function draftFromBoard(b: BoardConfig): Draft {
     rules: b.rules ?? [],
     cards: b.cards ?? [],
     pinned: b.pinned !== false,
+    ...(b.states && { states: b.states }),
   };
+}
+
+/** Step 3's up and down: `columns` with column `i` moved `by` places, unchanged at an end. */
+export function moveColumn(columns: BoardColumn[], i: number, by: number): BoardColumn[] {
+  const j = i + by;
+  if (j < 0 || j >= columns.length) return columns;
+  const next = [...columns];
+  [next[i], next[j]] = [next[j], next[i]];
+  return next;
+}
+
+/** `columns` with column `i`'s category or Show / Fold / Hide changed; shown is written as no `show`. */
+export function columnAt(columns: BoardColumn[], i: number, patch: { category?: BoardColumn["category"]; show?: ColumnShow }): BoardColumn[] {
+  return columns.map((c, j) => {
+    if (j !== i) return c;
+    const { show, ...rest } = { ...c, ...patch };
+    return show && show !== "show" ? { ...rest, show } : rest;
+  });
+}
+
+/** Why `board` cannot be saved: its workspace already has a board from the same origin. `replacing` is the board Board settings saves over. */
+export function clash(boards: BoardConfig[] | undefined, board: BoardConfig, replacing?: string): string | null {
+  const other = (boards ?? []).find((b) => b.id !== replacing && b.workspace === board.workspace && b.connection === board.connection && b.origin.kind === board.origin.kind && originKey(b.origin) === originKey(board.origin));
+  return other ? `This workspace already has a board from ${originText(board.origin)}.` : null;
+}
+
+/** The boards with `board` saved: a new one last, one saved from Board settings where `replacing` was. */
+export function putBoard(boards: BoardConfig[] | undefined, board: BoardConfig, replacing?: string): BoardConfig[] {
+  const list = boards ?? [];
+  const at = list.findIndex((b) => b.id === (replacing ?? board.id));
+  return at < 0 ? [...list, board] : list.map((b, i) => (i === at ? board : b));
 }

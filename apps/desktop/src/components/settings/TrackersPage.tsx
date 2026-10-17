@@ -9,7 +9,7 @@ import type { RuleSetting } from "../../lib/keepInStep";
 import { M } from "../../lib/protocol";
 import { errorToast, shownWorkspace, useStore } from "../../lib/store";
 import { sourceList } from "../../lib/trackerSources";
-import { branchUser, loadTrackersConfig, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
+import { branchUser, loadTrackersConfig, openAddBoard, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { GITHUB_RULES, githubConnection, previewTask, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
 import { AddTracker, ConnectionRow } from "./TrackerConnections";
 import { Button, cx, IconButton } from "../ui";
@@ -159,11 +159,11 @@ export function TrackersPage() {
           />
         </Card>
       </Section>
-      <Section title="Boards" hint="Tasks mode shows the boards of the workspace you are in (X50).">
+      <Section title="Boards" hint="Tasks mode shows the boards of the workspace you are in.">
         <Card>
           {wsRows.map((w) => {
             const { host, id } = parseWsKey(w.key);
-            const open = (board?: string) => useStore.setState({ settingsPage: null, dialog: { kind: "add-board", host, workspace: id, board } });
+            const open = (board?: string) => openAddBoard(host, id, board);
             return (
               <Row
                 key={w.key}
@@ -188,7 +188,7 @@ export function TrackersPage() {
                     "No board yet"
                   )
                 }
-                setting={`ws-sources-${w.key}`}
+                setting={`ws-boards-${w.key}`}
               >
                 <Button size="sm" className="field-height" onClick={() => open()}>
                   Add a board

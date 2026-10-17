@@ -30,6 +30,7 @@ import {
   setExpanded,
   setFilters,
   setLayout,
+  openAddBoard,
   showBoard,
   syncTasks,
   taskColumns,
@@ -129,10 +130,10 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
 }
 
 /** A board's tracker mark: Linear, Jira and ClickUp's logos, GH for GitHub. */
-function BoardMark({ connection }: { connection: string }) {
+export function BoardMark({ connection, size = 12 }: { connection: string; size?: 12 | 14 }) {
   const kind = trackerOf(connection);
-  if (kind && kind !== "github") return <TrackerIcon kind={kind} size={12} />;
-  return <span className="w-3 shrink-0 text-center font-mono ui-text-9 font-semibold text-muted">GH</span>;
+  if (kind && kind !== "github") return <TrackerIcon kind={kind} size={size} />;
+  return <span className={cx("shrink-0 text-center font-mono font-semibold", size === 12 ? "w-3 ui-text-9 text-muted" : "ui-text-10.5 text-fg")}>GH</span>;
 }
 
 /** The sidebar body in Tasks mode (X50): Find a task, the workspace's pinned boards, then the sync line. */
@@ -157,7 +158,7 @@ export function TasksSidebar() {
       </label>
       <div className="flex items-center px-4 pb-1 pt-2">
         <span className="flex-1 ui-text-11 font-medium uppercase tracking-[0.08em] text-faint">Boards</span>
-        <IconButton title="Add a board" onClick={() => ws && useStore.setState({ dialog: { kind: "add-board", host: ws.host, workspace: ws.id } })}>
+        <IconButton title="Add a board" onClick={() => ws && openAddBoard(ws.host, ws.id)}>
           <Plus size={13} />
         </IconButton>
       </div>
@@ -454,7 +455,7 @@ export function TasksMode() {
           </div>
           <div className="mt-4 flex justify-between">
             {connected ? (
-              <Button size="sm" variant="primary" onClick={() => useStore.setState({ dialog: { kind: "add-board", host: ws.host, workspace: ws.id } })}>
+              <Button size="sm" variant="primary" onClick={() => openAddBoard(ws.host, ws.id)}>
                 Add a board
               </Button>
             ) : (
@@ -513,7 +514,7 @@ export function TasksMode() {
                             { label: "Fold", onSelect: () => setColumnShow(shown.board.id, v.name, "fold") },
                             { label: "Hide", onSelect: () => setColumnShow(shown.board.id, v.name, "hide") },
                             { kind: "divider" },
-                            { label: "Board settings…", onSelect: () => useStore.setState({ dialog: { kind: "add-board", host: ws.host, workspace: ws.id, board: shown.board.id } }) },
+                            { label: "Board settings…", onSelect: () => openAddBoard(ws.host, ws.id, shown.board.id) },
                           ]}
                           trigger={(open) => (
                             <IconButton title={`${v.name} options`} onClick={open}>
@@ -590,7 +591,7 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
   ]);
   items.push(
     { kind: "divider" },
-    { label: "New board", icon: <Plus size={13} />, onSelect: () => useStore.setState({ dialog: { kind: "add-board", host, workspace: workspaceId } }) },
+    { label: "New board", icon: <Plus size={13} />, onSelect: () => openAddBoard(host, workspaceId) },
     { label: "Manage", onSelect: () => void goSettings({ page: "trackers" }) },
   );
   return (

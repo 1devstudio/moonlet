@@ -589,7 +589,11 @@ pub async fn tracker_board_setup(id: String, board: u64) -> Res<BoardSetup> {
     let s = Session::load(&id).await?;
     let mut setup = s.jira_setup(board).await?;
     let filter_id = safe_id(&setup.filter_id)?.to_string();
-    setup.filter_jql = Some(jira_board::parse_filter(&s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/filter/{filter_id}"))?).await?)?);
+    // A filter the user may not read leaves the board's columns to pick from.
+    setup.filter_jql = match s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/filter/{filter_id}"))?).await {
+        Ok(raw) => jira_board::parse_filter(&raw).ok(),
+        Err(_) => None,
+    };
     Ok(setup)
 }
 
