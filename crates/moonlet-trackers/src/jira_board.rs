@@ -725,6 +725,24 @@ mod tests {
     }
 
     #[test]
+    fn a_backlog_column_is_hidden_by_its_name_even_with_statuses() {
+        let statuses = parse_statuses(&fixture("jira-statuses.json")).unwrap();
+        let config = serde_json::json!({ "type": "scrum", "filter": { "id": "1" }, "columnConfig": { "columns": [
+            { "name": "Backlog", "statuses": [{ "id": "1" }] },
+            { "name": "To Do", "statuses": [{ "id": "1" }] }
+        ] } });
+        let setup = parse_board_config(config.to_string().as_bytes(), &statuses).unwrap();
+        assert_eq!(
+            setup
+                .columns
+                .iter()
+                .map(|c| (c.name.as_str(), c.show))
+                .collect::<Vec<_>>(),
+            [("Backlog", Show::Hide), ("To Do", Show::Show)]
+        );
+    }
+
+    #[test]
     fn a_columns_category_is_the_one_most_of_its_statuses_have() {
         let statuses = parse_statuses(&fixture("jira-statuses.json")).unwrap();
         let config = serde_json::json!({ "type": "kanban", "filter": { "id": "1" }, "columnConfig": { "columns": [

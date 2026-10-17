@@ -3,7 +3,9 @@ import type { GhTask, Section, Workspace } from "./protocol";
 import { migrateSources } from "./boards";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, openBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { answerConfirm } from "./confirm";
+import { rpc } from "./daemon";
+import { activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -532,6 +534,28 @@ describe("boards (X50 Sync)", () => {
     await refreshTasks("local", "personal", 1_000);
     expect(useTasks.getState().data["local/personal"].boards?.moon).toEqual({ keys: ["linear:acme MOON-1"], sprint: null, kind: "kanban" });
     delete answers["board_kind linear:acme"];
+    useTasks.setState({ config: null });
+  });
+
+  it("removes a board only after asking, and leaves the sessions and their task links alone", async () => {
+    const link = { connection: "linear:acme", key: "MOON-1", url: "" };
+    useStore.setState({ sessions: { local: [{ id: "s1", project_id: "web", name: "Hosts", branch: "moon-1-hosts", base: "main", path: "/w/hosts", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: link }] } });
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [board()] } });
+    saved.length = 0;
+    vi.mocked(rpc).mockClear();
+    // Kept: nothing saved.
+    const kept = removeBoard(board());
+    expect(useStore.getState().confirm?.options.title).toBe("Remove Moonlet?");
+    answerConfirm(false, false);
+    expect(await kept).toBe(false);
+    expect(saved).toEqual([]);
+    const removed = removeBoard(board());
+    answerConfirm(true, false);
+    expect(await removed).toBe(true);
+    expect((saved.at(-1) as { boards?: unknown[] }).boards).toEqual([]);
+    // No session is touched: it keeps its link to the task.
+    expect(vi.mocked(rpc).mock.calls.filter(([, method]) => String(method).startsWith("session."))).toEqual([]);
+    expect(useStore.getState().sessions.local[0].task).toEqual(link);
     useTasks.setState({ config: null });
   });
 
