@@ -9,7 +9,7 @@ import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskId, taskStart, trackerName } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
-import { type BoardWorktree, type Card, type CardRow, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
+import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
 import {
   activityOf,
   boardInput,
@@ -49,7 +49,7 @@ import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";

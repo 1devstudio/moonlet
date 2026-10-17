@@ -55,11 +55,17 @@ describe("a card's note line (X50 Cards)", () => {
   it("names whose issue it is when it is someone else's and no session is on it", () => {
     const cols = view([{ ...jira("OPS-520", "10001"), mine: false, assignees: ["Kim Park"] }, { ...jira("OPS-521", "10001"), mine: true, assignees: ["Sam Rivera"] }]);
     expect([note(cols, "OPS-520"), note(cols, "OPS-521")]).toEqual(["Assigned to Kim Park", null]);
+    // A worktree of the user's on it keeps its own line.
+    const worked = boardView(OPS, { tasks: [{ ...jira("OPS-522", "10001"), mine: false, assignees: ["Kim Park"] }], sessions: [], worktrees: [{ path: "/w/ops-522-fix", branch: "ops-522-fix", originRepo: "acme/ops" }], sessionStartRule: "auto" });
+    expect(note(worked, "OPS-522")).toBe(null);
   });
 
   it("says a merged PR waits for the next column as expected, on a board with several In review columns", () => {
     const cols = view([jira("OPS-476", "10020")], [session("Status API limits", "ops-476-limits", { pr: pr(301, "merged") })]);
     expect(note(cols, "OPS-476")).toBe("Merged · waiting for Ready for Release, as expected");
+    // Only when every session's PR is merged.
+    const mixed = view([jira("OPS-476", "10020")], [session("Status API limits", "ops-476-limits", { pr: pr(301, "merged") }), session("Status API docs", "ops-476-docs", { pr: pr(302, "open") })]);
+    expect(note(mixed, "OPS-476")).toBe(null);
   });
 
   it("says the agent is fixing the session's failing checks while it works", () => {

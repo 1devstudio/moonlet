@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { isDimmed } from "./tasksBoard";
 import type { BoardSession } from "./tasksBoard";
 import { type BoardColumn, type BoardConfig, cardFields } from "./boards";
 import type { Task } from "./tasks";

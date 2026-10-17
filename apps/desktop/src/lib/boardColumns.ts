@@ -5,7 +5,7 @@ import { type BoardColumn, type BoardConfig, type Category, originKey, originLab
 import type { BoardData } from "./tasksStore";
 import type { AgentState } from "./protocol";
 import { type Column, type Task, trackerName, trackerOf } from "./tasks";
-import { type BoardInput, type Card, type Drift, tasksBoard } from "./tasksBoard";
+import { type BoardInput, type Card, checkCounts, type Drift, isDimmed, tasksBoard } from "./tasksBoard";
 import { count } from "./workspaces";
 
 export interface ColumnView {
@@ -63,7 +63,7 @@ export function boardView(columns: BoardColumn[], input: BoardInput): ColumnView
     if (c.show === "hide") return [];
     const here = byColumn[i].map((card) => {
       const drift = onBoard(columns, i, shape, card.drift);
-      const note = noteOf(card, columns, i, card.drift?.kind === "merged" && !drift);
+      const note = noteOf(card, columns, i, shape);
       return { ...card, columnName: c.name, drift, ...(note && { note }) };
     });
     const wip = c.wip ? { count: here.length, max: c.wip, full: here.length >= c.wip } : undefined;
@@ -71,21 +71,17 @@ export function boardView(columns: BoardColumn[], input: BoardInput): ColumnView
   });
 }
 
-const PASSING = new Set(["success", "neutral", "skipped"]);
-
 /**
  * A card's note line (X50 Cards), the first that applies: whose issue it is
- * when someone else's has no session on it, a merged PR waiting as expected
- * (`expected`: out of sync left it alone), or the agent fixing failing checks.
+ * in place of `No sessions` when it is someone else's, a merged PR waiting
+ * for the next column as expected, or the agent fixing failing checks.
  */
-function noteOf(card: Card, columns: BoardColumn[], i: number, expected: boolean): string | null {
-  if (!card.rows.length && card.task.mine === false && card.task.assignees[0]) return `Assigned to ${card.task.assignees[0]}`;
-  if (expected) {
-    const next = columns.slice(i + 1).find((c) => c.show !== "hide");
-    return next ? `Merged · waiting for ${next.name}, as expected` : "Merged, as expected";
-  }
+function noteOf(card: Card, columns: BoardColumn[], i: number, shape: ReturnType<typeof boardShape>): string | null {
+  if (isDimmed(card) && !card.orphans.length && card.task.assignees[0]) return `Assigned to ${card.task.assignees[0]}`;
+  const next = columns.slice(i + 1).find((c) => c.show !== "hide");
+  if (mergedAsExpected(columns, i, shape, card.drift) && next) return `Merged · waiting for ${next.name}, as expected`;
   for (const { session } of card.rows) {
-    const failing = (session.pr?.checks ?? []).filter((c) => c.conclusion && !PASSING.has(c.conclusion)).length;
+    const { failing } = checkCounts(session.pr?.checks ?? []);
     const agent = session.agents?.find((a) => a.state === "working");
     if (failing && agent) return `${agent.name} is fixing ${failing} failing ${failing === 1 ? "check" : "checks"}`;
   }
@@ -100,6 +96,11 @@ function boardShape(columns: BoardColumn[]) {
   return { reviews: drawn.filter((c) => c.category === "in_review").length, has: new Set<Column>(drawn.map((c) => c.category)) };
 }
 
+/** Every session's PR merged in one of a board's several In review columns: expected, not out of sync (X50). */
+function mergedAsExpected(columns: BoardColumn[], i: number, shape: ReturnType<typeof boardShape>, drift: Drift | null): boolean {
+  return drift?.kind === "merged" && shape.reviews > 1 && columns[i].category === "in_review";
+}
+
 /**
  * X45's out-of-sync chip on a board (X50): a merged PR is expected in any
  * In review column of a board with several; work started and PR open need a
@@ -109,7 +110,7 @@ function boardShape(columns: BoardColumn[]) {
  */
 function onBoard(columns: BoardColumn[], i: number, shape: ReturnType<typeof boardShape>, drift: Drift | null): Drift | null {
   if (!drift || drift.kind === "done_open") return drift;
-  if (drift.kind === "merged" && shape.reviews > 1 && columns[i].category === "in_review") return null;
+  if (mergedAsExpected(columns, i, shape, drift)) return null;
   if (drift.kind === "pr_open" && !shape.has.has("in_review")) return null;
   if (drift.kind === "started" && !shape.has.has("in_progress")) return null;
   const next = columns.slice(i + 1).find((c) => c.show !== "hide");
