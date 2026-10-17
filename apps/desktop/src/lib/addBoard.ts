@@ -1,7 +1,7 @@
 // Add a board (X50): the wizard's four steps as data, what each waits for,
 // the tracker's defaults, and the board it makes.
 
-import { type BoardColumn, type BoardConfig, boardId, type CardField, type ColumnShow, type Origin, originKey, type StartRule } from "./boards";
+import { type BoardColumn, type BoardConfig, boardId, type CardField, type ColumnShow, DEFAULT_CARDS, type Origin, originKey, type StartRule } from "./boards";
 import { type Column, mentionsKey, type Task, type TrackerKind, trackerOf } from "./tasks";
 
 export type Step = 1 | 2 | 3 | 4;
@@ -40,8 +40,6 @@ export function newDraft(wsKey: string): Draft {
   return { step: 1, connection: null, origin: null, narrow: "", labels: [], assignee: "me", finished: 14, columns: [], name: "", workspace: wsKey, rules: [], cards: [], pinned: true };
 }
 
-/** The card fields a tracker's boards start with (X50 Cards show). */
-const CARDS: Record<TrackerKind, CardField[]> = { jira: ["issue_type", "points", "assignee"], linear: ["points", "assignee"], github: ["assignee"], clickup: ["assignee"] };
 
 /** The card fields a tracker has, as step 4 names them. */
 const CARD_CHOICES: Record<TrackerKind, [CardField, string][]> = {
@@ -78,7 +76,7 @@ export const jiraSprints = (kind: string) => kind === "scrum" || kind === "simpl
  */
 export function pickOrigin(draft: Draft, connection: string, origin: Origin, name: string, sprints = false): Draft {
   const tracker = trackerOf(connection) ?? "github";
-  return { ...draft, connection, origin, sprints, name, columns: [], finished: sprints ? "sprint" : 14, cards: CARDS[tracker] };
+  return { ...draft, connection, origin, sprints, name, columns: [], finished: sprints ? "sprint" : 14, cards: DEFAULT_CARDS[tracker] };
 }
 
 /** Whether `origin` of `connection` is already a board in workspace `wsKey`: "Already added". */

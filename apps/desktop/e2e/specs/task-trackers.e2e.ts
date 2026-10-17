@@ -226,7 +226,7 @@ describe("Linear tracker", () => {
     await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId);
   });
 
-  it("adds a board of a Linear team that uses cycles, following its active cycle, and removes it after asking (X50)", async () => {
+  it("adds a board of a Linear team that uses cycles, following its active cycle, with the card fields picked, and removes it after asking (X50)", async () => {
     opsTeam = true;
     try {
       const tasks = '//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]';
@@ -246,7 +246,12 @@ describe("Linear tracker", () => {
       // The team's workflow states are the columns.
       await expect($(`${dialog}//div[@role="row"][@aria-label="In Review"]`)).toBeDisplayed({ wait: 10_000 });
       await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+      // Cards show the estimate and assignee by default; the parent and due date too once ticked.
+      for (const field of ["Parent", "Due date"]) await $(`${dialog}//section[@aria-label="Cards show"]//label[normalize-space()="${field}"]/input`).click();
       await $(`${dialog}//button[normalize-space()="Create board"]`).click();
+      const card = '//section[@aria-label="In Progress"]//article[starts-with(@aria-label, "ENG-123")]';
+      await expect($(`${card}//*[normalize-space()="3 pt"]`)).toBeDisplayed({ wait: 15_000 });
+      await expect($(`${card}//div[normalize-space()="ENG-100 Reliable webhooks · Due Oct 20"]`)).toBeDisplayed();
       await expect($('//button[starts-with(@aria-label, "Switch board, current: Operations")]')).toBeDisplayed({ wait: 15_000 });
       const sidebarRow = '//nav[@aria-label="Boards"]//button[.//span[normalize-space()="Operations · Cycle 42"]]';
       await expect($(sidebarRow)).toBeDisplayed();
