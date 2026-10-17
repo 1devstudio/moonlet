@@ -79,6 +79,11 @@ describe("the composer while Claude works", () => {
     expect(composerPlaceholder("claude", false)).toBe("Ask for a change, @ to mention a file, / for commands");
   });
 
+  it("shortens the idle placeholder in a narrow chat (X51)", () => {
+    expect(composerPlaceholder("claude", false, false)).toBe("Ask for a change…");
+    expect(composerPlaceholder("claude", true, false)).toBe("Queue a message for Claude");
+  });
+
   it("counts the queue in the footer", () => {
     expect(queuedCount([])).toBeNull();
     expect(queuedCount([port])).toBe("· 1 queued");
