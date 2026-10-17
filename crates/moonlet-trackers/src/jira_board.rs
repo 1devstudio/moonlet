@@ -373,6 +373,7 @@ pub fn parse_board_search(
                         .into(),
                 }),
                 due: f["duedate"].as_str().map(String::from),
+                due_ms: None,
             }
         })
         .collect();
