@@ -696,8 +696,14 @@ impl ChatManager {
             }
             let session = inner.state.agent_session.clone().context("Claude has no conversation to ask about yet")?;
             let running = inner.state.items.iter().rev().filter_map(|i| i.tool.as_ref()).find(|t| t.status == "running").map(|t| t.summary.clone());
+            // As at a start (X33): a conversation kept in another profile's folder cannot be resumed.
+            let launch = self.launch(&inner);
+            if launch.env.get(crate::profiles::CONFIG_DIR_VAR) != inner.cfg.config_dir.as_ref() {
+                let now = launch.profile.unwrap_or_else(|| "the default Claude profile".into());
+                bail!("This conversation is in another Claude profile: send Claude a message to start one in {now}.");
+            }
             let args = super::claude::aside_args(&inner.cfg, &session, question, running.as_deref());
-            let env = self.agent_env(id, &inner, self.launch(&inner).env);
+            let env = self.agent_env(id, &inner, launch.env);
             ("claude".to_string(), args, inner.cfg.cwd.clone(), env)
         };
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
@@ -1073,6 +1079,32 @@ done
         let (dir, _terms, chats) = setup().await;
         let codex = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "codex".into(), ..Default::default() }).unwrap().id;
         assert_eq!(chats.aside(codex, "hi").await.unwrap_err().to_string(), "Ask aside works with Claude only");
+    }
+
+    #[tokio::test]
+    async fn an_aside_needs_a_conversation_to_ask_about() {
+        let dir = tempfile::tempdir().unwrap();
+        // No `claude` on PATH: the chat never gets a conversation.
+        let terms = TerminalManager::new(dir.path().join("sock"), BTreeMap::from([("PATH".to_string(), "/nonexistent".to_string())]));
+        let chats = ChatManager::new(terms, dir.path().join("chats"));
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        assert_eq!(chats.aside(id, "hi").await.unwrap_err().to_string(), "Claude has no conversation to ask about yet");
+    }
+
+    #[tokio::test]
+    async fn an_aside_after_a_profile_switch_asks_for_a_message_first() {
+        let (dir, _terms, chats) = setup().await;
+        let profile = Arc::new(Mutex::new("/profiles/personal".to_string()));
+        let current = profile.clone();
+        chats.set_session_env(Box::new(move |_| SessionLaunch {
+            env: BTreeMap::from([(crate::profiles::CONFIG_DIR_VAR.to_string(), current.lock().unwrap().clone())]),
+            profile: Some("Work".into()),
+        }));
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s1".into()), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        *profile.lock().unwrap() = "/profiles/work".into();
+        let err = chats.aside(id, "which port?").await.unwrap_err();
+        assert_eq!(err.to_string(), "This conversation is in another Claude profile: send Claude a message to start one in Work.");
     }
 
     #[tokio::test]
