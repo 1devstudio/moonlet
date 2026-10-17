@@ -480,6 +480,9 @@ pub fn run() {
             trackers::tracker_tasks,
             trackers::tracker_update,
             trackers::tracker_states,
+            trackers::tracker_boards,
+            trackers::tracker_board_setup,
+            trackers::tracker_board_tasks,
             trackers::tracker_oauth_available,
             trackers::tracker_oauth_linear,
             app_info

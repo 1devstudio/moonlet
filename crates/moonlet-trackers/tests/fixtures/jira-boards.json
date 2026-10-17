@@ -1,0 +1,60 @@
+{
+  "maxResults": 50,
+  "startAt": 0,
+  "total": 4,
+  "isLast": true,
+  "values": [
+    {
+      "id": 10,
+      "self": "https://acme.atlassian.net/rest/agile/1.0/board/10",
+      "name": "OPS board",
+      "type": "scrum",
+      "location": {
+        "projectId": 10008,
+        "displayName": "Operations (OPS)",
+        "projectName": "Operations",
+        "projectKey": "OPS",
+        "projectTypeKey": "software",
+        "name": "Operations (OPS)"
+      },
+      "isPrivate": false
+    },
+    {
+      "id": 224,
+      "self": "https://acme.atlassian.net/rest/agile/1.0/board/224",
+      "name": "PLAT tasks",
+      "type": "kanban",
+      "location": {
+        "projectId": 10173,
+        "displayName": "Platform (PLAT)",
+        "projectName": "Platform",
+        "projectKey": "PLAT",
+        "projectTypeKey": "software",
+        "name": "Platform (PLAT)"
+      },
+      "isPrivate": false
+    },
+    {
+      "id": 78,
+      "self": "https://acme.atlassian.net/rest/agile/1.0/board/78",
+      "name": "Design board",
+      "type": "simple",
+      "location": {
+        "projectId": 10300,
+        "displayName": "Design (DES)",
+        "projectName": "Design",
+        "projectKey": "DES",
+        "projectTypeKey": "software",
+        "name": "Design (DES)"
+      },
+      "isPrivate": false
+    },
+    {
+      "id": 18,
+      "self": "https://acme.atlassian.net/rest/agile/1.0/board/18",
+      "name": "Release train",
+      "type": "scrum",
+      "isPrivate": false
+    }
+  ]
+}
