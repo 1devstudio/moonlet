@@ -86,3 +86,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X45 | Tasks mode (board and list of issues with their sessions) | P1 | 3 | draft (board, list, filters and out-of-sync fixes implemented for all four trackers; Current cycle view to come) | [X45-tasks-mode.md](X45-tasks-mode.md) |
 | X46 | Tasks in sessions (links, start from a task, Keep in step) | P1 | 3 | draft (links, the link dialog, starting a session from a task and Keep in step implemented) | [X46-tasks-in-sessions.md](X46-tasks-in-sessions.md) |
 | X47 | Quieter notifications: one done per turn with subagents, per-event banners, mute | P1 | 3 | implemented (unheard in app) | [X47-quieter-notifications.md](X47-quieter-notifications.md) |
+| X49 | Queued messages, Send now and Ask aside | P1 | 3 | draft | [X49-queued-messages.md](X49-queued-messages.md) |

@@ -126,6 +126,15 @@ export interface SubagentTool {
   removed?: number | null;
 }
 
+/** A message waiting in the agent's queue (X49). */
+export interface QueuedMessage {
+  /** The uuid the message was sent to the agent with. */
+  id: string;
+  text: string;
+  /** Send now was asked for it, and the agent has not read it yet. */
+  sending?: boolean;
+}
+
 export interface ChatState {
   items: ChatItem[];
   pending: PermissionAsk[];
@@ -145,7 +154,8 @@ export interface ChatState {
   add_dirs?: string[];
   /** The agent's MCP servers; null until the agent has answered (X29). */
   mcp_servers?: McpServer[] | null;
-  queued: string[];
+  /** Messages sent during a turn that the agent has not read yet, oldest first (X49). */
+  queued: QueuedMessage[];
   /** How full the agent's context window is; null until it has said (X34). */
   context?: ContextUsage | null;
   /** Subagents the agent launched, oldest first (X42). */
