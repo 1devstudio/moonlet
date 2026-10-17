@@ -1,0 +1,639 @@
+// Add a board (X50): four steps, Source, Issues, Columns and Finish, for a
+// Jira board or query, a Linear team, a GitHub repository or a ClickUp list.
+
+import { ArrowDown, ArrowUp, ArrowRight, Check, Lock, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { alreadyAdded, canContinue, type Draft, draftFromBoard, finishedChoices, newDraft, pickOrigin, previewLine, STEPS, summaryLine, toBoard } from "../../lib/addBoard";
+import { type BoardColumn, CATEGORY_LABEL, type CardField, GITHUB_REPO_COLUMNS, type Origin, type StartRule } from "../../lib/boards";
+import { askConfirm } from "../../lib/confirm";
+import { hostsApi } from "../../lib/daemon";
+import { errorToast, useStore } from "../../lib/store";
+import { type Task, trackerName, trackerOf } from "../../lib/tasks";
+import { openBoard, previewBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
+import { parseWsKey, wsKey } from "../../lib/workspaces";
+import { Button, cx, IconButton, inputCls, TrackerIcon } from "../ui";
+import { TaskGlyph } from "./TasksMode";
+
+const GITHUB = "github:github.com";
+const selectCls = cx(inputCls, "menu-select field-height");
+
+/** A row the user can pick in step 1: a Jira board, a Linear team, a ClickUp list or a repository. */
+interface Choice {
+  key: string;
+  name: string;
+  kind?: string;
+  origin: Origin;
+}
+
+const KIND_LABEL: Record<string, string> = { scrum: "Scrum", kanban: "Kanban", simple: "Team-managed" };
+const CATEGORY_CHOICES = Object.entries(CATEGORY_LABEL) as [BoardColumn["category"], string][];
+const CARD_CHOICES: Record<string, [CardField, string][]> = {
+  jira: [
+    ["issue_type", "Issue type"],
+    ["points", "Story points"],
+    ["assignee", "Assignee"],
+    ["parent", "Epic"],
+    ["due", "Due date"],
+  ],
+  linear: [
+    ["points", "Estimate"],
+    ["assignee", "Assignee"],
+    ["parent", "Parent"],
+    ["due", "Due date"],
+  ],
+  github: [["assignee", "Assignee"]],
+  clickup: [
+    ["assignee", "Assignee"],
+    ["due", "Due date"],
+  ],
+};
+const BAR: Record<BoardColumn["category"], string> = { todo: "bg-[#4a4a4a]", in_progress: "bg-[#7d7d7d]", in_review: "bg-[#b5b5b5]", done: "bg-merged" };
+
+const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
+
+function Mark({ connection }: { connection: string }) {
+  const kind = trackerOf(connection);
+  if (kind && kind !== "github") return <TrackerIcon kind={kind} size={14} />;
+  return <span className="font-mono ui-text-10.5 font-semibold text-fg">GH</span>;
+}
+
+/** Add a board, or with `boardId` that board's settings (X50). */
+export function AddBoardDialog({ host, workspace, boardId }: { host: string; workspace: string; boardId?: string }) {
+  const close = () => useStore.setState({ dialog: null });
+  const config = useTasks((t) => trackersConfig(t));
+  const workspaces = useStore((s) => s.workspaces);
+  const data = useTasks((t) => t.data[wsKey(host, workspace)]);
+  const editing = config.boards?.find((b) => b.id === boardId);
+  const [draft, setDraft] = useState<Draft>(() => (editing ? draftFromBoard(editing) : newDraft(wsKey(host, workspace))));
+  const [choices, setChoices] = useState<Choice[] | null>(null);
+  const [choicesError, setChoicesError] = useState<string | null>(null);
+  const [build, setBuild] = useState<"board" | "jql">("board");
+  const [filterJql, setFilterJql] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null } | null>(null);
+  const tracker = draft.connection ? (trackerOf(draft.connection) ?? "github") : null;
+  const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
+
+  // Esc closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Step 1: what the connection can show.
+  useEffect(() => {
+    setChoices(null);
+    setChoicesError(null);
+    if (!draft.connection) return;
+    if (draft.connection === GITHUB) {
+      const repos = [...new Set(Object.values(data?.repos ?? {}).filter((r): r is string => !!r))];
+      setChoices(repos.map((repo) => ({ key: repo, name: repo, origin: { kind: "github_repo", repo } })));
+      return;
+    }
+    const kind = trackerOf(draft.connection);
+    const ask =
+      kind === "jira"
+        ? hostsApi.trackerBoards(draft.connection).then((bs) => bs.map((b): Choice => ({ key: b.project ?? String(b.id), name: b.name, kind: b.kind, origin: { kind: "jira_board", board: b.id } })))
+        : hostsApi
+            .trackerSources(draft.connection)
+            .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
+    ask.then(setChoices, (e) => setChoicesError(message(e)));
+  }, [draft.connection, data]);
+
+  // A Jira board's filter and columns.
+  useEffect(() => {
+    setFilterJql(null);
+    if (!draft.connection || draft.origin?.kind !== "jira_board") return;
+    hostsApi.trackerBoardSetup(draft.connection, draft.origin.board).then(
+      (setup) => {
+        setFilterJql(setup.filterJql ?? null);
+        setDraft((d) => (d.columns.length ? d : { ...d, columns: setup.columns }));
+      },
+      (e) => errorToast(e),
+    );
+  }, [draft.connection, draft.origin]);
+
+  // Step 2's preview, a moment after the last change.
+  const previewKey = JSON.stringify([draft.connection, draft.origin, draft.narrow, draft.labels, draft.finished]);
+  const latest = useRef(previewKey);
+  latest.current = previewKey;
+  useEffect(() => {
+    if (draft.step < 2 || !draft.origin || !draft.connection || !canContinue({ ...draft, step: 1 }, null)) return;
+    const t = setTimeout(() => {
+      previewBoard(host, workspace, { ...toBoard({ ...draft, columns: draft.columns }), assignee: "anyone" }).then((p) => {
+        if (latest.current !== previewKey) return;
+        setPreview(p);
+        // A JQL board's, a Linear team's and a ClickUp list's columns come with their issues.
+        if (p.columns) setDraft((d) => (d.columns.length ? d : { ...d, columns: p.columns ?? [] }));
+      });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [previewKey, draft.step]);
+
+  useEffect(() => {
+    if (draft.origin?.kind === "github_repo" && !draft.columns.length) set({ columns: GITHUB_REPO_COLUMNS });
+  }, [draft.origin]);
+
+  const branches = useMemo(() => {
+    const st = useStore.getState();
+    return [...(st.sessions[host] ?? []).filter((s) => s.workspace_id === workspace).map((s) => s.branch), ...(data?.worktrees ?? []).flatMap((w) => (w.branch ? [w.branch] : []))];
+  }, [host, workspace, data]);
+
+  const projects = workspaceProjects(useStore.getState(), host, workspace);
+  const wsOptions = Object.entries(workspaces).flatMap(([h, list]) => list.map((w) => ({ value: wsKey(h, w.id), label: w.name })));
+  const wsName = wsOptions.find((w) => w.value === draft.workspace)?.label ?? "";
+  const ok = canContinue(draft, draft.step === 2 ? (preview?.error ?? null) : null);
+  const create = async () => {
+    // Board settings keep the board's id; a new board's is made from its origin.
+    const board = { ...toBoard(draft), ...(editing && { id: editing.id }) };
+    try {
+      await saveTrackersConfig((c) => {
+        const others = (c.boards ?? []).filter((b) => b.id !== board.id);
+        const at = (c.boards ?? []).findIndex((b) => b.id === board.id);
+        return { ...c, boards: at < 0 ? [...others, board] : [...others.slice(0, at), board, ...others.slice(at)] };
+      });
+      close();
+      const to = parseWsKey(board.workspace);
+      openBoard(to.host, to.id, board.id);
+    } catch (e) {
+      errorToast(e);
+    }
+  };
+  const remove = async () => {
+    if (!editing) return;
+    const ok = await askConfirm({ title: `Remove ${editing.name}?`, message: "It goes from Tasks mode. Sessions keep their links.", action: "Remove", variant: "danger" });
+    if (!ok) return;
+    try {
+      await saveTrackersConfig((c) => ({ ...c, boards: (c.boards ?? []).filter((b) => b.id !== editing.id) }));
+      close();
+    } catch (e) {
+      errorToast(e);
+    }
+  };
+
+  const connections = [
+    ...(config.connections ?? []).map((c) => ({ id: c.id, name: c.kind === "jira" ? "Jira Cloud" : trackerName(c.kind), site: c.site })),
+    { id: GITHUB, name: "GitHub", site: "via gh login" },
+  ];
+  const sample = (preview?.tasks ?? []).slice(0, 3);
+  const moveColumn = (i: number, by: number) =>
+    setDraft((d) => {
+      const cols = [...d.columns];
+      const j = i + by;
+      if (j < 0 || j >= cols.length) return d;
+      [cols[i], cols[j]] = [cols[j], cols[i]];
+      return { ...d, columns: cols };
+    });
+  const setColumn = (i: number, patch: Partial<BoardColumn> & { show?: BoardColumn["show"] | "show" }) =>
+    setDraft((d) => ({
+      ...d,
+      columns: d.columns.map((c, j) => {
+        if (j !== i) return c;
+        const next = { ...c, ...patch };
+        if (next.show === ("show" as never) || next.show === undefined) {
+          const { show: _, ...rest } = next;
+          return rest as BoardColumn;
+        }
+        return next as BoardColumn;
+      }),
+    }));
+  const defaultRule = draft.rules.find((r) => r.when === "default");
+  const otherRules = draft.rules.filter((r) => r.when !== "default");
+  const setRules = (rules: StartRule[]) => set({ rules });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[8vh]" onMouseDown={close}>
+      <div role="dialog" aria-label={editing ? "Board settings" : "Add a board"} className="flex h-[640px] w-[960px] overflow-hidden rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <nav aria-label="Steps" className="flex w-[210px] shrink-0 flex-col border-r border-border bg-bg/40 p-3">
+          <h2 className="px-2 pb-3 pt-1 ui-text-14 font-semibold text-fg">{editing ? "Board settings" : "Add a board"}</h2>
+          {STEPS.map((s, i) => {
+            const n = (i + 1) as Draft["step"];
+            const done = n < draft.step;
+            const current = n === draft.step;
+            return (
+              <button
+                key={s.name}
+                aria-current={current ? "step" : undefined}
+                disabled={!editing && n > draft.step}
+                onClick={() => set({ step: n })}
+                className={cx("flex items-start gap-2.5 rounded-lg px-2 py-2 text-left", current && "bg-panel-2")}
+              >
+                <span
+                  className={cx(
+                    "mt-[1px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border font-mono ui-text-10.5",
+                    current ? "border-accent bg-accent text-[#1a1208]" : done ? "border-border-strong text-done" : "border-border-strong text-muted",
+                  )}
+                >
+                  {done ? <Check size={11} /> : n}
+                </span>
+                <span>
+                  <span className={cx("block ui-text-13", current || done ? "text-fg" : "text-muted")}>{s.name}</span>
+                  <span className="block ui-text-11.5 text-faint">{s.sub}</span>
+                </span>
+              </button>
+            );
+          })}
+          <p className="mt-auto px-2 ui-text-11.5 text-faint">Every choice can be changed later from the board's ⋯ menu › Board settings.</p>
+        </nav>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center border-b border-border px-5 py-3">
+            <h3 className="flex-1 ui-text-14 font-semibold text-fg">{STEPS[draft.step - 1].title}</h3>
+            <IconButton title="Close" onClick={close}>
+              <X size={14} />
+            </IconButton>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            {draft.step === 1 && editing && (
+              <section aria-label="Source" className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
+                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-panel-2">
+                  <Mark connection={editing.connection} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate ui-text-13 text-fg">{summaryLine(draft, preview?.tasks.length ?? 0, "").split(" · ")[0]}</span>
+                  <span className="block ui-text-12 text-faint">The source stays as it is: a different one is a new board.</span>
+                </span>
+              </section>
+            )}
+            {draft.step === 1 && !editing && (
+              <div className="flex flex-col gap-4">
+                <section aria-label="Connection">
+                  <div className="mb-2 ui-text-12 text-muted">Connection</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {connections.map((c) => (
+                      <button
+                        key={c.id}
+                        aria-pressed={draft.connection === c.id}
+                        onClick={() => setDraft({ ...newDraft(draft.workspace), connection: c.id })}
+                        className={cx("flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left", draft.connection === c.id ? "border-accent bg-accent/[0.08]" : "border-border hover:bg-panel-2")}
+                      >
+                        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-panel-2">
+                          <Mark connection={c.id} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate ui-text-13 text-fg">{c.name}</span>
+                          <span className="block truncate ui-text-11.5 text-faint">{c.site}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+                {tracker === "jira" && (
+                  <section aria-label="Build the board from">
+                    <div className="mb-2 ui-text-12 text-muted">Build the board from</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(
+                        [
+                          ["board", "An existing Jira board", "Columns, their order, WIP limits and the filter come from the board. Changes in Jira show up here."],
+                          ["jql", "A JQL query", "Any set of issues. One column per workflow status, which you can then group and order."],
+                        ] as const
+                      ).map(([id, title, text]) => (
+                        <button
+                          key={id}
+                          aria-pressed={build === id}
+                          onClick={() => {
+                            setBuild(id);
+                            if (id === "jql" && draft.connection) setDraft(pickOrigin(draft, draft.connection, { kind: "jql", query: "" }, "Query"));
+                            if (id === "board") set({ origin: null });
+                          }}
+                          className={cx("rounded-lg border px-3 py-2.5 text-left", build === id ? "border-accent bg-accent/[0.08]" : "border-border hover:bg-panel-2")}
+                        >
+                          <span className="block ui-text-13 text-fg">{title}</span>
+                          <span className="mt-0.5 block ui-text-12 text-muted">{text}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
+                {tracker === "jira" && build === "jql" ? (
+                  <label className="flex flex-col gap-1.5">
+                    <span className="ui-text-12 text-muted">JQL query</span>
+                    <textarea
+                      className={cx(inputCls, "min-h-[72px] font-mono ui-text-12.5")}
+                      placeholder="project = WEB AND component = frontend"
+                      value={draft.origin?.kind === "jql" ? draft.origin.query : ""}
+                      onChange={(e) => draft.connection && set({ origin: { kind: "jql", query: e.target.value } })}
+                    />
+                  </label>
+                ) : (
+                  draft.connection && (
+                    <section aria-label="Pick what the board shows">
+                      <div className="mb-2 ui-text-12 text-muted">{tracker === "jira" ? "Jira board" : tracker === "linear" ? "Linear team" : tracker === "clickup" ? "ClickUp list" : "Repository"}</div>
+                      {choicesError && <p className="ui-text-12.5 text-error">{choicesError}</p>}
+                      {!choices && !choicesError && <p className="ui-text-12.5 text-muted">Loading…</p>}
+                      {choices && choices.length === 0 && <p className="ui-text-12.5 text-muted">{tracker === "github" ? "No project of this workspace has a GitHub origin." : "Nothing to pick."}</p>}
+                      <div role="radiogroup" className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
+                        {(choices ?? []).map((c) => {
+                          const added = alreadyAdded(config.boards, draft.workspace, draft.connection ?? "", c.origin);
+                          const on = JSON.stringify(draft.origin) === JSON.stringify(c.origin);
+                          return (
+                            <button
+                              key={JSON.stringify(c.origin)}
+                              role="radio"
+                              aria-checked={on}
+                              disabled={added}
+                              onClick={() => draft.connection && setDraft(pickOrigin(draft, draft.connection, c.origin, c.name, c.kind))}
+                              className={cx("flex items-center gap-3 px-3 py-2.5 text-left", on ? "bg-accent/[0.08]" : "hover:bg-panel-2", added && "opacity-60")}
+                            >
+                              <span className={cx("h-3 w-3 shrink-0 rounded-full border", on ? "border-accent bg-accent" : "border-border-strong")} />
+                              <span className="w-[64px] shrink-0 truncate font-mono ui-text-12 text-muted">{c.key}</span>
+                              <span className="min-w-0 flex-1 truncate ui-text-13 text-fg">{c.name}</span>
+                              {c.kind && <span className="ui-text-12 text-faint">{KIND_LABEL[c.kind] ?? c.kind}</span>}
+                              <span className="w-[100px] text-right ui-text-12 text-faint">{added ? "Already added" : on && draft.columns.length ? `${draft.columns.length} columns` : ""}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )
+                )}
+              </div>
+            )}
+            {draft.step === 2 && (
+              <div className="flex flex-col gap-4">
+                {draft.origin?.kind === "jira_board" && (
+                  <section aria-label="Board filter">
+                    <div className="mb-1.5 ui-text-12 text-muted">Board filter, from Jira</div>
+                    <div className="flex items-center gap-2 rounded-lg border border-border bg-bg/40 px-3 py-2 font-mono ui-text-12.5 text-muted">
+                      <Lock size={12} />
+                      <span className="min-w-0 flex-1 truncate">{filterJql ?? "Reading the board's filter…"}</span>
+                    </div>
+                  </section>
+                )}
+                {(draft.origin?.kind === "jira_board" || draft.origin?.kind === "jql") && (
+                  <label className="flex flex-col gap-1.5">
+                    <span className="ui-text-12 text-muted">
+                      {draft.origin.kind === "jql" ? "JQL query" : "Narrow it down in moonlet"} <span className="text-faint">{draft.origin.kind === "jql" ? "" : "· optional JQL, added with AND"}</span>
+                    </span>
+                    {draft.origin.kind === "jql" ? (
+                      <textarea className={cx(inputCls, "min-h-[60px] font-mono ui-text-12.5")} value={draft.origin.query} onChange={(e) => set({ origin: { kind: "jql", query: e.target.value } })} />
+                    ) : (
+                      <input className={cx(inputCls, "font-mono ui-text-12.5")} placeholder="component in (frontend, design-system)" value={draft.narrow} onChange={(e) => set({ narrow: e.target.value })} />
+                    )}
+                  </label>
+                )}
+                {(draft.origin?.kind === "linear_team" || draft.origin?.kind === "github_repo" || draft.origin?.kind === "clickup_list") && (
+                  <label className="flex flex-col gap-1.5">
+                    <span className="ui-text-12 text-muted">
+                      Labels <span className="text-faint">· optional, any of them, comma separated</span>
+                    </span>
+                    <input
+                      className={inputCls}
+                      placeholder="frontend, bug"
+                      value={draft.labels.join(", ")}
+                      onChange={(e) =>
+                        set({
+                          labels: e.target.value
+                            .split(",")
+                            .map((x) => x.trim())
+                            .filter(Boolean),
+                        })
+                      }
+                    />
+                  </label>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="mb-1.5 ui-text-12 text-muted">Show issues assigned to</div>
+                    <div role="group" aria-label="Show issues assigned to" className="inline-flex gap-0.5 rounded-md bg-panel-2 p-0.5">
+                      {(["me", "anyone"] as const).map((a) => (
+                        <button key={a} aria-pressed={draft.assignee === a} onClick={() => set({ assignee: a })} className={cx("rounded-[5px] px-3 py-1 ui-text-12.5", draft.assignee === a ? "bg-raised text-fg" : "text-muted")}>
+                          {a === "me" ? "Me" : "Anyone"}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 ui-text-11.5 text-faint">Others' issues are dimmed. The header filter can still switch it.</p>
+                  </div>
+                  <div>
+                    <div className="mb-1.5 ui-text-12 text-muted">Finished issues</div>
+                    <select aria-label="Finished issues" className={selectCls} value={String(draft.finished)} onChange={(e) => set({ finished: e.target.value === "sprint" ? "sprint" : 14 })}>
+                      {finishedChoices(tracker ?? "github", draft.boardKind).map((c) => (
+                        <option key={String(c.value)} value={String(c.value)}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <section aria-label="Preview" className="rounded-lg border border-border px-3 py-2.5">
+                  {!preview && <p className="ui-text-12.5 text-muted">Counting the issues…</p>}
+                  {preview?.error && <p className="ui-text-12.5 text-error">{preview.error}</p>}
+                  {preview && !preview.error && (
+                    <>
+                      <p className="flex items-center gap-2 ui-text-12.5 text-fg">
+                        <Check size={13} className="text-done" />
+                        {previewLine(preview.tasks, branches, draft.connection ?? "")}
+                      </p>
+                      {sample.map((t) => (
+                        <div key={t.key} className="mt-1 flex items-center gap-3 pl-5 ui-text-12.5">
+                          <span className="w-[90px] shrink-0 truncate font-mono text-faint">{t.key}</span>
+                          <span className="min-w-0 flex-1 truncate text-muted">{t.title}</span>
+                          <span className="text-faint">{t.tracker?.state ?? (t.column === "open" ? "Open" : "Closed")}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </section>
+              </div>
+            )}
+            {draft.step === 3 && (
+              <div className="flex flex-col gap-3">
+                <section aria-label="Board preview">
+                  <div className="mb-1.5 ui-text-12 text-muted">Preview</div>
+                  <div className="flex h-[34px] gap-1 rounded-lg border border-border p-1">
+                    {draft.columns
+                      .filter((c) => c.show !== "hide")
+                      .map((c) => (
+                        <div key={c.name} title={c.name} className={cx("flex min-w-0 flex-col overflow-hidden rounded-[4px] bg-panel-2", c.show === "fold" ? "w-[14px] shrink-0" : "flex-1")}>
+                          <div className={cx("h-[2px]", BAR[c.category])} />
+                          {c.show !== "fold" && <span className="truncate px-1.5 pt-0.5 ui-text-11 text-muted">{c.name}</span>}
+                        </div>
+                      ))}
+                  </div>
+                </section>
+                {!draft.columns.length && <p className="ui-text-12.5 text-muted">Reading the columns…</p>}
+                <div role="table" aria-label="Columns" className="overflow-hidden rounded-lg border border-border">
+                  <div role="row" className="grid grid-cols-[52px_minmax(0,1fr)_150px_150px_40px] items-center gap-2 border-b border-border px-2 py-1.5 ui-text-11.5 text-faint">
+                    <span />
+                    <span>{trackerName(draft.connection ?? "")} column · statuses</span>
+                    <span>moonlet treats it as</span>
+                    <span>On the board</span>
+                    <span>WIP</span>
+                  </div>
+                  {draft.columns.map((c, i) => (
+                    <div key={c.name} role="row" aria-label={c.name} className="grid grid-cols-[52px_minmax(0,1fr)_150px_150px_40px] items-center gap-2 border-b border-border px-2 py-1.5 last:border-b-0">
+                      <span className="flex">
+                        <IconButton title={`Move ${c.name} up`} onClick={() => moveColumn(i, -1)}>
+                          <ArrowUp size={12} />
+                        </IconButton>
+                        <IconButton title={`Move ${c.name} down`} onClick={() => moveColumn(i, 1)}>
+                          <ArrowDown size={12} />
+                        </IconButton>
+                      </span>
+                      <span className="min-w-0">
+                        <span className={cx("block truncate ui-text-13", c.show === "hide" ? "text-faint" : "text-fg")}>{c.name}</span>
+                        <span className="block truncate ui-text-11.5 text-faint">{c.statuses.length ? c.statuses.join(" · ") : "no status"}</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <TaskGlyph column={c.category} size={12} />
+                        <select aria-label={`Category of ${c.name}`} className={selectCls} value={c.category} onChange={(e) => setColumn(i, { category: e.target.value as BoardColumn["category"] })}>
+                          {CATEGORY_CHOICES.map(([id, label]) => (
+                            <option key={id} value={id}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                      <span role="group" aria-label={`${c.name} on the board`} className="inline-flex gap-0.5 rounded-md bg-panel-2 p-0.5">
+                        {(["show", "fold", "hide"] as const).map((v) => (
+                          <button key={v} aria-pressed={(c.show ?? "show") === v} onClick={() => setColumn(i, { show: v === "show" ? undefined : v })} className={cx("rounded-[5px] px-2 py-0.5 ui-text-12", (c.show ?? "show") === v ? "bg-raised text-fg" : "text-muted")}>
+                            {v === "show" ? "Show" : v === "fold" ? "Fold" : "Hide"}
+                          </button>
+                        ))}
+                      </span>
+                      <span className="font-mono ui-text-12 text-faint">{c.wip ?? "—"}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="ui-text-12 text-faint">
+                  Suggested from each status's {trackerName(draft.connection ?? "")} category. Change one where your team means something else. A hidden column's issues are not shown.
+                </p>
+              </div>
+            )}
+            {draft.step === 4 && (
+              <div className="flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="flex flex-col gap-1.5">
+                    <span className="ui-text-12 text-muted">Name</span>
+                    <input className={inputCls} value={draft.name} onChange={(e) => set({ name: e.target.value })} />
+                  </label>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="ui-text-12 text-muted">Workspace</span>
+                    <select className={selectCls} value={draft.workspace} onChange={(e) => set({ workspace: e.target.value })}>
+                      {wsOptions.map((w) => (
+                        <option key={w.value} value={w.value}>
+                          {w.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <section aria-label="New sessions from this board start in">
+                  <div className="mb-1.5 ui-text-12 text-muted">New sessions from this board start in</div>
+                  <div className="flex flex-col divide-y divide-border rounded-lg border border-border">
+                    <div className="grid grid-cols-[minmax(0,1fr)_16px_200px_24px] items-center gap-2 px-3 py-2">
+                      <span className="ui-text-12.5 text-muted">By default</span>
+                      <ArrowRight size={12} className="text-faint" />
+                      <select
+                        aria-label="Project by default"
+                        className={selectCls}
+                        value={defaultRule?.project ?? ""}
+                        onChange={(e) => setRules([...(e.target.value ? [{ when: "default" as const, project: e.target.value }] : []), ...otherRules])}
+                      >
+                        <option value="">The projects that link it</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                      <span />
+                    </div>
+                    {otherRules.map((r, i) => {
+                      const by = r.when !== "default" && "component" in r.when ? "component" : "label";
+                      const value = r.when === "default" ? "" : "component" in r.when ? r.when.component : r.when.label;
+                      const update = (next: StartRule | null) => setRules([...(defaultRule ? [defaultRule] : []), ...otherRules.flatMap((x, j) => (j === i ? (next ? [next] : []) : [x]))]);
+                      return (
+                        <div key={i} className="grid grid-cols-[minmax(0,1fr)_16px_200px_24px] items-center gap-2 px-3 py-2">
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <select aria-label="Rule by" className={cx(selectCls, "w-[110px]")} value={by} onChange={(e) => update({ when: e.target.value === "component" ? { component: value } : { label: value }, project: r.project })}>
+                              <option value="component">Component</option>
+                              <option value="label">Label</option>
+                            </select>
+                            <input aria-label="Rule value" className={cx(inputCls, "min-w-0 flex-1")} value={value} onChange={(e) => update({ when: by === "component" ? { component: e.target.value } : { label: e.target.value }, project: r.project })} />
+                          </span>
+                          <ArrowRight size={12} className="text-faint" />
+                          <select aria-label="Rule project" className={selectCls} value={r.project} onChange={(e) => update({ when: r.when, project: e.target.value })}>
+                            {projects.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                          <IconButton title="Remove rule" onClick={() => update(null)}>
+                            <X size={12} />
+                          </IconButton>
+                        </div>
+                      );
+                    })}
+                    <button
+                      disabled={!projects.length}
+                      onClick={() => setRules([...draft.rules, { when: { component: "" }, project: projects[0]?.id ?? "" }])}
+                      className="px-3 py-2 text-left ui-text-12.5 text-accent hover:underline disabled:text-faint"
+                    >
+                      + Add a rule by component or label
+                    </button>
+                  </div>
+                </section>
+                <section aria-label="Cards show">
+                  <div className="mb-1.5 ui-text-12 text-muted">Cards show</div>
+                  <div className="flex flex-wrap gap-4">
+                    {(CARD_CHOICES[tracker ?? "github"] ?? []).map(([id, label]) => (
+                      <label key={id} className="flex items-center gap-1.5 ui-text-12.5 text-fg">
+                        <input type="checkbox" checked={draft.cards.includes(id)} onChange={(e) => set({ cards: e.target.checked ? [...draft.cards, id] : draft.cards.filter((x) => x !== id) })} />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </section>
+                <section aria-label="Summary" className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-panel-2">
+                    <Mark connection={draft.connection ?? GITHUB} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate ui-text-13 text-fg">{draft.name || "Untitled board"}</span>
+                    <span className="block truncate ui-text-12 text-faint">{summaryLine(draft, preview?.tasks.length ?? 0, wsName)}</span>
+                  </span>
+                  <label className="flex items-center gap-1.5 ui-text-12.5 text-muted">
+                    <input type="checkbox" checked={draft.pinned} onChange={(e) => set({ pinned: e.target.checked })} />
+                    Pin in sidebar
+                  </label>
+                </section>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 border-t border-border px-5 py-3">
+            <span className="min-w-0 flex-1 truncate ui-text-12 text-faint">
+              {draft.step === 1 && `moonlet reads the board's configuration; it never changes it in ${trackerName(draft.connection ?? "jira")}.`}
+              {draft.step === 2 && "Counts update as you type."}
+              {draft.step === 3 && `Order and folding are moonlet-only and don't change ${trackerName(draft.connection ?? "jira")}.`}
+              {draft.step === 4 && "Saved to ~/.moonlet/trackers.toml."}
+            </span>
+            {editing && (
+              <Button size="sm" variant="danger" onClick={() => void remove()}>
+                Remove board
+              </Button>
+            )}
+            {draft.step > 1 && (
+              <Button size="sm" variant="ghost" onClick={() => set({ step: (draft.step - 1) as Draft["step"] })}>
+                Back
+              </Button>
+            )}
+            {editing ? (
+              <Button size="sm" variant="primary" disabled={!canContinue({ ...draft, step: 4 }, null)} onClick={() => void create()}>
+                Save
+              </Button>
+            ) : draft.step < 4 ? (
+              <Button size="sm" variant="primary" disabled={!ok} onClick={() => set({ step: (draft.step + 1) as Draft["step"] })}>
+                Continue <ArrowRight size={12} />
+              </Button>
+            ) : (
+              <Button size="sm" variant="primary" disabled={!ok} onClick={() => void create()}>
+                Create board
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

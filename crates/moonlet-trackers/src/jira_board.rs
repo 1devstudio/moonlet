@@ -70,6 +70,10 @@ pub fn parse_statuses(raw: &[u8]) -> Result<Vec<JiraStatus>, ApiError> {
 pub struct BoardSetup {
     /// The saved filter that picks the board's issues.
     pub filter_id: String,
+    /// That filter's JQL, once read (`GET /rest/api/3/filter/{id}`), for
+    /// Add a board's step 2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_jql: Option<String>,
     /// A Kanban board's sub-filter, added with AND.
     pub sub_query: Option<String>,
     /// The board's estimation field: its story points.
@@ -119,6 +123,7 @@ pub fn parse_board_config(raw: &[u8], statuses: &[JiraStatus]) -> Result<BoardSe
         .collect();
     Ok(BoardSetup {
         filter_id: v["filter"]["id"].as_str().unwrap_or_default().into(),
+        filter_jql: None,
         sub_query: v["subQuery"]["query"]
             .as_str()
             .filter(|q| !q.trim().is_empty())
@@ -501,6 +506,7 @@ mod tests {
             setup,
             BoardSetup {
                 filter_id: "10021".into(),
+                filter_jql: None,
                 sub_query: None,
                 points_field: Some("customfield_10014".into()),
                 sprints: true,

@@ -7,9 +7,9 @@ describe("sourceList (X44 Where each workspace gets its tasks, X45 sidebar Track
     const b = (id: string, connection: string, workspace: string, name: string): BoardConfig => ({ id, name, connection, workspace, origin: { kind: "linear_team", team: id } });
     const boards = [b("web", "github:github.com", "local/w1", "acme/web"), b("eng", "linear:acme", "local/w1", "Engineering"), b("des", "linear:acme", "local/w2", "Design"), b("ops", "jira:ops.atlassian.net", "local/w1", "Operations")];
     expect(sourceList("local/w1", boards, { "jira:ops.atlassian.net": "Jira no longer accepts the API token" })).toEqual([
-      { tracker: "GitHub", name: "acme/web", attention: undefined },
-      { tracker: "Linear", name: "Engineering", attention: undefined },
-      { tracker: "Jira", name: "Operations", attention: "Jira no longer accepts the API token" },
+      { id: "web", tracker: "GitHub", name: "acme/web", attention: undefined },
+      { id: "eng", tracker: "Linear", name: "Engineering", attention: undefined },
+      { id: "ops", tracker: "Jira", name: "Operations", attention: "Jira no longer accepts the API token" },
     ]);
   });
 });
