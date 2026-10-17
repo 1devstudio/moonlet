@@ -14,6 +14,13 @@ describe("chat input layout (X51)", () => {
     expect(inputLayout(260).tier).toBe("compact");
   });
 
+  it("counts the width in text-sized px, so larger text reaches the narrower tiers sooner", () => {
+    // 760 px at 1.5× text is 506 px of 1× text; 560 px at 1.5× is 373; 600 px at 0.9× is 667.
+    expect(inputLayout(760, 1.5).tier).toBe("medium");
+    expect(inputLayout(560, 1.5).tier).toBe("compact");
+    expect(inputLayout(600, 0.9).tier).toBe("wide");
+  });
+
   it("shows everything when wide: the full spend, effort, esc to stop and ⌥↵", () => {
     expect(inputLayout(760)).toEqual({ tier: "wide", padX: 24, insetX: 16, escHint: true, asideHint: true, percent: true, cost: "full", effort: true, modeLabel: true, longPlaceholder: true });
   });
