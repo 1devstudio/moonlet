@@ -8,6 +8,7 @@ import { routeKey, type SettingsRoute } from "./settingsPage";
 import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
 import { bannerOn } from "./alerts";
+import { originText } from "./addBoard";
 import { trackerName } from "./tasks";
 import { ROW_STYLES, rowStyle } from "./sessionRows";
 import type { Settings } from "./store";
@@ -82,6 +83,9 @@ function trackerEntries(t: TrackersConfig | undefined): [string | undefined, str
     ["link-branch", "Link a session when its branch name contains the issue key", onOff(t.link?.branch ?? true), "linking"],
     ["link-pr", "Link a session when its pull request mentions the key or closes the issue", onOff(t.link?.pr ?? true), "linking"],
     ["link-title", "Suggest a task whose title is a session's name", onOff(t.link?.title ?? true), "linking"],
+    // Boards (X50): the section, and each board by its name.
+    ["boards", "Boards", `${(t.boards ?? []).length} ${(t.boards ?? []).length === 1 ? "board" : "boards"}`, "add board pin remove manage"],
+    ...(t.boards ?? []).map((b): [string, string, string, string] => [`board-${b.id}`, b.name, originText(b.origin), "board"]),
   ];
 }
 

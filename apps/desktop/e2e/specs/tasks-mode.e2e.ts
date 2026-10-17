@@ -158,7 +158,7 @@ describe("Tasks mode", () => {
     await $('//button[.//span[normalize-space()="Manage"]]').click();
     const row = '//div[@role="group"][@aria-label="acme/storefront"]';
     await expect($(row)).toBeDisplayed({ wait: 10_000 });
-    await expect($('//div[@data-setting="boards"]')).toHaveAttribute("data-flash", "true");
+    await expect($('//div[@data-setting="boards"]')).toBeDisplayedInViewport();
     await expect($(`${row}//*[normalize-space()="GitHub acme/storefront"]`)).toBeDisplayed();
     const pin = `${row}//button[@role="switch"]`;
     await expect($(pin)).toHaveAttribute("aria-checked", "true");

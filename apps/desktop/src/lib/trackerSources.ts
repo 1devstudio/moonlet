@@ -1,4 +1,5 @@
-// Which Linear, Jira and ClickUp sources each workspace shows (X44).
+// Which boards each workspace shows (X50), and the Sources, States and
+// Connect dialogs' words and choices (X44).
 
 import { originText } from "./addBoard";
 import { type BoardConfig, sourceKeyOf } from "./boards";
@@ -10,7 +11,6 @@ import type { Connection, Source } from "./tasksStore";
 export interface BoardEntry {
   id: string;
   connection: string;
-  tracker: string;
   name: string;
   /** What it is built from: `Jira board 10`, `Linear team ENG`. */
   origin: string;
@@ -19,11 +19,11 @@ export interface BoardEntry {
   attention?: string;
 }
 
-/** A workspace's boards with their tracker, origin and pin, and why a board's connection needs attention (X44, X50). */
+/** A workspace's boards with their origin and pin, and why a board's connection needs attention (X44, X50). */
 export function boardList(wsKey: string, boards: BoardConfig[] | undefined, attention: Record<string, string>): BoardEntry[] {
   return (boards ?? [])
     .filter((b) => b.workspace === wsKey)
-    .map((b) => ({ id: b.id, connection: b.connection, tracker: trackerName(b.connection), name: b.name, origin: originText(b.origin), pinned: b.pinned !== false, attention: attention[b.connection] }));
+    .map((b) => ({ id: b.id, connection: b.connection, name: b.name, origin: originText(b.origin), pinned: b.pinned !== false, attention: attention[b.connection] }));
 }
 
 /** The States dialog's mapping as saved: only states moved off their default column (X44). */

@@ -3,7 +3,7 @@ import { boardList, changedStates, connectedText, disconnectText, parseTrackerLi
 import type { BoardConfig } from "./boards";
 
 describe("boardList (X50 Settings › Task trackers › Boards)", () => {
-  it("lists the workspace's boards by tracker and name, marking a board whose connection needs attention", () => {
+  it("lists the workspace's boards with their origin and pin, marking a board whose connection needs attention", () => {
     const boards: BoardConfig[] = [
       { id: "web", name: "acme/web", connection: "github:github.com", workspace: "local/w1", origin: { kind: "github_repo", repo: "acme/web" } },
       { id: "eng", name: "Engineering", connection: "linear:acme", workspace: "local/w1", origin: { kind: "linear_team", team: "ENG" }, pinned: false },
@@ -11,9 +11,9 @@ describe("boardList (X50 Settings › Task trackers › Boards)", () => {
       { id: "ops", name: "Operations", connection: "jira:ops.atlassian.net", workspace: "local/w1", origin: { kind: "jira_board", board: 10 } },
     ];
     expect(boardList("local/w1", boards, { "jira:ops.atlassian.net": "Jira no longer accepts the API token" })).toEqual([
-      { id: "web", connection: "github:github.com", tracker: "GitHub", name: "acme/web", origin: "GitHub acme/web", pinned: true, attention: undefined },
-      { id: "eng", connection: "linear:acme", tracker: "Linear", name: "Engineering", origin: "Linear team ENG", pinned: false, attention: undefined },
-      { id: "ops", connection: "jira:ops.atlassian.net", tracker: "Jira", name: "Operations", origin: "Jira board 10", pinned: true, attention: "Jira no longer accepts the API token" },
+      { id: "web", connection: "github:github.com", name: "acme/web", origin: "GitHub acme/web", pinned: true, attention: undefined },
+      { id: "eng", connection: "linear:acme", name: "Engineering", origin: "Linear team ENG", pinned: false, attention: undefined },
+      { id: "ops", connection: "jira:ops.atlassian.net", name: "Operations", origin: "Jira board 10", pinned: true, attention: "Jira no longer accepts the API token" },
     ]);
   });
 });

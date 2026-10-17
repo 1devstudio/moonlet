@@ -144,4 +144,11 @@ describe("Task trackers in the search (X44)", () => {
     const hits = searchSettings("linear branch", { ...ctx, trackers: withLinear }).map((r) => [r.before + r.hit + r.after, r.value]);
     expect(hits).toEqual([["Linear branch name for new sessions", "{key}-{title}"]]);
   });
+
+  it("finds the Boards section and each board by its name, with what it is built from (X50)", () => {
+    const withBoards = { ...trackers, boards: [{ id: "jira:ops.atlassian.net/10@local/w", name: "Operations", connection: "jira:ops.atlassian.net", workspace: "local/w", origin: { kind: "jira_board" as const, board: 10 } }] };
+    const hits = (q: string) => searchSettings(q, { ...ctx, trackers: withBoards }).map((r) => [r.before + r.hit + r.after, r.value, r.setting]);
+    expect(hits("boards")).toEqual([["Boards", "1 board", "boards"]]);
+    expect(hits("operations")).toEqual([["Operations", "Jira board 10", "board-jira:ops.atlassian.net/10@local/w"]]);
+  });
 });

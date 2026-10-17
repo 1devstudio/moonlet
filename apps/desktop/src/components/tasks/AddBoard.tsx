@@ -29,8 +29,8 @@ import { errorToast, useStore } from "../../lib/store";
 import { type Task, trackerName, trackerOf } from "../../lib/tasks";
 import { GITHUB, openBoard, previewBoard, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { Button, cx, IconButton, inputCls } from "../ui";
-import { BoardMark, TaskGlyph } from "./TasksMode";
+import { BoardMark, Button, cx, IconButton, inputCls } from "../ui";
+import { TaskGlyph } from "./TasksMode";
 
 const selectCls = cx(inputCls, "menu-select field-height");
 

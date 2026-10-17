@@ -86,6 +86,9 @@ export function settingsNav(input: NavInput): NavGroup[] {
 }
 
 /** The key of the nav entry for `route`. */
+/** The row an app page route opens on (its `data-setting`), if it names one. */
+export const routeFocus = (route: SettingsRoute): string | undefined => (route.page !== "project" && "focus" in route ? route.focus : undefined);
+
 export function routeKey(route: SettingsRoute): string {
   if (route.page === "workspace") return `ws:${route.host}:${route.id}`;
   if (route.page === "project") return `project:${route.host}:${route.id}`;
