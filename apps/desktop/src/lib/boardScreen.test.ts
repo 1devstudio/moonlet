@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, boardHeader, boardStats, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardStats, cardFace, cardFields, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
 import type { BoardSession } from "./tasksBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
@@ -117,5 +117,36 @@ describe("boardStats (X50 switcher rows)", () => {
     const views = [{ name: "To Do", category: "todo" as const, folded: false, cards: [{ rows: [{ session: { state: "working" } }, { session: { state: "blocked" } }] }, { rows: [] }] }];
     expect(boardStats(ops, views as never, { id: 5, name: "Sprint 42", startMs: 0, endMs: 0 })).toEqual({ tasks: 2, sessions: 2, state: "blocked", kind: "Sprint 42" });
     expect(boardStats(b("plat", "local/w"), [], null)).toEqual({ tasks: 0, sessions: 0, state: null });
+  });
+});
+
+describe("cardFace (X50 Cards show)", () => {
+  const task = {
+    key: "WEB-233",
+    issueType: "Story",
+    points: 3,
+    assignees: ["Sam Rivera"],
+    parent: { key: "WEB-200", title: "Pricing page" },
+    due: "2026-10-20",
+  };
+
+  it("shows the fields the board's cards show, the parent and due date on a line under the title", () => {
+    expect(cardFace(task, ["issue_type", "points", "assignee", "parent", "due"])).toEqual({
+      type: "Story",
+      points: "3 pt",
+      assignee: { initials: "SR", name: "Sam Rivera" },
+      line: "WEB-200 Pricing page · Due Oct 20",
+    });
+    expect(cardFace(task, ["points"])).toEqual({ points: "3 pt" });
+    expect(cardFace({ ...task, parent: undefined }, ["parent", "due"])).toEqual({ line: "Due Oct 20" });
+    // A field the issue has no value for shows nothing.
+    expect(cardFace({ key: "MOON-1", assignees: [] }, ["issue_type", "points", "assignee", "parent", "due"])).toEqual({});
+  });
+
+  it("gives a board without its own choice its tracker's fields", () => {
+    expect(cardFields({ connection: "jira:acme.atlassian.net" })).toEqual(["issue_type", "points", "assignee"]);
+    expect(cardFields({ connection: "linear:acme" })).toEqual(["points", "assignee"]);
+    expect(cardFields({ connection: "github:github.com" })).toEqual(["assignee"]);
+    expect(cardFields({ connection: "linear:acme", cards: ["due"] })).toEqual(["due"]);
   });
 });
