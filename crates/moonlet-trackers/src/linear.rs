@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
+use crate::board::{BoardIssue, Parent, Sprint};
 use crate::config::Finished;
-use crate::jira_board::{BoardIssue, Parent, Sprint};
 use crate::task::{TrackerRef, TrackerTask};
 use crate::{ApiError, TrackerKind};
 
@@ -16,22 +16,6 @@ pub const VIEWER: &str = "query { viewer { id name email } }";
 pub const ACCOUNT: &str = "query { viewer { id name email } organization { urlKey name } }";
 pub const TEAMS: &str = "query { teams { nodes { id key name cyclesEnabled } } }";
 pub const STATES: &str = "query States($team: String!) { workflowStates(filter: { team: { key: { eq: $team } } }) { nodes { id name type position } } }";
-
-/// The issues of `teams`: assigned to the viewer, or all open ones.
-pub fn issues_query(mine: bool) -> String {
-    let who = if mine {
-        ", assignee: { isMe: { eq: true } }"
-    } else {
-        ""
-    };
-    // Open issues, and the done and canceled ones of the last 14 days.
-    let recent = r#"or: [{ state: { type: { nin: ["completed", "canceled"] } } }, { updatedAt: { gt: "-P14D" } }]"#;
-    format!(
-        "query Issues($teams: [String!], $after: String) {{ issues(first: 100, after: $after, \
-         filter: {{ team: {{ key: {{ in: $teams }} }}{who}, {recent} }}) {{ nodes {{ {ISSUE_FIELDS} }} \
-         pageInfo {{ hasNextPage endCursor }} }} }}"
-    )
-}
 
 /// A team board's issues (X50): assigned to the viewer or anyone's, open ones
 /// and those finished in the last `n` days, or those of the active cycle.
@@ -85,11 +69,9 @@ pub fn parse_active_cycle(raw: &[u8]) -> Result<Option<Sprint>, ApiError> {
     let Some(number) = c["number"].as_f64().map(|n| n as u64) else {
         return Ok(None);
     };
-    let ms = |field: &str| {
-        c[field]
-            .as_str()
-            .and_then(crate::time::timestamp_ms)
-            .unwrap_or(0)
+    let ms = |field: &str| c[field].as_str().and_then(crate::time::timestamp_ms);
+    let (Some(start_ms), Some(end_ms)) = (ms("startsAt"), ms("endsAt")) else {
+        return Ok(None);
     };
     Ok(Some(Sprint {
         id: number,
@@ -98,8 +80,8 @@ pub fn parse_active_cycle(raw: &[u8]) -> Result<Option<Sprint>, ApiError> {
             .filter(|n| !n.is_empty())
             .map(String::from)
             .unwrap_or_else(|| format!("Cycle {number}")),
-        start_ms: ms("startsAt"),
-        end_ms: ms("endsAt"),
+        start_ms,
+        end_ms,
     }))
 }
 
@@ -232,25 +214,24 @@ pub fn parse_account(raw: &[u8]) -> Result<(String, String), ApiError> {
 }
 
 /// `(key, name)` of every team the account can see.
-pub fn parse_teams(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
+pub fn parse_teams(raw: &[u8]) -> Result<Vec<Team>, ApiError> {
     let d = data(raw)?;
     Ok(nodes(&d["teams"])
-        .map(|t| {
-            (
-                t["key"].as_str().unwrap_or_default().into(),
-                t["name"].as_str().unwrap_or_default().into(),
-            )
+        .map(|t| Team {
+            key: t["key"].as_str().unwrap_or_default().into(),
+            name: t["name"].as_str().unwrap_or_default().into(),
+            cycles: t["cyclesEnabled"].as_bool() == Some(true),
         })
         .collect())
 }
 
-/// The keys of the [`TEAMS`] that use cycles, whose boards can follow the active one.
-pub fn parse_cycle_teams(raw: &[u8]) -> Result<Vec<String>, ApiError> {
-    let d = data(raw)?;
-    Ok(nodes(&d["teams"])
-        .filter(|t| t["cyclesEnabled"].as_bool() == Some(true))
-        .filter_map(|t| t["key"].as_str().map(String::from))
-        .collect())
+/// A team the account can see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Team {
+    pub key: String,
+    pub name: String,
+    /// Whether it uses cycles, so its board can follow the active one (X50).
+    pub cycles: bool,
 }
 
 /// A workflow state of a team.
@@ -423,18 +404,21 @@ mod tests {
             parse_viewer(&fixture("linear-viewer.json")).unwrap(),
             "Ada Lovelace"
         );
+        // Only a team with cycles offers to follow its active one (X50).
         assert_eq!(
             parse_teams(&fixture("linear-teams.json")).unwrap(),
             [
-                ("ENG".to_string(), "Engineering".to_string()),
-                ("DES".to_string(), "Design".to_string())
+                Team {
+                    key: "ENG".into(),
+                    name: "Engineering".into(),
+                    cycles: true
+                },
+                Team {
+                    key: "DES".into(),
+                    name: "Design".into(),
+                    cycles: false
+                }
             ]
-        );
-        // Only a team with cycles offers to follow its active one (X50).
-        assert!(TEAMS.contains("cyclesEnabled"));
-        assert_eq!(
-            parse_cycle_teams(&fixture("linear-teams.json")).unwrap(),
-            ["ENG"]
         );
         let states = parse_states(&fixture("linear-states.json")).unwrap();
         assert_eq!(
@@ -527,10 +511,11 @@ mod tests {
 
     #[test]
     fn assigned_to_me_is_linears_own_is_me() {
-        assert!(issues_query(true).contains("assignee: { isMe: { eq: true } }"));
-        assert!(!issues_query(false).contains("isMe"));
+        let days = Finished::Days(14);
+        assert!(board_issues_query(true, &days).contains("assignee: { isMe: { eq: true } }"));
+        assert!(!board_issues_query(false, &days).contains("isMe"));
         // Pages of 100.
-        assert!(issues_query(true).contains("issues(first: 100, after: $after"));
+        assert!(board_issues_query(true, &days).contains("issues(first: 100, after: $after"));
     }
 
     #[test]
@@ -540,7 +525,7 @@ mod tests {
             br#"{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c2"}}}}"#;
         assert_eq!(next_page(more).as_deref(), Some("c2"));
         // Open issues, and the done and canceled ones of the last 14 days.
-        assert!(issues_query(true).contains(
+        assert!(board_issues_query(true, &Finished::Days(14)).contains(
             r#"or: [{ state: { type: { nin: ["completed", "canceled"] } } }, { updatedAt: { gt: "-P14D" } }]"#
         ));
     }
@@ -630,6 +615,9 @@ mod tests {
         let named = br#"{"data":{"teams":{"nodes":[{"activeCycle":{"number":7,"name":"Polish","startsAt":"2026-10-12T00:00:00.000Z","endsAt":"2026-10-26T00:00:00.000Z"}}]}}}"#;
         assert_eq!(parse_active_cycle(named).unwrap().unwrap().name, "Polish");
         let none = br#"{"data":{"teams":{"nodes":[{"activeCycle":null}]}}}"#;
+        assert_eq!(parse_active_cycle(none).unwrap(), None);
+        // A cycle without dates is not one to follow.
+        let none = br#"{"data":{"teams":{"nodes":[{"activeCycle":{"number":7,"name":null}}]}}}"#;
         assert_eq!(parse_active_cycle(none).unwrap(), None);
     }
 }

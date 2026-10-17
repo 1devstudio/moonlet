@@ -476,7 +476,7 @@ export function TasksMode() {
   const cards = board ? Object.values(board).flat() : [];
   const detail = cards.find((c) => taskId(c.task) === selected);
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
-  const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint ?? null, site, views.flatMap((v) => v.cards));
+  const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
   const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id]?.sprint ?? null)]));
   const listCards = views.flatMap((v) => (v.folded ? [] : v.cards));
   return (
