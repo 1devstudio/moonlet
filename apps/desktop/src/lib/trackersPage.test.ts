@@ -18,9 +18,13 @@ describe("Linear, Jira and ClickUp connections (X44)", () => {
   const conn = { id: "jira:acme.atlassian.net", kind: "jira" as const, site: "acme.atlassian.net", account: "Mia Krystof", auth: "token", sources: [{ key: "OPS", name: "Operations", project: "p1", workspace: "local/acme" }] };
 
   it("says who each connection is signed in as, or what to do", () => {
-    expect(connectionLine(conn, undefined)).toEqual({ tone: "done", text: "Connected as Mia Krystof · API token · 1 source" });
-    expect(connectionLine({ ...conn, sources: [] }, undefined)).toEqual({ tone: "blocked", text: "Connected as Mia Krystof · API token · pick what to show" });
-    expect(connectionLine(conn, "Jira no longer accepts the API token for acme.atlassian.net.")).toEqual({ tone: "error", text: "Jira no longer accepts the API token for acme.atlassian.net." });
+    // Counted by its boards (X50).
+    const board = (id: string, connection: string) => ({ id, name: id, connection, workspace: "local/acme", origin: { kind: "jql" as const, query: "project = OPS" } });
+    const boards = [board("ops", conn.id), board("web", "github:github.com")];
+    expect(connectionLine(conn, boards, undefined)).toEqual({ tone: "done", text: "Connected as Mia Krystof · API token · 1 board" });
+    expect(connectionLine(conn, [...boards, board("plat", conn.id)], undefined)).toEqual({ tone: "done", text: "Connected as Mia Krystof · API token · 2 boards" });
+    expect(connectionLine(conn, [], undefined)).toEqual({ tone: "blocked", text: "Connected as Mia Krystof · API token · pick what to show" });
+    expect(connectionLine(conn, boards, "Jira no longer accepts the API token for acme.atlassian.net.")).toEqual({ tone: "error", text: "Jira no longer accepts the API token for acme.atlassian.net." });
   });
 
   it("words the rules for the tracker", () => {

@@ -10,7 +10,8 @@ export type RuleSetting = "auto" | "suggest" | "off";
 export type FixPlan =
   /** A GitHub repository issue: no column to move, so closing is "Done". */
   | { kind: "github"; repo: string; number: number; close: true }
-  | { kind: "move"; column: Exclude<Column, "hidden"> }
+  /** On a board (X50), `status` and `name` are the next column's first status and its name. */
+  | { kind: "move"; column: Exclude<Column, "hidden">; status?: string; name?: string }
   | { kind: "clean_up"; sessions: string[]; worktrees: string[] };
 
 /** What the chip's button does. */
@@ -18,6 +19,13 @@ export function driftFix(card: Card): FixPlan | null {
   const d = card.drift;
   if (!d) return null;
   if (d.kind === "done_open") return { kind: "clean_up", sessions: card.rows.map((r) => r.session.id), worktrees: card.orphans.map((w) => w.path) };
+  // A board's chip without a fix: nothing to do (X50).
+  if (!d.fix) return null;
+  if (d.to) {
+    const gh = card.task.github;
+    if (gh) return d.to.category === "done" ? { kind: "github", repo: gh.repo, number: gh.number, close: true } : null;
+    return { kind: "move", column: d.to.category, status: d.to.statuses[0], name: d.to.column };
+  }
   const column = d.kind === "merged" ? "done" : d.kind === "pr_open" ? "in_review" : "in_progress";
   const gh = card.task.github;
   if (gh) return column === "done" ? { kind: "github", repo: gh.repo, number: gh.number, close: true } : null;

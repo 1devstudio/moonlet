@@ -330,6 +330,20 @@ pub struct BoardIssue {
     pub due: Option<String>,
 }
 
+impl BoardIssue {
+    /// A Linear or ClickUp task on a board: its columns list states by name.
+    pub fn from_task(task: TrackerTask) -> Self {
+        Self {
+            task,
+            status_id: String::new(),
+            components: vec![],
+            points: None,
+            parent: None,
+            due: None,
+        }
+    }
+}
+
 /// An issue's epic or parent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Parent {

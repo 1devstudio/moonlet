@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type BoardColumn, matchColumns, migrateWorkspace, startProjects, taskFromBoardIssue } from "./boards";
+import { type BoardColumn, type BoardConfig, boardRows, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, migrateWorkspace, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -57,7 +57,7 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
         origin: { kind: "linear_team", team: "MOON" },
       },
     ]);
-    expect(after.migrated).toEqual(["local/acme"]);
+    expect(after.migrated).toEqual(["local/acme", "local/acme github:github.com/acme/storefront"]);
   });
 
   it("keeps other workspaces' sources until they open, and drops a connection's states with its last source", () => {
@@ -76,6 +76,14 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
   it("migrates a workspace once, so a board removed later stays removed", () => {
     const after = migrateWorkspace(config, "local/acme", ["acme/storefront"]);
     expect(migrateWorkspace({ ...after, boards: [] }, "local/acme", ["acme/storefront"]).boards).toEqual([]);
+  });
+
+  it("gives a repository its board the first sync that sees it, even after the workspace migrated", () => {
+    // The origin could not be read on the first sync (a host offline, a remote added later).
+    const first = migrateWorkspace(config, "local/acme", []);
+    const later = migrateWorkspace(first, "local/acme", ["acme/web"]);
+    expect(later.boards?.map((b) => b.id).at(-1)).toBe("github:github.com/acme/web@local/acme");
+    expect(migrateWorkspace(later, "local/acme", ["acme/web"])).toBe(later);
   });
 
   it("makes a ClickUp list a list board", () => {
@@ -174,5 +182,92 @@ describe("matchColumns (X50 a board's columns on each sync)", () => {
   it("takes the tracker's columns as they are for a board that has none yet", () => {
     const fresh: BoardColumn[] = [{ name: "Todo", statuses: ["s1"], category: "todo" }];
     expect(matchColumns(undefined, fresh)).toEqual(fresh);
+  });
+});
+
+describe("firstColumns (X50 a migrated board's first columns)", () => {
+  it("gives the tracker's states the categories the old state mapping gave them, and hides those not shown", () => {
+    const fresh: BoardColumn[] = [
+      { name: "Backlog", statuses: ["Backlog"], category: "todo", show: "hide" },
+      { name: "Todo", statuses: ["Todo"], category: "todo" },
+      { name: "QA", statuses: ["QA"], category: "in_progress" },
+      { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+    ];
+    expect(firstColumns(fresh, { QA: "in_review", Backlog: "todo", Todo: "hidden" })).toEqual([
+      { name: "Backlog", statuses: ["Backlog"], category: "todo" },
+      { name: "Todo", statuses: ["Todo"], category: "todo", show: "hide" },
+      { name: "QA", statuses: ["QA"], category: "in_review" },
+      { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+    ]);
+    expect(firstColumns(fresh, undefined)).toEqual(fresh);
+  });
+});
+
+describe("GITHUB_REPO_COLUMNS (X50 a GitHub repository board)", () => {
+  it("is GitHub's Open and Closed, Closed holding both close reasons and folded", () => {
+    expect(GITHUB_REPO_COLUMNS).toEqual([
+      { name: "Open", statuses: ["open"], category: "todo" },
+      { name: "Closed", statuses: ["completed", "not_planned"], category: "done", show: "fold" },
+    ]);
+  });
+});
+
+describe("workspaceBoards (X50 Sync)", () => {
+  const b = (id: string, workspace: string, pinned?: false): BoardConfig => ({ id, name: id, connection: "linear:acme", workspace, origin: { kind: "linear_team", team: id }, ...(pinned === false ? { pinned } : {}) });
+  it("syncs the workspace's pinned boards and the one shown", () => {
+    const boards = [b("a", "local/w"), b("b", "local/w", false), b("c", "local/other"), b("d", "local/w", false)];
+    expect(workspaceBoards(boards, "local/w", "d").map((x) => x.id)).toEqual(["a", "d"]);
+    expect(workspaceBoards(boards, "local/w", null).map((x) => x.id)).toEqual(["a"]);
+  });
+});
+
+describe("the Sources dialog edits boards (X50, until Add a board)", () => {
+  const conn = { id: "jira:acme.atlassian.net", kind: "jira" as const, site: "acme.atlassian.net", account: "Sam", auth: "token", sources: [] };
+  const ops: BoardConfig = {
+    id: "jira:acme.atlassian.net/OPS@local/acme",
+    name: "Operations",
+    connection: conn.id,
+    workspace: "local/acme",
+    origin: { kind: "jql", query: "project = OPS" },
+    columns: [{ name: "To Do", statuses: ["10000"], category: "todo" }],
+  };
+  const other: BoardConfig = { ...ops, id: "linear:acme/MOON@local/acme", connection: "linear:acme", origin: { kind: "linear_team", team: "MOON" } };
+
+  it("lists the connection's boards as rows", () => {
+    expect(boardRows(conn, [ops, other])).toEqual([{ key: "OPS", name: "Operations", workspace: "local/acme" }]);
+    expect(boardRows(conn, [other])).toEqual([{ key: "", name: "", workspace: "" }]);
+  });
+
+  it("keeps a board whose row stays, adds one per new row and removes those whose row went", () => {
+    const rows = [
+      { key: "OPS", name: "Operations", workspace: "local/acme" },
+      { key: "PLAT", name: "Platform", workspace: "local/acme" },
+      { key: "", name: "", workspace: "local/acme" },
+    ];
+    expect(rowsToBoards(conn, rows, [ops, other])).toEqual([
+      ops,
+      other,
+      { id: "jira:acme.atlassian.net/PLAT@local/acme", name: "Platform", connection: conn.id, workspace: "local/acme", origin: { kind: "jql", query: "project = PLAT" } },
+    ]);
+    expect(rowsToBoards(conn, [], [ops, other])).toEqual([other]);
+  });
+});
+
+describe("withStates (X44 States dialog on a board, X50)", () => {
+  const board: BoardConfig = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/w", origin: { kind: "linear_team", team: "MOON" } };
+  it("keeps the mapping for the board's first columns, and applies it to columns it already has", () => {
+    expect(withStates(board, { Backlog: "todo" })).toEqual({ ...board, states: { Backlog: "todo" } });
+    const columns: BoardColumn[] = [
+      { name: "Backlog", statuses: ["Backlog"], category: "todo", show: "hide" },
+      { name: "QA", statuses: ["QA"], category: "in_progress" },
+    ];
+    expect(withStates({ ...board, columns }, { Backlog: "todo", QA: "in_review" })).toEqual({
+      ...board,
+      states: { Backlog: "todo", QA: "in_review" },
+      columns: [
+        { name: "Backlog", statuses: ["Backlog"], category: "todo" },
+        { name: "QA", statuses: ["QA"], category: "in_review" },
+      ],
+    });
   });
 });
