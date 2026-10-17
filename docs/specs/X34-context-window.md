@@ -14,7 +14,7 @@ The chat footer follows the updated "MCP Servers Menu" design: next to the `+` b
 1. In a Claude session the footer reads, left to right: `+`, a ring with `62%`, a thin divider, `$43.73 · 130.7M in · 297k out`. The model, effort and permission mode stay on the right.
 2. The user clicks the ring. A card opens above it: `Context window` with `124k / 200k` on the right, a stacked bar, and one row per category with its colour and token count, for example `System prompt 8.1k`, `Skills 8.8k`, `Messages 92.1k`, then `Free 75.8k`.
 3. Under a divider the card says `Auto-compacts at 95%` and has **Compact now**. Clicking it sends `/compact` to the agent and closes the card.
-4. While a turn runs the centre of the footer shows `Working`, the elapsed time and `esc to stop`; the ring and cost line stay where they are.
+4. While a turn runs, a line above the input shows `Working`, the elapsed time and `esc to stop` ([X51](X51-responsive-chat-input.md)); the ring and cost line stay where they are. A narrower chat shortens the cost line to `$43.73`, then hides it (X51).
 5. After each turn the ring updates.
 
 ## Behaviour and acceptance criteria

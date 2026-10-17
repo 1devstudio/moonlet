@@ -24,7 +24,7 @@ The chat input gets the layout of the "MCP Servers Menu" design: the input on to
 
 ### Layout and `+` menu (stack part 1)
 
-- [x] The footer row is under the input: `+` left, model and effort then permission mode right. While a turn runs the centre shows `Working`, the elapsed time and `esc to stop`; while the agent waits it shows the waiting text. Stop and the More menu stay on the right. [X34](X34-context-window.md) moved the cost and tokens to the left, after the context ring.
+- [x] The footer row is under the input: `+` left, model and effort then permission mode right. The More menu stays on the right. [X51](X51-responsive-chat-input.md) moved `Working`, the elapsed time, `esc to stop`, the waiting text and Stop onto a line above the input, and drops footer extras in narrow chats. [X34](X34-context-window.md) moved the cost and tokens to the left, after the context ring.
 - [x] The `+` menu lists `Attach files or images` (hint `⌘U`), `Add directory`, then `Slash commands`, `MCP servers` and `Subagents`, each opening a submenu on hover. (`plusMenu.test.ts`, `plus-menu.e2e.ts`)
 - [x] `Slash commands` lists the agent's commands; choosing one puts `/<name> ` at the start of the input. An agent without commands shows `No commands`. (`plusMenu.test.ts`, `claude.rs` test)
 - [x] `Subagents` lists the agent's subagents with their descriptions, from Claude's `initialize` reply; choosing one inserts `@agent-<name> ` at the caret. The item is hidden when the agent has no subagents. (`claude.rs` test, `plusMenu.test.ts`)
