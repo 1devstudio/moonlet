@@ -243,5 +243,15 @@ export function changedCategories(columns: BoardColumn[], suggested: Partial<Rec
   return columns.filter((c) => suggested[c.name] !== undefined && suggested[c.name] !== c.category).map((c) => c.name);
 }
 
+/**
+ * Each column's category as suggested (X50 step 3): taken from the columns
+ * when they first come (the tracker's for a new board, the saved ones in
+ * Board settings), kept while the user changes them, cleared with them.
+ */
+export function suggestedOf(prev: Partial<Record<string, BoardColumn["category"]>>, columns: BoardColumn[]): Partial<Record<string, BoardColumn["category"]>> {
+  if (!columns.length) return {};
+  return Object.keys(prev).length ? prev : Object.fromEntries(columns.map((c) => [c.name, c.category]));
+}
+
 /** Where a Jira board's filter is edited (X50 Edit in Jira). */
 export const jiraFilterUrl = (site: string, filterId: string) => `https://${site}/issues/?filter=${encodeURIComponent(filterId)}`;
