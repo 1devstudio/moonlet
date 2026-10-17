@@ -1,6 +1,6 @@
 // Queued messages, Send now and Ask aside (X49): what the chat says about
 // messages Claude has not read yet.
-import type { AsideAnswer, ChatItem, QueuedMessage } from "./protocol";
+import type { AsideAnswer, ChatItem, ChatState, QueuedMessage } from "./protocol";
 import { clock } from "./subagents";
 
 /** A line of the queued area: text, then a command in mono, then more text. */
@@ -69,4 +69,43 @@ export function composerPlaceholder(agent: string, working: boolean): string {
 /** After Working in the footer; null with nothing queued. */
 export function queuedCount(queued: readonly QueuedMessage[]): string | null {
   return queued.length ? `· ${queued.length} queued` : null;
+}
+
+/** The line above the queued messages, its tone, and whether the running command's row is ringed. */
+export function queuedHeader(queued: readonly QueuedMessage[], running: Running | null, warn: Line | null): { line: Line; tone: "waiting" | "warn" | "sending"; ring: boolean } {
+  if (queued.some((q) => q.sending)) return { line: stoppingLine(running), tone: "sending", ring: !!running };
+  if (warn) return { line: warn, tone: "warn", ring: true };
+  return { line: queuedLine(queued, running), tone: "waiting", ring: false };
+}
+
+/** `chat.send_now`'s params: the one queued message, or every one. */
+export function sendNowParams(queued: readonly QueuedMessage[]): { message?: string } {
+  return queued.length === 1 ? { message: queued[0].id } : {};
+}
+
+/**
+ * What became of a message Ask aside asked Claude to give back: still
+ * `waiting` in the queue, `cancelled` out of it, or `taken` by Claude
+ * first (its uuid is then a transcript item's id).
+ */
+export function unqueued(st: Pick<ChatState, "queued" | "items">, id: string): "waiting" | "cancelled" | "taken" {
+  if (st.queued.some((q) => q.id === id)) return "waiting";
+  return st.items.some((i) => i.id === id) ? "taken" : "cancelled";
+}
+
+/** A side question and its answer: not added to the session, gone when closed. */
+export interface Aside {
+  question: string;
+  answer?: AsideAnswer;
+  error?: string;
+}
+
+/** The open aside once `question`'s reply arrives; a reply to a closed or replaced question changes nothing. */
+export function asideSettled(cur: Aside | null, question: string, reply: Pick<Aside, "answer" | "error">): Aside | null {
+  return cur?.question === question ? { ...cur, ...reply } : cur;
+}
+
+/** ⌥↵ asks aside while Claude works, unless the input answers a plan. */
+export function canAskAside(agent: string, working: boolean, revising: boolean): boolean {
+  return agent === "claude" && working && !revising;
 }

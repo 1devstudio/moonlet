@@ -68,7 +68,7 @@ import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
 import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
 import { openAgents, openChanges, openFileTab } from "../lib/actions";
 import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
-import { type Line, type Running, asideFooter, composerPlaceholder, interruptedLine, queuedCount, queuedLine, sendNowLabel, sendNowWarning, stoppingLine, waitingOn } from "../lib/queued";
+import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, sendNowLabel, sendNowParams, sendNowWarning, unqueued, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
@@ -755,15 +755,14 @@ function QueuedArea({
 }) {
   const [hover, setHover] = useState(false);
   const now = useNow(hover);
-  const sending = queued.some((q) => q.sending);
-  const warn = hover && !sending ? sendNowWarning(running, now) : null;
-  useEffect(() => onRing(!!warn || (sending && !!running)), [!!warn, sending, !!running]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { line, tone, ring } = queuedHeader(queued, running, hover ? sendNowWarning(running, now) : null);
+  const sending = tone === "sending";
+  useEffect(() => onRing(ring), [ring]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => onRing(false), []); // eslint-disable-line react-hooks/exhaustive-deps
-  const line = sending ? stoppingLine(running) : (warn ?? queuedLine(queued, running));
   return (
     <section aria-label="Queued messages" className="moonlet-card-in flex flex-col items-end gap-1.5 pb-0.5 pt-2.5">
-      <div className={cx("flex items-center gap-1.5 ui-text-12", sending ? "text-muted" : warn ? "text-blocked" : "text-faint")}>
-        {sending ? <Loader2 size={12} className="spin text-accent" /> : warn ? <Square size={9} fill="currentColor" /> : <Clock size={12} />}
+      <div className={cx("flex items-center gap-1.5 ui-text-12", sending ? "text-muted" : tone === "warn" ? "text-blocked" : "text-faint")}>
+        {sending ? <Loader2 size={12} className="spin text-accent" /> : tone === "warn" ? <Square size={9} fill="currentColor" /> : <Clock size={12} />}
         <LineText line={line} />
       </div>
       {queued.map((q) => (
@@ -785,13 +784,6 @@ function QueuedArea({
       )}
     </section>
   );
-}
-
-/** A side question and its answer (X49): not added to the session, gone when closed. */
-export interface Aside {
-  question: string;
-  answer?: AsideAnswer;
-  error?: string;
 }
 
 function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () => void; onClose: () => void }) {
@@ -1351,18 +1343,31 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const askAside = (question: string) => {
     stick.current = true;
     setAside({ question });
-    const settle = (patch: Partial<Aside>) => setAside((cur) => (cur?.question === question ? { ...cur, ...patch } : cur));
     rpc<AsideAnswer>(host, M.chatAside, { id, text: question }).then(
-      (answer) => settle({ answer }),
-      (e) => settle({ error: String(e?.message ?? e) }),
+      (answer) => setAside((cur) => asideSettled(cur, question, { answer })),
+      (e) => setAside((cur) => asideSettled(cur, question, { error: String(e?.message ?? e) })),
     );
   };
+  // Ask aside on a queued message: asked once Claude gives the message back,
+  // not at all if Claude read it first.
+  const [unqueuing, setUnqueuing] = useState<QueuedMessage | null>(null);
   const asideLast = () => {
     const last = queued[queued.length - 1];
     if (!last) return;
-    void call(M.chatUnqueue, { message: last.id });
-    askAside(last.text);
+    setUnqueuing(last);
+    rpc(host, M.chatUnqueue, { id, message: last.id }).catch((e) => {
+      setUnqueuing(null);
+      errorToast(e);
+    });
   };
+  useEffect(() => {
+    if (!unqueuing || !st) return;
+    const outcome = unqueued(st, unqueuing.id);
+    if (outcome === "waiting") return;
+    setUnqueuing(null);
+    if (outcome === "cancelled") askAside(unqueuing.text);
+    else toast("Claude read the message before it could be asked aside");
+  }, [st, unqueuing]); // eslint-disable-line react-hooks/exhaustive-deps
   const requeue = () => {
     if (aside) void call(M.chatSend, { text: aside.question, images: [] });
     setAside(null);
@@ -1550,7 +1555,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                 running={running}
                 onSendNow={() => {
                   stick.current = true;
-                  void call(M.chatSendNow, queued.length === 1 ? { message: queued[0].id } : {});
+                  void call(M.chatSendNow, sendNowParams(queued));
                 }}
                 onAside={asideLast}
                 onRing={setRing}
@@ -1601,7 +1606,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           focusSignal={focusSignal}
           onCancel={revising ? () => setRevise(null) : aside ? () => setAside(null) : undefined}
           onAttach={() => void attach()}
-          onAside={working && agent === "claude" && !revising ? askAside : undefined}
+          onAside={canAskAside(agent, working, revising) ? askAside : undefined}
           handle={editor}
           top={st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
         />
