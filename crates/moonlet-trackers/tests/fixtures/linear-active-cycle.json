@@ -1,0 +1,16 @@
+{
+  "data": {
+    "teams": {
+      "nodes": [
+        {
+          "activeCycle": {
+            "number": 42,
+            "name": null,
+            "startsAt": "2026-10-12T00:00:00.000Z",
+            "endsAt": "2026-10-26T00:00:00.000Z"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -48,7 +48,8 @@ export const hostsApi = {
   trackerConnect: (req: { kind: "linear" | "jira" | "clickup"; site?: string; email?: string; token: string }) =>
     invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_connect", { req }),
   trackerDisconnect: (id: string) => invoke("tracker_disconnect", { id }),
-  trackerSources: (id: string) => invoke<{ key: string; name: string }[]>("tracker_sources", { id }),
+  /** A connection's teams, projects or lists; a Linear team that uses cycles says so. */
+  trackerSources: (id: string) => invoke<{ key: string; name: string; cycles?: boolean }[]>("tracker_sources", { id }),
   trackerTask: (id: string, key: string) => invoke<import("./tasks").Task | null>("tracker_task", { id, key }),
   trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; status?: string | null; assign_me?: boolean; comment?: string | null }) =>
     invoke("tracker_update", { req }),
