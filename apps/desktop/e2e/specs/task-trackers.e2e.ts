@@ -133,7 +133,7 @@ describe("Linear tracker", () => {
     await new Promise((r) => server.close(r));
   });
 
-  it("connects with an API key, keeps the key out of trackers.toml, and shows a chosen team", async () => {
+  it("connects with an API key, keeps the key out of trackers.toml, and ends in Add a board for a team (X50)", async () => {
     await openSettings("Task trackers");
     await $(sel.settingsButton("Connect Linear")).click();
     // A key Linear refuses: its error shows in the dialog.
@@ -142,18 +142,21 @@ describe("Linear tracker", () => {
     await expect($('//div[@role="dialog"]').$(sel.text("Linear no longer accepts this token. Create a new one and paste it here."))).toBeDisplayed({ wait: 15_000 });
     await fill('//div[@role="dialog"]//input[@type="password"]', "lin_api_e2e");
     await $('//div[@role="dialog"]//button[normalize-space()="Connect"]').click();
-    await expect($(sel.text("Signed in as Ada Lovelace · 2 sources visible"))).toBeDisplayed({ wait: 15_000 });
-    // Sources are added row by row: the first row starts empty, a second is added, then removed.
-    await expect($('//div[@role="dialog"]').$(sel.text("Add the Linear teams whose issues Tasks mode shows, and the workspace that shows each. Which moonlet projects their sessions start in is under each project's settings."))).toBeDisplayed();
-    await choose('//div[@role="dialog"]//select[@aria-label="Source 1"]', "ENG");
-    await $('//div[@role="dialog"]//button[normalize-space()="Add source"]').click();
-    await choose('//div[@role="dialog"]//select[@aria-label="Source 2"]', "DES");
-    await $('//div[@role="dialog"]//button[@aria-label="Remove Design"]').click();
-    await $('//div[@role="listitem"][@aria-label="Design"]').waitForExist({ reverse: true });
-    const eng = '//div[@role="listitem"][@aria-label="Engineering"]';
-    const ws = rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
-    await choose(`${eng}//select[@aria-label="Workspace for Engineering"]`, `local/${ws}`);
-    await $('//div[@role="dialog"]//button[normalize-space()="Save and sync"]').click();
+    await expect($(sel.text("Signed in as Ada Lovelace · 2 teams visible"))).toBeDisplayed({ wait: 15_000 });
+    // The Connect dialog ends in Add a board, on the new connection (X50).
+    await $('//div[@role="dialog"]//button[normalize-space()="Add a board"]').click();
+    const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+    await $(`${dialog}//button[@role="radio"][.//span[normalize-space()="Engineering"]]`).click();
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    await expect($(`${dialog}//p[contains(normalize-space(), "issues match")]`)).toBeDisplayed({ wait: 15_000 });
+    await choose(`${dialog}//select[@aria-label="Finished issues"]`, "14");
+    // Continue waits for the changed choice's preview.
+    await $(`${dialog}//button[normalize-space()="Continue"]`).waitForEnabled({ timeout: 15_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    await $(`${dialog}//button[normalize-space()="Create board"]`).click();
+    await openSettings("Task trackers");
     await expect($(sel.text("Connected as Ada Lovelace · API key · 1 board"))).toBeDisplayed({ wait: 10_000 });
     const toml = readFileSync(join(w.home, "trackers.toml"), "utf8");
     expect(toml).toContain('id = "linear:acme"');
@@ -294,9 +297,9 @@ describe("Linear tracker", () => {
     rejecting = false;
   });
 
-  it("disconnects after asking: the token and the connection are gone", async () => {
+  it("disconnects after asking, naming its boards: the token, the connection and its boards are gone", async () => {
     await $(sel.settingsButton("Disconnect")).click();
-    await expect($(sel.text("moonlet forgets the token for acme and stops showing its issues. Sessions keep their links."))).toBeDisplayed({ wait: 10_000 });
+    await expect($(sel.text("moonlet forgets the token for acme and removes its board Engineering. Sessions keep their links."))).toBeDisplayed({ wait: 10_000 });
     await $('//div[@role="dialog"]//button[normalize-space()="Disconnect"]').click();
     await browser.waitUntil(() => !readFileSync(join(w.home, "trackers.toml"), "utf8").includes("linear:acme"), {
       timeout: 10_000,
@@ -362,8 +365,8 @@ describe("Jira and ClickUp trackers", () => {
     await expect($('//div[@role="dialog"]').$(sel.text("The token is saved in the macOS Keychain."))).toBeDisplayed();
     await fill('//div[@role="dialog"]//input[@type="password"]', "pk_e2e_token");
     await $('//div[@role="dialog"]//button[normalize-space()="Connect"]').click();
-    await expect($(sel.text("Signed in as John Doe · 4 sources visible"))).toBeDisplayed({ wait: 15_000 });
-    await $('//div[@role="dialog"]//button[normalize-space()="Save and sync"]').click();
+    await expect($(sel.text("Signed in as John Doe · 4 lists visible"))).toBeDisplayed({ wait: 15_000 });
+    await $('//div[@role="dialog"]//button[normalize-space()="Later"]').click();
     // The token goes as the raw Authorization value, not as a Bearer.
     expect(asked.filter((x) => x.path.startsWith("/clickup/")).every((x) => x.auth === "pk_e2e_token")).toBe(true);
     expect(readFileSync(join(w.home, "trackers.toml"), "utf8")).toContain('id = "clickup:1111"');
@@ -388,14 +391,24 @@ describe("Jira and ClickUp trackers", () => {
         await expect($('//div[@role="dialog"]').$(sel.text(`Jira no longer accepts the API token for ${site}. It may have expired or been revoked. Create a new token and paste it here.`))).toBeDisplayed({ wait: 15_000 });
         continue;
       }
-      await expect($(sel.text("Signed in as Mia Krystof · 2 sources visible"))).toBeDisplayed({ wait: 15_000 });
-      if (site === "acme.atlassian.net") {
-        await choose('//div[@role="dialog"]//select[@aria-label="Source 1"]', "EX");
-        const ex = '//div[@role="listitem"][@aria-label="Example"]';
-        const ws = rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
-        await choose(`${ex}//select[@aria-label="Workspace for Example"]`, `local/${ws}`);
+      await expect($(sel.text("Signed in as Mia Krystof · 2 projects visible"))).toBeDisplayed({ wait: 15_000 });
+      if (site !== "acme.atlassian.net") {
+        await $('//div[@role="dialog"]//button[normalize-space()="Later"]').click();
+        continue;
       }
-      await $('//div[@role="dialog"]//button[normalize-space()="Save and sync"]').click();
+      // The first site's board: a query for the EX project (X50 Add a board).
+      await $('//div[@role="dialog"]//button[normalize-space()="Add a board"]').click();
+      const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+      await $(`${dialog}//button[.//span[normalize-space()="A JQL query"]]`).click();
+      await fill(`${dialog}//textarea`, "project = EX");
+      await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+      await expect($(`${dialog}//p[contains(normalize-space(), "issues match")]`)).toBeDisplayed({ wait: 15_000 });
+      await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+      await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
+      await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+      await fill(`${dialog}//label[.//span[normalize-space()="Name"]]//input`, "Example");
+      await $(`${dialog}//button[normalize-space()="Create board"]`).click();
+      await openSettings("Task trackers");
     }
     const toml = readFileSync(join(w.home, "trackers.toml"), "utf8");
     expect([toml.includes('id = "jira:acme.atlassian.net"'), toml.includes('id = "jira:ops.atlassian.net"')]).toEqual([true, true]);
@@ -443,7 +456,7 @@ describe("Jira and ClickUp trackers", () => {
     // Step 3: a column per status the issues are in.
     await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
-    // The workspace's EX source already became a `project = EX` board.
+    // The workspace already has a `project = EX` board.
     await expect($(`${dialog}//span[normalize-space()="This workspace already has a board from JQL query."]`)).toBeDisplayed({ wait: 10_000 });
     await expect($(`${dialog}//button[normalize-space()="Create board"]`)).toBeDisabled();
     await $(`${dialog}//nav//button[.//span[normalize-space()="Source"]]`).click();
