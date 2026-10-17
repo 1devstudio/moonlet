@@ -1,0 +1,74 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "1a2b3c4d-0000-4000-8000-000000000123",
+          "identifier": "ENG-123",
+          "title": "Retry failed webhook deliveries",
+          "description": null,
+          "url": "https://linear.app/acme/issue/ENG-123/retry-failed-webhook-deliveries",
+          "branchName": "ada/eng-123-retry-failed-webhook-deliveries",
+          "priority": 2,
+          "updatedAt": "2026-10-14T09:12:44.512Z",
+          "state": {
+            "id": "a1000000-0000-4000-8000-000000000002",
+            "name": "In Progress",
+            "type": "started"
+          },
+          "assignee": {
+            "id": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+            "name": "Ada Lovelace"
+          },
+          "labels": {
+            "nodes": [{ "name": "Backend" }]
+          },
+          "cycle": {
+            "number": 42
+          },
+          "team": {
+            "key": "ENG"
+          },
+          "estimate": 3,
+          "dueDate": "2026-10-20",
+          "parent": {
+            "identifier": "ENG-100",
+            "title": "Reliable webhooks"
+          }
+        },
+        {
+          "id": "1a2b3c4d-0000-4000-8000-000000000124",
+          "identifier": "ENG-124",
+          "title": "Add dark mode to settings page",
+          "description": null,
+          "url": "https://linear.app/acme/issue/ENG-124/add-dark-mode-to-settings-page",
+          "branchName": "ada/eng-124-add-dark-mode-to-settings-page",
+          "priority": 0,
+          "updatedAt": "2026-10-13T16:40:02.001Z",
+          "state": {
+            "id": "a1000000-0000-4000-8000-000000000001",
+            "name": "Todo",
+            "type": "unstarted"
+          },
+          "assignee": null,
+          "labels": {
+            "nodes": []
+          },
+          "cycle": {
+            "number": 42
+          },
+          "team": {
+            "key": "ENG"
+          },
+          "estimate": null,
+          "dueDate": null,
+          "parent": null
+        }
+      ],
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "1a2b3c4d-0000-4000-8000-000000000124"
+      }
+    }
+  }
+}

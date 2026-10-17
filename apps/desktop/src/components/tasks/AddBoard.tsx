@@ -42,7 +42,7 @@ interface Choice {
   origin: Origin;
 }
 
-const KIND_LABEL: Record<string, string> = { scrum: "Scrum", kanban: "Kanban", simple: "Team-managed" };
+const KIND_LABEL: Record<string, string> = { scrum: "Scrum", kanban: "Kanban", simple: "Team-managed", cycles: "Cycles" };
 const CATEGORY_CHOICES = Object.entries(CATEGORY_LABEL) as [BoardColumn["category"], string][];
 const BAR: Record<BoardColumn["category"], string> = { todo: "bg-[#4a4a4a]", in_progress: "bg-[#7d7d7d]", in_review: "bg-[#b5b5b5]", done: "bg-merged" };
 
@@ -92,7 +92,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
         ? hostsApi.trackerBoards(draft.connection).then((bs) => bs.map((b): Choice => ({ key: b.project ?? String(b.id), name: b.name, kind: b.kind, origin: { kind: "jira_board", board: b.id } })))
         : hostsApi
             .trackerSources(draft.connection)
-            .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
+            .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, ...(s.cycles && { kind: "cycles" }), origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
     ask.then(
       (c) => !stale && setChoices(c),
       (e) => !stale && setChoicesError(message(e)),
