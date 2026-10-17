@@ -2,7 +2,7 @@
 // own columns. `BoardConfig` mirrors `moonlet-trackers::config::Board`, as
 // saved in `trackers.toml`; `tasksBoard` builds what is drawn.
 
-import type { Column } from "./tasks";
+import type { Column, Task } from "./tasks";
 import type { TrackersConfig } from "./tasksStore";
 import { trackerLink } from "./trackerSources";
 
@@ -114,3 +114,17 @@ const ORIGIN: Record<"linear" | "jira" | "clickup", (key: string) => Origin> = {
   linear: (team) => ({ kind: "linear_team", team }),
   clickup: (list) => ({ kind: "clickup_list", list }),
 };
+
+/**
+ * The projects a new session from `task` starts in (X50): the first rule
+ * whose component or label the task has, else the board's By default rule,
+ * else `linked`, the projects whose `.moonlet/config.toml` links the task's
+ * tracker project (X44).
+ */
+export function startProjects(rules: BoardConfig["rules"], task: Task, linked: string[]): string[] {
+  const matching = (rules ?? []).find(
+    ({ when }) => when !== "default" && ("component" in when ? (task.components ?? []).includes(when.component) : task.labels.includes(when.label)),
+  );
+  const chosen = matching ?? (rules ?? []).find((r) => r.when === "default");
+  return chosen ? [chosen.project] : linked;
+}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { migrateWorkspace } from "./boards";
+import { migrateWorkspace, startProjects } from "./boards";
+import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
 describe("migrateWorkspace (X50 Boards replace sources)", () => {
@@ -83,5 +84,35 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
       connections: [{ id: "clickup:9012", kind: "clickup", site: "9012", account: "Sam", auth: "token", sources: [{ key: "901", name: "Sprint", workspace: "local/acme" }] }],
     };
     expect(migrateWorkspace(clickup, "local/acme", []).boards?.map((b) => b.origin)).toEqual([{ kind: "clickup_list", list: "901" }]);
+  });
+});
+
+describe("startProjects (X50 New sessions from this board start in)", () => {
+  // The "Add a board" design's rules.
+  const rules = [
+    { when: "default" as const, project: "website" },
+    { when: { component: "design-system" }, project: "ui-kit" },
+    { when: { label: "docs" }, project: "handbook" },
+  ];
+  const task = (components: string[], labels: string[]): Task => ({
+    connection: "jira:acme.atlassian.net",
+    key: "WEB-233",
+    title: "New pricing page layout",
+    url: "",
+    column: "todo",
+    priority: 0,
+    assignees: [],
+    labels,
+    components,
+    description: "",
+    updatedMs: 0,
+  });
+
+  it("takes the first matching component or label rule, then the board's default, then the projects linking the tracker project", () => {
+    expect(startProjects(rules, task(["design-system"], ["docs"]), ["linked"])).toEqual(["ui-kit"]);
+    expect(startProjects(rules, task([], ["docs"]), ["linked"])).toEqual(["handbook"]);
+    expect(startProjects(rules, task(["frontend"], []), ["linked"])).toEqual(["website"]);
+    expect(startProjects([], task(["frontend"], []), ["linked"])).toEqual(["linked"]);
+    expect(startProjects(undefined, task([], []), [])).toEqual([]);
   });
 });
