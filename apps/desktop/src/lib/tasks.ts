@@ -18,6 +18,8 @@ export interface Task {
   priority: number;
   assignees: string[];
   labels: string[];
+  /** Jira's components, for a board's "start in" rules (X50). */
+  components?: string[];
   /** Markdown. */
   description: string;
   updatedMs: number;
@@ -30,7 +32,7 @@ export interface Task {
   /** GitHub issues: what links a branch or PR to it. */
   github?: { repo: string; number: number; closingPrs: number[] };
   /** Linear, Jira and ClickUp issues: their id, state name and team/project/list in the tracker. */
-  tracker?: { id: string; state: string; source: string };
+  tracker?: { id: string; state: string; source: string; statusId?: string };
 }
 
 /** A GitHub issue from `gh.tasks` as a task. */
