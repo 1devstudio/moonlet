@@ -658,7 +658,7 @@ function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connec
   const columns = taskColumns(host, workspaceId, task);
   const to = status ?? statusFor(columns, category) ?? undefined;
   // Named as the tracker names the column (X50).
-  return { status: to, name: columns.find((c) => to && c.statuses.includes(to))?.name ?? COLUMN_LABEL[category] };
+  return { status: to, name: columns.find((c) => to !== undefined && c.statuses.includes(to))?.name ?? COLUMN_LABEL[category] };
 }
 
 /** Sets a GitHub Project item's Status to `status` (X50), through gh on `host`. */
@@ -1039,7 +1039,7 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       // A GitHub Project's item: its Status, set to the column's (X50); never the issue itself.
       if (!column) return;
       const { status, name } = boardTarget(host, workspaceId, task, column, toStatus);
-      if (!status) throw new Error(`The Project has no ${name} column`);
+      if (status === undefined) throw new Error(`The Project has no ${name} column`);
       movedByMoonlet.set(id, column);
       await moveProjectItem(host, workspaceId, task, status);
       recordActivity(task, `moonlet moved it to ${name}`, now);

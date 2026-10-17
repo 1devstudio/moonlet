@@ -289,7 +289,7 @@ describe("boardView (X50 Board)", () => {
 
 describe("a GitHub Project's items (X50)", () => {
   const PROJECT: BoardColumn[] = [
-    { name: "No Status", statuses: ["No Status"], category: "todo" },
+    { name: "No Status", statuses: [""], category: "todo" },
     { name: "Todo", statuses: ["Todo"], category: "todo" },
     { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
     { name: "Done", statuses: ["Done"], category: "done", show: "fold" },

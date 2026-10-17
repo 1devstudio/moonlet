@@ -1,7 +1,7 @@
 // A board's columns as the tracker has them (X50): each task in the column
 // that holds its status, folded and hidden columns, and WIP.
 
-import { type BoardColumn, type BoardConfig, type Category, originKey, originLabel, syncedColumns, NO_STATUS } from "./boards";
+import { type BoardColumn, type BoardConfig, type Category, originKey, originLabel, syncedColumns } from "./boards";
 import type { BoardData } from "./tasksStore";
 import type { AgentState } from "./protocol";
 import { type Column, type Task, trackerName, trackerOf } from "./tasks";
@@ -23,8 +23,8 @@ export interface ColumnView {
  * `not_planned` (how it was closed).
  */
 export function statusKey(task: Task): string {
-  // A GitHub Project's item is where its Status puts it (X50).
-  if (task.github?.project) return task.github.project.status ?? NO_STATUS;
+  // A GitHub Project's item is where its Status puts it (X50); without one, `""` (No Status).
+  if (task.github?.project) return task.github.project.status ?? "";
   if (task.github) return task.column === "open" ? "open" : task.column === "done" ? "completed" : "not_planned";
   return task.tracker?.statusId || task.tracker?.state || "";
 }

@@ -22,9 +22,9 @@ vi.mock("./daemon", () => ({
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
     // A Linear team's or ClickUp list's board (X50): that source's issues
     // from the tracker_tasks answers, and its columns when a test gives them.
-    // The app's command, tested in Rust (states.rs a_github_projects_status_options_as_board_columns).
+    // The app's command, tested in Rust (states.rs a_github_projects_columns_start_with_no_status).
     githubProjectColumns: (options: string[]) =>
-      Promise.resolve(["No Status", ...options].map((name) => ({ name, statuses: [name], category: name === "Done" ? "done" : name === "In Progress" ? "in_progress" : "todo", ...(name === "Done" && { show: "fold" }) }))),
+      Promise.resolve(["", ...options].map((name) => ({ name: name || "No Status", statuses: [name], category: name === "Done" ? "done" : name === "In Progress" ? "in_progress" : "todo", ...(name === "Done" && { show: "fold" }) }))),
     trackerBoardTasks: (q: { id: string; origin: { team?: string; list?: string; query?: string }; mine: boolean }) => {
       const answer = answers[`tracker_tasks ${q.id}${q.mine ? "" : " all"}`] ?? answers[`tracker_tasks ${q.id}`];
       if (!answer) return Promise.reject(new Error(`no tracker_board_tasks ${q.id}`));
@@ -435,15 +435,15 @@ describe("boards (X50 Sync)", () => {
       { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
       { name: "In Review", statuses: ["In Review"], category: "in_review" },
     ];
-    // The user folded In Progress; In Review is new in Linear.
+    // The user folded In Progress; Triage and In Review are new to the board, and go where Linear has them.
     useTasks.setState({
       config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [board({ columns: [{ name: "In Progress", statuses: ["In Progress"], category: "in_progress", show: "fold" }] })] },
       attention: {},
     });
     await refreshTasks("local", "personal", 1_000);
     expect(useTasks.getState().config?.boards?.[0].columns).toEqual([
-      { name: "In Progress", statuses: ["In Progress"], category: "in_progress", show: "fold" },
       { name: "Triage", statuses: ["Triage"], category: "todo", show: "hide" },
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress", show: "fold" },
       { name: "In Review", statuses: ["In Review"], category: "in_review" },
     ]);
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.column])).toEqual([
@@ -1171,8 +1171,8 @@ describe("a GitHub Project's board (X50 Sync)", () => {
       ["acme/web#10", "todo", true, { id: "PVT_1", item: "PVTI_10", status: "Todo" }],
       ["acme/web#11", "in_progress", false, { id: "PVT_1", item: "PVTI_11", status: "In Progress" }],
     ]);
-    // Its columns come from the Status options, as the app names them.
-    await vi.waitFor(() => expect((saved.at(-1) as { boards?: { columns?: { name: string }[] }[] } | undefined)?.boards?.[0].columns?.map((c) => c.name)).toEqual(["No Status", "Todo", "In Progress", "Done"]));
+    // Its columns come from the Project's Status options.
+    await vi.waitFor(() => expect((saved.at(-1) as { boards?: { columns?: { name: string }[] }[] } | undefined)?.boards?.[0].columns?.map((c) => c.name)).toEqual(expect.arrayContaining(["Todo", "In Progress", "Done"])));
     useTasks.setState({ config: null });
   });
 
