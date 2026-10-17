@@ -29,8 +29,9 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
     ],
   };
 
-  it("turns the workspace's sources and GitHub repositories into pinned boards, once", () => {
-    const after = migrateWorkspace(config, "local/acme", ["acme/storefront"]);
+  it("turns the workspace's sources and GitHub repositories into pinned boards", () => {
+    // Two projects of the workspace share a repository: one board.
+    const after = migrateWorkspace(config, "local/acme", ["acme/storefront", "acme/storefront"]);
     expect(after.boards).toEqual([
       {
         id: "github:github.com/acme/storefront@local/acme",
@@ -38,7 +39,6 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
         connection: "github:github.com",
         workspace: "local/acme",
         origin: { kind: "github_repo", repo: "acme/storefront" },
-        finished: 14,
       },
       {
         id: "jira:acme.atlassian.net/OPS@local/acme",
@@ -46,7 +46,6 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
         connection: "jira:acme.atlassian.net",
         workspace: "local/acme",
         origin: { kind: "jql", query: "project = OPS" },
-        finished: 14,
         states: { QA: "in_review", Backlog: "hidden" },
       },
       {
@@ -55,17 +54,26 @@ describe("migrateWorkspace (X50 Boards replace sources)", () => {
         connection: "linear:1devstudio",
         workspace: "local/acme",
         origin: { kind: "linear_team", team: "MOON" },
-        finished: 14,
       },
     ]);
     expect(after.migrated).toEqual(["local/acme"]);
-    // The other workspace's source stays until that workspace is opened;
-    // a connection with no source left drops its states.
+  });
+
+  it("keeps other workspaces' sources until they open, and drops a connection's states with its last source", () => {
+    const withUnchosen: TrackersConfig = {
+      ...config,
+      connections: config.connections?.map((c) => (c.kind === "linear" ? { ...c, sources: [...c.sources, { key: "DES", name: "Design", workspace: "" }] } : c)),
+    };
+    const after = migrateWorkspace(withUnchosen, "local/acme", []);
+    // A source no workspace was ever chosen for showed nowhere: it goes too.
     expect(after.connections?.map((c) => [c.id, c.sources, c.states])).toEqual([
       ["jira:acme.atlassian.net", [{ key: "PLAT", name: "Platform", workspace: "local/other" }], { QA: "in_review", Backlog: "hidden" }],
       ["linear:1devstudio", [], undefined],
     ]);
-    // Boards the user removes later don't come back.
+  });
+
+  it("migrates a workspace once, so a board removed later stays removed", () => {
+    const after = migrateWorkspace(config, "local/acme", ["acme/storefront"]);
     expect(migrateWorkspace({ ...after, boards: [] }, "local/acme", ["acme/storefront"]).boards).toEqual([]);
   });
 
