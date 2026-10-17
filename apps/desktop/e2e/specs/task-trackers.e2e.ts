@@ -214,14 +214,20 @@ describe("Linear tracker", () => {
     await expect($('//aside[@aria-label="Task detail"]').$(sel.text("· Cycle 42"))).toBeDisplayed();
   });
 
-  it("shows everyone's open issues once Assignee: me is off", async () => {
-    const mine = '//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Assignee: me"]';
+  it("shows everyone's open issues once the board's Assignee is anyone, others' dimmed (X50)", async () => {
+    const assignee = (who: string) => `//div[@role="group"][@aria-label="Filters"]//button[@aria-label="Assignee: ${who}"]`;
+    const pick = async (label: string) => {
+      await $('//div[@role="group"][@aria-label="Filters"]//button[starts-with(@aria-label, "Assignee: ")]').click();
+      await $(`//button[.//span[normalize-space()="${label}"]]`).click();
+    };
     const grace = '//section[@aria-label="Todo"]//article[starts-with(@aria-label, "ENG-200")]';
-    if ((await $(mine).getAttribute("aria-pressed")) !== "true") await $(mine).click();
+    await pick("Me");
+    await expect($(assignee("me"))).toBeDisplayed();
     await expect($(grace)).not.toBeExisting();
-    await $(mine).click();
+    await pick("Anyone");
     await expect($(grace)).toBeDisplayed({ wait: 15_000 });
-    await $(mine).click();
+    await expect($(grace)).toHaveElementClass("opacity-60");
+    await pick("Me");
     await expect($(grace)).not.toBeExisting();
   });
 

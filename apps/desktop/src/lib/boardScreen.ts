@@ -154,5 +154,11 @@ export function cardFace(
   };
 }
 
+/**
+ * A board's Assignee (X50 header): what the user picked for it in the app
+ * (`chosen`, by board id), else the board's own setting, else me.
+ */
+export const assigneeOf = (board: Pick<BoardConfig, "id" | "assignee">, chosen: Record<string, "me" | "anyone">): "me" | "anyone" => chosen[board.id] ?? board.assignee ?? "me";
+
 /** A card of someone else's issue with no session on it: dimmed under Assignee: anyone (X50). */
 export const isDimmed = (card: { task: Pick<Task, "mine">; rows: unknown[] }) => card.task.mine === false && card.rows.length === 0;
