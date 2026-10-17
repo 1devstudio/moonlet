@@ -117,14 +117,31 @@ const ORIGIN: Record<"linear" | "jira" | "clickup", (key: string) => Origin> = {
 
 /**
  * The projects a new session from `task` starts in (X50): the first rule
- * whose component or label the task has, else the board's By default rule,
+ * whose component or label the task has, else the board's By default row
+ * (each with all its projects),
  * else `linked`, the projects whose `.moonlet/config.toml` links the task's
  * tracker project (X44).
  */
-export function startProjects(rules: BoardConfig["rules"], task: Task, linked: string[]): string[] {
-  const matching = (rules ?? []).find(
-    ({ when }) => when !== "default" && ("component" in when ? (task.components ?? []).includes(when.component) : task.labels.includes(when.label)),
-  );
-  const chosen = matching ?? (rules ?? []).find((r) => r.when === "default");
-  return chosen ? [chosen.project] : linked;
+export function startProjects(rules: StartRule[] | undefined, task: Task, linked: string[]): string[] {
+  const all = rules ?? [];
+  const matches = ({ when }: StartRule) => when !== "default" && ("component" in when ? (task.components ?? []).includes(when.component) : task.labels.includes(when.label));
+  // The first rule that matches, or else the By default row, and every other
+  // rule with the same condition (a row of several projects).
+  const first = all.find(matches) ?? all.find((r) => r.when === "default");
+  if (!first) return linked;
+  const same = JSON.stringify(first.when);
+  return [...new Set(all.filter((r) => JSON.stringify(r.when) === same).map((r) => r.project))];
 }
+
+/** Each kind of origin: what the switcher calls it before a sync says more, and the key its search matches. */
+const ORIGIN_KINDS: { [K in Origin["kind"]]: { label: string; key: (o: Extract<Origin, { kind: K }>) => string } } = {
+  jira_board: { label: "Board", key: (o) => String(o.board) },
+  jql: { label: "Query", key: (o) => o.query },
+  linear_team: { label: "Team", key: (o) => o.team },
+  github_project: { label: "Project", key: (o) => `${o.owner}/${o.number}` },
+  github_repo: { label: "Repository", key: (o) => o.repo },
+  clickup_list: { label: "List", key: (o) => o.list },
+};
+
+export const originLabel = (o: Origin) => ORIGIN_KINDS[o.kind].label;
+export const originKey = (o: Origin) => (ORIGIN_KINDS[o.kind].key as (o: Origin) => string)(o);

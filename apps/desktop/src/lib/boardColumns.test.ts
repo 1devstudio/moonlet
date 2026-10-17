@@ -71,6 +71,15 @@ describe("boardView (X50 Board)", () => {
     ]);
   });
 
+  it("lays out 2000 issues with 60 sessions in under a second", () => {
+    const tasks = Array.from({ length: 2000 }, (_, i) => jira(`OPS-${i + 1}`, ["10001", "3", "10018", "10020", "10002"][i % 5]));
+    const sessions = Array.from({ length: 60 }, (_, i) => session(`s${i}`, `ops-${i * 7 + 1}-work`, { pr: i % 3 ? null : pr(i, "merged") }));
+    const started = performance.now();
+    const columns = view(tasks, sessions);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(columns.reduce((n, c) => n + c.cards.length, 0)).toBe(2000);
+  });
+
   describe("out of sync on a board", () => {
     const drift = (columns: ReturnType<typeof view>, key: string) => {
       const card = columns.flatMap((c) => c.cards).find((c) => c.task.key === key);
@@ -101,13 +110,23 @@ describe("boardView (X50 Board)", () => {
       expect(card?.drift?.to).toEqual({ column: "Code Review", category: "in_review", statuses: ["10018", "10019"] });
     });
 
-    it("has no fix when the next column is behind the work", () => {
+    it("moves a merged PR in To Do to the next column, a later category", () => {
       const cols = view([jira("OPS-512", "10001")], [session("Rotate keys", "ops-512-rotate", { pr: pr(330, "merged") })]);
-      expect(drift(cols, "OPS-512")).toEqual(["#330 merged", ""]);
+      expect(drift(cols, "OPS-512")).toEqual(["#330 merged", "Move to In Progress"]);
+    });
+
+    it("has no fix when the next column is not a later category", () => {
+      const board: BoardColumn[] = [
+        { name: "To Do", statuses: ["10001"], category: "todo" },
+        { name: "Selected for Development", statuses: ["10002"], category: "todo" },
+        { name: "In Progress", statuses: ["3"], category: "in_progress" },
+      ];
+      const cols = boardView(board, { tasks: [jira("OPS-512", "10001")], sessions: [session("Rotate keys", "ops-512-rotate", { state: "working" })], worktrees: [], sessionStartRule: "auto" });
+      expect(drift(cols, "OPS-512")).toEqual(["Session running", ""]);
       expect(cols[0].cards[0].drift?.to).toBeUndefined();
     });
 
-    it("moves a merged PR from a board's only In review column to Done", () => {
+    it("moves a merged PR from a board's only In review column to Done, and from In Progress to In Review", () => {
       // The "Tasks mode · Board" design's Linear board, by state name.
       const linear: BoardColumn[] = [
         { name: "Todo", statuses: ["Todo"], category: "todo" },
@@ -115,9 +134,18 @@ describe("boardView (X50 Board)", () => {
         { name: "In Review", statuses: ["In Review"], category: "in_review" },
         { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
       ];
-      const task: Task = { ...jira("MOON-144", ""), connection: "linear:1devstudio", tracker: { id: "i1", state: "In Review", source: "MOON" } };
-      const cols = boardView(linear, { tasks: [task], sessions: [session("File tabs", "moon-144-file-tabs", { pr: pr(128, "merged") })], worktrees: [], sessionStartRule: "auto" });
-      expect(drift(cols, "MOON-144")).toEqual(["#128 merged", "Move to Done"]);
+      // A Linear task keys on its state's name; an empty status id does not hide it.
+      const task = (key: string, state: string): Task => ({ ...jira(key, ""), connection: "linear:1devstudio", tracker: { id: key, state, statusId: "", source: "MOON" } });
+      const cols = boardView(linear, {
+        tasks: [task("MOON-144", "In Review"), task("MOON-147", "In Progress")],
+        sessions: [session("File tabs", "moon-144-file-tabs", { pr: pr(128, "merged") }), session("Block styling", "moon-147-blocks", { pr: pr(129, "merged") })],
+        worktrees: [],
+        sessionStartRule: "auto",
+      });
+      expect([drift(cols, "MOON-144"), drift(cols, "MOON-147")]).toEqual([
+        ["#128 merged", "Move to Done"],
+        ["#129 merged", "Move to In Review"],
+      ]);
     });
 
     it("flags a GitHub repository issue only for a merged PR, closing it", () => {
@@ -168,13 +196,13 @@ describe("boardView (X50 Board)", () => {
     const names = { "local/1dev": "1devstudio", "local/acme": "Acme" };
 
     it("lists this workspace's boards first, then the others', with their columns and live counts", () => {
-      const groups = switcherGroups(boards, "local/acme", "", names, { ops: { tasks: 12, sessions: 5, state: "blocked" } });
+      const groups = switcherGroups(boards, "local/acme", "", names, { ops: { tasks: 12, sessions: 5, state: "blocked", kind: "Scrum" } });
       expect(groups.map((g) => [g.name, g.hint, g.rows.map((r) => [r.board.id, r.kind, r.bars, r.meta, r.sessions])])).toEqual([
         [
           "Acme",
           "this workspace",
           [
-            ["ops", "Jira board", ["todo", "in_progress", "in_review", "in_review", "in_review", "done"], "6 columns · 12 issues", { text: "5 sessions", state: "blocked" }],
+            ["ops", "Scrum", ["todo", "in_progress", "in_review", "in_review", "in_review", "done"], "6 columns · 12 issues", { text: "5 sessions", state: "blocked" }],
             ["web", "Repository", [], "", null],
           ],
         ],

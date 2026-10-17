@@ -128,6 +128,8 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - `<n> issues` for Jira.
   - The dates show only while following a sprint or cycle.
   - The counts are those of the shown board after its filters.
+
+  (Partly: not drawn yet. `boardColumns.test.ts` names the tracker, its site, the sprint's dates and the counts, Jira counting issues)
 - [ ] The header's controls are:
   - **Assignee: me / anyone**, a menu that starts from the board's own setting; a change is kept per board in the app, not written to the board.
   - **Columns `<n>` · `<n>` folded**, a menu that shows, folds or hides each column (saved to the board).
@@ -141,20 +143,20 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 - [ ] The switcher is a popover under the title with "Find a board, team or project", which finds boards by name, key or workspace. It lists boards grouped by workspace: the current workspace first ("this workspace"), then the others ("switches workspace").
 - [ ] A row shows:
-  - the tracker's mark, the name and the type (Scrum, Kanban, Team-managed, Query, `Cycle <n>` or Team, Project, Repository, List)
+  - the tracker's mark, the name and the type (Scrum, Kanban, Team-managed or Board until a Jira board's first sync, Query, `Cycle <n>` or Team, Project, Repository, List)
   - a strip of small bars, one per shown or folded column, in its category's colour
   - `<n> columns · <n> issues` (`tasks` but for Jira, as in the subtitle), as much as is known before its first sync
   - the board's sessions: `<n> sessions` with a dot in the most urgent agent state, or `no sessions`
 
-  The current board has a check.
+  The current board has a check. (Partly: not drawn yet. `boardColumns.test.ts` lists this workspace's boards first, then the others', with their columns and live counts, finds a board by its name, its key or its workspace)
 - [ ] ↑ and ↓ move, ↵ opens, Esc closes. Picking a board of another workspace switches to that workspace, in Tasks mode.
 - [ ] The footer has **New board** (opens Add a board) and **Manage**.
 
 ### Board
 
-- [ ] The board draws its shown and folded columns in the board's order, a folded one as a narrow strip. Hidden columns are not drawn.
-- [ ] A task sits in the column whose statuses hold its status. A status in no column, or only in hidden ones, is not shown.
-- [ ] A column header shows its name and count, then a line with its category glyph and name. On a Jira board with a WIP limit it adds `· <n> of <max>`, counting the cards it shows (under Assignee: me, the user's own); at or above the limit, `· full` in amber.
+- [ ] The board draws its shown and folded columns in the board's order, a folded one as a narrow strip. Hidden columns are not drawn. (Partly: not drawn yet. `boardColumns.test.ts` draws the tracker's columns in the board's order, folded ones as such, hidden ones not at all)
+- [ ] A task sits in the column whose statuses hold its status (its id, else its name). A status in no column, or only in hidden ones, is not shown. Laying out 2000 issues takes well under a second. (Partly: not drawn yet. `boardColumns.test.ts` draws the tracker's columns in the board's order, folded ones as such, hidden ones not at all, moves a merged PR from a board's only In review column to Done, and from In Progress to In Review, lays out 2000 issues with 60 sessions in under a second)
+- [ ] A column header shows its name and count, then a line with its category glyph and name. On a Jira board with a WIP limit it adds `· <n> of <max>`, counting the cards it shows (under Assignee: me, the user's own); at or above the limit, `· full` in amber. (Partly: not drawn yet. `boardColumns.test.ts` shows a Jira column's WIP limit, full at the limit)
 - [ ] The column's `⋯` menu has Fold, Hide and Board settings….
 - [ ] A folded column is a narrow strip: its glyph, its name written vertically, its count. A folded Done-category column adds a red badge with the done tasks that still need clean-up (X45). Clicking a strip unfolds it; folding it again goes through its `⋯` menu.
 - [ ] Column names always come from the tracker; moonlet never names a column itself. A `github_repo` board has GitHub's two, Open and Closed, so X45's split of open issues into Todo, In Progress and In Review by their work is gone; a GitHub Project gives a status flow.
@@ -174,9 +176,9 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 ### Out of sync and moves
 
 - [ ] Out of sync (X45) reads the task's column category instead of the old fixed column.
-- [ ] A fix moves the task to the **next column** on the board: the first shown or folded column after the task's own. It is named after that column, as the tracker names it: `Move to QA`, `Move to Done`, `Move to Code Review`. When there is no next column, or the next one is not in a later category than the task's own (another To do column, for a task with a running session), the chip shows without a fix.
-- [ ] Work started and PR open show only on a board with a column of that category (In progress, In review). A GitHub repository board, with only Open and Closed, shows neither; its merged PR's fix is Move to Closed.
-- [ ] **PR merged** is out of sync when the task is in a To do or In progress column, or in an In review column of a board with only one, as in X45 (there the next column is usually Done). On a board with several In review columns (Code Review, QA, Staging), a merged PR in any of them is expected and not flagged.
+- [ ] A fix moves the task to the **next column** on the board: the first shown or folded column after the task's own. It is named after that column, as the tracker names it: `Move to QA`, `Move to Done`, `Move to Code Review`. When there is no next column, or the next one is not in a later category than the task's own (another To do column, for a task with a running session), the chip shows without a fix. (Partly: not drawn yet. `boardColumns.test.ts` names each fix after the next column and moves there, moves a merged PR in To Do to the next column, a later category, has no fix when the next column is not a later category)
+- [ ] Work started and PR open show only on a board with a column of that category (In progress, In review). A GitHub repository board, with only Open and Closed, shows neither; its merged PR's fix is Move to Closed. (Partly: not drawn yet. `boardColumns.test.ts` flags a GitHub repository issue only for a merged PR, closing it)
+- [ ] **PR merged** is out of sync when the task is in a To do or In progress column, or in an In review column of a board with only one, as in X45 (there the next column is usually Done). On a board with several In review columns (Code Review, QA, Staging), a merged PR in any of them is expected and not flagged. (Partly: not drawn yet. `boardColumns.test.ts` expects a merged PR in any In review column of a board with several, moves a merged PR from a board's only In review column to Done, and from In Progress to In Review)
 - [ ] Keep in step's automatic moves (X46) go to a category: moonlet picks the first status of the first shown or folded column of that category. Jira moves go through the transition to that status. A status Jira's workflow can't reach shows Jira's error with Retry, as X46 does.
 - [ ] The detail panel's State menu lists the board's columns by name, not the four categories. A GitHub repository still offers Open and Closed.
 - [ ] Moving a GitHub Project item sets its Status field, which needs gh's `project` scope. Without it, the State menu is disabled and says why.
@@ -246,6 +248,8 @@ Daemon RPCs, since `gh` runs on the project's host:
   2. the board's By default row
   3. the projects that link the task's tracker project
   4. X46's fallback
+
+  A rule's project, or the By default row's projects, all of them. (`boards.test.ts` takes the first matching component or label rule, then the board's default, then the projects linking the tracker project)
 - The app's local storage keeps, per workspace, the board last shown, and per board, the Assignee filter.
 
 ## Security considerations
