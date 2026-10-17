@@ -423,6 +423,8 @@ describe("projectMove (X50 moving a GitHub Project item)", () => {
 
   it("sets the item's Status field to the option of that name", () => {
     expect(projectMove(project, "PVTI_10", "Done")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o3" });
+    // No Status clears it.
+    expect(projectMove(project, "PVTI_10", "No Status")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: null });
     // An option the Project no longer has, or a Project without a Status field: nothing to send.
     expect(projectMove(project, "PVTI_10", "QA")).toBe(null);
     expect(projectMove({ ...project, field: null }, "PVTI_10", "Done")).toBe(null);

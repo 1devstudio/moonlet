@@ -372,6 +372,9 @@ export function byDefaultHint(linked: string[], projects: { id: string; name: st
   return `The projects that link it: ${linked.length ? linked.map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") : "none yet"}`;
 }
 
+/** A GitHub Project's column for issues with no Status (X50), as GitHub names it. */
+export const NO_STATUS = "No Status";
+
 /** A GitHub Project as moves need it (X50): its id, its Status field and the field's options. */
 export interface ProjectMeta {
   id: string;
@@ -379,10 +382,16 @@ export interface ProjectMeta {
   options: { id: string; name: string }[];
 }
 
-/** The `gh.project_move` that sets `item`'s Status to the option named `status`, or null when the Project has no such option. */
-export function projectMove(project: ProjectMeta, item: string, status: string): { project: string; item: string; field: string; option: string } | null {
+/**
+ * The `gh.project_move` that sets `item`'s Status to the option named
+ * `status`, or clears it for No Status; null when the Project has no such
+ * option.
+ */
+export function projectMove(project: ProjectMeta, item: string, status: string): { project: string; item: string; field: string; option: string | null } | null {
+  if (!project.field) return null;
+  if (status === NO_STATUS) return { project: project.id, item, field: project.field, option: null };
   const option = project.options.find((o) => o.name === status);
-  return project.field && option ? { project: project.id, item, field: project.field, option: option.id } : null;
+  return option ? { project: project.id, item, field: project.field, option: option.id } : null;
 }
 
 /**

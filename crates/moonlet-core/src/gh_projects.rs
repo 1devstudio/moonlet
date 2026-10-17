@@ -136,10 +136,21 @@ pub const MOVE_MUTATION: &str = "mutation($project: ID!, $item: ID!, $field: ID!
      updateProjectV2ItemFieldValue(input: { projectId: $project, itemId: $item, fieldId: $field, value: { singleSelectOptionId: $option } }) \
      { projectV2Item { id } } }";
 
-/// Whether a [`MOVE_MUTATION`] answer moved the item; a missing scope is named with its command.
+/// Clears an item's Status, to No Status (X50 moves).
+pub const CLEAR_MUTATION: &str = "mutation($project: ID!, $item: ID!, $field: ID!) { \
+     clearProjectV2ItemFieldValue(input: { projectId: $project, itemId: $item, fieldId: $field }) { projectV2Item { id } } }";
+
+/// Whether a [`MOVE_MUTATION`] or [`CLEAR_MUTATION`] answer moved the item; a
+/// missing scope is named with its command.
 pub fn parse_move(raw: &[u8]) -> Result<()> {
     let data = graphql_data(raw)?;
-    if data["updateProjectV2ItemFieldValue"]["projectV2Item"]["id"].is_null() {
+    let moved = [
+        "updateProjectV2ItemFieldValue",
+        "clearProjectV2ItemFieldValue",
+    ]
+    .iter()
+    .any(|m| !data[*m]["projectV2Item"]["id"].is_null());
+    if !moved {
         bail!("GitHub did not move the item");
     }
     Ok(())
@@ -339,15 +350,26 @@ pub async fn gh_project_items(owner: &str, number: u64, mine: bool) -> Result<Gh
     board.ok_or_else(|| anyhow::anyhow!("GitHub sent no Project"))
 }
 
-/// Sets a Project item's Status to `option` (X50 moves).
-pub async fn gh_project_move(project: &str, item: &str, field: &str, option: &str) -> Result<()> {
-    let vars = [
+/// Sets a Project item's Status to `option`, or with none clears it (X50 moves).
+pub async fn gh_project_move(
+    project: &str,
+    item: &str,
+    field: &str,
+    option: Option<&str>,
+) -> Result<()> {
+    let mut vars = vec![
         ("project", Var::Str(project.into())),
         ("item", Var::Str(item.into())),
         ("field", Var::Str(field.into())),
-        ("option", Var::Str(option.into())),
     ];
-    parse_move(&graphql(MOVE_MUTATION, &vars).await?)
+    let query = match option {
+        Some(o) => {
+            vars.push(("option", Var::Str(o.into())));
+            MOVE_MUTATION
+        }
+        None => CLEAR_MUTATION,
+    };
+    parse_move(&graphql(query, &vars).await?)
 }
 
 /// gh's token scopes for github.com, from `gh auth status`.
@@ -546,6 +568,9 @@ mod tests {
     #[test]
     fn a_move_sets_the_status_or_says_the_scope_it_needs() {
         assert!(parse_move(&fixture("gh-project-move.json")).is_ok());
+        // Clearing it, to No Status.
+        assert!(parse_move(&fixture("gh-project-clear.json")).is_ok());
+        assert!(parse_move(br#"{"data":{"clearProjectV2ItemFieldValue":null}}"#).is_err());
         assert_eq!(
             parse_move(&fixture("gh-error-project-scope.json"))
                 .unwrap_err()

@@ -24,7 +24,7 @@ vi.mock("./daemon", () => ({
     // from the tracker_tasks answers, and its columns when a test gives them.
     // The app's command, tested in Rust (states.rs a_github_projects_status_options_as_board_columns).
     githubProjectColumns: (options: string[]) =>
-      Promise.resolve(options.map((name) => ({ name, statuses: [name], category: name === "Done" ? "done" : name === "In Progress" ? "in_progress" : "todo", ...(name === "Done" && { show: "fold" }) }))),
+      Promise.resolve(["No Status", ...options].map((name) => ({ name, statuses: [name], category: name === "Done" ? "done" : name === "In Progress" ? "in_progress" : "todo", ...(name === "Done" && { show: "fold" }) }))),
     trackerBoardTasks: (q: { id: string; origin: { team?: string; list?: string; query?: string }; mine: boolean }) => {
       const answer = answers[`tracker_tasks ${q.id}${q.mine ? "" : " all"}`] ?? answers[`tracker_tasks ${q.id}`];
       if (!answer) return Promise.reject(new Error(`no tracker_board_tasks ${q.id}`));
@@ -1172,7 +1172,7 @@ describe("a GitHub Project's board (X50 Sync)", () => {
       ["acme/web#11", "in_progress", false, { id: "PVT_1", item: "PVTI_11", status: "In Progress" }],
     ]);
     // Its columns come from the Status options, as the app names them.
-    await vi.waitFor(() => expect((saved.at(-1) as { boards?: { columns?: { name: string }[] }[] } | undefined)?.boards?.[0].columns?.map((c) => c.name)).toEqual(["Todo", "In Progress", "Done"]));
+    await vi.waitFor(() => expect((saved.at(-1) as { boards?: { columns?: { name: string }[] }[] } | undefined)?.boards?.[0].columns?.map((c) => c.name)).toEqual(["No Status", "Todo", "In Progress", "Done"]));
     useTasks.setState({ config: null });
   });
 

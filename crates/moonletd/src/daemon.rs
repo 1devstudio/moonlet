@@ -598,7 +598,10 @@ impl Daemon {
             m::GH_PROJECT_MOVE => {
                 let r: m::GhProjectMove = params(p)?;
                 moonlet_core::gh_projects::gh_project_move(
-                    &r.project, &r.item, &r.field, &r.option,
+                    &r.project,
+                    &r.item,
+                    &r.field,
+                    r.option.as_deref(),
                 )
                 .await
                 .map_err(internal)?;
