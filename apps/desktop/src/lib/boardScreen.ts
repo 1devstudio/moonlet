@@ -154,3 +154,10 @@ export function cardFace(
   };
 }
 
+
+/** What the board shown says when its last sync failed (X50: a board whose origin is gone), or null. */
+export function boardProblem(board: Pick<BoardConfig, "name">, data: BoardData | undefined): string | null {
+  if (!data?.error) return null;
+  const text = `moonlet could not read ${board.name}: ${data.error}`;
+  return data.keys.length ? `${text.replace(/\.$/, "")}. Its last tasks are shown.` : text;
+}
