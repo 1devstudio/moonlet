@@ -121,6 +121,8 @@ describe("boardStats (X50 switcher rows)", () => {
     expect(boardStats(b("plat", "local/w"), [], { sprint: null, kind: "kanban" }).kind).toBe("Kanban");
     expect(boardStats(b("plat", "local/w"), [], { sprint: null, kind: "simple" }).kind).toBe("Team-managed");
     expect(boardStats({ ...ops, finished: 14 }, [], { sprint: null, kind: "scrum" }).kind).toBe("Scrum");
+    // Following its sprint, a Jira board is still named by its type; the title names the sprint.
+    expect(boardStats(ops, [], { sprint: { id: 5, name: "Sprint 42", startMs: 0, endMs: 0 }, kind: "scrum" }).kind).toBe("Scrum");
   });
 });
 

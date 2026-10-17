@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight } from "lucide-react";
-import { firstActive, moveActive } from "../lib/menuNav";
+import { firstActive, menuKey, sameItem } from "../lib/menuNav";
 import { cx } from "./ui";
 
 export type MenuItem =
@@ -12,7 +12,7 @@ export type MenuItem =
       checked?: boolean;
       danger?: boolean;
       hint?: string;
-      description?: string;
+      description?: ReactNode;
       /** Drawn at the row's right, before its check: the board switcher's column bars. */
       aside?: ReactNode;
       onSelect: () => void;
@@ -21,7 +21,21 @@ export type MenuItem =
   | { kind: "divider" }
   | { kind: "label"; label: string };
 
-export function MenuItems({ items, onClose, active = null }: { items: MenuItem[]; onClose: () => void; /** The item ↑ and ↓ moved to. */ active?: number | null }) {
+export function MenuItems({
+  items,
+  onClose,
+  active = null,
+  offset = 0,
+  onActive,
+}: {
+  items: MenuItem[];
+  onClose: () => void;
+  /** The item ↑ and ↓ (or the mouse) made active, counted from the menu's first item. */
+  active?: number | null;
+  /** Where these items start in the menu: a footer's come after the list's. */
+  offset?: number;
+  onActive?: (i: number) => void;
+}) {
   const [open, setOpen] = useState<number | null>(null);
   return (
     <>
@@ -51,9 +65,9 @@ export function MenuItems({ items, onClose, active = null }: { items: MenuItem[]
         return (
           <button
             key={i}
-            data-active={active === i || undefined}
-            ref={active === i ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
-            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14 hover:bg-hover", active === i && "bg-hover", it.danger && "text-error")}
+            data-active={active === i + offset || undefined}
+            onMouseMove={onActive && active !== i + offset ? () => onActive(i + offset) : undefined}
+            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14", onActive ? active === i + offset && "bg-hover" : "hover:bg-hover", it.danger && "text-error")}
             onClick={() => {
               onClose();
               it.onSelect();
@@ -89,6 +103,7 @@ export function Menu({
   side = "bottom",
   width = 230,
   search,
+  footer = [],
 }: {
   trigger: (open: () => void) => ReactNode;
   items: MenuItem[];
@@ -97,24 +112,45 @@ export function Menu({
   width?: number;
   /** A search box above the items; the caller filters `items` by `query`. */
   search?: { placeholder: string; query: string; onQuery: (q: string) => void };
+  /** Items below the list, outside its scrolling: the board switcher's New board and Manage. */
+  footer?: MenuItem[];
 }) {
   const [rect, setRect] = useState<DOMRect | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const open = rect !== null;
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
-  // ↑ and ↓ move through the items, ↵ picks one (X50 board switcher). A
-  // searchable menu starts on its checked item, and on the first match as
-  // the query changes.
+  // ↑ and ↓ move through the items, the footer's too, ↵ picks one (X50
+  // board switcher); the mouse moves the same highlight. A searchable menu
+  // starts on its checked item, and on the first match as the search changes.
+  const all = [...items, ...footer];
+  const itemsRef = useRef(all);
+  itemsRef.current = all;
   const [active, setActive] = useState<number | null>(null);
-  const activeRef = useRef(active);
-  activeRef.current = active;
-  const kinds = (list: MenuItem[]) => list.map((it) => it.kind);
+  const activeLabel = useRef<string | null>(null);
+  const label = (i: number | null) => {
+    const it = i === null ? undefined : all[i];
+    return it && "label" in it ? it.label : null;
+  };
+  const activate = (i: number | null) => {
+    activeLabel.current = label(i);
+    setActive(i);
+  };
+  const query = search?.query;
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (!open) return setActive(null);
-    setActive(search ? firstActive(kinds(items), items.map((it) => (it.kind === undefined || it.kind === "item") && !!it.checked)) : null);
-  }, [open, search?.query]);
+    const opening = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!open || !search) return activate(null);
+    activate(firstActive(all, opening ? "open" : "search"));
+  }, [open, query]);
+  // Items that change while the menu is open keep the active one where it went.
+  const now = open ? sameItem(all, active, activeLabel.current) : null;
+  const activeRef = useRef(now);
+  activeRef.current = now;
+  useEffect(() => {
+    if (now !== active) activate(now);
+    panel.current?.querySelector("[data-active]")?.scrollIntoView({ block: "nearest" });
+  }, [now]);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -123,15 +159,16 @@ export function Menu({
         e.stopPropagation();
         return setRect(null);
       }
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const act = menuKey(e, itemsRef.current, activeRef.current);
+      if (act) {
+        // The menu's own keys: nothing under it moves or submits.
         e.preventDefault();
-        return setActive(moveActive(kinds(itemsRef.current), activeRef.current, e.key === "ArrowDown" ? 1 : -1));
-      }
-      const picked = activeRef.current === null ? undefined : itemsRef.current[activeRef.current];
-      if (e.key === "Enter" && picked && (picked.kind === undefined || picked.kind === "item")) {
-        e.preventDefault();
+        e.stopPropagation();
+        if ("move" in act) return activate(act.move);
+        const picked = itemsRef.current[act.pick];
         setRect(null);
-        return picked.onSelect();
+        if (picked.kind === undefined || picked.kind === "item") picked.onSelect();
+        return;
       }
       // A single-character hint doubles as the item's shortcut while the menu is open.
       if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement | null)?.tagName === "INPUT") return;
@@ -183,8 +220,13 @@ export function Menu({
               />
             )}
             <div className={cx(search && "max-h-[320px] overflow-y-auto")}>
-              <MenuItems items={items} active={active} onClose={() => setRect(null)} />
+              <MenuItems items={items} active={now} onActive={activate} onClose={() => setRect(null)} />
             </div>
+            {footer.length > 0 && (
+              <div className="mt-1 border-t border-border pt-1">
+                <MenuItems items={footer} offset={items.length} active={now} onActive={activate} onClose={() => setRect(null)} />
+              </div>
+            )}
           </div>,
           document.body,
         )}

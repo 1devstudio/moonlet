@@ -21,6 +21,9 @@ export type Category = Exclude<Column, "hidden">;
 /** What a category reads as on a column's status line and in step 3 (X50). */
 export const CATEGORY_LABEL: Record<Category, string> = { todo: "To do", in_progress: "In progress", in_review: "In review", done: "Done" };
 
+/** Each category's colour in a board's column strip (Add a board's preview, the switcher's bars). */
+export const CATEGORY_BAR: Record<Category, string> = { todo: "bg-[#4a4a4a]", in_progress: "bg-[#7d7d7d]", in_review: "bg-[#b5b5b5]", done: "bg-merged" };
+
 /** A column on the board: shown, folded to a strip, or hidden. */
 export type ColumnShow = "show" | "fold" | "hide";
 

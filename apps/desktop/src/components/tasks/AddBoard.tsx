@@ -23,7 +23,7 @@ import {
   summaryLine,
   toBoard,
 } from "../../lib/addBoard";
-import { type BoardColumn, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, jiraBoardType, type Origin, type StartRule } from "../../lib/boards";
+import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, jiraBoardType, type Origin, type StartRule } from "../../lib/boards";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
@@ -31,7 +31,7 @@ import { type Task, trackerName, trackerOf } from "../../lib/tasks";
 import { GITHUB, openBoard, previewBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { Button, cx, IconButton, inputCls } from "../ui";
-import { BoardMark, CATEGORY_BAR, TaskGlyph } from "./TasksMode";
+import { BoardMark, TaskGlyph } from "./TasksMode";
 
 const selectCls = cx(inputCls, "menu-select field-height");
 
