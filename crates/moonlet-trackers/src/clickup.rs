@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 
+use crate::board::BoardIssue;
 use crate::config::Finished;
 use crate::states::Column;
 use crate::task::{TrackerRef, TrackerTask};
@@ -86,18 +87,30 @@ pub fn closed_since(now: u64, finished: &Finished) -> u64 {
     now.saturating_sub(days * 86_400_000)
 }
 
-/// Each task's due date (X50 Cards show), by its id: ClickUp's
-/// milliseconds as the day they fall on (UTC).
-pub fn parse_due_dates(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
-    Ok(parse(raw)?["tasks"]
+/// A page of a list's tasks on a board (X50), each with its due date's time.
+pub fn parse_board_tasks(raw: &[u8], connection: &str) -> Result<Vec<BoardIssue>, ApiError> {
+    let due: Vec<Option<u64>> = parse(raw)?["tasks"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|t| {
-            let ms = str_of(&t["due_date"]).parse::<u64>().ok()?;
-            Some((str_of(&t["id"]), crate::time::date_of_ms(ms)))
+        .map(|t| str_of(&t["due_date"]).parse().ok())
+        .collect();
+    Ok(parse_tasks(raw, connection)?
+        .into_iter()
+        .zip(due)
+        .map(|(task, due_ms)| BoardIssue {
+            due_ms,
+            ..BoardIssue::from_task(task)
         })
         .collect())
+}
+
+/// How Add a board heads a list (X50): its space, and folder.
+pub fn list_group(space: &str, folder: Option<&str>) -> String {
+    match folder {
+        Some(f) => format!("{space} › {f}"),
+        None => space.into(),
+    }
 }
 
 /// A page of a list's tasks for the user (or all): the open ones, or with
@@ -125,16 +138,25 @@ pub fn tasks_path(
 /// "closed"-type statuses), by the user's state `mapping` where it has one,
 /// then the recent pass's tasks not already in.
 pub fn merge_passes(
-    open: Vec<TrackerTask>,
-    recent: Vec<TrackerTask>,
+    open: Vec<BoardIssue>,
+    recent: Vec<BoardIssue>,
     mapping: &crate::states::Mapping,
-) -> Vec<TrackerTask> {
-    let done = |t: &TrackerTask| {
-        mapping.get(&t.tracker.state).copied().unwrap_or(t.column) == Column::Done
+) -> Vec<BoardIssue> {
+    let done = |i: &BoardIssue| {
+        mapping
+            .get(&i.task.tracker.state)
+            .copied()
+            .unwrap_or(i.task.column)
+            == Column::Done
     };
-    let mut out: Vec<TrackerTask> = open.into_iter().filter(|t| !done(t)).collect();
-    let mut seen: std::collections::HashSet<String> = out.iter().map(|t| t.key.clone()).collect();
-    out.extend(recent.into_iter().filter(|t| seen.insert(t.key.clone())));
+    let mut out: Vec<BoardIssue> = open.into_iter().filter(|i| !done(i)).collect();
+    let mut seen: std::collections::HashSet<String> =
+        out.iter().map(|i| i.task.key.clone()).collect();
+    out.extend(
+        recent
+            .into_iter()
+            .filter(|i| seen.insert(i.task.key.clone())),
+    );
     out
 }
 
@@ -287,6 +309,10 @@ pub fn parse_error(status: u16, raw: &[u8]) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn issues(tasks: Vec<TrackerTask>) -> Vec<BoardIssue> {
+        tasks.into_iter().map(BoardIssue::from_task).collect()
+    }
     use crate::states::Column;
     use crate::task::{TrackerRef, TrackerTask};
 
@@ -397,9 +423,9 @@ mod tests {
             with("CU-a", Column::InProgress),
             with("CU-new", Column::Done),
         ];
-        let keys: Vec<String> = merge_passes(open, recent, &Default::default())
+        let keys: Vec<String> = merge_passes(issues(open), issues(recent), &Default::default())
             .into_iter()
-            .map(|t| t.key)
+            .map(|i| i.task.key)
             .collect();
         assert_eq!(keys, ["CU-a", "CU-new"]);
     }
@@ -428,9 +454,9 @@ mod tests {
             // A status not shown is no Done: kept.
             with("CU-h", Column::Hidden, "on hold"),
         ];
-        let keys: Vec<String> = merge_passes(open, vec![], &mapping)
+        let keys: Vec<String> = merge_passes(issues(open), vec![], &mapping)
             .into_iter()
-            .map(|t| t.key)
+            .map(|i| i.task.key)
             .collect();
         assert_eq!(keys, ["CU-s", "CU-h"]);
     }
@@ -491,18 +517,35 @@ mod tests {
     }
 
     #[test]
-    fn a_tasks_due_date_is_its_day() {
+    fn a_boards_tasks_carry_their_due_dates_time() {
+        let tasks = parse_board_tasks(&fixture("clickup-tasks.json"), "clickup:9012345").unwrap();
         assert_eq!(
-            parse_due_dates(&fixture("clickup-tasks.json")).unwrap(),
-            [("9hx".to_string(), "2017-10-18".to_string())]
+            tasks
+                .iter()
+                .map(|i| (i.task.tracker.id.as_str(), i.due_ms))
+                .collect::<Vec<_>>(),
+            [
+                ("9hx", Some(1_508_369_194_377)),
+                ("9hz", None),
+                ("86d2m1awy", None)
+            ]
         );
+    }
+
+    #[test]
+    fn a_list_is_headed_by_its_space_and_folder() {
+        assert_eq!(
+            list_group("Engineering", Some("Roadmap")),
+            "Engineering › Roadmap"
+        );
+        assert_eq!(list_group("Engineering", None), "Engineering");
     }
 
     #[test]
     fn closed_tasks_are_read_back_to_the_boards_finished_days() {
         let now = 1_792_972_800_000;
-        assert_eq!(closed_since(now, &Finished::Days(7)), now - 7 * 86_400_000);
+        assert_eq!(closed_since(now, &Finished::Days(7)), 1_792_368_000_000);
         // ClickUp has no sprint to follow: the default 14 days.
-        assert_eq!(closed_since(now, &Finished::Sprint), now - 14 * 86_400_000);
+        assert_eq!(closed_since(now, &Finished::Sprint), 1_791_763_200_000);
     }
 }

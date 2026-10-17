@@ -315,7 +315,7 @@ fn random32() -> Res<[u8; 32]> {
 }
 
 /// A team, project or list a connection can show.
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct SourceChoice {
     pub key: String,
     pub name: String,
@@ -345,7 +345,7 @@ pub struct ConnectRequest {
 }
 
 fn pairs(list: Vec<(String, String)>) -> Vec<SourceChoice> {
-    list.into_iter().map(|(key, name)| SourceChoice { key, name, cycles: false, group: None }).collect()
+    list.into_iter().map(|(key, name)| SourceChoice { key, name, ..Default::default() }).collect()
 }
 
 /// Signs in with a token, keeps it in the Keychain and adds (or replaces) the
@@ -436,7 +436,7 @@ pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
         TrackerKind::Linear => s
             .linear_ok(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?))?
             .into_iter()
-            .map(|t| SourceChoice { key: t.key, name: t.name, cycles: t.cycles, group: None })
+            .map(|t| SourceChoice { key: t.key, name: t.name, cycles: t.cycles, ..Default::default() })
             .collect(),
         TrackerKind::Jira => pairs(jira::parse_projects(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/project/search?maxResults=100")?).await?)?),
         TrackerKind::Clickup => {
@@ -447,12 +447,13 @@ pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
             for (space, space_name) in clickup::parse_spaces(&raw)? {
                 let space = safe_id(&space)?;
                 let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/space/{space}/list"))?).await?;
-                lists.extend(clickup::parse_lists(&raw)?.into_iter().map(|(key, name)| SourceChoice { key, name, cycles: false, group: Some(space_name.clone()) }));
+                let group = |folder: Option<&str>| Some(clickup::list_group(&space_name, folder));
+                lists.extend(clickup::parse_lists(&raw)?.into_iter().map(|(key, name)| SourceChoice { key, name, group: group(None), ..Default::default() }));
                 let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/space/{space}/folder"))?).await?;
                 lists.extend(
                     clickup::parse_folder_lists(&raw)?
                         .into_iter()
-                        .map(|(key, name, folder)| SourceChoice { key, name, cycles: false, group: Some(format!("{space_name} › {folder}")) }),
+                        .map(|(key, name, folder)| SourceChoice { key, name, group: group(Some(&folder)), ..Default::default() }),
                 );
             }
             lists
@@ -499,25 +500,20 @@ impl Session {
     async fn clickup_tasks(&self, list: &str, mine: bool, finished: &Finished) -> Res<Vec<BoardIssue>> {
         let me = if mine { clickup::parse_user_id(&self.clickup_send(self.clickup(reqwest::Method::GET, "/user")?).await?)? } else { String::new() };
         let since = clickup::closed_since(moonlet_core::paths::now_ms(), finished);
-        let mut due = std::collections::HashMap::new();
         let list = safe_id(list)?;
         let mut passes = [Vec::new(), Vec::new()];
         for (pass, closed_since) in passes.iter_mut().zip([None, Some(since)]) {
             for page in 0..5 {
                 let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, closed_since);
                 let raw = self.clickup_send(self.clickup(reqwest::Method::GET, &path)?).await?;
-                pass.extend(clickup::parse_tasks(&raw, &self.conn.id)?);
-                due.extend(clickup::parse_due_dates(&raw)?);
+                pass.extend(clickup::parse_board_tasks(&raw, &self.conn.id)?);
                 if !clickup::more_pages(&raw) {
                     break;
                 }
             }
         }
         let [open, recent] = passes;
-        Ok(clickup::merge_passes(open, recent, &self.conn.states)
-            .into_iter()
-            .map(|t| BoardIssue { due: due.get(&t.tracker.id).cloned(), ..BoardIssue::from_task(t) })
-            .collect())
+        Ok(clickup::merge_passes(open, recent, &self.conn.states))
     }
 }
 

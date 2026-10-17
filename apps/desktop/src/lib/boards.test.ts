@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -370,5 +370,17 @@ describe("withPinned (X50 Settings › Boards: Pinned)", () => {
     ];
     expect(withPinned(boards, "a", false).map((b) => b.pinned)).toEqual([false, false]);
     expect(withPinned(boards, "b", true)).toEqual([boards[0], { id: "b", name: "B", connection: "linear:acme", workspace: "local/w", origin: { kind: "linear_team", team: "B" } }]);
+  });
+});
+
+describe("a due date given as a time (X50 ClickUp)", () => {
+  it("is the day it falls on where the user is", () => {
+    // 2017-10-18 23:26 UTC: the 18th in London, the 19th in Warsaw.
+    expect(localDay(1_508_369_194_377, 0)).toBe("2017-10-18");
+    expect(localDay(1_508_369_194_377, -120)).toBe("2017-10-19");
+    expect(localDay(1_508_369_194_377, 300)).toBe("2017-10-18");
+    const issue = { connection: "clickup:9012", key: "CU-9hx", title: "x", url: "", column: "todo" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, statusId: "", dueMs: 1_508_369_194_377 };
+    expect(taskFromBoardIssue(issue, 0).due).toBe("2017-10-18");
+    expect(taskFromBoardIssue(issue, -120).due).toBe("2017-10-19");
   });
 });

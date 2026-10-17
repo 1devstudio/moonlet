@@ -339,7 +339,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                           const on = JSON.stringify(draft.origin) === JSON.stringify(c.origin);
                           return (
                             <button
-                              key={JSON.stringify(c.origin)}
+                              key={`${group ?? ""} ${JSON.stringify(c.origin)}`}
                               role="radio"
                               aria-checked={on}
                               disabled={added}
