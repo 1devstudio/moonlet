@@ -49,6 +49,28 @@ const session = (name: string, branch: string, o: Partial<BoardSession> = {}): B
 });
 const view = (tasks: Task[], sessions: BoardSession[] = []) => boardView(OPS, { tasks, sessions, worktrees: [], sessionStartRule: "auto" });
 
+describe("a card's note line (X50 Cards)", () => {
+  const note = (columns: ReturnType<typeof view>, key: string) => columns.flatMap((c) => c.cards).find((c) => c.task.key === key)?.note ?? null;
+
+  it("names whose issue it is when it is someone else's and no session is on it", () => {
+    const cols = view([{ ...jira("OPS-520", "10001"), mine: false, assignees: ["Kim Park"] }, { ...jira("OPS-521", "10001"), mine: true, assignees: ["Sam Rivera"] }]);
+    expect([note(cols, "OPS-520"), note(cols, "OPS-521")]).toEqual(["Assigned to Kim Park", null]);
+  });
+
+  it("says a merged PR waits for the next column as expected, on a board with several In review columns", () => {
+    const cols = view([jira("OPS-476", "10020")], [session("Status API limits", "ops-476-limits", { pr: pr(301, "merged") })]);
+    expect(note(cols, "OPS-476")).toBe("Merged · waiting for Ready for Release, as expected");
+  });
+
+  it("says the agent is fixing the session's failing checks while it works", () => {
+    const failing = { ...pr(322, "open"), checks: [{ name: "lint", status: "completed", conclusion: "failure" }, { name: "test", status: "completed", conclusion: "failure" }, { name: "build", status: "completed", conclusion: "success" }] } as PullRequest;
+    const working = view([jira("OPS-505", "3")], [session("Webhook retries", "ops-505-retries", { pr: failing, state: "working", agents: [{ name: "Claude", state: "working", since: 0 }] })]);
+    expect(note(working, "OPS-505")).toBe("Claude is fixing 2 failing checks");
+    const idle = view([jira("OPS-505", "3")], [session("Webhook retries", "ops-505-retries", { pr: failing, state: "idle", agents: [{ name: "Claude", state: "idle", since: 0 }] })]);
+    expect(note(idle, "OPS-505")).toBe(null);
+  });
+});
+
 describe("boardView (X50 Board)", () => {
   it("draws the tracker's columns in the board's order, folded ones as such, hidden ones not at all", () => {
     const columns = view([jira("OPS-512", "10001"), jira("OPS-498", "3"), jira("OPS-487", "10018"), jira("OPS-476", "10020"), jira("OPS-470", "10002"), jira("OPS-400", "10000"), jira("OPS-1", "99999")]);

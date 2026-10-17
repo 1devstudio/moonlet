@@ -259,11 +259,13 @@ function TaskCard({ host, workspaceId, card, fields, selected }: { host: string;
               <span className={cx("font-mono ui-text-11.5 tabular-nums", TONE[r.meta.tone])}>{r.meta.text}</span>
             </button>
           ))}
+          {card.note && <div className="px-1 ui-text-12 text-faint">{card.note}</div>}
         </div>
       ) : (
         <div className="mt-2 flex items-center gap-1.5 ui-text-12 text-faint">
           {card.orphans.length > 0 && <GitBranch size={12} />}
-          <span>{card.empty}</span>
+          {/* A note (X50) says more than "No sessions": whose issue it is. */}
+          <span>{card.note ?? card.empty}</span>
           <button className="ml-auto font-medium text-accent hover:underline" onClick={() => startSession(host, workspaceId, card, card.orphans[0])}>
             {card.orphans.length ? "Start session" : "Start"}
           </button>
