@@ -75,6 +75,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const [filterId, setFilterId] = useState<string | null>(null);
   // A Jira board's status names by id, for step 3.
   const [setupNames, setSetupNames] = useState<Record<string, string>>({});
+  // Status names earlier previews of this source gave, kept while the next one loads.
+  const [knownNames, setKnownNames] = useState<Record<string, string>>({});
   // Each column's category as the tracker suggested it, to outline one the user changed.
   const [suggested, setSuggested] = useState<Partial<Record<string, BoardColumn["category"]>>>({});
   // The row being dragged in step 3.
@@ -131,6 +133,9 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   useEffect(() => {
     setFilterJql(undefined);
     setFilterId(null);
+    // Another source has its own names.
+    setSetupNames({});
+    setKnownNames({});
     if (!draft.connection || draft.origin?.kind !== "jira_board") return;
     let stale = false;
     hostsApi.trackerBoardSetup(draft.connection, draft.origin.board).then(
@@ -215,7 +220,10 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const sample = (preview?.tasks ?? []).slice(0, 3);
   useEffect(() => setSuggested((prev) => suggestedOf(prev, draft.columns)), [draft.columns]);
   const changed = changedCategories(draft.columns, suggested);
-  const names = statusNames(setupNames, preview?.tasks ?? []);
+  const names = statusNames(setupNames, preview?.tasks ?? [], knownNames);
+  useEffect(() => {
+    if (preview?.tasks.length) setKnownNames((known) => statusNames({}, preview.tasks, known));
+  }, [preview]);
   const site = (config.connections ?? []).find((c) => c.id === draft.connection)?.site;
   const moveAt = (i: number, by: number) => setDraft((d) => ({ ...d, columns: moveColumn(d.columns, i, by) }));
   const setColumn = (i: number, patch: Parameters<typeof columnAt>[2]) => setDraft((d) => ({ ...d, columns: columnAt(d.columns, i, patch) }));

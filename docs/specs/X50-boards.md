@@ -75,14 +75,14 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 #### 3. Columns
 
 - [x] A strip previews the board, its columns in order, a folded one narrow. (Seen in the app; React components have no unit tests.)
-- [x] One row per column, in order:
+- [ ] One row per column, in order:
   - a drag handle
   - the column's name and its statuses
   - "moonlet treats it as": To do, In progress, In review or Done
   - Show / Fold / Hide
   - WIP
 
-  Up and down buttons move a column too, for the keyboard. Statuses show by name: a Jira board's from its setup, a JQL board's from its issues. (`addBoard.test.ts` lists a column's statuses by name: Jira's board setup, else the previewed issues, else the id; `jira_board.rs` a_scrum_boards_columns_with_their_suggested_categories; `addBoard.test.ts` moves a column up or down, and sets its category and how it shows, drops a dragged column where it lands; `task-trackers.e2e.ts` adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged (X50); `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings)
+  Up and down buttons move a column too, for the keyboard. Statuses show by name: a Jira board's from its setup, a JQL board's from its issues. (Partly: a JQL board's status that no issue is in today shows its id. `addBoard.test.ts` lists a column's statuses by name: Jira's board setup, else the previewed issues, else the id; `jira_board.rs` a_scrum_boards_columns_with_their_suggested_categories; `addBoard.test.ts` moves a column up or down, and sets its category and how it shows, drops a dragged column where it lands; `task-trackers.e2e.ts` adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged (X50); `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings)
 - [ ] Where columns come from:
   - Jira board: Jira's columns, their statuses and their WIP limits (max).
   - JQL board: one column per status its issues are in, ordered by category; a status seen later gets a column of its own, and no column goes by itself, since its statuses may just have no issue today. A status can be dragged onto another column to group them, as the design's "which you can then group and order" says. (`boards.test.ts` only adds columns to a JQL board, since its columns come from the statuses its issues happen to be in)

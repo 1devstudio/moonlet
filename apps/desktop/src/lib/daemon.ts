@@ -60,7 +60,7 @@ export const hostsApi = {
   trackerBoards: (id: string) => invoke<{ id: number; name: string; kind: string; project: string | null }[]>("tracker_boards", { id }),
   /** A Jira board's columns, filter and story points field (X50). */
   trackerBoardSetup: (id: string, board: number) =>
-    invoke<{ filterId: string; filterJql?: string; subQuery: string | null; pointsField: string | null; sprints: boolean; kind: string; statusNames: Record<string, string>; columns: import("./boards").BoardColumn[] }>("tracker_board_setup", { id, board }),
+    invoke<{ filterId: string; filterJql?: string; subQuery: string | null; pointsField: string | null; sprints: boolean; statusNames: Record<string, string>; columns: import("./boards").BoardColumn[] }>("tracker_board_setup", { id, board }),
   /** A board's issues, its active sprint, and a Jira board's columns as Jira has them now (X50). */
   trackerBoardTasks: (query: { id: string; origin: import("./boards").Origin; narrow?: string; mine: boolean; finished: number | "sprint" }) =>
     invoke<{ issues: import("./boards").BoardIssue[]; sprint: { id: number; name: string; startMs: number; endMs: number } | null; columns: import("./boards").BoardColumn[] | null; kind?: string }>(

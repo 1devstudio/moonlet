@@ -215,6 +215,9 @@ describe("Add a board, step 3 statuses (X50)", () => {
     const issue = (statusId: string, state: string): Task => ({ connection: JIRA, key: "EX-1", title: "", url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "1", state, statusId, source: "EX" } });
     const names = statusNames({ "10002": "Done" }, [issue("3", "In Progress"), issue("10001", "Selected for Development")]);
     expect(names).toEqual({ "10002": "Done", "3": "In Progress", "10001": "Selected for Development" });
+    // The board's setup wins over an issue's; names already seen stay while the next preview loads.
+    expect(statusNames({ "3": "In Progress" }, [issue("3", "Doing")], { "6": "Closed" })).toEqual({ "3": "In Progress", "6": "Closed" });
+    expect(statusNames({}, [], { "6": "Closed" })).toEqual({ "6": "Closed" });
     expect(WEB.map((c) => statusText(c, names))).toEqual(["10000", "Selected for Development", "In Progress", "10030", "Done"]);
     expect(statusText({ name: "Empty", statuses: [], category: "todo" }, names)).toBe("no status");
     // Linear and ClickUp columns list their states by name already.
