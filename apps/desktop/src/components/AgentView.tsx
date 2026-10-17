@@ -1381,7 +1381,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     setAside(null);
   };
   const column = useRef<HTMLElement>(null);
-  const layout = inputLayout(useWidth(column, 760));
+  const layout = inputLayout(useWidth(column, 760), scale);
   const cost = st && layout.cost ? costLine(st, layout.cost) : null;
   const fullCost = st ? costLine(st) : null;
   const stopButton = (

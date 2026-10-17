@@ -24,8 +24,10 @@ export interface InputLayout {
   longPlaceholder: boolean;
 }
 
-export function inputLayout(width: number): InputLayout {
-  const tier: InputTier = width >= 640 ? "wide" : width >= 500 ? "medium" : width >= 380 ? "narrow" : "compact";
+/** `scale` is the app's text scale (see uiScale): larger text needs more room, so the width counts in 1× px. */
+export function inputLayout(width: number, scale = 1): InputLayout {
+  const w = width / scale;
+  const tier: InputTier = w >= 640 ? "wide" : w >= 500 ? "medium" : w >= 380 ? "narrow" : "compact";
   const roomy = tier === "wide" || tier === "medium";
   const compact = tier === "compact";
   return {
