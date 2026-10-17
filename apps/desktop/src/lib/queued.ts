@@ -64,8 +64,8 @@ export function asideFooter(a: AsideAnswer): string {
  * The chat input's placeholder. Claude queues a message sent during a turn; Codex steers the turn with it.
  * A narrow chat leaves the hints out of the idle one (X51).
  */
-export function composerPlaceholder(agent: string, working: boolean, long = true): string {
-  if (!working) return long ? "Ask for a change, @ to mention a file, / for commands" : "Ask for a change…";
+export function composerPlaceholder(agent: string, working: boolean, hints = true): string {
+  if (!working) return hints ? "Ask for a change, @ to mention a file, / for commands" : "Ask for a change…";
   return agent === "claude" ? "Queue a message for Claude" : "Queue a message…";
 }
 

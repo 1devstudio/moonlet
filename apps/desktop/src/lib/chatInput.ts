@@ -13,7 +13,7 @@ export interface InputLayout {
   /** `⌥↵ ask aside` in the input. */
   asideHint: boolean;
   /** The context ring's percentage. */
-  percent: boolean;
+  showPercent: boolean;
   /** The spend: `$3.49 · 3M in · 19.9k out`, `$3.49`, or none. */
   cost: "full" | "short" | null;
   /** The effort after the model. */
@@ -36,7 +36,7 @@ export function inputLayout(width: number, scale = 1): InputLayout {
     insetX: compact ? 12 : 16,
     escHint: roomy,
     asideHint: roomy,
-    percent: !compact,
+    showPercent: !compact,
     cost: tier === "wide" ? "full" : roomy ? "short" : null,
     effort: roomy,
     modeLabel: !compact,

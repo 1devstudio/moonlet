@@ -11,7 +11,7 @@ const WIDTH = 320;
  * window is, and a card with the breakdown and Compact now. A compact chat
  * shows the ring without its percentage (X51).
  */
-export function ContextMeter({ usage, onCompact, percent = true }: { usage: ContextUsage; onCompact: () => void; percent?: boolean }) {
+export function ContextMeter({ usage, onCompact, showPercent = true }: { usage: ContextUsage; onCompact: () => void; showPercent?: boolean }) {
   const [rect, setRect] = useState<DOMRect | null>(null);
   const anchor = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -53,7 +53,7 @@ export function ContextMeter({ usage, onCompact, percent = true }: { usage: Cont
         >
           <span className="h-2 w-2 rounded-full bg-bg" />
         </span>
-        {percent && <span className="font-mono ui-text-12.5 text-muted">{view.percent}%</span>}
+        {showPercent && <span className="font-mono ui-text-12.5 text-muted">{view.percent}%</span>}
       </button>
       {rect &&
         createPortal(
