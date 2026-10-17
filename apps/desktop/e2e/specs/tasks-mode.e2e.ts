@@ -268,18 +268,23 @@ describe("Tasks mode", () => {
     await expect($('//*[starts-with(normalize-space(), "Sync failed · ")]')).not.toBeExisting({ wait: 15_000 });
   });
 
-  it("asks to connect a task tracker in a workspace with no source", async () => {
-    git("remote", "remove", "origin");
+  it("asks to connect a task tracker in a workspace with no board", async () => {
+    // A workspace with no project: no GitHub repository, no board (X50).
+    const empty = rpc<{ id: string }>(w, "workspace.create", { name: "Empty", color: "grey" });
+    const ctrlCmd = (key: string) =>
+      browser.execute((k: string) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, metaKey: true, ctrlKey: true, bubbles: true })), key);
     try {
-      // No project has a GitHub origin now.
+      await ctrlCmd("2");
+      await expect($('button[aria-label="Switch workspace, current: Empty"]')).toBeDisplayed({ wait: 15_000 });
       await tasksButton().click();
-      await $('//button[@title="Refresh tasks"]').click();
       await expect($(sel.text("Connect a task tracker"))).toBeDisplayed({ wait: 15_000 });
       await expect($(sel.button("Open Settings › Task trackers"))).toBeDisplayed();
       await $(sel.button("Not now")).click();
     } finally {
-      git("remote", "add", "origin", "https://github.com/acme/storefront.git");
+      await ctrlCmd("1");
+      rpc(w, "workspace.delete", { id: empty.id });
     }
+    await expect($('button[aria-label="Switch workspace, current: Personal"]')).toBeDisplayed({ wait: 15_000 });
     await tasksButton().click();
     await expect(card("acme/storefront#19", "Todo")).toBeDisplayed({ wait: 15_000 });
     await sessionsButton().click();

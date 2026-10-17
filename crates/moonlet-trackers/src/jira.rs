@@ -181,8 +181,9 @@ pub fn parse_project_statuses(raw: &[u8]) -> Result<Vec<(String, String)>, ApiEr
 pub struct Transition {
     pub id: String,
     pub name: String,
-    /// The status it leads to, and that status's category key.
+    /// The status it leads to, its id, and that status's category key.
     pub to: String,
+    pub to_id: String,
     pub to_category: String,
 }
 
@@ -196,6 +197,7 @@ pub fn parse_transitions(raw: &[u8]) -> Result<Vec<Transition>, ApiError> {
             id: t["id"].as_str().unwrap_or_default().into(),
             name: t["name"].as_str().unwrap_or_default().into(),
             to: t["to"]["name"].as_str().unwrap_or_default().into(),
+            to_id: t["to"]["id"].as_str().unwrap_or_default().into(),
             to_category: t["to"]["statusCategory"]["key"]
                 .as_str()
                 .unwrap_or_default()
@@ -214,6 +216,16 @@ pub fn transition_to<'a>(
         let natural = crate::states::default_column(TrackerKind::Jira, &t.to_category, &t.to);
         (natural, t.to.as_str())
     })
+}
+
+/// The transition to a board column's status (X50), given by its id or name.
+pub fn transition_to_status<'a>(
+    transitions: &'a [Transition],
+    status: &str,
+) -> Option<&'a Transition> {
+    transitions
+        .iter()
+        .find(|t| t.to_id == status || t.to == status)
 }
 
 pub fn transition_body(id: &str) -> Value {
@@ -358,6 +370,21 @@ mod tests {
                 ("ABC".to_string(), "Alphabetical".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn the_transition_that_reaches_a_board_columns_status() {
+        let t = parse_transitions(&fixture("jira-transitions.json")).unwrap();
+        // By the status id a board column lists, or by its name.
+        assert_eq!(
+            transition_to_status(&t, "3").map(|t| t.id.as_str()),
+            Some("21")
+        );
+        assert_eq!(
+            transition_to_status(&t, "Done").map(|t| t.id.as_str()),
+            Some("31")
+        );
+        assert_eq!(transition_to_status(&t, "10018"), None);
     }
 
     #[test]

@@ -94,9 +94,9 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   const loading = !file;
   const parseError = file?.error ?? null;
   const v = validate(form);
-  const connections = useTasks((t) => t.config?.connections);
+  const boards = useTasks((t) => t.config?.boards);
   useEffect(() => void loadTrackersConfig(), []);
-  const trackers = projectTrackers(connections, form.trackers);
+  const trackers = projectTrackers(boards, form.trackers);
   const dirty = !parseError && isDirty(form, orig);
   const canSave = !loading && !parseError && dirty && !v.any && !saving;
   const path = file?.path ?? "";

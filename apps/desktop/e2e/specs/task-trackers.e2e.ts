@@ -143,16 +143,17 @@ describe("Linear tracker", () => {
     const ws = rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
     await choose(`${eng}//select[@aria-label="Workspace for Engineering"]`, `local/${ws}`);
     await $('//div[@role="dialog"]//button[normalize-space()="Save and sync"]').click();
-    await expect($(sel.text("Connected as Ada Lovelace · API key · 1 source"))).toBeDisplayed({ wait: 10_000 });
+    await expect($(sel.text("Connected as Ada Lovelace · API key · 1 board"))).toBeDisplayed({ wait: 10_000 });
     const toml = readFileSync(join(w.home, "trackers.toml"), "utf8");
     expect(toml).toContain('id = "linear:acme"');
-    expect(toml).toContain('key = "ENG"');
-    expect(toml).not.toContain('key = "DES"');
+    // The chosen team is a board (X50).
+    expect(toml).toContain('team = "ENG"');
+    expect(toml).not.toContain('team = "DES"');
     expect(toml).not.toContain("lin_api_e2e");
     expect(readFileSync(join(w.home, "secrets.json"), "utf8")).toContain("lin_api_e2e");
   });
 
-  it("maps a workflow state to another column, saved with the connection", async () => {
+  it("maps a workflow state to another column, saved with the board", async () => {
     await $(sel.settingsButton("States")).click();
     await expect($('//div[@role="dialog"]').$(sel.text("Backlog"))).toBeDisplayed({ wait: 10_000 });
     await choose('//select[@aria-label="Column for Backlog"]', "todo");
