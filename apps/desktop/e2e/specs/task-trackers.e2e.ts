@@ -179,8 +179,8 @@ describe("Linear tracker", () => {
     await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
     await expect($('//section[@aria-label="In Progress"]//article[starts-with(@aria-label, "ENG-123")]')).toBeDisplayed({ wait: 15_000 });
     await expect($('//section[@aria-label="Todo"]//article[starts-with(@aria-label, "ENG-124")]')).toBeDisplayed();
-    // The sidebar lists the workspace's sources.
-    await expect($(sel.text("Linear · Engineering"))).toBeDisplayed();
+    // The sidebar lists the workspace's boards (X50).
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="Engineering"]]')).toBeDisplayed();
     await $('//section[@aria-label="In Progress"]//article[starts-with(@aria-label, "ENG-123")]//button[normalize-space()="Retry failed webhook deliveries"]').click();
     await expect($('//aside[@aria-label="Task detail"]').$(sel.text("· Cycle 42"))).toBeDisplayed();
   });
@@ -235,8 +235,8 @@ describe("Linear tracker", () => {
     rejecting = true;
     await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
     await $('//button[@title="Refresh tasks"]').click();
-    // The sidebar marks the source of a connection that needs attention.
-    await expect($('//li[.//span[normalize-space()="Linear · Engineering"]]/span[@title]')).toBeDisplayed({ wait: 15_000 });
+    // The sidebar marks the board of a connection that needs attention.
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="Engineering"]]/span[@title]')).toBeDisplayed({ wait: 15_000 });
     await openSettings("Task trackers");
     await expect($('//*[@role="img"][@aria-label="1 connection needs attention"]')).toBeDisplayed({ wait: 15_000 });
     rejecting = false;

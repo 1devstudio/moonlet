@@ -18,6 +18,12 @@ export type Origin =
 /** What moonlet treats a board column as; hiding a column is its `show`. */
 export type Category = Exclude<Column, "hidden">;
 
+/** What a category reads as on a column's status line and in step 3 (X50). */
+export const CATEGORY_LABEL: Record<Category, string> = { todo: "To do", in_progress: "In progress", in_review: "In review", done: "Done" };
+
+/** A column on the board: shown, folded to a strip, or hidden. */
+export type ColumnShow = "show" | "fold" | "hide";
+
 export interface BoardColumn {
   /** As the tracker names it. */
   name: string;
@@ -25,7 +31,7 @@ export interface BoardColumn {
   statuses: string[];
   category: Category;
   /** Absent: shown. */
-  show?: "fold" | "hide";
+  show?: Exclude<ColumnShow, "show">;
   /** Jira's column limit. */
   wip?: number;
 }
@@ -277,4 +283,16 @@ export function syncedColumns(board: BoardConfig, fresh: BoardColumn[] | null): 
   if (!saved.length) return firstColumns(fresh, board.states);
   if (board.origin.kind === "jql") return [...saved, ...fresh.filter((f) => !f.statuses.some((id) => saved.some((c) => c.statuses.includes(id))))];
   return matchColumns(saved, fresh);
+}
+
+/** Board `board` with column `name` shown, folded or hidden (X50); moonlet-only, the tracker is not told. */
+export function withColumnShow(board: BoardConfig, name: string, show: ColumnShow): BoardConfig {
+  return {
+    ...board,
+    columns: syncedColumns(board, null).map((c) => {
+      if (c.name !== name) return c;
+      const { show: _, ...rest } = c;
+      return show === "show" ? rest : { ...rest, show };
+    }),
+  };
 }
