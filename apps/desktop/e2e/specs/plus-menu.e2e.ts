@@ -1,11 +1,12 @@
 // The chat input's + menu (X29), with a fake `claude` that answers
-// `initialize` and `mcp_status` the way Claude Code 2.1.292 does.
+// `initialize` and `mcp_status` the way Claude Code 2.1.292 does. Its
+// commands also back the editor's `/` completion mid-message (X6).
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { PROJECT, hover, rpc, sel, world } from "../fixtures";
+import { PROJECT, fill, hover, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
@@ -114,5 +115,14 @@ describe("+ menu", () => {
     await expect($(sel.text("Software architect agent for designing implementation plans."))).toBeDisplayed();
     await $('//button[span[normalize-space()="Plan"]][span[starts-with(normalize-space(), "Software architect")]]').click();
     expect(await $(EDITOR).getValue()).toBe("/review @agent-Plan ");
+  });
+
+  it("lists slash commands for a / typed in the middle of the message", async () => {
+    await fill(EDITOR, "Tidy the page, then /rev");
+    await expect($(sel.button("/review"))).toBeDisplayed();
+    // Tab accepts the highlighted command; the list's own buttons act on mousedown.
+    await browser.keys("Tab");
+    expect(await $(EDITOR).getValue()).toBe("Tidy the page, then /review ");
+    await fill(EDITOR, "");
   });
 });

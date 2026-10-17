@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   activeToken,
+  commandOptions,
+  withCompletion,
   joinDraft,
   fileMention,
   askQuestions,
@@ -53,8 +55,30 @@ describe("chat helpers", () => {
   it("finds @ and / tokens at the caret", () => {
     expect(activeToken("look at @src/ma", 15)).toEqual({ kind: "@", start: 8, query: "src/ma" });
     expect(activeToken("/rev", 4)).toEqual({ kind: "/", start: 0, query: "rev" });
-    expect(activeToken("run /rev", 8)).toBeNull();
     expect(activeToken("email a@b", 9)).toBeNull();
+  });
+
+  it("finds a / token in the middle of the message", () => {
+    expect(activeToken("run /rev", 8)).toEqual({ kind: "/", start: 4, query: "rev" });
+    expect(activeToken("fix it\n/", 8)).toEqual({ kind: "/", start: 7, query: "" });
+    expect(activeToken("then /rev and more", 9)).toEqual({ kind: "/", start: 5, query: "rev" });
+    expect(activeToken("see src/main", 12)).toBeNull();
+  });
+
+  it("lists commands fuzzily at the start and by name prefix mid-message", () => {
+    const commands = ["review", "terminal-setup", "compact"];
+    expect(commandOptions(commands, "/rv", activeToken("/rv", 3)!)).toEqual(["/review"]);
+    expect(commandOptions(commands, "check /tmp", activeToken("check /tmp", 10)!)).toEqual([]);
+    expect(commandOptions(commands, "then /Re", activeToken("then /Re", 8)!)).toEqual(["/review"]);
+    expect(commandOptions(commands, "then /", activeToken("then /", 6)!)).toEqual(["/review", "/terminal-setup", "/compact"]);
+  });
+
+  it("replaces the whole word at the caret with the chosen completion", () => {
+    expect(withCompletion("then /rev", 9, activeToken("then /rev", 9)!, "/review")).toEqual({ text: "then /review ", caret: 13 });
+    expect(withCompletion("then /rev and more", 9, activeToken("then /rev and more", 9)!, "/review")).toEqual({ text: "then /review and more", caret: 13 });
+    expect(withCompletion("/re view", 3, activeToken("/re view", 3)!, "/review")).toEqual({ text: "/review view", caret: 8 });
+    expect(withCompletion("/reXX next", 3, activeToken("/reXX next", 3)!, "/review")).toEqual({ text: "/review next", caret: 8 });
+    expect(withCompletion("see @src/ma\nmore", 11, activeToken("see @src/ma\nmore", 11)!, "@src/main.rs")).toEqual({ text: "see @src/main.rs \nmore", caret: 17 });
   });
 
   it("ranks fuzzy file matches by name", () => {
