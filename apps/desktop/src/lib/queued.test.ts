@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { asideFooter, composerPlaceholder, interruptedLine, queuedCount, queuedLine, sendNowLabel, sendNowWarning, stoppingLine, waitingOn } from "./queued";
-import type { ChatItem, QueuedMessage } from "./protocol";
+import { type Aside, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, queuedLine, sendNowLabel, sendNowParams, sendNowWarning, stoppingLine, unqueued, waitingOn } from "./queued";
+import type { ChatItem, ChatState, QueuedMessage } from "./protocol";
 
 const T0 = 1_792_150_000_000;
 
@@ -83,5 +83,70 @@ describe("the composer while Claude works", () => {
     expect(queuedCount([])).toBeNull();
     expect(queuedCount([port])).toBe("· 1 queued");
     expect(queuedCount([timeout, port])).toBe("· 2 queued");
+  });
+});
+
+describe("queuedHeader", () => {
+  const running = waitingOn([ask, reply, check]);
+  const warn = sendNowWarning(running, T0 + 60_000);
+
+  it("is the queued line, the hover warning, or the stopping line after Send now", () => {
+    expect(queuedHeader([port], running, null)).toEqual({ line: { text: "Queued · Claude reads it after", command: "pnpm stack:check" }, tone: "waiting", ring: false });
+    expect(queuedHeader([port], running, warn)).toEqual({ line: { text: "Send now stops", command: "pnpm stack:check", tail: "(running 0:57)" }, tone: "warn", ring: true });
+    expect(queuedHeader([{ ...port, sending: true }], running, warn)).toEqual({ line: { text: "Stopping", command: "pnpm stack:check", tail: "…" }, tone: "sending", ring: true });
+  });
+
+  it("rings nothing when no command runs", () => {
+    expect(queuedHeader([{ ...port, sending: true }], null, null)).toEqual({ line: { text: "Sending…" }, tone: "sending", ring: false });
+  });
+});
+
+describe("sendNowParams", () => {
+  it("names the message when it is the only one, and sends every one otherwise", () => {
+    expect(sendNowParams([port])).toEqual({ message: port.id });
+    expect(sendNowParams([timeout, port])).toEqual({});
+  });
+});
+
+describe("unqueued", () => {
+  const st = (queued: QueuedMessage[], ...items: ChatItem[]): Pick<ChatState, "queued" | "items"> => ({ queued, items: [ask, reply, check, ...items] });
+
+  it("waits while the message is queued", () => {
+    expect(unqueued(st([port]), port.id)).toBe("waiting");
+  });
+
+  it("is cancelled when the message left the queue without being read", () => {
+    expect(unqueued(st([]), port.id)).toBe("cancelled");
+  });
+
+  it("is taken when Claude read the message first", () => {
+    // The daemon gives a message Claude reads its uuid as its id.
+    expect(unqueued(st([], { id: port.id, kind: "user", text: port.text, ts: T0 + 9_000 }), port.id)).toBe("taken");
+  });
+});
+
+describe("asideSettled", () => {
+  const asking: Aside = { question: "and the web port?" };
+
+  it("keeps the answer or the error of the question still open", () => {
+    expect(asideSettled(asking, "and the web port?", { error: "No conversation found with session ID: e2e-queue" })).toEqual({ question: "and the web port?", error: "No conversation found with session ID: e2e-queue" });
+    expect(asideSettled(asking, "and the web port?", { answer: { text: "3000.", cost_usd: 0.0015, duration_ms: 3_200 } })).toEqual({
+      question: "and the web port?",
+      answer: { text: "3000.", cost_usd: 0.0015, duration_ms: 3_200 },
+    });
+  });
+
+  it("drops a late reply to a question that was closed or replaced", () => {
+    expect(asideSettled(null, "and the web port?", { error: "late" })).toBeNull();
+    expect(asideSettled({ question: "which db?" }, "and the web port?", { error: "late" })).toEqual({ question: "which db?" });
+  });
+});
+
+describe("canAskAside", () => {
+  it("is offered while Claude works, and not while a plan is revised", () => {
+    expect(canAskAside("claude", true, false)).toBe(true);
+    expect(canAskAside("claude", false, false)).toBe(false);
+    expect(canAskAside("codex", true, false)).toBe(false);
+    expect(canAskAside("claude", true, true)).toBe(false);
   });
 });
