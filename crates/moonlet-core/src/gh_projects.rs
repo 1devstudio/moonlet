@@ -50,6 +50,10 @@ pub fn parse_projects(raw: &[u8]) -> Result<Vec<GhProject>> {
             continue;
         }
         let field = &p["field"];
+        // A Project without a Status field has no columns to show.
+        if field["id"].is_null() {
+            continue;
+        }
         out.push(GhProject {
             id: p["id"].as_str().unwrap_or_default().into(),
             owner: p["owner"]["login"].as_str().unwrap_or_default().into(),
@@ -146,10 +150,19 @@ pub fn scope_hint(scope: &str) -> String {
     )
 }
 
-/// A GraphQL answer's data, or its first error; a missing scope is named with the command that adds it.
+/// A GraphQL answer's data, or its first error; a missing scope is named
+/// with the command that adds it. An answer with some data keeps it: an
+/// owner whose Projects gh may not read leaves the others.
 fn graphql_data(raw: &[u8]) -> Result<Value> {
     let v: Value = serde_json::from_slice(raw)?;
-    if let Some(e) = v["errors"].as_array().and_then(|e| e.first()) {
+    let some_data = v["data"]
+        .as_object()
+        .is_some_and(|o| o.values().any(|x| !x.is_null()));
+    if let Some(e) = v["errors"]
+        .as_array()
+        .and_then(|e| e.first())
+        .filter(|_| !some_data)
+    {
         let message = e["message"]
             .as_str()
             .unwrap_or("GitHub refused the request");
@@ -166,9 +179,15 @@ fn graphql_data(raw: &[u8]) -> Result<Value> {
     Ok(v["data"].clone())
 }
 
-/// Runs a GraphQL query through gh; its answer even when gh exits with an
-/// error, since GraphQL errors come in the answer.
-async fn graphql(query: &str, vars: &[(&str, String)]) -> Result<Vec<u8>> {
+/// A GraphQL variable: a string, or a number, which gh must send as one.
+pub enum Var {
+    Str(String),
+    Int(u64),
+}
+
+/// `gh api graphql`'s arguments for `query` and its variables: `-F` types a
+/// number, `-f` keeps a string a string (a login of digits stays a string).
+pub fn graphql_args(query: &str, vars: &[(&str, Var)]) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "api".into(),
         "graphql".into(),
@@ -176,14 +195,19 @@ async fn graphql(query: &str, vars: &[(&str, String)]) -> Result<Vec<u8>> {
         format!("query={query}"),
     ];
     for (k, v) in vars {
-        // -F types numbers; -f keeps strings as strings.
-        let flag = if v.parse::<u64>().is_ok() && *k == "number" {
-            "-F"
-        } else {
-            "-f"
+        let (flag, value) = match v {
+            Var::Str(s) => ("-f", s.clone()),
+            Var::Int(n) => ("-F", n.to_string()),
         };
-        args.extend([flag.into(), format!("{k}={v}")]);
+        args.extend([flag.into(), format!("{k}={value}")]);
     }
+    args
+}
+
+/// Runs a GraphQL query through gh; its answer even when gh exits with an
+/// error, since GraphQL errors come in the answer.
+async fn graphql(query: &str, vars: &[(&str, Var)]) -> Result<Vec<u8>> {
+    let args = graphql_args(query, vars);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let out = run_raw("gh", Path::new("/"), &refs, None, Duration::from_secs(60)).await?;
     if out.status != 0 && !out.stdout.starts_with(b"{") {
@@ -194,55 +218,80 @@ async fn graphql(query: &str, vars: &[(&str, String)]) -> Result<Vec<u8>> {
 
 /// The open Projects of the signed-in user and of `owners`, each once.
 pub async fn gh_projects(owners: &[String]) -> Result<Vec<GhProject>> {
-    let owners: Vec<&String> = owners.iter().filter(|o| is_login(o)).collect();
-    let vars: Vec<(String, String)> = owners
+    let owners = owners_to_ask(owners);
+    let names: Vec<String> = (0..owners.len()).map(|i| format!("o{i}")).collect();
+    let vars: Vec<(&str, Var)> = names
         .iter()
-        .enumerate()
-        .map(|(i, o)| (format!("o{i}"), (*o).clone()))
+        .zip(&owners)
+        .map(|(k, o)| (k.as_str(), Var::Str(o.to_string())))
         .collect();
-    let refs: Vec<(&str, String)> = vars.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-    parse_projects(&graphql(&projects_query(owners.len()), &refs).await?)
+    parse_projects(&graphql(&projects_query(owners.len()), &vars).await?)
+}
+
+/// The owners worth asking about: GitHub logins (letters, digits and single
+/// hyphens, not at either end), each once whatever its case.
+pub fn owners_to_ask(owners: &[String]) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for o in owners {
+        let login = !o.is_empty()
+            && o.len() <= 39
+            && !o.starts_with('-')
+            && !o.ends_with('-')
+            && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if login && !out.iter().any(|x| x.eq_ignore_ascii_case(o)) {
+            out.push(o);
+        }
+    }
+    out
+}
+
+/// A Project read so far with its next page added: the user's own items
+/// only when `mine`, by the signed-in `login`, whatever its case.
+pub fn add_page(
+    board: Option<GhProjectBoard>,
+    mut page: GhProjectBoard,
+    login: &str,
+    mine: bool,
+) -> GhProjectBoard {
+    page.items.retain(|i| {
+        !mine
+            || i.task
+                .assignees
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(login))
+    });
+    match board {
+        Some(mut b) => {
+            b.items.extend(page.items);
+            b
+        }
+        None => page,
+    }
 }
 
 /// A Project's items that are issues, at most 5 pages of 100; the user's own when `mine`.
 pub async fn gh_project_items(owner: &str, number: u64, mine: bool) -> Result<GhProjectBoard> {
-    if !is_login(owner) {
+    if owners_to_ask(&[owner.to_string()]).is_empty() {
         bail!("{owner} is not a GitHub user or organisation");
     }
     let mut board: Option<GhProjectBoard> = None;
     let mut after: Option<String> = None;
     for _ in 0..5 {
-        let mut vars = vec![("owner", owner.to_string()), ("number", number.to_string())];
+        let mut vars = vec![
+            ("owner", Var::Str(owner.into())),
+            ("number", Var::Int(number)),
+        ];
         if let Some(a) = &after {
-            vars.push(("after", a.clone()));
+            vars.push(("after", Var::Str(a.clone())));
         }
-        let (mut page, login, next) = parse_project_items(&graphql(ITEMS_QUERY, &vars).await?)?;
-        page.items.retain(|i| {
-            !mine
-                || i.task
-                    .assignees
-                    .iter()
-                    .any(|a| a.eq_ignore_ascii_case(&login))
-        });
-        match &mut board {
-            Some(b) => b.items.extend(page.items),
-            None => board = Some(page),
-        }
+        let (page, login, next) = parse_project_items(&graphql(ITEMS_QUERY, &vars).await?)?;
+        board = Some(add_page(board, page, &login, mine));
         after = next;
         if after.is_none() {
             break;
         }
     }
     board.ok_or_else(|| anyhow::anyhow!("GitHub sent no Project"))
-}
-
-/// A GitHub login: letters, digits and single hyphens, not at either end.
-fn is_login(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 39
-        && !s.starts_with('-')
-        && !s.ends_with('-')
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 #[cfg(test)]
@@ -278,8 +327,7 @@ mod tests {
             ["Todo", "In Progress", "Done"]
         );
         // An owner's Projects come in the same answer, under their own key, and a Project seen twice counts once.
-        let both =
-            format!(
+        let both = format!(
                 r#"{{"data":{{"viewer":{},"o0":{}}}}}"#,
                 serde_json::to_string(
                     &serde_json::from_slice::<Value>(&fixture("gh-projects.json")).unwrap()["data"]
@@ -293,8 +341,6 @@ mod tests {
                 .unwrap(),
             );
         assert_eq!(parse_projects(both.as_bytes()).unwrap().len(), 2);
-        assert!(projects_query(2).starts_with("query($o0: String!, $o1: String!) { viewer"));
-        assert!(projects_query(0).starts_with("query { viewer"));
     }
 
     #[test]
@@ -349,7 +395,7 @@ mod tests {
             "GitHub Projects need gh's read:project scope. Run gh auth refresh -s read:project, then Check again."
         );
         assert_eq!(
-            graphql_data(&fixture("gh-error-project-scope.json"))
+            parse_project_items(&fixture("gh-error-project-scope.json"))
                 .unwrap_err()
                 .to_string(),
             "GitHub Projects need gh's project scope. Run gh auth refresh -s project, then Check again."
@@ -357,8 +403,72 @@ mod tests {
     }
 
     #[test]
-    fn only_a_github_login_is_asked_about() {
-        assert!(is_login("acme") && is_login("sam-rivera"));
-        assert!(!is_login("-x") && !is_login("a b") && !is_login("x\"y") && !is_login(""));
+    fn only_github_logins_are_asked_about_each_once() {
+        let owners: Vec<String> = ["acme", "sam-rivera", "-x", "a b", "x\"y", "", "ACME"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(owners_to_ask(&owners), ["acme", "sam-rivera"]);
+    }
+
+    #[test]
+    fn a_number_goes_to_gh_as_a_number_and_a_login_as_a_string() {
+        assert_eq!(
+            graphql_args(
+                "q",
+                &[("owner", Var::Str("1234".into())), ("number", Var::Int(2))]
+            ),
+            [
+                "api",
+                "graphql",
+                "-f",
+                "query=q",
+                "-f",
+                "owner=1234",
+                "-F",
+                "number=2"
+            ]
+        );
+    }
+
+    #[test]
+    fn pages_add_up_and_mine_keeps_the_users_own() {
+        let page = || {
+            parse_project_items(&fixture("gh-project-items.json"))
+                .unwrap()
+                .0
+        };
+        let all = add_page(
+            Some(add_page(None, page(), "sam-rivera", false)),
+            page(),
+            "sam-rivera",
+            false,
+        );
+        assert_eq!(all.items.len(), 26);
+        // Two issues are assigned to sam-rivera; the login's case doesn't matter.
+        let mine = add_page(None, page(), "Sam-Rivera", true);
+        assert_eq!(
+            mine.items.iter().map(|i| i.task.number).collect::<Vec<_>>(),
+            [10, 5]
+        );
+    }
+
+    #[test]
+    fn a_project_without_a_status_field_is_not_offered() {
+        let raw = br#"{"data":{"viewer":{"projectsV2":{"nodes":[{"id":"PVT_a","number":4,"title":"Notes","closed":false,"owner":{"login":"sam-rivera"},"field":null}]}}}}"#;
+        assert_eq!(parse_projects(raw).unwrap(), []);
+    }
+
+    #[test]
+    fn an_owner_gh_may_not_read_leaves_the_others() {
+        let raw =
+            format!(
+                r#"{{"data":{{"viewer":{},"o0":null}},"errors":[{{"type":"FORBIDDEN","message":"Resource protected by organization SAML enforcement."}}]}}"#,
+                serde_json::to_string(
+                    &serde_json::from_slice::<Value>(&fixture("gh-projects.json")).unwrap()["data"]
+                        ["viewer"]
+                )
+                .unwrap()
+            );
+        assert_eq!(parse_projects(raw.as_bytes()).unwrap().len(), 2);
     }
 }

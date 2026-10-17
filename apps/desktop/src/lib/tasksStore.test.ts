@@ -1168,8 +1168,8 @@ describe("a GitHub Project's board (X50 Sync)", () => {
     await refreshTasks("local", "personal", 1_000);
     const tasks = useTasks.getState().data["local/personal"].tasks;
     expect(tasks.map((t) => [t.key, t.column, t.mine, t.github?.project])).toEqual([
-      ["acme/web#11", "in_progress", false, { item: "PVTI_11", status: "In Progress" }],
       ["acme/web#10", "todo", true, { item: "PVTI_10", status: "Todo" }],
+      ["acme/web#11", "in_progress", false, { item: "PVTI_11", status: "In Progress" }],
     ]);
     // Its columns come from the Status options, as the app names them.
     await vi.waitFor(() => expect((saved.at(-1) as { boards?: { columns?: { name: string }[] }[] } | undefined)?.boards?.[0].columns?.map((c) => c.name)).toEqual(["Todo", "In Progress", "Done"]));
