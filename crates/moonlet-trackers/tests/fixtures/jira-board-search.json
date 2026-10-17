@@ -1,0 +1,277 @@
+{
+  "issues": [
+    {
+      "id": "149571",
+      "key": "OPS-512",
+      "self": "https://acme.atlassian.net/rest/api/3/issue/149571",
+      "fields": {
+        "summary": "Rotate S3 access keys for the audit bucket",
+        "status": {
+          "self": "https://acme.atlassian.net/rest/api/3/status/10000",
+          "name": "To Do",
+          "id": "10000",
+          "statusCategory": {
+            "id": 2,
+            "key": "new",
+            "colorName": "blue-gray",
+            "name": "To Do"
+          }
+        },
+        "priority": {
+          "id": "10003",
+          "name": "Trivial"
+        },
+        "assignee": null,
+        "labels": [
+          "security"
+        ],
+        "updated": "2026-10-06T14:08:45.233-0400",
+        "project": {
+          "id": "10008",
+          "key": "OPS",
+          "name": "Operations"
+        },
+        "issuetype": {
+          "id": "10001",
+          "name": "Story",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "duedate": null,
+        "components": [],
+        "customfield_10010": [
+          {
+            "id": 5109,
+            "name": "OPS Sprint 42",
+            "state": "active",
+            "boardId": 10,
+            "goal": "",
+            "startDate": "2026-10-07T15:36:59.718Z",
+            "endDate": "2026-10-21T14:30:00.000Z"
+          }
+        ],
+        "customfield_10014": 3,
+        "parent": {
+          "id": "149565",
+          "key": "OPS-400",
+          "fields": {
+            "summary": "Audit readiness",
+            "issuetype": {
+              "name": "Epic"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "149613",
+      "key": "OPS-487",
+      "self": "https://acme.atlassian.net/rest/api/3/issue/149613",
+      "fields": {
+        "summary": "Split the billing worker into two queues",
+        "status": {
+          "self": "https://acme.atlassian.net/rest/api/3/status/10018",
+          "name": "Needs Reviews",
+          "id": "10018",
+          "statusCategory": {
+            "id": 4,
+            "key": "indeterminate",
+            "colorName": "yellow",
+            "name": "In Progress"
+          }
+        },
+        "priority": {
+          "id": "10003",
+          "name": "Trivial"
+        },
+        "assignee": {
+          "accountId": "557058:00000001-acme",
+          "displayName": "Sam Rivera",
+          "emailAddress": "sam@acme.example",
+          "active": true
+        },
+        "labels": [
+          "billing",
+          "refined"
+        ],
+        "updated": "2026-10-16T12:41:58.885-0400",
+        "project": {
+          "id": "10008",
+          "key": "OPS",
+          "name": "Operations"
+        },
+        "issuetype": {
+          "id": "10001",
+          "name": "Story",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "duedate": null,
+        "components": [
+          {
+            "self": "https://acme.atlassian.net/rest/api/3/component/10400",
+            "id": "10400",
+            "name": "billing"
+          }
+        ],
+        "customfield_10010": [
+          {
+            "id": 5109,
+            "name": "OPS Sprint 42",
+            "state": "active",
+            "boardId": 10,
+            "goal": "",
+            "startDate": "2026-10-07T15:36:59.718Z",
+            "endDate": "2026-10-21T14:30:00.000Z"
+          }
+        ],
+        "customfield_10014": 5,
+        "parent": {
+          "id": "149574",
+          "key": "OPS-480",
+          "fields": {
+            "summary": "Billing reliability",
+            "issuetype": {
+              "name": "Epic"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "149575",
+      "key": "OPS-490",
+      "self": "https://acme.atlassian.net/rest/api/3/issue/149575",
+      "fields": {
+        "summary": "Structured logs for the auth service",
+        "status": {
+          "self": "https://acme.atlassian.net/rest/api/3/status/10018",
+          "name": "Needs Reviews",
+          "id": "10018",
+          "statusCategory": {
+            "id": 4,
+            "key": "indeterminate",
+            "colorName": "yellow",
+            "name": "In Progress"
+          }
+        },
+        "priority": {
+          "id": "10003",
+          "name": "Trivial"
+        },
+        "assignee": {
+          "accountId": "557058:00000001-acme",
+          "displayName": "Sam Rivera",
+          "emailAddress": "sam@acme.example",
+          "active": true
+        },
+        "labels": [],
+        "updated": "2026-10-16T09:22:00.788-0400",
+        "project": {
+          "id": "10008",
+          "key": "OPS",
+          "name": "Operations"
+        },
+        "issuetype": {
+          "id": "10001",
+          "name": "Story",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "duedate": null,
+        "components": [],
+        "customfield_10010": [
+          {
+            "id": 5109,
+            "name": "OPS Sprint 42",
+            "state": "active",
+            "boardId": 10,
+            "goal": "",
+            "startDate": "2026-10-07T15:36:59.718Z",
+            "endDate": "2026-10-21T14:30:00.000Z"
+          },
+          {
+            "id": 5040,
+            "name": "OPS Sprint 41",
+            "state": "closed",
+            "boardId": 10,
+            "goal": "",
+            "startDate": "2026-09-23T15:27:24.067Z",
+            "endDate": "2026-10-07T15:00:00.000Z",
+            "completeDate": "2026-10-07T14:04:39.719Z"
+          }
+        ],
+        "customfield_10014": 5,
+        "parent": {
+          "id": "149574",
+          "key": "OPS-480",
+          "fields": {
+            "summary": "Billing reliability",
+            "issuetype": {
+              "name": "Epic"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "150420",
+      "key": "OPS-521",
+      "self": "https://acme.atlassian.net/rest/api/3/issue/150420",
+      "fields": {
+        "summary": "Add a runbook link to every PagerDuty alert",
+        "status": {
+          "self": "https://acme.atlassian.net/rest/api/3/status/10000",
+          "name": "To Do",
+          "id": "10000",
+          "statusCategory": {
+            "id": 2,
+            "key": "new",
+            "colorName": "blue-gray",
+            "name": "To Do"
+          }
+        },
+        "priority": {
+          "id": "10003",
+          "name": "Trivial"
+        },
+        "assignee": {
+          "accountId": "557058:00000002-acme",
+          "displayName": "Anna Kowalska",
+          "emailAddress": "anna@acme.example",
+          "active": true
+        },
+        "labels": [
+          "on-call"
+        ],
+        "updated": "2026-10-16T10:58:21.528-0400",
+        "project": {
+          "id": "10008",
+          "key": "OPS",
+          "name": "Operations"
+        },
+        "issuetype": {
+          "id": "10002",
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "duedate": "2026-10-24",
+        "components": [],
+        "customfield_10010": [
+          {
+            "id": 5109,
+            "name": "OPS Sprint 42",
+            "state": "active",
+            "boardId": 10,
+            "goal": "",
+            "startDate": "2026-10-07T15:36:59.718Z",
+            "endDate": "2026-10-21T14:30:00.000Z"
+          }
+        ],
+        "customfield_10014": 0.5
+      }
+    }
+  ],
+  "isLast": true
+}

@@ -1,0 +1,6 @@
+{
+  "self": "https://acme.atlassian.net/rest/api/3/filter/10650",
+  "id": "10650",
+  "name": "Filter for PLAT tasks",
+  "jql": "project in (10173) AND issuetype != Epic ORDER BY priority DESC, Rank ASC"
+}
