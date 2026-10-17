@@ -177,16 +177,29 @@ export function diffStat(diff: string): { add: number; del: number } {
   return { add, del };
 }
 
-/** The `@token` or `/token` being typed at the caret, if any. */
+/** The `@token` or `/token` being typed at the caret, if any. Either may
+ *  start a word anywhere in the message, so `/` lists commands mid-prompt too. */
 export function activeToken(text: string, caret: number): { kind: "@" | "/"; start: number; query: string } | null {
-  const before = text.slice(0, caret);
-  const m = /(^|\s)([@/])([^\s@]*)$/.exec(before);
+  const m = /(^|\s)([@/])([^\s@]*)$/.exec(text.slice(0, caret));
   if (!m) return null;
-  const kind = m[2] as "@" | "/";
-  const start = caret - m[3].length - 1;
-  // Slash commands only at the very start of the message.
-  if (kind === "/" && before.slice(0, start).trim() !== "") return null;
-  return { kind, start, query: m[3] };
+  return { kind: m[2] as "@" | "/", start: caret - m[3].length - 1, query: m[3] };
+}
+
+/** The `/commands` offered for a `/token`: fuzzy at the start of the message,
+ *  by name prefix mid-message, so a path such as `/tmp` offers none. */
+export function commandOptions(commands: readonly string[], text: string, token: { start: number; query: string }): string[] {
+  const atStart = text.slice(0, token.start).trim() === "";
+  const q = token.query.toLowerCase();
+  const found = atStart ? fuzzyFilter(commands, token.query, 8) : commands.filter((c) => c.toLowerCase().startsWith(q)).slice(0, 8);
+  return found.map((c) => "/" + c);
+}
+
+/** The input after choosing `choice` for the token at the caret: it replaces
+ *  the whole word, also past the caret, and one space follows it. */
+export function withCompletion(text: string, caret: number, token: { start: number }, choice: string): { text: string; caret: number } {
+  const rest = text.slice(caret).replace(/^\S*/, "");
+  const head = text.slice(0, token.start) + choice;
+  return { text: head + (rest.startsWith(" ") ? "" : " ") + rest, caret: head.length + 1 };
 }
 
 /** Subsequence match score: lower is better, null when no match. */
