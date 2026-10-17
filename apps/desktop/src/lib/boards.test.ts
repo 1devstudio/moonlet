@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -382,5 +382,26 @@ describe("a due date given as a time (X50 ClickUp)", () => {
     const issue = { connection: "clickup:9012", key: "CU-9hx", title: "x", url: "", column: "todo" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, statusId: "", dueMs: 1_508_369_194_377 };
     expect(taskFromBoardIssue(issue, 0).due).toBe("2017-10-18");
     expect(taskFromBoardIssue(issue, -120).due).toBe("2017-10-19");
+  });
+});
+
+describe("linkedProjects (X50 Add a board: By default)", () => {
+  it("names the projects whose committed config links the board's tracker project, or any of its connection's for a Jira board", () => {
+    const sourceProjects = { "linear:acme MOON": ["web", "api"], "linear:acme DES": ["ui-kit"], "jira:acme.atlassian.net OPS": ["ops-tools"] };
+    expect(linkedProjects({ connection: "linear:acme", origin: { kind: "linear_team", team: "MOON" } }, sourceProjects)).toEqual(["web", "api"]);
+    expect(linkedProjects({ connection: "jira:acme.atlassian.net", origin: { kind: "jql", query: "project = OPS" } }, sourceProjects)).toEqual(["ops-tools"]);
+    // A Jira board's issues can be of any of the site's projects.
+    expect(linkedProjects({ connection: "jira:acme.atlassian.net", origin: { kind: "jira_board", board: 10 } }, sourceProjects)).toEqual(["ops-tools"]);
+    expect(linkedProjects({ connection: "linear:acme", origin: { kind: "linear_team", team: "ENG" } }, sourceProjects)).toEqual([]);
+  });
+});
+
+describe("footerTracker (X50 sidebar footer)", () => {
+  it("names the tracker of the workspace's boards, or Tasks when they come from several", () => {
+    const b = (connection: string): Pick<BoardConfig, "connection"> => ({ connection });
+    expect(footerTracker([b("jira:acme.atlassian.net"), b("jira:ops.atlassian.net")])).toBe("Jira");
+    expect(footerTracker([b("linear:acme")])).toBe("Linear");
+    expect(footerTracker([b("github:github.com"), b("linear:acme")])).toBe("Tasks");
+    expect(footerTracker([])).toBe("GitHub");
   });
 });

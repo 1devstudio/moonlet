@@ -30,7 +30,7 @@ import {
   summaryLine,
   toBoard,
 } from "../../lib/addBoard";
-import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, jiraBoardType, type Origin, type StartRule } from "../../lib/boards";
+import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, jiraBoardType, linkedProjects, type Origin, type StartRule } from "../../lib/boards";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
 import { type Task, trackerName, trackerOf } from "../../lib/tasks";
@@ -186,6 +186,9 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   }, [draft.workspace, data]);
 
   const projects = workspaceProjects(useStore.getState(), target.host, target.id);
+  // Empty, By default uses the projects whose committed config links the tracker project (X44); the hint names them.
+  const linked = draft.origin && draft.connection ? linkedProjects({ connection: draft.connection, origin: draft.origin }, useTasks.getState().data[draft.workspace]?.sourceProjects ?? {}) : [];
+  const linkedHint = linked.length ? `The projects that link it: ${linked.map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ")}` : "The projects that link it: none yet";
   const wsOptions = Object.entries(workspaces).flatMap(([h, list]) => list.map((w) => ({ value: wsKey(h, w.id), label: w.name })));
   const wsName = wsOptions.find((w) => w.value === draft.workspace)?.label ?? "";
   // A board its workspace already has stops Create board and Save.
@@ -607,7 +610,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                         value={defaultRule?.project ?? ""}
                         onChange={(e) => setRules([...(e.target.value ? [{ when: "default" as const, project: e.target.value }] : []), ...otherRules])}
                       >
-                        <option value="">The projects that link it</option>
+                        <option value="">{linkedHint}</option>
                         {projects.map((p) => (
                           <option key={p.id} value={p.id}>
                             {p.name}
