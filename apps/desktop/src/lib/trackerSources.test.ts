@@ -103,16 +103,16 @@ describe("disconnectText (X50 Disconnecting removes its boards)", () => {
   it("names the boards that go with the connection", () => {
     const b = (name: string, connection: string): BoardConfig => ({ id: name, name, connection, workspace: "local/w1", origin: { kind: "jql", query: name } });
     const boards = [b("OPS", "jira:ops.atlassian.net"), b("Moonlet", "linear:acme"), b("WEB · Website", "jira:ops.atlassian.net")];
-    expect(disconnectText("jira:ops.atlassian.net", "ops.atlassian.net", boards)).toBe("moonlet forgets the token for ops.atlassian.net and removes its 2 boards, OPS and WEB · Website. Sessions keep their links.");
-    expect(disconnectText("linear:acme", "acme", boards)).toBe("moonlet forgets the token for acme and removes its board Moonlet. Sessions keep their links.");
-    expect(disconnectText("clickup:9012", "9012", boards)).toBe("moonlet forgets the token for 9012 and stops showing its issues. Sessions keep their links.");
+    expect(disconnectText({ id: "jira:ops.atlassian.net", site: "ops.atlassian.net" }, boards)).toBe("moonlet forgets the token for ops.atlassian.net and removes its 2 boards, OPS and WEB · Website. Sessions keep their links.");
+    expect(disconnectText({ id: "linear:acme", site: "acme" }, boards)).toBe("moonlet forgets the token for acme and removes its board Moonlet. Sessions keep their links.");
+    expect(disconnectText({ id: "clickup:9012", site: "9012" }, boards)).toBe("moonlet forgets the token for 9012 and stops showing its issues. Sessions keep their links.");
   });
 });
 
 describe("connectedText (X50 the Connect dialog's end)", () => {
   it("says who signed in, what the account sees and what its first board can be built from", () => {
     expect(connectedText("linear", "Ada Lovelace", 2)).toEqual({ line: "Signed in as Ada Lovelace · 2 teams visible", hint: "Make the first board from one of its teams." });
-    expect(connectedText("jira", "Mia Krystof", 1)).toEqual({ line: "Signed in as Mia Krystof · 1 project visible", hint: "Make the first board from one of its Jira boards or a JQL query." });
+    expect(connectedText("jira", "Mia Krystof", 1)).toEqual({ line: "Signed in as Mia Krystof · 1 project visible", hint: "Make the first board from a Jira board or a JQL query." });
     expect(connectedText("clickup", "John Doe", 4)).toEqual({ line: "Signed in as John Doe · 4 lists visible", hint: "Make the first board from one of its lists." });
   });
 });

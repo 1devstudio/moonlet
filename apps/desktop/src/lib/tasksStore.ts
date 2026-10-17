@@ -158,7 +158,7 @@ function storedShownBoard(): Record<string, string> {
 /**
  * Opens Add a board for workspace `workspace` of `host`, starting on
  * `connection` when given (the Connect dialog's end), or with `board` that
- * board's settings (X50), over Settings too.
+ * board's settings (X50). Settings close behind it.
  */
 export function openAddBoard(host: string, workspace: string, board?: string, connection?: string) {
   useStore.setState({ settingsPage: null, dialog: { kind: "add-board", host, workspace, ...(board && { board }), ...(connection && { connection }) } });
