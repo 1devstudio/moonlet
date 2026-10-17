@@ -36,6 +36,8 @@ import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, type P
 import {
   type QuestionPick,
   activeToken,
+  commandOptions,
+  withCompletion,
   askQuestions,
   chatBlocks,
   chatDraft,
@@ -954,9 +956,9 @@ function ChatEditor({
 
   const options = useMemo(() => {
     if (!token || dismissed === token.start) return [];
-    if (token.kind === "/") return fuzzyFilter(commands, token.query, 8).map((c) => "/" + c);
+    if (token.kind === "/") return commandOptions(commands, text, token);
     return fuzzyFilter(files ?? [], token.query, 8).map((f) => "@" + f);
-  }, [token, dismissed, commands, files]);
+  }, [token, dismissed, commands, files, text]);
   useEffect(() => setSel(0), [options.length, token?.query]);
 
   const ghost = !options.length && walk === null && !text.includes("\n") ? suggest(history, text) : null;
@@ -984,8 +986,8 @@ function ChatEditor({
 
   const accept = (choice: string) => {
     if (!token) return;
-    const before = text.slice(0, token.start) + choice + " ";
-    set(before + text.slice(caret), before.length);
+    const r = withCompletion(text, caret, token, choice);
+    set(r.text, r.caret);
   };
 
   const send = () => {

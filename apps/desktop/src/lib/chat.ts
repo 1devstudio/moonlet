@@ -185,6 +185,23 @@ export function activeToken(text: string, caret: number): { kind: "@" | "/"; sta
   return { kind: m[2] as "@" | "/", start: caret - m[3].length - 1, query: m[3] };
 }
 
+/** The `/commands` offered for a `/token`: fuzzy at the start of the message,
+ *  by name prefix mid-message, so a path such as `/tmp` offers none. */
+export function commandOptions(commands: readonly string[], text: string, token: { start: number; query: string }): string[] {
+  const atStart = text.slice(0, token.start).trim() === "";
+  const q = token.query.toLowerCase();
+  const found = atStart ? fuzzyFilter(commands, token.query, 8) : commands.filter((c) => c.toLowerCase().startsWith(q)).slice(0, 8);
+  return found.map((c) => "/" + c);
+}
+
+/** The input after choosing `choice` for the token at the caret: it replaces
+ *  the whole word, also past the caret, and one space follows it. */
+export function withCompletion(text: string, caret: number, token: { start: number }, choice: string): { text: string; caret: number } {
+  const rest = text.slice(caret).replace(/^\S*/, "");
+  const head = text.slice(0, token.start) + choice;
+  return { text: head + (rest.startsWith(" ") ? "" : " ") + rest, caret: head.length + 1 };
+}
+
 /** Subsequence match score: lower is better, null when no match. */
 export function fuzzyScore(candidate: string, query: string): number | null {
   if (!query) return 0;

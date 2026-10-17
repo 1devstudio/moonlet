@@ -1,5 +1,6 @@
 // The chat input's + menu (X29), with a fake `claude` that answers
-// `initialize` and `mcp_status` the way Claude Code 2.1.292 does.
+// `initialize` and `mcp_status` the way Claude Code 2.1.292 does. Its
+// commands also back the editor's `/` completion mid-message (X6).
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
