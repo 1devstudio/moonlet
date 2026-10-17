@@ -301,14 +301,13 @@ impl Daemon {
                 ok(true)
             }
             m::CHAT_SEND_NOW => {
-                let r: m::ChatQueued = params(p)?;
+                let r: m::ChatSendNow = params(p)?;
                 self.chats.send_now(r.id, r.message.as_deref()).map_err(internal)?;
                 ok(true)
             }
             m::CHAT_UNQUEUE => {
-                let r: m::ChatQueued = params(p)?;
-                let message = r.message.ok_or_else(|| RpcError::new("invalid_params", "message is required"))?;
-                self.chats.unqueue(r.id, &message).map_err(internal)?;
+                let r: m::ChatUnqueue = params(p)?;
+                self.chats.unqueue(r.id, &r.message).map_err(internal)?;
                 ok(true)
             }
             m::CHAT_STOP_AGENT => {

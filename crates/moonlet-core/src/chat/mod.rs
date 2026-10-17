@@ -262,6 +262,11 @@ pub(crate) fn stop_subagents(st: &mut ChatState) -> bool {
     any
 }
 
+/// A turn is running: the agent works or waits for an answer.
+pub(crate) fn busy(st: &ChatState) -> bool {
+    st.status == "working" || st.status == "blocked"
+}
+
 /// Moves the messages still queued when their agent is gone into the
 /// transcript, each with a note that it never reached the agent (X49).
 pub(crate) fn undeliver(st: &mut ChatState) -> Vec<Out> {

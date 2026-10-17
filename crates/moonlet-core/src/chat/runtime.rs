@@ -370,7 +370,7 @@ impl ChatManager {
 
     /// Takes a queued message out of the agent's queue (X49).
     pub fn unqueue(&self, id: TerminalId, message: &str) -> Result<()> {
-        self.with_queued(id, Some(message), |a, m, st| a.unqueue(m.unwrap_or_default(), st))
+        self.with_queued(id, Some(message), |a, _, st| a.unqueue(message, st))
     }
 
     fn with_queued(&self, id: TerminalId, message: Option<&str>, f: impl FnOnce(&mut dyn Adapter, Option<&str>, &mut ChatState) -> Vec<Out>) -> Result<()> {

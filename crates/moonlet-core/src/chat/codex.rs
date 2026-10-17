@@ -529,6 +529,21 @@ mod tests {
     }
 
     #[test]
+    fn a_message_during_a_codex_turn_steers_it_and_is_never_queued() {
+        let mut a = Codex::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        feed(&mut a, &mut st, json!({"id": 1, "result": {}}));
+        feed(&mut a, &mut st, json!({"id": 2, "result": {"thread": {"id": "th1"}}}));
+        a.send("fix the build", &[], &mut st);
+        feed(&mut a, &mut st, json!({"method": "turn/started", "params": {"turn": {"id": "tu1"}}}));
+        let w = writes(&a.send("also run the tests", &[], &mut st));
+        assert_eq!(w[0]["method"], "turn/steer");
+        assert!(st.queued.is_empty());
+        assert_eq!(st.items.last().unwrap().text, "also run the tests");
+    }
+
+    #[test]
     fn added_directories_are_extra_writable_roots() {
         let mut a = Codex::default();
         let mut st = ChatState::default();
