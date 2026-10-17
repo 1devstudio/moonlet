@@ -318,6 +318,9 @@ fn random32() -> Res<[u8; 32]> {
 pub struct SourceChoice {
     pub key: String,
     pub name: String,
+    /// A Linear team that uses cycles, whose board can follow the active one (X50).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cycles: bool,
 }
 
 #[derive(Serialize)]
@@ -338,7 +341,7 @@ pub struct ConnectRequest {
 }
 
 fn pairs(list: Vec<(String, String)>) -> Vec<SourceChoice> {
-    list.into_iter().map(|(key, name)| SourceChoice { key, name }).collect()
+    list.into_iter().map(|(key, name)| SourceChoice { key, name, cycles: false }).collect()
 }
 
 /// Signs in with a token, keeps it in the Keychain and adds (or replaces) the
@@ -426,7 +429,13 @@ pub fn tracker_disconnect(id: String) -> Res<()> {
 pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
     let s = Session::load(&id).await?;
     Ok(match s.conn.kind {
-        TrackerKind::Linear => pairs(s.linear_ok(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?))?),
+        TrackerKind::Linear => {
+            let raw = s.linear(linear::TEAMS, json!({})).await?;
+            let cycles = s.linear_ok(linear::parse_cycle_teams(&raw))?;
+            let mut teams = pairs(s.linear_ok(linear::parse_teams(&raw))?);
+            teams.iter_mut().for_each(|t| t.cycles = cycles.contains(&t.key));
+            teams
+        }
         TrackerKind::Jira => pairs(jira::parse_projects(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/project/search?maxResults=100")?).await?)?),
         TrackerKind::Clickup => {
             let team = safe_id(&s.conn.site)?;
@@ -622,9 +631,31 @@ pub struct BoardTasks {
 #[tauri::command]
 pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
     let s = Session::load(&query.id).await?;
-    // A Linear team or ClickUp list: X44's fetch of that one source, and its
-    // states as columns.
-    if let Origin::LinearTeam { team: key } | Origin::ClickupList { list: key } = &query.origin {
+    // A Linear team: its open issues and those finished lately, or its active
+    // cycle's, and its states as columns.
+    if let Origin::LinearTeam { team } = &query.origin {
+        let team = safe_id(team)?.to_string();
+        let search = linear::board_issues_query(query.mine, &query.finished);
+        let mut issues = Vec::new();
+        let mut after: Option<String> = None;
+        // At most 500 issues, as for Jira.
+        for _ in 0..5 {
+            let raw = s.linear(&search, json!({ "team": team, "after": after })).await?;
+            issues.extend(s.linear_ok(linear::parse_board_issues(&raw, &s.conn.id))?);
+            after = linear::next_page(&raw);
+            if after.is_none() {
+                break;
+            }
+        }
+        let sprint = match query.finished {
+            Finished::Sprint => s.linear_ok(linear::parse_active_cycle(&s.linear(linear::ACTIVE_CYCLE, json!({ "team": team })).await?))?,
+            Finished::Days(_) => None,
+        };
+        let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_of(&team).await?);
+        return Ok(BoardTasks { issues, sprint, columns: Some(columns) });
+    }
+    // A ClickUp list: X44's fetch of that one source, and its states as columns.
+    if let Origin::ClickupList { list: key } = &query.origin {
         let issues = s.tasks_of(std::slice::from_ref(key), query.mine).await?.into_iter().map(BoardIssue::from_task).collect();
         let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_of(key).await?);
         return Ok(BoardTasks { issues, sprint: None, columns: Some(columns) });

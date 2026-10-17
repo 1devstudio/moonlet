@@ -2,6 +2,8 @@
 
 use serde_json::Value;
 
+use crate::config::Finished;
+use crate::jira_board::{BoardIssue, Parent, Sprint};
 use crate::task::{TrackerRef, TrackerTask};
 use crate::{ApiError, TrackerKind};
 
@@ -12,7 +14,7 @@ pub const TOKEN: &str = "https://api.linear.app/oauth/token";
 pub const VIEWER: &str = "query { viewer { id name email } }";
 /// Who signed in, and the organisation that names the connection.
 pub const ACCOUNT: &str = "query { viewer { id name email } organization { urlKey name } }";
-pub const TEAMS: &str = "query { teams { nodes { id key name } } }";
+pub const TEAMS: &str = "query { teams { nodes { id key name cyclesEnabled } } }";
 pub const STATES: &str = "query States($team: String!) { workflowStates(filter: { team: { key: { eq: $team } } }) { nodes { id name type position } } }";
 
 /// The issues of `teams`: assigned to the viewer, or all open ones.
@@ -29,6 +31,76 @@ pub fn issues_query(mine: bool) -> String {
          filter: {{ team: {{ key: {{ in: $teams }} }}{who}, {recent} }}) {{ nodes {{ {ISSUE_FIELDS} }} \
          pageInfo {{ hasNextPage endCursor }} }} }}"
     )
+}
+
+/// A team board's issues (X50): assigned to the viewer or anyone's, open ones
+/// and those finished in the last `n` days, or those of the active cycle.
+pub fn board_issues_query(mine: bool, finished: &Finished) -> String {
+    let who = if mine {
+        ", assignee: { isMe: { eq: true } }"
+    } else {
+        ""
+    };
+    let which = match finished {
+        Finished::Sprint => "cycle: { isActive: { eq: true } }".to_string(),
+        Finished::Days(n) => format!(
+            r#"or: [{{ state: {{ type: {{ nin: ["completed", "canceled"] }} }} }}, {{ updatedAt: {{ gt: "-P{n}D" }} }}]"#
+        ),
+    };
+    format!(
+        "query BoardIssues($team: String!, $after: String) {{ issues(first: 100, after: $after, \
+         filter: {{ team: {{ key: {{ eq: $team }} }}{who}, {which} }}) {{ nodes {{ {ISSUE_FIELDS} {BOARD_FIELDS} }} \
+         pageInfo {{ hasNextPage endCursor }} }} }}"
+    )
+}
+
+/// What a board's card shows beyond a task (X50 Cards show).
+const BOARD_FIELDS: &str = "estimate dueDate parent { identifier title }";
+
+/// The issues of a [`board_issues_query`], with their estimate, parent and due date.
+pub fn parse_board_issues(raw: &[u8], connection: &str) -> Result<Vec<BoardIssue>, ApiError> {
+    let d = data(raw)?;
+    Ok(nodes(&d["issues"])
+        .map(|i| BoardIssue {
+            points: i["estimate"].as_f64(),
+            parent: i["parent"]["identifier"].as_str().map(|key| Parent {
+                key: key.into(),
+                title: i["parent"]["title"].as_str().unwrap_or_default().into(),
+            }),
+            due: i["dueDate"].as_str().map(String::from),
+            ..BoardIssue::from_task(issue_task(i, connection))
+        })
+        .collect())
+}
+
+/// A team's active cycle, which a board following it names (X50).
+pub const ACTIVE_CYCLE: &str = "query Cycle($team: String!) { teams(filter: { key: { eq: $team } }) { nodes { activeCycle { number name startsAt endsAt } } } }";
+
+/// The cycle of [`ACTIVE_CYCLE`], named `Cycle <n>` unless it has a name; `None` between cycles.
+pub fn parse_active_cycle(raw: &[u8]) -> Result<Option<Sprint>, ApiError> {
+    let d = data(raw)?;
+    let Some(c) = nodes(&d["teams"]).next().map(|t| &t["activeCycle"]) else {
+        return Ok(None);
+    };
+    let Some(number) = c["number"].as_f64().map(|n| n as u64) else {
+        return Ok(None);
+    };
+    let ms = |field: &str| {
+        c[field]
+            .as_str()
+            .and_then(crate::time::timestamp_ms)
+            .unwrap_or(0)
+    };
+    Ok(Some(Sprint {
+        id: number,
+        name: c["name"]
+            .as_str()
+            .filter(|n| !n.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| format!("Cycle {number}")),
+        start_ms: ms("startsAt"),
+        end_ms: ms("endsAt"),
+    }))
 }
 
 /// What a task needs of a Linear issue.
@@ -169,6 +241,15 @@ pub fn parse_teams(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
                 t["name"].as_str().unwrap_or_default().into(),
             )
         })
+        .collect())
+}
+
+/// The keys of the [`TEAMS`] that use cycles, whose boards can follow the active one.
+pub fn parse_cycle_teams(raw: &[u8]) -> Result<Vec<String>, ApiError> {
+    let d = data(raw)?;
+    Ok(nodes(&d["teams"])
+        .filter(|t| t["cyclesEnabled"].as_bool() == Some(true))
+        .filter_map(|t| t["key"].as_str().map(String::from))
         .collect())
 }
 
@@ -349,6 +430,12 @@ mod tests {
                 ("DES".to_string(), "Design".to_string())
             ]
         );
+        // Only a team with cycles offers to follow its active one (X50).
+        assert!(TEAMS.contains("cyclesEnabled"));
+        assert_eq!(
+            parse_cycle_teams(&fixture("linear-teams.json")).unwrap(),
+            ["ENG"]
+        );
         let states = parse_states(&fixture("linear-states.json")).unwrap();
         assert_eq!(
             states
@@ -488,5 +575,61 @@ mod tests {
                 .unwrap_err()
                 .auth
         );
+    }
+
+    #[test]
+    fn a_teams_board_follows_its_active_cycle_or_its_finished_days() {
+        let cycle = board_issues_query(true, &Finished::Sprint);
+        assert!(cycle.contains("team: { key: { eq: $team } }"));
+        assert!(cycle.contains("assignee: { isMe: { eq: true } }"));
+        assert!(cycle.contains("cycle: { isActive: { eq: true } }"));
+        assert!(!cycle.contains("updatedAt: { gt"));
+        let days = board_issues_query(false, &Finished::Days(7));
+        assert!(days.contains(r#"{ updatedAt: { gt: "-P7D" } }"#));
+        assert!(!days.contains("isMe"));
+        assert!(!days.contains("isActive"));
+    }
+
+    #[test]
+    fn a_boards_issues_carry_their_estimate_parent_and_due_date() {
+        let issues =
+            parse_board_issues(&fixture("linear-board-issues.json"), "linear:acme").unwrap();
+        let first = &issues[0];
+        assert_eq!(first.task.key, "ENG-123");
+        assert_eq!(first.task.tracker.state, "In Progress");
+        assert_eq!(first.points, Some(3.0));
+        assert_eq!(
+            first.parent,
+            Some(Parent {
+                key: "ENG-100".into(),
+                title: "Reliable webhooks".into()
+            })
+        );
+        assert_eq!(first.due.as_deref(), Some("2026-10-20"));
+        assert_eq!(
+            (
+                issues[1].points,
+                issues[1].parent.clone(),
+                issues[1].due.clone()
+            ),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn the_teams_active_cycle_names_the_board() {
+        assert_eq!(
+            parse_active_cycle(&fixture("linear-active-cycle.json")).unwrap(),
+            Some(Sprint {
+                id: 42,
+                name: "Cycle 42".into(),
+                start_ms: 1_791_763_200_000,
+                end_ms: 1_792_972_800_000,
+            })
+        );
+        let named = br#"{"data":{"teams":{"nodes":[{"activeCycle":{"number":7,"name":"Polish","startsAt":"2026-10-12T00:00:00.000Z","endsAt":"2026-10-26T00:00:00.000Z"}}]}}}"#;
+        assert_eq!(parse_active_cycle(named).unwrap().unwrap().name, "Polish");
+        let none = br#"{"data":{"teams":{"nodes":[{"activeCycle":null}]}}}"#;
+        assert_eq!(parse_active_cycle(none).unwrap(), None);
     }
 }

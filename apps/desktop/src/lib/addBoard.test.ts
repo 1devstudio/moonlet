@@ -51,7 +51,11 @@ describe("Add a board, step 2 (X50)", () => {
   it("offers the sprint or cycle only where there is one", () => {
     expect(finishedChoices("jira", "scrum").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active sprint"]);
     expect(finishedChoices("jira", "kanban").map((c) => c.label)).toEqual(["Hide after 14 days"]);
-    expect(finishedChoices("linear").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active cycle"]);
+    // A Linear team offers its cycle only when it uses cycles, and follows it by default.
+    expect(finishedChoices("linear", "cycles").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active cycle"]);
+    expect(finishedChoices("linear").map((c) => c.label)).toEqual(["Hide after 14 days"]);
+    expect(pickOrigin(newDraft("local/acme"), "linear:acme", { kind: "linear_team", team: "ENG" }, "Engineering", "cycles").finished).toBe("sprint");
+    expect(pickOrigin(newDraft("local/acme"), "linear:acme", { kind: "linear_team", team: "DES" }, "Design").finished).toBe(14);
     expect(finishedChoices("github").map((c) => c.label)).toEqual(["Hide after 14 days"]);
     // A team-managed board has sprints; a Jira board of unknown type gets 14 days, as its choices say.
     expect(pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 12 }, "MOB board", "simple").finished).toBe("sprint");
