@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alreadyAdded, byGroup, canContinue, cardChoices, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { alreadyAdded, byGroup, canContinue, cardChoices, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -207,5 +207,17 @@ describe("Add a board, step 3 polish (X50)", () => {
 
   it("links a Jira board's filter for editing in Jira", () => {
     expect(jiraFilterUrl("acme.atlassian.net", "10021")).toBe("https://acme.atlassian.net/issues/?filter=10021");
+  });
+});
+
+describe("Add a board, step 3 statuses (X50)", () => {
+  it("lists a column's statuses by name: Jira's board setup, else the previewed issues, else the id", () => {
+    const issue = (statusId: string, state: string): Task => ({ connection: JIRA, key: "EX-1", title: "", url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "1", state, statusId, source: "EX" } });
+    const names = statusNames({ "10002": "Done" }, [issue("3", "In Progress"), issue("10001", "Selected for Development")]);
+    expect(names).toEqual({ "10002": "Done", "3": "In Progress", "10001": "Selected for Development" });
+    expect(WEB.map((c) => statusText(c, names))).toEqual(["10000", "Selected for Development", "In Progress", "10030", "Done"]);
+    expect(statusText({ name: "Empty", statuses: [], category: "todo" }, names)).toBe("no status");
+    // Linear and ClickUp columns list their states by name already.
+    expect(statusText({ name: "Todo", statuses: ["Todo", "Backlog"], category: "todo" }, {})).toBe("Todo · Backlog");
   });
 });

@@ -16,6 +16,8 @@ import {
   draftFromBoard,
   finishedChoices,
   jiraFilterUrl,
+  statusNames,
+  statusText,
   suggestedOf,
   jiraSprints,
   moveColumn,
@@ -71,6 +73,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   // The board's filter: undefined while it is read, null when Jira does not share it.
   const [filterJql, setFilterJql] = useState<string | null | undefined>(undefined);
   const [filterId, setFilterId] = useState<string | null>(null);
+  // A Jira board's status names by id, for step 3.
+  const [setupNames, setSetupNames] = useState<Record<string, string>>({});
   // Each column's category as the tracker suggested it, to outline one the user changed.
   const [suggested, setSuggested] = useState<Partial<Record<string, BoardColumn["category"]>>>({});
   // The row being dragged in step 3.
@@ -134,6 +138,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
         if (stale) return;
         setFilterJql(setup.filterJql ?? null);
         setFilterId(setup.filterId);
+        setSetupNames(setup.statusNames);
         setDraft((d) => (d.columns.length ? d : { ...d, columns: setup.columns }));
       },
       (e) => !stale && errorToast(e),
@@ -210,6 +215,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const sample = (preview?.tasks ?? []).slice(0, 3);
   useEffect(() => setSuggested((prev) => suggestedOf(prev, draft.columns)), [draft.columns]);
   const changed = changedCategories(draft.columns, suggested);
+  const names = statusNames(setupNames, preview?.tasks ?? []);
   const site = (config.connections ?? []).find((c) => c.id === draft.connection)?.site;
   const moveAt = (i: number, by: number) => setDraft((d) => ({ ...d, columns: moveColumn(d.columns, i, by) }));
   const setColumn = (i: number, patch: Parameters<typeof columnAt>[2]) => setDraft((d) => ({ ...d, columns: columnAt(d.columns, i, patch) }));
@@ -535,7 +541,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       </span>
                       <span className="min-w-0">
                         <span className={cx("block truncate ui-text-13", c.show === "hide" ? "text-faint" : "text-fg")}>{c.name}</span>
-                        <span className="block truncate ui-text-11.5 text-faint">{c.statuses.length ? c.statuses.join(" · ") : "no status"}</span>
+                        <span className="block truncate ui-text-11.5 text-faint">{statusText(c, names)}</span>
                       </span>
                       <span className="flex items-center gap-1.5">
                         <TaskGlyph column={c.category} size={12} />
