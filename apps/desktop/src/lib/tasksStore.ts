@@ -1,6 +1,7 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
+import type { BoardConfig } from "./boards";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
@@ -104,6 +105,10 @@ export interface TrackersConfig {
   clickup?: TrackerSettings;
   connections?: Connection[];
   link?: LinkRules;
+  /** What Tasks mode shows, one board at a time (X50). */
+  boards?: BoardConfig[];
+  /** Workspaces whose sources and GitHub repositories became boards (X50). */
+  migrated?: string[];
 }
 
 const DEFAULT_TRACKER: TrackerSettings = { branch_template: "", max_length: 48, rules: DEFAULT_RULES };
