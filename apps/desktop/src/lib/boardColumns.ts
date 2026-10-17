@@ -23,6 +23,8 @@ export interface ColumnView {
  * `not_planned` (how it was closed).
  */
 export function statusKey(task: Task): string {
+  // A GitHub Project's item is where its Status puts it (X50).
+  if (task.github?.project) return task.github.project.status ?? "";
   if (task.github) return task.column === "open" ? "open" : task.column === "done" ? "completed" : "not_planned";
   return task.tracker?.statusId || task.tracker?.state || "";
 }
@@ -30,13 +32,14 @@ export function statusKey(task: Task): string {
 /**
  * Tracker tasks in their board column's category (X50), so out of sync,
  * Keep in step and notices read the board's columns: a status in no column,
- * or in a hidden one, is hidden. GitHub repository issues keep theirs.
+ * or in a hidden one, is hidden. GitHub repository issues keep theirs; a
+ * GitHub Project's items go by their Status.
  */
 export function categorize(columns: BoardColumn[], tasks: Task[]): Task[] {
   const index = new Map<string, BoardColumn>();
   for (const c of columns) for (const s of c.statuses) index.set(s, c);
   return tasks.map((task) => {
-    if (task.github) return task;
+    if (task.github && !task.github.project) return task;
     const c = index.get(statusKey(task));
     return { ...task, column: c && c.show !== "hide" ? c.category : "hidden" };
   });

@@ -270,3 +270,14 @@ export function statusNames(fromSetup: Record<string, string>, issues: Task[], k
 export function statusText(column: BoardColumn, names: Record<string, string>): string {
   return column.statuses.length ? column.statuses.map((s) => names[s] ?? s).join(" · ") : "no status";
 }
+
+/** The gh scope a daemon error says is missing (X50 GitHub Projects), or null. */
+export function scopeNeeded(message: string): "read:project" | "project" | null {
+  const m = /gh auth refresh -s (read:project|project)\b/.exec(message);
+  return m ? (m[1] as "read:project" | "project") : null;
+}
+
+/** A GitHub Project as a row of step 1, under its owner: its Status options counted as columns. */
+export function projectChoice(p: { owner: string; number: number; title: string; options: unknown[] }): { key: string; name: string; kind: string; group: string; origin: Origin } {
+  return { key: `#${p.number}`, name: p.title, kind: `${p.options.length} ${p.options.length === 1 ? "column" : "columns"}`, group: p.owner, origin: { kind: "github_project", owner: p.owner, number: p.number } };
+}

@@ -23,7 +23,7 @@ pub struct Output {
     pub stderr: String,
 }
 
-async fn run_raw(
+pub(crate) async fn run_raw(
     program: &str,
     cwd: &Path,
     args: &[&str],
@@ -1042,7 +1042,7 @@ pub async fn gh_task(dir: &Path, repo: &str, number: u64) -> Result<moonlet_prot
 }
 
 /// `gh issue list --json <GH_TASK_FIELDS>` as tasks.
-fn parse_gh_tasks(raw: &[u8]) -> Result<Vec<moonlet_proto::types::GhTask>> {
+pub(crate) fn parse_gh_tasks(raw: &[u8]) -> Result<Vec<moonlet_proto::types::GhTask>> {
     let list: Vec<serde_json::Value> = serde_json::from_slice(raw)?;
     let names = |v: &serde_json::Value, field: &str| -> Vec<String> {
         v.as_array()
