@@ -72,7 +72,8 @@ export const boardTitle = (board: BoardConfig, sprint: string | null | undefined
  */
 export function boardHeader(board: BoardConfig, sprint: BoardData["sprint"] | undefined, site: string, cards: Pick<Card, "rows">[]): { title: string; subtitle: string } {
   const follows = board.finished === "sprint";
-  const where = board.origin.kind === "github_repo" ? board.origin.repo : site;
+  const o = board.origin;
+  const where = o.kind === "github_repo" ? o.repo : o.kind === "github_project" ? `Project #${o.number} of ${o.owner}` : site;
   const none = trackerOf(board.connection) === "linear" ? "No active cycle" : "No active sprint";
   const dates = !follows || sprint === undefined ? null : sprint ? { startMs: sprint.startMs, endMs: sprint.endMs } : none;
   return { title: boardTitle(board, sprint?.name), subtitle: boardSubtitle(board.connection, where, dates, cards.length, cards.reduce((n, c) => n + c.rows.length, 0)) };
