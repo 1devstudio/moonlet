@@ -479,6 +479,10 @@ describe("boards (X50 Sync)", () => {
     sent.length = 0;
     await moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_500);
     expect(sent).toEqual([{ id: "linear:acme", task: "MOON-1", source: "MOON", column: "in_progress", status: "Doing" }]);
+    // The State menu names the column: its status, not the category's first.
+    sent.length = 0;
+    await moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_600, "In Progress");
+    expect(sent).toEqual([{ id: "linear:acme", task: "MOON-1", source: "MOON", column: "in_progress", status: "In Progress" }]);
     useTasks.setState({ config: null });
   });
 

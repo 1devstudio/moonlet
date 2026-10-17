@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { PullRequest } from "./protocol";
 import type { Task } from "./tasks";
 import { type BoardSession, tasksBoard } from "./tasksBoard";
-import { listGroups, listRow } from "./tasksList";
+import { boardListGroups, listGroups, listRow } from "./tasksList";
+import { boardView } from "./boardColumns";
 
 const task = (key: string, column: Task["column"], updatedMs = 0): Task => ({
   connection: "linear:acme",
@@ -125,5 +126,30 @@ describe("a row's chip and updated time (X45 List)", () => {
     });
     expect(listRow(b.todo[0], 1_000 + 5 * 60_000)).toMatchObject({ chip: "Session running · In Progress", updated: "5 min ago" });
     expect(listRow(b.todo[0], 1_000 + 3 * 3_600_000).updated).toBe("3 h ago");
+  });
+});
+
+describe("boardListGroups (X50 List by the board's columns)", () => {
+  it("groups by the board's shown and folded columns, in order, with their notes", () => {
+    const linear = (key: string, state: string): Task => ({ ...task(key, "todo"), tracker: { id: key, state, source: "MOON" } });
+    const views = boardView(
+      [
+        { name: "Todo", statuses: ["Todo"], category: "todo" },
+        { name: "Doing", statuses: ["Doing"], category: "in_progress" },
+        { name: "Backlog", statuses: ["Backlog"], category: "todo", show: "hide" },
+        { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+      ],
+      { tasks: [linear("MOON-1", "Todo"), linear("MOON-2", "Done"), linear("MOON-3", "Backlog")], sessions: [session("s", "moon-2-old")], worktrees: [], sessionStartRule: "auto" },
+    );
+    expect(boardListGroups(views).map((g) => [g.name, g.column, g.folded, g.cards.map((c) => c.task.key), g.note])).toEqual([
+      ["Todo", "todo", false, ["MOON-1"], ""],
+      ["Doing", "in_progress", false, [], ""],
+      ["Done", "done", true, ["MOON-2"], "1 needs clean-up"],
+    ]);
+  });
+
+  it("shows a chip without a fix as its text alone", () => {
+    const c = tasksBoard({ tasks: [task("MOON-1", "todo")], sessions: [], worktrees: [], sessionStartRule: "auto" }).todo[0];
+    expect(listRow({ ...c, drift: { kind: "started", text: "Session running", fix: "" } }, 0).chip).toBe("Session running");
   });
 });

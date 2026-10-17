@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type BoardColumn, type BoardConfig, boardRows, syncedColumns, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { type BoardColumn, type BoardConfig, boardRows, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -316,5 +316,26 @@ describe("syncedColumns (X50 a board's columns after a sync)", () => {
     expect(syncedColumns({ ...board, columns: undefined, states: { "To Do": "hidden" } }, [todo])).toEqual([{ ...todo, show: "hide" }]);
     expect(syncedColumns(board, null)).toEqual([todo, review]);
     expect(syncedColumns({ ...base, origin: { kind: "github_repo", repo: "acme/web" } }, null)).toEqual(GITHUB_REPO_COLUMNS);
+  });
+});
+
+describe("withColumnShow (X50 a column's ⋯ menu and the header's Columns menu)", () => {
+  it("shows, folds or hides one column of the board, kept with the board", () => {
+    const board: BoardConfig = {
+      id: "b",
+      name: "b",
+      connection: "linear:acme",
+      workspace: "local/w",
+      origin: { kind: "linear_team", team: "MOON" },
+      columns: [
+        { name: "Todo", statuses: ["Todo"], category: "todo" },
+        { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+      ],
+    };
+    expect(withColumnShow(board, "Todo", "fold").columns).toEqual([
+      { name: "Todo", statuses: ["Todo"], category: "todo", show: "fold" },
+      { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+    ]);
+    expect(withColumnShow(board, "Done", "show").columns?.[1]).toEqual({ name: "Done", statuses: ["Done"], category: "done" });
   });
 });

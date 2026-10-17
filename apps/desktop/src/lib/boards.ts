@@ -278,3 +278,15 @@ export function syncedColumns(board: BoardConfig, fresh: BoardColumn[] | null): 
   if (board.origin.kind === "jql") return [...saved, ...fresh.filter((f) => !f.statuses.some((id) => saved.some((c) => c.statuses.includes(id))))];
   return matchColumns(saved, fresh);
 }
+
+/** Board `board` with column `name` shown, folded or hidden (X50); moonlet-only, the tracker is not told. */
+export function withColumnShow(board: BoardConfig, name: string, show: "show" | "fold" | "hide"): BoardConfig {
+  return {
+    ...board,
+    columns: syncedColumns(board, null).map((c) => {
+      if (c.name !== name) return c;
+      const { show: _, ...rest } = c;
+      return show === "show" ? rest : { ...rest, show };
+    }),
+  };
+}
