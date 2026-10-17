@@ -281,3 +281,8 @@ export function scopeNeeded(message: string): "read:project" | "project" | null 
 export function projectChoice(p: { owner: string; number: number; title: string; options: unknown[] }): { key: string; name: string; kind: string; group: string; origin: Origin } {
   return { key: `#${p.number}`, name: p.title, kind: `${p.options.length} ${p.options.length === 1 ? "column" : "columns"}`, group: p.owner, origin: { kind: "github_project", owner: p.owner, number: p.number } };
 }
+
+/** Whose GitHub Projects step 1 lists besides the user's (X50): the owners of the workspace's repositories, each once. */
+export function projectOwners(repos: (string | null)[]): string[] {
+  return [...new Set(repos.flatMap((r) => (r ? [r.split("/")[0]] : [])))];
+}

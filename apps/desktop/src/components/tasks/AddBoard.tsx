@@ -25,6 +25,7 @@ import {
   originText,
   pickOrigin,
   projectChoice,
+  projectOwners,
   scopeNeeded,
   previewLine,
   putBoard,
@@ -129,7 +130,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     let stale = false;
     const kind = trackerOf(draft.connection);
     // The Projects of the user and of the owners of the workspace's repositories (X50).
-    const owners = [...new Set(repos.map((r) => r.split("/")[0]))];
+    const owners = projectOwners(repos);
     const ask =
       draft.connection === GITHUB
         ? rpc<GhProject[]>(host, M.ghProjects, { owners }).then((ps) => ps.map((p): Choice => projectChoice(p)))

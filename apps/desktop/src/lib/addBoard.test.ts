@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alreadyAdded, byGroup, canContinue, cardChoices, projectChoice, scopeNeeded, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { alreadyAdded, byGroup, canContinue, cardChoices, projectChoice, projectOwners, scopeNeeded, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -235,5 +235,12 @@ describe("Add a board, GitHub Projects (X50)", () => {
   it("lists a Project under its owner, with its Status options counted as columns", () => {
     const project = { id: "PVT_1", owner: "acme", number: 2, title: "Website", status_field: "F", options: [{ id: "a", name: "Todo" }, { id: "b", name: "In Progress" }, { id: "c", name: "Done" }] };
     expect(projectChoice(project)).toEqual({ key: "#2", name: "Website", kind: "3 columns", group: "acme", origin: { kind: "github_project", owner: "acme", number: 2 } });
+  });
+});
+
+describe("Add a board, whose GitHub Projects to list (X50)", () => {
+  it("asks about the owners of the workspace's repositories, each once", () => {
+    expect(projectOwners(["acme/web", "acme/api", "Sam-Rivera/notes", null])).toEqual(["acme", "Sam-Rivera"]);
+    expect(projectOwners([])).toEqual([]);
   });
 });
