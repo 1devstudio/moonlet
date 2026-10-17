@@ -1,7 +1,7 @@
 // Add a board (X50): the wizard's four steps as data, what each waits for,
 // the tracker's defaults, and the board it makes.
 
-import { type BoardColumn, type BoardConfig, boardId, type CardField, type ColumnShow, DEFAULT_CARDS, type Origin, originKey, type StartRule } from "./boards";
+import { type BoardColumn, type BoardConfig, boardId, type CardField, cardFields, type ColumnShow, DEFAULT_CARDS, type Origin, originKey, type StartRule } from "./boards";
 import { type Column, mentionsKey, type Task, type TrackerKind, trackerOf } from "./tasks";
 
 export type Step = 1 | 2 | 3 | 4;
@@ -148,6 +148,8 @@ export function summaryLine(d: Draft, issues: number, workspaceName: string): st
   return [d.origin ? originText(d.origin) : "", columns, count(issues, "issue", "issues"), workspaceName].filter(Boolean).join(" · ");
 }
 
+const sameFields = (a: CardField[], b: CardField[]) => a.length === b.length && a.every((f) => b.includes(f));
+
 /** The board Create board saves, with what is at its default left out. */
 export function toBoard(d: Draft): BoardConfig {
   if (!d.origin || !d.connection) throw new Error("Pick what the board is built from first");
@@ -163,7 +165,8 @@ export function toBoard(d: Draft): BoardConfig {
     ...(d.finished !== 14 && { finished: d.finished }),
     columns: d.columns,
     ...(d.rules.length && { rules: d.rules }),
-    ...(d.cards.length && { cards: d.cards }),
+    // Cards at the tracker's own fields are left out; none at all is kept.
+    ...(!sameFields(d.cards, DEFAULT_CARDS[trackerOf(d.connection) ?? "github"]) && { cards: d.cards }),
     ...(!d.pinned && { pinned: false as const }),
     ...(d.states && { states: d.states }),
   };
@@ -183,7 +186,7 @@ export function draftFromBoard(b: BoardConfig): Draft {
     name: b.name,
     workspace: b.workspace,
     rules: b.rules ?? [],
-    cards: b.cards ?? [],
+    cards: cardFields(b),
     pinned: b.pinned !== false,
     ...(b.states && { states: b.states }),
   };

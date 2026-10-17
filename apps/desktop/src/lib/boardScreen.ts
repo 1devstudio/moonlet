@@ -2,7 +2,7 @@
 // Boards, the header's Columns menu and the detail's State menu.
 
 import { boardSubtitle, boardView, type ColumnView, statusKey } from "./boardColumns";
-import { type BoardColumn, type BoardConfig, type CardField, type Category, DEFAULT_CARDS, syncedColumns } from "./boards";
+import { type BoardColumn, type BoardConfig, type CardField, type Category, syncedColumns } from "./boards";
 import type { AgentState } from "./protocol";
 import type { BoardData } from "./tasksStore";
 import { initials } from "./taskDetails";
@@ -128,10 +128,11 @@ export function mapCards(views: ColumnView[], f: (c: Card) => Card | null): Colu
   });
 }
 
-/** The fields `board`'s cards show: its own choice, else its tracker's (X50 Cards show). */
-export const cardFields = (board: Pick<BoardConfig, "connection" | "cards">): CardField[] => board.cards ?? DEFAULT_CARDS[trackerOf(board.connection) ?? "github"];
-
-const dueDay = (due: string) => new Date(`${due}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+/** `2026-10-20` as `Oct 20`, in the user's own day; a date that doesn't read stays as written. */
+function dueDay(due: string): string {
+  const d = new Date(`${due}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? due : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
 /**
  * What a card shows of `fields` (X50 Cards show): issue type after the key,
