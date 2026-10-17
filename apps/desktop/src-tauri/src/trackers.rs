@@ -322,6 +322,9 @@ pub struct SourceChoice {
     /// A Linear team that uses cycles, whose board can follow the active one (X50).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub cycles: bool,
+    /// A ClickUp list's space, and folder: `Engineering › Roadmap` (X50 Add a board).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -342,7 +345,7 @@ pub struct ConnectRequest {
 }
 
 fn pairs(list: Vec<(String, String)>) -> Vec<SourceChoice> {
-    list.into_iter().map(|(key, name)| SourceChoice { key, name, cycles: false }).collect()
+    list.into_iter().map(|(key, name)| SourceChoice { key, name, cycles: false, group: None }).collect()
 }
 
 /// Signs in with a token, keeps it in the Keychain and adds (or replaces) the
@@ -433,21 +436,26 @@ pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
         TrackerKind::Linear => s
             .linear_ok(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?))?
             .into_iter()
-            .map(|t| SourceChoice { key: t.key, name: t.name, cycles: t.cycles })
+            .map(|t| SourceChoice { key: t.key, name: t.name, cycles: t.cycles, group: None })
             .collect(),
         TrackerKind::Jira => pairs(jira::parse_projects(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/project/search?maxResults=100")?).await?)?),
         TrackerKind::Clickup => {
             let team = safe_id(&s.conn.site)?;
             let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/team/{team}/space"))?).await?;
             let mut lists = Vec::new();
-            for (space, _) in clickup::parse_spaces(&raw)? {
+            // Grouped by space, and folder (X50 Add a board).
+            for (space, space_name) in clickup::parse_spaces(&raw)? {
                 let space = safe_id(&space)?;
                 let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/space/{space}/list"))?).await?;
-                lists.extend(clickup::parse_lists(&raw)?);
+                lists.extend(clickup::parse_lists(&raw)?.into_iter().map(|(key, name)| SourceChoice { key, name, cycles: false, group: Some(space_name.clone()) }));
                 let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/space/{space}/folder"))?).await?;
-                lists.extend(clickup::parse_folder_lists(&raw)?);
+                lists.extend(
+                    clickup::parse_folder_lists(&raw)?
+                        .into_iter()
+                        .map(|(key, name, folder)| SourceChoice { key, name, cycles: false, group: Some(format!("{space_name} › {folder}")) }),
+                );
             }
-            pairs(lists)
+            lists
         }
         TrackerKind::Github => vec![],
     })
@@ -487,10 +495,11 @@ pub async fn tracker_task(id: String, key: String) -> Res<Option<TrackerTask>> {
 
 impl Session {
     /// A ClickUp list's tasks, the user's own when `mine` (X44 Sync): open
-    /// ones, and closed ones of the last 14 days.
-    async fn clickup_tasks(&self, list: &str, mine: bool) -> Res<Vec<TrackerTask>> {
+    /// ones, and closed ones of the board's finished days, with due dates.
+    async fn clickup_tasks(&self, list: &str, mine: bool, finished: &Finished) -> Res<Vec<BoardIssue>> {
         let me = if mine { clickup::parse_user_id(&self.clickup_send(self.clickup(reqwest::Method::GET, "/user")?).await?)? } else { String::new() };
-        let since = moonlet_core::paths::now_ms().saturating_sub(14 * 86_400_000);
+        let since = clickup::closed_since(moonlet_core::paths::now_ms(), finished);
+        let mut due = std::collections::HashMap::new();
         let list = safe_id(list)?;
         let mut passes = [Vec::new(), Vec::new()];
         for (pass, closed_since) in passes.iter_mut().zip([None, Some(since)]) {
@@ -498,13 +507,17 @@ impl Session {
                 let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, closed_since);
                 let raw = self.clickup_send(self.clickup(reqwest::Method::GET, &path)?).await?;
                 pass.extend(clickup::parse_tasks(&raw, &self.conn.id)?);
+                due.extend(clickup::parse_due_dates(&raw)?);
                 if !clickup::more_pages(&raw) {
                     break;
                 }
             }
         }
         let [open, recent] = passes;
-        Ok(clickup::merge_passes(open, recent, &self.conn.states))
+        Ok(clickup::merge_passes(open, recent, &self.conn.states)
+            .into_iter()
+            .map(|t| BoardIssue { due: due.get(&t.tracker.id).cloned(), ..BoardIssue::from_task(t) })
+            .collect())
     }
 }
 
@@ -611,7 +624,7 @@ pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
     }
     // A ClickUp list: X44's fetch of that one source, and its states as columns.
     if let Origin::ClickupList { list: key } = &query.origin {
-        let issues = s.clickup_tasks(key, query.mine).await?.into_iter().map(BoardIssue::from_task).collect();
+        let issues = s.clickup_tasks(key, query.mine, &query.finished).await?;
         let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_of(key).await?);
         return Ok(BoardTasks { issues, sprint: None, columns: Some(columns), kind: None });
     }

@@ -58,7 +58,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
   (Partly: only a repository's issues; GitHub Projects come with their own layer.)
 - [ ] Reading GitHub Projects needs gh's `read:project` scope. Without it, step 1 says so, with the command `gh auth refresh -s read:project` to copy and **Check again**. moonlet never runs `gh auth` itself.
-- [ ] **ClickUp:** the workspace's lists, by space and folder. (Partly: the lists, by name, not grouped by space and folder yet.)
+- [x] **ClickUp:** the workspace's lists, by space and folder. (`clickup.rs` the_lists_inside_a_spaces_folders_are_sources_named_with_their_folder; `addBoard.test.ts` groups a connection's lists by space and folder, in the order they came; `task-trackers.e2e.ts` connects ClickUp with its raw token to the account's first workspace, its lists grouped by space in Add a board)
 
 #### 2. Issues
 
@@ -110,7 +110,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - epic (Jira) or parent
   - due date
 
-  Ticked at first: the tracker's own fields (Jira: issue type, story points, assignee; Linear: estimate, assignee; GitHub and ClickUp: assignee), which are not written to the file; unticking every box is kept as none. (Partly: a ClickUp task's due date is offered but its sync does not read it yet. `addBoard.test.ts` offers only the card fields the tracker has, makes the board, leaving out what is at its default, opens the board's own values, and saves it back as it was; `config.rs` a_board_whose_cards_show_nothing_keeps_that_choice)
+  Ticked at first: the tracker's own fields (Jira: issue type, story points, assignee; Linear: estimate, assignee; GitHub and ClickUp: assignee), which are not written to the file; unticking every box is kept as none. (`addBoard.test.ts` offers only the card fields the tracker has, makes the board, leaving out what is at its default, opens the board's own values, and saves it back as it was; `config.rs` a_board_whose_cards_show_nothing_keeps_that_choice)
 - [ ] A summary card shows the tracker's mark, the name and `<origin> · <n> columns shown, <n> folded, <n> hidden · <n> issues · <workspace>`, with **Pin in sidebar** (on). (`addBoard.test.ts` sums the board up as the summary card does)
 - [x] **Create board** saves the board, closes the wizard and opens the board. (`task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings)
 
@@ -210,7 +210,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - Before searching, each sync asks Jira who the user is, so a token Jira no longer accepts asks to reconnect instead of showing an empty board (X44). (`task-trackers.e2e.ts` asks Jira who the user is before each search, and reads at most 5 pages)
 - [x] **Linear:** issues of the team, filtered by label and assignee: open ones, and done or canceled ones updated in the board's last days (as Jira's rule reads `updated`). With Follow the active cycle, only the active cycle's issues, plus its number (or name) and dates. Each issue keeps its estimate, parent and due date. (`linear.rs` a_teams_board_follows_its_active_cycle_or_its_finished_days, a_boards_issues_carry_their_estimate_parent_and_due_date, the_teams_active_cycle_names_the_board; `tasksStore.test.ts` keeps only the issues with any of a board's labels, whatever their case; `task-trackers.e2e.ts` adds a board of a Linear team that uses cycles, following its active cycle, with the card fields picked, and removes it after asking)
 - [ ] **GitHub Project:** the project's items that are issues, with their Status and number fields. Draft items and PRs are left out.
-- [ ] **ClickUp:** X44's two passes over the list.
+- [x] **ClickUp:** X44's two passes over the list, the closed one going back the board's finished days (ClickUp has no sprint, so a board set to follow one takes 14 days), with each task's due date. (`clickup.rs` closed_tasks_are_read_back_to_the_boards_finished_days, a_tasks_due_date_is_its_day; `time.rs` a_day_from_unix_milliseconds)
 
 ## UI
 

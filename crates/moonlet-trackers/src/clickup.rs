@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 
+use crate::config::Finished;
 use crate::states::Column;
 use crate::task::{TrackerRef, TrackerTask};
 use crate::{ApiError, TrackerKind};
@@ -59,13 +60,43 @@ pub fn parse_lists(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
     Ok(pairs(&parse(raw)?["lists"]))
 }
 
-/// The lists inside the folders of `GET /space/{id}/folder`.
-pub fn parse_folder_lists(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
+/// The lists inside the folders of `GET /space/{id}/folder`, each with its
+/// folder's name, which Add a board groups them by (X50).
+pub fn parse_folder_lists(raw: &[u8]) -> Result<Vec<(String, String, String)>, ApiError> {
     Ok(parse(raw)?["folders"]
         .as_array()
         .into_iter()
         .flatten()
-        .flat_map(|f| pairs(&f["lists"]))
+        .flat_map(|f| {
+            let folder = f["name"].as_str().unwrap_or_default().to_string();
+            pairs(&f["lists"])
+                .into_iter()
+                .map(move |(id, name)| (id, name, folder.clone()))
+        })
+        .collect())
+}
+
+/// Since when a board's closed tasks are read (ms): its finished days back
+/// from `now`; ClickUp has no sprint to follow, so that takes the default.
+pub fn closed_since(now: u64, finished: &Finished) -> u64 {
+    let days = match finished {
+        Finished::Days(n) => u64::from(*n),
+        Finished::Sprint => 14,
+    };
+    now.saturating_sub(days * 86_400_000)
+}
+
+/// Each task's due date (X50 Cards show), by its id: ClickUp's
+/// milliseconds as the day they fall on (UTC).
+pub fn parse_due_dates(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
+    Ok(parse(raw)?["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            let ms = str_of(&t["due_date"]).parse::<u64>().ok()?;
+            Some((str_of(&t["id"]), crate::time::date_of_ms(ms)))
+        })
         .collect())
 }
 
@@ -405,13 +436,16 @@ mod tests {
     }
 
     #[test]
-    fn the_lists_inside_a_spaces_folders_are_sources() {
+    fn the_lists_inside_a_spaces_folders_are_sources_named_with_their_folder() {
         // The documented folders answer has no lists in its example folders.
         assert_eq!(parse_folder_lists(&fixture("clickup-folders.json")).unwrap(), []);
         let raw = br#"{"folders":[{"id":"457","name":"Roadmap","lists":[{"id":"901","name":"Q4"},{"id":"902","name":"Bugs"}]}]}"#;
         assert_eq!(
             parse_folder_lists(raw).unwrap(),
-            [("901".to_string(), "Q4".to_string()), ("902".to_string(), "Bugs".to_string())]
+            [
+                ("901".to_string(), "Q4".to_string(), "Roadmap".to_string()),
+                ("902".to_string(), "Bugs".to_string(), "Roadmap".to_string())
+            ]
         );
     }
 
@@ -454,5 +488,21 @@ mod tests {
             (other.auth, other.message.as_str()),
             (false, "ClickUp: Rate limit reached")
         );
+    }
+
+    #[test]
+    fn a_tasks_due_date_is_its_day() {
+        assert_eq!(
+            parse_due_dates(&fixture("clickup-tasks.json")).unwrap(),
+            [("9hx".to_string(), "2017-10-18".to_string())]
+        );
+    }
+
+    #[test]
+    fn closed_tasks_are_read_back_to_the_boards_finished_days() {
+        let now = 1_792_972_800_000;
+        assert_eq!(closed_since(now, &Finished::Days(7)), now - 7 * 86_400_000);
+        // ClickUp has no sprint to follow: the default 14 days.
+        assert_eq!(closed_since(now, &Finished::Sprint), now - 14 * 86_400_000);
     }
 }
