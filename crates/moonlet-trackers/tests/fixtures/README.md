@@ -1,6 +1,6 @@
 # Tracker API fixtures
 
-Gathered on 2026-10-15 from the trackers' official API documentation; no live account was used. The X50 board files were added on 2026-10-17 from a real Jira Cloud site. Each file is one of:
+Gathered on 2026-10-15 from the trackers' official API documentation; no live account was used. The X50 Jira board files were added on 2026-10-17 from a real Jira Cloud site; the X50 Linear board files (`linear-board-issues.json`, `linear-active-cycle.json`) are SCHEMA, as Linear's other files. Each file is one of:
 
 - **VERBATIM**: a documented example response or request body, trimmed to the fields moonlet reads (field names and nesting unchanged).
 - **VERBATIM+**: a documented example with small, noted edits (a second item added, text replaced).

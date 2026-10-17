@@ -63,11 +63,16 @@ export function stateChoices(columns: BoardColumn[], task: Task): { choices: { l
 /** A board's title (X50): its name, with the sprint or cycle it follows. */
 export const boardTitle = (board: BoardConfig, sprint: string | null | undefined) => (board.finished === "sprint" && sprint ? `${board.name} · ${sprint}` : board.name);
 
-/** The header's title and subtitle (X50), counting the cards the filters leave and their sessions. */
-export function boardHeader(board: BoardConfig, sprint: BoardData["sprint"], site: string, cards: Pick<Card, "rows">[]): { title: string; subtitle: string } {
-  const following = board.finished === "sprint" ? sprint : null;
+/**
+ * The header's title and subtitle (X50), counting the cards the filters leave
+ * and their sessions. `sprint` is null once a sync found no active sprint or
+ * cycle, undefined before one.
+ */
+export function boardHeader(board: BoardConfig, sprint: BoardData["sprint"] | undefined, site: string, cards: Pick<Card, "rows">[]): { title: string; subtitle: string } {
+  const follows = board.finished === "sprint";
   const where = board.origin.kind === "github_repo" ? board.origin.repo : site;
-  const dates = following ? { startMs: following.startMs, endMs: following.endMs } : null;
+  const none = trackerOf(board.connection) === "linear" ? "No active cycle" : "No active sprint";
+  const dates = !follows || sprint === undefined ? null : sprint ? { startMs: sprint.startMs, endMs: sprint.endMs } : none;
   return { title: boardTitle(board, sprint?.name), subtitle: boardSubtitle(board.connection, where, dates, cards.length, cards.reduce((n, c) => n + c.rows.length, 0)) };
 }
 

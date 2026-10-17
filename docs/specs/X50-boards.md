@@ -35,7 +35,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - ClickUp: `clickup_list` (a list, by id).
 - [x] When the app reads `trackers.toml` after the upgrade, every X44 source becomes one board in its workspace. A Jira project becomes a `jql` board `project = <KEY>`, a Linear team a `linear_team` board, a ClickUp list a `clickup_list` board. The board is named after the source and pinned, and carries its connection's state mapping. Its columns come from the tracker on the first sync, named as there: the statuses the Jira project's issues are in, the Linear team's workflow states, the ClickUp list's statuses. Each column's category is the one the mapping gave its state; a state mapped to Not shown becomes a hidden column. The connections keep no sources or mapping, and a source no workspace was chosen for goes. (`boards.test.ts` turns every workspace's sources into pinned boards as soon as the file loads, keeping each connection's state mapping, drops a source no workspace was chosen for, skips one that already has its board, and leaves a file without sources as it is, gives the tracker's states the categories the old state mapping gave them, and hides those not shown; `tasksStore.test.ts` turns the file's sources into boards when it loads, and gives the workspace's repository its board on the first sync)
 - [x] Each GitHub repository of a workspace's projects gets a `github_repo` board, with GitHub's Open and Closed, the first time a sync sees it, so one whose origin could not be read at first (a host offline, a remote added later) still gets one; a board removed later stays removed, and `Acme/Web` and `acme/web` are one board. (`boards.test.ts` gives each repository of a workspace's projects its board once, whatever its case, keeps a board removed later removed, gives a repository seen on a later sync its board then (a host offline, a remote added later))
-- [x] Removing a board asks first. Session links (X46) stay, and so do the sessions themselves. (`task-trackers.e2e.ts` adds a board of a Linear team that uses cycles, following its active cycle, and removes it after asking)
+- [ ] Removing a board asks first. Session links (X46) stay, and so do the sessions themselves. (Removing touches only `trackers.toml`; no test yet shows the sessions and their links staying. The confirm: `task-trackers.e2e.ts` adds a board of a Linear team that uses cycles, following its active cycle, and removes it after asking)
 - [ ] Disconnecting a connection (X44) also removes its boards, and its confirm names them. (Partly: the confirm does not name them yet. `task-trackers.e2e.ts` disconnects after asking: the token and the connection are gone)
 
 ### Add a board
@@ -131,7 +131,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - Sessions without a task is the List's last group.
   - Out of sync stays on the cards and on the Tasks button's dot and count, counted over the workspace's boards.
   - My issues is the Assignee filter.
-- [x] The header title is the board's name with a `⌄`. When the board follows a sprint or cycle, the title adds its name: `OPS · Sprint 42`, `Moonlet · Cycle 14`. Clicking the title opens the board switcher. (`tasks-mode.e2e.ts` shows the project's GitHub issues with the sessions working on them; `boardScreen.test.ts` titles the board with the sprint it follows, and sums up what the filters show)
+- [x] The header title is the board's name with a `⌄`. When the board follows a sprint or cycle, the title adds its name: `OPS · Sprint 42`, `Moonlet · Cycle 14` (a Linear cycle's own name when it has one). Clicking the title opens the board switcher. (`tasks-mode.e2e.ts` shows the project's GitHub issues with the sessions working on them; `boardScreen.test.ts` titles the board with the sprint it follows, and sums up what the filters show)
 - [x] The subtitle reads `<tracker> · <site> · <start> – <end> · <n> tasks · <n> sessions`:
   - `<n> issues` for Jira.
   - The dates show only while following a sprint or cycle.
@@ -151,7 +151,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 - [x] The switcher is a popover under the title with "Find a board, team or project", which finds boards by name, key or workspace. It lists boards grouped by workspace: the current workspace first ("this workspace"), then the others ("switches workspace"). (`boardColumns.test.ts` finds a board by its name, its key or its workspace)
 - [ ] A row shows:
-  - the tracker's mark, the name and the type (Scrum, Kanban, Team-managed or Board until a Jira board's first sync, Query, `Cycle <n>` or Team, Project, Repository, List)
+  - the tracker's mark, the name and the type (Scrum, Kanban, Team-managed or Board until a Jira board's first sync, Query, the cycle (`Cycle <n>` or its name) or Team, Project, Repository, List)
   - a strip of small bars, one per shown or folded column, in its category's colour
   - `<n> columns · <n> issues` (`tasks` but for Jira, as in the subtitle), as much as is known before its first sync
   - the board's sessions: `<n> sessions` with a dot in the most urgent agent state, or `no sessions`
@@ -171,7 +171,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 ### Cards
 
-- [ ] A card shows the X45 card plus the board's card fields: (Partly: issue type and story points show, for every board; the card fields setting, epic or parent and due date come with Add a board.)
+- [ ] A card shows the X45 card plus the board's card fields: (Partly: issue type and story points (a Linear estimate) show, for every board, whatever the card fields setting says; epic or parent and due date are synced but not shown yet.)
   - issue type, after the key
   - story points as `<n> pt`, before the assignee's initials
   - epic or parent and due date, on a line under the title
@@ -207,7 +207,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - The active sprint's name and dates come from the issues' sprint field (the field Jira Software made, found by its type): the board's sprint whose state is `active`. (`jira_board.rs` a_boards_issues_with_their_status_id_points_parent_and_the_active_sprint)
   - Each issue keeps its status id, which the board's columns list, plus its components, parent and due date. (`jira_board.rs` a_boards_issues_with_their_status_id_points_parent_and_the_active_sprint, a_jql_boards_columns_are_its_issues_statuses_in_category_order; `boards.test.ts` keeps the status id with the tracker's state, and the card's fields)
   - Before searching, each sync asks Jira who the user is, so a token Jira no longer accepts asks to reconnect instead of showing an empty board (X44). (`task-trackers.e2e.ts` asks Jira who the user is before each search, and reads at most 5 pages)
-- [x] **Linear:** issues of the team, filtered by label and assignee: open ones and those finished in the board's days. With Follow the active cycle, only the active cycle's issues, plus its number (or name) and dates. Each issue keeps its estimate, parent and due date. (`linear.rs` a_teams_board_follows_its_active_cycle_or_its_finished_days, a_boards_issues_carry_their_estimate_parent_and_due_date, the_teams_active_cycle_names_the_board; `tasksStore.test.ts` keeps only the issues with any of a board's labels, whatever their case; `task-trackers.e2e.ts` adds a board of a Linear team that uses cycles, following its active cycle, and removes it after asking)
+- [x] **Linear:** issues of the team, filtered by label and assignee: open ones, and done or canceled ones updated in the board's last days (as Jira's rule reads `updated`). With Follow the active cycle, only the active cycle's issues, plus its number (or name) and dates. Each issue keeps its estimate, parent and due date. (`linear.rs` a_teams_board_follows_its_active_cycle_or_its_finished_days, a_boards_issues_carry_their_estimate_parent_and_due_date, the_teams_active_cycle_names_the_board; `tasksStore.test.ts` keeps only the issues with any of a board's labels, whatever their case; `task-trackers.e2e.ts` adds a board of a Linear team that uses cycles, following its active cycle, and removes it after asking)
 - [ ] **GitHub Project:** the project's items that are issues, with their Status and number fields. Draft items and PRs are left out.
 - [ ] **ClickUp:** X44's two passes over the list.
 
@@ -222,6 +222,7 @@ States:
 - A workspace with no board shows "Add a board" in the centre when a tracker is connected, else X45's "Connect a task tracker" panel. (Without a tracker: `tasks-mode.e2e.ts` asks to connect a task tracker in a workspace with no board)
 - "Loading tasks…" shows before a board's first list.
 - A board whose origin is gone (a Jira board deleted, a team archived) shows the tracker's error and **Board settings**.
+- A board that follows its sprint or cycle while none is active is empty, and its subtitle says "No active sprint" or "No active cycle". (`boardScreen.test.ts` titles the board with the sprint it follows, and sums up what the filters show)
 
 ## Protocol and RPCs
 
