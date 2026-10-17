@@ -125,6 +125,11 @@ pub const GH_PROJECTS: &str = "gh.projects";
 /// `{owner, number, mine?}`: a Project's items that are issues, with their
 /// Status (X50 Sync); the user's own when `mine`.
 pub const GH_PROJECT_ITEMS: &str = "gh.project_items";
+/// `{project, item, field, option}`: sets a Project item's Status (X50).
+/// Needs gh's `project` scope.
+pub const GH_PROJECT_MOVE: &str = "gh.project_move";
+/// gh's token scopes for github.com, such as `read:project` (X50).
+pub const GH_SCOPES: &str = "gh.scopes";
 /// One issue of any repository by its number (X46: a pasted key or URL).
 pub const GH_TASK: &str = "gh.task";
 /// `{path, number, assign_me?, close?, reopen?}`: assigns a GitHub issue to
@@ -674,6 +679,14 @@ pub struct GhProjectItems {
     pub number: u64,
     #[serde(default)]
     pub mine: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhProjectMove {
+    pub project: String,
+    pub item: String,
+    pub field: String,
+    pub option: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

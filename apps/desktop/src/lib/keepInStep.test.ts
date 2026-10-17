@@ -65,6 +65,14 @@ describe("driftFix (X45 out of sync, X46 Keep in step)", () => {
     expect(driftFix(card(gh, { kind: "merged", text: "#70 merged", fix: "Move to Closed", to: closed }))).toEqual({ kind: "github", repo: "acme/web", number: 7, close: true });
   });
 
+  it("on a GitHub Project's board, sets the item's Status to the next column's, whatever its category (X50)", () => {
+    const item = task("acme/web#10", "in_progress", { repo: "acme/web", number: 10, closingPrs: [], project: { item: "PVTI_10", status: "In Progress" } });
+    const drift = { kind: "merged" as const, text: "#31 merged", fix: "Move to Done", to: { column: "Done", category: "done" as const, statuses: ["Done"] } };
+    expect(driftFix(card(item, drift))).toEqual({ kind: "project", item: "PVTI_10", status: "Done", name: "Done" });
+    const review = { ...drift, kind: "pr_open" as const, fix: "Move to In review", to: { column: "In review", category: "in_review" as const, statuses: ["In review"] } };
+    expect(driftFix(card(item, review))).toEqual({ kind: "project", item: "PVTI_10", status: "In review", name: "In review" });
+  });
+
   it("cleans up a done task's sessions and worktrees", () => {
     const c = card(task("MOON-131", "done"), { kind: "done_open", text: "1 session, 2 worktrees", fix: "Clean up" }, [session("hooks", "/w/hooks", 119)], [
       { path: "/w/old", branch: "moon-131-old", originRepo: null },

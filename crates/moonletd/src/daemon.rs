@@ -595,6 +595,18 @@ impl Daemon {
                     .await
                     .map_err(internal)?)
             }
+            m::GH_PROJECT_MOVE => {
+                let r: m::GhProjectMove = params(p)?;
+                moonlet_core::gh_projects::gh_project_move(
+                    &r.project, &r.item, &r.field, &r.option,
+                )
+                .await
+                .map_err(internal)?;
+                ok(true)
+            }
+            m::GH_SCOPES => ok(moonlet_core::gh_projects::gh_scopes()
+                .await
+                .map_err(internal)?),
             m::GH_PROJECT_ITEMS => {
                 let r: m::GhProjectItems = params(p)?;
                 ok(

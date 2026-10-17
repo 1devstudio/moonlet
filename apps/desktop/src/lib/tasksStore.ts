@@ -1,7 +1,7 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { addRepoBoards, type Assignee, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
+import { addRepoBoards, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
@@ -48,6 +48,8 @@ export interface BoardData {
   kind?: string;
   /** Why the board's last sync failed (a Jira board deleted, a team archived); its last good tasks stay. */
   error?: string;
+  /** A GitHub Project's id, Status field and options, for moving its items (X50). */
+  project?: ProjectMeta;
 }
 
 interface TasksState {
@@ -67,6 +69,8 @@ interface TasksState {
   expanded: Record<string, boolean>;
   /** Hide empty Done in the header, kept across restarts (X45). */
   filters: Omit<BoardFilters, "mine">;
+  /** gh's token scopes on each host, as its last GitHub Project sync read them (X50 moves need `project`). */
+  ghScopes: Record<string, string[]>;
   /** Assignee picked in the header, by board id, kept in the app across restarts, not written to the board (X50). */
   assignee: Record<string, AssigneePick>;
   /** Connections whose token stopped working, with what to do (X44). */
@@ -147,6 +151,7 @@ export const useTasks = create<TasksState>(() => ({
   expanded: storedExpanded(),
   filters: storedFilters(),
   assignee: storedAssignee(),
+  ghScopes: {},
   attention: {},
   activity: {},
   query: "",
@@ -436,7 +441,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     // Before a board's columns are known, a task keeps its tracker category.
     const placed = cols.length ? categorize(cols, r.tasks) : r.tasks;
     for (const t of placed) if (!tasks.has(taskId(t))) tasks.set(taskId(t), t);
-    boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint, ...(r.kind && { kind: r.kind }) };
+    boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint, ...(r.kind && { kind: r.kind }), ...(r.project && { project: r.project }) };
   }
   // A board whose columns changed in its tracker keeps them, matched to the
   // board as it is when the write runs, so a change made meanwhile stays.
@@ -486,6 +491,7 @@ interface BoardRead {
   columns: BoardColumn[] | null;
   sprint: BoardData["sprint"];
   kind?: string;
+  project?: ProjectMeta;
   /** Why it failed; null when it worked. */
   error: string | null;
 }
@@ -532,7 +538,13 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
       const [own, all] = await Promise.all([ask(true), everyoneToo ? ask(false) : null]);
       const list = ownAndOthers(own.items, all?.items ?? null, (i) => i.item);
       const columns = await hostsApi.githubProjectColumns(own.options.map((o) => o.name));
-      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB), mine })), columns, sprint: null, error: null };
+      // Whether its items can be moved: gh's project scope (X50).
+      void rpc<string[]>(host, M.ghScopes, {}).then(
+        (scopes) => useTasks.setState((t) => ({ ghScopes: { ...t.ghScopes, [host]: scopes } })),
+        () => {},
+      );
+      const project = { id: own.id, field: own.status_field, options: own.options };
+      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB), mine })), columns, sprint: null, project, error: null };
     } catch (e) {
       return none(message(e));
     }
@@ -636,6 +648,16 @@ function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connec
   const to = status ?? statusFor(columns, category) ?? undefined;
   // Named as the tracker names the column (X50).
   return { status: to, name: columns.find((c) => to && c.statuses.includes(to))?.name ?? COLUMN_LABEL[category] };
+}
+
+/** Sets a GitHub Project item's Status to `status` (X50), through gh on `host`. */
+async function moveProjectItem(host: string, workspaceId: string, task: Task, status: string) {
+  const data = useTasks.getState().data[wsKey(host, workspaceId)];
+  const meta = Object.values(data?.boards ?? {}).find((b) => b.project && b.keys.includes(taskId(task)))?.project;
+  const item = task.github?.project?.item;
+  const req = meta && item ? projectMove(meta, item, status) : null;
+  if (!req) throw new Error(`The Project has no Status called ${status}`);
+  await rpc(host, M.ghProjectMove, req);
 }
 
 /** The columns of the board `task` came from (X50), or none. */
@@ -787,6 +809,10 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
       await rpc(host, M.ghTaskUpdate, { path, number: plan.number, close: true });
       recordActivity(card.task, "moonlet closed it: every session's PR is merged");
       toast(`Closed ${card.task.key}`);
+    } else if (plan.kind === "project") {
+      await moveProjectItem(host, workspaceId, card.task, plan.status);
+      recordActivity(card.task, `moonlet moved it to ${plan.name}`);
+      toast(`Moved ${card.task.key} to ${plan.name}`);
     } else if (plan.kind === "move") {
       const t = card.task.tracker;
       if (!t) return false;
@@ -990,7 +1016,12 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
   const id = `${task.connection} ${task.key}`;
   retries.set(id, () => moveTask(host, workspaceId, task, column, Date.now(), toStatus));
   try {
-    if (task.github) {
+    if (task.github?.project && column) {
+      // A GitHub Project's item: its Status, set to the column's (X50).
+      const { status, name } = boardTarget(host, workspaceId, task, column, toStatus);
+      await moveProjectItem(host, workspaceId, task, status ?? name);
+      recordActivity(task, `moonlet moved it to ${name}`, now);
+    } else if (task.github) {
       const path = repoPath(host, workspaceId, task.github.repo);
       if (!path) throw new Error(`No project in this workspace has ${task.github.repo} as its origin`);
       const close = column === "done";
