@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { changedStates, parseTrackerLink, projectTrackers, trackerLink, sourceList, sourceChoices, sourceNoun } from "./trackerSources";
 import type { BoardConfig } from "./boards";
 
-describe("sourceList (X44 Where each workspace gets its tasks, X45 sidebar Trackers, on boards X50)", () => {
+describe("sourceList (X50 Settings › Task trackers › Boards)", () => {
   it("lists the workspace's boards by tracker and name, marking a board whose connection needs attention", () => {
     const b = (id: string, connection: string, workspace: string, name: string): BoardConfig => ({ id, name, connection, workspace, origin: { kind: "linear_team", team: id } });
     const boards = [b("web", "github:github.com", "local/w1", "acme/web"), b("eng", "linear:acme", "local/w1", "Engineering"), b("des", "linear:acme", "local/w2", "Design"), b("ops", "jira:ops.atlassian.net", "local/w1", "Operations")];

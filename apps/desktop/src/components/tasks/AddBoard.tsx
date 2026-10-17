@@ -3,18 +3,35 @@
 
 import { ArrowDown, ArrowUp, ArrowRight, Check, Lock, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { alreadyAdded, canContinue, type Draft, draftFromBoard, finishedChoices, newDraft, pickOrigin, previewLine, STEPS, summaryLine, toBoard } from "../../lib/addBoard";
-import { type BoardColumn, CATEGORY_LABEL, type CardField, GITHUB_REPO_COLUMNS, type Origin, type StartRule } from "../../lib/boards";
+import {
+  alreadyAdded,
+  canContinue,
+  cardChoices,
+  clash,
+  columnAt,
+  type Draft,
+  draftFromBoard,
+  finishedChoices,
+  moveColumn,
+  newDraft,
+  originText,
+  pickOrigin,
+  previewLine,
+  putBoard,
+  STEPS,
+  summaryLine,
+  toBoard,
+} from "../../lib/addBoard";
+import { type BoardColumn, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, type Origin, type StartRule } from "../../lib/boards";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
 import { type Task, trackerName, trackerOf } from "../../lib/tasks";
-import { openBoard, previewBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
+import { GITHUB, openBoard, previewBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { Button, cx, IconButton, inputCls, TrackerIcon } from "../ui";
-import { TaskGlyph } from "./TasksMode";
+import { Button, cx, IconButton, inputCls } from "../ui";
+import { BoardMark, TaskGlyph } from "./TasksMode";
 
-const GITHUB = "github:github.com";
 const selectCls = cx(inputCls, "menu-select field-height");
 
 /** A row the user can pick in step 1: a Jira board, a Linear team, a ClickUp list or a repository. */
@@ -27,35 +44,9 @@ interface Choice {
 
 const KIND_LABEL: Record<string, string> = { scrum: "Scrum", kanban: "Kanban", simple: "Team-managed" };
 const CATEGORY_CHOICES = Object.entries(CATEGORY_LABEL) as [BoardColumn["category"], string][];
-const CARD_CHOICES: Record<string, [CardField, string][]> = {
-  jira: [
-    ["issue_type", "Issue type"],
-    ["points", "Story points"],
-    ["assignee", "Assignee"],
-    ["parent", "Epic"],
-    ["due", "Due date"],
-  ],
-  linear: [
-    ["points", "Estimate"],
-    ["assignee", "Assignee"],
-    ["parent", "Parent"],
-    ["due", "Due date"],
-  ],
-  github: [["assignee", "Assignee"]],
-  clickup: [
-    ["assignee", "Assignee"],
-    ["due", "Due date"],
-  ],
-};
 const BAR: Record<BoardColumn["category"], string> = { todo: "bg-[#4a4a4a]", in_progress: "bg-[#7d7d7d]", in_review: "bg-[#b5b5b5]", done: "bg-merged" };
 
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
-
-function Mark({ connection }: { connection: string }) {
-  const kind = trackerOf(connection);
-  if (kind && kind !== "github") return <TrackerIcon kind={kind} size={14} />;
-  return <span className="font-mono ui-text-10.5 font-semibold text-fg">GH</span>;
-}
 
 /** Add a board, or with `boardId` that board's settings (X50). */
 export function AddBoardDialog({ host, workspace, boardId }: { host: string; workspace: string; boardId?: string }) {
@@ -63,15 +54,20 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
   const config = useTasks((t) => trackersConfig(t));
   const workspaces = useStore((s) => s.workspaces);
   const data = useTasks((t) => t.data[wsKey(host, workspace)]);
+  const repos = [...new Set(Object.values(data?.repos ?? {}).filter((r): r is string => !!r))];
   const editing = config.boards?.find((b) => b.id === boardId);
   const [draft, setDraft] = useState<Draft>(() => (editing ? draftFromBoard(editing) : newDraft(wsKey(host, workspace))));
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [choicesError, setChoicesError] = useState<string | null>(null);
   const [build, setBuild] = useState<"board" | "jql">("board");
-  const [filterJql, setFilterJql] = useState<string | null>(null);
+  // The board's filter: undefined while it is read, null when Jira does not share it.
+  const [filterJql, setFilterJql] = useState<string | null | undefined>(undefined);
   const [preview, setPreview] = useState<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null } | null>(null);
   const tracker = draft.connection ? (trackerOf(draft.connection) ?? "github") : null;
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
+  // The furthest step reached: the steps before it are done and stay clickable after Back.
+  const [reached, setReached] = useState<Draft["step"]>(editing ? 4 : 1);
+  useEffect(() => setReached((r) => (draft.step > r ? draft.step : r)), [draft.step]);
 
   // Esc closes.
   useEffect(() => {
@@ -80,16 +76,16 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Step 1: what the connection can show.
+  // Step 1: what the connection can show; an answer for a connection no longer picked is dropped.
   useEffect(() => {
     setChoices(null);
     setChoicesError(null);
     if (!draft.connection) return;
     if (draft.connection === GITHUB) {
-      const repos = [...new Set(Object.values(data?.repos ?? {}).filter((r): r is string => !!r))];
       setChoices(repos.map((repo) => ({ key: repo, name: repo, origin: { kind: "github_repo", repo } })));
       return;
     }
+    let stale = false;
     const kind = trackerOf(draft.connection);
     const ask =
       kind === "jira"
@@ -97,38 +93,54 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
         : hostsApi
             .trackerSources(draft.connection)
             .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
-    ask.then(setChoices, (e) => setChoicesError(message(e)));
-  }, [draft.connection, data]);
+    ask.then(
+      (c) => !stale && setChoices(c),
+      (e) => !stale && setChoicesError(message(e)),
+    );
+    return () => {
+      stale = true;
+    };
+  }, [draft.connection, repos.join(" ")]);
 
-  // A Jira board's filter and columns.
+  // A Jira board's filter and columns, and whether it has sprints; an answer for a board no longer picked is dropped.
   useEffect(() => {
-    setFilterJql(null);
+    setFilterJql(undefined);
     if (!draft.connection || draft.origin?.kind !== "jira_board") return;
+    let stale = false;
     hostsApi.trackerBoardSetup(draft.connection, draft.origin.board).then(
       (setup) => {
+        if (stale) return;
         setFilterJql(setup.filterJql ?? null);
-        setDraft((d) => (d.columns.length ? d : { ...d, columns: setup.columns }));
+        setDraft((d) => ({ ...d, boardKind: d.boardKind ?? (setup.sprints ? "scrum" : "kanban"), columns: d.columns.length ? d.columns : setup.columns }));
       },
-      (e) => errorToast(e),
+      (e) => !stale && errorToast(e),
     );
-  }, [draft.connection, draft.origin]);
+    return () => {
+      stale = true;
+    };
+  }, [draft.connection, JSON.stringify(draft.origin)]);
 
-  // Step 2's preview, a moment after the last change.
-  const previewKey = JSON.stringify([draft.connection, draft.origin, draft.narrow, draft.labels, draft.finished]);
+  // Step 2's preview (and Board settings'), a moment after the last change;
+  // until it answers, Continue waits.
+  const target = parseWsKey(draft.workspace);
+  const previewKey = JSON.stringify([draft.connection, draft.origin, draft.narrow, draft.labels, draft.finished, draft.workspace]);
   const latest = useRef(previewKey);
   latest.current = previewKey;
+  const previewing = (draft.step >= 2 || !!editing) && canContinue({ ...draft, step: 1 }, null);
   useEffect(() => {
-    if (draft.step < 2 || !draft.origin || !draft.connection || !canContinue({ ...draft, step: 1 }, null)) return;
+    setPreview(null);
+    if (!previewing) return;
     const t = setTimeout(() => {
-      previewBoard(host, workspace, { ...toBoard({ ...draft, columns: draft.columns }), assignee: "anyone" }).then((p) => {
+      const answer = (p: { tasks: Task[]; columns: BoardColumn[] | null; error: string | null }) => {
         if (latest.current !== previewKey) return;
         setPreview(p);
         // A JQL board's, a Linear team's and a ClickUp list's columns come with their issues.
         if (p.columns) setDraft((d) => (d.columns.length ? d : { ...d, columns: p.columns ?? [] }));
-      });
+      };
+      previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).then(answer, (e) => answer({ tasks: [], columns: null, error: message(e) }));
     }, 500);
     return () => clearTimeout(t);
-  }, [previewKey, draft.step]);
+  }, [previewKey, previewing]);
 
   useEffect(() => {
     if (draft.origin?.kind === "github_repo" && !draft.columns.length) set({ columns: GITHUB_REPO_COLUMNS });
@@ -136,22 +148,22 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
 
   const branches = useMemo(() => {
     const st = useStore.getState();
-    return [...(st.sessions[host] ?? []).filter((s) => s.workspace_id === workspace).map((s) => s.branch), ...(data?.worktrees ?? []).flatMap((w) => (w.branch ? [w.branch] : []))];
-  }, [host, workspace, data]);
+    const worktrees = useTasks.getState().data[draft.workspace]?.worktrees ?? [];
+    return [...(st.sessions[target.host] ?? []).filter((s) => s.workspace_id === target.id).map((s) => s.branch), ...worktrees.flatMap((w) => (w.branch ? [w.branch] : []))];
+  }, [draft.workspace, data]);
 
-  const projects = workspaceProjects(useStore.getState(), host, workspace);
+  const projects = workspaceProjects(useStore.getState(), target.host, target.id);
   const wsOptions = Object.entries(workspaces).flatMap(([h, list]) => list.map((w) => ({ value: wsKey(h, w.id), label: w.name })));
   const wsName = wsOptions.find((w) => w.value === draft.workspace)?.label ?? "";
-  const ok = canContinue(draft, draft.step === 2 ? (preview?.error ?? null) : null);
+  // A board its workspace already has stops Create board and Save.
+  const clashText = draft.origin && draft.connection ? clash(config.boards, toBoard(draft), editing?.id) : null;
+  const ok = canContinue(draft, preview) && !(draft.step === 4 && clashText);
+  const canSave = canContinue({ ...draft, step: 4 }, preview) && !clashText;
   const create = async () => {
-    // Board settings keep the board's id; a new board's is made from its origin.
-    const board = { ...toBoard(draft), ...(editing && { id: editing.id }) };
+    // Board settings save the board where it was, under the id of its workspace now.
+    const board = toBoard(draft);
     try {
-      await saveTrackersConfig((c) => {
-        const others = (c.boards ?? []).filter((b) => b.id !== board.id);
-        const at = (c.boards ?? []).findIndex((b) => b.id === board.id);
-        return { ...c, boards: at < 0 ? [...others, board] : [...others.slice(0, at), board, ...others.slice(at)] };
-      });
+      await saveTrackersConfig((c) => ({ ...c, boards: putBoard(c.boards, board, editing?.id) }));
       close();
       const to = parseWsKey(board.workspace);
       openBoard(to.host, to.id, board.id);
@@ -161,8 +173,8 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
   };
   const remove = async () => {
     if (!editing) return;
-    const ok = await askConfirm({ title: `Remove ${editing.name}?`, message: "It goes from Tasks mode. Sessions keep their links.", action: "Remove", variant: "danger" });
-    if (!ok) return;
+    const sure = await askConfirm({ title: `Remove ${editing.name}?`, message: "It goes from Tasks mode. Sessions keep their links.", action: "Remove", variant: "danger" });
+    if (!sure) return;
     try {
       await saveTrackersConfig((c) => ({ ...c, boards: (c.boards ?? []).filter((b) => b.id !== editing.id) }));
       close();
@@ -176,27 +188,11 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
     { id: GITHUB, name: "GitHub", site: "via gh login" },
   ];
   const sample = (preview?.tasks ?? []).slice(0, 3);
-  const moveColumn = (i: number, by: number) =>
-    setDraft((d) => {
-      const cols = [...d.columns];
-      const j = i + by;
-      if (j < 0 || j >= cols.length) return d;
-      [cols[i], cols[j]] = [cols[j], cols[i]];
-      return { ...d, columns: cols };
-    });
-  const setColumn = (i: number, patch: Partial<BoardColumn> & { show?: BoardColumn["show"] | "show" }) =>
-    setDraft((d) => ({
-      ...d,
-      columns: d.columns.map((c, j) => {
-        if (j !== i) return c;
-        const next = { ...c, ...patch };
-        if (next.show === ("show" as never) || next.show === undefined) {
-          const { show: _, ...rest } = next;
-          return rest as BoardColumn;
-        }
-        return next as BoardColumn;
-      }),
-    }));
+  const moveAt = (i: number, by: number) => setDraft((d) => ({ ...d, columns: moveColumn(d.columns, i, by) }));
+  const setColumn = (i: number, patch: Parameters<typeof columnAt>[2]) => setDraft((d) => ({ ...d, columns: columnAt(d.columns, i, patch) }));
+  // WIP limits are Jira's alone.
+  const wip = tracker === "jira";
+  const grid = wip ? "grid-cols-[52px_minmax(0,1fr)_150px_150px_40px]" : "grid-cols-[52px_minmax(0,1fr)_150px_150px]";
   const defaultRule = draft.rules.find((r) => r.when === "default");
   const otherRules = draft.rules.filter((r) => r.when !== "default");
   const setRules = (rules: StartRule[]) => set({ rules });
@@ -208,13 +204,13 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
           <h2 className="px-2 pb-3 pt-1 ui-text-14 font-semibold text-fg">{editing ? "Board settings" : "Add a board"}</h2>
           {STEPS.map((s, i) => {
             const n = (i + 1) as Draft["step"];
-            const done = n < draft.step;
+            const done = n < reached && n !== draft.step;
             const current = n === draft.step;
             return (
               <button
                 key={s.name}
                 aria-current={current ? "step" : undefined}
-                disabled={!editing && n > draft.step}
+                disabled={n > reached}
                 onClick={() => set({ step: n })}
                 className={cx("flex items-start gap-2.5 rounded-lg px-2 py-2 text-left", current && "bg-panel-2")}
               >
@@ -246,10 +242,10 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
             {draft.step === 1 && editing && (
               <section aria-label="Source" className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
                 <span className="flex h-7 w-7 items-center justify-center rounded-md bg-panel-2">
-                  <Mark connection={editing.connection} />
+                  <BoardMark size={14} connection={editing.connection} />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate ui-text-13 text-fg">{summaryLine(draft, preview?.tasks.length ?? 0, "").split(" · ")[0]}</span>
+                  <span className="block truncate ui-text-13 text-fg">{draft.origin && originText(draft.origin)}</span>
                   <span className="block ui-text-12 text-faint">The source stays as it is: a different one is a new board.</span>
                 </span>
               </section>
@@ -263,11 +259,14 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                       <button
                         key={c.id}
                         aria-pressed={draft.connection === c.id}
-                        onClick={() => setDraft({ ...newDraft(draft.workspace), connection: c.id })}
+                        onClick={() => {
+                          setDraft({ ...newDraft(draft.workspace), connection: c.id });
+                          setReached(1);
+                        }}
                         className={cx("flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left", draft.connection === c.id ? "border-accent bg-accent/[0.08]" : "border-border hover:bg-panel-2")}
                       >
                         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-panel-2">
-                          <Mark connection={c.id} />
+                          <BoardMark size={14} connection={c.id} />
                         </span>
                         <span className="min-w-0">
                           <span className="block truncate ui-text-13 text-fg">{c.name}</span>
@@ -292,6 +291,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                           aria-pressed={build === id}
                           onClick={() => {
                             setBuild(id);
+                            setReached(1);
                             if (id === "jql" && draft.connection) setDraft(pickOrigin(draft, draft.connection, { kind: "jql", query: "" }, "Query"));
                             if (id === "board") set({ origin: null });
                           }}
@@ -331,7 +331,11 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                               role="radio"
                               aria-checked={on}
                               disabled={added}
-                              onClick={() => draft.connection && setDraft(pickOrigin(draft, draft.connection, c.origin, c.name, c.kind))}
+                              onClick={() => {
+                                if (!draft.connection) return;
+                                setDraft(pickOrigin(draft, draft.connection, c.origin, c.name, c.kind));
+                                setReached(1);
+                              }}
                               className={cx("flex items-center gap-3 px-3 py-2.5 text-left", on ? "bg-accent/[0.08]" : "hover:bg-panel-2", added && "opacity-60")}
                             >
                               <span className={cx("h-3 w-3 shrink-0 rounded-full border", on ? "border-accent bg-accent" : "border-border-strong")} />
@@ -355,7 +359,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                     <div className="mb-1.5 ui-text-12 text-muted">Board filter, from Jira</div>
                     <div className="flex items-center gap-2 rounded-lg border border-border bg-bg/40 px-3 py-2 font-mono ui-text-12.5 text-muted">
                       <Lock size={12} />
-                      <span className="min-w-0 flex-1 truncate">{filterJql ?? "Reading the board's filter…"}</span>
+                      <span className="min-w-0 flex-1 truncate">{filterJql === undefined ? "Reading the board's filter…" : (filterJql ?? "Jira did not share the board's filter")}</span>
                     </div>
                   </section>
                 )}
@@ -406,7 +410,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                   <div>
                     <div className="mb-1.5 ui-text-12 text-muted">Finished issues</div>
                     <select aria-label="Finished issues" className={selectCls} value={String(draft.finished)} onChange={(e) => set({ finished: e.target.value === "sprint" ? "sprint" : 14 })}>
-                      {finishedChoices(tracker ?? "github", draft.boardKind).map((c) => (
+                      {finishedChoices(tracker ?? "github", draft.boardKind, draft.finished).map((c) => (
                         <option key={String(c.value)} value={String(c.value)}>
                           {c.label}
                         </option>
@@ -452,20 +456,20 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                 </section>
                 {!draft.columns.length && <p className="ui-text-12.5 text-muted">Reading the columns…</p>}
                 <div role="table" aria-label="Columns" className="overflow-hidden rounded-lg border border-border">
-                  <div role="row" className="grid grid-cols-[52px_minmax(0,1fr)_150px_150px_40px] items-center gap-2 border-b border-border px-2 py-1.5 ui-text-11.5 text-faint">
+                  <div role="row" className={cx("grid items-center gap-2 border-b border-border px-2 py-1.5 ui-text-11.5 text-faint", grid)}>
                     <span />
                     <span>{trackerName(draft.connection ?? "")} column · statuses</span>
                     <span>moonlet treats it as</span>
                     <span>On the board</span>
-                    <span>WIP</span>
+                    {wip && <span>WIP</span>}
                   </div>
                   {draft.columns.map((c, i) => (
-                    <div key={c.name} role="row" aria-label={c.name} className="grid grid-cols-[52px_minmax(0,1fr)_150px_150px_40px] items-center gap-2 border-b border-border px-2 py-1.5 last:border-b-0">
+                    <div key={c.name} role="row" aria-label={c.name} className={cx("grid items-center gap-2 border-b border-border px-2 py-1.5 last:border-b-0", grid)}>
                       <span className="flex">
-                        <IconButton title={`Move ${c.name} up`} onClick={() => moveColumn(i, -1)}>
+                        <IconButton title={`Move ${c.name} up`} onClick={() => moveAt(i, -1)}>
                           <ArrowUp size={12} />
                         </IconButton>
-                        <IconButton title={`Move ${c.name} down`} onClick={() => moveColumn(i, 1)}>
+                        <IconButton title={`Move ${c.name} down`} onClick={() => moveAt(i, 1)}>
                           <ArrowDown size={12} />
                         </IconButton>
                       </span>
@@ -485,12 +489,12 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                       </span>
                       <span role="group" aria-label={`${c.name} on the board`} className="inline-flex gap-0.5 rounded-md bg-panel-2 p-0.5">
                         {(["show", "fold", "hide"] as const).map((v) => (
-                          <button key={v} aria-pressed={(c.show ?? "show") === v} onClick={() => setColumn(i, { show: v === "show" ? undefined : v })} className={cx("rounded-[5px] px-2 py-0.5 ui-text-12", (c.show ?? "show") === v ? "bg-raised text-fg" : "text-muted")}>
+                          <button key={v} aria-pressed={(c.show ?? "show") === v} onClick={() => setColumn(i, { show: v })} className={cx("rounded-[5px] px-2 py-0.5 ui-text-12", (c.show ?? "show") === v ? "bg-raised text-fg" : "text-muted")}>
                             {v === "show" ? "Show" : v === "fold" ? "Fold" : "Hide"}
                           </button>
                         ))}
                       </span>
-                      <span className="font-mono ui-text-12 text-faint">{c.wip ?? "—"}</span>
+                      {wip && <span className="font-mono ui-text-12 text-faint">{c.wip ?? "—"}</span>}
                     </div>
                   ))}
                 </div>
@@ -577,7 +581,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                 <section aria-label="Cards show">
                   <div className="mb-1.5 ui-text-12 text-muted">Cards show</div>
                   <div className="flex flex-wrap gap-4">
-                    {(CARD_CHOICES[tracker ?? "github"] ?? []).map(([id, label]) => (
+                    {cardChoices(tracker ?? "github").map(([id, label]) => (
                       <label key={id} className="flex items-center gap-1.5 ui-text-12.5 text-fg">
                         <input type="checkbox" checked={draft.cards.includes(id)} onChange={(e) => set({ cards: e.target.checked ? [...draft.cards, id] : draft.cards.filter((x) => x !== id) })} />
                         {label}
@@ -587,7 +591,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                 </section>
                 <section aria-label="Summary" className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
                   <span className="flex h-7 w-7 items-center justify-center rounded-md bg-panel-2">
-                    <Mark connection={draft.connection ?? GITHUB} />
+                    <BoardMark size={14} connection={draft.connection ?? GITHUB} />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate ui-text-13 text-fg">{draft.name || "Untitled board"}</span>
@@ -602,11 +606,12 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
             )}
           </div>
           <div className="flex items-center gap-2 border-t border-border px-5 py-3">
-            <span className="min-w-0 flex-1 truncate ui-text-12 text-faint">
+            <span className={cx("min-w-0 flex-1 truncate ui-text-12", clashText && draft.step === 4 ? "text-error" : "text-faint")}>
+              {clashText && draft.step === 4 ? clashText : null}
               {draft.step === 1 && `moonlet reads the board's configuration; it never changes it in ${trackerName(draft.connection ?? "jira")}.`}
               {draft.step === 2 && "Counts update as you type."}
               {draft.step === 3 && `Order and folding are moonlet-only and don't change ${trackerName(draft.connection ?? "jira")}.`}
-              {draft.step === 4 && "Saved to ~/.moonlet/trackers.toml."}
+              {draft.step === 4 && !clashText && "Saved to ~/.moonlet/trackers.toml."}
             </span>
             {editing && (
               <Button size="sm" variant="danger" onClick={() => void remove()}>
@@ -619,7 +624,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
               </Button>
             )}
             {editing ? (
-              <Button size="sm" variant="primary" disabled={!canContinue({ ...draft, step: 4 }, null)} onClick={() => void create()}>
+              <Button size="sm" variant="primary" disabled={!canSave} onClick={() => void create()}>
                 Save
               </Button>
             ) : draft.step < 4 ? (

@@ -155,7 +155,11 @@ function storedShownBoard(): Record<string, string> {
   }
 }
 
-/** Shows board `id` in workspace `wsKey` (X50), and syncs it if it is not pinned. */
+/** Opens Add a board for workspace `workspace` of `host`, or with `board` that board's settings (X50), over Settings too. */
+export function openAddBoard(host: string, workspace: string, board?: string) {
+  useStore.setState({ settingsPage: null, dialog: { kind: "add-board", host, workspace, ...(board && { board }) } });
+}
+
 /** Opens board `id` from the board switcher (X50): another workspace's is shown there, in Tasks mode. */
 export function openBoard(host: string, workspaceId: string, id: string) {
   const shown = shownWorkspace(useStore.getState());
@@ -165,6 +169,7 @@ export function openBoard(host: string, workspaceId: string, id: string) {
   showBoard(host, workspaceId, id);
 }
 
+/** Shows board `id` in workspace `workspaceId` of `host` (X50), and syncs it if it is not pinned. */
 export function showBoard(host: string, workspaceId: string, id: string) {
   const shownBoard = { ...useTasks.getState().shownBoard, [wsKey(host, workspaceId)]: id };
   useTasks.setState({ shownBoard });
