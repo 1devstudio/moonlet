@@ -7,7 +7,7 @@
 
 ## Summary
 
-Tasks mode shows one **board** at a time. A board is a named view of one tracker: a Jira board or JQL query, a Linear team, a GitHub Project or repository, or a ClickUp list. It has the tracker's own columns in the tracker's own order, its filter, its sprint or cycle, which repositories its sessions start in, and which fields its cards show. Boards replace X44's sources and X45's fixed Todo / In Progress / In Review / Done columns. moonlet's four groups stay, as each column's **category**, so out of sync, Keep in step and the glyphs work as before. Columns like QA or Ready for Release, which the old board folded into In Review, now show as they do in the tracker.
+Tasks mode shows one **board** at a time. A board is a named view of one tracker: a Jira board or JQL query, a Linear team, a GitHub Project or repository, or a ClickUp list. It has the tracker's own columns in the tracker's own order, its filter, its sprint or cycle, which projects its sessions start in, and which fields its cards show. Boards replace X44's sources and X45's fixed Todo / In Progress / In Review / Done columns. moonlet's four groups stay, as each column's **category**, so out of sync, Keep in step and the glyphs work as before. Columns like QA or Ready for Release, which the old board folded into In Review, now show as they do in the tracker.
 
 ## User journey
 
@@ -16,7 +16,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
    1. **Source:** pick the connection and what the board is built from, such as an existing Jira board.
    2. **Issues:** narrow the issues down and preview how many match.
    3. **Columns:** check each column's category, then Show, Fold or Hide it.
-   4. **Finish:** name the board, pick its workspace and the repositories its sessions start in, and choose what cards show.
+   4. **Finish:** name the board, pick its workspace and the projects its sessions start in, and choose what cards show.
 
    **Create board** saves it and opens it.
 3. The Tasks sidebar lists the workspace's pinned boards under **Boards**. The header's board name opens the **board switcher**, which lists every board of every workspace.
@@ -27,7 +27,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 ### Boards replace sources
 
-- [ ] A board has a name, a connection, an origin, an issue filter, columns, a workspace, repository rules, card fields and a pinned flag. It is saved in `trackers.toml` under `[[boards]]`.
+- [ ] A board has a name, a connection, an origin, an issue filter, columns, a workspace, start-in rules, card fields and a pinned flag. It is saved in `trackers.toml` under `[[boards]]`.
 - [ ] Origins:
   - Jira: `jira_board` (an existing Jira board, by id) or `jql` (a JQL query).
   - Linear: `linear_team` (a team, by key).
@@ -48,7 +48,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 - [ ] Connections are cards with the tracker's mark, its name and its site (`acme.atlassian.net`, the Linear organisation, `via gh login`, the ClickUp workspace). GitHub is always offered.
 - [ ] **Jira:** "Build the board from" offers **An existing Jira board** or **A JQL query**.
-  - Existing board: Jira's boards are listed with key, name and type (Scrum, Kanban or Service). One that is already a board in this workspace is marked "Already added" and cannot be picked. The picked one shows its column count.
+  - Existing board: Jira's boards are listed with key, name and type (Scrum, Kanban or Team-managed). One that is already a board in this workspace is marked "Already added" and cannot be picked. The picked one shows its column count.
   - JQL query: a query field.
 - [ ] **Linear:** the account's teams, listed with key and name. One already added is marked the same way.
 - [ ] **GitHub:** "Build the board from" offers **A GitHub Project** or **A repository's issues**.
@@ -64,9 +64,9 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 - [ ] "Show issues assigned to": **Me** or **Anyone**. Under Anyone, other people's issues are dimmed. The header's Assignee filter can still switch it.
 - [ ] "Finished issues":
   - **Hide after 14 days**, the default for boards without sprints.
-  - **Follow the active sprint** on a Jira Scrum board, **Follow the active cycle** on a Linear team with cycles, **Follow the current iteration** on a GitHub Project with an iteration field.
+  - **Follow the active sprint** on a Jira Scrum or team-managed board, **Follow the active cycle** on a Linear team with cycles.
 
-  The sprint, cycle and iteration options are only offered where they exist.
+  The sprint and cycle options are only offered where they exist.
 - [ ] A preview below says `<n> issues match · <n> assigned to you · <n> already have a branch with their key`, with three of the issues (key, title, status). It updates as the user types, after a short pause. A query the tracker rejects shows the tracker's error instead, and Continue waits.
 
 #### 3. Columns
@@ -80,20 +80,20 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - WIP
 - [ ] Where columns come from:
   - Jira board: Jira's columns, their statuses and their WIP limits (max).
-  - JQL board: one column per status of the matching issues' projects.
+  - JQL board: one column per status its issues are in, ordered by category; a status seen later gets a column of its own. A status can be dragged onto another column to group them, as the design's "which you can then group and order" says.
   - Linear: the team's workflow states.
   - GitHub Project: the Status field's options. A repository: Open and Closed.
   - ClickUp: the list's statuses.
 - [ ] A column's category is suggested from its statuses: Jira's status category, Linear's state type, ClickUp's status type, and for GitHub the option's name. A column named like "review" or "QA" is suggested as In review (X44's rule).
-- [ ] A changed category is outlined in the accent colour. The note under the table says: "Suggested from each status's <tracker> category. Change one where your team means something else. Hidden columns still count in the Tasks button's out-of-sync count."
-- [ ] Defaults: Done-category columns are folded. Jira's backlog column, Linear's `backlog`, `triage` and `canceled` states, and GitHub's "closed as not planned" are hidden.
+- [ ] A changed category is outlined in the accent colour. The note under the table says: "Suggested from each status's <tracker> category. Change one where your team means something else." A hidden column's issues are not shown and not counted, out of sync included.
+- [ ] Defaults: Done-category columns are folded. Jira's backlog column and a column with no status, and Linear's `backlog`, `triage` and `canceled` states, are hidden. A GitHub repository's Closed holds issues closed as completed and as not planned.
 - [ ] WIP is shown only for Jira boards; Linear, GitHub and ClickUp have no WIP limits.
 
 #### 4. Finish
 
 - [ ] **Name**, prefilled from the source (`WEB · Website`, the team name, the project title), and **Workspace**, preset to the current one.
 - [ ] "New sessions from this board start in":
-  - A **By default** row, prefilled with the projects whose `.moonlet/config.toml` links the board's tracker project (X44). It is empty when none does.
+  - A **By default** row, empty unless the user sets it. Empty, it shows as its hint the projects whose committed `.moonlet/config.toml` links the board's tracker project (X44), and those are used, so a teammate's change to that file reaches the board.
   - Rules by component (Jira) or label: `Component = design-system → ui-kit`.
   - **Add a rule by component or label**.
 - [ ] "Cards show" checkboxes, only those the tracker has:
@@ -102,21 +102,20 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - assignee
   - epic (Jira) or parent
   - due date
-  - labels
 - [ ] A summary card shows the tracker's mark, the name and `<origin> · <n> columns shown, <n> folded, <n> hidden · <n> issues · <workspace>`, with **Pin in sidebar** (on).
 - [ ] **Create board** saves the board, closes the wizard and opens the board.
 
 ### Board settings and Manage
 
 - [ ] **Board settings** opens from a column's `⋯` menu and from Manage. It has the wizard's four steps as tabs, with the board's current values, plus **Save** and **Remove board**. Its Source tab shows the origin read-only: changing it means a new board.
-- [ ] A Jira board's columns are read again from Jira on each sync. A column added in Jira shows as a new row, shown by default. A removed one disappears. The order and the folding the user set stay.
-- [ ] **Manage** (in the switcher) opens Settings › Task trackers at **Boards**, a list of each workspace's boards: mark, name, origin, pinned, and Board settings and Remove.
+- [ ] A board's columns are matched to the tracker's on each sync (a Jira board's columns; a JQL board's, a Linear team's, a ClickUp list's and a Project's statuses), by status id. A new one shows as a new column with step 3's defaults; a removed one disappears; the order, folding and categories the user set stay.
+- [ ] **Manage** (in the switcher) opens Settings › Task trackers at **Boards**, a list of each workspace's boards: mark, name, origin, pinned, and Board settings and Remove. A board whose connection needs attention shows the reason in red (X44).
 
 ### Sidebar and header
 
 - [ ] The Tasks sidebar shows:
   - "Find a task"
-  - **Boards** with a `+` that opens Add a board, then one row per pinned board of the workspace: mark, name, open-task count
+  - **Boards** with a `+` that opens Add a board, then one row per pinned board of the workspace: mark, name with the sprint or cycle it follows (`OPS · Sprint 42`), open-task count
   - the footer `<tracker> synced <age>` with a dot (green, or red after a failed sync)
 
   The current board is highlighted.
@@ -127,23 +126,24 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 - [ ] The header title is the board's name with a `⌄`. When the board follows a sprint or cycle, the title adds its name: `OPS · Sprint 42`, `Moonlet · Cycle 14`. Clicking the title opens the board switcher.
 - [ ] The subtitle reads `<tracker> · <site> · <start> – <end> · <n> tasks · <n> sessions`:
   - `<n> issues` for Jira.
-  - The dates show only while following a sprint, cycle or iteration.
+  - The dates show only while following a sprint or cycle.
   - The counts are those of the shown board after its filters.
 - [ ] The header's controls are:
-  - **Assignee: me / anyone**, a menu kept per board.
+  - **Assignee: me / anyone**, a menu that starts from the board's own setting; a change is kept per board in the app, not written to the board.
   - **Columns `<n>` · `<n>` folded**, a menu that shows, folds or hides each column (saved to the board).
   - **Hide empty Done**.
   - **Board | List** with their icons.
+  - **Expand all**, in List (X45).
   - Refresh.
 - [ ] Tasks mode opens on the board last shown in the workspace, or on its first pinned board.
 
 ### Board switcher
 
-- [ ] The switcher is a popover under the title with "Find a board, team or project". It lists boards grouped by workspace: the current workspace first ("this workspace"), then the others ("switches workspace").
+- [ ] The switcher is a popover under the title with "Find a board, team or project", which finds boards by name, key or workspace. It lists boards grouped by workspace: the current workspace first ("this workspace"), then the others ("switches workspace").
 - [ ] A row shows:
-  - the tracker's mark, the name and the type (Scrum, Kanban, `Cycle <n>`, Project, Repository)
-  - a strip of small bars, one per shown column, in its category's colour
-  - `<n> columns · <n> issues`
+  - the tracker's mark, the name and the type (Scrum, Kanban, Team-managed, Query, `Cycle <n>` or Team, Project, Repository, List)
+  - a strip of small bars, one per shown or folded column, in its category's colour
+  - `<n> columns · <n> issues` (`tasks` but for Jira, as in the subtitle), as much as is known before its first sync
   - the board's sessions: `<n> sessions` with a dot in the most urgent agent state, or `no sessions`
 
   The current board has a check.
@@ -152,9 +152,9 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 ### Board
 
-- [ ] The board's columns are its shown columns in the board's order, then its folded columns as strips. Hidden columns are not drawn.
+- [ ] The board draws its shown and folded columns in the board's order, a folded one as a narrow strip. Hidden columns are not drawn.
 - [ ] A task sits in the column whose statuses hold its status. A status in no column, or only in hidden ones, is not shown.
-- [ ] A column header shows its name and count, then a line with its category glyph and name. On a Jira board with a WIP limit it adds `· <n> of <max>`; at or above the limit, `· full` in amber.
+- [ ] A column header shows its name and count, then a line with its category glyph and name. On a Jira board with a WIP limit it adds `· <n> of <max>`, counting the cards it shows (under Assignee: me, the user's own); at or above the limit, `· full` in amber.
 - [ ] The column's `⋯` menu has Fold, Hide and Board settings….
 - [ ] A folded column is a narrow strip: its glyph, its name written vertically, its count. A folded Done-category column adds a red badge with the done tasks that still need clean-up (X45). Clicking a strip unfolds it; folding it again goes through its `⋯` menu.
 - [ ] Column names always come from the tracker; moonlet never names a column itself. A `github_repo` board has GitHub's two, Open and Closed, so X45's split of open issues into Todo, In Progress and In Review by their work is gone; a GitHub Project gives a status flow.
@@ -164,7 +164,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 - [ ] A card shows the X45 card plus the board's card fields:
   - issue type, after the key
   - story points as `<n> pt`, before the assignee's initials
-  - epic or parent, due date and labels, on a line under the title
+  - epic or parent and due date, on a line under the title
 - [ ] Under Assignee: anyone, a card assigned to someone else is dimmed.
 - [ ] A card with no sessions can have a note line instead of `No sessions`. The first that applies:
   - `Assigned to <name>`: the issue is someone else's.
@@ -174,9 +174,10 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 ### Out of sync and moves
 
 - [ ] Out of sync (X45) reads the task's column category instead of the old fixed column.
-- [ ] A fix moves the task to the **next column** on the board: the first shown or folded column after the task's own. It is named after that column, as the tracker names it: `Move to QA`, `Move to Done`, `Move to Code Review`. When there is no next column, or the next one's category is behind the work (a To do column for a task with a running session), the chip shows without a fix.
+- [ ] A fix moves the task to the **next column** on the board: the first shown or folded column after the task's own. It is named after that column, as the tracker names it: `Move to QA`, `Move to Done`, `Move to Code Review`. When there is no next column, or the next one is not in a later category than the task's own (another To do column, for a task with a running session), the chip shows without a fix.
+- [ ] Work started and PR open show only on a board with a column of that category (In progress, In review). A GitHub repository board, with only Open and Closed, shows neither; its merged PR's fix is Move to Closed.
 - [ ] **PR merged** is out of sync when the task is in a To do or In progress column, or in an In review column of a board with only one, as in X45 (there the next column is usually Done). On a board with several In review columns (Code Review, QA, Staging), a merged PR in any of them is expected and not flagged.
-- [ ] Keep in step's automatic moves (X46) go to a category: moonlet picks the first status of the first shown column of that category. Jira moves go through the transition to that status. A status Jira's workflow can't reach shows Jira's error with Retry, as X46 does.
+- [ ] Keep in step's automatic moves (X46) go to a category: moonlet picks the first status of the first shown or folded column of that category. Jira moves go through the transition to that status. A status Jira's workflow can't reach shows Jira's error with Retry, as X46 does.
 - [ ] The detail panel's State menu lists the board's columns by name, not the four categories. A GitHub repository still offers Open and Closed.
 - [ ] Moving a GitHub Project item sets its Status field, which needs gh's `project` scope. Without it, the State menu is disabled and says why.
 
@@ -192,21 +193,20 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - Then its filter's JQL, ANDed with the user's narrowing and with `sprint in openSprints()` when it follows the sprint, else with X44's 14-day rule.
   - It reads the active sprint's name and dates, and the story points from the board's estimation field.
 - [ ] **Linear:** issues of the team, filtered by label and assignee. With Follow the active cycle, only the active cycle's issues, plus its number and dates.
-- [ ] **GitHub Project:** the project's items that are issues, with their Status, iteration and number fields. Draft items and PRs are left out.
+- [ ] **GitHub Project:** the project's items that are issues, with their Status and number fields. Draft items and PRs are left out.
 - [ ] **ClickUp:** X44's two passes over the list.
 
 ## UI
 
 The designs are the "Tasks mode · Board", "Tasks mode · Jira board", "Tasks mode · List", "Board switcher", "Add a board" and "Task card states" boards of the Tasks mode design.
-- The design's "Across boards" sidebar section is left out (see Out of sync and Out of scope).
+- The design's "Across boards" sidebar section is left out (see Sidebar and header, and Out of scope).
 - The design's `+` on Linear columns is left out.
 - The design shows only the Jira path through Add a board. Linear, GitHub and ClickUp follow the same four steps, with the differences listed above.
 
 States:
-- A workspace with a connection but no board shows "Add a board" in the centre, with the connections as cards.
-- A workspace with no connection and no GitHub repository shows X45's "Connect a task tracker" panel.
+- A workspace with no board shows "Add a board" in the centre, with its connections and GitHub as cards. With no connection and no GitHub repository either, it shows X45's "Connect a task tracker" panel.
 - "Loading tasks…" shows before a board's first list.
-- A board whose source is gone (a Jira board deleted, a team archived) shows the tracker's error and **Board settings**.
+- A board whose origin is gone (a Jira board deleted, a team archived) shows the tracker's error and **Board settings**.
 
 ## Protocol and RPCs
 
@@ -223,8 +223,8 @@ Desktop-only Tauri commands (ADR 0010):
 
 Daemon RPCs, since `gh` runs on the project's host:
 
-- `gh.projects {path}` → `[{owner, number, title, status_options, iteration_field?, number_fields}]`, or a `missing_scope` error naming the scope.
-- `gh.project_items {path, owner, number, mine}` → issues with their Status option, iteration and fields.
+- `gh.projects {path}` → `[{owner, number, title, status_options, number_fields}]`, or a `missing_scope` error naming the scope.
+- `gh.project_items {path, owner, number, mine}` → issues with their Status option and number fields.
 - `gh.project_item_move {path, owner, number, item, option}`.
 - `gh.tasks` stays for `github_repo` boards.
 
@@ -282,4 +282,5 @@ Daemon RPCs, since `gh` runs on the project's host:
 
 ## Open questions
 
-- None yet.
+- **Opens on.** The design's Settings page lets each workspace open Tasks mode on its current cycle, active sprint or Sessions mode. This spec leaves it out (Tasks mode opens on the board last shown). Keep it out?
+- **`+` on a column.** The design's Linear board has a `+` per column, which would create a task there. Creating tasks stays out of scope. Keep it out?
