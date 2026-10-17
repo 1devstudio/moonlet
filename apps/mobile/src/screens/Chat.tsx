@@ -7,7 +7,7 @@ import { rpc } from "@desktop/lib/daemon";
 import { askQuestions, chatBlocks, chatDraft, chatKey, loadChat, questionAnswers, saveChatDraft, turnRunning, useChat } from "@desktop/lib/chat";
 import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
 import { type ChatState, M, type PermissionAsk, type Session } from "@desktop/lib/protocol";
-import { queuedLine, waitingOn } from "@desktop/lib/queued";
+import { queuedHeader, waitingOn } from "@desktop/lib/queued";
 import { showScreen, useApp } from "../lib/app";
 import { answerAsk, answerQuestion } from "../lib/answers";
 import { STATE_COLOR } from "../lib/palette";
@@ -109,11 +109,12 @@ function DockedQuestion({ host, terminal, ask }: { host: string; terminal: numbe
 }
 
 function QueuedView({ st }: { st: ChatState }) {
-  const line = queuedLine(st.queued, waitingOn(st.items));
+  const { line } = queuedHeader(st.queued, waitingOn(st.items), null);
   return (
     <section aria-label="Queued messages" className="flex flex-col items-end gap-1.5">
       <div className="text-[12px] text-faint">
         {line.text} {line.command && <span className="font-mono text-[11.5px]">{line.command}</span>}
+        {line.tail}
       </div>
       {st.queued.map((q) => (
         <div key={q.id} className="selectable max-w-[85%] rounded-[14px] rounded-br-[4px] border border-dashed border-[#3a3a3a] px-3.5 py-2.5 text-[14.5px] leading-[1.45] whitespace-pre-wrap text-[#b8b8b8]">
