@@ -1,0 +1,91 @@
+{
+  "id": 10,
+  "name": "OPS board",
+  "type": "scrum",
+  "self": "https://acme.atlassian.net/rest/agile/1.0/board/10/configuration",
+  "location": {
+    "type": "project",
+    "key": "OPS",
+    "id": "10008",
+    "self": "https://acme.atlassian.net/rest/api/2/project/10008",
+    "name": "Operations"
+  },
+  "filter": {
+    "id": "10021",
+    "self": "https://acme.atlassian.net/rest/api/2/filter/10021"
+  },
+  "columnConfig": {
+    "columns": [
+      {
+        "name": "Open",
+        "statuses": [
+          {
+            "id": "1",
+            "self": "https://acme.atlassian.net/rest/api/2/status/1"
+          }
+        ]
+      },
+      {
+        "name": "In Progress",
+        "statuses": [
+          {
+            "id": "3",
+            "self": "https://acme.atlassian.net/rest/api/2/status/3"
+          }
+        ]
+      },
+      {
+        "name": "Needs Reviews",
+        "statuses": [
+          {
+            "id": "10018",
+            "self": "https://acme.atlassian.net/rest/api/2/status/10018"
+          }
+        ],
+        "max": 2
+      },
+      {
+        "name": "Acceptance Testing",
+        "statuses": [
+          {
+            "id": "10030",
+            "self": "https://acme.atlassian.net/rest/api/2/status/10030"
+          }
+        ]
+      },
+      {
+        "name": "QA Testing",
+        "statuses": [
+          {
+            "id": "5",
+            "self": "https://acme.atlassian.net/rest/api/2/status/5"
+          }
+        ]
+      },
+      {
+        "name": "Done",
+        "statuses": [
+          {
+            "id": "10019",
+            "self": "https://acme.atlassian.net/rest/api/2/status/10019"
+          },
+          {
+            "id": "6",
+            "self": "https://acme.atlassian.net/rest/api/2/status/6"
+          }
+        ]
+      }
+    ],
+    "constraintType": "issueCount"
+  },
+  "estimation": {
+    "type": "field",
+    "field": {
+      "fieldId": "customfield_10014",
+      "displayName": "Story Points"
+    }
+  },
+  "ranking": {
+    "rankCustomFieldId": 10011
+  }
+}

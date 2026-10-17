@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrateWorkspace, startProjects } from "./boards";
+import { migrateWorkspace, startProjects, taskFromBoardIssue } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -117,5 +117,31 @@ describe("startProjects (X50 New sessions from this board start in)", () => {
     expect(startProjects([...rules, { when: "default", project: "docs-site" }, { when: { label: "docs" }, project: "guides" }], task([], ["docs"]), [])).toEqual(["handbook", "guides"]);
     expect(startProjects([...rules, { when: "default", project: "docs-site" }], task([], []), [])).toEqual(["website", "docs-site"]);
     expect(startProjects(undefined, task([], []), [])).toEqual([]);
+  });
+});
+
+describe("taskFromBoardIssue (X50 a Jira board's issues)", () => {
+  it("keeps the status id with the tracker's state, and the card's fields", () => {
+    // As `tracker_board_tasks` sends OPS-487 of jira-board-search.json.
+    const issue = JSON.parse(
+      '{"connection":"jira:acme.atlassian.net","key":"OPS-487","title":"Split the billing worker into two queues","url":"https://acme.atlassian.net/browse/OPS-487","column":"in_review","priority":1,"assignees":["Sam Rivera"],"labels":["billing","refined"],"description":"","updatedMs":1792168918885,"issueType":"Story","tracker":{"id":"149613","state":"Needs Reviews","source":"OPS"},"statusId":"10018","components":["billing"],"points":5.0,"parent":{"key":"OPS-480","title":"Billing reliability"}}',
+    );
+    expect(taskFromBoardIssue(issue)).toEqual({
+      connection: "jira:acme.atlassian.net",
+      key: "OPS-487",
+      title: "Split the billing worker into two queues",
+      url: "https://acme.atlassian.net/browse/OPS-487",
+      column: "in_review",
+      priority: 1,
+      assignees: ["Sam Rivera"],
+      labels: ["billing", "refined"],
+      description: "",
+      updatedMs: 1792168918885,
+      issueType: "Story",
+      tracker: { id: "149613", state: "Needs Reviews", source: "OPS", statusId: "10018" },
+      components: ["billing"],
+      points: 5,
+      parent: { key: "OPS-480", title: "Billing reliability" },
+    });
   });
 });

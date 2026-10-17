@@ -1,0 +1,145 @@
+[
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/1",
+    "name": "Open",
+    "id": "1",
+    "statusCategory": {
+      "id": 2,
+      "key": "new",
+      "colorName": "blue-gray",
+      "name": "To Do"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/3",
+    "name": "In Progress",
+    "id": "3",
+    "statusCategory": {
+      "id": 4,
+      "key": "indeterminate",
+      "colorName": "yellow",
+      "name": "In Progress"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/5",
+    "name": "QA Testing",
+    "id": "5",
+    "statusCategory": {
+      "id": 4,
+      "key": "indeterminate",
+      "colorName": "yellow",
+      "name": "In Progress"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/6",
+    "name": "Closed",
+    "id": "6",
+    "statusCategory": {
+      "id": 3,
+      "key": "done",
+      "colorName": "green",
+      "name": "Done"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10000",
+    "name": "To Do",
+    "id": "10000",
+    "statusCategory": {
+      "id": 2,
+      "key": "new",
+      "colorName": "blue-gray",
+      "name": "To Do"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10018",
+    "name": "Needs Reviews",
+    "id": "10018",
+    "statusCategory": {
+      "id": 4,
+      "key": "indeterminate",
+      "colorName": "yellow",
+      "name": "In Progress"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10019",
+    "name": "Ready to Deploy",
+    "id": "10019",
+    "statusCategory": {
+      "id": 3,
+      "key": "done",
+      "colorName": "green",
+      "name": "Done"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10030",
+    "name": "Acceptance Testing",
+    "id": "10030",
+    "statusCategory": {
+      "id": 4,
+      "key": "indeterminate",
+      "colorName": "yellow",
+      "name": "In Progress"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10097",
+    "name": "Done",
+    "id": "10097",
+    "statusCategory": {
+      "id": 3,
+      "key": "done",
+      "colorName": "green",
+      "name": "Done"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10129",
+    "name": "In Review",
+    "id": "10129",
+    "statusCategory": {
+      "id": 4,
+      "key": "indeterminate",
+      "colorName": "yellow",
+      "name": "In Progress"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10310",
+    "name": "Accepted",
+    "id": "10310",
+    "statusCategory": {
+      "id": 4,
+      "key": "indeterminate",
+      "colorName": "yellow",
+      "name": "In Progress"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10349",
+    "name": "In Testing",
+    "id": "10349",
+    "statusCategory": {
+      "id": 4,
+      "key": "indeterminate",
+      "colorName": "yellow",
+      "name": "In Progress"
+    }
+  },
+  {
+    "self": "https://acme.atlassian.net/rest/api/3/status/10382",
+    "name": "Tested - Pending Deployment",
+    "id": "10382",
+    "statusCategory": {
+      "id": 4,
+      "key": "indeterminate",
+      "colorName": "yellow",
+      "name": "In Progress"
+    }
+  }
+]
