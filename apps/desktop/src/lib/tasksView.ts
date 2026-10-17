@@ -49,11 +49,11 @@ export interface BoardFilters {
   hideEmptyDone: boolean;
 }
 
-/** The board with the header's filters applied (X45). */
 /** Whether the header's filters keep a card. Assignee: me keeps a task you have a session on, whoever it is assigned to. */
 export const keepCard = (c: Board["todo"][number], f: BoardFilters) =>
   (!f.mine || c.task.mine !== false || c.rows.length > 0) && (!f.hideEmptyDone || c.column !== "done" || c.rows.length + c.orphans.length > 0);
 
+/** The board with the header's filters applied (X45). */
 export function filterBoard(board: Board, f: BoardFilters): Board {
   const keep = (c: Board["todo"][number]) => keepCard(c, f);
   return { todo: board.todo.filter(keep), in_progress: board.in_progress.filter(keep), in_review: board.in_review.filter(keep), done: board.done.filter(keep) };

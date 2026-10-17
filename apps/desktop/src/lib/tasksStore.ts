@@ -1,13 +1,13 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { addRepoBoards, type BoardColumn, type BoardConfig, type Category, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
+import { addRepoBoards, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
 import { type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
-import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, toast, useStore } from "./store";
+import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
@@ -17,7 +17,7 @@ import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type 
 import { parseTrackerLink } from "./trackerSources";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
-import { wsKey } from "./workspaces";
+import { parseWsKey, wsKey } from "./workspaces";
 
 /** GitHub Issues through `gh` on the project's host (X44). */
 export const GITHUB = "github:github.com";
@@ -156,6 +156,15 @@ function storedShownBoard(): Record<string, string> {
 }
 
 /** Shows board `id` in workspace `wsKey` (X50), and syncs it if it is not pinned. */
+/** Opens board `id` from the board switcher (X50): another workspace's is shown there, in Tasks mode. */
+export function openBoard(host: string, workspaceId: string, id: string) {
+  const shown = shownWorkspace(useStore.getState());
+  if (shown?.host !== host || shown.id !== workspaceId) switchWorkspace({ host, id: workspaceId });
+  const key = wsKey(host, workspaceId);
+  useStore.setState((s) => ({ tasksMode: { ...s.tasksMode, [key]: true } }));
+  showBoard(host, workspaceId, id);
+}
+
 export function showBoard(host: string, workspaceId: string, id: string) {
   const shownBoard = { ...useTasks.getState().shownBoard, [wsKey(host, workspaceId)]: id };
   useTasks.setState({ shownBoard });
@@ -181,8 +190,8 @@ export function setFilters(filters: BoardFilters) {
   // Everyone's issues are only fetched with Assignee: me off: ask for them now.
   if (was.mine && !filters.mine)
     for (const key of Object.keys(useTasks.getState().data)) {
-      const [host, ...id] = key.split("/");
-      void refreshTasks(host, id.join("/"));
+      const { host, id } = parseWsKey(key);
+      void refreshTasks(host, id);
     }
 }
 
@@ -537,12 +546,16 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
 }
 
 /**
- * The status a move of `task` to `category` lands on (X50): on the board the
- * task came from, the first status of its first column of that category;
- * undefined when the task is on no board with columns.
+ * Where a move of `task` to `category` lands (X50): on the board the task
+ * came from, `status` or else the first status of its first column of that
+ * category, and that column's name; no status when the task is on no board
+ * with columns.
  */
-function boardStatus(host: string, workspaceId: string, task: Pick<Task, "connection" | "key">, category: Category): string | undefined {
-  return statusFor(taskColumns(host, workspaceId, task), category) ?? undefined;
+function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connection" | "key">, category: Category, status?: string): { status?: string; name: string } {
+  const columns = taskColumns(host, workspaceId, task);
+  const to = status ?? statusFor(columns, category) ?? undefined;
+  // Named as the tracker names the column (X50).
+  return { status: to, name: columns.find((c) => to && c.statuses.includes(to))?.name ?? COLUMN_LABEL[category] };
 }
 
 /** The columns of the board `task` came from (X50), or none. */
@@ -553,7 +566,7 @@ export function taskColumns(host: string, workspaceId: string, task: Pick<Task, 
 }
 
 /** Shows, folds or hides a column of board `boardId` (X50). */
-export function setColumnShow(boardId: string, name: string, show: "show" | "fold" | "hide") {
+export function setColumnShow(boardId: string, name: string, show: ColumnShow) {
   void saveTrackersConfig((c) => ({ ...c, boards: c.boards?.map((b) => (b.id === boardId ? withColumnShow(b, name, show) : b)) })).catch((e) => errorToast(e));
 }
 
@@ -606,7 +619,7 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
   const id = `${start.ref.connection} ${start.key}`;
   movedByMoonlet.set(id, "in_progress");
   try {
-    const status = boardStatus(host, workspaceId, { connection: start.ref.connection, key: start.key }, "in_progress");
+    const { status, name } = boardTarget(host, workspaceId, { connection: start.ref.connection, key: start.key }, "in_progress");
     await hostsApi.trackerUpdate({
       id: start.ref.connection,
       task: start.tracker.id,
@@ -615,7 +628,7 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
       ...(status && { status }),
       assign_me: true,
     });
-    recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you", now + 1);
+    recordActivity({ connection: start.ref.connection, key: start.key }, `moonlet moved it to ${name} and assigned it to you`, now + 1);
   } catch (e) {
     movedByMoonlet.delete(id);
     toast(`${start.key}: ${message(e)}`, "error");
@@ -698,9 +711,10 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
       const t = card.task.tracker;
       if (!t) return false;
       movedByMoonlet.set(id, plan.column);
-      const status = plan.status ?? boardStatus(host, workspaceId, card.task, plan.column);
+      const target = boardTarget(host, workspaceId, card.task, plan.column, plan.status);
+      const status = target.status;
       await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column, ...(status && { status }) });
-      const to = plan.name ?? COLUMN_LABEL[plan.column];
+      const to = plan.name ?? target.name;
       recordActivity(card.task, `moonlet moved it to ${to}`);
       toast(`Moved ${card.task.key} to ${to}`);
     } else {
@@ -905,9 +919,9 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
       movedByMoonlet.set(id, column);
-      const status = toStatus ?? boardStatus(host, workspaceId, task, column);
+      const { status, name } = boardTarget(host, workspaceId, task, column, toStatus);
       await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, ...(status && { status }) });
-      recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
+      recordActivity(task, `moonlet moved it to ${name}`, now);
     } else return;
     setFailure(task, null);
     void refreshTasks(host, workspaceId);

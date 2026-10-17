@@ -3,7 +3,7 @@ import type { GhTask, Section, Workspace } from "./protocol";
 import { migrateSources } from "./boards";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, openBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -469,21 +469,32 @@ describe("boards (X50 Sync)", () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
     answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
-    // The team's In Progress column holds "Doing" first.
+    // The team's in-progress column, Building, holds "Doing" first.
     const columns = [
       { name: "Todo", statuses: ["Todo"], category: "todo" as const },
-      { name: "In Progress", statuses: ["Doing", "In Progress"], category: "in_progress" as const },
+      { name: "Building", statuses: ["Doing", "In Progress"], category: "in_progress" as const },
     ];
     useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [board({ columns })] }, attention: {} });
     await refreshTasks("local", "personal", 1_000);
     sent.length = 0;
     await moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_500);
     expect(sent).toEqual([{ id: "linear:acme", task: "MOON-1", source: "MOON", column: "in_progress", status: "Doing" }]);
+    // Activity names the column as the tracker does.
+    expect(activityOf({ connection: "linear:acme", key: "MOON-1" })[0].text).toBe("moonlet moved it to Building");
     // The State menu names the column: its status, not the category's first.
     sent.length = 0;
     await moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_600, "In Progress");
     expect(sent).toEqual([{ id: "linear:acme", task: "MOON-1", source: "MOON", column: "in_progress", status: "In Progress" }]);
     useTasks.setState({ config: null });
+  });
+
+  it("opens a board of another workspace there, in Tasks mode", () => {
+    useStore.setState({ workspace: { host: "local", id: "personal" }, tasksMode: { "local/personal": true } });
+    openBoard("local", "acme", "acme-board");
+    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
+    expect(useStore.getState().tasksMode["local/acme"]).toBe(true);
+    expect(useTasks.getState().shownBoard["local/acme"]).toBe("acme-board");
+    useTasks.setState({ shownBoard: {} });
   });
 
   it("syncs the board shown even when it is not pinned, keeping each board's tasks apart", async () => {

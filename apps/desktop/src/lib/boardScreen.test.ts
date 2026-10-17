@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardStats, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
 import type { BoardSession } from "./tasksBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
@@ -51,14 +51,20 @@ describe("columnsSummary (X50 header)", () => {
 });
 
 describe("stateChoices (X50 the detail's State menu)", () => {
-  it("lists a tracker board's shown and folded columns by name, each moving to its first status", () => {
-    expect(stateChoices(OPS, task("OPS-1", "todo"))).toEqual([
-      { label: "To Do", category: "todo", status: "10001" },
-      { label: "In Progress", category: "in_progress", status: "3" },
-      { label: "QA", category: "in_review", status: "10020" },
-      { label: "Ready for Release", category: "in_review", status: "10021" },
-      { label: "Done", category: "done", status: "10002" },
-    ]);
+  it("lists a tracker board's shown and folded columns by name, each moving to its first status, with the task's own marked", () => {
+    const qa = { ...task("OPS-1", "in_review"), tracker: { id: "1", state: "QA", statusId: "10020", source: "OPS" } };
+    expect(stateChoices(OPS, qa)).toEqual({
+      current: 2,
+      choices: [
+        { label: "To Do", category: "todo", status: "10001" },
+        { label: "In Progress", category: "in_progress", status: "3" },
+        { label: "QA", category: "in_review", status: "10020" },
+        { label: "Ready for Release", category: "in_review", status: "10021" },
+        { label: "Done", category: "done", status: "10002" },
+      ],
+    });
+    // In a hidden column: no current choice.
+    expect(stateChoices(OPS, { ...qa, tracker: { ...qa.tracker, statusId: "10000" } }).current).toBe(-1);
   });
 });
 
@@ -86,5 +92,25 @@ describe("isDimmed (X50 Assignee: anyone)", () => {
   it("dims someone else's issue that has no session of yours", () => {
     const card = (mine: boolean | undefined, sessions: number) => ({ task: { ...task("OPS-1", "todo"), mine }, rows: Array.from({ length: sessions }, () => ({})) });
     expect([isDimmed(card(false, 0)), isDimmed(card(false, 1)), isDimmed(card(true, 0)), isDimmed(card(undefined, 0))]).toEqual([true, false, false, false]);
+  });
+});
+
+describe("boardHeader (X50 header)", () => {
+  it("titles the board with the sprint it follows, and sums up what the filters show", () => {
+    const ops = b("ops", "local/w", { name: "OPS", finished: "sprint" });
+    const sprint = { id: 5, name: "Sprint 42", startMs: new Date(2026, 9, 9).getTime(), endMs: new Date(2026, 9, 23).getTime() };
+    const cards = [{ rows: [1, 2] }, { rows: [] }] as unknown as Parameters<typeof boardHeader>[3];
+    expect(boardHeader(ops, sprint, "acme.atlassian.net", cards)).toEqual({ title: "OPS · Sprint 42", subtitle: "Jira · acme.atlassian.net · Oct 9 – Oct 23 · 2 issues · 2 sessions" });
+    expect(boardHeader({ ...ops, finished: 14 }, sprint, "acme.atlassian.net", cards).title).toBe("OPS");
+    expect(boardHeader(b("web", "local/w", { connection: "github:github.com", origin: { kind: "github_repo", repo: "acme/web" } }), null, "", []).subtitle).toBe("GitHub · acme/web · 0 tasks · 0 sessions");
+  });
+});
+
+describe("boardStats (X50 switcher rows)", () => {
+  it("counts a synced board's tasks and sessions, its most urgent agent state, and names its sprint or cycle", () => {
+    const ops = b("ops", "local/w", { finished: "sprint" });
+    const views = [{ name: "To Do", category: "todo" as const, folded: false, cards: [{ rows: [{ session: { state: "working" } }, { session: { state: "blocked" } }] }, { rows: [] }] }];
+    expect(boardStats(ops, views as never, { id: 5, name: "Sprint 42", startMs: 0, endMs: 0 })).toEqual({ tasks: 2, sessions: 2, state: "blocked", kind: "Sprint 42" });
+    expect(boardStats(b("plat", "local/w"), [], null)).toEqual({ tasks: 0, sessions: 0, state: null });
   });
 });
