@@ -113,6 +113,9 @@ describe("startProjects (X50 New sessions from this board start in)", () => {
     expect(startProjects(rules, task([], ["docs"]), ["linked"])).toEqual(["handbook"]);
     expect(startProjects(rules, task(["frontend"], []), ["linked"])).toEqual(["website"]);
     expect(startProjects([], task(["frontend"], []), ["linked"])).toEqual(["linked"]);
+    // Several rules for the same match (a By default row of two projects): all of them.
+    expect(startProjects([...rules, { when: "default", project: "docs-site" }, { when: { label: "docs" }, project: "guides" }], task([], ["docs"]), [])).toEqual(["handbook", "guides"]);
+    expect(startProjects([...rules, { when: "default", project: "docs-site" }], task([], []), [])).toEqual(["website", "docs-site"]);
     expect(startProjects(undefined, task([], []), [])).toEqual([]);
   });
 });

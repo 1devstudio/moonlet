@@ -1,10 +1,11 @@
 // A board's columns as the tracker has them (X50): each task in the column
 // that holds its status, folded and hidden columns, and WIP.
 
-import type { BoardColumn, BoardConfig, Origin } from "./boards";
+import { type BoardColumn, type BoardConfig, originKey, originLabel } from "./boards";
 import type { AgentState } from "./protocol";
 import { type Column, type Task, trackerName, trackerOf } from "./tasks";
 import { type BoardInput, type Card, type Drift, tasksBoard } from "./tasksBoard";
+import { count } from "./workspaces";
 
 export interface ColumnView {
   name: string;
@@ -22,7 +23,7 @@ export interface ColumnView {
  */
 function statusKey(task: Task): string {
   if (task.github) return task.column === "open" ? "open" : task.column === "done" ? "completed" : "not_planned";
-  return task.tracker?.statusId ?? task.tracker?.state ?? "";
+  return task.tracker?.statusId || task.tracker?.state || "";
 }
 
 /**
@@ -39,10 +40,12 @@ export function boardView(columns: BoardColumn[], input: BoardInput): ColumnView
     const i = index.get(statusKey(task));
     if (i !== undefined && columns[i].show !== "hide") placed.set({ ...task, column: columns[i].category }, i);
   }
-  const cards = Object.values(tasksBoard({ ...input, tasks: [...placed.keys()] })).flat();
+  const byColumn = columns.map((): Card[] => []);
+  for (const card of Object.values(tasksBoard({ ...input, tasks: [...placed.keys()] })).flat()) byColumn[placed.get(card.task) ?? -1]?.push(card);
+  const shape = boardShape(columns);
   return columns.flatMap((c, i) => {
     if (c.show === "hide") return [];
-    const here = cards.filter((card) => placed.get(card.task) === i).map((card) => ({ ...card, drift: onBoard(columns, i, card.drift) }));
+    const here = byColumn[i].map((card) => ({ ...card, drift: onBoard(columns, i, shape, card.drift) }));
     const wip = c.wip ? { count: here.length, max: c.wip, full: here.length >= c.wip } : undefined;
     return [{ name: c.name, category: c.category, folded: c.show === "fold", cards: here, ...(wip ? { wip } : {}) }];
   });
@@ -50,32 +53,33 @@ export function boardView(columns: BoardColumn[], input: BoardInput): ColumnView
 
 const RANK: Record<Column, number> = { hidden: -1, todo: 0, in_progress: 1, in_review: 2, done: 3 };
 
+/** What out of sync needs to know of a board: its In review columns, and which categories it has. */
+function boardShape(columns: BoardColumn[]) {
+  const drawn = columns.filter((c) => c.show !== "hide");
+  return { reviews: drawn.filter((c) => c.category === "in_review").length, has: new Set<Column>(drawn.map((c) => c.category)) };
+}
+
 /**
  * X45's out-of-sync chip on a board (X50): a merged PR is expected in any
  * In review column of a board with several; work started and PR open need a
  * column of that kind on the board. The fix moves to the next column, named
- * as the tracker names it, or there is none when that column is behind the work.
+ * as the tracker names it; there is none when the next column is not a
+ * later category than the task's own.
  */
-function onBoard(columns: BoardColumn[], i: number, drift: Drift | null): Drift | null {
+function onBoard(columns: BoardColumn[], i: number, shape: ReturnType<typeof boardShape>, drift: Drift | null): Drift | null {
   if (!drift || drift.kind === "done_open") return drift;
-  const drawn = columns.filter((c) => c.show !== "hide");
-  const reviews = drawn.filter((c) => c.category === "in_review").length;
-  const has = (category: Column) => drawn.some((c) => c.category === category);
-  if (drift.kind === "merged" && reviews > 1 && columns[i].category === "in_review") return null;
-  if (drift.kind === "pr_open" && !has("in_review")) return null;
-  if (drift.kind === "started" && !has("in_progress")) return null;
-  const need: Column = drift.kind === "started" ? "in_progress" : drift.kind === "pr_open" || reviews > 1 ? "in_review" : "done";
+  if (drift.kind === "merged" && shape.reviews > 1 && columns[i].category === "in_review") return null;
+  if (drift.kind === "pr_open" && !shape.has.has("in_review")) return null;
+  if (drift.kind === "started" && !shape.has.has("in_progress")) return null;
   const next = columns.slice(i + 1).find((c) => c.show !== "hide");
-  if (!next || RANK[next.category] < RANK[need]) return { ...drift, fix: "" };
+  if (!next || RANK[next.category] <= RANK[columns[i].category]) return { ...drift, fix: "" };
   return { ...drift, fix: `Move to ${next.name}`, to: { column: next.name, category: next.category, statuses: next.statuses } };
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const day = (ms: number) => {
-  const d = new Date(ms);
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
-};
-const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+const day = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+/** Jira counts issues; Linear, GitHub and ClickUp tasks. */
+const taskNoun = (connection: string) => (trackerOf(connection) === "jira" ? "issue" : "task");
 
 /**
  * The header's subtitle (X50): `Jira · acme.atlassian.net · Oct 9 – Oct 23 ·
@@ -84,35 +88,7 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
  */
 export function boardSubtitle(connection: string, site: string, sprint: { startMs: number; endMs: number } | null, tasks: number, sessions: number): string {
   const dates = sprint ? [`${day(sprint.startMs)} – ${day(sprint.endMs)}`] : [];
-  const noun = trackerOf(connection) === "jira" ? "issue" : "task";
-  return [trackerName(connection), site, ...dates, plural(tasks, noun), plural(sessions, "session")].join(" · ");
-}
-
-const KIND: Record<Origin["kind"], string> = {
-  jira_board: "Jira board",
-  jql: "JQL",
-  linear_team: "Team",
-  github_project: "Project",
-  github_repo: "Repository",
-  clickup_list: "List",
-};
-
-/** What the switcher's search matches besides the name: the team, project, repository, list or board. */
-function originKey(o: Origin): string {
-  switch (o.kind) {
-    case "jira_board":
-      return String(o.board);
-    case "jql":
-      return o.query;
-    case "linear_team":
-      return o.team;
-    case "github_project":
-      return `${o.owner}/${o.number}`;
-    case "github_repo":
-      return o.repo;
-    case "clickup_list":
-      return o.list;
-  }
+  return [trackerName(connection), site, ...dates, count(tasks, taskNoun(connection)), count(sessions, "session")].join(" · ");
 }
 
 /** A board's counts once its tasks have loaded, and its most urgent agent state. */
@@ -120,9 +96,11 @@ export interface BoardStats {
   tasks: number;
   sessions: number;
   state: AgentState | null;
+  /** What the last sync said the board is: `Scrum`, `Kanban`, `Cycle 14`. */
+  kind?: string;
 }
 
-export interface SwitcherRow {
+export interface BoardSwitcherRow {
   board: BoardConfig;
   kind: string;
   /** One bar per shown or folded column, by category. */
@@ -131,6 +109,13 @@ export interface SwitcherRow {
   meta: string;
   /** Null until its tasks have loaded. */
   sessions: { text: string; state: AgentState | null } | null;
+}
+
+export interface BoardSwitcherGroup {
+  workspace: string;
+  name: string;
+  hint: string;
+  rows: BoardSwitcherRow[];
 }
 
 /**
@@ -144,7 +129,7 @@ export function switcherGroups(
   query: string,
   workspaceNames: Record<string, string>,
   stats: Record<string, BoardStats>,
-): { workspace: string; name: string; hint: string; rows: SwitcherRow[] }[] {
+): BoardSwitcherGroup[] {
   const q = query.trim().toLowerCase();
   const name = (ws: string) => workspaceNames[ws] ?? ws;
   const found = boards.filter((b) => !q || [b.name, originKey(b.origin), name(b.workspace)].some((t) => t.toLowerCase().includes(q)));
@@ -152,16 +137,15 @@ export function switcherGroups(
   return order.flatMap((ws) => {
     const rows = found
       .filter((b) => b.workspace === ws)
-      .map((board): SwitcherRow => {
+      .map((board): BoardSwitcherRow => {
         const bars = (board.columns ?? []).filter((c) => c.show !== "hide").map((c) => c.category);
         const live = stats[board.id];
-        const noun = trackerOf(board.connection) === "jira" ? "issue" : "task";
         return {
           board,
-          kind: KIND[board.origin.kind],
+          kind: live?.kind ?? originLabel(board.origin),
           bars,
-          meta: [bars.length ? plural(bars.length, "column") : "", live ? plural(live.tasks, noun) : ""].filter(Boolean).join(" · "),
-          sessions: live ? { text: live.sessions ? plural(live.sessions, "session") : "no sessions", state: live.state } : null,
+          meta: [bars.length ? count(bars.length, "column") : "", live ? count(live.tasks, taskNoun(board.connection)) : ""].filter(Boolean).join(" · "),
+          sessions: live ? { text: live.sessions ? count(live.sessions, "session") : "no sessions", state: live.state } : null,
         };
       });
     return rows.length ? [{ workspace: ws, name: name(ws), hint: ws === wsKey ? "this workspace" : "switches workspace", rows }] : [];
