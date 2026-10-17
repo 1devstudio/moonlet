@@ -21,7 +21,7 @@ export type Category = Exclude<Column, "hidden">;
 export interface BoardColumn {
   /** As the tracker names it. */
   name: string;
-  /** Status or state ids where the tracker has them (Jira, Linear), else names (ClickUp; a GitHub repository's `open`, `completed`, `not_planned`). */
+  /** Jira status ids, else state names (Linear, ClickUp; a GitHub repository's `open`, `completed`, `not_planned`). */
   statuses: string[];
   category: Category;
   /** Absent: shown. */
@@ -55,7 +55,7 @@ export interface BoardConfig {
   finished?: number | "sprint";
   /** Empty until the first sync reads the tracker's statuses. */
   columns?: BoardColumn[];
-  /** A migrated source's state mapping, until its columns are read. */
+  /** The state mapping a migrated source brought or the States dialog saved: it gives the board's first columns their categories. */
   states?: Record<string, Column>;
   rules?: StartRule[];
   cards?: CardField[];
@@ -72,58 +72,63 @@ export const boardId = (connection: string, key: string, wsKey: string) => `${tr
 const repoSeen = (wsKey: string, repo: string) => `${wsKey} ${trackerLink(GITHUB, repo.toLowerCase())}`;
 
 /**
- * Turns workspace `wsKey`'s X44 sources into pinned boards once, and each
- * GitHub repository of its projects (`repos`, `owner/name`) into one the
- * first time a sync sees it. `migrated` remembers both, so a board the user
- * removes stays removed, while a repository whose origin could not be read
- * this time gets its board on a later sync. The sources of other workspaces
- * stay until those are opened; a connection with no source left drops its
- * state mapping, which its boards carry now. Returns `config` itself when
- * there is nothing to do.
+ * Turns every X44 source into a pinned board in its workspace (X50), as
+ * soon as `trackers.toml` loads: a board keeps its connection's state
+ * mapping, a source no workspace was chosen for showed nowhere and goes, and
+ * one whose board is already there is skipped. The connections keep no
+ * sources or mapping. Returns `config` itself when it has no source.
  */
-export function migrateWorkspace(config: TrackersConfig, wsKey: string, repos: string[]): TrackersConfig {
+export function migrateSources(config: TrackersConfig): TrackersConfig {
+  if (!(config.connections ?? []).some((c) => c.sources.length || (c.states && Object.keys(c.states).length))) return config;
+  const have = new Set((config.boards ?? []).map((b) => b.id));
+  const fromSources: BoardConfig[] = (config.connections ?? []).flatMap((c) =>
+    c.sources
+      .filter((s) => s.workspace && !have.has(boardId(c.id, s.key, s.workspace)))
+      .map((s) => ({
+        id: boardId(c.id, s.key, s.workspace),
+        name: s.name,
+        connection: c.id,
+        workspace: s.workspace,
+        origin: ORIGIN[c.kind](s.key),
+        ...(c.states && Object.keys(c.states).length ? { states: c.states } : {}),
+      })),
+  );
+  return {
+    ...config,
+    connections: config.connections?.map((c) => ({ ...c, sources: [], states: undefined })),
+    boards: [...(config.boards ?? []), ...fromSources],
+  };
+}
+
+/**
+ * Gives each GitHub repository of workspace `wsKey`'s projects (`repos`,
+ * `owner/name`, any case) a pinned board the first time a sync sees it
+ * (X50). `migrated` remembers it, so a board the user removes stays
+ * removed, while a repository whose origin could not be read this time (a
+ * host offline, a remote added later) gets its board on a later sync.
+ * Returns `config` itself when there is nothing to add.
+ */
+export function addRepoBoards(config: TrackersConfig, wsKey: string, repos: string[]): TrackersConfig {
   const done = new Set(config.migrated ?? []);
-  const newRepos = [...new Set(repos)].filter((repo) => !done.has(repoSeen(wsKey, repo)));
-  const sourcesDone = done.has(wsKey);
-  if (sourcesDone && !newRepos.length) return config;
-  const fromRepos: BoardConfig[] = newRepos.map((repo) => ({
-    id: boardId(GITHUB, repo, wsKey),
+  const fresh = new Map<string, string>();
+  for (const repo of repos) if (!done.has(repoSeen(wsKey, repo)) && !fresh.has(repo.toLowerCase())) fresh.set(repo.toLowerCase(), repo);
+  if (!fresh.size) return config;
+  const added: BoardConfig[] = [...fresh.values()].map((repo) => ({
+    id: boardId(GITHUB, repo.toLowerCase(), wsKey),
     name: repo,
     connection: GITHUB,
     workspace: wsKey,
     origin: { kind: "github_repo", repo },
   }));
-  const fromSources: BoardConfig[] = sourcesDone
-    ? []
-    : (config.connections ?? []).flatMap((c) =>
-        c.sources
-          .filter((s) => s.workspace === wsKey)
-          .map((s) => ({
-            id: boardId(c.id, s.key, wsKey),
-            name: s.name,
-            connection: c.id,
-            workspace: wsKey,
-            origin: ORIGIN[c.kind](s.key),
-            ...(c.states && Object.keys(c.states).length ? { states: c.states } : {}),
-          })),
-      );
-  const connections = sourcesDone
-    ? config.connections
-    : config.connections?.map((c) => {
-        // A source no workspace was chosen for showed nowhere: it goes too.
-        const sources = c.sources.filter((s) => s.workspace && s.workspace !== wsKey);
-        return { ...c, sources, states: sources.length ? c.states : undefined };
-      });
-  return {
-    ...config,
-    connections,
-    boards: [...(config.boards ?? []), ...fromRepos, ...fromSources],
-    migrated: [...(config.migrated ?? []), ...(sourcesDone ? [] : [wsKey]), ...newRepos.map((repo) => repoSeen(wsKey, repo))],
-  };
+  return { ...config, boards: [...(config.boards ?? []), ...added], migrated: [...(config.migrated ?? []), ...[...fresh.values()].map((repo) => repoSeen(wsKey, repo))] };
 }
 
+/** A Jira project's board query, and the project back from it (X50: a migrated Jira source). */
+export const jqlOfProject = (key: string) => `project = ${key}`;
+export const projectOfJql = (query: string) => /^project = ([A-Za-z0-9_]+)$/.exec(query)?.[1] ?? null;
+
 const ORIGIN: Record<"linear" | "jira" | "clickup", (key: string) => Origin> = {
-  jira: (key) => ({ kind: "jql", query: `project = ${key}` }),
+  jira: (key) => ({ kind: "jql", query: jqlOfProject(key) }),
   linear: (team) => ({ kind: "linear_team", team }),
   clickup: (list) => ({ kind: "clickup_list", list }),
 };
@@ -218,7 +223,7 @@ export function workspaceBoards(boards: BoardConfig[] | undefined, wsKey: string
 export function sourceKeyOf(b: BoardConfig): string | null {
   if (b.origin.kind === "linear_team") return b.origin.team;
   if (b.origin.kind === "clickup_list") return b.origin.list;
-  if (b.origin.kind === "jql") return /^project = ([A-Za-z0-9_]+)$/.exec(b.origin.query)?.[1] ?? null;
+  if (b.origin.kind === "jql") return projectOfJql(b.origin.query);
   return null;
 }
 
@@ -257,4 +262,19 @@ export function rowsToBoards(connection: Connection, rows: Source[], boards: Boa
  */
 export function withStates(board: BoardConfig, states: Record<string, Column>): BoardConfig {
   return { ...board, states, ...(board.columns?.length && { columns: firstColumns(board.columns, states) }) };
+}
+
+/**
+ * A board's columns after a sync brought the tracker's (`fresh`, or null
+ * when it brought none): a board without columns starts from the tracker's
+ * with its state mapping; a JQL board's only grow, since they come from the
+ * statuses its issues happen to be in; any other board's are matched to
+ * the tracker's (`matchColumns`). A GitHub repository board has GitHub's two.
+ */
+export function syncedColumns(board: BoardConfig, fresh: BoardColumn[] | null): BoardColumn[] {
+  const saved = board.columns ?? [];
+  if (!fresh) return saved.length || board.origin.kind !== "github_repo" ? saved : GITHUB_REPO_COLUMNS;
+  if (!saved.length) return firstColumns(fresh, board.states);
+  if (board.origin.kind === "jql") return [...saved, ...fresh.filter((f) => !f.statuses.some((id) => saved.some((c) => c.statuses.includes(id))))];
+  return matchColumns(saved, fresh);
 }

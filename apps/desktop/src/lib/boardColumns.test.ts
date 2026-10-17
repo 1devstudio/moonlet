@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardSubtitle, boardView, categorize, switcherGroups } from "./boardColumns";
+import { boardSubtitle, boardView, categorize, placeOnBoards, statusFor, switcherGroups } from "./boardColumns";
 import type { BoardConfig } from "./boards";
 import type { BoardColumn } from "./boards";
 import type { PullRequest } from "./protocol";
@@ -226,6 +226,24 @@ describe("boardView (X50 Board)", () => {
         ["OPS-2", "hidden"],
         ["OPS-3", "in_review"],
         ["acme/web#12", "open"],
+      ]);
+    });
+  });
+
+  describe("statusFor (X50 Keep in step's moves on a board)", () => {
+    it("is the first status of the first shown or folded column of that category", () => {
+      expect([statusFor(OPS, "in_review"), statusFor(OPS, "done"), statusFor(OPS, "todo")]).toEqual(["10018", "10002", "10001"]);
+      expect(statusFor([], "done")).toBeNull();
+    });
+  });
+
+  describe("placeOnBoards (X50 the board's columns as saved now)", () => {
+    it("places each task by the columns of the board it came from, so a changed mapping shows without a sync", () => {
+      const board = { id: "ops", name: "OPS", connection: "jira:acme.atlassian.net", workspace: "local/w", origin: { kind: "jira_board" as const, board: 10 }, columns: OPS };
+      const tasks = [{ ...jira("OPS-476", "10020"), column: "in_progress" as const }, jira("OPS-9", "10020")];
+      expect(placeOnBoards(tasks, { ops: { keys: ["jira:acme.atlassian.net OPS-476"], sprint: null } }, [board]).map((t) => [t.key, t.column])).toEqual([
+        ["OPS-476", "in_review"],
+        ["OPS-9", "todo"],
       ]);
     });
   });
