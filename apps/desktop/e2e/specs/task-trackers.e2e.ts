@@ -167,6 +167,21 @@ describe("Linear tracker", () => {
     expect(readFileSync(join(w.home, "secrets.json"), "utf8")).toContain("lin_api_e2e");
   });
 
+  it("edits the connection's boards as sources, row by row (X44, X50)", async () => {
+    await $(sel.settingsButton("Sources")).click();
+    // The team's board is the first row; a second is added, then removed.
+    await expect($('//div[@role="listitem"][@aria-label="Engineering"]')).toBeDisplayed({ wait: 10_000 });
+    await $('//div[@role="dialog"]//button[normalize-space()="Add source"]').click();
+    await choose('//div[@role="dialog"]//select[@aria-label="Source 2"]', "DES");
+    await $('//div[@role="dialog"]//button[@aria-label="Remove Design"]').click();
+    await $('//div[@role="listitem"][@aria-label="Design"]').waitForExist({ reverse: true });
+    await $('//div[@role="dialog"]//button[normalize-space()="Save and sync"]').click();
+    await $('//div[@role="dialog"]').waitForExist({ reverse: true, timeout: 10_000 });
+    const toml = readFileSync(join(w.home, "trackers.toml"), "utf8");
+    expect(toml).toContain('team = "ENG"');
+    expect(toml).not.toContain('team = "DES"');
+  });
+
   it("maps a workflow state to another column, saved with the board", async () => {
     await $(sel.settingsButton("States")).click();
     await expect($('//div[@role="dialog"]').$(sel.text("Backlog"))).toBeDisplayed({ wait: 10_000 });
@@ -286,7 +301,7 @@ describe("Linear tracker", () => {
     }
   });
 
-  it("stops asking Linear once it rejects the token, and the Settings nav shows a dot", async () => {
+  it("stops asking Linear once it rejects the token, the Settings nav shows a dot, and reconnecting ends with Done", async () => {
     rejecting = true;
     await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
     await $('//button[@title="Refresh tasks"]').click();
@@ -295,6 +310,14 @@ describe("Linear tracker", () => {
     await openSettings("Task trackers");
     await expect($('//*[@role="img"][@aria-label="1 connection needs attention"]')).toBeDisplayed({ wait: 15_000 });
     rejecting = false;
+    // Reconnecting ends with Done, not Add a board (X50).
+    await $(sel.settingsButton("Reconnect")).click();
+    await fill('//div[@role="dialog"]//input[@type="password"]', "lin_api_e2e");
+    await $('//div[@role="dialog"]//button[normalize-space()="Connect"]').click();
+    await expect($(sel.text("Signed in as Ada Lovelace · 2 teams visible"))).toBeDisplayed({ wait: 15_000 });
+    await expect($('//div[@role="dialog"]//button[normalize-space()="Add a board"]')).not.toBeExisting();
+    await $('//div[@role="dialog"]//button[normalize-space()="Done"]').click();
+    await expect($('//*[@role="img"][@aria-label="1 connection needs attention"]')).not.toBeExisting({ wait: 10_000 });
   });
 
   it("disconnects after asking, naming its boards: the token, the connection and its boards are gone", async () => {
