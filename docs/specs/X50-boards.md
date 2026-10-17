@@ -27,13 +27,13 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 ### Boards replace sources
 
-- [ ] A board has a name, a connection, an origin, an issue filter, columns, a workspace, start-in rules, card fields and a pinned flag. It is saved in `trackers.toml` under `[[boards]]`.
+- [ ] A board has a name, a connection, an origin, an issue filter, columns, a workspace, start-in rules, card fields and a pinned flag. It is saved in `trackers.toml` under `[[boards]]`; a setting at its default is not written. (`config.rs` a_jira_board_with_its_columns_rules_and_cards, a_board_written_with_only_its_essentials_takes_the_defaults, a_board_at_its_default_finished_rule_does_not_write_it, every_origin_reads_back)
 - [ ] Origins:
   - Jira: `jira_board` (an existing Jira board, by id) or `jql` (a JQL query).
   - Linear: `linear_team` (a team, by key).
   - GitHub: `github_project` (a GitHub Project, by owner and number) or `github_repo` (a repository's issues, as X44 shows them today).
   - ClickUp: `clickup_list` (a list, by id).
-- [ ] On the first load after the upgrade, each X44 source becomes one board in the same workspace. A Jira project becomes a `jql` board `project = <KEY>`, a Linear team a `linear_team` board, a ClickUp list a `clickup_list` board. Each GitHub repository a workspace showed becomes a `github_repo` board. The board is named after the source and pinned. Its columns come from the tracker on the first sync, named as there: the Jira project's statuses, the Linear team's workflow states, the ClickUp list's statuses, GitHub's Open and Closed. Each column's category is the one the connection's state mapping gave its state; a state mapped to Not shown becomes a hidden column. The old sources and `states` are dropped from the file when it is next written.
+- [ ] The first time the app opens a workspace after the upgrade, each X44 source of that workspace becomes one board in it. A Jira project becomes a `jql` board `project = <KEY>`, a Linear team a `linear_team` board, a ClickUp list a `clickup_list` board. Each GitHub repository a workspace showed becomes a `github_repo` board. The board is named after the source and pinned. Its columns come from the tracker on the first sync, named as there: the Jira project's statuses, the Linear team's workflow states, the ClickUp list's statuses, GitHub's Open and Closed. Each column's category is the one the connection's state mapping gave its state; a state mapped to Not shown becomes a hidden column. The old sources and `states` are dropped from the file when it is next written. (Partly: the app does not call the migration yet. `boards.test.ts` turns the workspace's sources and GitHub repositories into pinned boards, keeps other workspaces' sources until they open, and drops a connection's states with its last source, migrates a workspace once, so a board removed later stays removed)
 - [ ] A new GitHub repository added to a workspace no longer shows its issues by itself: the user adds a board for it.
 - [ ] Removing a board asks first. Session links (X46) stay, and so do the sessions themselves.
 - [ ] Disconnecting a connection (X44) also removes its boards, and its confirm names them.
@@ -233,11 +233,13 @@ Daemon RPCs, since `gh` runs on the project's host:
 - `~/.moonlet/trackers.toml` gains `[[boards]]`:
   - `id`, `name`, `connection`, `workspace`, `pinned`
   - `[boards.origin]`: `kind` (`jira_board`, `jql`, `linear_team`, `github_project`, `github_repo`, `clickup_list`) and its key (`board`, `query`, `team`, `owner` + `number`, `repo`, `list`)
-  - `narrow` (JQL), `labels`, `assignee` (`me` or `anyone`), `finished` (`days = 14` or `follow = "sprint"`)
-  - `[[boards.columns]]`: `name`, `statuses` (ids), `category`, `show` (`show`, `fold`, `hide`), `wip`
-  - `[[boards.rules]]`: `when` (`default`, `component = "…"`, `label = "…"`) and `project`
-  - `cards` (a list of field names)
-- `[[connections.sources]]` and `connections.states` are read once, to migrate, and dropped.
+  - `narrow` (JQL), `labels`, `assignee` (`me` or `anyone`), `finished` (a number of days, `14` by default, or `"sprint"`)
+  - `[[boards.columns]]`: `name`, `statuses` (status or state ids where the tracker has them, Jira and Linear; else names, ClickUp and a GitHub repository's `open`, `completed`, `not_planned`), `category` (`todo`, `in_progress`, `in_review`, `done`: hiding a column is its `show`), `show` (`show`, `fold`, `hide`), `wip` (`config.rs` a_columns_category_is_one_of_four_and_hiding_is_its_show)
+  - `[[boards.rules]]`: `when` (`"default"`, `{ component = "…" }` or `{ label = "…" }`) and `project`, one project per rule
+  - `cards` (a list of field names: `issue_type`, `points`, `assignee`, `parent`, `due`, `labels`)
+  - a migrated board's `states`, the old connection's state mapping, until its columns are first read
+- `migrated`: the workspaces whose sources and GitHub repositories have become boards. The app migrates a workspace the first time it opens it, since only then does it know the workspace's GitHub repositories. A board removed later stays removed.
+- `[[connections.sources]]` are read until their workspace is migrated, then dropped. `connections.states` is dropped once its connection has no source left.
 - A Jira board's columns are kept with the user's order, folding and categories. On each sync they are matched to Jira's by status ids.
 - `.moonlet/config.toml`'s `trackers = ["<connection>/<key>"]` (X44) stays. It is the default for a board's By default row. A new session from a task starts in, in this order:
   1. the board's matching rule
@@ -264,12 +266,13 @@ Daemon RPCs, since `gh` runs on the project's host:
 ## Test plan
 
 - **Rust (`crates/moonlet-trackers`):**
-  - the `[[boards]]` round trip and the migration from sources (`config.rs`)
+  - the `[[boards]]` round trip (`config.rs`)
   - Jira board list, board configuration, active sprint, filter JQL and per-site field lookup (`jira.rs`); fixtures from real responses, captured with the user's token, with names, emails, keys and URLs replaced
   - Linear teams with their active cycle (`linear.rs`)
   - category suggestions (`states.rs`)
 - **Daemon:** `gh.projects` and `gh.project_items` against real `gh api graphql` output, and the missing-scope error.
 - **Vitest (`apps/desktop/src/lib/`):**
+  - the migration from sources, once per workspace (`boards.test.ts`)
   - placing tasks in a board's columns, fold and hide, WIP `full`
   - the switcher's groups and search, the header subtitle
   - the repository a new session starts in, by rule
