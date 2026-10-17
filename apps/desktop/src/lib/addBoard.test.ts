@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alreadyAdded, canContinue, draftFromBoard, finishedChoices, newDraft, pickOrigin, previewLine, summaryLine, toBoard } from "./addBoard";
+import { alreadyAdded, canContinue, cardChoices, clash, columnAt, draftFromBoard, finishedChoices, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -35,11 +35,15 @@ describe("Add a board, step 1 (X50)", () => {
     expect(canContinue(pickOrigin(d, JIRA, { kind: "jql", query: " " }, "Query"), null)).toBe(false);
     const picked = pickOrigin(d, JIRA, { kind: "jira_board", board: 41 }, "WEB · Website", "kanban");
     expect(canContinue(picked, null)).toBe(true);
-    // Step 2 waits while the tracker rejects the query.
-    expect(canContinue({ ...picked, step: 2 }, "Jira: Field 'compnent' does not exist")).toBe(false);
+    // Step 2 waits for the tracker to check the query, and while it rejects it.
+    expect(canContinue({ ...picked, step: 2 }, null)).toBe(false);
+    expect(canContinue({ ...picked, step: 2 }, { error: "Jira: Field 'compnent' does not exist" })).toBe(false);
+    expect(canContinue({ ...picked, step: 2 }, { error: null })).toBe(true);
     expect(canContinue({ ...picked, step: 3, columns: [] }, null)).toBe(false);
     expect(canContinue({ ...picked, step: 3, columns: WEB }, null)).toBe(true);
     expect(canContinue({ ...picked, step: 4, columns: WEB, name: "" }, null)).toBe(false);
+    // Board settings' Save waits while the tracker rejects an edited query.
+    expect(canContinue({ ...picked, step: 4, columns: WEB }, { error: "Jira: Field 'compnent' does not exist" })).toBe(false);
   });
 });
 
@@ -49,6 +53,11 @@ describe("Add a board, step 2 (X50)", () => {
     expect(finishedChoices("jira", "kanban").map((c) => c.label)).toEqual(["Hide after 14 days"]);
     expect(finishedChoices("linear").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active cycle"]);
     expect(finishedChoices("github").map((c) => c.label)).toEqual(["Hide after 14 days"]);
+    // A team-managed board has sprints; a Jira board of unknown type gets 14 days, as its choices say.
+    expect(pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 12 }, "MOB board", "simple").finished).toBe("sprint");
+    expect(pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 12 }, "MOB board").finished).toBe(14);
+    // Board settings of a board following its sprint keeps the choice.
+    expect(finishedChoices("jira", undefined, "sprint").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active sprint"]);
   });
 
   it("says how many issues match, how many are the user's, and how many have a branch with their key", () => {
@@ -84,6 +93,44 @@ describe("Add a board, step 4 (X50)", () => {
   });
 });
 
+describe("Add a board, step 3 (X50)", () => {
+  it("moves a column up or down, and sets its category and how it shows", () => {
+    expect(moveColumn(WEB, 2, -1).map((c) => c.name)).toEqual(["Backlog", "In Progress", "Selected for Development", "Design Review", "Done"]);
+    expect(moveColumn(WEB, 4, 1)).toEqual(WEB);
+    expect(columnAt(WEB, 3, { category: "in_progress" })[3]).toEqual({ name: "Design Review", statuses: ["10030"], category: "in_progress" });
+    expect(columnAt(WEB, 4, { show: "show" })[4]).toEqual({ name: "Done", statuses: ["10002"], category: "done" });
+    expect(columnAt(WEB, 1, { show: "fold" })[1]).toEqual({ name: "Selected for Development", statuses: ["10001"], category: "todo", show: "fold" });
+  });
+});
+
+describe("Add a board, step 4 cards (X50)", () => {
+  it("offers only the card fields the tracker has", () => {
+    expect(cardChoices("jira").map(([, label]) => label)).toEqual(["Issue type", "Story points", "Assignee", "Epic", "Due date"]);
+    expect(cardChoices("linear").map(([, label]) => label)).toEqual(["Estimate", "Assignee", "Parent", "Due date"]);
+    expect(cardChoices("github").map(([, label]) => label)).toEqual(["Assignee"]);
+  });
+});
+
+describe("Saving a board (X50)", () => {
+  const ops: BoardConfig = { id: "jira:acme.atlassian.net/10@local/acme", name: "OPS", connection: JIRA, workspace: "local/acme", origin: { kind: "jira_board", board: 10 } };
+  const web: BoardConfig = { id: "jira:acme.atlassian.net/41@local/acme", name: "WEB", connection: JIRA, workspace: "local/acme", origin: { kind: "jira_board", board: 41 } };
+
+  it("refuses a board its workspace already has, even moved there in Board settings", () => {
+    expect(clash([ops, web], { ...web, name: "WEB again" })).toBe("This workspace already has a board from Jira board 41.");
+    expect(clash([ops, web], { ...web, id: "jira:acme.atlassian.net/41@local/other", workspace: "local/other" })).toBe(null);
+    // Board settings may save the board over itself, not over another.
+    expect(clash([ops, web], { ...web, name: "Website" }, web.id)).toBe(null);
+    expect(clash([ops, web], { ...ops, origin: web.origin, id: web.id }, ops.id)).toBe("This workspace already has a board from Jira board 41.");
+  });
+
+  it("adds a new board last, and puts a board saved from its settings where it was, under its new id", () => {
+    const fresh: BoardConfig = { id: "jql:x@local/acme", name: "Query", connection: JIRA, workspace: "local/acme", origin: { kind: "jql", query: "project = X" } };
+    expect(putBoard([ops, web], fresh).map((b) => b.id)).toEqual([ops.id, web.id, fresh.id]);
+    const moved = { ...ops, id: "jira:acme.atlassian.net/10@local/other", workspace: "local/other" };
+    expect(putBoard([ops, web], moved, ops.id).map((b) => b.id)).toEqual(["jira:acme.atlassian.net/10@local/other", web.id]);
+  });
+});
+
 describe("Board settings (X50)", () => {
   it("opens the board's own values, and saves it back as it was", () => {
     const board: BoardConfig = {
@@ -97,6 +144,8 @@ describe("Board settings (X50)", () => {
       columns: WEB,
       cards: ["points"],
       pinned: false,
+      // A board made from an X44 source keeps its state mapping.
+      states: { QA: "in_review" },
     };
     const d = draftFromBoard(board);
     expect([d.step, d.name, d.narrow, d.assignee, d.finished, d.cards, d.pinned]).toEqual([1, "WEB · Website", "component = frontend", "me", "sprint", ["points"], false]);
