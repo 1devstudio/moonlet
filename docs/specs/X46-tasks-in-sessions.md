@@ -4,6 +4,7 @@
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** X44 (task trackers), X45 (Tasks mode), X5 (sessions), X2 (pull requests)
 - **Related ADRs:** [0010](../adr/0010-task-trackers-in-the-app.md)
+- **Superseded in part by:** [X50](X50-boards.md) — moves and fixes go to a board's columns (a fix to the next column), and a GitHub repository board has only Open and Closed.
 
 ## Summary
 
