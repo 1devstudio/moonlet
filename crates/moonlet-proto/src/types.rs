@@ -741,6 +741,15 @@ pub struct QueuedMessage {
     pub sending: bool,
 }
 
+/// An aside's answer (X49): a side question answered from a chat's
+/// conversation by a separate Claude, outside the chat.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AsideAnswer {
+    pub text: String,
+    pub cost_usd: f64,
+    pub duration_ms: u64,
+}
+
 /// The agent's context window, from Claude's `get_context_usage` (X34).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ContextUsage {

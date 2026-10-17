@@ -126,6 +126,13 @@ export interface SubagentTool {
   removed?: number | null;
 }
 
+/** A side question's answer from `chat.aside` (X49). */
+export interface AsideAnswer {
+  text: string;
+  cost_usd: number;
+  duration_ms: number;
+}
+
 /** A message waiting in the agent's queue (X49). */
 export interface QueuedMessage {
   /** The uuid the message was sent to the agent with. */
