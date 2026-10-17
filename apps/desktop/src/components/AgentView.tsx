@@ -81,6 +81,8 @@ import { type PlanView, planLabels, planView } from "../lib/plan";
 import { AGENT_STATE, type AgentNote, type AgentRow, agentCount, agentMs, agentNotes, agentRows, askerName, clock, launchedRows, notesByBlock } from "../lib/subagents";
 import { uiScale } from "../lib/uiScale";
 import { useNow } from "../lib/useNow";
+import { useWidth } from "../lib/useWidth";
+import { type InputLayout, inputLayout } from "../lib/chatInput";
 import { type ContextFiles, chatContextFiles, chipSection, newChatContext, otherChats, planContextFiles } from "../lib/chatContext";
 import { shortPath } from "../lib/terminals";
 import { AgentsStrip } from "./AgentsStrip";
@@ -863,6 +865,7 @@ function ChatEditor({
   onAside,
   handle,
   top,
+  layout,
 }: {
   host: string;
   /** The chat terminal, whose unsent text survives a session switch. */
@@ -892,6 +895,8 @@ function ChatEditor({
   onAside?: (text: string) => void;
   /** Lets the `+` menu edit the input (X29). */
   handle?: Ref<EditorHandle>;
+  /** What fits at the chat column's width (X51). */
+  layout: InputLayout;
 }) {
   const [text, setTextState] = useState(() => chatDraft(host, id));
   const setText = (v: string) => {
@@ -933,12 +938,14 @@ function ChatEditor({
     ta.current?.focus();
   }, [draft, draftKey, text]);
 
+  // Text wraps differently when the chat's width changes, so a resize re-measures too (X51).
+  const inputWidth = useWidth(ta, 0);
   useLayoutEffect(() => {
     const el = ta.current;
     if (!el) return;
     el.style.height = "0px";
     el.style.height = Math.min(el.scrollHeight, 260) + "px";
-  }, [text, scale]);
+  }, [text, scale, inputWidth]);
 
   const token = activeToken(text, caret);
   useEffect(() => {
@@ -1095,7 +1102,8 @@ function ChatEditor({
       )}
       <div className="rounded-[14px] border border-border-strong bg-panel has-[textarea:focus]:border-[#3a3a3a]">
         {top}
-        <div className="relative flex min-h-[52px] items-center gap-3 py-3 pl-4 pr-3.5">
+        {/* Two lines tall when empty (X51); the send button sits at the bottom. */}
+        <div className={cx("relative flex items-start gap-2.5 pr-3", CARD_PAD[layout.insetX])}>
           <div className="relative min-w-0 flex-1 ui-text-14 leading-[1.5]">
             <div aria-hidden className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words text-transparent">
               {text}
@@ -1103,7 +1111,7 @@ function ChatEditor({
             </div>
             <textarea
               ref={ta}
-              rows={1}
+              rows={2}
               spellCheck={false}
               value={text}
               placeholder={placeholder}
@@ -1115,10 +1123,10 @@ function ChatEditor({
               }}
               onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
               onKeyDown={onKeyDown}
-              className="relative block w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
+              className="relative block min-h-[3em] w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
             />
           </div>
-          {onAside && (
+          {onAside && layout.asideHint && (
             <span className="flex shrink-0 items-center gap-1.5 self-end whitespace-nowrap pb-1 ui-text-12 text-faint">
               <Kbd>⌥↵</Kbd> ask aside
             </span>
@@ -1128,6 +1136,28 @@ function ChatEditor({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Tailwind classes for the X51 layout's px values. */
+const PAD_X: Record<number, string> = { 24: "px-6", 16: "px-4", 12: "px-3" };
+const INSET_X: Record<number, string> = { 16: "pl-4", 12: "pl-3" };
+/** The input card's padding by its inset: 14 px above and below, 11 px when compact. */
+const CARD_PAD: Record<number, string> = { 16: "py-3.5 pl-4", 12: "py-[11px] pl-3" };
+
+/**
+ * The turn's status on its own line above the input (X51), lined up with the
+ * input's text, with Stop at its end while the turn runs or waits.
+ */
+function StatusLine({ inset, className, onStop, children }: { inset: number; className: string; onStop: () => void; children: React.ReactNode }) {
+  return (
+    <div role="status" className={cx("mb-1.5 flex h-7 items-center gap-2 overflow-hidden whitespace-nowrap ui-text-12.5", INSET_X[inset], className)}>
+      {children}
+      <span className="flex-1" />
+      <Button size="sm" variant="ghost" className="shrink-0" onClick={onStop} title="Stop (⌘.)">
+        <Square size={10} fill="currentColor" /> Stop
+      </Button>
     </div>
   );
 }
@@ -1372,7 +1402,10 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     if (aside) void call(M.chatSend, { text: aside.question, images: [] });
     setAside(null);
   };
-  const cost = st ? costLine(st) : null;
+  const column = useRef<HTMLElement>(null);
+  const layout = inputLayout(useWidth(column, 760), scale);
+  const fullCost = st ? costLine(st) : null;
+  const cost = layout.cost === "short" && st ? costLine(st, "short") : layout.cost ? fullCost : null;
   const editor = useRef<EditorHandle>(null);
   // Attached images go with the next message, other files become @mentions (X29).
   const attach = async () => {
@@ -1589,7 +1622,21 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           </div>
         </FileLinks.Provider>
       </div>
-      <div className="w-full shrink-0 px-6 pb-3">
+      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-3", PAD_X[layout.padX])}>
+        {st?.status === "working" ? (
+          <StatusLine inset={layout.insetX} className="text-muted" onStop={stop}>
+            <Loader2 size={12} className="spin shrink-0 text-accent" />
+            <span className="chat-shimmer">Working</span>
+            {st.turn_started_at && <span className="text-faint">{elapsed(now - st.turn_started_at)}</span>}
+            {queuedCount(queued) && <span className="text-faint">{queuedCount(queued)}</span>}
+            {layout.escHint && <span className="text-faint">· esc to stop</span>}
+          </StatusLine>
+        ) : st?.status === "blocked" ? (
+          <StatusLine inset={layout.insetX} className="text-fg" onStop={stop}>
+            <ShieldAlert size={12} className="shrink-0 text-blocked" />
+            <span className="truncate">{st.pending.length > 0 && st.pending.every(isQuestion) ? "Waiting for your answer" : "Waiting for your approval"}</span>
+          </StatusLine>
+        ) : null}
         <ChatEditor
           host={host}
           id={id}
@@ -1602,17 +1649,18 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           onStop={stop}
           onCycleMode={agent === "claude" ? () => modeMenu.pick(nextMode(modeMenu.mode, modeMenu.bypassOn)) : undefined}
           scale={scale}
-          placeholder={revising ? "What should change in the plan?" : composerPlaceholder(agent, working)}
+          placeholder={revising ? "What should change in the plan?" : composerPlaceholder(agent, working, layout.longPlaceholder)}
           focusSignal={focusSignal}
           onCancel={revising ? () => setRevise(null) : aside ? () => setAside(null) : undefined}
           onAttach={() => void attach()}
           onAside={canAskAside(agent, working, revising) ? askAside : undefined}
           handle={editor}
           top={st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
+          layout={layout}
         />
-        {/* Under the input (X29, X34): +, context ring and cost on the left, status centred, settings on the right. */}
-        <div className="mt-1.5 grid h-[34px] grid-cols-[1fr_auto_1fr] items-center px-1 ui-text-12.5 text-muted">
-          <div className="flex items-center gap-1">
+        {/* Under the input (X29, X34, X51): +, context ring and cost on the left, settings on the right; narrower chats drop the extras. */}
+        <div className="mt-1.5 flex h-[34px] items-center justify-between gap-2 whitespace-nowrap ui-text-12.5 text-muted">
+          <div className="flex min-w-0 items-center gap-0.5">
             <PlusMenu
               variant="chat"
               onAttach={() => void attach()}
@@ -1625,50 +1673,31 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
               mcp={mcpActions}
             />
             {/* Straight to the agent: while a plan is revised, send() answers the plan. */}
-            {st?.context && <ContextMeter usage={st.context} onCompact={() => void call(M.chatSend, { text: "/compact", images: [] })} />}
+            {st?.context && <ContextMeter usage={st.context} showPercent={layout.showPercent} onCompact={() => void call(M.chatSend, { text: "/compact", images: [] })} />}
             {cost && (
               <>
-                {st?.context && <span className="mx-1 h-3.5 w-px bg-border-strong" />}
-                <span className="whitespace-nowrap">{cost}</span>
+                {st?.context && <span className="mx-1 h-3.5 w-px shrink-0 bg-border-strong" />}
+                <span className="min-w-0 truncate" title={fullCost ?? undefined}>
+                  {cost}
+                </span>
               </>
             )}
           </div>
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            {st?.status === "working" ? (
-              <>
-                <Loader2 size={12} className="spin text-accent" />
-                <span className="chat-shimmer">Working</span>
-                {st.turn_started_at && <span className="text-faint">{elapsed(now - st.turn_started_at)}</span>}
-                {queuedCount(queued) && <span className="text-faint">{queuedCount(queued)}</span>}
-                <span className="text-faint">· esc to stop</span>
-              </>
-            ) : st?.status === "blocked" ? (
-              <>
-                <ShieldAlert size={12} className="text-blocked" />
-                <span>{st.pending.length > 0 && st.pending.every(isQuestion) ? "Waiting for your answer" : "Waiting for your approval"}</span>
-              </>
-            ) : null}
-          </div>
-          <div className="flex items-center justify-end gap-1 whitespace-nowrap ui-text-13">
-            {working && (
-              <Button size="sm" variant="ghost" onClick={stop} title="Stop (⌘.)">
-                <Square size={10} fill="currentColor" /> Stop
-              </Button>
-            )}
+          <div className="flex shrink-0 items-center gap-0.5 ui-text-13">
             <Menu
               side="top"
               align="right"
               width={200}
               items={settings}
               trigger={(open) => (
-                <button className="flex h-7 items-center gap-1.5 rounded-md px-2 hover:bg-hover" onClick={open}>
+                <button title="Model and effort" className="flex h-7 items-center gap-1.5 rounded-md px-2 hover:bg-hover" onClick={open}>
                   {agent !== "claude" && <AgentIcon agent={agent} size={12} />}
                   <span className="text-fg">{modelLabel}</span>
-                  {effortLabel && <span className="text-muted">{effortLabel}</span>}
+                  {effortLabel && layout.effort && <span className="text-muted">{effortLabel}</span>}
                 </button>
               )}
             />
-            {agent === "claude" && <ModeMenu menu={modeMenu} className="h-7 px-2 text-fg" iconSize={12} />}
+            {agent === "claude" && <ModeMenu menu={modeMenu} className={cx("h-7 text-fg", layout.modeLabel ? "px-2" : "px-1.5")} iconSize={12} label={layout.modeLabel} />}
             <Menu
               side="top"
               align="right"
@@ -1682,7 +1711,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
             />
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

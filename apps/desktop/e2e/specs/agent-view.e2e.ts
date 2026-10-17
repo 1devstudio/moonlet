@@ -1,5 +1,6 @@
 // Collapsed tool calls and thinking rows in the agent view (X14), the
-// footer under the final message (X16) and the context ring (X34), with a
+// footer under the final message (X16), the context ring (X34) and the input's
+// height at any width (X51), with a
 // fake `claude` that replays one recorded-style turn.
 
 import { execFileSync } from "node:child_process";
@@ -137,5 +138,35 @@ describe("agent view", () => {
     await $(sel.button("Compact now")).click();
     await expect($(sel.text("124k / 200k"))).not.toBeExisting();
     await expect($(sel.text("/compact"))).toBeDisplayed();
+  });
+
+  it("keeps the input as tall as its text when the chat narrows and widens (X51)", async () => {
+    const input = '//section[@aria-label="Chat input"]//textarea';
+    const box = () =>
+      browser.execute((xp: string) => {
+        const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLTextAreaElement;
+        return { height: el.clientHeight, content: el.scrollHeight };
+      }, input);
+    const chatWidth = (px: string) =>
+      browser.execute((w: string) => {
+        const view = (document.evaluate('//section[@aria-label="Chat input"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement).parentElement!;
+        view.style.maxWidth = w;
+      }, px);
+    await fill(input, "Check that the login page keeps the session cookie after the redirect from the identity provider, then compare it with the signup page.");
+    await browser.pause(200);
+    const wide = await box();
+    try {
+      await chatWidth("360px");
+      await browser.pause(300);
+      const narrow = await box();
+      expect(narrow.content).toBeLessThanOrEqual(narrow.height);
+      expect(narrow.height).toBeGreaterThan(wide.height);
+      await chatWidth("");
+      await browser.pause(300);
+      expect((await box()).height).toBe(wide.height);
+    } finally {
+      await chatWidth("");
+      await fill(input, "");
+    }
   });
 });

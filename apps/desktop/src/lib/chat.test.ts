@@ -274,6 +274,12 @@ describe("cost line (X34)", () => {
   it("leaves out a zero cost", () => {
     expect(costLine({ cost_usd: 0, input_tokens: 100, output_tokens: 20 })).toBe("100 in · 20 out");
   });
+
+  it("keeps only the cost in its short form, or the tokens in without one (X51)", () => {
+    expect(costLine({ cost_usd: 3.49, input_tokens: 3_000_000, output_tokens: 19_900 }, "short")).toBe("$3.49");
+    expect(costLine({ cost_usd: 0, input_tokens: 41_200, output_tokens: 1_850 }, "short")).toBe("41.2k in");
+    expect(costLine({ cost_usd: 0, input_tokens: 0, output_tokens: 0 }, "short")).toBeNull();
+  });
 });
 
 describe("context window card (X34)", () => {

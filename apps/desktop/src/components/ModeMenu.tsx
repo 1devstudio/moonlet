@@ -37,8 +37,20 @@ export function useModeMenu(mode: string, onPick: (mode: string) => void) {
   return { mode, items, info, bypassOn, pick: onPick };
 }
 
-/** The mode chip and its dropdown. `className` sizes the chip for its surroundings. */
-export function ModeMenu({ menu, className, iconSize, align = "right" }: { menu: ReturnType<typeof useModeMenu>; className: string; iconSize: number; align?: "left" | "right" }) {
+/** The mode chip and its dropdown. `className` sizes the chip for its surroundings; `label: false` leaves the icon alone (X51). */
+export function ModeMenu({
+  menu,
+  className,
+  iconSize,
+  align = "right",
+  label = true,
+}: {
+  menu: ReturnType<typeof useModeMenu>;
+  className: string;
+  iconSize: number;
+  align?: "left" | "right";
+  label?: boolean;
+}) {
   const Icon = ICONS[menu.info.id as keyof typeof ICONS];
   return (
     <Menu
@@ -47,9 +59,9 @@ export function ModeMenu({ menu, className, iconSize, align = "right" }: { menu:
       width={300}
       items={menu.items}
       trigger={(open) => (
-        <button title="Permission mode" className={cx("flex items-center gap-1.5 rounded-md hover:bg-hover hover:text-fg", className, menu.mode === BYPASS_MODE.id && "text-blocked")} onClick={open}>
+        <button title="Permission mode" aria-label={`Permission mode: ${menu.info.label}`} className={cx("flex items-center gap-1.5 rounded-md hover:bg-hover hover:text-fg", className, menu.mode === BYPASS_MODE.id && "text-blocked")} onClick={open}>
           <Icon size={iconSize} />
-          <span>{menu.info.label}</span>
+          {label && <span>{menu.info.label}</span>}
           <ChevronDown size={iconSize} />
         </button>
       )}

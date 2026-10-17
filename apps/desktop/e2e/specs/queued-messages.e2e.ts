@@ -94,6 +94,13 @@ describe("queued messages", () => {
     await expect($(sel.text("· 1 queued"))).toBeDisplayed();
   });
 
+  it("puts Working, the queue count and Stop on a line above the input (X51)", async () => {
+    const status = '//section[@aria-label="Chat input"]/div[@role="status"]';
+    await expect($(`${status}//span[normalize-space()="Working"]`)).toBeDisplayed();
+    await expect($(`${status}//span[normalize-space()="· 1 queued"]`)).toBeDisplayed();
+    await expect($(`${status}${sel.button("Stop")}`)).toBeDisplayed();
+  });
+
   it("warns that Send now stops the command while it is pointed at", async () => {
     await hover($(`${QUEUED}${sel.button("Send now")}`));
     await expect($(`${QUEUED}/div[1]`)).toHaveText(/^Send now stops pnpm stack:check \(running \d+:\d\d\)$/);

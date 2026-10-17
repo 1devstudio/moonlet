@@ -8,9 +8,10 @@ const WIDTH = 320;
 
 /**
  * The context ring in the chat footer (X34): how full the agent's context
- * window is, and a card with the breakdown and Compact now.
+ * window is, and a card with the breakdown and Compact now. A compact chat
+ * shows the ring without its percentage (X51).
  */
-export function ContextMeter({ usage, onCompact }: { usage: ContextUsage; onCompact: () => void }) {
+export function ContextMeter({ usage, onCompact, showPercent = true }: { usage: ContextUsage; onCompact: () => void; showPercent?: boolean }) {
   const [rect, setRect] = useState<DOMRect | null>(null);
   const anchor = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -42,6 +43,7 @@ export function ContextMeter({ usage, onCompact }: { usage: ContextUsage; onComp
       <button
         ref={anchor}
         title="Context window"
+        aria-label={`Context window, ${view.percent}% used`}
         className={cx("flex h-[26px] items-center gap-1.5 rounded-md px-1.5 hover:bg-hover", open && "bg-hover")}
         onClick={() => setRect((r) => (r ? null : (anchor.current?.getBoundingClientRect() ?? null)))}
       >
@@ -51,7 +53,7 @@ export function ContextMeter({ usage, onCompact }: { usage: ContextUsage; onComp
         >
           <span className="h-2 w-2 rounded-full bg-bg" />
         </span>
-        <span className="font-mono ui-text-12.5 text-muted">{view.percent}%</span>
+        {showPercent && <span className="font-mono ui-text-12.5 text-muted">{view.percent}%</span>}
       </button>
       {rect &&
         createPortal(
