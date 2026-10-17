@@ -6,7 +6,8 @@ use moonlet_trackers::config::{Connection, TrackersConfig, connection_id};
 use moonlet_trackers::states::Column;
 use moonlet_trackers::task::TrackerTask;
 use moonlet_trackers::config::{BoardColumn, Finished, Origin};
-use moonlet_trackers::jira_board::{self, BoardIssue, BoardSetup, JiraBoard, SearchFields, Sprint};
+use moonlet_trackers::board::{BoardIssue, Sprint};
+use moonlet_trackers::jira_board::{self, BoardSetup, JiraBoard, SearchFields};
 use moonlet_trackers::{ApiError, TrackerKind, clickup, jira, linear};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -318,6 +319,9 @@ fn random32() -> Res<[u8; 32]> {
 pub struct SourceChoice {
     pub key: String,
     pub name: String,
+    /// A Linear team that uses cycles, whose board can follow the active one (X50).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cycles: bool,
 }
 
 #[derive(Serialize)]
@@ -338,7 +342,7 @@ pub struct ConnectRequest {
 }
 
 fn pairs(list: Vec<(String, String)>) -> Vec<SourceChoice> {
-    list.into_iter().map(|(key, name)| SourceChoice { key, name }).collect()
+    list.into_iter().map(|(key, name)| SourceChoice { key, name, cycles: false }).collect()
 }
 
 /// Signs in with a token, keeps it in the Keychain and adds (or replaces) the
@@ -426,7 +430,11 @@ pub fn tracker_disconnect(id: String) -> Res<()> {
 pub async fn tracker_sources(id: String) -> Res<Vec<SourceChoice>> {
     let s = Session::load(&id).await?;
     Ok(match s.conn.kind {
-        TrackerKind::Linear => pairs(s.linear_ok(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?))?),
+        TrackerKind::Linear => s
+            .linear_ok(linear::parse_teams(&s.linear(linear::TEAMS, json!({})).await?))?
+            .into_iter()
+            .map(|t| SourceChoice { key: t.key, name: t.name, cycles: t.cycles })
+            .collect(),
         TrackerKind::Jira => pairs(jira::parse_projects(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/project/search?maxResults=100")?).await?)?),
         TrackerKind::Clickup => {
             let team = safe_id(&s.conn.site)?;
@@ -477,73 +485,26 @@ pub async fn tracker_task(id: String, key: String) -> Res<Option<TrackerTask>> {
     }
 }
 
-/// The tasks of a connection's sources: the user's, or all open ones.
 impl Session {
-    /// The tasks of `keys` (Linear teams, Jira projects or ClickUp lists),
-    /// the user's own when `mine` (X44 Sync).
-    async fn tasks_of(&self, keys: &[String], mine: bool) -> Res<Vec<TrackerTask>> {
-        if keys.is_empty() {
-            return Ok(vec![]);
+    /// A ClickUp list's tasks, the user's own when `mine` (X44 Sync): open
+    /// ones, and closed ones of the last 14 days.
+    async fn clickup_tasks(&self, list: &str, mine: bool) -> Res<Vec<TrackerTask>> {
+        let me = if mine { clickup::parse_user_id(&self.clickup_send(self.clickup(reqwest::Method::GET, "/user")?).await?)? } else { String::new() };
+        let since = moonlet_core::paths::now_ms().saturating_sub(14 * 86_400_000);
+        let list = safe_id(list)?;
+        let mut passes = [Vec::new(), Vec::new()];
+        for (pass, closed_since) in passes.iter_mut().zip([None, Some(since)]) {
+            for page in 0..5 {
+                let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, closed_since);
+                let raw = self.clickup_send(self.clickup(reqwest::Method::GET, &path)?).await?;
+                pass.extend(clickup::parse_tasks(&raw, &self.conn.id)?);
+                if !clickup::more_pages(&raw) {
+                    break;
+                }
+            }
         }
-        match self.conn.kind {
-            TrackerKind::Linear => {
-                let query = linear::issues_query(mine);
-                let mut out = Vec::new();
-                let mut after: Option<String> = None;
-                // At most 500 issues, as for Jira.
-                for _ in 0..5 {
-                    let raw = self.linear(&query, json!({ "teams": keys, "after": after })).await?;
-                    out.extend(self.linear_ok(linear::parse_issues(&raw, &self.conn.id))?);
-                    after = linear::next_page(&raw);
-                    if after.is_none() {
-                        break;
-                    }
-                }
-                Ok(out)
-            }
-            TrackerKind::Jira => {
-                // A token Jira no longer accepts makes searches come back empty, not
-                // refused: ask who we are first, which does fail.
-                self.jira_send(self.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
-                let mut out = Vec::new();
-                let mut token: Option<String> = None;
-                // At most 5 pages (500 issues), however Jira pages them.
-                for _ in 0..5 {
-                    let body = jira::search_body(keys, mine, token.as_deref());
-                    let raw = self.jira_send(self.jira(reqwest::Method::POST, "/rest/api/3/search/jql")?.json(&body)).await?;
-                    out.extend(jira::parse_search(&raw, &self.conn.id, &self.conn.site)?);
-                    token = jira::next_page(&raw);
-                    if token.is_none() || out.len() >= 500 {
-                        break;
-                    }
-                }
-                Ok(out)
-            }
-            TrackerKind::Clickup => {
-                let me = if mine { clickup::parse_user_id(&self.clickup_send(self.clickup(reqwest::Method::GET, "/user")?).await?)? } else { String::new() };
-                // Open tasks, and closed ones of the last 14 days for the Done column.
-                let since = moonlet_core::paths::now_ms().saturating_sub(14 * 86_400_000);
-                let mut out = Vec::new();
-                for list in keys {
-                    let list = safe_id(list)?;
-                    let mut passes = [Vec::new(), Vec::new()];
-                    for (pass, closed_since) in passes.iter_mut().zip([None, Some(since)]) {
-                        for page in 0..5 {
-                            let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, closed_since);
-                            let raw = self.clickup_send(self.clickup(reqwest::Method::GET, &path)?).await?;
-                            pass.extend(clickup::parse_tasks(&raw, &self.conn.id)?);
-                            if !clickup::more_pages(&raw) {
-                                break;
-                            }
-                        }
-                    }
-                    let [open, recent] = passes;
-                    out.extend(clickup::merge_passes(open, recent, &self.conn.states));
-                }
-                Ok(out)
-            }
-            TrackerKind::Github => Ok(vec![]),
-        }
+        let [open, recent] = passes;
+        Ok(clickup::merge_passes(open, recent, &self.conn.states))
     }
 }
 
@@ -622,10 +583,32 @@ pub struct BoardTasks {
 #[tauri::command]
 pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
     let s = Session::load(&query.id).await?;
-    // A Linear team or ClickUp list: X44's fetch of that one source, and its
-    // states as columns.
-    if let Origin::LinearTeam { team: key } | Origin::ClickupList { list: key } = &query.origin {
-        let issues = s.tasks_of(std::slice::from_ref(key), query.mine).await?.into_iter().map(BoardIssue::from_task).collect();
+    // A Linear team: its open issues and those finished lately, or its active
+    // cycle's, and its states as columns.
+    if let Origin::LinearTeam { team } = &query.origin {
+        let team = safe_id(team)?.to_string();
+        let search = linear::board_issues_query(query.mine, &query.finished);
+        let mut issues = Vec::new();
+        let mut after: Option<String> = None;
+        // At most 500 issues, as for Jira.
+        for _ in 0..5 {
+            let raw = s.linear(&search, json!({ "team": team, "after": after })).await?;
+            issues.extend(s.linear_ok(linear::parse_board_issues(&raw, &s.conn.id))?);
+            after = linear::next_page(&raw);
+            if after.is_none() {
+                break;
+            }
+        }
+        let sprint = match query.finished {
+            Finished::Sprint => s.linear_ok(linear::parse_active_cycle(&s.linear(linear::ACTIVE_CYCLE, json!({ "team": team })).await?))?,
+            Finished::Days(_) => None,
+        };
+        let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_of(&team).await?);
+        return Ok(BoardTasks { issues, sprint, columns: Some(columns) });
+    }
+    // A ClickUp list: X44's fetch of that one source, and its states as columns.
+    if let Origin::ClickupList { list: key } = &query.origin {
+        let issues = s.clickup_tasks(key, query.mine).await?.into_iter().map(BoardIssue::from_task).collect();
         let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_of(key).await?);
         return Ok(BoardTasks { issues, sprint: None, columns: Some(columns) });
     }

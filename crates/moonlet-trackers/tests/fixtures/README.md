@@ -1,6 +1,6 @@
 # Tracker API fixtures
 
-Gathered on 2026-10-15 from the trackers' official API documentation; no live account was used. The X50 board files were added on 2026-10-17 from a real Jira Cloud site. Each file is one of:
+Gathered on 2026-10-15 from the trackers' official API documentation; no live account was used. The X50 Jira board files were added on 2026-10-17 from a real Jira Cloud site; the X50 Linear board files (`linear-board-issues.json`, `linear-active-cycle.json`) are SCHEMA, as Linear's other files. Each file is one of:
 
 - **VERBATIM**: a documented example response or request body, trimmed to the fields moonlet reads (field names and nesting unchanged).
 - **VERBATIM+**: a documented example with small, noted edits (a second item added, text replaced).
@@ -10,7 +10,7 @@ Gathered on 2026-10-15 from the trackers' official API documentation; no live ac
 
 | File | Kind | Source |
 |---|---|---|
-| `linear-viewer.json`, `linear-teams.json`, `linear-issues.json`, `linear-states.json`, `linear-issue-update.json`, `linear-comment.json` | SCHEMA | Linear's GraphQL schema, `linear/linear` `packages/sdk/src/schema.graphql`; https://linear.app/developers/graphql |
+| `linear-viewer.json`, `linear-teams.json`, `linear-issues.json`, `linear-states.json`, `linear-issue-update.json`, `linear-comment.json`, `linear-board-issues.json`, `linear-active-cycle.json` | SCHEMA | Linear's GraphQL schema, `linear/linear` `packages/sdk/src/schema.graphql`; https://linear.app/developers/graphql |
 | `linear-error-auth.json` | CAPTURED | HTTP 401 to a bad personal key (and a bad Bearer token) |
 | `linear-error-ratelimited.json` | VERBATIM+ | https://linear.app/developers/rate-limiting (message text is a placeholder) |
 | `jira-myself.json` | VERBATIM | `GET /rest/api/3/myself`, https://developer.atlassian.com/cloud/jira/platform/rest/v3/ |

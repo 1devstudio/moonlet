@@ -12,6 +12,7 @@ import {
   type Draft,
   draftFromBoard,
   finishedChoices,
+  jiraSprints,
   moveColumn,
   newDraft,
   originText,
@@ -38,7 +39,10 @@ const selectCls = cx(inputCls, "menu-select field-height");
 interface Choice {
   key: string;
   name: string;
+  /** Its type, as the row names it: Scrum, Kanban, Team-managed, Cycles. */
   kind?: string;
+  /** Whether it has sprints or cycles to follow. */
+  sprints?: boolean;
   origin: Origin;
 }
 
@@ -89,10 +93,10 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
     const kind = trackerOf(draft.connection);
     const ask =
       kind === "jira"
-        ? hostsApi.trackerBoards(draft.connection).then((bs) => bs.map((b): Choice => ({ key: b.project ?? String(b.id), name: b.name, kind: b.kind, origin: { kind: "jira_board", board: b.id } })))
+        ? hostsApi.trackerBoards(draft.connection).then((bs) => bs.map((b): Choice => ({ key: b.project ?? String(b.id), name: b.name, kind: KIND_LABEL[b.kind] ?? b.kind, sprints: jiraSprints(b.kind), origin: { kind: "jira_board", board: b.id } })))
         : hostsApi
             .trackerSources(draft.connection)
-            .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
+            .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, ...(s.cycles && { kind: "Cycles", sprints: true }), origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
     ask.then(
       (c) => !stale && setChoices(c),
       (e) => !stale && setChoicesError(message(e)),
@@ -102,7 +106,14 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
     };
   }, [draft.connection, repos.join(" ")]);
 
-  // A Jira board's filter and columns, and whether it has sprints; an answer for a board no longer picked is dropped.
+  // Board settings learn from the source's row whether it has sprints or cycles.
+  useEffect(() => {
+    if (draft.sprints !== undefined || !draft.origin) return;
+    const row = choices?.find((c) => JSON.stringify(c.origin) === JSON.stringify(draft.origin));
+    if (row) set({ sprints: !!row.sprints });
+  }, [choices]);
+
+  // A Jira board's filter and columns; an answer for a board no longer picked is dropped.
   useEffect(() => {
     setFilterJql(undefined);
     if (!draft.connection || draft.origin?.kind !== "jira_board") return;
@@ -111,7 +122,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
       (setup) => {
         if (stale) return;
         setFilterJql(setup.filterJql ?? null);
-        setDraft((d) => ({ ...d, boardKind: d.boardKind ?? (setup.sprints ? "scrum" : "kanban"), columns: d.columns.length ? d.columns : setup.columns }));
+        setDraft((d) => (d.columns.length ? d : { ...d, columns: setup.columns }));
       },
       (e) => !stale && errorToast(e),
     );
@@ -333,7 +344,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                               disabled={added}
                               onClick={() => {
                                 if (!draft.connection) return;
-                                setDraft(pickOrigin(draft, draft.connection, c.origin, c.name, c.kind));
+                                setDraft(pickOrigin(draft, draft.connection, c.origin, c.name, c.sprints));
                                 setReached(1);
                               }}
                               className={cx("flex items-center gap-3 px-3 py-2.5 text-left", on ? "bg-accent/[0.08]" : "hover:bg-panel-2", added && "opacity-60")}
@@ -341,7 +352,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                               <span className={cx("h-3 w-3 shrink-0 rounded-full border", on ? "border-accent bg-accent" : "border-border-strong")} />
                               <span className="w-[64px] shrink-0 truncate font-mono ui-text-12 text-muted">{c.key}</span>
                               <span className="min-w-0 flex-1 truncate ui-text-13 text-fg">{c.name}</span>
-                              {c.kind && <span className="ui-text-12 text-faint">{KIND_LABEL[c.kind] ?? c.kind}</span>}
+                              {c.kind && <span className="ui-text-12 text-faint">{c.kind}</span>}
                               <span className="w-[100px] text-right ui-text-12 text-faint">{added ? "Already added" : on && draft.columns.length ? `${draft.columns.length} columns` : ""}</span>
                             </button>
                           );
@@ -410,7 +421,7 @@ export function AddBoardDialog({ host, workspace, boardId }: { host: string; wor
                   <div>
                     <div className="mb-1.5 ui-text-12 text-muted">Finished issues</div>
                     <select aria-label="Finished issues" className={selectCls} value={String(draft.finished)} onChange={(e) => set({ finished: e.target.value === "sprint" ? "sprint" : 14 })}>
-                      {finishedChoices(tracker ?? "github", draft.boardKind, draft.finished).map((c) => (
+                      {finishedChoices(tracker ?? "github", draft.sprints, draft.finished).map((c) => (
                         <option key={String(c.value)} value={String(c.value)}>
                           {c.label}
                         </option>

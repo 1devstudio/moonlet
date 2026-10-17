@@ -5,6 +5,7 @@
 //! sessions and PRs are.
 
 pub mod adf;
+pub mod board;
 pub mod branch;
 pub mod clickup;
 pub mod config;
