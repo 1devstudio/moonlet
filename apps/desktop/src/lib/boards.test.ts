@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -397,11 +397,23 @@ describe("linkedProjects (X50 Add a board: By default)", () => {
 });
 
 describe("footerTracker (X50 sidebar footer)", () => {
-  it("names the tracker of the workspace's boards, or Tasks when they come from several", () => {
-    const b = (connection: string): Pick<BoardConfig, "connection"> => ({ connection });
-    expect(footerTracker([b("jira:acme.atlassian.net"), b("jira:ops.atlassian.net")])).toBe("Jira");
-    expect(footerTracker([b("linear:acme")])).toBe("Linear");
-    expect(footerTracker([b("github:github.com"), b("linear:acme")])).toBe("Tasks");
-    expect(footerTracker([])).toBe("GitHub");
+  it("names the tracker of the board shown, a repository's board beside it or not", () => {
+    expect(footerTracker({ connection: "jira:acme.atlassian.net" })).toBe("Jira");
+    expect(footerTracker({ connection: "linear:acme" })).toBe("Linear");
+    expect(footerTracker({ connection: "github:github.com" })).toBe("GitHub");
+    // No board shown yet: the repositories' GitHub.
+    expect(footerTracker(null)).toBe("GitHub");
+  });
+});
+
+describe("byDefaultHint (X50 Add a board: By default)", () => {
+  it("names the projects that link the tracker project, by name where known", () => {
+    const projects = [
+      { id: "web", name: "Website" },
+      { id: "api", name: "API" },
+    ];
+    expect(byDefaultHint(["web", "api"], projects)).toBe("The projects that link it: Website, API");
+    expect(byDefaultHint(["gone"], projects)).toBe("The projects that link it: gone");
+    expect(byDefaultHint([], projects)).toBe("The projects that link it: none yet");
   });
 });

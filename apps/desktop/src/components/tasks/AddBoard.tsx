@@ -30,7 +30,7 @@ import {
   summaryLine,
   toBoard,
 } from "../../lib/addBoard";
-import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, jiraBoardType, linkedProjects, type Origin, type StartRule } from "../../lib/boards";
+import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, byDefaultHint, jiraBoardType, linkedProjects, type Origin, type StartRule } from "../../lib/boards";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
 import { type Task, trackerName, trackerOf } from "../../lib/tasks";
@@ -67,6 +67,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const repos = [...new Set(Object.values(data?.repos ?? {}).filter((r): r is string => !!r))];
   const editing = config.boards?.find((b) => b.id === boardId);
   const [draft, setDraft] = useState<Draft>(() => (editing ? draftFromBoard(editing) : { ...newDraft(wsKey(host, workspace)), connection: connection ?? null }));
+  // The links of the workspace the board goes to, which step 4 can change.
+  const sourceProjects = useTasks((t) => t.data[draft.workspace]?.sourceProjects);
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [choicesError, setChoicesError] = useState<string | null>(null);
   const [build, setBuild] = useState<"board" | "jql">("board");
@@ -187,8 +189,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
 
   const projects = workspaceProjects(useStore.getState(), target.host, target.id);
   // Empty, By default uses the projects whose committed config links the tracker project (X44); the hint names them.
-  const linked = draft.origin && draft.connection ? linkedProjects({ connection: draft.connection, origin: draft.origin }, useTasks.getState().data[draft.workspace]?.sourceProjects ?? {}) : [];
-  const linkedHint = linked.length ? `The projects that link it: ${linked.map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ")}` : "The projects that link it: none yet";
+  const linkedHint = byDefaultHint(draft.origin && draft.connection ? linkedProjects({ connection: draft.connection, origin: draft.origin }, sourceProjects ?? {}) : [], projects);
   const wsOptions = Object.entries(workspaces).flatMap(([h, list]) => list.map((w) => ({ value: wsKey(h, w.id), label: w.name })));
   const wsName = wsOptions.find((w) => w.value === draft.workspace)?.label ?? "";
   // A board its workspace already has stops Create board and Save.
