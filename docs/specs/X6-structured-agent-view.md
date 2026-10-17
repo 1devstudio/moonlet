@@ -58,7 +58,7 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 - **Editor:**
   - Multi-line with mouse editing.
   - **Enter** sends; **⇧Enter** adds a new line; **↑** in an empty editor recalls the previous prompt.
-  - `@` completes project files (fuzzy, from `fs.files`: non-ignored files, relative to the session); `/` lists the agent's slash commands.
+  - `@` completes project files (fuzzy, from `fs.files`: non-ignored files, relative to the session); `/` lists the agent's slash commands, at the start of the message or after a space or line break anywhere in it.
   - Ghost text suggests from the user's previous prompts to that agent.
   - Unsent text stays with its chat: switching to another session and back shows it again, ready to finish. It is kept in memory until sent or the chat terminal is removed, not across an app restart.
 - **Header menu:**
@@ -120,4 +120,5 @@ Claude asks the user multiple-choice questions through the `AskUserQuestion` too
 - [x] Adapter unit tests replay recorded/synthetic protocol streams for both agents.
 - [x] **Questions, protocol** (2026-10-04, Haiku, $0.04): answering `AskUserQuestion` with `updatedInput.answers` gives the tool result `Your questions have been answered: "…"="Blue"` and Claude continues with the answer. The adapter round trip is unit-tested.
 - [x] Unsent text in the editor survives switching to another session and back (`chat.test.ts`, `agent-view.e2e.ts`).
+- [x] Typing `/` after a space or line break in the middle of a message lists the agent's slash commands, and choosing one replaces the typed `/token` in place (`chat.test.ts`, `plus-menu.e2e.ts`).
 - [ ] **Questions, UI:** the question card (options, multi-select, Other, Submit, Skip) has not been checked in the app.
