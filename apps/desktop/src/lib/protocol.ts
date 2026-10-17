@@ -603,6 +603,8 @@ export const M = {
   ghTasks: "gh.tasks",
   ghProjects: "gh.projects",
   ghProjectItems: "gh.project_items",
+  ghProjectMove: "gh.project_move",
+  ghScopes: "gh.scopes",
   ghTask: "gh.task",
   ghTaskUpdate: "gh.task_update",
   ghWhoami: "gh.whoami",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, canMoveProjectItems, projectMove, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -415,5 +415,22 @@ describe("byDefaultHint (X50 Add a board: By default)", () => {
     expect(byDefaultHint(["web", "api"], projects)).toBe("The projects that link it: Website, API");
     expect(byDefaultHint(["gone"], projects)).toBe("The projects that link it: gone");
     expect(byDefaultHint([], projects)).toBe("The projects that link it: none yet");
+  });
+});
+
+describe("projectMove (X50 moving a GitHub Project item)", () => {
+  const project = { id: "PVT_1", field: "PVTSSF_1", options: [{ id: "o1", name: "Todo" }, { id: "o2", name: "In Progress" }, { id: "o3", name: "Done" }] };
+
+  it("sets the item's Status field to the option of that name", () => {
+    expect(projectMove(project, "PVTI_10", "Done")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o3" });
+    // An option the Project no longer has, or a Project without a Status field: nothing to send.
+    expect(projectMove(project, "PVTI_10", "QA")).toBe(null);
+    expect(projectMove({ ...project, field: null }, "PVTI_10", "Done")).toBe(null);
+  });
+
+  it("is open only with gh's project scope", () => {
+    expect(canMoveProjectItems(["repo", "project"])).toBe(true);
+    expect(canMoveProjectItems(["repo", "read:project"])).toBe(false);
+    expect(canMoveProjectItems(undefined)).toBe(false);
   });
 });

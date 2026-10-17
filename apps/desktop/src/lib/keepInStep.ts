@@ -12,7 +12,9 @@ export type FixPlan =
   | { kind: "github"; repo: string; number: number; close: true }
   /** On a board (X50), `status` and `name` are the next column's first status and its name. */
   | { kind: "move"; column: Exclude<Column, "hidden">; status?: string; name?: string }
-  | { kind: "clean_up"; sessions: string[]; worktrees: string[] };
+  | { kind: "clean_up"; sessions: string[]; worktrees: string[] }
+  /** A GitHub Project's item (X50): its Status set to the next column's. */
+  | { kind: "project"; item: string; status: string; name: string };
 
 /** What the chip's button does. */
 export function driftFix(card: Card): FixPlan | null {
@@ -23,6 +25,7 @@ export function driftFix(card: Card): FixPlan | null {
   if (!d.fix) return null;
   if (d.to) {
     const gh = card.task.github;
+    if (gh?.project) return { kind: "project", item: gh.project.item, status: d.to.statuses[0], name: d.to.column };
     if (gh) return d.to.category === "done" ? { kind: "github", repo: gh.repo, number: gh.number, close: true } : null;
     return { kind: "move", column: d.to.category, status: d.to.statuses[0], name: d.to.column };
   }

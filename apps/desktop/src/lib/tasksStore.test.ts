@@ -1175,4 +1175,32 @@ describe("a GitHub Project's board (X50 Sync)", () => {
     await vi.waitFor(() => expect((saved.at(-1) as { boards?: { columns?: { name: string }[] }[] } | undefined)?.boards?.[0].columns?.map((c) => c.name)).toEqual(["Todo", "In Progress", "Done"]));
     useTasks.setState({ config: null });
   });
+
+  it("moves an item by setting its Status to the option of the column picked, and knows gh's scopes", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const options = [{ id: "o1", name: "Todo" }, { id: "o2", name: "In Progress" }, { id: "o3", name: "Done" }];
+    answers["gh.project_items"] = () => ({ id: "PVT_1", status_field: "F", options, items: [item(10, "Todo", ["sam-rivera"])] });
+    answers["gh.scopes"] = () => ["repo", "project"];
+    const moves: object[] = [];
+    answers["gh.project_move"] = (p) => (moves.push(p), true);
+    const project = { id: "web-project", name: "Website", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_project" as const, owner: "acme", number: 2 }, columns: [
+      { name: "Todo", statuses: ["Todo"], category: "todo" as const },
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress" as const },
+      { name: "Done", statuses: ["Done"], category: "done" as const, show: "fold" as const },
+    ] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [project] }, attention: {}, assignee: {} });
+    await refreshTasks("local", "personal", 1_000);
+    await vi.waitFor(() => expect(useTasks.getState().ghScopes.local).toEqual(["repo", "project"]));
+    const task = useTasks.getState().data["local/personal"].tasks[0];
+    // The State menu's In Progress, by its status; a fix's category goes to its column's first status.
+    await moveTask("local", "personal", task, "in_progress", 2_000, "In Progress");
+    await moveTask("local", "personal", task, "done", 3_000);
+    expect(moves).toEqual([
+      { project: "PVT_1", item: "PVTI_10", field: "F", option: "o2" },
+      { project: "PVT_1", item: "PVTI_10", field: "F", option: "o3" },
+    ]);
+    expect(activityOf(task)[0].text).toBe("moonlet moved it to Done");
+    useTasks.setState({ config: null });
+  });
 });

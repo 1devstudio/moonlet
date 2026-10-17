@@ -47,7 +47,7 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, canMoveProjectItems, cardFields, footerTracker, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
@@ -887,12 +887,18 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
   // The board's columns as saved, and the task's board after each sync.
   const boards = useTasks((t) => t.config?.boards);
   const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
-  const columns = useMemo(() => (task.github ? [] : taskColumns(host, workspaceId, task)), [boards, data, task, host, workspaceId]);
+  // A GitHub Project's item moves through its board's columns, like a tracker's (X50).
+  const columns = useMemo(() => (task.github && !task.github.project ? [] : taskColumns(host, workspaceId, task)), [boards, data, task, host, workspaceId]);
+  const scopes = useTasks((t) => t.ghScopes[host]);
+  // Setting a Project item's Status needs gh's project scope: without it the menu says what to run.
+  const locked = !!task.github?.project && scopes !== undefined && !canMoveProjectItems(scopes);
   if (columns.length) {
     const { choices, current } = stateChoices(columns, task);
-    return (
+    const select = (
       <select
         aria-label={`State of ${task.key}`}
+        disabled={locked}
+        title={locked ? "Moving needs gh's project scope: run gh auth refresh -s project" : undefined}
         className={cx(inputCls, "menu-select field-height")}
         value={current}
         onChange={(e) => {
@@ -907,6 +913,15 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
           </option>
         ))}
       </select>
+    );
+    if (!locked) return select;
+    return (
+      <span className="flex flex-col gap-1">
+        {select}
+        <span className="ui-text-11.5 text-faint">
+          Moving needs gh's project scope: run <code className="font-mono">gh auth refresh -s project</code>
+        </span>
+      </span>
     );
   }
   const options = stateOptions(task);

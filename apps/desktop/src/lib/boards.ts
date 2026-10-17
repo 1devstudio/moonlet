@@ -371,3 +371,19 @@ export const footerTracker = (shown: Pick<BoardConfig, "connection"> | null): st
 export function byDefaultHint(linked: string[], projects: { id: string; name: string }[]): string {
   return `The projects that link it: ${linked.length ? linked.map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") : "none yet"}`;
 }
+
+/** A GitHub Project as moves need it (X50): its id, its Status field and the field's options. */
+export interface ProjectMeta {
+  id: string;
+  field: string | null;
+  options: { id: string; name: string }[];
+}
+
+/** The `gh.project_move` that sets `item`'s Status to the option named `status`, or null when the Project has no such option. */
+export function projectMove(project: ProjectMeta, item: string, status: string): { project: string; item: string; field: string; option: string } | null {
+  const option = project.options.find((o) => o.name === status);
+  return project.field && option ? { project: project.id, item, field: project.field, option: option.id } : null;
+}
+
+/** Whether gh may set a Project item's Status: it needs the `project` scope (X50). */
+export const canMoveProjectItems = (scopes: string[] | undefined) => !!scopes?.includes("project");

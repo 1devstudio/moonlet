@@ -131,6 +131,47 @@ pub fn parse_project_items(raw: &[u8]) -> Result<(GhProjectBoard, String, Option
     ))
 }
 
+/// Sets an item's Status (X50 moves): needs gh's `project` scope.
+pub const MOVE_MUTATION: &str = "mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) { \
+     updateProjectV2ItemFieldValue(input: { projectId: $project, itemId: $item, fieldId: $field, value: { singleSelectOptionId: $option } }) \
+     { projectV2Item { id } } }";
+
+/// Whether a [`MOVE_MUTATION`] answer moved the item; a missing scope is named with its command.
+pub fn parse_move(raw: &[u8]) -> Result<()> {
+    let data = graphql_data(raw)?;
+    if data["updateProjectV2ItemFieldValue"]["projectV2Item"]["id"].is_null() {
+        bail!("GitHub did not move the item");
+    }
+    Ok(())
+}
+
+/// The token scopes of gh's active github.com account, from `gh auth status`.
+pub fn parse_scopes(status: &str) -> Vec<String> {
+    let mut active = false;
+    let mut scopes = Vec::new();
+    for line in status.lines().map(str::trim) {
+        if line.starts_with('✓') || line.starts_with('X') {
+            // A new account's block.
+            active = false;
+            scopes.clear();
+        }
+        if line == "- Active account: true" {
+            active = true;
+        }
+        if let Some(list) = line.strip_prefix("- Token scopes:") {
+            scopes = list
+                .split(',')
+                .map(|s| s.trim().trim_matches('\'').to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if active && !scopes.is_empty() {
+            return scopes;
+        }
+    }
+    if active { scopes } else { Vec::new() }
+}
+
 /// A Status field's options.
 fn options(v: &Value) -> Vec<GhOption> {
     v.as_array()
@@ -292,6 +333,35 @@ pub async fn gh_project_items(owner: &str, number: u64, mine: bool) -> Result<Gh
         }
     }
     board.ok_or_else(|| anyhow::anyhow!("GitHub sent no Project"))
+}
+
+/// Sets a Project item's Status to `option` (X50 moves).
+pub async fn gh_project_move(project: &str, item: &str, field: &str, option: &str) -> Result<()> {
+    let vars = [
+        ("project", Var::Str(project.into())),
+        ("item", Var::Str(item.into())),
+        ("field", Var::Str(field.into())),
+        ("option", Var::Str(option.into())),
+    ];
+    parse_move(&graphql(MOVE_MUTATION, &vars).await?)
+}
+
+/// gh's token scopes for github.com, from `gh auth status`.
+pub async fn gh_scopes() -> Result<Vec<String>> {
+    let out = run_raw(
+        "gh",
+        Path::new("/"),
+        &["auth", "status", "--hostname", "github.com"],
+        None,
+        Duration::from_secs(30),
+    )
+    .await?;
+    // Older gh prints it to stderr.
+    Ok(parse_scopes(&format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        out.stderr
+    )))
 }
 
 #[cfg(test)]
@@ -470,5 +540,32 @@ mod tests {
                 .unwrap()
             );
         assert_eq!(parse_projects(raw.as_bytes()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_move_sets_the_status_or_says_the_scope_it_needs() {
+        assert!(parse_move(&fixture("gh-project-move.json")).is_ok());
+        assert_eq!(
+            parse_move(&fixture("gh-error-project-scope.json"))
+                .unwrap_err()
+                .to_string(),
+            "GitHub Projects need gh's project scope. Run gh auth refresh -s project, then Check again."
+        );
+    }
+
+    #[test]
+    fn the_active_accounts_token_scopes() {
+        let status = String::from_utf8(fixture("gh-auth-status.txt")).unwrap();
+        assert_eq!(
+            parse_scopes(&status),
+            ["gist", "project", "read:org", "repo", "workflow"]
+        );
+        // With two accounts, the active one's.
+        let two = "github.com\n  ✓ Logged in to github.com account kim (keyring)\n  - Active account: false\n  - Token scopes: 'repo'\n  ✓ Logged in to github.com account sam-rivera (keyring)\n  - Active account: true\n  - Token scopes: 'repo', 'read:project'\n";
+        assert_eq!(parse_scopes(two), ["repo", "read:project"]);
+        assert_eq!(
+            parse_scopes("You are not logged into any GitHub hosts."),
+            Vec::<String>::new()
+        );
     }
 }
