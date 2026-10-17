@@ -53,8 +53,14 @@ describe("chat helpers", () => {
   it("finds @ and / tokens at the caret", () => {
     expect(activeToken("look at @src/ma", 15)).toEqual({ kind: "@", start: 8, query: "src/ma" });
     expect(activeToken("/rev", 4)).toEqual({ kind: "/", start: 0, query: "rev" });
-    expect(activeToken("run /rev", 8)).toBeNull();
     expect(activeToken("email a@b", 9)).toBeNull();
+  });
+
+  it("finds a / token in the middle of the message", () => {
+    expect(activeToken("run /rev", 8)).toEqual({ kind: "/", start: 4, query: "rev" });
+    expect(activeToken("fix it\n/", 8)).toEqual({ kind: "/", start: 7, query: "" });
+    expect(activeToken("then /rev and more", 9)).toEqual({ kind: "/", start: 5, query: "rev" });
+    expect(activeToken("see src/main", 12)).toBeNull();
   });
 
   it("ranks fuzzy file matches by name", () => {

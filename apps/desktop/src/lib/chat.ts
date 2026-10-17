@@ -177,16 +177,12 @@ export function diffStat(diff: string): { add: number; del: number } {
   return { add, del };
 }
 
-/** The `@token` or `/token` being typed at the caret, if any. */
+/** The `@token` or `/token` being typed at the caret, if any. Either may
+ *  start a word anywhere in the message, so `/` lists commands mid-prompt too. */
 export function activeToken(text: string, caret: number): { kind: "@" | "/"; start: number; query: string } | null {
-  const before = text.slice(0, caret);
-  const m = /(^|\s)([@/])([^\s@]*)$/.exec(before);
+  const m = /(^|\s)([@/])([^\s@]*)$/.exec(text.slice(0, caret));
   if (!m) return null;
-  const kind = m[2] as "@" | "/";
-  const start = caret - m[3].length - 1;
-  // Slash commands only at the very start of the message.
-  if (kind === "/" && before.slice(0, start).trim() !== "") return null;
-  return { kind, start, query: m[3] };
+  return { kind: m[2] as "@" | "/", start: caret - m[3].length - 1, query: m[3] };
 }
 
 /** Subsequence match score: lower is better, null when no match. */
