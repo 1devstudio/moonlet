@@ -51,6 +51,33 @@ pub fn default_column(kind: TrackerKind, state_type: &str, name: &str) -> Column
     }
 }
 
+/// A Linear team's or ClickUp list's states, `(name, type)` in the tracker's
+/// order, as a board's columns (X50): one per state, listed by name, with
+/// its default category; Done folded, a state not shown hidden.
+pub fn board_columns(
+    kind: TrackerKind,
+    states: &[(String, String)],
+) -> Vec<crate::config::BoardColumn> {
+    use crate::config::{BoardColumn, Category, Show};
+    states
+        .iter()
+        .map(|(name, state_type)| {
+            let category = Category::of(default_column(kind, state_type, name));
+            BoardColumn {
+                name: name.clone(),
+                statuses: vec![name.clone()],
+                category: category.unwrap_or(Category::Todo),
+                show: match category {
+                    None => Show::Hide,
+                    Some(Category::Done) => Show::Fold,
+                    Some(_) => Show::Show,
+                },
+                wip: None,
+            }
+        })
+        .collect()
+}
+
 /// A connection's state mapping: state name → the column the user put it in,
 /// where that differs from [`default_column`] (`trackers.toml` `states`).
 pub type Mapping = std::collections::BTreeMap<String, Column>;
@@ -89,6 +116,63 @@ fn looks_like_review(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::TrackerKind::*;
+    use crate::config::{Category, Show};
+
+    #[test]
+    fn a_linear_teams_states_as_board_columns() {
+        let states: Vec<(String, String)> = crate::linear::parse_states(
+            &std::fs::read(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/linear-states.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.name, s.kind))
+        .collect();
+        let columns = board_columns(Linear, &states);
+        assert_eq!(
+            columns
+                .iter()
+                .map(|c| (c.name.as_str(), c.statuses.clone(), c.category, c.show))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "Backlog",
+                    vec!["Backlog".to_string()],
+                    Category::Todo,
+                    Show::Hide
+                ),
+                ("Todo", vec!["Todo".to_string()], Category::Todo, Show::Show),
+                (
+                    "In Progress",
+                    vec!["In Progress".to_string()],
+                    Category::InProgress,
+                    Show::Show
+                ),
+                (
+                    "In Review",
+                    vec!["In Review".to_string()],
+                    Category::InReview,
+                    Show::Show
+                ),
+                ("Done", vec!["Done".to_string()], Category::Done, Show::Fold),
+                (
+                    "Canceled",
+                    vec!["Canceled".to_string()],
+                    Category::Todo,
+                    Show::Hide
+                ),
+                (
+                    "Duplicate",
+                    vec!["Duplicate".to_string()],
+                    Category::Todo,
+                    Show::Hide
+                ),
+            ]
+        );
+    }
 
     #[test]
     fn linear_state_types() {

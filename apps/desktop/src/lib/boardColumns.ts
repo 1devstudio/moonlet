@@ -27,6 +27,21 @@ function statusKey(task: Task): string {
 }
 
 /**
+ * Tracker tasks in their board column's category (X50), so out of sync,
+ * Keep in step and notices read the board's columns: a status in no column,
+ * or in a hidden one, is hidden. GitHub repository issues keep theirs.
+ */
+export function categorize(columns: BoardColumn[], tasks: Task[]): Task[] {
+  const index = new Map<string, BoardColumn>();
+  for (const c of columns) for (const s of c.statuses) index.set(s, c);
+  return tasks.map((task) => {
+    if (task.github) return task;
+    const c = index.get(statusKey(task));
+    return { ...task, column: c && c.show !== "hide" ? c.category : "hidden" };
+  });
+}
+
+/**
  * The board's shown and folded columns in its order, each with its cards.
  * A task whose status no drawn column holds is left out.
  */

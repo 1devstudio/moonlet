@@ -35,7 +35,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 - [x] Rows: workspace switcher, mode switch, a "Find a task" field, **Views**, **Trackers**, and a footer `<tracker> synced <age>` with a refresh button. "Find a task" filters the board by key or title. (`tasksView.test.ts` syncedLabel, `taskDetails.test.ts` findTasks, `tasks-mode.e2e.ts`)
 - [x] After a failed sync the footer reads `Sync failed · <error>` instead. (`tasks-mode.e2e.ts`)
 - [x] Views, each with a count: My issues, In review, Out of sync (count in the accent colour), Sessions without a task. (`tasksView.test.ts`)
-- [x] Trackers lists each source of the workspace as `<tracker> · <source>`, with a red dot when its connection needs attention. (`trackerSources.test.ts` sourceList, `task-trackers.e2e.ts`)
+- [x] Trackers lists each source of the workspace as `<tracker> · <source>`, with a red dot when its connection needs attention. (`trackerSources.test.ts` lists the workspace's boards by tracker and name, marking a board whose connection needs attention, `task-trackers.e2e.ts`)
 
 ### Board
 

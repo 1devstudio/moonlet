@@ -1,5 +1,6 @@
 // Settings › Task trackers (X44): status lines and the rules' wording.
 
+import type { BoardConfig } from "./boards";
 import type { RuleSetting, Rules } from "./keepInStep";
 import { type Task, type TrackerKind, trackerOf } from "./tasks";
 import type { Connection } from "./tasksStore";
@@ -38,10 +39,11 @@ export const GITHUB_RULES: { id: keyof Rules; when: string; then: string; hint: 
 const AUTH_LABEL: Record<string, string> = { api_key: "API key", token: "API token", oauth: "OAuth" };
 
 /** A Linear, Jira or ClickUp row's line: who it is signed in as, or what to do. */
-export function connectionLine(c: Connection, attention: string | undefined): StatusLine {
+export function connectionLine(c: Connection, boards: BoardConfig[] | undefined, attention: string | undefined): StatusLine {
   if (attention) return { tone: "error", text: attention };
-  const n = c.sources.length;
-  const sources = n ? `${n} source${n === 1 ? "" : "s"}` : "pick what to show";
+  // Counted by its boards (X50).
+  const n = (boards ?? []).filter((b) => b.connection === c.id).length;
+  const sources = n ? `${n} board${n === 1 ? "" : "s"}` : "pick what to show";
   return { tone: n ? "done" : "blocked", text: `Connected as ${c.account} · ${AUTH_LABEL[c.auth] ?? c.auth} · ${sources}` };
 }
 

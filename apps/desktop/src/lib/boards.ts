@@ -3,7 +3,7 @@
 // saved in `trackers.toml`; `tasksBoard` builds what is drawn.
 
 import type { Column, Task } from "./tasks";
-import type { TrackersConfig } from "./tasksStore";
+import type { Connection, Source, TrackersConfig } from "./tasksStore";
 import { trackerLink } from "./trackerSources";
 
 /** What a board is built from. */
@@ -68,44 +68,57 @@ const GITHUB = "github:github.com";
 /** A migrated board's id: its tracker project's link (`<connection>/<key>`) in workspace `wsKey`. */
 export const boardId = (connection: string, key: string, wsKey: string) => `${trackerLink(connection, key)}@${wsKey}`;
 
+/** How `migrated` records that repository `repo` of workspace `wsKey` got its board. */
+const repoSeen = (wsKey: string, repo: string) => `${wsKey} ${trackerLink(GITHUB, repo.toLowerCase())}`;
+
 /**
- * Turns workspace `wsKey`'s X44 sources and GitHub repositories (`repos`,
- * `owner/name`) into pinned boards, once per workspace: a board the user
- * removes later stays removed. The sources of other workspaces stay until
- * those are opened; a connection with no source left drops its state mapping,
- * which its boards carry now.
+ * Turns workspace `wsKey`'s X44 sources into pinned boards once, and each
+ * GitHub repository of its projects (`repos`, `owner/name`) into one the
+ * first time a sync sees it. `migrated` remembers both, so a board the user
+ * removes stays removed, while a repository whose origin could not be read
+ * this time gets its board on a later sync. The sources of other workspaces
+ * stay until those are opened; a connection with no source left drops its
+ * state mapping, which its boards carry now. Returns `config` itself when
+ * there is nothing to do.
  */
 export function migrateWorkspace(config: TrackersConfig, wsKey: string, repos: string[]): TrackersConfig {
-  if (config.migrated?.includes(wsKey)) return config;
-  const fromRepos: BoardConfig[] = [...new Set(repos)].map((repo) => ({
+  const done = new Set(config.migrated ?? []);
+  const newRepos = [...new Set(repos)].filter((repo) => !done.has(repoSeen(wsKey, repo)));
+  const sourcesDone = done.has(wsKey);
+  if (sourcesDone && !newRepos.length) return config;
+  const fromRepos: BoardConfig[] = newRepos.map((repo) => ({
     id: boardId(GITHUB, repo, wsKey),
     name: repo,
     connection: GITHUB,
     workspace: wsKey,
     origin: { kind: "github_repo", repo },
   }));
-  const fromSources: BoardConfig[] = (config.connections ?? []).flatMap((c) =>
-    c.sources
-      .filter((s) => s.workspace === wsKey)
-      .map((s) => ({
-        id: boardId(c.id, s.key, wsKey),
-        name: s.name,
-        connection: c.id,
-        workspace: wsKey,
-        origin: ORIGIN[c.kind](s.key),
-        ...(c.states && Object.keys(c.states).length ? { states: c.states } : {}),
-      })),
-  );
-  const connections = config.connections?.map((c) => {
-    // A source no workspace was chosen for showed nowhere: it goes too.
-    const sources = c.sources.filter((s) => s.workspace && s.workspace !== wsKey);
-    return { ...c, sources, states: sources.length ? c.states : undefined };
-  });
+  const fromSources: BoardConfig[] = sourcesDone
+    ? []
+    : (config.connections ?? []).flatMap((c) =>
+        c.sources
+          .filter((s) => s.workspace === wsKey)
+          .map((s) => ({
+            id: boardId(c.id, s.key, wsKey),
+            name: s.name,
+            connection: c.id,
+            workspace: wsKey,
+            origin: ORIGIN[c.kind](s.key),
+            ...(c.states && Object.keys(c.states).length ? { states: c.states } : {}),
+          })),
+      );
+  const connections = sourcesDone
+    ? config.connections
+    : config.connections?.map((c) => {
+        // A source no workspace was chosen for showed nowhere: it goes too.
+        const sources = c.sources.filter((s) => s.workspace && s.workspace !== wsKey);
+        return { ...c, sources, states: sources.length ? c.states : undefined };
+      });
   return {
     ...config,
     connections,
     boards: [...(config.boards ?? []), ...fromRepos, ...fromSources],
-    migrated: [...(config.migrated ?? []), wsKey],
+    migrated: [...(config.migrated ?? []), ...(sourcesDone ? [] : [wsKey]), ...newRepos.map((repo) => repoSeen(wsKey, repo))],
   };
 }
 
@@ -172,4 +185,76 @@ export function matchColumns(saved: BoardColumn[] | undefined, fresh: BoardColum
     return [{ ...tracker, category: s.category, ...(s.show && { show: s.show }) }];
   });
   return [...kept, ...fresh.filter((f) => !used.has(f))];
+}
+
+/**
+ * A migrated board's first columns (X50): the tracker's, each in the
+ * category the old state mapping gave its state (by name), a state mapped
+ * to Not shown hidden and one mapped to a column shown.
+ */
+export function firstColumns(fresh: BoardColumn[], states: Record<string, Column> | undefined): BoardColumn[] {
+  if (!states || !Object.keys(states).length) return fresh;
+  return fresh.map((c) => {
+    const mapped = states[c.name] ?? c.statuses.map((s) => states[s]).find(Boolean);
+    if (!mapped) return c;
+    const { show, ...rest } = c;
+    if (mapped === "hidden") return { ...rest, show: "hide" };
+    return { ...rest, category: mapped, ...(show === "fold" && { show }) };
+  });
+}
+
+/** A GitHub repository board's columns: GitHub's own two (X50). */
+export const GITHUB_REPO_COLUMNS: BoardColumn[] = [
+  { name: "Open", statuses: ["open"], category: "todo" },
+  { name: "Closed", statuses: ["completed", "not_planned"], category: "done", show: "fold" },
+];
+
+/** The boards a sync of workspace `wsKey` reads: its pinned ones and the one shown. */
+export function workspaceBoards(boards: BoardConfig[] | undefined, wsKey: string, shown: string | null): BoardConfig[] {
+  return (boards ?? []).filter((b) => b.workspace === wsKey && (b.pinned !== false || b.id === shown));
+}
+
+/** The team, project or list a board built from a source shows: `MOON`, `OPS`, a list id; null for other boards. */
+export function sourceKeyOf(b: BoardConfig): string | null {
+  if (b.origin.kind === "linear_team") return b.origin.team;
+  if (b.origin.kind === "clickup_list") return b.origin.list;
+  if (b.origin.kind === "jql") return /^project = ([A-Za-z0-9_]+)$/.exec(b.origin.query)?.[1] ?? null;
+  return null;
+}
+
+/** The Sources dialog's rows: the connection's boards built from a team, project or list, or one empty row. */
+export function boardRows(connection: Connection, boards: BoardConfig[] | undefined): Source[] {
+  const rows = (boards ?? []).flatMap((b) => {
+    const key = b.connection === connection.id ? sourceKeyOf(b) : null;
+    return key ? [{ key, name: b.name, workspace: b.workspace }] : [];
+  });
+  return rows.length ? rows : [{ key: "", name: "", workspace: "" }];
+}
+
+/**
+ * The boards after the Sources dialog saves `rows` for `connection`: a board
+ * whose row stays keeps its columns and settings, a new row becomes a board
+ * as a migrated source does, and a board whose row went is removed. Other
+ * boards stay as they are.
+ */
+export function rowsToBoards(connection: Connection, rows: Source[], boards: BoardConfig[] | undefined): BoardConfig[] {
+  const wanted = rows.filter((r) => r.key && r.workspace);
+  const has = (ws: string, key: string) => wanted.some((r) => r.workspace === ws && r.key === key);
+  const kept = (boards ?? []).filter((b) => {
+    const key = b.connection === connection.id ? sourceKeyOf(b) : null;
+    return !key || has(b.workspace, key);
+  });
+  const added = wanted
+    .filter((r) => !kept.some((b) => b.connection === connection.id && b.workspace === r.workspace && sourceKeyOf(b) === r.key))
+    .filter((r, i, all) => all.findIndex((x) => x.workspace === r.workspace && x.key === r.key) === i)
+    .map((r) => ({ id: boardId(connection.id, r.key, r.workspace), name: r.name, connection: connection.id, workspace: r.workspace, origin: ORIGIN[connection.kind](r.key) }));
+  return [...kept, ...added];
+}
+
+/**
+ * The States dialog's mapping saved on a board (X44, X50): kept for the
+ * board's first columns, and applied at once to the columns it has.
+ */
+export function withStates(board: BoardConfig, states: Record<string, Column>): BoardConfig {
+  return { ...board, states, ...(board.columns?.length && { columns: firstColumns(board.columns, states) }) };
 }

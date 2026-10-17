@@ -53,8 +53,7 @@ export function TrackersPage() {
   const wsRows = Object.entries(workspaces).flatMap(([host, list]) =>
     list.map((w) => {
       const key = wsKey(host, w.id);
-      const repos = (data[key]?.sources ?? []).filter((x) => !x.includes(":"));
-      return { key, name: w.name, loaded: !!data[key], sources: sourceList(key, repos, config.connections, attention) };
+      return { key, name: w.name, loaded: !!data[key], sources: sourceList(key, config.boards, attention) };
     }),
   );
   const setGithub = (patch: Partial<TrackersConfig["github"]>) => save((c) => ({ ...c, github: { ...c.github, ...patch } }));
