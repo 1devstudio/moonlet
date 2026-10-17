@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, boardHeader, boardStats, cardFace, cardFields, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
 import type { BoardSession } from "./tasksBoard";
-import type { BoardColumn, BoardConfig } from "./boards";
+import { type BoardColumn, type BoardConfig, cardFields } from "./boards";
 import type { Task } from "./tasks";
 
 const b = (id: string, workspace: string, o: Partial<BoardConfig> = {}): BoardConfig => ({ id, name: id, connection: "jira:acme.atlassian.net", workspace, origin: { kind: "jira_board", board: 1 }, ...o });
@@ -148,5 +148,6 @@ describe("cardFace (X50 Cards show)", () => {
     expect(cardFields({ connection: "linear:acme" })).toEqual(["points", "assignee"]);
     expect(cardFields({ connection: "github:github.com" })).toEqual(["assignee"]);
     expect(cardFields({ connection: "linear:acme", cards: ["due"] })).toEqual(["due"]);
+    expect(cardFields({ connection: "linear:acme", cards: [] })).toEqual([]);
   });
 });

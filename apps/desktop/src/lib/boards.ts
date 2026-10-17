@@ -2,7 +2,7 @@
 // own columns. `BoardConfig` mirrors `moonlet-trackers::config::Board`, as
 // saved in `trackers.toml`; `tasksBoard` builds what is drawn.
 
-import type { Column, Task, TrackerKind } from "./tasks";
+import { type Column, type Task, type TrackerKind, trackerOf } from "./tasks";
 import type { Connection, Source, TrackersConfig } from "./tasksStore";
 import { trackerLink } from "./trackerSources";
 
@@ -46,6 +46,9 @@ export type CardField = "issue_type" | "points" | "assignee" | "parent" | "due" 
 
 /** The card fields a tracker's boards show until the user picks (X50 Cards show). */
 export const DEFAULT_CARDS: Record<TrackerKind, CardField[]> = { jira: ["issue_type", "points", "assignee"], linear: ["points", "assignee"], github: ["assignee"], clickup: ["assignee"] };
+
+/** The fields a board's cards show: its own choice (none included), else its tracker's (X50 Cards show). */
+export const cardFields = (board: Pick<BoardConfig, "connection" | "cards">): CardField[] => board.cards ?? DEFAULT_CARDS[trackerOf(board.connection) ?? "github"];
 
 export interface BoardConfig {
   id: string;

@@ -109,7 +109,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - epic (Jira) or parent
   - due date
 
-  (Partly: the choice is saved; cards show issue type and story points whatever it is, and epic, parent and due date not yet. `addBoard.test.ts` offers only the card fields the tracker has)
+  Ticked at first: the tracker's own fields (Jira: issue type, story points, assignee; Linear: estimate, assignee; GitHub and ClickUp: assignee), which are not written to the file; unticking every box is kept as none. (Partly: a ClickUp task's due date is offered but its sync does not read it yet. `addBoard.test.ts` offers only the card fields the tracker has, makes the board, leaving out what is at its default, opens the board's own values, and saves it back as it was; `config.rs` a_board_whose_cards_show_nothing_keeps_that_choice)
 - [ ] A summary card shows the tracker's mark, the name and `<origin> · <n> columns shown, <n> folded, <n> hidden · <n> issues · <workspace>`, with **Pin in sidebar** (on). (`addBoard.test.ts` sums the board up as the summary card does)
 - [x] **Create board** saves the board, closes the wizard and opens the board. (`task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, and renames it in Board settings)
 

@@ -139,9 +139,10 @@ pub struct Board {
     /// Where new sessions from the board start (X50 "start in" rules).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<StartRule>,
-    /// The fields its cards show besides the X45 card.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cards: Vec<CardField>,
+    /// The fields its cards show besides the X45 card; none set means the
+    /// tracker's own, and an empty list means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cards: Option<Vec<CardField>>,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub pinned: bool,
 }
@@ -647,7 +648,7 @@ project = "ui-kit"
                         project: "ui-kit".into(),
                     },
                 ],
-                cards: vec![CardField::IssueType, CardField::Points, CardField::Assignee],
+                cards: Some(vec![CardField::IssueType, CardField::Points, CardField::Assignee]),
                 pinned: true,
             }]
         );
@@ -678,7 +679,7 @@ origin = { kind = "linear_team", team = "MOON" }
         assert_eq!(b.finished, Finished::Sprint);
         assert_eq!(b.assignee, Assignee::Me);
         assert!(b.pinned);
-        assert!(b.columns.is_empty() && b.rules.is_empty() && b.cards.is_empty());
+        assert!(b.columns.is_empty() && b.rules.is_empty() && b.cards.is_none());
         // Defaults are not written back.
         let written = to_toml(&parse(text).unwrap());
         for key in [
@@ -689,6 +690,14 @@ origin = { kind = "linear_team", team = "MOON" }
                 "{key} in {written}"
             );
         }
+    }
+
+    #[test]
+    fn a_board_whose_cards_show_nothing_keeps_that_choice() {
+        let text = "[[boards]]\nid = \"b\"\nname = \"n\"\nconnection = \"c\"\nworkspace = \"w\"\norigin = { kind = \"jql\", query = \"q\" }\ncards = []\n";
+        let c = parse(text).unwrap();
+        assert_eq!(c.boards[0].cards, Some(vec![]));
+        assert!(to_toml(&c).contains("cards = []"), "{}", to_toml(&c));
     }
 
     #[test]
