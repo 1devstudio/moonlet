@@ -34,8 +34,8 @@ pub struct TrackersConfig {
     /// What Tasks mode shows, one board at a time (X50).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub boards: Vec<Board>,
-    /// Workspaces (`host/workspaceId`) whose X44 sources and GitHub
-    /// repositories the app has turned into boards, once (X50).
+    /// Each GitHub repository the app gave a board, `<workspace>
+    /// <connection>/<owner/name>`, so a removed one is not added again (X50).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub migrated: Vec<String>,
 }
@@ -131,8 +131,9 @@ pub struct Board {
     /// own statuses (a board migrated from a source, X50).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<BoardColumn>,
-    /// The old connection's state mapping, kept for a migrated board until its
-    /// columns are read: state name → category.
+    /// The state mapping (state name → category) a migrated source brought
+    /// or the States dialog saved: it gives the board's first columns their
+    /// categories (X50).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub states: crate::states::Mapping,
     /// Where new sessions from the board start (X50 "start in" rules).
@@ -252,9 +253,9 @@ fixed_str!(default_rule, "default");
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoardColumn {
     pub name: String,
-    /// The tracker's statuses in it: status or state ids where the tracker
-    /// has them (Jira, Linear), else names (ClickUp; a GitHub repository's
-    /// `open`, `completed`, `not_planned`).
+    /// The tracker's statuses in it: Jira status ids, else state names
+    /// (Linear, ClickUp; a GitHub repository's `open`, `completed`,
+    /// `not_planned`).
     pub statuses: Vec<String>,
     /// What moonlet treats it as, for out of sync and Keep in step.
     pub category: Category,

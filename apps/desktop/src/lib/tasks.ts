@@ -41,6 +41,9 @@ export interface Task {
   tracker?: { id: string; state: string; source: string; statusId?: string };
 }
 
+/** A task's id across trackers: `<connection> <key>`, as the store and boards key it. */
+export const taskId = (t: Pick<Task, "connection" | "key">) => `${t.connection} ${t.key}`;
+
 /** A GitHub issue from `gh.tasks` as a task. */
 export function taskFromGh(gh: GhTask, connection: string): Task {
   return {

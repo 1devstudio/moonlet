@@ -130,12 +130,12 @@ pub fn parse_success(raw: &[u8], field: &str) -> Result<(), ApiError> {
     }
 }
 
-/// The state a move to `column` uses, by the user's state mapping (X44).
 /// A board column's state (X50), given by its id or name.
 pub fn state_named<'a>(states: &'a [State], status: &str) -> Option<&'a State> {
     states.iter().find(|s| s.id == status || s.name == status)
 }
 
+/// The state a move to `column` uses, by the user's state mapping (X44).
 pub fn state_for<'a>(
     states: &'a [State],
     column: crate::states::Column,

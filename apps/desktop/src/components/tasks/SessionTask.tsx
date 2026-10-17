@@ -9,7 +9,7 @@ import { selectSession, useStore } from "../../lib/store";
 import { acceptanceCriteria, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
-import { ensureTasks, linkTask, lookUpPasted, mappedTasks, openInTasksMode, setKeepInStep, useTasks } from "../../lib/tasksStore";
+import { ensureTasks, linkTask, lookUpPasted, openInTasksMode, placedTasks, setKeepInStep, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
@@ -142,7 +142,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   const [pasted, setPasted] = useState<Task | null>(null);
   const close = () => useStore.setState({ dialog: null });
   const config = useTasks((t) => t.config);
-  const tasks = useMemo(() => mappedTasks(data?.tasks ?? []), [data, config]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tasks = useMemo(() => placedTasks(data ?? { tasks: [] }), [data, config]); // eslint-disable-line react-hooks/exhaustive-deps
   const originRepo = ws ? (data?.repos[ws.project_id] ?? null) : null;
   const boardRef = useMemo(() => (ws?.workspace_id ? { host, id: ws.workspace_id } : null), [host, ws?.workspace_id]);
   const { board } = useWorkspaceBoard(boardRef);

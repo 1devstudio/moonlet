@@ -477,7 +477,6 @@ pub fn run() {
             trackers::tracker_disconnect,
             trackers::tracker_sources,
             trackers::tracker_task,
-            trackers::tracker_tasks,
             trackers::tracker_update,
             trackers::tracker_states,
             trackers::tracker_boards,

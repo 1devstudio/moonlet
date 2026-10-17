@@ -478,30 +478,22 @@ pub async fn tracker_task(id: String, key: String) -> Res<Option<TrackerTask>> {
 }
 
 /// The tasks of a connection's sources: the user's, or all open ones.
-#[tauri::command]
-pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
-    let s = Session::load(&id).await?;
-    let keys: Vec<String> = s.conn.sources.iter().map(|x| x.key.clone()).collect();
-    s.tasks_of(&keys, mine).await
-}
-
 impl Session {
     /// The tasks of `keys` (Linear teams, Jira projects or ClickUp lists),
     /// the user's own when `mine` (X44 Sync).
     async fn tasks_of(&self, keys: &[String], mine: bool) -> Res<Vec<TrackerTask>> {
-        let s = self;
         if keys.is_empty() {
             return Ok(vec![]);
         }
-        match s.conn.kind {
+        match self.conn.kind {
             TrackerKind::Linear => {
                 let query = linear::issues_query(mine);
                 let mut out = Vec::new();
                 let mut after: Option<String> = None;
                 // At most 500 issues, as for Jira.
                 for _ in 0..5 {
-                    let raw = s.linear(&query, json!({ "teams": keys, "after": after })).await?;
-                    out.extend(s.linear_ok(linear::parse_issues(&raw, &s.conn.id))?);
+                    let raw = self.linear(&query, json!({ "teams": keys, "after": after })).await?;
+                    out.extend(self.linear_ok(linear::parse_issues(&raw, &self.conn.id))?);
                     after = linear::next_page(&raw);
                     if after.is_none() {
                         break;
@@ -512,14 +504,14 @@ impl Session {
             TrackerKind::Jira => {
                 // A token Jira no longer accepts makes searches come back empty, not
                 // refused: ask who we are first, which does fail.
-                s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
+                self.jira_send(self.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
                 let mut out = Vec::new();
                 let mut token: Option<String> = None;
                 // At most 5 pages (500 issues), however Jira pages them.
                 for _ in 0..5 {
                     let body = jira::search_body(keys, mine, token.as_deref());
-                    let raw = s.jira_send(s.jira(reqwest::Method::POST, "/rest/api/3/search/jql")?.json(&body)).await?;
-                    out.extend(jira::parse_search(&raw, &s.conn.id, &s.conn.site)?);
+                    let raw = self.jira_send(self.jira(reqwest::Method::POST, "/rest/api/3/search/jql")?.json(&body)).await?;
+                    out.extend(jira::parse_search(&raw, &self.conn.id, &self.conn.site)?);
                     token = jira::next_page(&raw);
                     if token.is_none() || out.len() >= 500 {
                         break;
@@ -528,7 +520,7 @@ impl Session {
                 Ok(out)
             }
             TrackerKind::Clickup => {
-                let me = if mine { clickup::parse_user_id(&s.clickup_send(s.clickup(reqwest::Method::GET, "/user")?).await?)? } else { String::new() };
+                let me = if mine { clickup::parse_user_id(&self.clickup_send(self.clickup(reqwest::Method::GET, "/user")?).await?)? } else { String::new() };
                 // Open tasks, and closed ones of the last 14 days for the Done column.
                 let since = moonlet_core::paths::now_ms().saturating_sub(14 * 86_400_000);
                 let mut out = Vec::new();
@@ -538,15 +530,15 @@ impl Session {
                     for (pass, closed_since) in passes.iter_mut().zip([None, Some(since)]) {
                         for page in 0..5 {
                             let path = clickup::tasks_path(list, (!me.is_empty()).then_some(me.as_str()), page, closed_since);
-                            let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &path)?).await?;
-                            pass.extend(clickup::parse_tasks(&raw, &s.conn.id)?);
+                            let raw = self.clickup_send(self.clickup(reqwest::Method::GET, &path)?).await?;
+                            pass.extend(clickup::parse_tasks(&raw, &self.conn.id)?);
                             if !clickup::more_pages(&raw) {
                                 break;
                             }
                         }
                     }
                     let [open, recent] = passes;
-                    out.extend(clickup::merge_passes(open, recent, &s.conn.states));
+                    out.extend(clickup::merge_passes(open, recent, &self.conn.states));
                 }
                 Ok(out)
             }
@@ -693,16 +685,15 @@ pub async fn tracker_states(id: String, source: String) -> Res<Vec<StateChoice>>
 impl Session {
     /// `(name, type)` of a Linear team's, Jira project's or ClickUp list's states.
     async fn states_of(&self, source: &str) -> Res<Vec<(String, String)>> {
-        let s = self;
         let source = safe_id(source)?.to_string();
-        Ok(match s.conn.kind {
+        Ok(match self.conn.kind {
             TrackerKind::Linear => {
-                let states = s.linear_ok(linear::parse_states(&s.linear(linear::STATES, json!({ "team": source })).await?))?;
+                let states = self.linear_ok(linear::parse_states(&self.linear(linear::STATES, json!({ "team": source })).await?))?;
                 states.into_iter().map(|x| (x.name, x.kind)).collect()
             }
-            TrackerKind::Jira => jira::parse_project_statuses(&s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/project/{source}/statuses"))?).await?)?,
+            TrackerKind::Jira => jira::parse_project_statuses(&self.jira_send(self.jira(reqwest::Method::GET, &format!("/rest/api/3/project/{source}/statuses"))?).await?)?,
             TrackerKind::Clickup => {
-                let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/list/{source}"))?).await?;
+                let raw = self.clickup_send(self.clickup(reqwest::Method::GET, &format!("/list/{source}"))?).await?;
                 clickup::parse_statuses(&raw)?.into_iter().map(|x| (x.name, x.kind)).collect()
             }
             TrackerKind::Github => vec![],
