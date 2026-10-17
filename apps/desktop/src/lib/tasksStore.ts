@@ -1,7 +1,7 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { addRepoBoards, type BoardColumn, type BoardConfig, type Category, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { addRepoBoards, type BoardColumn, type BoardConfig, type Category, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
@@ -16,7 +16,7 @@ import type { Pasted } from "./taskLinking";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, taskId, trackerOf } from "./tasks";
 import { parseTrackerLink } from "./trackerSources";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
-import type { BoardFilters, TaskView } from "./tasksView";
+import type { BoardFilters } from "./tasksView";
 import { wsKey } from "./workspaces";
 
 /** GitHub Issues through `gh` on the project's host (X44). */
@@ -48,7 +48,6 @@ export interface BoardData {
 interface TasksState {
   /** Per workspace, `host/workspaceId`. */
   data: Record<string, TasksData>;
-  view: TaskView;
   /** The task the detail panel shows, `connection key`. */
   selected: string | null;
   /** Out-of-sync chips put off with "Not now", by `driftKey` (X45). */
@@ -133,7 +132,6 @@ export function trackerSettings(config: TrackersConfig, connection: string): Tra
 
 export const useTasks = create<TasksState>(() => ({
   data: {},
-  view: "mine",
   selected: null,
   notNow: {},
   config: null,
@@ -544,9 +542,19 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
  * undefined when the task is on no board with columns.
  */
 function boardStatus(host: string, workspaceId: string, task: Pick<Task, "connection" | "key">, category: Category): string | undefined {
+  return statusFor(taskColumns(host, workspaceId, task), category) ?? undefined;
+}
+
+/** The columns of the board `task` came from (X50), or none. */
+export function taskColumns(host: string, workspaceId: string, task: Pick<Task, "connection" | "key">): BoardColumn[] {
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
   const board = trackersConfig(useTasks.getState()).boards?.find((b) => data?.boards?.[b.id]?.keys.includes(taskId(task)));
-  return (board && statusFor(syncedColumns(board, null), category)) ?? undefined;
+  return board ? syncedColumns(board, null) : [];
+}
+
+/** Shows, folds or hides a column of board `boardId` (X50). */
+export function setColumnShow(boardId: string, name: string, show: "show" | "fold" | "hide") {
+  void saveTrackersConfig((c) => ({ ...c, boards: c.boards?.map((b) => (b.id === boardId ? withColumnShow(b, name, show) : b)) })).catch((e) => errorToast(e));
 }
 
 /** The project path of a workspace project in GitHub repository `repo`. */
@@ -851,7 +859,7 @@ export function openInTasksMode(task: Task) {
   const s = useStore.getState();
   const ws = shownWorkspace(s);
   if (!ws) return;
-  useTasks.setState({ selected: `${task.connection} ${task.key}`, view: "mine" });
+  useTasks.setState({ selected: `${task.connection} ${task.key}` });
   useStore.setState({ tasksMode: { ...s.tasksMode, [wsKey(ws.host, ws.id)]: true }, showHistory: false });
 }
 
@@ -884,9 +892,9 @@ export function recordActivity(task: Pick<Task, "connection" | "key">, text: str
 }
 
 /** The state menu (X45 detail, X46 task bar): move a tracker issue, or close or reopen a GitHub issue. */
-export async function moveTask(host: string, workspaceId: string, task: Task, column: Exclude<Column, "hidden"> | null, now = Date.now()) {
+export async function moveTask(host: string, workspaceId: string, task: Task, column: Exclude<Column, "hidden"> | null, now = Date.now(), toStatus?: string) {
   const id = `${task.connection} ${task.key}`;
-  retries.set(id, () => moveTask(host, workspaceId, task, column));
+  retries.set(id, () => moveTask(host, workspaceId, task, column, Date.now(), toStatus));
   try {
     if (task.github) {
       const path = repoPath(host, workspaceId, task.github.repo);
@@ -897,7 +905,7 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
       movedByMoonlet.set(id, column);
-      const status = boardStatus(host, workspaceId, task, column);
+      const status = toStatus ?? boardStatus(host, workspaceId, task, column);
       await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, ...(status && { status }) });
       recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
     } else return;
