@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrateWorkspace, startProjects, taskFromBoardIssue } from "./boards";
+import { type BoardColumn, matchColumns, migrateWorkspace, startProjects, taskFromBoardIssue } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -143,5 +143,36 @@ describe("taskFromBoardIssue (X50 a Jira board's issues)", () => {
       points: 5,
       parent: { key: "OPS-480", title: "Billing reliability" },
     });
+  });
+});
+
+describe("matchColumns (X50 a board's columns on each sync)", () => {
+  it("keeps the user's order, folding and categories, takes Jira's names and statuses, adds new columns and drops removed ones", () => {
+    const saved: BoardColumn[] = [
+      { name: "To Do", statuses: ["10000"], category: "todo" },
+      // Folded and moved before In Progress by the user.
+      { name: "Code Review", statuses: ["10018"], category: "in_review", show: "fold" },
+      { name: "In Progress", statuses: ["3"], category: "in_progress" },
+      { name: "Old", statuses: ["999"], category: "todo" },
+    ];
+    const fresh: BoardColumn[] = [
+      { name: "To Do", statuses: ["10000"], category: "todo" },
+      { name: "Doing", statuses: ["3", "10012"], category: "in_progress", wip: 4 },
+      { name: "Code Review", statuses: ["10018"], category: "in_review" },
+      { name: "QA", statuses: ["5"], category: "in_review" },
+      { name: "Done", statuses: ["10097"], category: "done", show: "fold" },
+    ];
+    expect(matchColumns(saved, fresh)).toEqual([
+      { name: "To Do", statuses: ["10000"], category: "todo" },
+      { name: "Code Review", statuses: ["10018"], category: "in_review", show: "fold" },
+      { name: "Doing", statuses: ["3", "10012"], category: "in_progress", wip: 4 },
+      { name: "QA", statuses: ["5"], category: "in_review" },
+      { name: "Done", statuses: ["10097"], category: "done", show: "fold" },
+    ]);
+  });
+
+  it("takes the tracker's columns as they are for a board that has none yet", () => {
+    const fresh: BoardColumn[] = [{ name: "Todo", statuses: ["s1"], category: "todo" }];
+    expect(matchColumns(undefined, fresh)).toEqual(fresh);
   });
 });
