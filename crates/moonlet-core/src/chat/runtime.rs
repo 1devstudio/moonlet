@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use moonlet_proto::methods::{self, ChatItemEvent, ChatStateEvent};
-use moonlet_proto::types::{AgentState, ChatImage, ChatState, PermissionAsk, StateSource, TerminalInfo, TerminalKind, ToolCall};
+use moonlet_proto::types::{AgentState, AsideAnswer, ChatImage, ChatState, PermissionAsk, StateSource, TerminalInfo, TerminalKind, ToolCall};
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -111,6 +111,9 @@ fn agent_state(status: &str) -> AgentState {
 
 /// Asks that wait through a daemon restart.
 const KEPT_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
+
+/// How long an aside may take before moonlet gives up on it (X49).
+const ASIDE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The tool call an ask is about: the same tool with the same input.
 fn asks_for(ask: &PermissionAsk, tool: &ToolCall) -> bool {
@@ -661,12 +664,57 @@ impl ChatManager {
         let _ = self.session_env.set(f);
     }
 
-    fn spawn(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
-        let adapter = adapter_for(&inner.cfg.agent).context("unknown agent")?;
-        let launch = match (&inner.info.session_id, self.session_env.get()) {
+    /// How the session's agents start: its Claude profile and environment.
+    fn launch(&self, inner: &Inner) -> SessionLaunch {
+        match (&inner.info.session_id, self.session_env.get()) {
             (Some(s), Some(f)) => f(s),
             _ => SessionLaunch::default(),
+        }
+    }
+
+    /// The environment an agent of `chat` runs in.
+    fn agent_env(&self, chat: TerminalId, inner: &Inner, launch: BTreeMap<String, String>) -> BTreeMap<String, String> {
+        let mut env = self.terms.base_env().clone();
+        env.insert("MOONLET_TERMINAL_ID".into(), chat.to_string());
+        env.insert("MOONLET_SOCK".into(), self.terms.socket().display().to_string());
+        if let Some(s) = &inner.info.session_id {
+            env.insert("MOONLET_SESSION".into(), s.clone());
+        }
+        env.extend(inner.env.clone());
+        env.extend(launch);
+        env
+    }
+
+    /// Answers a side question from the chat's conversation in a separate,
+    /// tool-less Claude, leaving the chat as it is (X49).
+    pub async fn aside(&self, id: TerminalId, question: &str) -> Result<AsideAnswer> {
+        let chat = self.get(id)?;
+        let (program, args, cwd, env) = {
+            let inner = chat.inner.lock().unwrap();
+            if inner.cfg.agent != "claude" {
+                bail!("Ask aside works with Claude only");
+            }
+            let session = inner.state.agent_session.clone().context("Claude has no conversation to ask about yet")?;
+            let running = inner.state.items.iter().rev().filter_map(|i| i.tool.as_ref()).find(|t| t.status == "running").map(|t| t.summary.clone());
+            // As at a start (X33): a conversation kept in another profile's folder cannot be resumed.
+            let launch = self.launch(&inner);
+            if launch.env.get(crate::profiles::CONFIG_DIR_VAR) != inner.cfg.config_dir.as_ref() {
+                let now = launch.profile.unwrap_or_else(|| "the default Claude profile".into());
+                bail!("This conversation is in another Claude profile: send Claude a message to start one in {now}.");
+            }
+            let args = super::claude::aside_args(&inner.cfg, &session, question, running.as_deref());
+            let env = self.agent_env(id, &inner, launch.env);
+            ("claude".to_string(), args, inner.cfg.cwd.clone(), env)
         };
+        let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
+        let run = tokio::process::Command::new(&exe).args(&args).current_dir(&cwd).env_clear().envs(&env).stdin(Stdio::null()).kill_on_drop(true).output();
+        let out = tokio::time::timeout(ASIDE_TIMEOUT, run).await.map_err(|_| anyhow::anyhow!("The aside took too long."))?.context("failed to start claude")?;
+        super::claude::aside_answer(&String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr))
+    }
+
+    fn spawn(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
+        let adapter = adapter_for(&inner.cfg.agent).context("unknown agent")?;
+        let launch = self.launch(inner);
         // A Claude conversation lives in its profile's folder (X33): after
         // the workspace switched profiles, start a new one. Other agents keep
         // their history elsewhere.
@@ -682,14 +730,7 @@ impl ChatManager {
         let mut cfg = inner.cfg.clone();
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
-        let mut env = self.terms.base_env().clone();
-        env.insert("MOONLET_TERMINAL_ID".into(), chat.id.to_string());
-        env.insert("MOONLET_SOCK".into(), self.terms.socket().display().to_string());
-        if let Some(s) = &inner.info.session_id {
-            env.insert("MOONLET_SESSION".into(), s.clone());
-        }
-        env.extend(inner.env.clone());
-        env.extend(launch.env);
+        let env = self.agent_env(chat.id, inner, launch.env);
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let mut child = tokio::process::Command::new(&exe)
             .args(&args)
@@ -852,6 +893,9 @@ pub(crate) mod tests {
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
 echo "$*" >> claude-args
 echo "${CLAUDE_CONFIG_DIR:-default}" >> claude-env
+case "$*" in
+  *--fork-session*) echo '{"type":"result","subtype":"success","is_error":false,"result":"Port 4000.","duration_ms":1200,"total_cost_usd":0.0015}'; exit 0 ;;
+esac
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"sess-1","model":"fake","slash_commands":["clear"]}' ;;
@@ -1015,6 +1059,52 @@ done
         assert_eq!(err.to_string(), "no queued message not-a-queued-message");
         let message = chats.state(id).unwrap().queued[0].id.clone();
         chats.unqueue(id, &message).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_aside_answers_from_a_fork_and_leaves_the_running_turn_alone() {
+        let (dir, _terms, chats) = setup().await;
+        let id = holding_a_queued_message(&chats, dir.path()).await;
+        let before = chats.state(id).unwrap();
+        let answer = chats.aside(id, "which port is the api on?").await.unwrap();
+        assert_eq!(answer, AsideAnswer { text: "Port 4000.".into(), cost_usd: 0.0015, duration_ms: 1200 });
+        let args = std::fs::read_to_string(dir.path().join("claude-args")).unwrap();
+        assert!(args.contains("-p --resume sess-1 --fork-session --no-session-persistence --tools  --output-format json"), "{args}");
+        assert!(args.contains("Your tool call `pnpm stack:check` is still running in the main session"), "{args}");
+        assert_eq!(chats.state(id).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn an_aside_needs_a_claude_conversation() {
+        let (dir, _terms, chats) = setup().await;
+        let codex = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "codex".into(), ..Default::default() }).unwrap().id;
+        assert_eq!(chats.aside(codex, "hi").await.unwrap_err().to_string(), "Ask aside works with Claude only");
+    }
+
+    #[tokio::test]
+    async fn an_aside_needs_a_conversation_to_ask_about() {
+        let dir = tempfile::tempdir().unwrap();
+        // No `claude` on PATH: the chat never gets a conversation.
+        let terms = TerminalManager::new(dir.path().join("sock"), BTreeMap::from([("PATH".to_string(), "/nonexistent".to_string())]));
+        let chats = ChatManager::new(terms, dir.path().join("chats"));
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        assert_eq!(chats.aside(id, "hi").await.unwrap_err().to_string(), "Claude has no conversation to ask about yet");
+    }
+
+    #[tokio::test]
+    async fn an_aside_after_a_profile_switch_asks_for_a_message_first() {
+        let (dir, _terms, chats) = setup().await;
+        let profile = Arc::new(Mutex::new("/profiles/personal".to_string()));
+        let current = profile.clone();
+        chats.set_session_env(Box::new(move |_| SessionLaunch {
+            env: BTreeMap::from([(crate::profiles::CONFIG_DIR_VAR.to_string(), current.lock().unwrap().clone())]),
+            profile: Some("Work".into()),
+        }));
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s1".into()), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        *profile.lock().unwrap() = "/profiles/work".into();
+        let err = chats.aside(id, "which port?").await.unwrap_err();
+        assert_eq!(err.to_string(), "This conversation is in another Claude profile: send Claude a message to start one in Work.");
     }
 
     #[tokio::test]

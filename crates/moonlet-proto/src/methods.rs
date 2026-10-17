@@ -107,6 +107,9 @@ pub const CHAT_STOP_AGENT: &str = "chat.stop_agent";
 pub const CHAT_SEND_NOW: &str = "chat.send_now";
 /// Takes a message out of the agent's queue: `{ id, message }` (X49).
 pub const CHAT_UNQUEUE: &str = "chat.unqueue";
+/// Answers a side question from the conversation without touching it:
+/// `{ id, text }` → `AsideAnswer` (X49).
+pub const CHAT_ASIDE: &str = "chat.aside";
 pub const CHAT_SETTINGS: &str = "chat.settings";
 pub const CHAT_ADD_DIR: &str = "chat.add_dir";
 pub const CHAT_MCP: &str = "chat.mcp";
@@ -910,6 +913,12 @@ pub struct ChatUnqueue {
     pub id: TerminalId,
     /// The queued message's id.
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatAside {
+    pub id: TerminalId,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
