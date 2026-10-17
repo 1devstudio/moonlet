@@ -10,7 +10,7 @@ import { count } from "./workspaces";
 
 export interface ColumnView {
   name: string;
-  category: Column;
+  category: Category;
   folded: boolean;
   cards: Card[];
   /** Jira's column limit: `<count> of <max>`, full at or above it. */
@@ -61,7 +61,7 @@ export function boardView(columns: BoardColumn[], input: BoardInput): ColumnView
   const shape = boardShape(columns);
   return columns.flatMap((c, i) => {
     if (c.show === "hide") return [];
-    const here = byColumn[i].map((card) => ({ ...card, drift: onBoard(columns, i, shape, card.drift) }));
+    const here = byColumn[i].map((card) => ({ ...card, columnName: c.name, drift: onBoard(columns, i, shape, card.drift) }));
     const wip = c.wip ? { count: here.length, max: c.wip, full: here.length >= c.wip } : undefined;
     return [{ name: c.name, category: c.category, folded: c.show === "fold", cards: here, ...(wip ? { wip } : {}) }];
   });
