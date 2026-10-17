@@ -300,6 +300,16 @@ impl Daemon {
                 self.chats.interrupt(r.id).map_err(internal)?;
                 ok(true)
             }
+            m::CHAT_SEND_NOW => {
+                let r: m::ChatSendNow = params(p)?;
+                self.chats.send_now(r.id, r.message.as_deref()).map_err(internal)?;
+                ok(true)
+            }
+            m::CHAT_UNQUEUE => {
+                let r: m::ChatUnqueue = params(p)?;
+                self.chats.unqueue(r.id, &r.message).map_err(internal)?;
+                ok(true)
+            }
             m::CHAT_STOP_AGENT => {
                 let r: m::ChatStopAgent = params(p)?;
                 self.chats.stop_agent(r.id, &r.agent).map_err(internal)?;

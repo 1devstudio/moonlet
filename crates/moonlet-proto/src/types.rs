@@ -718,15 +718,27 @@ pub struct ChatState {
     /// The agent's MCP servers; `None` until the agent has answered (X29).
     #[serde(default)]
     pub mcp_servers: Option<Vec<McpServer>>,
-    /// Messages sent while a turn was running, delivered in order.
+    /// Messages sent while a turn was running that the agent has not read
+    /// yet, oldest first (X49).
     #[serde(default)]
-    pub queued: Vec<String>,
+    pub queued: Vec<QueuedMessage>,
     /// How full the agent's context window is; `None` until it has said (X34).
     #[serde(default)]
     pub context: Option<ContextUsage>,
     /// Subagents the agent launched, oldest first (X42).
     #[serde(default)]
     pub subagents: Vec<Subagent>,
+}
+
+/// A message waiting in the agent's queue (X49).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct QueuedMessage {
+    /// The uuid the message was sent to the agent with.
+    pub id: String,
+    pub text: String,
+    /// Send now was asked for it, and the agent has not read it yet.
+    #[serde(default)]
+    pub sending: bool,
 }
 
 /// The agent's context window, from Claude's `get_context_usage` (X34).

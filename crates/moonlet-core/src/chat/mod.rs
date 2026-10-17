@@ -95,6 +95,16 @@ pub trait Adapter: Send {
     fn stop_agent(&mut self, _agent: &str, _st: &mut ChatState) -> Vec<Out> {
         vec![]
     }
+    /// Take a queued message out of the agent's queue (X49); agents that
+    /// queue nothing ignore it.
+    fn unqueue(&mut self, _message: &str, _st: &mut ChatState) -> Vec<Out> {
+        vec![]
+    }
+    /// Ask the agent to read a queued message now, or every queued one
+    /// without `message` (X49); agents that queue nothing ignore it.
+    fn send_now(&mut self, _message: Option<&str>, _st: &mut ChatState) -> Vec<Out> {
+        vec![]
+    }
     /// MCP servers (X29): `refresh` asks for their status, `reconnect`
     /// retries `server`, `auth` asks for its sign-in page and `cancel`
     /// gives up on that sign-in. Answers arrive later as state changes.
@@ -250,6 +260,22 @@ pub(crate) fn stop_subagents(st: &mut ChatState) -> bool {
         any = true;
     }
     any
+}
+
+/// A turn is running: the agent works or waits for an answer.
+pub(crate) fn busy(st: &ChatState) -> bool {
+    st.status == "working" || st.status == "blocked"
+}
+
+/// Moves the messages still queued when their agent is gone into the
+/// transcript, each with a note that it never reached the agent (X49).
+pub(crate) fn undeliver(st: &mut ChatState) -> Vec<Out> {
+    let mut out = Vec::new();
+    for q in std::mem::take(&mut st.queued) {
+        out.push(upsert(st, item(local_id("user"), "user", q.text)));
+        out.push(upsert(st, item(local_id("system"), "system", "Not delivered: Claude stopped before reading this message.")));
+    }
+    out
 }
 
 /// Mutates an existing item; `None` if it is unknown.
