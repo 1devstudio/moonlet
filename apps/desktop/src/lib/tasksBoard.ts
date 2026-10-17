@@ -76,7 +76,10 @@ export interface Card {
 export interface Drift {
   kind: "merged" | "started" | "pr_open" | "done_open";
   text: string;
+  /** The button's label; empty when there is no fix, only the chip (X50). */
   fix: string;
+  /** On a board (X50): the column the fix moves the task to. */
+  to?: { column: string; category: Column; statuses: string[] };
 }
 
 export type Board = Record<Exclude<Column, "hidden">, Card[]>;
