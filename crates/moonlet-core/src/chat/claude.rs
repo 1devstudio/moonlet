@@ -449,10 +449,11 @@ impl Adapter for Claude {
                 let Some(at) = st.queued.iter().position(|q| q.id == id) else { return out };
                 match v["state"].as_str().unwrap_or("") {
                     "started" => {
+                        // It keeps its uuid, so a client that asked to unqueue it can tell it was read.
                         let q = st.queued.remove(at);
-                        out.push(upsert(st, item(super::local_id("user"), "user", q.text)));
+                        out.push(upsert(st, item(q.id, "user", q.text)));
                         // A message read after its turn ended starts the next one.
-                        if st.status != "working" && st.status != "blocked" {
+                        if !super::busy(st) {
                             st.turn_started_at = Some(now_ms());
                             st.status = "working".into();
                         }
@@ -496,8 +497,13 @@ impl Adapter for Claude {
                     }
                     out.push(Out::State);
                 } else if rid.starts_with("send-now-") && resp["response"]["send_now"] != "stopped" {
-                    // The turn goes on, taking the message in (X49).
+                    // The turn goes on (X49): taking the message in, or with
+                    // nothing waiting to send, which then waits as before.
                     self.interrupted = false;
+                    if resp["response"]["send_now"] != "delivering" {
+                        st.queued.iter_mut().for_each(|q| q.sending = false);
+                        out.push(Out::State);
+                    }
                 } else if rid.starts_with("mcp-reconnect-") {
                     // Connected or not, the status shows how it went.
                     out.push(self.control("mcp-status", json!({"subtype": "mcp_status"})));
@@ -612,7 +618,7 @@ impl Adapter for Claude {
         let line = Out::Write(Self::user_line(&uuid, text, images));
         // During a turn Claude reads the message only when the running step
         // ends: it waits in the queue until Claude says it started.
-        if st.status == "working" || st.status == "blocked" {
+        if super::busy(st) {
             st.queued.push(QueuedMessage { id: uuid, text: user_text(text, images), sending: false });
             return vec![line, Out::State];
         }
@@ -713,7 +719,7 @@ impl Adapter for Claude {
             out.push(Out::Write(resp.to_string()));
         }
         st.pending.clear();
-        if st.status == "working" || st.status == "blocked" {
+        if super::busy(st) {
             self.interrupted = true;
         }
         out.push(Out::Write(req.to_string()));
@@ -1027,6 +1033,7 @@ mod tests {
         assert!(st.queued.is_empty());
         let shown = texts(&st);
         let at = shown.iter().position(|(k, t)| k == "user" && t == "also tell me 2+2").expect("the message in the transcript");
+        assert_eq!(st.items.iter().find(|i| i.text == "also tell me 2+2").unwrap().id, id, "the message keeps its uuid as its id");
         assert_eq!(shown[at - 1].1, "ping -c 15 -i 1 127.0.0.1 > /dev/null; echo pinged", "read after the tool call returned");
         assert_eq!(shown[at + 1..].iter().find(|(k, _)| k == "tool").unwrap().1, "echo second");
         assert_eq!(st.status, "done");
@@ -1103,6 +1110,45 @@ mod tests {
         assert!(st.queued.is_empty());
         let last = st.items.last().unwrap();
         assert_eq!((last.kind.as_str(), last.text.as_str()), ("error", "Claude did not take this message: what is 2+2?"));
+    }
+
+    /// Captured from Claude Code 2.1.301: "what is 3+3?" (`44444444-…`) was
+    /// queued during `ping`, then a plain interrupt stopped the turn.
+    const STOP: &str = include_str!("fixtures/claude-stop.jsonl");
+
+    #[test]
+    fn a_message_queued_before_a_stop_runs_next() {
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        a.send("Run ping, then reply done", &[], &mut st);
+        replay(&until(STOP, "task_started"), &mut a, &mut st);
+        let id = written_uuid(&a.send("what is 3+3?", &[], &mut st));
+        a.interrupt(&mut st);
+        replay(&STOP[until(STOP, "task_started").len()..].replace("44444444-4444-4444-8444-444444444444", &id), &mut a, &mut st);
+        assert!(st.queued.is_empty());
+        let shown: Vec<(String, String)> = texts(&st).into_iter().filter(|(k, _)| k != "thinking").collect();
+        assert_eq!(
+            shown[2..],
+            [("system".to_string(), "Interrupted".to_string()), ("user".to_string(), "what is 3+3?".to_string()), ("assistant".to_string(), "6".to_string())]
+        );
+        assert_eq!(st.status, "done");
+    }
+
+    #[test]
+    fn send_now_that_finds_nothing_waiting_lets_the_message_wait_again() {
+        let (mut a, mut st) = pinging();
+        let id = written_uuid(&a.send("what is 2+2?", &[], &mut st));
+        let rid = writes(&a.send_now(Some(&id), &mut st))[0]["request_id"].as_str().unwrap().to_string();
+        // Claude Code 2.1.301's reply to a send_now for a message it already took.
+        a.on_line(&format!(r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"{rid}","response":{{"still_queued":[],"send_now":"nothing_waiting"}}}}}}"#), &mut st);
+        assert_eq!(st.queued, vec![QueuedMessage { id: id.clone(), text: "what is 2+2?".into(), sending: false }]);
+
+        let rid = writes(&a.send_now(Some(&id), &mut st))[0]["request_id"].as_str().unwrap().to_string();
+        a.on_line(&json!({"type": "control_response", "response": {"subtype": "error", "request_id": rid, "error": "not supported"}}).to_string(), &mut st);
+        assert!(!st.queued[0].sending);
+        a.on_line(r#"{"type":"result","subtype":"success","is_error":false,"result":"pinged"}"#, &mut st);
+        assert!(st.items.iter().all(|i| i.text != "Interrupted"), "the turn was not stopped");
     }
 
     #[test]

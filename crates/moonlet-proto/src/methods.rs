@@ -895,13 +895,21 @@ pub struct ChatStopAgent {
     pub agent: String,
 }
 
-/// `chat.send_now` and `chat.unqueue` (X49).
+/// `chat.send_now` (X49).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatQueued {
+pub struct ChatSendNow {
     pub id: TerminalId,
-    /// The queued message's id; `chat.send_now` without it sends every one.
+    /// The queued message's id; without it every queued message is sent.
     #[serde(default)]
     pub message: Option<String>,
+}
+
+/// `chat.unqueue` (X49).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatUnqueue {
+    pub id: TerminalId,
+    /// The queued message's id.
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
