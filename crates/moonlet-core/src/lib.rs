@@ -7,6 +7,7 @@ pub mod claude_update;
 pub mod client;
 pub mod commands;
 pub mod fs;
+pub mod gh_projects;
 pub mod git;
 pub mod history;
 pub mod hooks;

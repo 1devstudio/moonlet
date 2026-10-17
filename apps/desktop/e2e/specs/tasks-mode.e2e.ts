@@ -72,6 +72,10 @@ const OTHER_ISSUE = JSON.stringify({
 const LINKED = "Checkout on Safari";
 // While this file exists, the fake gh fails to list issues.
 const ghFails = join(w.root, "gh-fails");
+// While this file exists, gh lacks the read:project scope (X50 GitHub Projects).
+const ghNoScope = join(w.root, "gh-no-scope");
+// gh's GraphQL answers for GitHub Projects, captured and sanitised (crates/moonlet-core/tests/fixtures).
+const ghFixture = (name: string) => join(process.cwd(), "../../crates/moonlet-core/tests/fixtures", name);
 const wt16 = join(w.root, "wt-16-old-banner");
 const wt18 = join(w.root, "wt-18-orphan-work");
 const tasksButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]');
@@ -84,7 +88,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\ncase "$*" in *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -173,6 +177,39 @@ describe("Tasks mode", () => {
     await expect($(pin)).toHaveAttribute("aria-checked", "true");
     await closeSettings();
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="acme/storefront"]]')).toBeDisplayed({ wait: 10_000 });
+  });
+
+  it("adds a board of a GitHub Project, after gh gets its read:project scope, with the Project's Status as columns (X50)", async () => {
+    await $('//button[@title="Add a board"]').click();
+    const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+    await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
+    writeFileSync(ghNoScope, "");
+    try {
+      await $(`${dialog}//button[.//span[normalize-space()="GitHub"]]`).click();
+      // Without the scope, step 1 says so, with the command; moonlet never runs gh auth itself.
+      await expect($(`${dialog}//code[normalize-space()="gh auth refresh -s read:project"]`)).toBeDisplayed({ wait: 15_000 });
+    } finally {
+      rmSync(ghNoScope, { force: true });
+    }
+    await $(`${dialog}//button[normalize-space()="Check again"]`).click();
+    const website = `${dialog}//button[@role="radio"][.//span[normalize-space()="Website"]]`;
+    await expect($(`${website}//span[normalize-space()="3 columns"]`)).toBeDisplayed({ wait: 15_000 });
+    await $(website).click();
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    await expect($(`${dialog}//p[contains(normalize-space(), "13 issues match")]`)).toBeDisplayed({ wait: 15_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    await $(`${dialog}//button[normalize-space()="Create board"]`).click();
+    // The user's own issue sits in its Status column.
+    await expect(card("acme/web#10", "Todo")).toBeDisplayed({ wait: 15_000 });
+    await expect($('//button[starts-with(@aria-label, "Switch board, current: Website")]')).toBeDisplayed();
+    // Removed again, the repository's board shows.
+    await $('//button[@title="Todo options"]').click();
+    await $('//button[normalize-space()="Board settings…"]').click();
+    await $('//div[@role="dialog"][@aria-label="Board settings"]//button[normalize-space()="Remove board"]').click();
+    await $(sel.confirmButton("Remove")).click();
+    await expect($('//button[starts-with(@aria-label, "Switch board, current: acme/storefront")]')).toBeDisplayed({ wait: 15_000 });
   });
 
   it("opens a session from its card in Sessions mode", async () => {

@@ -589,6 +589,20 @@ impl Daemon {
                 let r: m::GhTasks = params(p)?;
                 ok(git::gh_tasks(&path(&r.path), r.mine).await.map_err(internal)?)
             }
+            m::GH_PROJECTS => {
+                let r: m::GhProjects = params(p)?;
+                ok(moonlet_core::gh_projects::gh_projects(&r.owners)
+                    .await
+                    .map_err(internal)?)
+            }
+            m::GH_PROJECT_ITEMS => {
+                let r: m::GhProjectItems = params(p)?;
+                ok(
+                    moonlet_core::gh_projects::gh_project_items(&r.owner, r.number, r.mine)
+                        .await
+                        .map_err(internal)?,
+                )
+            }
             m::GH_ISSUES | m::GH_PRS => {
                 let r: m::GitPath = params(p)?;
                 let kind = if method == m::GH_PRS { "pr" } else { "issue" };

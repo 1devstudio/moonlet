@@ -255,6 +255,24 @@ export interface TaskRef {
 }
 
 /** A GitHub issue for Tasks mode (X44). */
+/** An open GitHub Project (X50 Add a board): its Status options are the board's columns. */
+export interface GhProject {
+  id: string;
+  owner: string;
+  number: number;
+  title: string;
+  status_field: string | null;
+  options: { id: string; name: string }[];
+}
+
+/** A GitHub Project as a board reads it (X50 Sync): its Status options and its items that are issues. */
+export interface GhProjectBoard {
+  id: string;
+  status_field: string | null;
+  options: { id: string; name: string }[];
+  items: { item: string; status: string | null; task: GhTask }[];
+}
+
 export interface GhTask {
   /** `owner/repo`. */
   repo: string;
@@ -583,6 +601,8 @@ export const M = {
   shellCommands: "shell.commands",
   ghPrs: "gh.prs",
   ghTasks: "gh.tasks",
+  ghProjects: "gh.projects",
+  ghProjectItems: "gh.project_items",
   ghTask: "gh.task",
   ghTaskUpdate: "gh.task_update",
   ghWhoami: "gh.whoami",

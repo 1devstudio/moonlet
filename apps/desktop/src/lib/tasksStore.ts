@@ -6,14 +6,14 @@ import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
+import { type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskId, trackerOf } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, trackerOf } from "./tasks";
 import { parseTrackerLink } from "./trackerSources";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
@@ -519,7 +519,20 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
       return none(message(e));
     }
   }
-  if (b.origin.kind === "github_project") return none(null);
+  if (b.origin.kind === "github_project") {
+    // A GitHub Project (X50): its issues with their Status, its columns from the Status options.
+    const { owner, number } = b.origin;
+    const ask = (mine: boolean) => rpc<GhProjectBoard>(host, M.ghProjectItems, { owner, number, mine });
+    try {
+      const [own, all] = await Promise.all([ask(true), everyoneToo ? ask(false) : null]);
+      const ownItems = new Set(own.items.map((i) => i.item));
+      const list = [...(all?.items ?? []).filter((i) => !ownItems.has(i.item)).map((i) => ({ i, mine: false })), ...own.items.map((i) => ({ i, mine: true }))];
+      const columns = await hostsApi.githubProjectColumns(own.options.map((o) => o.name));
+      return { tasks: list.map(({ i, mine }) => ({ ...taskFromProjectItem(i, GITHUB), mine })), columns, sprint: null, error: null };
+    } catch (e) {
+      return none(message(e));
+    }
+  }
   // A rejected token is not tried again until the user reconnects (X44).
   if (useTasks.getState().attention[b.connection] !== undefined) return none("");
   const query = (mine: boolean) => hostsApi.trackerBoardTasks({ id: b.connection, origin: b.origin, narrow: b.narrow, mine, finished: b.finished ?? 14 });
