@@ -789,6 +789,8 @@ describe("each board's Assignee decides whose issues it fetches (X45, X50)", () 
   const MOON = "linear:acme/MOON@local/personal";
   const DES = "linear:acme/DES@local/personal";
   const WEB = "github:github.com/acme/web@local/personal";
+  const anyone = { to: "anyone", over: "me" } as const;
+  const me = { to: "me", over: "me" } as const;
 
   it("takes only the account's issues on a board at Assignee: me, and everyone's open issues on one at anyone", async () => {
     answers["git.origin_url"] = () => null;
@@ -799,12 +801,12 @@ describe("each board's Assignee decides whose issues it fetches (X45, X50)", () 
     useTasks.setState({ config: migrateSources({ ...DEFAULT_CONFIG, connections: [linear] }), assignee: {} });
     await refreshTasks("local", "personal", 1_000);
     expect(shown()).toEqual({ "MOON-2": true, "MOON-9": true });
-    useTasks.setState({ assignee: { [MOON]: "anyone", [DES]: "anyone" } });
+    useTasks.setState({ assignee: { [MOON]: anyone, [DES]: anyone } });
     await refreshTasks("local", "personal", 2_000);
     // Everyone's, marking the account's own; an own issue everyone's left out (it stops at 500) still shows.
     expect(shown()).toEqual({ "MOON-1": false, "MOON-2": true, "DES-1": false, "DES-3": false, "MOON-9": true });
     // Each board by its own: Design back to the user's issues.
-    useTasks.setState({ assignee: { [MOON]: "anyone", [DES]: "me" } });
+    useTasks.setState({ assignee: { [MOON]: anyone, [DES]: me } });
     await refreshTasks("local", "personal", 3_000);
     expect(shown()).toEqual({ "MOON-1": false, "MOON-2": true, "MOON-9": true });
     useTasks.setState({ config: null });
@@ -818,7 +820,7 @@ describe("each board's Assignee decides whose issues it fetches (X45, X50)", () 
     useTasks.setState({ assignee: {} });
     await refreshTasks("local", "personal", 1_000);
     expect(shown()).toEqual({ "acme/web#12": true });
-    useTasks.setState({ assignee: { [WEB]: "anyone" } });
+    useTasks.setState({ assignee: { [WEB]: anyone } });
     await refreshTasks("local", "personal", 2_000);
     expect(shown()).toEqual({ "acme/web#12": true, "acme/web#13": false });
   });
@@ -829,7 +831,7 @@ describe("each board's Assignee decides whose issues it fetches (X45, X50)", () 
     answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
     answers["project.worktrees"] = () => [];
     answers["gh.tasks"] = (p) => ((p as { mine?: boolean }).mine ? [issue] : [issue, theirsOpen, theirsDone]);
-    useTasks.setState({ assignee: { [WEB]: "anyone" } });
+    useTasks.setState({ assignee: { [WEB]: anyone } });
     await refreshTasks("local", "personal", 1_000);
     expect(shown()).toEqual({ "acme/web#12": true, "acme/web#13": false });
   });
@@ -841,19 +843,32 @@ describe("each board's Assignee decides whose issues it fetches (X45, X50)", () 
     answers["gh.tasks"] = (p) => ((p as { mine?: boolean }).mine ? [issue] : [issue, theirs]);
     useTasks.setState({ assignee: {} });
     await refreshTasks("local", "personal", 1_000);
-    setAssignee(WEB, "anyone");
+    setAssignee({ id: WEB, workspace: "local/personal" }, "anyone");
     await vi.waitFor(() => expect(shown()).toEqual({ "acme/web#12": true, "acme/web#13": false }));
     // Kept in the app across restarts.
     vi.resetModules();
     const restarted = await import("./tasksStore");
-    expect(restarted.useTasks.getState().assignee).toEqual({ [WEB]: "anyone" });
+    expect(restarted.useTasks.getState().assignee).toEqual({ [WEB]: anyone });
   });
 
-  it("starts each board at its own setting for a new install", async () => {
+  it("starts each board at its own setting for a new install, and keeps X45's switch left off as anyone", async () => {
+    const theirs: GhTask = { ...issue, number: 13, title: "Tidy the footer", url: "https://github.com/acme/web/issues/13", assignees: ["kim"] };
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = (p) => ((p as { mine?: boolean }).mine ? [issue] : [issue, theirs]);
+    const restart = async (stored: Record<string, string>) => {
+      localStorage.clear();
+      for (const [k, v] of Object.entries(stored)) localStorage.setItem(`moonlet.${k}`, v);
+      vi.resetModules();
+      const fresh = await import("./tasksStore");
+      await fresh.refreshTasks("local", "personal", 1_000);
+      return Object.fromEntries(fresh.useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.mine]));
+    };
+    // A new install: the repository's board at its own setting, me.
+    expect(await restart({})).toEqual({ "acme/web#12": true });
+    // Upgraded with Assignee: me turned off: every board at me shows anyone's.
+    expect(await restart({ "tasks.filters": JSON.stringify({ mine: false, hideEmptyDone: false }) })).toEqual({ "acme/web#12": true, "acme/web#13": false });
     localStorage.clear();
-    vi.resetModules();
-    const fresh = await import("./tasksStore");
-    expect([fresh.useTasks.getState().assignee, fresh.useTasks.getState().filters]).toEqual([{}, { hideEmptyDone: false }]);
   });
 });
 

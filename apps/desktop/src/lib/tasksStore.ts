@@ -1,8 +1,7 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { addRepoBoards, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
-import { assigneeOf } from "./boardScreen";
+import { addRepoBoards, type Assignee, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
@@ -66,7 +65,7 @@ interface TasksState {
   /** Hide empty Done in the header, kept across restarts (X45). */
   filters: Omit<BoardFilters, "mine">;
   /** Assignee picked in the header, by board id, kept in the app across restarts, not written to the board (X50). */
-  assignee: Record<string, "me" | "anyone">;
+  assignee: Record<string, AssigneePick>;
   /** Connections whose token stopped working, with what to do (X44). */
   attention: Record<string, string>;
   /** What moonlet did about each task, by `connection key` (X45 Activity). */
@@ -201,27 +200,31 @@ export function setFilters(filters: Omit<BoardFilters, "mine">) {
   writeStored("tasks.filters", JSON.stringify(filters));
 }
 
-function storedAssignee(): Record<string, "me" | "anyone"> {
+// A function, not a const: the store reads the picks while this module loads.
+function isAssignee(v: unknown): v is Assignee {
+  return v === "me" || v === "anyone";
+}
+
+/** The header's Assignee picks; X45's one switch, left off, becomes anyone for every board at me (X50). */
+function storedAssignee(): Record<string, AssigneePick> {
   try {
-    return JSON.parse(readStored("tasks.assignee") ?? "{}");
+    const raw = readStored("tasks.assignee");
+    if (raw === null) return JSON.parse(readStored("tasks.filters") ?? "{}").mine === false ? { [EVERY_BOARD]: { to: "anyone", over: "me" } } : {};
+    const picks = JSON.parse(raw) as Record<string, Partial<AssigneePick>>;
+    return Object.fromEntries(Object.entries(picks).filter((e): e is [string, AssigneePick] => isAssignee(e[1]?.to) && isAssignee(e[1]?.over)));
   } catch {
     return {};
   }
 }
 
-/** The header's Assignee for board `boardId` (X50), kept in the app; switching to anyone fetches everyone's issues now. */
-export function setAssignee(boardId: string, to: "me" | "anyone") {
-  const assignee = { ...useTasks.getState().assignee, [boardId]: to };
+/** The header's Assignee for `board` (X50), kept in the app, not written to the board; its workspace syncs again for whose issues it now fetches. */
+export function setAssignee(board: Pick<BoardConfig, "id" | "assignee" | "workspace">, to: Assignee) {
+  const ids = (trackersConfig(useTasks.getState()).boards ?? []).map((b) => b.id);
+  const assignee = pickAssignee(useTasks.getState().assignee, board, to, [...ids, board.id]);
   useTasks.setState({ assignee });
   writeStored("tasks.assignee", JSON.stringify(assignee));
-  const board = trackersConfig(useTasks.getState()).boards?.find((b) => b.id === boardId);
-  // A board not saved (trackers.toml unreadable) is in every workspace that shows it.
-  const keys = board ? [board.workspace] : Object.keys(useTasks.getState().data);
-  if (to === "anyone")
-    for (const key of keys) {
-      const { host, id } = parseWsKey(key);
-      void refreshTasks(host, id);
-    }
+  const { host, id } = parseWsKey(board.workspace);
+  void refreshTasks(host, id);
 }
 
 function storedExpanded(): Record<string, boolean> {
