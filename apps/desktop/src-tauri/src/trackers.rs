@@ -6,7 +6,7 @@ use moonlet_trackers::config::{Connection, TrackersConfig, connection_id};
 use moonlet_trackers::states::Column;
 use moonlet_trackers::task::TrackerTask;
 use moonlet_trackers::config::{BoardColumn, Finished, Origin};
-use moonlet_trackers::jira_board::{self, BoardIssue, BoardSetup, JiraBoard, Sprint};
+use moonlet_trackers::jira_board::{self, BoardIssue, BoardSetup, JiraBoard, SearchFields, Sprint};
 use moonlet_trackers::{ApiError, TrackerKind, clickup, jira, linear};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -544,7 +544,8 @@ pub async fn tracker_tasks(id: String, mine: bool) -> Res<Vec<TrackerTask>> {
     }
 }
 
-/// The Jira boards a connection can show (X50 Add a board, step 1), at most 5 pages.
+/// The Jira boards a connection can show (X50 Add a board, step 1), at most
+/// 20 pages of 50.
 #[tauri::command]
 pub async fn tracker_boards(id: String) -> Res<Vec<JiraBoard>> {
     let s = Session::load(&id).await?;
@@ -552,7 +553,7 @@ pub async fn tracker_boards(id: String) -> Res<Vec<JiraBoard>> {
         return Ok(vec![]);
     }
     let mut out = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..20 {
         let path = format!("/rest/agile/1.0/board?maxResults=50&startAt={}", out.len());
         let (page, last) = jira_board::parse_boards(&s.jira_send(s.jira(reqwest::Method::GET, &path)?).await?)?;
         let empty = page.is_empty();
@@ -565,8 +566,13 @@ pub async fn tracker_boards(id: String) -> Res<Vec<JiraBoard>> {
 }
 
 impl Session {
+    fn only_jira(&self) -> Res<()> {
+        if self.conn.kind == TrackerKind::Jira { Ok(()) } else { Err(fail(format!("{} is not a Jira connection", self.conn.id))) }
+    }
+
     /// A Jira board's configuration with each column's suggested category.
     async fn jira_setup(&self, board: u64) -> Res<BoardSetup> {
+        self.only_jira()?;
         let config = self.jira_send(self.jira(reqwest::Method::GET, &format!("/rest/agile/1.0/board/{board}/configuration"))?).await?;
         let statuses = self.jira_send(self.jira(reqwest::Method::GET, "/rest/api/3/status")?).await?;
         Ok(jira_board::parse_board_config(&config, &jira_board::parse_statuses(&statuses)?)?)
@@ -594,7 +600,8 @@ pub struct BoardQuery {
 pub struct BoardTasks {
     pub issues: Vec<BoardIssue>,
     pub sprint: Option<Sprint>,
-    /// A Jira board's columns as Jira has them now, to match the saved ones.
+    /// A Jira board's columns as Jira has them now, or a JQL board's from its
+    /// issues' statuses, to match the saved ones.
     pub columns: Option<Vec<BoardColumn>>,
 }
 
@@ -603,30 +610,32 @@ pub struct BoardTasks {
 #[tauri::command]
 pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
     let s = Session::load(&query.id).await?;
+    if !matches!(query.origin, Origin::JiraBoard { .. } | Origin::Jql { .. }) {
+        return Ok(BoardTasks { issues: vec![], sprint: None, columns: None });
+    }
+    s.only_jira()?;
+    // A token Jira no longer accepts makes searches come back empty, not
+    // refused: ask who we are first, which does fail.
+    s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
     let (filter, sub_query, points, board, columns) = match &query.origin {
         Origin::JiraBoard { board } => {
             let setup = s.jira_setup(*board).await?;
             let filter_id = safe_id(&setup.filter_id)?.to_string();
             let filter = jira_board::parse_filter(&s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/filter/{filter_id}"))?).await?)?;
-            (filter, setup.sub_query, setup.estimation, Some(*board), Some(setup.columns))
+            (filter, setup.sub_query, setup.points_field, Some(*board), Some(setup.columns))
         }
-        Origin::Jql { query: jql } => {
-            // A token Jira no longer accepts makes searches come back empty, not
-            // refused: ask who we are first, which does fail.
-            s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
-            (jql.clone(), None, None, None, None)
-        }
-        _ => return Ok(BoardTasks { issues: vec![], sprint: None, columns: None }),
+        Origin::Jql { query: jql } => (jql.clone(), None, None, None, None),
+        _ => unreachable!("checked above"),
     };
-    let sprint_field = jira_board::sprint_field(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/field")?).await?)?;
+    let fields = SearchFields { sprint: jira_board::sprint_field(&s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/field")?).await?)?, points };
     let jql = jira_board::board_jql(&filter, sub_query.as_deref(), &query.narrow, query.mine, query.finished);
     let mut issues = Vec::new();
     let mut sprint = None;
     let mut token: Option<String> = None;
     for _ in 0..5 {
-        let body = jira_board::board_search_body(&jql, sprint_field.as_deref(), points.as_deref(), token.as_deref());
+        let body = jira_board::board_search_body(&jql, &fields, token.as_deref());
         let raw = s.jira_send(s.jira(reqwest::Method::POST, "/rest/api/3/search/jql")?.json(&body)).await?;
-        let (page, found) = jira_board::parse_board_search(&raw, &s.conn.id, &s.conn.site, sprint_field.as_deref(), points.as_deref(), board)?;
+        let (page, found) = jira_board::parse_board_search(&raw, &s.conn.id, &s.conn.site, &fields, board)?;
         issues.extend(page);
         sprint = sprint.or(found);
         token = jira::next_page(&raw);
@@ -634,6 +643,8 @@ pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
             break;
         }
     }
+    // A JQL board's columns are the statuses its issues are in.
+    let columns = columns.or_else(|| matches!(query.origin, Origin::Jql { .. }).then(|| jira_board::columns_from_issues(&issues)));
     Ok(BoardTasks { issues, sprint, columns })
 }
 

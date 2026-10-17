@@ -48,7 +48,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 - [ ] Connections are cards with the tracker's mark, its name and its site (`acme.atlassian.net`, the Linear organisation, `via gh login`, the ClickUp workspace). GitHub is always offered.
 - [ ] **Jira:** "Build the board from" offers **An existing Jira board** or **A JQL query**.
-  - Existing board: Jira's boards are listed with key, name and type (Scrum, Kanban or Team-managed). One that is already a board in this workspace is marked "Already added" and cannot be picked. The picked one shows its column count.
+  - Existing board: Jira's boards are listed with key, name and type (Scrum, Kanban or Team-managed) (`jira_board.rs` the_boards_a_connection_can_show). One that is already a board in this workspace is marked "Already added" and cannot be picked. The picked one shows its column count.
   - JQL query: a query field.
 - [ ] **Linear:** the account's teams, listed with key and name. One already added is marked the same way.
 - [ ] **GitHub:** "Build the board from" offers **A GitHub Project** or **A repository's issues**.
@@ -191,11 +191,14 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 - [ ] A sync reads each pinned board of the workspace, plus the shown board. Boards of one connection share its requests where the tracker allows it. X44's interval, focus refresh and failure rules apply per board.
 - [ ] **Jira:**
-  - A `jira_board` reads its configuration: columns, statuses, WIP, filter id, a Kanban board's sub-filter, and the estimation field. (`jira_board.rs` a_scrum_boards_columns…, a_kanban_boards_backlog_is_hidden…)
-  - Its search is `(<filter>) AND (<sub-filter>) AND (<narrowing>) [AND assignee = currentUser()] AND <finished>`, in the filter's own `ORDER BY` (taken off the filter first, since a filter ends with one), else `Rank ASC`. Finished is `sprint in openSprints()` when it follows the sprint, else `(statusCategory != Done OR updated >= -<n>d)`. (`jira_board.rs` a_boards_query_is_its_filter…)
-  - Story points come from the board's estimation field, never from guessing among the site's fields: a site can have a "Story point estimate" field that its boards don't use. (`jira_board.rs` the_sprint_field_is_found…)
-  - The active sprint's name and dates come from the issues' sprint field (the field Jira Software made, found by its type): the board's sprint whose state is `active`. (`jira_board.rs` a_boards_issues_with_their_status_id…)
-  - Each issue keeps its status id, which the board's columns list, plus its components, parent and due date. (`boards.test.ts` taskFromBoardIssue)
+  - A `jira_board` reads its configuration: columns, statuses, WIP, filter id, a Kanban board's sub-filter, and the estimation field. A column's category is the one most of its statuses have, a tie going to the later one. (`jira_board.rs` a_scrum_boards_columns_with_their_suggested_categories, a_kanban_boards_backlog_is_hidden_and_its_sub_filter_kept, a_columns_category_is_the_one_most_of_its_statuses_have)
+  - A JQL board's columns are the statuses its issues are in. (`jira_board.rs` a_jql_boards_columns_are_its_issues_statuses_in_category_order)
+  - Each sync matches the board's saved columns to these. (`boards.test.ts` keeps the user's order, folding and categories, takes Jira's names and statuses, adds new columns and drops removed ones, takes the tracker's columns as they are for a board that has none yet)
+  - Its search is `(<filter>) AND (<sub-filter>) AND (<narrowing>) [AND assignee = currentUser()] AND <finished>`, in the filter's own `ORDER BY` (taken off the filter first, since a filter ends with one), else `Rank ASC`. Finished is `sprint in openSprints()` when it follows the sprint, else `(statusCategory != Done OR updated >= -<n>d)`. An `ORDER BY` in the sub-filter or the narrowing is dropped, and an empty filter adds no condition. (`jira_board.rs` a_boards_query_is_its_filter_and_moonlets_narrowing_in_the_filters_order, the_query_survives_filters_that_end_or_hide_an_order_by)
+  - Story points come from the board's estimation field, never from guessing among the site's fields: a site can have a "Story point estimate" field that its boards don't use. (`jira_board.rs` the_sprint_field_is_found_by_its_type_and_points_come_from_the_boards_estimation)
+  - The active sprint's name and dates come from the issues' sprint field (the field Jira Software made, found by its type): the board's sprint whose state is `active`. (`jira_board.rs` a_boards_issues_with_their_status_id_points_parent_and_the_active_sprint)
+  - Each issue keeps its status id, which the board's columns list, plus its components, parent and due date. (`jira_board.rs` a_boards_issues_with_their_status_id_points_parent_and_the_active_sprint, a_jql_boards_columns_are_its_issues_statuses_in_category_order; `boards.test.ts` keeps the status id with the tracker's state, and the card's fields)
+  - Before searching, each sync asks Jira who the user is, so a token Jira no longer accepts asks to reconnect instead of showing an empty board (X44).
 - [ ] **Linear:** issues of the team, filtered by label and assignee. With Follow the active cycle, only the active cycle's issues, plus its number and dates.
 - [ ] **GitHub Project:** the project's items that are issues, with their Status and number fields. Draft items and PRs are left out.
 - [ ] **ClickUp:** X44's two passes over the list.
@@ -217,12 +220,12 @@ States:
 Desktop-only Tauri commands (ADR 0010):
 
 - `tracker_boards {id}` → what a board can be built from:
-  - Jira: boards `{id, name, kind, project}`.
+  - Jira: boards `{id, name, kind, project}`, at most 1000.
   - Linear: teams `{key, name, cycles}`.
   - ClickUp: lists.
-- `tracker_board_setup {id, board}` → a Jira board's `{filter_id, sub_query, estimation, sprints, columns}`, each column with its suggested category and Show / Fold / Hide.
+- `tracker_board_setup {id, board}` → a Jira board's `{filterId, subQuery, pointsField, sprints, columns}`, each column with its suggested category and Show / Fold / Hide.
 - `tracker_board_preview {id, board}` → `{count, mine, sample: [task; 3]}`. The "already have a branch" count is the app's, from the workspace's branches and worktrees.
-- `tracker_board_tasks {query: {id, origin, narrow, mine, finished}}` → `{issues, sprint, columns}`: each issue a task with its `statusId`, `components`, `points`, `parent` and `due`; the active sprint `{id, name, startMs, endMs}`; a Jira board's columns as Jira has them now. It replaces `tracker_tasks`.
+- `tracker_board_tasks {query: {id, origin, narrow, mine, finished}}` → `{issues, sprint, columns}`: each issue a task with its `statusId`, `components`, `points`, `parent` and `due`; the active sprint `{id, name, startMs, endMs}`; a Jira board's columns as Jira has them now, or a JQL board's from its issues. It replaces `tracker_tasks` (in a later change).
 - `tracker_update` takes a `status` instead of a `column` when the board knows it.
 
 Daemon RPCs, since `gh` runs on the project's host:
@@ -273,7 +276,7 @@ Daemon RPCs, since `gh` runs on the project's host:
 
 - **Rust (`crates/moonlet-trackers`):**
   - the `[[boards]]` round trip (`config.rs`)
-  - Jira board list, board configuration, active sprint, filter JQL and per-site field lookup (`jira.rs`); fixtures from real responses, captured with the user's token, with names, emails, keys and URLs replaced
+  - Jira board list, board configuration, active sprint, filter JQL and per-site field lookup (`jira_board.rs`); fixtures from real responses, captured with the user's token, with names, emails, keys and URLs replaced
   - Linear teams with their active cycle (`linear.rs`)
   - category suggestions (`states.rs`)
 - **Daemon:** `gh.projects` and `gh.project_items` against real `gh api graphql` output, and the missing-scope error.
