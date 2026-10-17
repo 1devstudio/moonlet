@@ -17,15 +17,16 @@ The chat input and the footer under it were laid out for one width. In a narrow 
 
 ## Behaviour and acceptance criteria
 
-The width is the chat column's, measured as it resizes.
+The width is the chat column's, measured as it resizes, and counted in px of 1× text: at a larger text size (see the terminal font size) the chat reaches the narrower tiers sooner.
 
 - [x] Tiers: **wide** from 640 px, **medium** from 500 px, **narrow** from 380 px, **compact** below. (`chatInput.test.ts` picks the tier from the chat column's width)
+- [x] The width divides by the text scale: a 760 px chat at 1.5× text is medium, a 560 px one compact. (`chatInput.test.ts` counts the width in text-sized px, so larger text reaches the narrower tiers sooner)
 - [x] Wide shows everything: the full spend, the effort, `· esc to stop`, `⌥↵ ask aside` and the idle placeholder that names @ and /. (`chatInput.test.ts` shows everything when wide)
 - [x] Medium keeps the spend's first part only: `$3.49`, or `41.2k in` when there is no cost. The full line is the spend's tooltip. (`chatInput.test.ts` keeps only the dollars of the spend at medium; `chat.test.ts` keeps only the cost in its short form, or the tokens in without one)
 - [x] Narrow drops the spend, the effort, `· esc to stop` and `⌥↵ ask aside`, and the idle placeholder becomes `Ask for a change…`. While a turn runs, the placeholder stays `Queue a message for Claude` (X49). (`chatInput.test.ts` drops the spend, effort and hints when narrow; `queued.test.ts` shortens the idle placeholder in a narrow chat)
 - [x] Compact also drops the context ring's percentage and the permission mode's name (the icon and chevron stay), and the column's padding shrinks from 24 px (16 px when narrow) to 12 px. (`chatInput.test.ts` keeps the ring and the mode's icon alone when compact)
-- [x] The input is two lines tall when empty, and grows with its text up to 260 px. (seen in the app)
-- [x] While a turn runs or waits for approval, its status is on a line of its own above the input, lined up with the input's text, with **Stop** at its right end; the footer has no status in the middle any more. (seen in the app; `plan-approval.e2e.ts` and `queued-messages.e2e.ts` still find the status and Stop)
+- [x] The input is two lines tall when empty, and grows with its text up to 260 px. When the chat narrows or widens, the input's height follows its re-wrapped text. (`agent-view.e2e.ts` keeps the input as tall as its text when the chat narrows and widens; the empty height seen in the app, below)
+- [x] While a turn runs or waits for approval, its status is on a line of its own above the input, lined up with the input's text, with **Stop** at its right end; the footer has no status in the middle any more. The design leaves Stop off the waiting line; it stays there because the footer offered Stop while the agent waited, and esc is not the only way out of a permission ask. (`queued-messages.e2e.ts` puts Working, the queue count and Stop on a line above the input; `plan-approval.e2e.ts` opens the Plan tab with the plan formatted, and its file)
 
 ## UI
 
@@ -59,7 +60,9 @@ None: layout only.
 
 ## Test plan
 
-Vitest for the tiers, the short spend and the short placeholder; the existing e2e specs for the status line and Stop; screenshots of the chat at 760, 560, 420 and 320 px with `e2e/snap.ts`.
+Vitest for the tiers, the short spend and the short placeholder; e2e for the status line, Stop and the input's height on resize; screenshots of the chat at 760, 560, 420 and 320 px with `e2e/snap.ts`.
+
+Seen in the e2e app on 2026-10-17 with `e2e/snap.ts`, idle and working, at 760, 560, 420 and 320 px: the empty input measured 42 px (two lines of 14 px text) at every width, a three-line draft 63 px, and each tier showed and hid what the criteria above say, with nothing in the footer wrapping.
 
 ## Open questions
 
