@@ -12,10 +12,10 @@ import { sourceList } from "../../lib/trackerSources";
 import { branchUser, loadTrackersConfig, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { GITHUB_RULES, githubConnection, previewTask, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
 import { AddTracker, ConnectionRow } from "./TrackerConnections";
-import { cx, IconButton } from "../ui";
+import { Button, cx, IconButton } from "../ui";
 import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, SwitchRow } from "./controls";
 import { DEFAULT_LINK, type TrackerKind } from "../../lib/tasks";
-import { wsKey } from "../../lib/workspaces";
+import { parseWsKey, wsKey } from "../../lib/workspaces";
 
 
 const NAME = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
@@ -159,31 +159,43 @@ export function TrackersPage() {
           />
         </Card>
       </Section>
-      <Section title="Where each workspace gets its tasks" hint="Tasks mode shows the sources of the workspace you are in.">
+      <Section title="Boards" hint="Tasks mode shows the boards of the workspace you are in (X50).">
         <Card>
-          {wsRows.map((w) => (
-            <Row
-              key={w.key}
-              label={w.name}
-              hint={
-                w.sources.length ? (
-                  <span className="flex flex-wrap gap-1.5">
-                    {w.sources.map((x) => (
-                      // A source whose connection failed is outlined red, with its reason.
-                      <span key={`${x.tracker} ${x.name}`} title={x.attention} aria-label={x.attention ? `${x.tracker} ${x.name}: ${x.attention}` : undefined} className={cx("rounded px-1", x.attention && "outline outline-1 outline-error text-error")}>
-                        {x.tracker} {x.name}
-                      </span>
-                    ))}
-                  </span>
-                ) : w.loaded ? (
-                  "No source: a project with a GitHub origin, or a team, project or list picked under Sources"
-                ) : (
-                  "GitHub repositories show once the workspace's Tasks mode has loaded"
-                )
-              }
-              setting={`ws-sources-${w.key}`}
-            />
-          ))}
+          {wsRows.map((w) => {
+            const { host, id } = parseWsKey(w.key);
+            const open = (board?: string) => useStore.setState({ settingsPage: null, dialog: { kind: "add-board", host, workspace: id, board } });
+            return (
+              <Row
+                key={w.key}
+                label={w.name}
+                hint={
+                  w.sources.length ? (
+                    <span className="flex flex-wrap gap-1.5">
+                      {w.sources.map((x) => (
+                        // A board whose connection failed is outlined red, with its reason.
+                        <button
+                          key={x.id}
+                          title={x.attention ?? `Board settings for ${x.name}`}
+                          aria-label={x.attention ? `${x.tracker} ${x.name}: ${x.attention}` : `Board settings for ${x.name}`}
+                          onClick={() => open(x.id)}
+                          className={cx("rounded px-1 hover:bg-panel-2 hover:text-fg", x.attention && "outline outline-1 outline-error text-error")}
+                        >
+                          {x.tracker} {x.name}
+                        </button>
+                      ))}
+                    </span>
+                  ) : (
+                    "No board yet"
+                  )
+                }
+                setting={`ws-sources-${w.key}`}
+              >
+                <Button size="sm" className="field-height" onClick={() => open()}>
+                  Add a board
+                </Button>
+              </Row>
+            );
+          })}
         </Card>
       </Section>
       <Section title="Sync">

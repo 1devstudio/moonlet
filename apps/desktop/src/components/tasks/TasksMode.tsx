@@ -157,7 +157,7 @@ export function TasksSidebar() {
       </label>
       <div className="flex items-center px-4 pb-1 pt-2">
         <span className="flex-1 ui-text-11 font-medium uppercase tracking-[0.08em] text-faint">Boards</span>
-        <IconButton title="Add a board" onClick={() => void goSettings({ page: "trackers" })}>
+        <IconButton title="Add a board" onClick={() => ws && useStore.setState({ dialog: { kind: "add-board", host: ws.host, workspace: ws.id } })}>
           <Plus size={13} />
         </IconButton>
       </div>
@@ -453,9 +453,15 @@ export function TasksMode() {
             ))}
           </div>
           <div className="mt-4 flex justify-between">
-            <Button size="sm" variant="ghost" onClick={() => void goSettings({ page: "trackers" })}>
-              Open Settings › Task trackers
-            </Button>
+            {connected ? (
+              <Button size="sm" variant="primary" onClick={() => useStore.setState({ dialog: { kind: "add-board", host: ws.host, workspace: ws.id } })}>
+                Add a board
+              </Button>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={() => void goSettings({ page: "trackers" })}>
+                Open Settings › Task trackers
+              </Button>
+            )}
             <Button size="sm" variant="ghost" onClick={() => leaveTasksMode()}>
               Not now
             </Button>
@@ -506,6 +512,8 @@ export function TasksMode() {
                           items={[
                             { label: "Fold", onSelect: () => setColumnShow(shown.board.id, v.name, "fold") },
                             { label: "Hide", onSelect: () => setColumnShow(shown.board.id, v.name, "hide") },
+                            { kind: "divider" },
+                            { label: "Board settings…", onSelect: () => useStore.setState({ dialog: { kind: "add-board", host: ws.host, workspace: ws.id, board: shown.board.id } }) },
                           ]}
                           trigger={(open) => (
                             <IconButton title={`${v.name} options`} onClick={open}>
@@ -580,7 +588,11 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
       },
     })),
   ]);
-  items.push({ kind: "divider" }, { label: "New board", icon: <Plus size={13} />, onSelect: () => void goSettings({ page: "trackers" }) }, { label: "Manage", onSelect: () => void goSettings({ page: "trackers" }) });
+  items.push(
+    { kind: "divider" },
+    { label: "New board", icon: <Plus size={13} />, onSelect: () => useStore.setState({ dialog: { kind: "add-board", host, workspace: workspaceId } }) },
+    { label: "Manage", onSelect: () => void goSettings({ page: "trackers" }) },
+  );
   return (
     <div className="flex min-w-0 items-center gap-2.5">
       <BoardMark connection={shown.connection} />

@@ -376,4 +376,25 @@ describe("Jira and ClickUp trackers", () => {
     await choose('//select[@aria-label="State of EX-1"]', "3");
     await expect($('//aside[@aria-label="Task detail"]').$(sel.text("No Jira transition leads to that column from here"))).toBeDisplayed({ wait: 15_000 });
   });
+
+  it("adds a board from a JQL query, and shows it (X50 Add a board)", async () => {
+    await $('//button[@title="Add a board"]').click();
+    const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+    await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
+    await $(`(${dialog}//button[.//span[normalize-space()="Jira Cloud"]])[1]`).click();
+    await $(`${dialog}//button[.//span[normalize-space()="A JQL query"]]`).click();
+    await fill(`${dialog}//textarea`, "project = EX");
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    // Step 2 counts what the query brings.
+    await expect($(`${dialog}//p[contains(normalize-space(), "3 issues match")]`)).toBeDisplayed({ wait: 15_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    // Step 3: a column per status the issues are in.
+    await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    await fill(`${dialog}//label[.//span[normalize-space()="Name"]]//input`, "EX query");
+    await $(`${dialog}//button[normalize-space()="Create board"]`).click();
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX query"]]')).toBeDisplayed({ wait: 10_000 });
+    await expect($('//button[starts-with(@aria-label, "Switch board, current: EX query")]')).toBeDisplayed();
+    await expect($('//article[starts-with(@aria-label, "EX-1")]')).toBeDisplayed({ wait: 15_000 });
+  });
 });

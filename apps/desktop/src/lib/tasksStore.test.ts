@@ -3,7 +3,7 @@ import type { GhTask, Section, Workspace } from "./protocol";
 import { migrateSources } from "./boards";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
-import { activityOf, autoFixed, boardInput, openBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { activityOf, autoFixed, boardInput, openBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -486,6 +486,40 @@ describe("boards (X50 Sync)", () => {
     await moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_600, "In Progress");
     expect(sent).toEqual([{ id: "linear:acme", task: "MOON-1", source: "MOON", column: "in_progress", status: "In Progress" }]);
     useTasks.setState({ config: null });
+  });
+
+  it("previews a board not saved yet: everyone's issues, the user's own marked, and the tracker's columns (Add a board)", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["tracker_tasks linear:acme all"] = () => [lt("MOON-1", "Todo"), lt("MOON-2", "Todo")];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-2", "Todo")];
+    answers["board_columns linear:acme"] = () => [{ name: "Todo", statuses: ["Todo"], category: "todo" }];
+    useTasks.setState({ attention: {} });
+    const p = await previewBoard("local", "personal", board());
+    expect([p.error, p.tasks.map((t) => [t.key, t.mine]), p.columns]).toEqual([
+      null,
+      [
+        ["MOON-1", false],
+        ["MOON-2", true],
+      ],
+      [{ name: "Todo", statuses: ["Todo"], category: "todo" }],
+    ]);
+    answers["tracker_tasks linear:acme all"] = () => {
+      throw { auth: false, message: "Linear: no team MOON" };
+    };
+    expect((await previewBoard("local", "personal", board())).error).toBe("Linear: no team MOON");
+  });
+
+  it("keeps only the issues with any of a board's labels, whatever their case (Add a board, Issues)", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["tracker_tasks linear:acme all"] = () => [
+      { ...lt("MOON-1", "Todo"), labels: ["Frontend", "bug"] },
+      { ...lt("MOON-2", "Todo"), labels: ["backend"] },
+      { ...lt("MOON-3", "Todo"), labels: ["design"] },
+    ];
+    answers["tracker_tasks linear:acme"] = () => [];
+    useTasks.setState({ attention: {} });
+    const p = await previewBoard("local", "personal", board({ labels: ["frontend", "design"] }));
+    expect(p.tasks.map((t) => t.key)).toEqual(["MOON-1", "MOON-3"]);
   });
 
   it("opens a board of another workspace there, in Tasks mode", () => {

@@ -1,3 +1,4 @@
+import { AddBoardDialog } from "./tasks/AddBoard";
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../lib/daemon";
@@ -290,6 +291,8 @@ export function Dialogs() {
       return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} task={dialog.task} worktree={dialog.worktree} />;
     case "link-task":
       return <LinkTaskDialog host={dialog.host} sessionId={dialog.session} />;
+    case "add-board":
+      return <AddBoardDialog host={dialog.host} workspace={dialog.workspace} boardId={dialog.board} />;
     case "commit":
       return <CommitDialog />;
     case "create-pr":

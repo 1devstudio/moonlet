@@ -1,0 +1,155 @@
+// Add a board (X50): the wizard's four steps as data, what each waits for,
+// the tracker's defaults, and the board it makes.
+
+import { type BoardColumn, type BoardConfig, boardId, type CardField, type Origin, originKey, type StartRule } from "./boards";
+import { mentionsKey, type Task, type TrackerKind, trackerOf } from "./tasks";
+
+export type Step = 1 | 2 | 3 | 4;
+
+/** What the wizard has been told so far. */
+export interface Draft {
+  step: Step;
+  /** The connection id; `github:github.com` for GitHub. */
+  connection: string | null;
+  origin: Origin | null;
+  /** A Jira board's type (`scrum`, `kanban`, `simple`), for its sprints. */
+  boardKind?: string;
+  narrow: string;
+  labels: string[];
+  assignee: "me" | "anyone";
+  finished: number | "sprint";
+  columns: BoardColumn[];
+  name: string;
+  workspace: string;
+  rules: StartRule[];
+  cards: CardField[];
+  pinned: boolean;
+}
+
+export const STEPS: { name: string; sub: string; title: string }[] = [
+  { name: "Source", sub: "Tracker and board", title: "Where does the board come from?" },
+  { name: "Issues", sub: "Which issues show up", title: "Which issues should it show?" },
+  { name: "Columns", sub: "Order, mapping, folding", title: "Set up the columns" },
+  { name: "Finish", sub: "Name, workspace, repos", title: "Name it and choose where sessions start" },
+];
+
+/** An empty draft for workspace `wsKey`. */
+export function newDraft(wsKey: string): Draft {
+  return { step: 1, connection: null, origin: null, narrow: "", labels: [], assignee: "me", finished: 14, columns: [], name: "", workspace: wsKey, rules: [], cards: [], pinned: true };
+}
+
+/** The card fields a tracker's boards start with (X50 Cards show). */
+const CARDS: Record<TrackerKind, CardField[]> = { jira: ["issue_type", "points", "assignee"], linear: ["points", "assignee"], github: ["assignee"], clickup: ["assignee"] };
+
+/**
+ * The draft once the user picks what the board is built from: named after
+ * it, following the sprint of a Scrum or team-managed board, with the
+ * tracker's card fields. Columns are read again for the new origin.
+ */
+export function pickOrigin(draft: Draft, connection: string, origin: Origin, name: string, boardKind?: string): Draft {
+  const tracker = trackerOf(connection) ?? "github";
+  const sprints = tracker === "jira" && origin.kind === "jira_board" && boardKind !== "kanban";
+  return { ...draft, connection, origin, boardKind, name, columns: [], finished: sprints ? "sprint" : 14, cards: CARDS[tracker] };
+}
+
+/** Whether `origin` of `connection` is already a board in workspace `wsKey`: "Already added". */
+export function alreadyAdded(boards: BoardConfig[] | undefined, wsKey: string, connection: string, origin: Origin): boolean {
+  return (boards ?? []).some((b) => b.workspace === wsKey && b.connection === connection && b.origin.kind === origin.kind && originKey(b.origin) === originKey(origin));
+}
+
+/** "Finished issues": 14 days, or the sprint or cycle where the board has one. */
+export function finishedChoices(tracker: TrackerKind, boardKind?: string): { value: number | "sprint"; label: string }[] {
+  const days = { value: 14, label: "Hide after 14 days" };
+  if (tracker === "jira" && boardKind && boardKind !== "kanban") return [days, { value: "sprint", label: "Follow the active sprint" }];
+  if (tracker === "linear") return [days, { value: "sprint", label: "Follow the active cycle" }];
+  return [days];
+}
+
+/** Whether Continue (or Create board) can go on: a board picked or a query, a query the tracker accepts, a shown column, a name. */
+export function canContinue(d: Draft, previewError: string | null): boolean {
+  if (!d.origin || !d.connection) return false;
+  if (d.origin.kind === "jql" && !d.origin.query.trim()) return false;
+  if (d.step === 1) return true;
+  if (d.step === 2) return !previewError;
+  const shown = d.columns.some((c) => c.show !== "hide");
+  if (d.step === 3) return shown;
+  return shown && !!d.name.trim() && !!d.workspace;
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** Step 2's preview: `17 issues match · 5 assigned to you · 2 already have a branch with their key`. */
+export function previewLine(issues: Task[], branches: string[], connection: string): string {
+  const mine = issues.filter((t) => t.mine).length;
+  const branched = issues.filter((t) => branches.some((b) => mentionsKey(b, t.key))).length;
+  const noun = trackerOf(connection) === "clickup" ? ["task", "tasks"] : ["issue", "issues"];
+  const matches = issues.length === 1 ? `${count(1, noun[0], noun[1])} matches` : `${count(issues.length, noun[0], noun[1])} match`;
+  const branch = branched === 0 ? "none has a branch with its key" : `${branched} already ${branched === 1 ? "has a branch with its key" : "have a branch with their key"}`;
+  return `${matches} · ${mine} assigned to you · ${branch}`;
+}
+
+/** What the board is built from, as the summary card names it. */
+function originText(o: Origin): string {
+  switch (o.kind) {
+    case "jira_board":
+      return `Jira board ${o.board}`;
+    case "jql":
+      return "JQL query";
+    case "linear_team":
+      return `Linear team ${o.team}`;
+    case "github_project":
+      return `GitHub project ${o.owner}/${o.number}`;
+    case "github_repo":
+      return `GitHub ${o.repo}`;
+    case "clickup_list":
+      return `ClickUp list ${o.list}`;
+  }
+}
+
+/** Step 4's summary card: `Jira board 41 · 5 columns shown, 1 folded, 1 hidden · 17 issues · Acme`. */
+export function summaryLine(d: Draft, issues: number, workspaceName: string): string {
+  const shown = d.columns.filter((c) => !c.show).length;
+  const folded = d.columns.filter((c) => c.show === "fold").length;
+  const hidden = d.columns.filter((c) => c.show === "hide").length;
+  const columns = `${count(shown, "column", "columns")} shown, ${folded} folded, ${hidden} hidden`;
+  return [d.origin ? originText(d.origin) : "", columns, count(issues, "issue", "issues"), workspaceName].filter(Boolean).join(" · ");
+}
+
+/** The board Create board saves, with what is at its default left out. */
+export function toBoard(d: Draft): BoardConfig {
+  if (!d.origin || !d.connection) throw new Error("Pick what the board is built from first");
+  return {
+    id: boardId(d.connection, originKey(d.origin), d.workspace),
+    name: d.name.trim(),
+    connection: d.connection,
+    workspace: d.workspace,
+    origin: d.origin,
+    ...(d.narrow.trim() && { narrow: d.narrow.trim() }),
+    ...(d.labels.length && { labels: d.labels }),
+    ...(d.assignee === "anyone" && { assignee: "anyone" as const }),
+    ...(d.finished !== 14 && { finished: d.finished }),
+    columns: d.columns,
+    ...(d.rules.length && { rules: d.rules }),
+    ...(d.cards.length && { cards: d.cards }),
+    ...(!d.pinned && { pinned: false as const }),
+  };
+}
+
+/** Board settings (X50): the wizard on an existing board, its values as saved. */
+export function draftFromBoard(b: BoardConfig): Draft {
+  return {
+    step: 1,
+    connection: b.connection,
+    origin: b.origin,
+    narrow: b.narrow ?? "",
+    labels: b.labels ?? [],
+    assignee: b.assignee ?? "me",
+    finished: b.finished ?? 14,
+    columns: b.columns ?? [],
+    name: b.name,
+    workspace: b.workspace,
+    rules: b.rules ?? [],
+    cards: b.cards ?? [],
+    pinned: b.pinned !== false,
+  };
+}
