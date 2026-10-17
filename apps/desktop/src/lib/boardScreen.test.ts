@@ -102,6 +102,11 @@ describe("boardHeader (X50 header)", () => {
     const cards = [{ rows: [1, 2] }, { rows: [] }] as unknown as Parameters<typeof boardHeader>[3];
     expect(boardHeader(ops, sprint, "acme.atlassian.net", cards)).toEqual({ title: "OPS · Sprint 42", subtitle: "Jira · acme.atlassian.net · Oct 9 – Oct 23 · 2 issues · 2 sessions" });
     expect(boardHeader({ ...ops, finished: 14 }, sprint, "acme.atlassian.net", cards).title).toBe("OPS");
+    // Between sprints or cycles the board says so, once a sync has looked.
+    expect(boardHeader(ops, null, "acme.atlassian.net", cards).subtitle).toBe("Jira · acme.atlassian.net · No active sprint · 2 issues · 2 sessions");
+    expect(boardHeader(ops, undefined, "acme.atlassian.net", cards).subtitle).toBe("Jira · acme.atlassian.net · 2 issues · 2 sessions");
+    const moon = b("moon", "local/w", { name: "Moonlet", connection: "linear:acme", origin: { kind: "linear_team", team: "MOON" }, finished: "sprint" });
+    expect(boardHeader(moon, null, "acme", []).subtitle).toBe("Linear · acme · No active cycle · 0 tasks · 0 sessions");
     expect(boardHeader(b("web", "local/w", { connection: "github:github.com", origin: { kind: "github_repo", repo: "acme/web" } }), null, "", []).subtitle).toBe("GitHub · acme/web · 0 tasks · 0 sessions");
   });
 });

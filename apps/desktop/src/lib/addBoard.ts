@@ -12,8 +12,8 @@ export interface Draft {
   /** The connection id; `github:github.com` for GitHub. */
   connection: string | null;
   origin: Origin | null;
-  /** A Jira board's type (`scrum`, `kanban`, `simple`), or `cycles` for a Linear team that uses them: whether it has sprints or cycles. */
-  boardKind?: string;
+  /** Whether the source has sprints (a Jira board) or cycles (a Linear team); unknown until its tracker says. */
+  sprints?: boolean;
   narrow: string;
   labels: string[];
   assignee: "me" | "anyone";
@@ -68,18 +68,17 @@ const CARD_CHOICES: Record<TrackerKind, [CardField, string][]> = {
 /** "Cards show": the fields `tracker` has, with their names. */
 export const cardChoices = (tracker: TrackerKind) => CARD_CHOICES[tracker];
 
-/** Whether a board of `tracker` with `boardKind` has sprints or cycles: Jira's Scrum and team-managed boards, Linear's teams with cycles; an unknown type is taken as none. */
-const hasSprints = (tracker: TrackerKind, boardKind: string | undefined) => (tracker === "jira" ? !!boardKind && boardKind !== "kanban" : tracker === "linear" && boardKind === "cycles");
+/** Whether a Jira board of type `kind` has sprints: Scrum and team-managed (`simple`) ones do. */
+export const jiraSprints = (kind: string) => kind === "scrum" || kind === "simple";
 
 /**
  * The draft once the user picks what the board is built from: named after
  * it, following the sprint of a Scrum or team-managed board or the cycle of
  * a Linear team that uses them, with the tracker's card fields. Columns are read again for the new origin.
  */
-export function pickOrigin(draft: Draft, connection: string, origin: Origin, name: string, boardKind?: string): Draft {
+export function pickOrigin(draft: Draft, connection: string, origin: Origin, name: string, sprints = false): Draft {
   const tracker = trackerOf(connection) ?? "github";
-  const sprints = (origin.kind === "jira_board" || origin.kind === "linear_team") && hasSprints(tracker, boardKind);
-  return { ...draft, connection, origin, boardKind, name, columns: [], finished: sprints ? "sprint" : 14, cards: CARDS[tracker] };
+  return { ...draft, connection, origin, sprints, name, columns: [], finished: sprints ? "sprint" : 14, cards: CARDS[tracker] };
 }
 
 /** Whether `origin` of `connection` is already a board in workspace `wsKey`: "Already added". */
@@ -88,9 +87,9 @@ export function alreadyAdded(boards: BoardConfig[] | undefined, wsKey: string, c
 }
 
 /** "Finished issues": 14 days, or the sprint or cycle where the board has one, or already follows it. */
-export function finishedChoices(tracker: TrackerKind, boardKind?: string, current?: number | "sprint"): { value: number | "sprint"; label: string }[] {
+export function finishedChoices(tracker: TrackerKind, sprints?: boolean, current?: number | "sprint"): { value: number | "sprint"; label: string }[] {
   const days = { value: 14, label: "Hide after 14 days" };
-  if (!hasSprints(tracker, boardKind) && current !== "sprint") return [days];
+  if (!sprints && current !== "sprint") return [days];
   if (tracker === "jira") return [days, { value: "sprint", label: "Follow the active sprint" }];
   if (tracker === "linear") return [days, { value: "sprint", label: "Follow the active cycle" }];
   return [days];

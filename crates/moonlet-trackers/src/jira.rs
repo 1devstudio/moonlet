@@ -24,30 +24,6 @@ pub(crate) fn parse(raw: &[u8]) -> Result<Value, ApiError> {
         .map_err(|e| ApiError::new(format!("Jira answered with something else: {e}")))
 }
 
-/// The body of `POST /rest/api/3/search/jql` for `projects`: the user's
-/// issues (or all), open or updated in the last 14 days, newest first.
-pub fn search_body(projects: &[String], mine: bool, next_page_token: Option<&str>) -> Value {
-    let keys = projects
-        .iter()
-        .map(|p| format!("\"{}\"", p.replace('"', "")))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let who = if mine {
-        " AND assignee = currentUser()"
-    } else {
-        ""
-    };
-    let mut body = json!({
-        "jql": format!("project in ({keys}){who} AND (statusCategory != Done OR updated >= -14d) ORDER BY updated DESC"),
-        "fields": FIELDS,
-        "maxResults": 100,
-    });
-    if let Some(t) = next_page_token {
-        body["nextPageToken"] = json!(t);
-    }
-    body
-}
-
 /// The token of the next page of a search, if there is one.
 pub fn next_page(raw: &[u8]) -> Option<String> {
     let v = parse(raw).ok()?;
@@ -453,15 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn the_search_and_write_bodies() {
-        assert_eq!(
-            search_body(&["OPS".into(), "PLAT".into()], true, None),
-            serde_json::json!({
-                "jql": "project in (\"OPS\", \"PLAT\") AND assignee = currentUser() AND (statusCategory != Done OR updated >= -14d) ORDER BY updated DESC",
-                "fields": ["summary", "status", "priority", "assignee", "labels", "updated", "description", "project", "issuetype"],
-                "maxResults": 100
-            })
-        );
+    fn the_write_bodies() {
         assert_eq!(
             transition_body("21"),
             serde_json::from_slice::<serde_json::Value>(&fixture("jira-transition-request.json"))
