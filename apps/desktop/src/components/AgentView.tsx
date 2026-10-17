@@ -938,12 +938,14 @@ function ChatEditor({
     ta.current?.focus();
   }, [draft, draftKey, text]);
 
+  // Text wraps differently when the chat's width changes, so a resize re-measures too (X51).
+  const inputWidth = useWidth(ta, 0);
   useLayoutEffect(() => {
     const el = ta.current;
     if (!el) return;
     el.style.height = "0px";
     el.style.height = Math.min(el.scrollHeight, 260) + "px";
-  }, [text, scale]);
+  }, [text, scale, inputWidth]);
 
   const token = activeToken(text, caret);
   useEffect(() => {
@@ -1378,7 +1380,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     if (aside) void call(M.chatSend, { text: aside.question, images: [] });
     setAside(null);
   };
-  const column = useRef<HTMLDivElement>(null);
+  const column = useRef<HTMLElement>(null);
   const layout = inputLayout(useWidth(column, 760));
   const cost = st && layout.cost ? costLine(st, layout.cost) : null;
   const fullCost = st ? costLine(st) : null;
@@ -1603,7 +1605,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
           </div>
         </FileLinks.Provider>
       </div>
-      <div ref={column} className={cx("w-full shrink-0 pb-3", layout.padX === 24 ? "px-6" : layout.padX === 16 ? "px-4" : "px-3")}>
+      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-3", layout.padX === 24 ? "px-6" : layout.padX === 16 ? "px-4" : "px-3")}>
         {/* The turn's status on its own line above the input (X51), lined up with the input's text. */}
         {st?.status === "working" ? (
           <div role="status" className={cx("mb-1.5 flex h-7 items-center gap-2 whitespace-nowrap ui-text-12.5 text-muted", layout.insetX === 16 ? "pl-4" : "pl-3")}>
@@ -1697,7 +1699,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
             />
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
