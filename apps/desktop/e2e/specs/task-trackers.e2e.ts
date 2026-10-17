@@ -376,4 +376,41 @@ describe("Jira and ClickUp trackers", () => {
     await choose('//select[@aria-label="State of EX-1"]', "3");
     await expect($('//aside[@aria-label="Task detail"]').$(sel.text("No Jira transition leads to that column from here"))).toBeDisplayed({ wait: 15_000 });
   });
+
+  it("adds a board from a JQL query the workspace has no board for, shows it, and renames it in Board settings (X50)", async () => {
+    await $('//button[@title="Add a board"]').click();
+    const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+    await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
+    await $(`(${dialog}//button[.//span[normalize-space()="Jira Cloud"]])[1]`).click();
+    await $(`${dialog}//button[.//span[normalize-space()="A JQL query"]]`).click();
+    await fill(`${dialog}//textarea`, "project = EX");
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    // Step 2 counts what the query brings.
+    await expect($(`${dialog}//p[contains(normalize-space(), "3 issues match")]`)).toBeDisplayed({ wait: 15_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    // Step 3: a column per status the issues are in.
+    await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    // The workspace's EX source already became a `project = EX` board.
+    await expect($(`${dialog}//span[normalize-space()="This workspace already has a board from JQL query."]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($(`${dialog}//button[normalize-space()="Create board"]`)).toBeDisabled();
+    await $(`${dialog}//nav//button[.//span[normalize-space()="Source"]]`).click();
+    await fill(`${dialog}//textarea`, "project = EX AND type = Bug");
+    await $(`${dialog}//nav//button[.//span[normalize-space()="Finish"]]`).click();
+    await fill(`${dialog}//label[.//span[normalize-space()="Name"]]//input`, "EX query");
+    await $(`${dialog}//button[normalize-space()="Create board"]`).click();
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX query"]]')).toBeDisplayed({ wait: 10_000 });
+    await expect($('//button[starts-with(@aria-label, "Switch board, current: EX query")]')).toBeDisplayed();
+    await expect($('//article[starts-with(@aria-label, "EX-1")]')).toBeDisplayed({ wait: 15_000 });
+    // A column's ⋯ menu opens Board settings, which saves the board where it was.
+    await $('//button[@title="In Progress options"]').click();
+    await $('//button[normalize-space()="Board settings…"]').click();
+    const settings = '//div[@role="dialog"][@aria-label="Board settings"]';
+    await expect($(settings)).toBeDisplayed({ wait: 10_000 });
+    await $(`${settings}//nav//button[.//span[normalize-space()="Finish"]]`).click();
+    await fill(`${settings}//label[.//span[normalize-space()="Name"]]//input`, "EX issues");
+    await $(`${settings}//button[normalize-space()="Save"]`).click();
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX issues"]]')).toBeDisplayed({ wait: 10_000 });
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX query"]]')).not.toBeDisplayed();
+  });
 });
