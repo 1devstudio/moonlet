@@ -9,6 +9,7 @@ import { initials } from "./taskDetails";
 import type { Board, BoardInput, Card } from "./tasksBoard";
 import { type Task, taskId, type TrackerKind, trackerOf } from "./tasks";
 import type { TasksData } from "./tasksStore";
+import { syncedLabel } from "./tasksView";
 
 /** The board workspace `wsKey` shows: the one last shown there, else its first pinned one, else its first. */
 export function shownBoardOf(boards: BoardConfig[] | undefined, wsKey: string, shownId: string | null): BoardConfig | null {
@@ -157,7 +158,18 @@ export function cardFace(
 
 /** What the board shown says when its last sync failed (X50: a board whose origin is gone), or null. */
 export function boardProblem(board: Pick<BoardConfig, "name">, data: BoardData | undefined): string | null {
-  if (!data?.error) return null;
-  const text = `moonlet could not read ${board.name}: ${data.error}`;
-  return data.keys.length ? `${text.replace(/\.$/, "")}. Its last tasks are shown.` : text;
+  const error = data?.error?.trim();
+  if (!data || !error) return null;
+  const text = `moonlet could not read ${board.name}: ${error}`;
+  if (!data.keys.length) return text;
+  return `${/[.!?]$/.test(text) ? text : `${text}.`} Its last tasks are shown.`;
+}
+
+/**
+ * The sidebar footer (X44, X50): when the sync was, or that it failed with
+ * why, unless the board shown says why already in its banner.
+ */
+export function footerLine(data: Pick<TasksData, "syncedAt" | "error" | "boards">, shownId: string | null, tracker: string, now: number): string {
+  if (!data.error) return syncedLabel(tracker, data.syncedAt, now);
+  return shownId && data.boards?.[shownId]?.error === data.error ? `${tracker} sync failed` : `Sync failed · ${data.error}`;
 }
