@@ -621,6 +621,12 @@ export const M = {
   chatInterrupt: "chat.interrupt",
   /** Stops one running subagent: `{ id, agent }` (X42). */
   chatStopAgent: "chat.stop_agent",
+  /** Asks Claude to read a queued message now: `{ id, message? }` (X49). */
+  chatSendNow: "chat.send_now",
+  /** Takes a message out of Claude's queue: `{ id, message }` (X49). */
+  chatUnqueue: "chat.unqueue",
+  /** A side question answered from the conversation: `{ id, text }` → AsideAnswer (X49). */
+  chatAside: "chat.aside",
   chatSettings: "chat.settings",
   chatAddDir: "chat.add_dir",
   chatMcp: "chat.mcp",
