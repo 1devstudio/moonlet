@@ -129,7 +129,7 @@ describe("Tasks mode", () => {
     rmSync(fakeGh, { force: true });
   });
 
-  it("shows the project's GitHub issues with the sessions working on them", async () => {
+  it("shows the project's GitHub issues with the sessions working on them, and a board switcher with bars and ↑ ↓ ↵", async () => {
     await expect($(sel.text(PROJECT))).toBeDisplayed({ wait: 30_000 });
     await tasksButton().click();
     await expect(card("acme/storefront#12", "Open")).toBeDisplayed({ wait: 30_000 });
@@ -139,8 +139,18 @@ describe("Tasks mode", () => {
     // The board's name opens the board switcher, with this workspace's boards (X50).
     await $('//button[starts-with(@aria-label, "Switch board, current: acme/storefront")]').click();
     await expect($('//input[@placeholder="Find a board, team or project"]')).toBeDisplayed();
-    await expect($('//button[.//span[normalize-space()="acme/storefront"]][.//span[contains(normalize-space(), "Repository")]]')).toBeDisplayed();
+    const row = '//button[.//span[normalize-space()="acme/storefront"]][.//span[contains(normalize-space(), "Repository")]]';
+    await expect($(row)).toBeDisplayed();
+    // The row shows a bar per column: Open and Closed.
+    await expect($(`${row}//span[@aria-label="2 columns"]`)).toBeDisplayed();
+    // ↑ and ↓ move from the current board; ↵ picks: ↓ reaches New board, which opens Add a board.
+    await expect($(row)).toHaveAttribute("data-active", "true");
+    await browser.keys("ArrowDown");
+    await expect($('//button[@data-active="true"][.//span[normalize-space()="New board"]]')).toBeDisplayed();
+    await browser.keys("Enter");
+    await expect($('//div[@role="dialog"][@aria-label="Add a board"]')).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Escape");
+    await $('//div[@role="dialog"][@aria-label="Add a board"]').waitForExist({ reverse: true });
   });
 
   it("opens a session from its card in Sessions mode", async () => {

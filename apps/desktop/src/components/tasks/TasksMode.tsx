@@ -46,7 +46,7 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch, syncedLabel } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { type BoardColumn, type BoardConfig, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { type BoardColumn, type BoardConfig, CATEGORY_LABEL, type CardField, cardFields, type Category, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph, TrackerIcon } from "../ui";
@@ -128,6 +128,9 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
     return { ws, data, board: asBoard(all), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link), shown, all };
   }, [ws, data, notNow, config, paused, shownId, ...deps]);
 }
+
+/** Each category's colour in a board's column strip (Add a board's preview, the switcher's bars). */
+export const CATEGORY_BAR: Record<Category, string> = { todo: "bg-[#4a4a4a]", in_progress: "bg-[#7d7d7d]", in_review: "bg-[#b5b5b5]", done: "bg-merged" };
 
 /** A board's tracker mark: Linear, Jira and ClickUp's logos, GH for GitHub. */
 export function BoardMark({ connection, size = 12 }: { connection: string; size?: 12 | 14 }) {
@@ -480,7 +483,7 @@ export function TasksMode() {
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
   const fields = cardFields(shown.board);
-  const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id]?.sprint ?? null)]));
+  const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id])]));
   const listCards = views.flatMap((v) => (v.folded ? [] : v.cards));
   return (
     <div className="flex h-full min-w-0">
@@ -584,6 +587,16 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
     ...g.rows.map((r) => ({
       label: r.board.name,
       description: [r.kind, r.meta, r.sessions?.text].filter(Boolean).join(" · "),
+      aside: (
+        <span className="flex items-center gap-2">
+          {r.sessions?.state && <StateGlyph state={r.sessions.state} size={10} />}
+          <span aria-label={`${r.bars.length} columns`} className="flex items-end gap-[2px]">
+            {r.bars.map((c, i) => (
+              <span key={i} className={cx("h-[10px] w-[3px] rounded-[1px]", CATEGORY_BAR[c])} />
+            ))}
+          </span>
+        </span>
+      ),
       checked: r.board.id === shown.id,
       icon: <BoardMark connection={r.board.connection} />,
       onSelect: () => {

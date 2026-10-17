@@ -23,7 +23,7 @@ import {
   summaryLine,
   toBoard,
 } from "../../lib/addBoard";
-import { type BoardColumn, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, type Origin, type StartRule } from "../../lib/boards";
+import { type BoardColumn, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, jiraBoardType, type Origin, type StartRule } from "../../lib/boards";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
@@ -31,7 +31,7 @@ import { type Task, trackerName, trackerOf } from "../../lib/tasks";
 import { GITHUB, openBoard, previewBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { Button, cx, IconButton, inputCls } from "../ui";
-import { BoardMark, TaskGlyph } from "./TasksMode";
+import { BoardMark, CATEGORY_BAR, TaskGlyph } from "./TasksMode";
 
 const selectCls = cx(inputCls, "menu-select field-height");
 
@@ -46,9 +46,7 @@ interface Choice {
   origin: Origin;
 }
 
-const KIND_LABEL: Record<string, string> = { scrum: "Scrum", kanban: "Kanban", simple: "Team-managed" };
 const CATEGORY_CHOICES = Object.entries(CATEGORY_LABEL) as [BoardColumn["category"], string][];
-const BAR: Record<BoardColumn["category"], string> = { todo: "bg-[#4a4a4a]", in_progress: "bg-[#7d7d7d]", in_review: "bg-[#b5b5b5]", done: "bg-merged" };
 
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
@@ -93,7 +91,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     const kind = trackerOf(draft.connection);
     const ask =
       kind === "jira"
-        ? hostsApi.trackerBoards(draft.connection).then((bs) => bs.map((b): Choice => ({ key: b.project ?? String(b.id), name: b.name, kind: KIND_LABEL[b.kind] ?? b.kind, sprints: jiraSprints(b.kind), origin: { kind: "jira_board", board: b.id } })))
+        ? hostsApi.trackerBoards(draft.connection).then((bs) => bs.map((b): Choice => ({ key: b.project ?? String(b.id), name: b.name, kind: jiraBoardType(b.kind), sprints: jiraSprints(b.kind), origin: { kind: "jira_board", board: b.id } })))
         : hostsApi
             .trackerSources(draft.connection)
             .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, ...(s.cycles && { kind: "Cycles", sprints: true }), origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
@@ -459,7 +457,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       .filter((c) => c.show !== "hide")
                       .map((c) => (
                         <div key={c.name} title={c.name} className={cx("flex min-w-0 flex-col overflow-hidden rounded-[4px] bg-panel-2", c.show === "fold" ? "w-[14px] shrink-0" : "flex-1")}>
-                          <div className={cx("h-[2px]", BAR[c.category])} />
+                          <div className={cx("h-[2px]", CATEGORY_BAR[c.category])} />
                           {c.show !== "fold" && <span className="truncate px-1.5 pt-0.5 ui-text-11 text-muted">{c.name}</span>}
                         </div>
                       ))}

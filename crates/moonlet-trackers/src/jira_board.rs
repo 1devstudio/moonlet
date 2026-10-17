@@ -80,6 +80,8 @@ pub struct BoardSetup {
     pub points_field: Option<String>,
     /// Scrum and team-managed boards can have sprints; Kanban boards can't.
     pub sprints: bool,
+    /// `scrum`, `kanban` or `simple` (team-managed), which the board switcher names.
+    pub kind: String,
     /// Jira's columns in order, with a suggested category and Show / Fold /
     /// Hide: a column with no status, or the backlog, is hidden; Done is folded.
     pub columns: Vec<BoardColumn>,
@@ -136,6 +138,7 @@ pub fn parse_board_config(raw: &[u8], statuses: &[JiraStatus]) -> Result<BoardSe
             })
             .flatten(),
         sprints: v["type"] != "kanban",
+        kind: v["type"].as_str().unwrap_or_default().into(),
         columns,
     })
 }
@@ -460,6 +463,7 @@ mod tests {
                 sub_query: None,
                 points_field: Some("customfield_10014".into()),
                 sprints: true,
+                kind: "scrum".into(),
                 columns: vec![
                     col("Open", &["1"], Category::Todo, Show::Show, None),
                     col(
@@ -500,13 +504,15 @@ mod tests {
                 setup.filter_id.as_str(),
                 setup.sub_query.as_deref(),
                 setup.points_field,
-                setup.sprints
+                setup.sprints,
+                setup.kind.as_str()
             ),
             (
                 "10650",
                 Some("fixVersion in unreleasedVersions() OR fixVersion is EMPTY"),
                 None,
-                false
+                false,
+                "kanban"
             )
         );
         assert_eq!(
