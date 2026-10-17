@@ -25,6 +25,7 @@ Gathered on 2026-10-15 from the trackers' official API documentation; no live ac
 | `clickup-lists.json`, `clickup-tasks.json`, `clickup-update-task-request.json`, `clickup-comment-request.json` | VERBATIM+ | same; tasks use the object form of `assignees` and `tags` from the Get Task example, and its `due_date` on the first task, `null` on the second (X50) |
 | `clickup-error-401.json`, `clickup-error-no-header.json` | CAPTURED | a bad token, and no Authorization header |
 | `jira-error-400-jql.json` | VERBATIM+ | Jira's documented 400 answer to `POST /rest/api/3/search/jql` (`errorMessages`, `errors`), with Jira's message for a field it doesn't know; the Atlassian connector hides the raw answer, so it was not captured (X50 Add a board's preview) |
+| `jira-error-404-board.json` | VERBATIM+ | Jira Software's documented 404 answer to `GET /rest/agile/1.0/board/{id}/configuration` for a board that is gone (X50: a board whose origin is gone) |
 | `jira-boards.json` | CAPTURED, SANITISED | `GET /rest/agile/1.0/board`; four of the site's boards (Scrum, Kanban, simple, and one with no project) |
 | `jira-board-scrum-configuration.json` | CAPTURED, SANITISED | `GET /rest/agile/1.0/board/{id}/configuration` of a Scrum board; `max` added on one column in the documented `columnConfig` shape, since none of the site's columns had a limit |
 | `jira-board-kanban-configuration.json` | CAPTURED, SANITISED | the same for a Kanban board: a Backlog column with no status, and a sub-filter |

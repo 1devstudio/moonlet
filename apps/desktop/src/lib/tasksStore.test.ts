@@ -450,7 +450,7 @@ describe("boards (X50 Sync)", () => {
     useTasks.setState({ config: null });
   });
 
-  it("keeps a failed board's own last tasks, and takes its connection's other boards fresh", async () => {
+  it("keeps a failed board's own last tasks with why it failed, and takes its connection's other boards fresh", async () => {
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
     const des = (key: string) => ({ ...lt(key, "Todo"), tracker: { id: key, state: "Todo", source: "DES" } });
@@ -465,6 +465,12 @@ describe("boards (X50 Sync)", () => {
     await refreshTasks("local", "personal", 2_000);
     expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key).sort()).toEqual(["DES-2", "MOON-1"]);
     expect(useTasks.getState().data["local/personal"].error).toBe("cannot reach Linear");
+    // The board that failed says why on its own (X50: a board whose origin is gone); the other doesn't.
+    expect([useTasks.getState().data["local/personal"].boards?.moon?.error, useTasks.getState().data["local/personal"].boards?.des?.error]).toEqual(["cannot reach Linear", undefined]);
+    // Once it reads again, the error goes.
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo"), des("DES-2")];
+    await refreshTasks("local", "personal", 3_000);
+    expect(useTasks.getState().data["local/personal"].boards?.moon?.error).toBe(undefined);
     useTasks.setState({ config: null });
   });
 

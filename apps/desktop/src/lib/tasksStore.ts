@@ -45,6 +45,8 @@ export interface BoardData {
   sprint: { id: number; name: string; startMs: number; endMs: number } | null;
   /** A Jira board's type as its last sync read it: `scrum`, `kanban`, `simple`. */
   kind?: string;
+  /** Why the board's last sync failed (a Jira board deleted, a team archived); its last good tasks stay. */
+  error?: string;
 }
 
 interface TasksState {
@@ -420,12 +422,11 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     if (r.error !== null) {
       // A connection that needs attention says so on its own row (X44), not as the workspace's error.
       if (r.error) error = r.error;
-      // The board keeps its last good tasks.
+      // The board keeps its last good tasks, and says why it failed.
       const last = prev?.boards?.[b.id];
-      if (last) {
-        boardData[b.id] = last;
-        for (const t of prev?.tasks ?? []) if (last.keys.includes(taskId(t)) && !tasks.has(taskId(t))) tasks.set(taskId(t), t);
-      }
+      if (last) for (const t of prev?.tasks ?? []) if (last.keys.includes(taskId(t)) && !tasks.has(taskId(t))) tasks.set(taskId(t), t);
+      const { error: _, ...kept } = last ?? { keys: [], sprint: null };
+      boardData[b.id] = { ...kept, ...(r.error && { error: r.error }) };
       continue;
     }
     const cols = syncedColumns(b, r.columns);
