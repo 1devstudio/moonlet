@@ -460,7 +460,7 @@ describe("Jira and ClickUp trackers", () => {
     await closeSettings();
   });
 
-  it("adds an existing Jira board: its filter with Edit in Jira, a changed category outlined, a column dragged (X50)", async () => {
+  it("adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged (X50)", async () => {
     await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
@@ -475,6 +475,8 @@ describe("Jira and ClickUp trackers", () => {
     // Step 3: Jira's columns; a category changed from its suggestion is outlined.
     const row = (name: string) => `${dialog}//div[@role="row"][@aria-label="${name}"]`;
     await expect($(row("QA Testing"))).toBeDisplayed({ wait: 10_000 });
+    // Each column lists its statuses by name.
+    await expect($(`${row("Done")}//span[normalize-space()="Ready to Deploy · Closed"]`)).toBeDisplayed();
     await choose(`${row("QA Testing")}//select`, "in_progress");
     await expect($(`${row("QA Testing")}//select`)).toHaveAttribute("data-changed", "true");
     await expect($(`${row("Open")}//select`)).not.toHaveAttribute("data-changed");
