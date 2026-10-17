@@ -1,15 +1,27 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight } from "lucide-react";
+import { firstActive, moveActive } from "../lib/menuNav";
 import { cx } from "./ui";
 
 export type MenuItem =
-  | { kind?: "item"; label: string; icon?: ReactNode; checked?: boolean; danger?: boolean; hint?: string; description?: string; onSelect: () => void }
+  | {
+      kind?: "item";
+      label: string;
+      icon?: ReactNode;
+      checked?: boolean;
+      danger?: boolean;
+      hint?: string;
+      description?: string;
+      /** Drawn at the row's right, before its check: the board switcher's column bars. */
+      aside?: ReactNode;
+      onSelect: () => void;
+    }
   | { kind: "submenu"; label: string; icon?: ReactNode; items: MenuItem[] }
   | { kind: "divider" }
   | { kind: "label"; label: string };
 
-export function MenuItems({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
+export function MenuItems({ items, onClose, active = null }: { items: MenuItem[]; onClose: () => void; /** The item ↑ and ↓ moved to. */ active?: number | null }) {
   const [open, setOpen] = useState<number | null>(null);
   return (
     <>
@@ -39,7 +51,9 @@ export function MenuItems({ items, onClose }: { items: MenuItem[]; onClose: () =
         return (
           <button
             key={i}
-            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14 hover:bg-hover", it.danger && "text-error")}
+            data-active={active === i || undefined}
+            ref={active === i ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
+            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14 hover:bg-hover", active === i && "bg-hover", it.danger && "text-error")}
             onClick={() => {
               onClose();
               it.onSelect();
@@ -55,6 +69,7 @@ export function MenuItems({ items, onClose }: { items: MenuItem[]; onClose: () =
               <span className="flex-1 truncate">{it.label}</span>
             )}
             {it.hint && <span className="font-mono ui-text-11.5 text-faint">{it.hint}</span>}
+            {it.aside}
             {it.checked && <Check size={14} className="text-fg" />}
           </button>
         );
@@ -89,6 +104,17 @@ export function Menu({
   const open = rect !== null;
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  // ↑ and ↓ move through the items, ↵ picks one (X50 board switcher). A
+  // searchable menu starts on its checked item, and on the first match as
+  // the query changes.
+  const [active, setActive] = useState<number | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const kinds = (list: MenuItem[]) => list.map((it) => it.kind);
+  useEffect(() => {
+    if (!open) return setActive(null);
+    setActive(search ? firstActive(kinds(items), items.map((it) => (it.kind === undefined || it.kind === "item") && !!it.checked)) : null);
+  }, [open, search?.query]);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -96,6 +122,16 @@ export function Menu({
         // The menu's own Escape; a dialog around it must not also close.
         e.stopPropagation();
         return setRect(null);
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        return setActive(moveActive(kinds(itemsRef.current), activeRef.current, e.key === "ArrowDown" ? 1 : -1));
+      }
+      const picked = activeRef.current === null ? undefined : itemsRef.current[activeRef.current];
+      if (e.key === "Enter" && picked && (picked.kind === undefined || picked.kind === "item")) {
+        e.preventDefault();
+        setRect(null);
+        return picked.onSelect();
       }
       // A single-character hint doubles as the item's shortcut while the menu is open.
       if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement | null)?.tagName === "INPUT") return;
@@ -147,7 +183,7 @@ export function Menu({
               />
             )}
             <div className={cx(search && "max-h-[320px] overflow-y-auto")}>
-              <MenuItems items={items} onClose={() => setRect(null)} />
+              <MenuItems items={items} active={active} onClose={() => setRect(null)} />
             </div>
           </div>,
           document.body,

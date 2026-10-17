@@ -44,6 +44,9 @@ export interface StartRule {
 
 export type CardField = "issue_type" | "points" | "assignee" | "parent" | "due" | "labels";
 
+/** A Jira board's type as moonlet names it (X50 Add a board, board switcher). */
+export const jiraBoardType = (kind: string) => ({ scrum: "Scrum", kanban: "Kanban", simple: "Team-managed" })[kind] ?? kind;
+
 /** The card fields a tracker's boards show until the user picks (X50 Cards show). */
 export const DEFAULT_CARDS: Record<TrackerKind, CardField[]> = { jira: ["issue_type", "points", "assignee"], linear: ["points", "assignee"], github: ["assignee"], clickup: ["assignee"] };
 

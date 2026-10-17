@@ -203,7 +203,8 @@ describe("boardView (X50 Board)", () => {
           "this workspace",
           [
             ["ops", "Scrum", ["todo", "in_progress", "in_review", "in_review", "in_review", "done"], "6 columns · 12 issues", { text: "5 sessions", state: "blocked" }],
-            ["web", "Repository", [], "", null],
+            // A repository board has GitHub's Open and Closed before its first sync.
+            ["web", "Repository", ["todo", "done"], "2 columns", null],
           ],
         ],
         ["1devstudio", "switches workspace", [["moon", "Team", [], "", null]]],
