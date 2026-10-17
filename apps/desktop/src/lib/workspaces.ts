@@ -75,6 +75,12 @@ export interface WorkspaceRef {
 /** The key of a workspace in per-workspace records (`lastSession`, attention). */
 export const wsKey = (host: string, id: string) => `${host}/${id}`;
 
+/** The host and id back from a `wsKey`; an id may hold a slash. */
+export function parseWsKey(key: string): { host: string; id: string } {
+  const at = key.indexOf("/");
+  return { host: key.slice(0, at), id: key.slice(at + 1) };
+}
+
 /** Whether workspace `id` of `host` is the one shown. */
 export const isShown = (shown: WorkspaceRef | null, host: string, id: string) => shown?.host === host && shown.id === id;
 
