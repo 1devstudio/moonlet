@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, assigneeOf, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
 import type { BoardSession } from "./tasksBoard";
 import { type BoardColumn, type BoardConfig, cardFields } from "./boards";
 import type { Task } from "./tasks";
@@ -155,14 +155,5 @@ describe("cardFace (X50 Cards show)", () => {
     expect(cardFields({ connection: "github:github.com" })).toEqual(["assignee"]);
     expect(cardFields({ connection: "linear:acme", cards: ["due"] })).toEqual(["due"]);
     expect(cardFields({ connection: "linear:acme", cards: [] })).toEqual([]);
-  });
-});
-
-describe("assigneeOf (X50 header: Assignee)", () => {
-  it("is what the user picked for the board in the app, else the board's own setting, else me", () => {
-    const ops = b("ops", "local/w", { assignee: "anyone" });
-    expect(assigneeOf(ops, {})).toBe("anyone");
-    expect(assigneeOf(ops, { ops: "me" })).toBe("me");
-    expect(assigneeOf(b("web", "local/w"), { ops: "anyone" })).toBe("me");
   });
 });

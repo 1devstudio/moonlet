@@ -47,9 +47,9 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch, syncedLabel } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, assigneeOf, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph, TrackerIcon } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
@@ -681,7 +681,7 @@ function Filters({ board, columns }: { board: BoardConfig; columns: BoardColumn[
     <div role="group" aria-label="Filters" className="flex items-center gap-1">
       <Menu
         width={200}
-        items={(["me", "anyone"] as const).map((v) => ({ label: v === "me" ? "Me" : "Anyone", description: v === "me" ? "Issues assigned to you" : "Others' issues dimmed", checked: who === v, onSelect: () => setAssignee(board.id, v) }))}
+        items={(["me", "anyone"] as const).map((v) => ({ label: v === "me" ? "Me" : "Anyone", description: v === "me" ? "Issues assigned to you" : "Others' issues dimmed", checked: who === v, onSelect: () => setAssignee(board, v) }))}
         trigger={(open) => (
           <button aria-label={`Assignee: ${who}`} onClick={open} className={cx(chip, "flex items-center gap-1 border-border-strong bg-raised text-fg")}>
             Assignee: {who}
