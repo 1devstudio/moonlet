@@ -8,7 +8,7 @@ import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskId, taskStart, trackerName, trackerOf } from "../../lib/tasks";
-import { enterOpensFirst, findsTask, glyphShape, initials, sessionCard, stateOptions } from "../../lib/taskDetails";
+import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
 import {
   activityOf,
@@ -46,9 +46,9 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch, syncedLabel } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { type BoardColumn, type BoardConfig, CATEGORY_LABEL, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { type BoardColumn, type BoardConfig, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, boardHeader, boardStats, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph, TrackerIcon } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
@@ -228,8 +228,9 @@ export function startSession(host: string, workspaceId: string, card: Card, work
   });
 }
 
-function TaskCard({ host, workspaceId, card, selected }: { host: string; workspaceId: string; card: Card; selected: boolean }) {
+function TaskCard({ host, workspaceId, card, fields, selected }: { host: string; workspaceId: string; card: Card; fields: CardField[]; selected: boolean }) {
   const pick = () => useTasks.setState({ selected: `${card.task.connection} ${card.task.key}` });
+  const face = cardFace(card.task, fields);
   return (
     <article
       aria-label={`${card.task.key} ${card.task.title}`}
@@ -242,18 +243,19 @@ function TaskCard({ host, workspaceId, card, selected }: { host: string; workspa
     >
       <div className="flex items-center gap-2 font-mono ui-text-11.5 text-faint">
         {card.task.key}
-        {card.task.issueType && <span className="font-sans text-faint">{card.task.issueType}</span>}
+        {face.type && <span className="font-sans text-faint">{face.type}</span>}
         <PriorityBars n={card.task.priority} />
-        {card.task.points !== undefined && <span className="ml-auto">{card.task.points} pt</span>}
-        {card.task.assignees[0] && (
-          <span title={`Assigned to ${card.task.assignees[0]}`} className={cx("rounded-full bg-panel-2 px-1.5 font-sans ui-text-10.5 text-muted", card.task.points === undefined && "ml-auto")}>
-            {initials(card.task.assignees[0])}
+        {face.points && <span className="ml-auto">{face.points}</span>}
+        {face.assignee && (
+          <span title={`Assigned to ${face.assignee.name}`} className={cx("rounded-full bg-panel-2 px-1.5 font-sans ui-text-10.5 text-muted", !face.points && "ml-auto")}>
+            {face.assignee.initials}
           </span>
         )}
       </div>
       <button className="mt-1 block w-full text-left ui-text-13.5 text-fg hover:underline" onClick={pick}>
         {card.task.title}
       </button>
+      {face.line && <div className="mt-0.5 truncate ui-text-12 text-faint">{face.line}</div>}
       {card.rows.length > 0 ? (
         <div className="mt-2 flex flex-col gap-1">
           {card.rows.map((r) => (
@@ -477,6 +479,7 @@ export function TasksMode() {
   const detail = cards.find((c) => taskId(c.task) === selected);
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
+  const fields = cardFields(shown.board);
   const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id]?.sprint ?? null)]));
   const listCards = views.flatMap((v) => (v.folded ? [] : v.cards));
   return (
@@ -537,7 +540,7 @@ export function TasksMode() {
                   </div>
                   <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                     {v.cards.map((c) => (
-                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} selected={taskId(c.task) === selected} />
+                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} selected={taskId(c.task) === selected} />
                     ))}
                   </div>
                 </section>
