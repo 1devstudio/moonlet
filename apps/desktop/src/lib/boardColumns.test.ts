@@ -286,3 +286,40 @@ describe("boardView (X50 Board)", () => {
     });
   });
 });
+
+describe("a GitHub Project's items (X50)", () => {
+  const PROJECT: BoardColumn[] = [
+    { name: "Todo", statuses: ["Todo"], category: "todo" },
+    { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
+    { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+  ];
+  const item = (number: number, status: string | null, closed = false): Task => ({
+    connection: "github:github.com",
+    key: `acme/web#${number}`,
+    title: `#${number}`,
+    url: "",
+    column: closed ? "done" : "open",
+    priority: 0,
+    assignees: [],
+    labels: [],
+    description: "",
+    updatedMs: 0,
+    github: { repo: "acme/web", number, closingPrs: [], project: { item: `PVTI_${number}`, status } },
+  });
+
+  it("sit in the column of their Status, whatever the issue's own state; one with no Status is not drawn", () => {
+    const tasks = [item(1, "Todo"), item(2, "In Progress"), item(3, "Done", true), item(4, null)];
+    expect(categorize(PROJECT, tasks).map((t) => [t.key, t.column])).toEqual([
+      ["acme/web#1", "todo"],
+      ["acme/web#2", "in_progress"],
+      ["acme/web#3", "done"],
+      ["acme/web#4", "hidden"],
+    ]);
+    const cols = boardView(PROJECT, { tasks, sessions: [], worktrees: [], sessionStartRule: "auto" });
+    expect(cols.map((c) => [c.name, c.cards.map((x) => x.task.key)])).toEqual([
+      ["Todo", ["acme/web#1"]],
+      ["In Progress", ["acme/web#2"]],
+      ["Done", ["acme/web#3"]],
+    ]);
+  });
+});

@@ -22,6 +22,9 @@ vi.mock("./daemon", () => ({
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
     // A Linear team's or ClickUp list's board (X50): that source's issues
     // from the tracker_tasks answers, and its columns when a test gives them.
+    // The app's command, tested in Rust (states.rs a_github_projects_status_options_as_board_columns).
+    githubProjectColumns: (options: string[]) =>
+      Promise.resolve(options.map((name) => ({ name, statuses: [name], category: name === "Done" ? "done" : name === "In Progress" ? "in_progress" : "todo", ...(name === "Done" && { show: "fold" }) }))),
     trackerBoardTasks: (q: { id: string; origin: { team?: string; list?: string; query?: string }; mine: boolean }) => {
       const answer = answers[`tracker_tasks ${q.id}${q.mine ? "" : " all"}`] ?? answers[`tracker_tasks ${q.id}`];
       if (!answer) return Promise.reject(new Error(`no tracker_board_tasks ${q.id}`));
@@ -1140,6 +1143,36 @@ describe("branchUser (X44 {user} in branch names)", () => {
     answers["gh.whoami"] = () => "someone-else";
     expect(await branchUser("local", "github:github.com", 30_000)).toBe("sam-rivera");
     expect(await branchUser("local", "github:github.com", 70_000)).toBe("someone-else");
+    useTasks.setState({ config: null });
+  });
+});
+
+describe("a GitHub Project's board (X50 Sync)", () => {
+  const item = (number: number, status: string | null, assignees: string[]) => ({
+    item: `PVTI_${number}`,
+    status,
+    task: { repo: "acme/web", number, title: `Issue ${number}`, body: "", url: `https://github.com/acme/web/issues/${number}`, closed: false, state_reason: null, assignees, labels: [], updated_ms: 0, closing_prs: [] },
+  });
+
+  it("reads the Project's issues with their Status, the user's own marked, and its columns from the Status options", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const options = [{ id: "o1", name: "Todo" }, { id: "o2", name: "In Progress" }, { id: "o3", name: "Done" }];
+    answers["gh.project_items"] = (p) =>
+      (p as { mine?: boolean }).mine
+        ? { id: "PVT_1", status_field: "F", options, items: [item(10, "Todo", ["sam-rivera"])] }
+        : { id: "PVT_1", status_field: "F", options, items: [item(10, "Todo", ["sam-rivera"]), item(11, "In Progress", ["kim"])] };
+    const project = { id: "web-project", name: "Website", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_project" as const, owner: "acme", number: 2 }, assignee: "anyone" as const };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [project] }, attention: {}, assignee: {} });
+    saved.length = 0;
+    await refreshTasks("local", "personal", 1_000);
+    const tasks = useTasks.getState().data["local/personal"].tasks;
+    expect(tasks.map((t) => [t.key, t.column, t.mine, t.github?.project])).toEqual([
+      ["acme/web#10", "todo", true, { item: "PVTI_10", status: "Todo" }],
+      ["acme/web#11", "in_progress", false, { item: "PVTI_11", status: "In Progress" }],
+    ]);
+    // Its columns come from the Status options, as the app names them.
+    await vi.waitFor(() => expect((saved.at(-1) as { boards?: { columns?: { name: string }[] }[] } | undefined)?.boards?.[0].columns?.map((c) => c.name)).toEqual(["Todo", "In Progress", "Done"]));
     useTasks.setState({ config: null });
   });
 });

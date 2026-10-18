@@ -24,6 +24,9 @@ import {
   newDraft,
   originText,
   pickOrigin,
+  projectChoice,
+  projectOwners,
+  scopeNeeded,
   previewLine,
   putBoard,
   STEPS,
@@ -31,7 +34,8 @@ import {
   toBoard,
 } from "../../lib/addBoard";
 import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, byDefaultHint, jiraBoardType, linkedProjects, type Origin, type StartRule } from "../../lib/boards";
-import { hostsApi } from "../../lib/daemon";
+import { hostsApi, rpc } from "../../lib/daemon";
+import { type GhProject, M } from "../../lib/protocol";
 import { errorToast, useStore } from "../../lib/store";
 import { type Task, trackerName, trackerOf } from "../../lib/tasks";
 import { GITHUB, openBoard, previewBoard, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
@@ -40,6 +44,20 @@ import { BoardMark, Button, cx, IconButton, inputCls } from "../ui";
 import { TaskGlyph } from "./TasksMode";
 
 const selectCls = cx(inputCls, "menu-select field-height");
+
+type Build = "board" | "jql" | "project" | "repo";
+
+/** What a Jira or GitHub board can be built from (X50 step 1). */
+const BUILDS: Record<"jira" | "github", readonly (readonly [Build, string, string])[]> = {
+  jira: [
+    ["board", "An existing Jira board", "Columns, their order, WIP limits and the filter come from the board. Changes in Jira show up here."],
+    ["jql", "A JQL query", "Any set of issues. One column per workflow status, which you can then group and order."],
+  ],
+  github: [
+    ["project", "A GitHub Project", "Columns follow the Project's Status field. Its view's filter stays in GitHub."],
+    ["repo", "A repository's issues", "Open and Closed, as the repository's issues are."],
+  ],
+};
 
 /** A row the user can pick in step 1: a Jira board, a Linear team, a ClickUp list or a repository. */
 interface Choice {
@@ -71,7 +89,10 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const sourceProjects = useTasks((t) => t.data[draft.workspace]?.sourceProjects);
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [choicesError, setChoicesError] = useState<string | null>(null);
-  const [build, setBuild] = useState<"board" | "jql">("board");
+  // What a Jira or GitHub board is built from; GitHub starts on a Project.
+  const [build, setBuild] = useState<Build>(() => (editing?.origin.kind === "github_repo" ? "repo" : connection === GITHUB ? "project" : "board"));
+  // Check again (gh's scope) reads the list once more.
+  const [reload, setReload] = useState(0);
   // The board's filter: undefined while it is read, null when Jira does not share it.
   const [filterJql, setFilterJql] = useState<string | null | undefined>(undefined);
   const [filterId, setFilterId] = useState<string | null>(null);
@@ -102,14 +123,18 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     setChoices(null);
     setChoicesError(null);
     if (!draft.connection) return;
-    if (draft.connection === GITHUB) {
+    if (draft.connection === GITHUB && build === "repo") {
       setChoices(repos.map((repo) => ({ key: repo, name: repo, origin: { kind: "github_repo", repo } })));
       return;
     }
     let stale = false;
     const kind = trackerOf(draft.connection);
+    // The Projects of the user and of the owners of the workspace's repositories (X50).
+    const owners = projectOwners(repos);
     const ask =
-      kind === "jira"
+      draft.connection === GITHUB
+        ? rpc<GhProject[]>(host, M.ghProjects, { owners }).then((ps) => ps.map((p): Choice => projectChoice(p)))
+        : kind === "jira"
         ? hostsApi.trackerBoards(draft.connection).then((bs) => bs.map((b): Choice => ({ key: b.project ?? String(b.id), name: b.name, kind: jiraBoardType(b.kind), sprints: jiraSprints(b.kind), origin: { kind: "jira_board", board: b.id } })))
         : hostsApi
             .trackerSources(draft.connection)
@@ -122,7 +147,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     return () => {
       stale = true;
     };
-  }, [draft.connection, repos.join(" ")]);
+  }, [draft.connection, repos.join(" "), build, reload]);
 
   // Board settings learn from the source's row whether it has sprints or cycles.
   useEffect(() => {
@@ -302,6 +327,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                         aria-pressed={draft.connection === c.id}
                         onClick={() => {
                           setDraft({ ...newDraft(draft.workspace), connection: c.id });
+                          setBuild(c.id === GITHUB ? "project" : "board");
                           setReached(1);
                         }}
                         className={cx("flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left", draft.connection === c.id ? "border-accent bg-accent/[0.08]" : "border-border hover:bg-panel-2")}
@@ -317,16 +343,11 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                     ))}
                   </div>
                 </section>
-                {tracker === "jira" && (
+                {(tracker === "jira" || tracker === "github") && (
                   <section aria-label="Build the board from">
                     <div className="mb-2 ui-text-12 text-muted">Build the board from</div>
                     <div className="grid grid-cols-2 gap-2">
-                      {(
-                        [
-                          ["board", "An existing Jira board", "Columns, their order, WIP limits and the filter come from the board. Changes in Jira show up here."],
-                          ["jql", "A JQL query", "Any set of issues. One column per workflow status, which you can then group and order."],
-                        ] as const
-                      ).map(([id, title, text]) => (
+                      {BUILDS[tracker].map(([id, title, text]) => (
                         <button
                           key={id}
                           aria-pressed={build === id}
@@ -334,7 +355,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                             setBuild(id);
                             setReached(1);
                             if (id === "jql" && draft.connection) setDraft(pickOrigin(draft, draft.connection, { kind: "jql", query: "" }, "Query"));
-                            if (id === "board") set({ origin: null });
+                            if (id !== "jql") set({ origin: null, columns: [] });
                           }}
                           className={cx("rounded-lg border px-3 py-2.5 text-left", build === id ? "border-accent bg-accent/[0.08]" : "border-border hover:bg-panel-2")}
                         >
@@ -358,8 +379,21 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                 ) : (
                   draft.connection && (
                     <section aria-label="Pick what the board shows">
-                      <div className="mb-2 ui-text-12 text-muted">{tracker === "jira" ? "Jira board" : tracker === "linear" ? "Linear team" : tracker === "clickup" ? "ClickUp list" : "Repository"}</div>
-                      {choicesError && <p className="ui-text-12.5 text-error">{choicesError}</p>}
+                      <div className="mb-2 ui-text-12 text-muted">{tracker === "jira" ? "Jira board" : tracker === "linear" ? "Linear team" : tracker === "clickup" ? "ClickUp list" : build === "project" ? "GitHub Project" : "Repository"}</div>
+                      {choicesError && scopeNeeded(choicesError) ? (
+                        // moonlet never runs gh auth itself: the user adds the scope and checks again (X50).
+                        <div role="alert" className="flex flex-col gap-2 rounded-lg border border-border px-3 py-2.5 ui-text-12.5 text-muted">
+                          <span>Reading GitHub Projects needs gh's {scopeNeeded(choicesError)} scope. Run this in a terminal, then check again:</span>
+                          <code className="select-all rounded bg-bg/60 px-2 py-1 font-mono ui-text-12 text-fg">gh auth refresh -s {scopeNeeded(choicesError)}</code>
+                          <span>
+                            <Button size="sm" variant="ghost" onClick={() => setReload((n) => n + 1)}>
+                              Check again
+                            </Button>
+                          </span>
+                        </div>
+                      ) : (
+                        choicesError && <p className="ui-text-12.5 text-error">{choicesError}</p>
+                      )}
                       {!choices && !choicesError && <p className="ui-text-12.5 text-muted">Loading…</p>}
                       {choices && choices.length === 0 && <p className="ui-text-12.5 text-muted">{tracker === "github" ? "No project of this workspace has a GitHub origin." : "Nothing to pick."}</p>}
                       <div role="radiogroup" className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
