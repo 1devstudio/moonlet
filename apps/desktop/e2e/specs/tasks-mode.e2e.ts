@@ -135,9 +135,25 @@ describe("Tasks mode", () => {
     rmSync(fakeGh, { force: true });
   });
 
-  it("shows the project's GitHub issues with the sessions working on them, and a board switcher with bars and ↑ ↓ ↵", async () => {
+  it("gives a repository no board until the user adds it from Connect a task tracker's GitHub Issues, then shows its issues with the sessions working on them, and a board switcher with bars and ↑ ↓ ↵", async () => {
     await expect($(sel.text(PROJECT))).toBeDisplayed({ wait: 30_000 });
     await tasksButton().click();
+    // The project's repository has no board of its own (X50): GitHub Issues opens Add a board on GitHub.
+    await expect($(sel.text("Connect a task tracker"))).toBeDisplayed({ wait: 30_000 });
+    await expect($('//nav[@aria-label="Boards"]//button')).not.toBeExisting();
+    await $('//section[@aria-labelledby="connect-tracker"]//button[.//div[normalize-space()="GitHub Issues"]]').click();
+    const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+    await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
+    await $(`${dialog}//button[.//span[normalize-space()="A repository's issues"]]`).click();
+    await $(`${dialog}//button[@role="radio"][.//span[normalize-space()="acme/storefront"]]`).click();
+    const next = `${dialog}//button[normalize-space()="Continue"]`;
+    await $(next).click();
+    await expect($(`${dialog}//p[contains(normalize-space(), "issues match")]`)).toBeDisplayed({ wait: 15_000 });
+    await $(next).waitForEnabled({ timeout: 15_000 });
+    await $(next).click();
+    await expect($(`${dialog}//div[@role="row"][@aria-label="Open"]`)).toBeDisplayed({ wait: 10_000 });
+    await $(next).click();
+    await $(`${dialog}//button[normalize-space()="Create board"]`).click();
     await expect(card("acme/storefront#12", "Open")).toBeDisplayed({ wait: 30_000 });
     await expect(card("acme/storefront#15", "Open")).toBeDisplayed();
     await expect(card("acme/storefront#12", "Open").$(sel.text(LINKED))).toBeDisplayed();

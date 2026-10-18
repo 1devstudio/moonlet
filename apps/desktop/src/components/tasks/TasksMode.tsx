@@ -33,6 +33,7 @@ import {
   setAssignee,
   setFilters,
   setLayout,
+  GITHUB,
   openAddBoard,
   showBoard,
   syncTasks,
@@ -445,13 +446,15 @@ export function TasksMode() {
             {connected ? "This workspace has no board yet. Pick one of your trackers' boards, teams or lists, or a GitHub repository." : "Tasks mode shows your issues with the sessions, worktrees and PRs working on them. This workspace has no board yet."}
           </p>
           <div className="mt-3 flex flex-col divide-y divide-border rounded-lg border border-border">
-            <div className="flex items-center gap-3 px-3 py-2">
-              <BoardMark connection="github" size={14} />
-              <div className="min-w-0">
+            {/* GitHub needs no connecting: it opens Add a board on GitHub (X50). */}
+            <button className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-panel-2" onClick={() => openAddBoard(ws.host, ws.id, undefined, GITHUB)}>
+              <BoardMark connection={GITHUB} size={14} />
+              <div className="min-w-0 flex-1">
                 <div className="ui-text-13 text-fg">GitHub Issues</div>
-                <div className="ui-text-12 text-muted">Uses your gh login · add a project with a GitHub origin to this workspace</div>
+                <div className="ui-text-12 text-muted">Uses your gh login · a repository's issues or a GitHub Project</div>
               </div>
-            </div>
+              <ChevronRight size={14} className="shrink-0 text-faint" />
+            </button>
             {(
               [
                 ["linear", "Linear", "API key"],

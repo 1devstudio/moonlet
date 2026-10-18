@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, projectMove, projectMoveLock, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, projectMove, projectMoveLock, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -93,29 +93,6 @@ describe("migrateSources (X50 Boards replace sources)", () => {
       connections: [{ id: "clickup:9012", kind: "clickup", site: "9012", account: "Sam", auth: "token", sources: [{ key: "901", name: "Sprint", workspace: "local/acme" }] }],
     };
     expect(migrateSources(clickup).boards?.map((b) => b.origin)).toEqual([{ kind: "clickup_list", list: "901" }]);
-  });
-});
-
-describe("addRepoBoards (X50 a workspace's GitHub repositories)", () => {
-  it("gives each repository of a workspace's projects its board once, whatever its case", () => {
-    const after = addRepoBoards(DEFAULT_CONFIG, "local/acme", ["acme/storefront", "Acme/Storefront"]);
-    expect(after.boards).toEqual([
-      { id: "github:github.com/acme/storefront@local/acme", name: "acme/storefront", connection: "github:github.com", workspace: "local/acme", origin: { kind: "github_repo", repo: "acme/storefront" } },
-    ]);
-    expect(after.migrated).toEqual(["local/acme github:github.com/acme/storefront"]);
-  });
-
-  it("keeps a board removed later removed", () => {
-    const after = addRepoBoards(DEFAULT_CONFIG, "local/acme", ["acme/storefront"]);
-    expect(addRepoBoards({ ...after, boards: [] }, "local/acme", ["acme/storefront"]).boards).toEqual([]);
-  });
-
-  it("gives a repository seen on a later sync its board then (a host offline, a remote added later)", () => {
-    const first = addRepoBoards(DEFAULT_CONFIG, "local/acme", []);
-    expect(first).toBe(DEFAULT_CONFIG);
-    const later = addRepoBoards(first, "local/acme", ["acme/web"]);
-    expect(later.boards?.map((b) => b.id)).toEqual(["github:github.com/acme/web@local/acme"]);
-    expect(addRepoBoards(later, "local/acme", ["acme/web"])).toBe(later);
   });
 });
 
