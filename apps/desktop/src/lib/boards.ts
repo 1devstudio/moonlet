@@ -145,3 +145,31 @@ const ORIGIN_KINDS: { [K in Origin["kind"]]: { label: string; key: (o: Extract<O
 
 export const originLabel = (o: Origin) => ORIGIN_KINDS[o.kind].label;
 export const originKey = (o: Origin) => (ORIGIN_KINDS[o.kind].key as (o: Origin) => string)(o);
+
+/** A Jira board's issue as `tracker_board_tasks` sends it. */
+export type BoardIssue = Task & { statusId: string };
+
+/** A board issue as a task: its status id goes with the tracker's state. */
+export function taskFromBoardIssue({ statusId, ...task }: BoardIssue): Task {
+  return { ...task, tracker: task.tracker && { ...task.tracker, statusId } };
+}
+
+/**
+ * A board's saved columns matched to the tracker's on a sync (X50), by
+ * status id: a saved column keeps its place, folding and category and takes
+ * the tracker's name, statuses and WIP; a tracker column no saved one shares
+ * a status with is added at the end with its defaults; a saved column whose
+ * statuses are all gone is dropped.
+ */
+export function matchColumns(saved: BoardColumn[] | undefined, fresh: BoardColumn[]): BoardColumn[] {
+  if (!saved?.length) return fresh;
+  const used = new Set<BoardColumn>();
+  const kept = saved.flatMap((s) => {
+    const match = fresh.find((f) => !used.has(f) && f.statuses.some((id) => s.statuses.includes(id)));
+    if (!match) return [];
+    used.add(match);
+    const { show: _, ...tracker } = match;
+    return [{ ...tracker, category: s.category, ...(s.show && { show: s.show }) }];
+  });
+  return [...kept, ...fresh.filter((f) => !used.has(f))];
+}

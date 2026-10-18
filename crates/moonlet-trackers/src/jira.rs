@@ -7,7 +7,7 @@ use crate::task::{TrackerRef, TrackerTask};
 use crate::{ApiError, TrackerKind};
 
 /// The fields a search asks for.
-const FIELDS: [&str; 9] = [
+pub(crate) const FIELDS: [&str; 9] = [
     "summary",
     "status",
     "priority",
@@ -19,7 +19,7 @@ const FIELDS: [&str; 9] = [
     "issuetype",
 ];
 
-fn parse(raw: &[u8]) -> Result<Value, ApiError> {
+pub(crate) fn parse(raw: &[u8]) -> Result<Value, ApiError> {
     serde_json::from_slice(raw)
         .map_err(|e| ApiError::new(format!("Jira answered with something else: {e}")))
 }

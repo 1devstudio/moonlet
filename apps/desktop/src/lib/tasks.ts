@@ -20,6 +20,12 @@ export interface Task {
   labels: string[];
   /** Jira's components, for a board's "start in" rules (X50). */
   components?: string[];
+  /** Story points or estimate, when the board's cards show them (X50). */
+  points?: number;
+  /** The epic or parent issue. */
+  parent?: { key: string; title: string };
+  /** `YYYY-MM-DD`. */
+  due?: string;
   /** Markdown. */
   description: string;
   updatedMs: number;

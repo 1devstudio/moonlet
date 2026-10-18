@@ -56,6 +56,17 @@ export const hostsApi = {
   trackerOauthAvailable: () => invoke<boolean>("tracker_oauth_available"),
   trackerOauthLinear: () => invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_oauth_linear"),
   trackerStates: (id: string, source: string) => invoke<{ name: string; column: import("./tasks").Column }[]>("tracker_states", { id, source }),
+  /** A Jira connection's boards (X50 Add a board). */
+  trackerBoards: (id: string) => invoke<{ id: number; name: string; kind: string; project: string | null }[]>("tracker_boards", { id }),
+  /** A Jira board's columns, filter and story points field (X50). */
+  trackerBoardSetup: (id: string, board: number) =>
+    invoke<{ filterId: string; subQuery: string | null; pointsField: string | null; sprints: boolean; columns: import("./boards").BoardColumn[] }>("tracker_board_setup", { id, board }),
+  /** A board's issues, its active sprint, and a Jira board's columns as Jira has them now (X50). */
+  trackerBoardTasks: (query: { id: string; origin: import("./boards").Origin; narrow?: string; mine: boolean; finished: number | "sprint" }) =>
+    invoke<{ issues: import("./boards").BoardIssue[]; sprint: { id: number; name: string; startMs: number; endMs: number } | null; columns: import("./boards").BoardColumn[] | null }>(
+      "tracker_board_tasks",
+      { query },
+    ),
   /** `~/.moonlet/trackers.toml`, or its defaults (X44). */
   trackersConfig: () => invoke<Partial<import("./tasksStore").TrackersConfig>>("trackers_config"),
   trackersSave: (config: import("./tasksStore").TrackersConfig) => invoke("trackers_save", { config }),

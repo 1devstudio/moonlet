@@ -1,0 +1,6 @@
+{
+  "self": "https://acme.atlassian.net/rest/api/3/filter/10021",
+  "id": "10021",
+  "name": "Filter for OPS board",
+  "jql": "project = 10008 ORDER BY Rank ASC"
+}
