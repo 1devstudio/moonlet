@@ -44,12 +44,12 @@ import {
 import { boardListGroups, cleanUps, listRow } from "../../lib/tasksList";
 import { removeWorktreeAsk, startAction, withoutPutOffCard, withRules } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
-import { keepCard, modeSwitch, syncedLabel } from "../../lib/tasksView";
+import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
@@ -183,7 +183,7 @@ export function TasksSidebar() {
         <div className="flex items-center gap-2 px-4 py-2 ui-text-12 text-faint">
           <RotateCw size={12} className="shrink-0" />
           <span className={cx("min-w-0 flex-1 truncate", data.error && "text-error")} title={data.error ?? undefined}>
-            {data.error ? `Sync failed · ${data.error}` : syncedLabel(footerTracker(shown?.board ?? null), data.syncedAt, now)}
+            {footerLine(data, shown?.board.id ?? null, footerTracker(shown?.board ?? null), now)}
           </span>
           <span aria-hidden="true" className={cx("h-1.5 w-1.5 rounded-full", data.error ? "bg-error" : "bg-done")} />
         </div>
@@ -477,6 +477,7 @@ export function TasksMode() {
   const detail = cards.find((c) => taskId(c.task) === selected);
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
+  const problem = boardProblem(shown.board, data.boards?.[shown.board.id]);
   const fields = cardFields(shown.board);
   const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id])]));
   const listCards = views.flatMap((v) => (v.folded ? [] : v.cards));
@@ -494,6 +495,15 @@ export function TasksMode() {
             </IconButton>
           </div>
         </header>
+        {problem && (
+          // A board whose origin is gone (a Jira board deleted, a team archived) says why, with its settings (X50).
+          <div role="alert" className="mx-5 mb-3 flex items-center gap-3 rounded-lg border border-error/40 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">
+            <span className="min-w-0 flex-1">{problem}</span>
+            <Button size="sm" variant="ghost" onClick={() => openAddBoard(ws.host, ws.id, shown.board.id)}>
+              Board settings
+            </Button>
+          </div>
+        )}
         {layout === "list" ? (
           <TasksList host={ws.host} workspaceId={ws.id} views={views} unlinked={unlinked} />
         ) : (
