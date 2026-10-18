@@ -7,6 +7,7 @@ import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../.
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
+import { createLock, createsIn, createTarget } from "../../lib/newIssue";
 import { type Column, type Task, taskId, taskStart, trackerName } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
@@ -55,6 +56,7 @@ import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } f
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
+import { NewIssue } from "./NewIssue";
 
 
 const TONE: Record<CardRow["meta"]["tone"], string> = {
@@ -424,6 +426,9 @@ export function TasksMode() {
   const filters = useTasks((t) => t.filters);
   const assignee = useTasks((t) => t.assignee);
   const selected = useTasks((t) => t.selected);
+  const attention = useTasks((t) => t.attention);
+  // The column whose + opened New issue (X52).
+  const [creating, setCreating] = useState<BoardColumn | null>(null);
   if (!ws) return null;
   if (!data) return <Empty title="Loading tasks…" />;
   if (!shown) {
@@ -480,6 +485,13 @@ export function TasksMode() {
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
   const problem = boardProblem(shown.board, data.boards?.[shown.board.id]);
   const fields = cardFields(shown.board);
+  // The + on a column (X52): where it creates, and why it can't.
+  const savedColumns = syncedColumns(shown.board, null);
+  const createLocked = createLock(shown.board, { attention: attention[shown.board.connection], hostOnline: true });
+  const plusFor = (name: string) => {
+    const column = savedColumns.find((c) => c.name === name);
+    return column && createsIn(shown.board) && createTarget(shown.board, column) ? column : null;
+  };
   // A GitHub Project's estimate is named after its number field (X50).
   const estimate = data.boards?.[shown.board.id]?.project?.numberField ?? null;
   const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id])]));
@@ -521,11 +533,23 @@ export function TasksMode() {
               v.folded ? (
                 <FoldedColumn key={v.name} boardId={shown.board.id} view={v} />
               ) : (
-                <section key={v.name} aria-label={v.name} className="flex w-[280px] shrink-0 flex-col">
+                <section key={v.name} aria-label={v.name} className="group/column flex w-[280px] shrink-0 flex-col">
                   <div className="mb-2 border-b border-border pb-1.5">
                     <div className="flex items-center gap-2 ui-text-13 font-medium text-fg">
                       <span className="min-w-0 truncate">{v.name}</span>
                       <span className="font-mono ui-text-12 font-normal text-faint">{v.cards.length}</span>
+                      {plusFor(v.name) && (
+                        // Shown on hover, keyboard focus, and always on a touch screen.
+                        // A locked + stays in the tab order, so its reason can be reached.
+                        <IconButton
+                          title={createLocked ?? `New issue in ${v.name}`}
+                          aria-disabled={!!createLocked || undefined}
+                          onClick={() => !createLocked && setCreating(plusFor(v.name))}
+                          className="opacity-0 focus-visible:opacity-100 group-hover/column:opacity-100 aria-disabled:cursor-default aria-disabled:text-faint [@media(hover:none)]:opacity-100"
+                        >
+                          <Plus size={14} />
+                        </IconButton>
+                      )}
                       <div className="ml-auto">
                         <Menu
                           align="right"
@@ -567,6 +591,7 @@ export function TasksMode() {
         )}
       </div>
       {detail && <TaskDetail host={ws.host} workspaceId={ws.id} card={detail} />}
+      {creating && <NewIssue host={ws.host} workspaceId={ws.id} board={shown.board} column={creating} onClose={() => setCreating(null)} />}
     </div>
   );
 }

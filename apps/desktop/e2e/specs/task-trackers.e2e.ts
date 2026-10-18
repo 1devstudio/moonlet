@@ -66,10 +66,22 @@ let issuesAsked = 0;
 
 /** Whether Linear lists a third team, OPS (X50 Add a board). */
 let opsTeam = false;
+/** The `issueCreate` inputs Linear was sent (X52). */
+const linearCreates: object[] = [];
 
 /** Linear's GraphQL endpoint: an answer per query, and a record of every move. */
 function linear(query: string, variables: Record<string, unknown>): string {
   // Most specific first. A board's query (X50) reads one team.
+  // A new issue from a column (X52): the form's lists, and the issue in the state asked for.
+  if (query.includes("CreateOptions")) return answer("linear-create-options.json");
+  if (query.includes("issueCreate")) {
+    const input = (variables as { input: { stateId: string } }).input;
+    linearCreates.push(input);
+    const states = JSON.parse(answer("linear-create-options.json")).data.teams.nodes[0].states.nodes as { id: string; name: string }[];
+    const created = JSON.parse(answer("linear-issue-create.json"));
+    created.data.issueCreate.issue.state = { id: input.stateId, name: states.find((x) => x.id === input.stateId)?.name, type: "unstarted" };
+    return JSON.stringify(created);
+  }
   if (query.includes("issueUpdate")) {
     moves.push(variables as (typeof moves)[number]);
     return answer("linear-issue-update.json");
@@ -231,6 +243,28 @@ describe("Linear tracker", () => {
     await expect($(`${grace}//span[normalize-space()="Assigned to Grace Hopper"]`)).toBeDisplayed();
     await pick("Me");
     await expect($(grace)).not.toBeExisting();
+  });
+
+  it("creates an issue from a column's +, in that column, its card selected with its detail open (X52)", async () => {
+    const todo = '//section[@aria-label="Todo"]';
+    // The + shows on hover of its column.
+    await $(todo).moveTo();
+    await $(`${todo}//button[@title="New issue in Todo"]`).click();
+    const dialog = '//div[@role="dialog"][@aria-label="New issue in Todo"]';
+    await expect($(`${dialog}//button[normalize-space()="Create"]`)).toBeDisabled();
+    await fill(`${dialog}//input`, "Retry failed webhook deliveries");
+    await $(`${dialog}//button[normalize-space()="Create"]`).click();
+    await $(dialog).waitForExist({ reverse: true, timeout: 10_000 });
+    await expect($(`${todo}//article[starts-with(@aria-label, "ENG-142")]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($('//aside[@aria-label="Task detail"]')).toBeDisplayed();
+    // In Todo's state, assigned to the user.
+    expect(linearCreates.at(-1)).toEqual({
+      teamId: "b2000000-0000-4000-8000-000000000001",
+      title: "Retry failed webhook deliveries",
+      stateId: "a1000000-0000-4000-8000-000000000001",
+      assigneeId: "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+    });
+    await $('//button[@title="Close detail"]').click();
   });
 
   it("moves the issue to In Progress and assigns it when a session starts from it", async () => {
