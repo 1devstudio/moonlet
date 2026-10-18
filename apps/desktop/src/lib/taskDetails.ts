@@ -2,7 +2,7 @@
 
 import type { Column, Task } from "./tasks";
 import { ago } from "./mobile";
-import type { Board, BoardSession, Card } from "./tasksBoard";
+import { type Board, type BoardSession, type Card, checkCounts } from "./tasksBoard";
 
 /** "SR" for "Sam Rivera": first letters of the first and last name. */
 export function initials(name: string): string {
@@ -66,7 +66,6 @@ export function glyphShape(column: Column): "ring" | "half" | "three-quarters" |
   return column === "done" ? "check" : column === "in_progress" ? "half" : column === "in_review" ? "three-quarters" : "ring";
 }
 
-const PASSING = new Set(["success", "neutral", "skipped"]);
 const REVIEW: Record<string, string> = { APPROVED: "approved", CHANGES_REQUESTED: "changes requested", REVIEW_REQUIRED: "review required" };
 
 /** A session's card in the task detail (X45): where it works, its diff, its agents and its PR. */
@@ -75,7 +74,7 @@ export function sessionCard(s: BoardSession, project: string, now: number): { wh
   const agents = (s.agents ?? []).map((a) => `${a.name} · ${a.state} · ${ago(now - a.since).replace(/ ago$/, "")}`);
   let pr = "No pull request · Create PR ⇧⌘P";
   if (s.pr) {
-    const checks = s.pr.checks.length ? `${s.pr.checks.filter((c) => c.conclusion && PASSING.has(c.conclusion)).length}/${s.pr.checks.length} checks` : "";
+    const checks = s.pr.checks.length ? `${checkCounts(s.pr.checks).passed}/${s.pr.checks.length} checks` : "";
     const review = s.pr.review_decision ? REVIEW[s.pr.review_decision] : "";
     pr = [`#${s.pr.number} ${s.pr.state}`, checks, review].filter(Boolean).join(" · ");
   }
