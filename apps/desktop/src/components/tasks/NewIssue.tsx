@@ -4,7 +4,7 @@
 import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { BoardColumn, BoardConfig } from "../../lib/boards";
-import { canSubmit, type NewIssue as Draft, newIssueDraft } from "../../lib/newIssue";
+import { canSubmit, type NewIssue as Draft, newIssueDraft, withAccess } from "../../lib/newIssue";
 import { createIssue, createOptions, message } from "../../lib/tasksStore";
 import { Menu } from "../Menu";
 import { Button, Dialog, inputCls } from "../ui";
@@ -21,14 +21,18 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
   const [labelQuery, setLabelQuery] = useState("");
   useEffect(() => {
     let stale = false;
-    createOptions(board).then(
-      (o) => !stale && setOptions(o),
+    createOptions(host, board).then(
+      (o) => {
+        if (stale) return;
+        setOptions(o);
+        setDraft((d) => withAccess(d, o.canSet).draft);
+      },
       () => {},
     );
     return () => {
       stale = true;
     };
-  }, [board.id, board.connection]);
+  }, [host, board.id, board.connection]);
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   const ready = canSubmit(draft, { busy });
   const create = () => {
@@ -78,44 +82,46 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
           <span className="ui-text-12 text-muted">Description</span>
           <textarea rows={5} placeholder="Markdown" className={inputCls} value={draft.description} onChange={(e) => set({ description: e.target.value })} />
         </label>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1.5">
-            <span className="ui-text-12 text-muted">Assignee</span>
-            <Menu
-              width={240}
-              search={{ placeholder: "Find a person", query: peopleQuery, onQuery: setPeopleQuery }}
-              items={[
-                { label: "Me", checked: draft.assignee === "me", onSelect: () => set({ assignee: "me" }) },
-                { label: "Unassigned", checked: draft.assignee === "none", onSelect: () => set({ assignee: "none" }) },
-                ...people
-                  .filter((p) => p.name.toLowerCase().includes(peopleQuery.toLowerCase()))
-                  .map((p) => ({ label: p.name, checked: draft.assignee === p.id, onSelect: () => set({ assignee: p.id }) })),
-              ]}
-              trigger={(open) => (
-                <button aria-label="Assignee" onClick={open} className={`${inputCls} flex items-center justify-between text-left`}>
-                  {assigneeName}
-                  <ChevronDown size={12} className="text-faint" />
-                </button>
-              )}
-            />
+        {withAccess(draft, options?.canSet ?? true).assignment && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <span className="ui-text-12 text-muted">Assignee</span>
+              <Menu
+                width={240}
+                search={{ placeholder: "Find a person", query: peopleQuery, onQuery: setPeopleQuery }}
+                items={[
+                  { label: "Me", checked: draft.assignee === "me", onSelect: () => set({ assignee: "me" }) },
+                  { label: "Unassigned", checked: draft.assignee === "none", onSelect: () => set({ assignee: "none" }) },
+                  ...people
+                    .filter((p) => p.name.toLowerCase().includes(peopleQuery.toLowerCase()))
+                    .map((p) => ({ label: p.name, checked: draft.assignee === p.id, onSelect: () => set({ assignee: p.id }) })),
+                ]}
+                trigger={(open) => (
+                  <button aria-label="Assignee" onClick={open} className={`${inputCls} flex items-center justify-between text-left`}>
+                    {assigneeName}
+                    <ChevronDown size={12} className="text-faint" />
+                  </button>
+                )}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <span className="ui-text-12 text-muted">Labels</span>
+              <Menu
+                width={240}
+                search={{ placeholder: "Find a label", query: labelQuery, onQuery: setLabelQuery }}
+                items={labels
+                  .filter((l) => l.toLowerCase().includes(labelQuery.toLowerCase()))
+                  .map((l) => ({ label: l, checked: has(l), onSelect: () => set({ labels: has(l) ? draft.labels.filter((x) => x.toLowerCase() !== l.toLowerCase()) : [...draft.labels, l] }) }))}
+                trigger={(open) => (
+                  <button aria-label="Labels" onClick={open} className={`${inputCls} flex items-center justify-between text-left`}>
+                    <span className="truncate">{draft.labels.length ? draft.labels.join(", ") : "None"}</span>
+                    <ChevronDown size={12} className="text-faint" />
+                  </button>
+                )}
+              />
+            </div>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <span className="ui-text-12 text-muted">Labels</span>
-            <Menu
-              width={240}
-              search={{ placeholder: "Find a label", query: labelQuery, onQuery: setLabelQuery }}
-              items={labels
-                .filter((l) => l.toLowerCase().includes(labelQuery.toLowerCase()))
-                .map((l) => ({ label: l, checked: has(l), onSelect: () => set({ labels: has(l) ? draft.labels.filter((x) => x.toLowerCase() !== l.toLowerCase()) : [...draft.labels, l] }) }))}
-              trigger={(open) => (
-                <button aria-label="Labels" onClick={open} className={`${inputCls} flex items-center justify-between text-left`}>
-                  <span className="truncate">{draft.labels.length ? draft.labels.join(", ") : "None"}</span>
-                  <ChevronDown size={12} className="text-faint" />
-                </button>
-              )}
-            />
-          </div>
-        </div>
+        )}
         {error && (
           <p role="alert" className="ui-text-12.5 text-error">
             {error}

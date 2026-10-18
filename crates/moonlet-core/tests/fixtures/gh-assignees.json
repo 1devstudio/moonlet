@@ -1,0 +1,23 @@
+[
+  {
+    "login": "sam-rivera",
+    "id": 1000001,
+    "node_id": "U_e2e0002",
+    "avatar_url": "https://avatars.githubusercontent.com/u/1000001?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/sam-rivera",
+    "html_url": "https://github.com/sam-rivera",
+    "followers_url": "https://api.github.com/users/sam-rivera/followers",
+    "following_url": "https://api.github.com/users/sam-rivera/following{/other_user}",
+    "gists_url": "https://api.github.com/users/sam-rivera/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/sam-rivera/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/sam-rivera/subscriptions",
+    "organizations_url": "https://api.github.com/users/sam-rivera/orgs",
+    "repos_url": "https://api.github.com/users/sam-rivera/repos",
+    "events_url": "https://api.github.com/users/sam-rivera/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/sam-rivera/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  }
+]
