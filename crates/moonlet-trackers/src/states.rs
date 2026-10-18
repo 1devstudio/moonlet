@@ -119,6 +119,42 @@ mod tests {
     use crate::config::{Category, Show};
 
     #[test]
+    fn a_clickup_lists_statuses_as_board_columns() {
+        let states: Vec<(String, String)> = crate::clickup::parse_statuses(
+            &std::fs::read(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/clickup-list.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.name, s.kind))
+        .collect();
+        let columns = board_columns(Clickup, &states);
+        assert_eq!(
+            columns
+                .iter()
+                .map(|c| (c.name.as_str(), c.statuses.clone(), c.category, c.show))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "to do",
+                    vec!["to do".to_string()],
+                    Category::Todo,
+                    Show::Show
+                ),
+                (
+                    "complete",
+                    vec!["complete".to_string()],
+                    Category::Done,
+                    Show::Fold
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn a_linear_teams_states_as_board_columns() {
         let states: Vec<(String, String)> = crate::linear::parse_states(
             &std::fs::read(concat!(

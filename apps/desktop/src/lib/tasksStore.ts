@@ -13,7 +13,7 @@ import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKe
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, taskId, trackerOf } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskId, trackerOf } from "./tasks";
 import { parseTrackerLink } from "./trackerSources";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
@@ -445,7 +445,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   for (const x of per)
     for (const t of x.trackers) {
       const link = parseTrackerLink(t);
-      const source = link && `${link.connection} ${link.key}`;
+      const source = link && sourceKey(link.connection, link.key);
       if (source) sourceProjects[source] = [...(sourceProjects[source] ?? []), x.id];
     }
   const next: TasksData = {

@@ -2,7 +2,7 @@
 // own columns. `BoardConfig` mirrors `moonlet-trackers::config::Board`, as
 // saved in `trackers.toml`; `tasksBoard` builds what is drawn.
 
-import { type Column, type Task, type TrackerKind, trackerOf } from "./tasks";
+import { type Column, sourceKey, type Task, type TrackerKind, trackerName, trackerOf } from "./tasks";
 import type { Connection, Source, TrackersConfig } from "./tasksStore";
 import { trackerLink } from "./trackerSources";
 
@@ -281,7 +281,7 @@ export function workspaceBoards(boards: BoardConfig[] | undefined, wsKey: string
 }
 
 /** The team, project or list a board built from a source shows: `MOON`, `OPS`, a list id; null for other boards. */
-export function sourceKeyOf(b: BoardConfig): string | null {
+export function sourceKeyOf(b: Pick<BoardConfig, "origin">): string | null {
   if (b.origin.kind === "linear_team") return b.origin.team;
   if (b.origin.kind === "clickup_list") return b.origin.list;
   if (b.origin.kind === "jql") return projectOfJql(b.origin.query);
@@ -350,4 +350,24 @@ export function withColumnShow(board: BoardConfig, name: string, show: ColumnSho
       return show === "show" ? rest : { ...rest, show };
     }),
   };
+}
+
+/**
+ * The projects whose committed `.moonlet/config.toml` links the board's
+ * tracker project (X44), which its sessions start in by default (X50 By
+ * default); for a Jira board, whose issues can be of any of the site's
+ * projects, those linking any of its connection's.
+ */
+export function linkedProjects(board: Pick<BoardConfig, "connection" | "origin">, sourceProjects: Record<string, string[]>): string[] {
+  const key = sourceKeyOf(board);
+  const sources = Object.keys(sourceProjects).filter((s) => (key ? s === sourceKey(board.connection, key) : s.startsWith(sourceKey(board.connection, ""))));
+  return [...new Set(sources.flatMap((s) => sourceProjects[s]))];
+}
+
+/** The sidebar footer's tracker (X50): the shown board's, else GitHub, whose repositories every workspace syncs. */
+export const footerTracker = (shown: Pick<BoardConfig, "connection"> | null): string => (shown ? trackerName(shown.connection) : "GitHub");
+
+/** Add a board's By default hint: the projects that link the tracker project (`linked`, ids), by name where known. */
+export function byDefaultHint(linked: string[], projects: { id: string; name: string }[]): string {
+  return `The projects that link it: ${linked.length ? linked.map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") : "none yet"}`;
 }

@@ -7,7 +7,7 @@ import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node
 import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { $, browser, expect } from "@wdio/globals";
+import { $, $$, browser, expect } from "@wdio/globals";
 import { choose, closeSettings, fill, openSettings, PROJECT, rpc, sel, trackerPort, world } from "../fixtures";
 
 const w = world();
@@ -352,6 +352,8 @@ function jiraClickup(method: string, path: string, auth: string | undefined, bod
     if (auth === `Basic ${Buffer.from("e2e@acme.example:bad").toString("base64")}`) return { status: 401, body: answer("jira-error-401.json") };
     if (path.startsWith("/jira/rest/api/3/myself")) return ok(answer("jira-myself.json"));
     if (path.startsWith("/jira/rest/api/3/project/search")) return ok(answer("jira-projects.json"));
+    // A query with "nonsense" in it is one Jira refuses (X50 Add a board's preview).
+    if (path.startsWith("/jira/rest/api/3/search/jql") && body.includes("nonsense")) return { status: 400, body: answer("jira-error-400-jql.json") };
     if (path.startsWith("/jira/rest/api/3/search/jql")) return ok(answer(jiraEndless ? "jira-search-page1.json" : "jira-search.json"));
     if (path.includes("/transitions")) return ok(JSON.stringify({ transitions: [] }));
     // A Jira Software site's boards, a Scrum board's configuration and filter (X50 Add a board).
@@ -536,6 +538,16 @@ describe("Jira and ClickUp trackers", () => {
     // Step 2 counts what the query brings.
     await expect($(`${dialog}//p[contains(normalize-space(), "3 issues match")]`)).toBeDisplayed({ wait: 15_000 });
     await expect($(`${dialog}//*[normalize-space()="Counts update as you type."]`)).toBeDisplayed();
+    // Three of the issues show under the count; a query Jira refuses shows its error, and Continue waits.
+    const sample = `${dialog}//section[@aria-label="Preview"]//div[span[normalize-space()="EX-1"]]`;
+    await expect($(`${sample}/span[normalize-space()="Main order flow broken"]`)).toBeDisplayed();
+    await expect($(`${sample}/span[normalize-space()="In Progress"]`)).toBeDisplayed();
+    await expect($$(`${dialog}//section[@aria-label="Preview"]//div[span[starts-with(normalize-space(), "EX-")]]`)).toBeElementsArrayOfSize(3);
+    await fill(`${dialog}//textarea`, "project = EX AND nonsense");
+    await expect($(`${dialog}//section[@aria-label="Preview"]//p[contains(normalize-space(), "Field 'nonsense' does not exist")]`)).toBeDisplayed({ wait: 15_000 });
+    await expect($(`${dialog}//button[normalize-space()="Continue"]`)).toBeDisabled();
+    await fill(`${dialog}//textarea`, "project = EX");
+    await expect($(`${dialog}//p[contains(normalize-space(), "3 issues match")]`)).toBeDisplayed({ wait: 15_000 });
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     // Step 3: a column per status the issues are in.
     await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
