@@ -385,6 +385,8 @@ export interface ProjectMeta {
   id: string;
   field: string | null;
   options: { id: string; name: string }[];
+  /** Its first number field's name, the estimate Cards show offers. */
+  numberField?: string | null;
 }
 
 /**

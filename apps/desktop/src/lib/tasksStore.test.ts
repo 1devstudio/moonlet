@@ -517,6 +517,8 @@ describe("boards (X50 Sync)", () => {
     answers["board_columns linear:acme"] = () => [{ name: "Todo", statuses: ["Todo"], category: "todo" }];
     useTasks.setState({ attention: {} });
     const p = await previewBoard("local", "personal", board());
+    // Only a GitHub Project has a number field to offer.
+    expect(p.numberField).toBe(null);
     expect([p.error, p.tasks.map((t) => [t.key, t.mine]), p.columns]).toEqual([
       null,
       [
@@ -1152,6 +1154,20 @@ describe("a GitHub Project's board (X50 Sync)", () => {
     item: `PVTI_${number}`,
     status,
     task: { repo: "acme/web", number, title: `Issue ${number}`, body: "", url: `https://github.com/acme/web/issues/${number}`, closed: false, state_reason: null, assignees, labels: [], updated_ms: 0, closing_prs: [] },
+  });
+
+  it("gives an item's value in the Project's number field as its estimate, and previews the field's name for Cards show", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const options = [{ id: "o1", name: "Todo" }];
+    answers["gh.project_items"] = () => ({ id: "PVT_1", status_field: "F", options, number_field: "Hours", items: [{ ...item(10, "Todo", ["sam-rivera"]), estimate: 0.5 }, { ...item(11, "Todo", ["sam-rivera"]), estimate: null }] });
+    const project = { id: "web-project", name: "Website", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_project" as const, owner: "acme", number: 2 }, cards: ["points" as const] };
+    const p = await previewBoard("local", "personal", project);
+    expect(p.tasks.map((t) => [t.key, t.points])).toEqual([
+      ["acme/web#10", 0.5],
+      ["acme/web#11", undefined],
+    ]);
+    expect(p.numberField).toBe("Hours");
   });
 
   it("reads the Project's issues with their Status, the user's own marked, and its columns from the Status options", async () => {

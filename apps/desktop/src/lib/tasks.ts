@@ -50,10 +50,10 @@ export interface Task {
 /** A task's id across trackers: `<connection> <key>`, as the store and boards key it. */
 export const taskId = (t: Pick<Task, "connection" | "key">) => `${t.connection} ${t.key}`;
 
-/** A GitHub Project's item (X50) as a task: the issue, with its item and Status. */
-export function taskFromProjectItem(i: { item: string; status: string | null; task: GhTask }, connection: string, projectId: string): Task {
+/** A GitHub Project's item (X50) as a task: the issue, with its item, Status and estimate (its number field's value). */
+export function taskFromProjectItem(i: { item: string; status: string | null; estimate?: number | null; task: GhTask }, connection: string, projectId: string): Task {
   const t = taskFromGh(i.task, connection);
-  return { ...t, github: { ...t.github!, project: { id: projectId, item: i.item, status: i.status } } };
+  return { ...t, ...(typeof i.estimate === "number" && { points: i.estimate }), github: { ...t.github!, project: { id: projectId, item: i.item, status: i.status } } };
 }
 
 /** A GitHub issue from `gh.tasks` as a task. */
