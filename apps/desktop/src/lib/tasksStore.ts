@@ -529,9 +529,10 @@ function notShown(task: Task) {
   toast(`Created ${task.key}; this board doesn't show it`, "info", { label: "Open", run: () => void openUrl(task.url) });
 }
 
-/** Where a new issue goes in the tracker (X52): a Linear team. */
+/** Where a new issue goes in the tracker (X52): a Linear team, or a ClickUp list. */
 function placeOf(board: BoardConfig): string {
   if (board.origin.kind === "linear_team") return board.origin.team;
+  if (board.origin.kind === "clickup_list") return board.origin.list;
   throw new Error("moonlet can't create issues on this board yet");
 }
 

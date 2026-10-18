@@ -1,0 +1,113 @@
+{
+  "id": "869e2e001",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Retry failed webhook deliveries",
+  "text_content": "Back off exponentially.",
+  "description": "Back off exponentially.",
+  "status": {
+    "id": "p90150000003_e2e0653",
+    "status": "in progress",
+    "color": "#1090e0",
+    "orderindex": 2,
+    "type": "custom"
+  },
+  "orderindex": "10001792327702.34254800000000000000000000000000",
+  "date_created": "1792327702340",
+  "date_updated": "1792327702340",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+    "id": 81942673,
+    "username": "Sam Rivera",
+    "color": "#595d66",
+    "email": "sam@acme.example",
+    "profilePicture": null
+  },
+  "assignees": [
+    {
+      "id": 81942673,
+      "username": "Sam Rivera",
+      "color": "#595d66",
+      "initials": "SR",
+      "email": "sam@acme.example",
+      "profilePicture": null
+    }
+  ],
+  "group_assignees": [],
+  "watchers": [
+    {
+      "id": 81942673,
+      "username": "Sam Rivera",
+      "color": "#595d66",
+      "initials": "SR",
+      "email": "sam@acme.example",
+      "profilePicture": null
+    }
+  ],
+  "checklists": [],
+  "tags": [
+    {
+      "name": "backend",
+      "tag_fg": "#5f7c8a",
+      "tag_bg": "#5f7c8a",
+      "creator": 81942673
+    }
+  ],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "time_spent": 0,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9015000001",
+  "url": "https://app.clickup.com/t/869e2e001",
+  "sharing": {
+    "public": false,
+    "public_share_expires_on": null,
+    "public_fields": [
+      "assignees",
+      "priority",
+      "due_date",
+      "content",
+      "comments",
+      "activity",
+      "attachments",
+      "customFields",
+      "subtasks",
+      "tags",
+      "checklists",
+      "coverimage"
+    ],
+    "token": null,
+    "seo_optimized": false
+  },
+  "permission_level": "create",
+  "list": {
+    "id": "901500000002",
+    "name": "Website",
+    "access": true
+  },
+  "project": {
+    "id": "901500000004",
+    "name": "hidden",
+    "hidden": true,
+    "access": true
+  },
+  "folder": {
+    "id": "901500000004",
+    "name": "hidden",
+    "hidden": true,
+    "access": true
+  },
+  "space": {
+    "id": "90150000003"
+  }
+}

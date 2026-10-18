@@ -1364,6 +1364,16 @@ describe("a new issue from a column (X52)", () => {
     }
   });
 
+  it("creates a ClickUp task in the board's list", async () => {
+    const list = { id: "web", name: "Website", connection: "clickup:9015000001", workspace: "local/personal", origin: { kind: "clickup_list" as const, list: "901500000002" }, columns: [{ name: "in progress", statuses: ["in progress"], category: "in_progress" as const }] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [list] }, attention: {}, assignee: {}, selected: null });
+    answers["tracker_create clickup:9015000001"] = () => ({ ...issue("CU-869e2e001", "in progress"), connection: "clickup:9015000001", tracker: { id: "869e2e001", state: "in progress", source: "901500000002" } });
+    creates.length = 0;
+    await createIssue("local", "personal", list, list.columns[0], draft);
+    expect(creates).toEqual([{ id: "clickup:9015000001", place: "901500000002", issue: { ...draft, status: "in progress" }, inCycle: false }]);
+    useTasks.setState({ config: null });
+  });
+
   it("says at once when the board can't show it, and keeps the form open on a refusal", async () => {
     useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
     answers["tracker_create linear:acme"] = () => issue("MOON-143", "In Review", ["Kim Park"]);

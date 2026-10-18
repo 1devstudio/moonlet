@@ -1,0 +1,25 @@
+{
+  "tags": [
+    {
+      "name": "frontend",
+      "project_id": "90150000003",
+      "tag_fg": "#5d4037",
+      "tag_bg": "#5d4037",
+      "creator": 81942673
+    },
+    {
+      "name": "bug",
+      "project_id": "90150000003",
+      "tag_fg": "#afb42b",
+      "tag_bg": "#afb42b",
+      "creator": 81942673
+    },
+    {
+      "name": "backend",
+      "project_id": "90150000003",
+      "tag_fg": "#5f7c8a",
+      "tag_bg": "#5f7c8a",
+      "creator": 81942673
+    }
+  ]
+}
