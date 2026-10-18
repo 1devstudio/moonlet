@@ -590,6 +590,9 @@ describe("Jira and ClickUp trackers", () => {
     // And it gets its own column back.
     await $(`${dialog}//button[@aria-label="Give To Do its own column"]`).click();
     await expect($(`${dialog}//div[@role="row"][@aria-label="To Do"]`)).toBeDisplayed({ wait: 5_000 });
+    // In its own category again, so not outlined as changed.
+    await expect($(`${dialog}//div[@role="row"][@aria-label="To Do"]//select`)).toHaveValue("todo");
+    await expect($(`${dialog}//div[@role="row"][@aria-label="To Do"]//select`)).not.toHaveAttribute("data-changed");
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     // The workspace already has a `project = EX` board.
     await expect($(`${dialog}//span[normalize-space()="This workspace already has a board from JQL query."]`)).toBeDisplayed({ wait: 10_000 });

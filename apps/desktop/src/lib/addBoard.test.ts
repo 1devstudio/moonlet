@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { groupsStatuses, groupStatus, splitStatus, pausedPreview, alreadyAdded, byGroup, canContinue, cardChoices, projectChoice, projectOwners, scopeNeeded, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { canSplit, groupsStatuses, groupStatus, splitStatus, pausedPreview, alreadyAdded, byGroup, canContinue, cardChoices, projectChoice, projectOwners, scopeNeeded, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -303,25 +303,43 @@ describe("grouping a JQL board's statuses (X50 step 3)", () => {
   const review: BoardColumn = { name: "Needs Reviews", statuses: ["10018"], category: "in_review", show: "fold" };
 
   it("moves a status dragged onto another column into it, and drops the column it leaves empty", () => {
-    expect(groupStatus([open, progress, review], "10018", 1)).toEqual([open, { name: "In Progress", statuses: ["3", "10018"], category: "in_progress" }]);
+    expect(groupStatus([open, progress, review], "10018", 1, {})).toEqual([open, { name: "In Progress", statuses: ["3", "10018"], category: "in_progress" }]);
     // Onto its own column, nothing changes.
-    expect(groupStatus([open, progress], "1", 0)).toEqual([open, progress]);
+    expect(groupStatus([open, progress], "1", 0, {})).toEqual([open, progress]);
     // A column that keeps other statuses stays.
-    expect(groupStatus([{ ...open, statuses: ["1", "10000"] }, progress], "10000", 1)).toEqual([open, { ...progress, statuses: ["3", "10000"] }]);
+    expect(groupStatus([{ ...open, statuses: ["1", "10000"] }, progress], "10000", 1, {})).toEqual([open, { ...progress, statuses: ["3", "10000"] }]);
   });
 
-  it("gives a grouped status its own column again, beside the one it leaves and in its category", () => {
-    const names = { "1": "Open", "10000": "To Do", "10097": "Done", "6": "Closed" };
-    expect(splitStatus([{ ...open, statuses: ["1", "10000"] }, progress], "10000", names)).toEqual([open, { name: "To Do", statuses: ["10000"], category: "todo" }, progress]);
+  it("gives a grouped status its own column again, beside the one it leaves, in the category suggested for it", () => {
+    const names = { "1": "Open", "10000": "To Do", "10097": "Done", "6": "Closed", "3": "In Progress" };
+    // To Do, grouped into In Progress, comes back as To do.
+    expect(splitStatus([open, { ...progress, statuses: ["3", "10000"] }], "10000", names, { "To Do": "todo" })).toEqual([open, progress, { name: "To Do", statuses: ["10000"], category: "todo" }]);
+    // Without a suggestion it keeps the category of the column it leaves.
+    expect(splitStatus([{ ...open, statuses: ["1", "10000"] }], "10000", names)).toEqual([open, { name: "To Do", statuses: ["10000"], category: "todo" }]);
     // Taking the status the column is named after: it keeps that name, and the rest takes its first status's.
     const done: BoardColumn = { name: "Done", statuses: ["10097", "6"], category: "done", show: "fold" };
     expect(splitStatus([done], "10097", names)).toEqual([
       { name: "Done", statuses: ["10097"], category: "done", show: "fold" },
       { name: "Closed", statuses: ["6"], category: "done", show: "fold" },
     ]);
-    // A name another column has gets the status's id after it; a status alone in its column stays.
-    expect(splitStatus([{ ...open, statuses: ["1", "10000"] }, { name: "To Do", statuses: ["3"], category: "todo" }], "10000", names).map((c) => c.name)).toEqual(["Open", "To Do (10000)", "To Do"]);
-    expect(splitStatus([open], "1", names)).toEqual([open]);
+  });
+
+  it("splits a status only when its column gets the tracker's own name, unique on the board", () => {
+    const names = { "1": "Open", "10000": "To Do", "3": "To Do", "10097": "Done", "6": "Done" };
+    const grouped = { ...open, statuses: ["1", "10000"] };
+    expect(canSplit([grouped, progress], "10000", names)).toBe(true);
+    // Another column is named To Do already; two statuses of one name; a name not read yet; a status alone in its column.
+    expect(canSplit([grouped, { name: "To Do", statuses: ["3"], category: "todo" }], "10000", names)).toBe(false);
+    expect(canSplit([{ name: "Done", statuses: ["10097", "6"], category: "done" }], "10097", names)).toBe(false);
+    expect(canSplit([grouped], "10000", { "1": "Open" })).toBe(false);
+    expect(canSplit([open], "1", names)).toBe(false);
+    expect(splitStatus([grouped, { name: "To Do", statuses: ["3"], category: "todo" }], "10000", names)).toEqual([grouped, { name: "To Do", statuses: ["3"], category: "todo" }]);
+  });
+
+  it("names the column a status leaves after its next status, when it was named after the one that left", () => {
+    const names = { "10097": "Done", "6": "Closed", "3": "In Progress" };
+    const done: BoardColumn = { name: "Done", statuses: ["10097", "6"], category: "done" };
+    expect(groupStatus([progress, done], "10097", 0, names)).toEqual([{ ...progress, statuses: ["3", "10097"] }, { name: "Closed", statuses: ["6"], category: "done" }]);
   });
 
   it("groups only a JQL board's statuses: a tracker's own columns come back on each sync as the tracker has them", () => {

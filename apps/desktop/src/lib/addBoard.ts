@@ -276,7 +276,7 @@ export function statusNames(from: { setup?: Record<string, string>; issues?: Tas
 
 /** A column's statuses as step 3 lists them, by name where known: `Open · In Progress`. */
 export function statusText(column: BoardColumn, names: Record<string, string>): string {
-  return column.statuses.length ? column.statuses.map((s) => names[s] ?? s).join(" · ") : "no status";
+  return column.statuses.length ? column.statuses.map((s) => statusName(names, s)).join(" · ") : "no status";
 }
 
 /** The gh scope a daemon error says is missing (X50 GitHub Projects), or null. */
@@ -318,36 +318,62 @@ export function pausedPreview<T>(show: (answer: T) => void, wait = 500) {
   };
 }
 
+/** A status's name, or its id while its name is not known. */
+export const statusName = (names: Record<string, string>, id: string) => names[id] ?? id;
+
+/**
+ * A column without `status`: one named after it takes its next status's
+ * name, the tracker's (X50 step 3), unless another column has that name.
+ */
+function without(column: BoardColumn, status: string, names: Record<string, string>, columns: BoardColumn[]): BoardColumn | null {
+  const statuses = column.statuses.filter((s) => s !== status);
+  if (!statuses.length) return null;
+  const next = names[statuses[0]];
+  const rename = column.name === names[status] && next && !columns.some((c) => c !== column && c.name === next);
+  return { ...column, statuses, ...(rename && { name: next }) };
+}
+
 /**
  * A JQL board's status dragged onto the column at `to` (X50 step 3): it
  * joins that column's statuses, and a column it leaves without any goes.
  */
-export function groupStatus(columns: BoardColumn[], status: string, to: number): BoardColumn[] {
+export function groupStatus(columns: BoardColumn[], status: string, to: number, names: Record<string, string>): BoardColumn[] {
   const target = columns[to];
   if (!target || target.statuses.includes(status)) return columns;
   return columns.flatMap((c) => {
     if (c === target) return [{ ...c, statuses: [...c.statuses, status] }];
     if (!c.statuses.includes(status)) return [c];
-    const statuses = c.statuses.filter((s) => s !== status);
-    return statuses.length ? [{ ...c, statuses }] : [];
+    const rest = without(c, status, names, columns);
+    return rest ? [rest] : [];
   });
 }
 
 /**
- * A grouped status given its own column again (X50 step 3), beside the
- * column it leaves, in that column's category and showing as it does. The
- * status the column is named after keeps the name; the rest take their first
- * status's. A name another column has gets the status's id after it.
+ * Whether a grouped status can have its own column again: its column would
+ * be named after it, the tracker's name, and no other column has that name
+ * (moonlet never names a column itself).
  */
-export function splitStatus(columns: BoardColumn[], status: string, names: Record<string, string>): BoardColumn[] {
+export function canSplit(columns: BoardColumn[], status: string, names: Record<string, string>): boolean {
   const from = columns.find((c) => c.statuses.includes(status));
-  if (!from || from.statuses.length < 2) return columns;
-  const nameOf = (id: string) => names[id] ?? id;
-  const free = (name: string, id: string) => (columns.some((c) => c !== from && c.name === name) ? `${name} (${id})` : name);
-  const rest = from.statuses.filter((s) => s !== status);
-  const own: BoardColumn = { ...from, name: free(nameOf(status), status), statuses: [status] };
-  const left: BoardColumn = from.name === nameOf(status) ? { ...from, name: free(nameOf(rest[0]), rest[0]), statuses: rest } : { ...from, statuses: rest };
-  return columns.flatMap((c) => (c !== from ? [c] : from.name === nameOf(status) ? [own, left] : [left, own]));
+  const name = names[status];
+  if (!from || from.statuses.length < 2 || !name) return false;
+  const rest = without(from, status, names, columns)!;
+  return rest.name !== name && !columns.some((c) => c !== from && c.name === name);
+}
+
+/**
+ * A grouped status given its own column again (X50 step 3), beside the
+ * column it leaves, in the category `suggested` for its name, else that
+ * column's, and showing as it does. The status the column is named after
+ * keeps the name; the rest take their next status's.
+ */
+export function splitStatus(columns: BoardColumn[], status: string, names: Record<string, string>, suggested: Partial<Record<string, BoardColumn["category"]>> = {}): BoardColumn[] {
+  if (!canSplit(columns, status, names)) return columns;
+  const from = columns.find((c) => c.statuses.includes(status))!;
+  const name = names[status];
+  const own: BoardColumn = { ...from, name, statuses: [status], category: suggested[name] ?? from.category };
+  const rest = without(from, status, names, columns)!;
+  return columns.flatMap((c) => (c !== from ? [c] : from.name === name ? [own, rest] : [rest, own]));
 }
 
 /**
