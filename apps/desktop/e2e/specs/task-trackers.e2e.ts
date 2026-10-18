@@ -247,7 +247,8 @@ describe("Linear tracker", () => {
     await expect($(grace)).not.toBeExisting();
     await pick("Anyone");
     await expect($(grace)).toBeDisplayed({ wait: 15_000 });
-    await expect($(grace)).toHaveElementClass("opacity-60");
+    // Dimmed: drawn see-through.
+    expect(Number((await $(grace).getCSSProperty("opacity")).value)).toBeLessThan(1);
     // Someone else's issue with no session says whose it is (X50 Cards).
     await expect($(`${grace}//span[normalize-space()="Assigned to Grace Hopper"]`)).toBeDisplayed();
     await pick("Me");

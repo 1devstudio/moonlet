@@ -148,7 +148,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - **Assignee: me / anyone**, a menu that starts from the board's own setting; a change is kept per board in the app, not written to the board, until Board settings change that setting. A removed board's pick is forgotten. X45's one Assignee: me, left off, carries over as anyone for every board at me.
   - **Columns `<n>` · `<n>` folded**, a menu that shows, folds or hides each column (saved to the board).
   - **Hide empty Done**.
-  - **Board | List** with their icons.
+  - **Board | List**, shown by their icons when the header is narrow.
   - **Expand all**, in List (X45), with the other controls.
   - Refresh.
 - [x] Tasks mode opens on the board last shown in the workspace, or on its first pinned board. (`boardScreen.test.ts` is the board last shown in the workspace, else its first pinned one)
