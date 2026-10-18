@@ -411,6 +411,25 @@ pub struct GhProjectItem {
     pub task: GhTask,
 }
 
+/// A new issue from a board column (X52): the issue, and its node id for a GitHub Project.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhCreated {
+    pub task: GhTask,
+    pub node: String,
+}
+
+/// What the new-issue form offers for a repository (X52).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhCreateOptions {
+    /// gh's login.
+    pub me: String,
+    /// The logins issues can be assigned to.
+    pub people: Vec<String>,
+    pub labels: Vec<String>,
+    /// Whether gh's user can set assignees and labels (triage access or more).
+    pub can_set: bool,
+}
+
 /// A linked git work tree of a project (X45).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Worktree {

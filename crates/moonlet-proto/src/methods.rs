@@ -128,6 +128,12 @@ pub const GH_PROJECT_ITEMS: &str = "gh.project_items";
 /// `{project, item, field, option}`: sets a Project item's Status (X50), or
 /// clears it with no `option` (No Status). Needs gh's `project` scope.
 pub const GH_PROJECT_MOVE: &str = "gh.project_move";
+/// `{ repo }` → the new-issue form's lists for a repository (X52): gh's
+/// login, assignable people, labels, and whether they can be set.
+pub const GH_CREATE_OPTIONS: &str = "gh.create_options";
+/// `{ repo, title, body, assignee, labels }` → the issue created (X52), with
+/// its node id; `assignee` is `me`, `none` or a login.
+pub const GH_ISSUE_CREATE: &str = "gh.issue_create";
 /// gh's token scopes for github.com, such as `read:project` (X50).
 pub const GH_SCOPES: &str = "gh.scopes";
 /// One issue of any repository by its number (X46: a pasted key or URL).
@@ -679,6 +685,22 @@ pub struct GhProjectItems {
     pub number: u64,
     #[serde(default)]
     pub mine: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhCreateOptions {
+    pub repo: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhIssueCreate {
+    pub repo: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    pub assignee: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
