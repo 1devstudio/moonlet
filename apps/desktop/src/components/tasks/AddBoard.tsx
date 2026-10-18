@@ -43,7 +43,7 @@ import {
 import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, byDefaultHint, jiraBoardType, linkedProjects, type Origin, type StartRule } from "../../lib/boards";
 import { hostsApi, rpc } from "../../lib/daemon";
 import { type GhProject, M } from "../../lib/protocol";
-import { errorToast, useStore } from "../../lib/store";
+import { errorMessage, errorToast, useStore } from "../../lib/store";
 import { trackerName, trackerOf } from "../../lib/tasks";
 import { type BoardPreview, GITHUB, openBoard, previewBoard, previewFailed, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
@@ -79,7 +79,7 @@ interface Choice {
 
 const CATEGORY_CHOICES = Object.entries(CATEGORY_LABEL) as [BoardColumn["category"], string][];
 
-const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
+const message = errorMessage;
 
 /** Add a board, starting on `connection` when given, or with `boardId` that board's settings (X50). */
 export function AddBoardDialog({ host, workspace, boardId, connection }: { host: string; workspace: string; boardId?: string; connection?: string }) {

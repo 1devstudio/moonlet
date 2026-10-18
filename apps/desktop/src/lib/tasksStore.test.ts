@@ -5,7 +5,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
-import { createIssue } from "./tasksStore";
+import { createIssue, linkTask } from "./tasksStore";
 import { activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -1495,5 +1495,15 @@ describe("a new issue from a column (X52)", () => {
     delete answers["tracker_create linear:acme"];
     await expect(createIssue("local", "personal", moon, review, draft)).rejects.toThrow("Linear: no such team");
     useTasks.setState({ config: null });
+  });
+});
+
+describe("errors as the user reads them", () => {
+  it("shows a refusal's own message, not [object Object], when the daemon or a command refuses with a plain object", async () => {
+    answers["session.update"] = () => {
+      throw { message: "No session s9" };
+    };
+    await linkTask("local", "s9", null);
+    expect(useStore.getState().toasts.at(-1)?.text).toBe("No session s9");
   });
 });

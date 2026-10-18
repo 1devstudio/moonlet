@@ -5,7 +5,7 @@ import { Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
-import { errorToast, shownWorkspace, useStore } from "../../lib/store";
+import { errorMessage, errorToast, shownWorkspace, useStore } from "../../lib/store";
 import { type Connection, loadTrackersConfig, openAddBoard, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
 import { boardRows, rowsToBoards, sourceKeyOf, withStates } from "../../lib/boards";
@@ -22,7 +22,7 @@ const TOKEN_PAGE: Record<Connection["kind"], string> = {
   clickup: "https://app.clickup.com/settings/apps",
 };
 
-const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
+const message = errorMessage;
 
 /** Which sources a connection shows, in which workspace and starting in which project. */
 function SourcesEditor({ connection, choices, onDone }: { connection: Connection; choices: { key: string; name: string }[]; onDone: () => void }) {
