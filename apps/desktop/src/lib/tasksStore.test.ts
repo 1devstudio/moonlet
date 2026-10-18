@@ -1455,12 +1455,37 @@ describe("a new issue from a column (X52)", () => {
     useTasks.setState({ config: null });
   });
 
+  it("raises no 'moved outside moonlet' notice for the column it created the issue in, but does when someone moves it after", async () => {
+    shown.length = 0;
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [];
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
+    await refreshTasks("local", "personal", 500);
+    answers["tracker_create linear:acme"] = () => issue("MOON-142", "In Review");
+    await createIssue("local", "personal", moon, review, draft);
+    // A session starts on it before the next sync.
+    useStore.setState({ sessions: { local: [{ id: "s1", project_id: "web", name: "Retry", branch: "moon-142-retry", base: "main", path: "/w/retry", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: { connection: "linear:acme", key: "MOON-142", url: "" } }] } });
+    answers["tracker_tasks linear:acme"] = () => [issue("MOON-142", "In Review")];
+    await refreshTasks("local", "personal", Date.now() + 1_000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shown).toEqual([]);
+    // Someone moves it back to Todo in Linear: that is news.
+    answers["tracker_tasks linear:acme"] = () => [{ ...issue("MOON-142", "Todo"), column: "todo" }];
+    await refreshTasks("local", "personal", Date.now() + 2_000);
+    await vi.waitFor(() => expect(shown).toEqual([{ title: "MOON-142 moved to Todo", body: "Retry failed webhook deliveries" }]));
+    useStore.setState({ sessions: {} });
+    useTasks.setState({ config: null });
+  });
+
   it("says at once when the board can't show it, and keeps the form open on a refusal", async () => {
     useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
     answers["tracker_create linear:acme"] = () => issue("MOON-143", "In Review", ["Kim Park"]);
     // Assigned to someone else, on a board at Assignee: me.
     await createIssue("local", "personal", moon, review, { ...draft, assignee: "kim" });
     expect(useStore.getState().toasts.at(-1)?.text).toBe("Created MOON-143; this board doesn't show it");
+    // With a link to it in the tracker.
+    expect(useStore.getState().toasts.at(-1)?.action?.label).toBe("Open");
     expect(useTasks.getState().selected).toBe(null);
     delete answers["tracker_create linear:acme"];
     await expect(createIssue("local", "personal", moon, review, draft)).rejects.toThrow("Linear: no such team");

@@ -245,6 +245,8 @@ describe("Tasks mode", () => {
       await $('//button[@title="Refresh tasks"]').click();
       await expect($(state)).toBeDisabled({ wait: 15_000 });
       await expect($('//span[normalize-space()="Moving needs gh\'s project scope: run gh auth refresh -s project"]')).toBeDisplayed();
+      // Nor can a column's + add an issue to the Project (X52).
+      await expect($('//section[@aria-label="In Progress"]//button[@title="Adding issues to a Project needs gh\'s project scope: run gh auth refresh -s project"]')).toHaveAttribute("aria-disabled", "true");
     } finally {
       rmSync(ghNoMove, { force: true });
     }
