@@ -12,7 +12,7 @@ import { boardRows, rowsToBoards, sourceKeyOf, withStates } from "../../lib/boar
 import { blankSource, changedStates, connectedText, disconnectText, sourceChoices, sourceNoun } from "../../lib/trackerSources";
 import type { Column } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
-import { Button, cx, Dialog, Field, IconButton, inputCls, TrackerIcon } from "../ui";
+import { Button, cx, Dialog, Field, IconButton, inputCls, TrackerIcon, selectCls } from "../ui";
 import { Row, Status } from "./controls";
 
 const NAME: Record<Connection["kind"], string> = { linear: "Linear", jira: "Jira Cloud", clickup: "ClickUp" };
@@ -21,9 +21,6 @@ const TOKEN_PAGE: Record<Connection["kind"], string> = {
   jira: "https://id.atlassian.com/manage-profile/security/api-tokens",
   clickup: "https://app.clickup.com/settings/apps",
 };
-
-/** The Sources and States dialogs' menus, as tall as a text field (X44). */
-const selectCls = cx(inputCls, "menu-select field-height");
 
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 

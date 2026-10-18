@@ -622,6 +622,7 @@ export const M = {
   ghProjectItems: "gh.project_items",
   ghCreateOptions: "gh.create_options",
   ghIssueCreate: "gh.issue_create",
+  ghProjectAdd: "gh.project_add",
   ghProjectMove: "gh.project_move",
   ghScopes: "gh.scopes",
   ghTask: "gh.task",

@@ -47,10 +47,8 @@ import { errorToast, useStore } from "../../lib/store";
 import { trackerName, trackerOf } from "../../lib/tasks";
 import { type BoardPreview, GITHUB, openBoard, previewBoard, previewFailed, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { BoardMark, Button, cx, IconButton, inputCls } from "../ui";
+import { BoardMark, Button, cx, IconButton, inputCls, selectCls } from "../ui";
 import { TaskGlyph } from "./TasksMode";
-
-const selectCls = cx(inputCls, "menu-select field-height");
 
 type Build = "board" | "jql" | "project" | "repo";
 
