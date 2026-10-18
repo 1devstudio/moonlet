@@ -487,7 +487,7 @@ export interface BoardPreview {
   error: string | null;
   /** A GitHub Project's first number field, which Cards show offers; null for any other board. */
   numberField: string | null;
-  /** A JQL board's site status names by id, for step 3; empty for any other board. */
+  /** Status names by id for step 3: a JQL board's site's, a GitHub Project's options'; empty for any other board. */
   statusNames: Record<string, string>;
 }
 
@@ -509,7 +509,7 @@ interface BoardRead {
   sprint: BoardData["sprint"];
   kind?: string;
   project?: ProjectMeta;
-  /** A JQL board's site status names by id. */
+  /** Status names by id: a JQL board's site's, a GitHub Project's options'. */
   statusNames?: Record<string, string>;
   /** Why it failed; null when it worked. */
   error: string | null;
@@ -580,7 +580,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
       const project = { id: own.id, field: own.status_field, options: own.options, numberField: own.number_field ?? null };
       // Its columns hold option ids; step 3 names them by the options' names.
       const statusNames = { "": NO_STATUS, ...Object.fromEntries(own.options.map((o) => [o.id, o.name])) };
-      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id), mine })), columns, sprint: null, project, statusNames, error: null };
+      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id, own.options), mine })), columns, sprint: null, project, statusNames, error: null };
     } catch (e) {
       return none(message(e));
     }
@@ -694,7 +694,7 @@ async function moveProjectItem(host: string, workspaceId: string, task: Task, st
   const meta = Object.values(data?.boards ?? {}).find((b) => b.project && b.project.id === own?.id)?.project;
   const item = own?.item;
   const req = meta && item ? projectMove(meta, item, status) : null;
-  if (!req) throw new Error(`The Project has no Status called ${status}`);
+  if (!req) throw new Error("The Project no longer has that Status option");
   await rpc(host, M.ghProjectMove, req);
 }
 

@@ -66,11 +66,12 @@ describe("driftFix (X45 out of sync, X46 Keep in step)", () => {
   });
 
   it("on a GitHub Project's board, sets the item's Status to the next column's, whatever its category (X50)", () => {
-    const item = task("acme/web#10", "in_progress", { repo: "acme/web", number: 10, closingPrs: [], project: { id: "PVT_1", item: "PVTI_10", status: "In Progress" } });
-    const drift = { kind: "merged" as const, text: "#31 merged", fix: "Move to Done", to: { column: "Done", category: "done" as const, statuses: ["Done"] } };
-    expect(driftFix(card(item, drift))).toEqual({ kind: "project", item: "PVTI_10", status: "Done", name: "Done", column: "done" });
-    const review = { ...drift, kind: "pr_open" as const, fix: "Move to In review", to: { column: "In review", category: "in_review" as const, statuses: ["In review"] } };
-    expect(driftFix(card(item, review))).toEqual({ kind: "project", item: "PVTI_10", status: "In review", name: "In review", column: "in_review" });
+    const item = task("acme/web#10", "in_progress", { repo: "acme/web", number: 10, closingPrs: [], project: { id: "PVT_1", item: "PVTI_10", status: "In Progress", option: "o2" } });
+    // A Project's columns hold their options' ids.
+    const drift = { kind: "merged" as const, text: "#31 merged", fix: "Move to Done", to: { column: "Done", category: "done" as const, statuses: ["o3"] } };
+    expect(driftFix(card(item, drift))).toEqual({ kind: "project", item: "PVTI_10", status: "o3", name: "Done", column: "done" });
+    const review = { ...drift, kind: "pr_open" as const, fix: "Move to In review", to: { column: "In review", category: "in_review" as const, statuses: ["o4"] } };
+    expect(driftFix(card(item, review))).toEqual({ kind: "project", item: "PVTI_10", status: "o4", name: "In review", column: "in_review" });
     // Without a next column, a Project's item is never closed as a repository's issue is.
     expect(driftFix(card(item, { kind: "merged", text: "#31 merged", fix: "Move to Done" }))).toBe(null);
   });

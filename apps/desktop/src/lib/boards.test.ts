@@ -340,6 +340,31 @@ describe("syncedColumns (X50 a board's columns after a sync)", () => {
     ]);
   });
 
+  it("keeps a Project column whose option was renamed in GitHub, under the new name, with the user's folding and category", () => {
+    const board: BoardConfig = { ...base, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 }, columns: [{ name: "Todo", statuses: ["o1"], category: "in_progress", show: "fold" }] };
+    expect(syncedColumns(board, [{ name: "To do", statuses: ["o1"], category: "todo" }])).toEqual([{ name: "To do", statuses: ["o1"], category: "in_progress", show: "fold" }]);
+  });
+
+  it("moves a team's own No Status option onto its id, not onto the column of items with no Status", () => {
+    const board: BoardConfig = {
+      ...base,
+      connection: "github:github.com",
+      origin: { kind: "github_project", owner: "acme", number: 2 },
+      columns: [
+        { name: "No Status", statuses: [""], category: "todo" },
+        { name: "No Status", statuses: ["No Status"], category: "in_progress", show: "fold" },
+      ],
+    };
+    const fresh: BoardColumn[] = [
+      { name: "No Status", statuses: [""], category: "todo" },
+      { name: "No Status", statuses: ["o4"], category: "todo" },
+    ];
+    expect(syncedColumns(board, fresh)).toEqual([
+      { name: "No Status", statuses: [""], category: "todo" },
+      { name: "No Status", statuses: ["o4"], category: "in_progress", show: "fold" },
+    ]);
+  });
+
   it("only adds columns to a JQL board, since its columns come from the statuses its issues happen to be in", () => {
     const board: BoardConfig = { ...base, origin: { kind: "jql", query: "project = OPS" }, columns: [todo, review] };
     // No issue is in review today: the folded column stays.
@@ -480,6 +505,8 @@ describe("projectMove (X50 moving a GitHub Project item)", () => {
     expect(projectMove(named, "PVTI_10", "o4")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o4" });
     // An option the Project no longer has, or a Project without a Status field: nothing to send.
     expect(projectMove(project, "PVTI_10", "o9")).toBe(null);
+    // A board still saved with option names moves by the name.
+    expect(projectMove(project, "PVTI_10", "Done")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o3" });
     expect(projectMove({ ...project, field: null }, "PVTI_10", "o3")).toBe(null);
   });
 

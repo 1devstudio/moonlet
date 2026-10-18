@@ -40,8 +40,7 @@ export interface Task {
     repo: string;
     number: number;
     closingPrs: number[];
-    /** On a GitHub Project's board (X50): the Project's id, the item and its Status, none when it has none. */
-    /** A GitHub Project's item (X50): its Status option's name, for showing, and its id, which columns match by. */
+    /** On a GitHub Project's board (X50): the Project's id, the item, and its Status option's name (for showing) and id (which columns match by), none when it has none. */
     project?: { id: string; item: string; status: string | null; option?: string | null };
   };
   /** Linear, Jira and ClickUp issues: their id, state name and team/project/list in the tracker. */
@@ -52,9 +51,16 @@ export interface Task {
 export const taskId = (t: Pick<Task, "connection" | "key">) => `${t.connection} ${t.key}`;
 
 /** A GitHub Project's item (X50) as a task: the issue, with its item, Status and estimate (its number field's value). */
-export function taskFromProjectItem(i: { item: string; status: string | null; option?: string | null; estimate?: number | null; task: GhTask }, connection: string, projectId: string): Task {
+export function taskFromProjectItem(
+  i: { item: string; status: string | null; option?: string | null; estimate?: number | null; task: GhTask },
+  connection: string,
+  projectId: string,
+  /** The Project's Status options, for an older host that sends no option id: found by name. */
+  options: { id: string; name: string }[] = [],
+): Task {
   const t = taskFromGh(i.task, connection);
-  return { ...t, ...(typeof i.estimate === "number" && { points: i.estimate }), github: { ...t.github!, project: { id: projectId, item: i.item, status: i.status, option: i.option ?? null } } };
+  const option = i.option ?? options.find((o) => o.name === i.status)?.id ?? null;
+  return { ...t, ...(typeof i.estimate === "number" && { points: i.estimate }), github: { ...t.github!, project: { id: projectId, item: i.item, status: i.status, option } } };
 }
 
 /** A GitHub issue from `gh.tasks` as a task. */
