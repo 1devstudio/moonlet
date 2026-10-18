@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnsSummary, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
 import { isDimmed } from "./tasksBoard";
 import type { BoardSession } from "./tasksBoard";
 import { type BoardColumn, type BoardConfig, cardFields } from "./boards";
@@ -156,5 +156,27 @@ describe("cardFace (X50 Cards show)", () => {
     expect(cardFields({ connection: "github:github.com" })).toEqual(["assignee"]);
     expect(cardFields({ connection: "linear:acme", cards: ["due"] })).toEqual(["due"]);
     expect(cardFields({ connection: "linear:acme", cards: [] })).toEqual([]);
+  });
+});
+
+describe("boardProblem (X50: a board whose origin is gone)", () => {
+  it("says the tracker's error for the board shown, with what is still drawn", () => {
+    const ops = b("ops", "local/w", { name: "OPS board" });
+    // Jira's answer for a board that is gone, as the app words it.
+    const gone = "Jira: Board does not exist or you do not have permission to see it.";
+    expect(boardProblem(ops, { keys: [], error: gone })).toBe("moonlet could not read OPS board: Jira: Board does not exist or you do not have permission to see it.");
+    expect(boardProblem(ops, { keys: ["jira:acme.atlassian.net OPS-1"], sprint: null, error: "cannot reach Jira" })).toBe("moonlet could not read OPS board: cannot reach Jira. Its last tasks are shown.");
+    expect(boardProblem(ops, { keys: [], error: "Is the site down?" })).toBe("moonlet could not read OPS board: Is the site down?");
+    expect(boardProblem(ops, { keys: [], sprint: null })).toBe(null);
+    expect(boardProblem(ops, undefined)).toBe(null);
+  });
+});
+
+describe("footerLine (X50 sidebar footer)", () => {
+  it("says the sync failed with the error, or only that when the board shown already says why", () => {
+    const data = { syncedAt: 1_000, error: "cannot reach Jira", boards: { ops: { keys: [], error: "cannot reach Jira" } } };
+    expect(footerLine(data, "web", "GitHub", 41_000)).toBe("Sync failed · cannot reach Jira");
+    expect(footerLine(data, "ops", "Jira", 41_000)).toBe("Jira sync failed");
+    expect(footerLine({ syncedAt: 1_000, error: null }, "ops", "Jira", 41_000)).toBe("Jira synced just now");
   });
 });

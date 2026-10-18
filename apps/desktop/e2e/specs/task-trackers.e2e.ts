@@ -344,6 +344,8 @@ describe("Linear tracker", () => {
 /** Jira's and ClickUp's REST APIs: an answer per path, and what was asked. */
 const asked: { method: string; path: string; auth?: string }[] = [];
 let jiraEndless = false;
+/** Whether Jira answers that the OPS board is gone (X50). */
+let jiraBoardGone = false;
 function jiraClickup(method: string, path: string, auth: string | undefined, body: string): { status: number; body: string } {
   asked.push({ method, path, auth });
   const ok = (b: string) => ({ status: 200, body: b });
@@ -357,7 +359,7 @@ function jiraClickup(method: string, path: string, auth: string | undefined, bod
     if (path.startsWith("/jira/rest/api/3/search/jql")) return ok(answer(jiraEndless ? "jira-search-page1.json" : "jira-search.json"));
     if (path.includes("/transitions")) return ok(JSON.stringify({ transitions: [] }));
     // A Jira Software site's boards, a Scrum board's configuration and filter (X50 Add a board).
-    if (/^\/jira\/rest\/agile\/1\.0\/board\/\d+\/configuration/.test(path)) return ok(answer("jira-board-scrum-configuration.json"));
+    if (/^\/jira\/rest\/agile\/1\.0\/board\/\d+\/configuration/.test(path)) return jiraBoardGone ? { status: 404, body: answer("jira-error-404-board.json") } : ok(answer("jira-board-scrum-configuration.json"));
     if (path.startsWith("/jira/rest/agile/1.0/board")) return ok(answer("jira-boards.json"));
     if (path.startsWith("/jira/rest/api/3/filter/")) return ok(answer("jira-filter-scrum.json"));
     if (path.startsWith("/jira/rest/api/3/status")) return ok(answer("jira-statuses.json"));
@@ -462,7 +464,7 @@ describe("Jira and ClickUp trackers", () => {
     await closeSettings();
   });
 
-  it("adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged (X50)", async () => {
+  it("adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged, and says when it is gone (X50)", async () => {
     await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
@@ -494,8 +496,23 @@ describe("Jira and ClickUp trackers", () => {
     });
     await browser.waitUntil(async () => (await $(`(${dialog}//div[@role="row"][@aria-label])[1]`).getAttribute("aria-label")) === "Done", { timeout: 5_000 });
     await expect($(`${dialog}//*[contains(normalize-space(), "Drag to reorder.")]`)).toBeDisplayed();
-    await browser.keys("Escape");
-    await $(dialog).waitForExist({ reverse: true });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    await $(`${dialog}//button[normalize-space()="Create board"]`).click();
+    await expect($('//button[starts-with(@aria-label, "Switch board, current: OPS board")]')).toBeDisplayed({ wait: 15_000 });
+    // A board whose origin is gone says Jira's error, with its settings.
+    jiraBoardGone = true;
+    try {
+      await $('//button[@title="Refresh tasks"]').click();
+      const alert = '//div[@role="alert"][contains(normalize-space(), "moonlet could not read OPS board")]';
+      await expect($(`${alert}[contains(normalize-space(), "Board does not exist or you do not have permission to see it.")]`)).toBeDisplayed({ wait: 15_000 });
+      await $(`${alert}//button[normalize-space()="Board settings"]`).click();
+      const settings = '//div[@role="dialog"][@aria-label="Board settings"]';
+      await $(`${settings}//button[normalize-space()="Remove board"]`).click();
+      await $(sel.confirmButton("Remove")).click();
+      await $(settings).waitForExist({ reverse: true, timeout: 10_000 });
+    } finally {
+      jiraBoardGone = false;
+    }
   });
 
   it("asks Jira who the user is before each search, and reads at most 5 pages", async () => {

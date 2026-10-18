@@ -295,16 +295,21 @@ describe("Tasks mode", () => {
     await expect($(sel.text("Copied acme/storefront#19"))).toBeDisplayed({ wait: 5_000 });
   });
 
-  it("says Sync failed with gh's error when a sync fails", async () => {
+  it("says the board shown could not be read, with gh's error, and the footer that the sync failed (X50)", async () => {
+    const banner = '//div[@role="alert"][starts-with(normalize-space(), "moonlet could not read acme/storefront: ")]';
     writeFileSync(ghFails, "");
     try {
       await $('//button[@title="Refresh tasks"]').click();
-      await expect($('//*[starts-with(normalize-space(), "Sync failed · ")]')).toBeDisplayed({ wait: 15_000 });
+      await expect($(banner)).toBeDisplayed({ wait: 15_000 });
+      await expect($(`${banner}[contains(normalize-space(), "Its last tasks are shown.")]`)).toBeDisplayed();
+      // The banner says why; the footer only that the sync failed.
+      await expect($('//*[normalize-space()="GitHub sync failed"]')).toBeDisplayed();
     } finally {
       rmSync(ghFails, { force: true });
     }
     await $('//button[@title="Refresh tasks"]').click();
-    await expect($('//*[starts-with(normalize-space(), "Sync failed · ")]')).not.toBeExisting({ wait: 15_000 });
+    await expect($(banner)).not.toBeExisting({ wait: 15_000 });
+    await expect($('//*[normalize-space()="GitHub sync failed"]')).not.toBeExisting();
   });
 
   it("asks to connect a task tracker in a workspace with no board", async () => {
