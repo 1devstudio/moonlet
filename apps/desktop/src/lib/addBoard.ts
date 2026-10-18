@@ -383,3 +383,17 @@ export function splitStatus(columns: BoardColumn[], status: string, names: Recor
  * has them, which would undo a group.
  */
 export const groupsStatuses = (origin: Origin | null) => origin?.kind === "jql";
+
+/**
+ * Step 1's repositories for a GitHub repository's board (X50): the
+ * workspace's, from its projects' origins (`repos`, by project id), each
+ * once whatever its case; a project without a GitHub origin adds none.
+ */
+export function repoChoices(repos: Record<string, string | null> | undefined): { key: string; name: string; origin: Origin }[] {
+  const seen = new Set<string>();
+  return Object.values(repos ?? {}).flatMap((repo) => {
+    if (!repo || seen.has(repo.toLowerCase())) return [];
+    seen.add(repo.toLowerCase());
+    return [{ key: repo, name: repo, origin: { kind: "github_repo" as const, repo } }];
+  });
+}
