@@ -90,7 +90,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *clearProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-clear.json")}'; exit 0;; *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *addProjectV2ItemById*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-add.json")}'; exit 0;; *"/issues -X POST"*) echo "$@" >> "${ghLog}"; sed -e 's#issues/1"#issues/57"#g' -e 's/"number": 1,/"number": 57,/' -e 's#acme/web#acme/storefront#g' '${ghFixture("gh-issue-create.json")}'; exit 0;; "api user --jq .login") echo sam-rivera; exit 0;; *"/assignees?per_page=100") cat '${ghFixture("gh-assignees.json")}'; exit 0;; *"/labels?per_page=100") cat '${ghFixture("gh-labels.json")}'; exit 0;; "api repos/acme/storefront") cat '${ghFixture("gh-repo-permissions.json")}'; exit 0;; *clearProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-clear.json")}'; exit 0;; *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -181,7 +181,7 @@ describe("Tasks mode", () => {
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="acme/storefront"]]')).toBeDisplayed({ wait: 10_000 });
   });
 
-  it("adds a board of a GitHub Project, after gh gets its read:project scope and next to the workspace's repositories, with No Status and the Project's Status as columns and its estimate on cards, and moves an item by its Status (X50)", async () => {
+  it("adds a board of a GitHub Project, after gh gets its read:project scope and next to the workspace's repositories, with No Status and the Project's Status as columns and its estimate on cards, moves an item by its Status (X50), and creates one from a column's + (X52)", async () => {
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
@@ -223,6 +223,22 @@ describe("Tasks mode", () => {
     // No Status clears it.
     await choose(state, "0");
     await browser.waitUntil(() => readFileSync(ghLog, "utf8").includes("clearProjectV2ItemFieldValue"), { timeout: 10_000, timeoutMsg: readFileSync(ghLog, "utf8") });
+    // A column's +: the issue is created in a repository, the workspace's first, added to the Project, and given that column's Status (X52).
+    const inProgress = '//section[@aria-label="In Progress"]';
+    await $(inProgress).moveTo();
+    await $(`${inProgress}//button[@title="New issue in In Progress"]`).click();
+    const newIssue = '//div[@role="dialog"][@aria-label="New issue in In Progress"]';
+    await expect($(`${newIssue}//select`)).toHaveValue("acme/storefront");
+    await fill(`${newIssue}//input`, "Retry failed webhook deliveries");
+    await $(`${newIssue}//button[normalize-space()="Create"]`).waitForEnabled({ timeout: 10_000 });
+    await $(`${newIssue}//button[normalize-space()="Create"]`).click();
+    // The fake answers in the repository asked for, as GitHub does.
+    await expect($(`${inProgress}//article[starts-with(@aria-label, "acme/storefront#57")]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($('//aside[@aria-label="Task detail"]')).toBeDisplayed();
+    const created = readFileSync(ghLog, "utf8");
+    expect([created.includes("repos/acme/storefront/issues"), created.includes("addProjectV2ItemById"), created.includes("item=PVTI_e2e0050")]).toEqual([true, true, true]);
+    // Back to #10, for its State menu.
+    await $('//article[starts-with(@aria-label, "acme/web#10")]//button[normalize-space()="Retry failed webhook deliveries"]').click();
     // Without gh's project scope the menu is disabled and says what to run.
     writeFileSync(ghNoMove, "");
     try {

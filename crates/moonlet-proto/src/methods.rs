@@ -134,6 +134,9 @@ pub const GH_CREATE_OPTIONS: &str = "gh.create_options";
 /// `{ repo, title, body, assignee, labels }` → the issue created (X52), with
 /// its node id; `assignee` is `me`, `none` or a login.
 pub const GH_ISSUE_CREATE: &str = "gh.issue_create";
+/// `{ project, content }` → the new item's id: the issue (`content`, its
+/// node id) added to a Project (X52). Needs gh's `project` scope.
+pub const GH_PROJECT_ADD: &str = "gh.project_add";
 /// gh's token scopes for github.com, such as `read:project` (X50).
 pub const GH_SCOPES: &str = "gh.scopes";
 /// One issue of any repository by its number (X46: a pasted key or URL).
@@ -701,6 +704,12 @@ pub struct GhIssueCreate {
     pub assignee: String,
     #[serde(default)]
     pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhProjectAdd {
+    pub project: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

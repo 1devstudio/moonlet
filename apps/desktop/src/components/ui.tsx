@@ -320,6 +320,9 @@ export function Field({ label, hint, children }: { label: string; hint?: ReactNo
 export const inputCls =
   "w-full rounded-md border border-border-strong bg-panel-2 px-2.5 py-1.5 ui-text-13 text-fg outline-none placeholder:text-faint focus:border-accent";
 
+/** A native `<select>` styled as a field; WebKit ignores its height, so `menu-select` sets it. */
+export const selectCls = cx(inputCls, "menu-select field-height");
+
 export function Empty({ icon, title, children }: { icon?: ReactNode; title: string; children?: ReactNode }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-muted">

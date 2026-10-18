@@ -613,6 +613,12 @@ impl Daemon {
                 .await
                 .map_err(internal)?)
             }
+            m::GH_PROJECT_ADD => {
+                let r: m::GhProjectAdd = params(p)?;
+                ok(moonlet_core::gh_projects::gh_project_add(&r.project, &r.content)
+                    .await
+                    .map_err(internal)?)
+            }
             m::GH_PROJECT_MOVE => {
                 let r: m::GhProjectMove = params(p)?;
                 moonlet_core::gh_projects::gh_project_move(
