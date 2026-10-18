@@ -96,7 +96,7 @@ describe("Tasks mode", () => {
 
   // The app keeps the layout and open rows across restarts, and localStorage
   // outlives a run: start and end from the defaults.
-  const forgetLayout = () => browser.execute(() => ["moonlet.tasks.layout", "moonlet.tasks.expanded", "moonlet.tasks.filters"].forEach((k) => localStorage.removeItem(k)));
+  const forgetLayout = () => browser.execute(() => ["moonlet.tasks.layout", "moonlet.tasks.expanded", "moonlet.tasks.filters", "moonlet.tasks.assignee"].forEach((k) => localStorage.removeItem(k)));
   before(async () => {
     await forgetLayout();
     // The store read them when the app started.

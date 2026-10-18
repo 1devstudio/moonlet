@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type BoardColumn, type BoardConfig, boardRows, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, pickAssignee, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, addRepoBoards, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -337,5 +337,27 @@ describe("withColumnShow (X50 a column's ⋯ menu and the header's Columns menu)
       { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
     ]);
     expect(withColumnShow(board, "Done", "show").columns?.[1]).toEqual({ name: "Done", statuses: ["Done"], category: "done" });
+  });
+});
+
+describe("assigneeOf and pickAssignee (X50 header: Assignee)", () => {
+  const board = (id: string, assignee?: "anyone"): BoardConfig => ({ id, name: id, connection: "linear:acme", workspace: "local/w", origin: { kind: "linear_team", team: id }, ...(assignee && { assignee }) });
+
+  it("is the user's pick for the board while the board's own setting is the one it was made over, else that setting", () => {
+    expect(assigneeOf(board("ops", "anyone"), {})).toBe("anyone");
+    expect(assigneeOf(board("web"), {})).toBe("me");
+    const picks = pickAssignee({}, board("ops", "anyone"), "me", ["ops"]);
+    expect(assigneeOf(board("ops", "anyone"), picks)).toBe("me");
+    // Board settings changed the board's own setting since: that wins.
+    expect(assigneeOf(board("ops"), picks)).toBe("me");
+    expect(assigneeOf(board("ops"), pickAssignee({}, board("ops"), "anyone", ["ops"]))).toBe("anyone");
+    expect(assigneeOf(board("ops", "anyone"), pickAssignee({}, board("ops"), "anyone", ["ops"]))).toBe("anyone");
+    expect(assigneeOf(board("ops", "anyone"), pickAssignee({}, board("ops"), "me", ["ops"]))).toBe("anyone");
+  });
+
+  it("forgets the picks of boards that are gone, and keeps an upgrade's Assignee: anyone for boards at me", () => {
+    const upgraded = { "*": { to: "anyone" as const, over: "me" as const } };
+    expect(assigneeOf(board("web"), upgraded)).toBe("anyone");
+    expect(pickAssignee({ ...upgraded, old: { to: "anyone", over: "me" } }, board("ops"), "me", ["ops", "web"])).toEqual({ ...upgraded, ops: { to: "me", over: "me" } });
   });
 });

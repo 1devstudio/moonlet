@@ -28,6 +28,7 @@ import {
   runAutoFixes,
   setColumnShow,
   setExpanded,
+  setAssignee,
   setFilters,
   setLayout,
   openAddBoard,
@@ -46,7 +47,7 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch, syncedLabel } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph, TrackerIcon } from "../ui";
@@ -425,6 +426,7 @@ export function TasksMode() {
   const layout = useTasks((t) => t.layout);
   const query = useTasks((t) => t.query);
   const filters = useTasks((t) => t.filters);
+  const assignee = useTasks((t) => t.assignee);
   const selected = useTasks((t) => t.selected);
   if (!ws) return null;
   if (!data) return <Empty title="Loading tasks…" />;
@@ -474,7 +476,8 @@ export function TasksMode() {
     );
   }
   // The header's filters and Find a task (X45), column by column.
-  const views = mapCards(shown.views, (c) => (keepCard(c, filters) && findsTask(c.task, query) ? c : null));
+  // Assignee is the shown board's own (X50).
+  const views = mapCards(shown.views, (c) => (keepCard(c, { ...filters, mine: assigneeOf(shown.board, assignee) === "me" }) && findsTask(c.task, query) ? c : null));
   const cards = board ? Object.values(board).flat() : [];
   const detail = cards.find((c) => taskId(c.task) === selected);
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
@@ -671,19 +674,21 @@ export function ModeSwitch() {
 /** Assignee: me, the Columns menu and Hide empty Done in the header (X45, X50). */
 function Filters({ board, columns }: { board: BoardConfig; columns: BoardColumn[] }) {
   const filters = useTasks((t) => t.filters);
-  const item = (id: keyof typeof filters, label: string) => (
-    <button
-      aria-pressed={filters[id]}
-      onClick={() => setFilters({ ...filters, [id]: !filters[id] })}
-      className={cx("no-drag whitespace-nowrap rounded-md border px-2 py-1 ui-text-12", filters[id] ? "border-border-strong bg-raised text-fg" : "border-border text-muted hover:text-fg")}
-    >
-      {label}
-    </button>
-  );
+  const who = useTasks((t) => assigneeOf(board, t.assignee));
+  const chip = "no-drag whitespace-nowrap rounded-md border px-2 py-1 ui-text-12";
   const show = (c: { show?: "fold" | "hide" }) => c.show ?? "show";
   return (
     <div role="group" aria-label="Filters" className="flex items-center gap-1">
-      {item("mine", "Assignee: me")}
+      <Menu
+        width={200}
+        items={(["me", "anyone"] as const).map((v) => ({ label: v === "me" ? "Me" : "Anyone", description: v === "me" ? "Issues assigned to you" : "Others' issues dimmed", checked: who === v, onSelect: () => setAssignee(board, v) }))}
+        trigger={(open) => (
+          <button aria-label={`Assignee: ${who}`} onClick={open} className={cx(chip, "flex items-center gap-1 border-border-strong bg-raised text-fg")}>
+            Assignee: {who}
+            <ChevronDown size={12} className="text-muted" />
+          </button>
+        )}
+      />
       <Menu
         align="right"
         width={220}
@@ -693,12 +698,18 @@ function Filters({ board, columns }: { board: BoardConfig; columns: BoardColumn[
           items: (["show", "fold", "hide"] as const).map((v) => ({ label: v === "show" ? "Show" : v === "fold" ? "Fold" : "Hide", checked: show(c) === v, onSelect: () => setColumnShow(board.id, c.name, v) })),
         }))}
         trigger={(open) => (
-          <button onClick={open} className="no-drag whitespace-nowrap rounded-md border border-border px-2 py-1 ui-text-12 text-muted hover:text-fg">
+          <button onClick={open} className={cx(chip, "border-border text-muted hover:text-fg")}>
             {columnsSummary(columns)}
           </button>
         )}
       />
-      {item("hideEmptyDone", "Hide empty Done")}
+      <button
+        aria-pressed={filters.hideEmptyDone}
+        onClick={() => setFilters({ ...filters, hideEmptyDone: !filters.hideEmptyDone })}
+        className={cx(chip, filters.hideEmptyDone ? "border-border-strong bg-raised text-fg" : "border-border text-muted hover:text-fg")}
+      >
+        Hide empty Done
+      </button>
     </div>
   );
 }

@@ -47,6 +47,35 @@ export interface StartRule {
 
 export type CardField = "issue_type" | "points" | "assignee" | "parent" | "due" | "labels";
 
+/** Whose issues a board shows (X50): the user's, or anyone's with others' dimmed. */
+export type Assignee = "me" | "anyone";
+
+/** The header's Assignee picked for a board, `to`, over the board's own setting then, `over`. */
+export interface AssigneePick {
+  to: Assignee;
+  over: Assignee;
+}
+
+/** The pick that stands for every board at me: an upgrade from X45's one switch, turned off. */
+export const EVERY_BOARD = "*";
+
+/**
+ * A board's Assignee (X50 header): the user's pick for it, kept in the app,
+ * while the board's own setting is still the one it was picked over (Board
+ * settings changing it wins), else that own setting.
+ */
+export function assigneeOf(board: Pick<BoardConfig, "id" | "assignee">, picks: Record<string, AssigneePick>): Assignee {
+  const own = board.assignee ?? "me";
+  const pick = picks[board.id] ?? picks[EVERY_BOARD];
+  return pick && pick.over === own ? pick.to : own;
+}
+
+/** The picks once the user picks `to` for `board`, forgetting those of boards no longer among `ids`. */
+export function pickAssignee(picks: Record<string, AssigneePick>, board: Pick<BoardConfig, "id" | "assignee">, to: Assignee, ids: string[]): Record<string, AssigneePick> {
+  const kept = Object.fromEntries(Object.entries(picks).filter(([id]) => id === EVERY_BOARD || ids.includes(id)));
+  return { ...kept, [board.id]: { to, over: board.assignee ?? "me" } };
+}
+
 /** A Jira board's type as moonlet names it (X50 Add a board, board switcher). */
 export const jiraBoardType = (kind: string) => ({ scrum: "Scrum", kanban: "Kanban", simple: "Team-managed" })[kind] ?? kind;
 
