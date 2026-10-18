@@ -82,6 +82,8 @@ pub struct BoardSetup {
     pub sprints: bool,
     /// `scrum`, `kanban` or `simple` (team-managed), which the board switcher names.
     pub kind: String,
+    /// The names of the columns' statuses, by id, for Add a board's step 3.
+    pub status_names: std::collections::BTreeMap<String, String>,
     /// Jira's columns in order, with a suggested category and Show / Fold /
     /// Hide: a column with no status, or the backlog, is hidden; Done is folded.
     pub columns: Vec<BoardColumn>,
@@ -89,7 +91,7 @@ pub struct BoardSetup {
 
 pub fn parse_board_config(raw: &[u8], statuses: &[JiraStatus]) -> Result<BoardSetup, ApiError> {
     let v = parse(raw)?;
-    let columns = v["columnConfig"]["columns"]
+    let columns: Vec<BoardColumn> = v["columnConfig"]["columns"]
         .as_array()
         .into_iter()
         .flatten()
@@ -139,6 +141,16 @@ pub fn parse_board_config(raw: &[u8], statuses: &[JiraStatus]) -> Result<BoardSe
             .flatten(),
         sprints: v["type"] != "kanban",
         kind: v["type"].as_str().unwrap_or_default().into(),
+        status_names: columns
+            .iter()
+            .flat_map(|c| &c.statuses)
+            .filter_map(|id| {
+                statuses
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map(|s| (id.clone(), s.name.clone()))
+            })
+            .collect(),
         columns,
     })
 }
@@ -465,6 +477,19 @@ mod tests {
                 points_field: Some("customfield_10014".into()),
                 sprints: true,
                 kind: "scrum".into(),
+                // Step 3 lists each column's statuses by name.
+                status_names: [
+                    ("1", "Open"),
+                    ("10018", "Needs Reviews"),
+                    ("10019", "Ready to Deploy"),
+                    ("10030", "Acceptance Testing"),
+                    ("3", "In Progress"),
+                    ("5", "QA Testing"),
+                    ("6", "Closed"),
+                ]
+                .into_iter()
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .collect(),
                 columns: vec![
                     col("Open", &["1"], Category::Todo, Show::Show, None),
                     col(
