@@ -471,7 +471,7 @@ describe("Jira and ClickUp trackers", () => {
     await expect($('//aside[@aria-label="Task detail"]').$(sel.text("No Jira transition leads to that column from here"))).toBeDisplayed({ wait: 15_000 });
   });
 
-  it("adds a board from a JQL query the workspace has no board for, shows it, and renames it in Board settings (X50)", async () => {
+  it("adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings (X50)", async () => {
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
@@ -506,5 +506,18 @@ describe("Jira and ClickUp trackers", () => {
     await $(`${settings}//button[normalize-space()="Save"]`).click();
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX issues"]]')).toBeDisplayed({ wait: 10_000 });
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX query"]]')).not.toBeDisplayed();
+    // Settings › Boards opens its settings and removes it, after asking (X50 Manage).
+    await openSettings("Task trackers");
+    const row = '//div[@role="group"][@aria-label="EX issues"]';
+    await expect($(`${row}//*[normalize-space()="JQL query"]`)).toBeDisplayed({ wait: 10_000 });
+    await $(`${row}//button[normalize-space()="Board settings"]`).click();
+    await expect($('//div[@role="dialog"][@aria-label="Board settings"]')).toBeDisplayed({ wait: 10_000 });
+    await browser.keys("Escape");
+    await openSettings("Task trackers");
+    await $(`${row}//button[normalize-space()="Remove"]`).click();
+    await $(sel.confirmButton("Remove")).click();
+    await expect($(row)).not.toBeExisting({ wait: 10_000 });
+    await closeSettings();
+    await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX issues"]]')).not.toBeExisting({ wait: 10_000 });
   });
 });

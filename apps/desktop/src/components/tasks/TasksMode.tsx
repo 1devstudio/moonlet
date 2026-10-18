@@ -7,7 +7,7 @@ import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../.
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
-import { type Column, type Task, taskId, taskStart, trackerName, trackerOf } from "../../lib/tasks";
+import { type Column, type Task, taskId, taskStart, trackerName } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
 import {
@@ -50,7 +50,7 @@ import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
-import { Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph, TrackerIcon } from "../ui";
+import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
@@ -128,13 +128,6 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
     const shown = shownBoard ? { board: shownBoard, views: all.find((b) => b.board.id === shownBoard.id)?.views ?? [] } : null;
     return { ws, data, board: asBoard(all), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link), shown, all };
   }, [ws, data, notNow, config, paused, shownId, ...deps]);
-}
-
-/** A board's tracker mark: Linear, Jira and ClickUp's logos, GH for GitHub. */
-export function BoardMark({ connection, size = 12 }: { connection: string; size?: 12 | 14 }) {
-  const kind = trackerOf(connection);
-  if (kind && kind !== "github") return <TrackerIcon kind={kind} size={size} />;
-  return <span className={cx("shrink-0 text-center font-mono font-semibold", size === 12 ? "w-3 ui-text-9 text-muted" : "ui-text-10.5 text-fg")}>GH</span>;
 }
 
 /** The sidebar body in Tasks mode (X50): Find a task, the workspace's pinned boards, then the sync line. */
@@ -619,7 +612,7 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
   ]);
   const footer: MenuItem[] = [
     { label: "New board", icon: <Plus size={13} />, onSelect: () => openAddBoard(host, workspaceId) },
-    { label: "Manage", onSelect: () => void goSettings({ page: "trackers" }) },
+    { label: "Manage", onSelect: () => void goSettings({ page: "trackers", focus: "boards" }) },
   ];
   return (
     <div className="flex min-w-0 items-center gap-2.5">

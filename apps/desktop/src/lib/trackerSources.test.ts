@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { changedStates, connectedText, disconnectText, parseTrackerLink, projectTrackers, trackerLink, sourceList, sourceChoices, sourceNoun } from "./trackerSources";
+import { boardList, changedStates, connectedText, disconnectText, parseTrackerLink, projectTrackers, trackerLink, sourceChoices, sourceNoun } from "./trackerSources";
 import type { BoardConfig } from "./boards";
 
-describe("sourceList (X50 Settings › Task trackers › Boards)", () => {
-  it("lists the workspace's boards by tracker and name, marking a board whose connection needs attention", () => {
-    const b = (id: string, connection: string, workspace: string, name: string): BoardConfig => ({ id, name, connection, workspace, origin: { kind: "linear_team", team: id } });
-    const boards = [b("web", "github:github.com", "local/w1", "acme/web"), b("eng", "linear:acme", "local/w1", "Engineering"), b("des", "linear:acme", "local/w2", "Design"), b("ops", "jira:ops.atlassian.net", "local/w1", "Operations")];
-    expect(sourceList("local/w1", boards, { "jira:ops.atlassian.net": "Jira no longer accepts the API token" })).toEqual([
-      { id: "web", tracker: "GitHub", name: "acme/web", attention: undefined },
-      { id: "eng", tracker: "Linear", name: "Engineering", attention: undefined },
-      { id: "ops", tracker: "Jira", name: "Operations", attention: "Jira no longer accepts the API token" },
+describe("boardList (X50 Settings › Task trackers › Boards)", () => {
+  it("lists the workspace's boards with their origin and pin, marking a board whose connection needs attention", () => {
+    const boards: BoardConfig[] = [
+      { id: "web", name: "acme/web", connection: "github:github.com", workspace: "local/w1", origin: { kind: "github_repo", repo: "acme/web" } },
+      { id: "eng", name: "Engineering", connection: "linear:acme", workspace: "local/w1", origin: { kind: "linear_team", team: "ENG" }, pinned: false },
+      { id: "des", name: "Design", connection: "linear:acme", workspace: "local/w2", origin: { kind: "linear_team", team: "DES" } },
+      { id: "ops", name: "Operations", connection: "jira:ops.atlassian.net", workspace: "local/w1", origin: { kind: "jira_board", board: 10 } },
+    ];
+    expect(boardList("local/w1", boards, { "jira:ops.atlassian.net": "Jira no longer accepts the API token" })).toEqual([
+      { id: "web", connection: "github:github.com", name: "acme/web", origin: "GitHub acme/web", pinned: true, attention: undefined },
+      { id: "eng", connection: "linear:acme", name: "Engineering", origin: "Linear team ENG", pinned: false, attention: undefined },
+      { id: "ops", connection: "jira:ops.atlassian.net", name: "Operations", origin: "Jira board 10", pinned: true, attention: "Jira no longer accepts the API token" },
     ]);
   });
 });
