@@ -420,7 +420,7 @@ pub struct GhCreated {
 
 /// What the new-issue form offers for a repository (X52).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GhCreateOptions {
+pub struct GhCreateChoices {
     /// gh's login.
     pub me: String,
     /// The logins issues can be assigned to.

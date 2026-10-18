@@ -3,13 +3,13 @@
 //! node id so a GitHub Project can add it.
 
 use anyhow::{Result, bail};
-use moonlet_proto::types::{GhCreateOptions, GhCreated};
+use moonlet_proto::types::{GhCreateChoices, GhCreated};
 use serde_json::{Value, json};
 
 use std::path::Path;
 use std::time::Duration;
 
-use crate::git::{parse_gh_tasks, run_raw};
+use crate::git::{check_repo, gh_whoami, parse_gh_tasks, run_raw};
 
 /// `gh api`'s arguments to create an issue in `repo` (`owner/name`):
 /// assigned to `assignee`, a login, when given; labels as GitHub names them.
@@ -71,7 +71,7 @@ pub fn parse_create_options(
     assignees: &[u8],
     labels: &[u8],
     repo: &[u8],
-) -> Result<GhCreateOptions> {
+) -> Result<GhCreateChoices> {
     let names = |raw: &[u8], field: &str| -> Result<Vec<String>> {
         let list: Vec<Value> = serde_json::from_slice(raw)?;
         Ok(list
@@ -83,7 +83,7 @@ pub fn parse_create_options(
     let can_set = ["triage", "push", "maintain", "admin"]
         .iter()
         .any(|k| p[*k] == true);
-    Ok(GhCreateOptions {
+    Ok(GhCreateChoices {
         me: me.into(),
         people: names(assignees, "login")?,
         labels: names(labels, "name")?,
@@ -121,29 +121,11 @@ async fn api(args: &[String]) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-/// `owner/name` as a GitHub repository, before gh is run with it.
-fn checked(repo: &str) -> Result<&str> {
-    let part = |s: &str| {
-        !s.is_empty()
-            && !s.starts_with(['-', '.'])
-            && s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
-    };
-    match repo.split_once('/') {
-        Some((owner, name)) if part(owner) && part(name) => Ok(repo),
-        _ => bail!("{repo} is not a GitHub repository"),
-    }
-}
-
 /// The new-issue form's lists for `repo` (X52). Who the user is is needed;
 /// people, labels or access GitHub won't give leave the user's own choice.
-pub async fn gh_create_options(repo: &str) -> Result<GhCreateOptions> {
-    let repo = checked(repo)?;
-    let me = String::from_utf8_lossy(
-        &api(&["api".into(), "user".into(), "--jq".into(), ".login".into()]).await?,
-    )
-    .trim()
-    .to_string();
+pub async fn gh_create_options(repo: &str) -> Result<GhCreateChoices> {
+    let repo = check_repo(repo)?;
+    let me = gh_whoami().await?;
     let get = |path: String| async move {
         api(&["api".into(), path])
             .await
@@ -166,16 +148,10 @@ pub async fn gh_issue_create(
     assignee: &str,
     labels: &[String],
 ) -> Result<GhCreated> {
-    let repo = checked(repo)?;
+    let repo = check_repo(repo)?;
     let login = match assignee {
         "none" => None,
-        "me" => Some(
-            String::from_utf8_lossy(
-                &api(&["api".into(), "user".into(), "--jq".into(), ".login".into()]).await?,
-            )
-            .trim()
-            .to_string(),
-        ),
+        "me" => Some(gh_whoami().await?),
         login => Some(login.to_string()),
     };
     parse_created_issue(

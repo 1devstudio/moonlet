@@ -6,7 +6,7 @@ import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhCreated, type GhCreateOptions, type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
+import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
@@ -550,7 +550,7 @@ function placeOf(board: BoardConfig): string {
 export async function createOptions(host: string, board: BoardConfig): Promise<{ me: string; people: { id: string; name: string }[]; labels: { id: string; name: string }[]; canSet: boolean }> {
   if (board.origin.kind === "github_repo") {
     // GitHub through gh on the workspace's host; people and labels by login and name.
-    const o = await rpc<GhCreateOptions>(host, M.ghCreateOptions, { repo: board.origin.repo });
+    const o = await rpc<GhCreateChoices>(host, M.ghCreateOptions, { repo: board.origin.repo });
     const named = (xs: string[]) => xs.map((x) => ({ id: x, name: x }));
     return { me: o.me, people: named(o.people), labels: named(o.labels), canSet: o.can_set };
   }
