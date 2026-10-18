@@ -8,7 +8,8 @@ import { hostsApi } from "../../lib/daemon";
 import { errorToast, useStore } from "../../lib/store";
 import { type Connection, loadTrackersConfig, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
-import { blankSource, changedStates, sourceChoices, sourceNoun, sourceRows, sourcesToSave } from "../../lib/trackerSources";
+import { boardRows, rowsToBoards, sourceKeyOf, withStates } from "../../lib/boards";
+import { blankSource, changedStates, sourceChoices, sourceNoun } from "../../lib/trackerSources";
 import type { Column } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Dialog, Field, IconButton, inputCls, TrackerIcon } from "../ui";
@@ -29,15 +30,24 @@ const message = (e: unknown) => (e as { message?: string })?.message ?? String(e
 /** Which sources a connection shows, in which workspace and starting in which project. */
 function SourcesEditor({ connection, choices, onDone }: { connection: Connection; choices: { key: string; name: string }[]; onDone: () => void }) {
   const workspaces = useStore((s) => s.workspaces);
-  const [rows, setRows] = useState<Source[]>(() => sourceRows(connection.sources));
+  const boards = useTasks((t) => t.config?.boards);
+  // The connection's boards built from a team, project or list (X50), until Add a board replaces this dialog.
+  const [rows, setRows] = useState<Source[]>(() => boardRows(connection, boards));
   const noun = sourceNoun(connection.kind);
   const wsOptions = Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ value: wsKey(host, w.id), label: w.name, host })));
   const set = (i: number, patch: Partial<Source>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const canAdd = !rows.some((r) => !r.key);
   const save = async () => {
-    const sources = sourcesToSave(rows);
+    // Removing a board asks first (X50).
+    const kept = new Set(rowsToBoards(connection, rows, boards).map((b) => b.id));
+    const gone = (boards ?? []).filter((b) => !kept.has(b.id));
+    if (gone.length) {
+      const names = gone.map((b) => b.name).join(", ");
+      const ok = await askConfirm({ title: gone.length === 1 ? `Remove ${names}?` : `Remove ${gone.length} boards?`, message: `${names} ${gone.length === 1 ? "goes" : "go"} from Tasks mode. Sessions keep their links.`, action: "Remove", variant: "danger" });
+      if (!ok) return;
+    }
     try {
-      await saveTrackersConfig((config) => ({ ...config, connections: (config.connections ?? []).map((c) => (c.id === connection.id ? { ...c, sources } : c)) }));
+      await saveTrackersConfig((config) => ({ ...config, boards: rowsToBoards(connection, rows, config.boards) }));
       onDone();
     } catch (e) {
       errorToast(message(e));
@@ -202,6 +212,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
 /** One connection's row: its line, Sources, Reconnect when needed, Disconnect. */
 export function ConnectionRow({ c }: { c: Connection }) {
   const attention = useTasks((t) => t.attention[c.id]);
+  const boards = useTasks((t) => t.config?.boards);
   const [editing, setEditing] = useState<{ key: string; name: string }[] | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [statesOpen, setStatesOpen] = useState(false);
@@ -225,7 +236,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
   };
   return (
     <>
-      <Row label={`${NAME[c.kind]} · ${c.site}`} hint={<Status line={connectionLine(c, attention)} />} setting={`tracker-${c.id}`}>
+      <Row label={`${NAME[c.kind]} · ${c.site}`} hint={<Status line={connectionLine(c, boards, attention)} />} setting={`tracker-${c.id}`}>
         <div className="flex gap-1.5">
           {attention && (
             <Button size="sm" variant="primary" onClick={() => setReconnecting(true)}>
@@ -235,7 +246,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
           <Button size="sm" variant="ghost" onClick={() => void sources()}>
             Sources
           </Button>
-          <Button size="sm" variant="ghost" disabled={!c.sources.length} onClick={() => setStatesOpen(true)}>
+          <Button size="sm" variant="ghost" disabled={!(boards ?? []).some((b) => b.connection === c.id && sourceKeyOf(b))} onClick={() => setStatesOpen(true)}>
             States
           </Button>
           <Button size="sm" variant="ghost" onClick={() => void disconnect()}>
@@ -282,9 +293,13 @@ const COLUMN_CHOICES = [
 
 /** Workflow states (X44): each state of a source and the column it lands in. */
 export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => void }) {
-  const [source, setSource] = useState(c.sources[0]?.key ?? "");
+  // The connection's boards built from a team, project or list (X50), each with its own mapping.
+  const boards = (useTasks((t) => t.config?.boards) ?? []).filter((b) => b.connection === c.id && sourceKeyOf(b));
+  const [boardId, setBoardId] = useState(boards[0]?.id ?? "");
+  const board = boards.find((b) => b.id === boardId);
+  const source = board ? (sourceKeyOf(board) ?? "") : "";
   const [states, setStates] = useState<{ name: string; column: Column }[] | null>(null);
-  const [mapping, setMapping] = useState<Record<string, Column>>(c.states ?? {});
+  const [mapping, setMapping] = useState<Record<string, Column>>(board?.states ?? {});
   useEffect(() => {
     if (!source) return;
     setStates(null);
@@ -294,7 +309,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
     // Only states moved off their default column are kept.
     const kept = changedStates(states ?? [], mapping);
     try {
-      await saveTrackersConfig((config) => ({ ...config, connections: (config.connections ?? []).map((x) => (x.id === c.id ? { ...x, states: kept as Connection["states"] } : x)) }));
+      await saveTrackersConfig((config) => ({ ...config, boards: config.boards?.map((b) => (b.id === boardId ? withStates(b, kept) : b)) }));
       onClose();
     } catch (e) {
       errorToast(message(e));
@@ -303,16 +318,24 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
   return (
     <Dialog title={`${NAME[c.kind]} workflow states`} onClose={onClose} width={520}>
       <p className="mb-2 ui-text-12.5 text-muted">moonlet groups tasks into four columns. Filled in from the tracker's state types; change them if your team uses its own.</p>
-      {c.sources.length > 1 && (
-        <select aria-label="Source" className={cx(selectCls, "mb-2")} value={source} onChange={(e) => setSource(e.target.value)}>
-          {c.sources.map((s) => (
-            <option key={s.key} value={s.key}>
-              {s.name}
+      {boards.length > 1 && (
+        <select
+          aria-label="Board"
+          className={cx(selectCls, "mb-2")}
+          value={boardId}
+          onChange={(e) => {
+            setBoardId(e.target.value);
+            setMapping(boards.find((b) => b.id === e.target.value)?.states ?? {});
+          }}
+        >
+          {boards.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
             </option>
           ))}
         </select>
       )}
-      {!source && <p className="ui-text-12.5 text-muted">Pick a source first.</p>}
+      {!source && <p className="ui-text-12.5 text-muted">Add a source first.</p>}
       {source && !states && <p className="ui-text-12.5 text-muted">Loading states…</p>}
       <div role="list" aria-label="States" className="flex flex-col gap-1">
         {(states ?? []).map((s) => (

@@ -1,7 +1,8 @@
 // A board's columns as the tracker has them (X50): each task in the column
 // that holds its status, folded and hidden columns, and WIP.
 
-import { type BoardColumn, type BoardConfig, originKey, originLabel } from "./boards";
+import { type BoardColumn, type BoardConfig, type Category, originKey, originLabel, syncedColumns } from "./boards";
+import type { BoardData } from "./tasksStore";
 import type { AgentState } from "./protocol";
 import { type Column, type Task, trackerName, trackerOf } from "./tasks";
 import { type BoardInput, type Card, type Drift, tasksBoard } from "./tasksBoard";
@@ -24,6 +25,21 @@ export interface ColumnView {
 function statusKey(task: Task): string {
   if (task.github) return task.column === "open" ? "open" : task.column === "done" ? "completed" : "not_planned";
   return task.tracker?.statusId || task.tracker?.state || "";
+}
+
+/**
+ * Tracker tasks in their board column's category (X50), so out of sync,
+ * Keep in step and notices read the board's columns: a status in no column,
+ * or in a hidden one, is hidden. GitHub repository issues keep theirs.
+ */
+export function categorize(columns: BoardColumn[], tasks: Task[]): Task[] {
+  const index = new Map<string, BoardColumn>();
+  for (const c of columns) for (const s of c.statuses) index.set(s, c);
+  return tasks.map((task) => {
+    if (task.github) return task;
+    const c = index.get(statusKey(task));
+    return { ...task, column: c && c.show !== "hide" ? c.category : "hidden" };
+  });
 }
 
 /**
@@ -149,5 +165,25 @@ export function switcherGroups(
         };
       });
     return rows.length ? [{ workspace: ws, name: name(ws), hint: ws === wsKey ? "this workspace" : "switches workspace", rows }] : [];
+  });
+}
+
+/** The status a move to `category` lands on (X50): the first status of the first shown or folded column of that category. */
+export function statusFor(columns: BoardColumn[], category: Category): string | null {
+  return columns.find((c) => c.show !== "hide" && c.category === category)?.statuses[0] ?? null;
+}
+
+/**
+ * Tasks placed by the columns of the board each came from, as saved now
+ * (X50), so a changed mapping shows without waiting for a sync; a task on
+ * two boards takes the first's. A task on no board keeps its category.
+ */
+export function placeOnBoards(tasks: Task[], data: Record<string, BoardData> | undefined, boards: BoardConfig[] | undefined): Task[] {
+  const boardOf = new Map<string, BoardConfig>();
+  for (const b of boards ?? []) for (const id of data?.[b.id]?.keys ?? []) if (!boardOf.has(id)) boardOf.set(id, b);
+  return tasks.map((t) => {
+    const b = boardOf.get(`${t.connection} ${t.key}`);
+    const columns = b ? syncedColumns(b, null) : [];
+    return columns.length ? categorize(columns, [t])[0] : t;
   });
 }
