@@ -269,9 +269,9 @@ export const jiraFilterUrl = (site: string, filterId: string) => `https://${site
  * no issue is in today), then those `known` from an earlier preview of the
  * same source.
  */
-export function statusNames(fromSetup: Record<string, string>, issues: Task[], known: Record<string, string> = {}, site: Record<string, string> = {}): Record<string, string> {
-  const fromIssues = Object.fromEntries(issues.flatMap((t) => (t.tracker?.statusId ? [[t.tracker.statusId, t.tracker.state]] : [])));
-  return { ...known, ...site, ...fromIssues, ...fromSetup };
+export function statusNames(from: { setup?: Record<string, string>; issues?: Task[]; site?: Record<string, string>; known?: Record<string, string> }): Record<string, string> {
+  const fromIssues = Object.fromEntries((from.issues ?? []).flatMap((t) => (t.tracker?.statusId ? [[t.tracker.statusId, t.tracker.state]] : [])));
+  return { ...from.known, ...from.site, ...fromIssues, ...from.setup };
 }
 
 /** A column's statuses as step 3 lists them, by name where known: `Open · In Progress`. */
@@ -298,7 +298,8 @@ export function projectOwners(repos: (string | null)[]): string[] {
 /**
  * Step 2's preview (X50): the tracker is asked `wait` ms after the last
  * change, and only the latest change's answer is shown, so typing a query
- * asks once. `stop` drops a pending ask, for leaving the step.
+ * asks once. `stop` drops a pending ask and any answer still to come, for
+ * leaving the step. `ask` turns its own failures into an answer.
  */
 export function pausedPreview<T>(show: (answer: T) => void, wait = 500) {
   let timer: ReturnType<typeof setTimeout> | undefined;

@@ -226,13 +226,13 @@ describe("Add a board, step 3 polish (X50)", () => {
 describe("Add a board, step 3 statuses (X50)", () => {
   it("lists a column's statuses by name: Jira's board setup, else the previewed issues, else the site's statuses, else the id", () => {
     const issue = (statusId: string, state: string): Task => ({ connection: JIRA, key: "EX-1", title: "", url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "1", state, statusId, source: "EX" } });
-    const names = statusNames({ "10002": "Done" }, [issue("3", "In Progress"), issue("10001", "Selected for Development")]);
+    const names = statusNames({ setup: { "10002": "Done" }, issues: [issue("3", "In Progress"), issue("10001", "Selected for Development")] });
     expect(names).toEqual({ "10002": "Done", "3": "In Progress", "10001": "Selected for Development" });
     // The board's setup wins over an issue's; names already seen stay while the next preview loads.
-    expect(statusNames({ "3": "In Progress" }, [issue("3", "Doing")], { "6": "Closed" })).toEqual({ "3": "In Progress", "6": "Closed" });
-    expect(statusNames({}, [], { "6": "Closed" })).toEqual({ "6": "Closed" });
+    expect(statusNames({ setup: { "3": "In Progress" }, issues: [issue("3", "Doing")], known: { "6": "Closed" } })).toEqual({ "3": "In Progress", "6": "Closed" });
+    expect(statusNames({ known: { "6": "Closed" } })).toEqual({ "6": "Closed" });
     // A JQL board's status that no issue is in today takes the site's name.
-    expect(statusNames({}, [issue("3", "In Progress")], {}, { "3": "Doing", "10030": "Acceptance Testing" })).toEqual({ "3": "In Progress", "10030": "Acceptance Testing" });
+    expect(statusNames({ issues: [issue("3", "In Progress")], site: { "3": "Doing", "10030": "Acceptance Testing" } })).toEqual({ "3": "In Progress", "10030": "Acceptance Testing" });
     expect(WEB.map((c) => statusText(c, names))).toEqual(["10000", "Selected for Development", "In Progress", "10030", "Done"]);
     expect(statusText({ name: "Empty", statuses: [], category: "todo" }, names)).toBe("no status");
     // Linear and ClickUp columns list their states by name already.
@@ -263,29 +263,36 @@ describe("Add a board, whose GitHub Projects to list (X50)", () => {
 describe("the preview's pause (X50 step 2)", () => {
   it("asks the tracker a moment after the last change, and shows only the latest change's answer", async () => {
     vi.useFakeTimers();
-    const asked: string[] = [];
-    const shown: string[] = [];
-    const preview = pausedPreview<string>((answer) => shown.push(answer), 500);
-    const ask = (query: string, ms = 0) => () => (asked.push(query), ms ? new Promise<string>((r) => setTimeout(() => r(`${query} matches`), ms)) : Promise.resolve(`${query} matches`));
-    // Typing "project = EX" asks once, half a second after the last key.
-    preview.change(ask("project = E"));
-    await vi.advanceTimersByTimeAsync(300);
-    preview.change(ask("project = EX"));
-    await vi.advanceTimersByTimeAsync(499);
-    expect([asked, shown]).toEqual([[], []]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect([asked, shown]).toEqual([["project = EX"], ["project = EX matches"]]);
-    // A slow answer to an earlier query is not shown once the user changed it.
-    preview.change(ask("project = OPS", 2_000));
-    await vi.advanceTimersByTimeAsync(500);
-    preview.change(ask("project = WEB"));
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(shown).toEqual(["project = EX matches", "project = WEB matches"]);
-    // Leaving the step asks nothing more.
-    preview.change(ask("project = MOON"));
-    preview.stop();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(asked).toEqual(["project = EX", "project = OPS", "project = WEB"]);
-    vi.useRealTimers();
+    try {
+      const asked: string[] = [];
+      const shown: string[] = [];
+      const preview = pausedPreview<string>((answer) => shown.push(answer));
+      const ask = (query: string, ms = 0) => () => (asked.push(query), ms ? new Promise<string>((r) => setTimeout(() => r(`${query} matches`), ms)) : Promise.resolve(`${query} matches`));
+      // Typing "project = EX" asks once, half a second after the last key.
+      preview.change(ask("project = E"));
+      await vi.advanceTimersByTimeAsync(300);
+      preview.change(ask("project = EX"));
+      await vi.advanceTimersByTimeAsync(499);
+      expect([asked, shown]).toEqual([[], []]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect([asked, shown]).toEqual([["project = EX"], ["project = EX matches"]]);
+      // A slow answer to an earlier query is not shown once the user changed it.
+      preview.change(ask("project = OPS", 2_000));
+      await vi.advanceTimersByTimeAsync(500);
+      preview.change(ask("project = WEB"));
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(shown).toEqual(["project = EX matches", "project = WEB matches"]);
+      // Leaving the step asks nothing more, and drops an answer still to come.
+      preview.change(ask("project = MOON"));
+      preview.stop();
+      preview.change(ask("project = DES", 2_000));
+      await vi.advanceTimersByTimeAsync(500);
+      preview.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(asked).toEqual(["project = EX", "project = OPS", "project = WEB", "project = DES"]);
+      expect(shown).toEqual(["project = EX matches", "project = WEB matches"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

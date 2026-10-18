@@ -491,6 +491,9 @@ export interface BoardPreview {
   statusNames: Record<string, string>;
 }
 
+/** A preview that could not be read: no issues, and why. */
+export const previewFailed = (error: string): BoardPreview => ({ tasks: [], columns: null, error, numberField: null, statusNames: {} });
+
 export async function previewBoard(host: string, workspaceId: string, board: BoardConfig): Promise<BoardPreview> {
   const repos = useTasks.getState().data[wsKey(host, workspaceId)]?.repos ?? {};
   const projects = workspaceProjects(useStore.getState(), host, workspaceId).map((p) => ({ path: p.path, repo: repos[p.id] ?? null }));

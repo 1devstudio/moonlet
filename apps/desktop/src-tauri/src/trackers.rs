@@ -609,7 +609,7 @@ pub struct BoardQuery {
     pub sync: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct BoardTasks {
     pub issues: Vec<BoardIssue>,
     pub sprint: Option<Sprint>,
@@ -651,16 +651,16 @@ pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
             Finished::Days(_) => None,
         };
         let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_in(&team, query.sync).await?);
-        return Ok(BoardTasks { issues, sprint, columns: Some(columns), kind: None, status_names: None });
+        return Ok(BoardTasks { issues, sprint, columns: Some(columns), ..Default::default() });
     }
     // A ClickUp list: X44's fetch of that one source, and its states as columns.
     if let Origin::ClickupList { list: key } = &query.origin {
         let issues = s.clickup_tasks(key, query.mine, &query.finished).await?;
         let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_in(key, query.sync).await?);
-        return Ok(BoardTasks { issues, sprint: None, columns: Some(columns), kind: None, status_names: None });
+        return Ok(BoardTasks { issues, columns: Some(columns), ..Default::default() });
     }
     if !matches!(query.origin, Origin::JiraBoard { .. } | Origin::Jql { .. }) {
-        return Ok(BoardTasks { issues: vec![], sprint: None, columns: None, kind: None, status_names: None });
+        return Ok(BoardTasks::default());
     }
     s.only_jira()?;
     // A token Jira no longer accepts makes searches come back empty, not
@@ -702,13 +702,20 @@ pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
     // site's statuses; a site that won't list them leaves the names to its issues.
     let jql = matches!(query.origin, Origin::Jql { .. });
     let columns = columns.or_else(|| jql.then(|| jira_board::columns_from_issues(&issues)));
-    let status_names = if jql {
+    let status_names = if wants_site_names(&query.origin, query.sync, query.mine) {
         let raw = s.jira_get("/rest/api/3/status", query.sync).await.ok();
         raw.and_then(|raw| jira_board::parse_statuses(&raw).ok()).map(|st| jira_board::status_names(&st))
     } else {
         None
     };
     Ok(BoardTasks { issues, sprint, columns, kind, status_names })
+}
+
+/// Whether a board read also gives the site's status names: only a JQL
+/// board's preview needs them (step 3 names a status no issue is in today),
+/// and only its read of the user's issues, the one the preview keeps.
+fn wants_site_names(origin: &Origin, sync: Option<u64>, mine: bool) -> bool {
+    matches!(origin, Origin::Jql { .. }) && sync.is_none() && mine
 }
 
 /// A tracker state and the column it lands in by default.
@@ -881,6 +888,18 @@ mod tests {
         };
         let (one, two) = tokio::join!(load(), load());
         assert_eq!((one.unwrap(), two.unwrap()), ("a2".to_string(), "a2".to_string()));
+    }
+
+    #[test]
+    fn only_a_jql_boards_preview_asks_for_the_sites_status_names() {
+        let jql = Origin::Jql { query: "project = EX".into() };
+        // Add a board's preview: the user's issues, read outside a sync.
+        assert!(wants_site_names(&jql, None, true));
+        // Its read of everyone's issues, and a sync's reads, don't.
+        assert!(!wants_site_names(&jql, None, false));
+        assert!(!wants_site_names(&jql, Some(7), true));
+        // A Jira board names its statuses from its setup.
+        assert!(!wants_site_names(&Origin::JiraBoard { board: 10 }, None, true));
     }
 
     #[test]
