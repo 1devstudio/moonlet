@@ -144,7 +144,7 @@ describe("Tasks mode", () => {
     await $('//section[@aria-labelledby="connect-tracker"]//button[.//div[normalize-space()="GitHub Issues"]]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
-    await $(`${dialog}//button[.//span[normalize-space()="A repository's issues"]]`).click();
+    // It opens on the workspace's repositories.
     await $(`${dialog}//button[@role="radio"][.//span[normalize-space()="acme/storefront"]]`).click();
     const next = `${dialog}//button[normalize-space()="Continue"]`;
     await $(next).click();

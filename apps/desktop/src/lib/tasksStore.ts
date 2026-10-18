@@ -181,8 +181,8 @@ export async function removeBoard(board: Pick<BoardConfig, "id" | "name">): Prom
  * `connection` when given (the Connect dialog's end), or with `board` that
  * board's settings (X50). Settings close behind it.
  */
-export function openAddBoard(host: string, workspace: string, board?: string, connection?: string) {
-  useStore.setState({ settingsPage: null, dialog: { kind: "add-board", host, workspace, ...(board && { board }), ...(connection && { connection }) } });
+export function openAddBoard(host: string, workspace: string, open: { board?: string; connection?: string; build?: "repo" } = {}) {
+  useStore.setState({ settingsPage: null, dialog: { kind: "add-board", host, workspace, ...open } });
 }
 
 /** Opens board `id` from the board switcher (X50): another workspace's is shown there, in Tasks mode. */
@@ -384,9 +384,8 @@ const syncs = latestPerKey();
 
 /**
  * Reads a workspace's boards (X50): its pinned ones and the one shown, each
- * by its origin, with the projects' worktrees. The first sync of a workspace
- * turns its X44 sources and GitHub repositories into boards. A board that
- * fails keeps its last good tasks.
+ * by its origin, with the projects' worktrees. A repository is a board only
+ * once the user adds it. A board that fails keeps its last good tasks.
  */
 export async function refreshTasks(host: string, workspaceId: string, now = Date.now()) {
   const key = wsKey(host, workspaceId);

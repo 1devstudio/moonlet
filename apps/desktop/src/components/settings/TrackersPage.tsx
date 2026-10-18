@@ -171,7 +171,7 @@ export function TrackersPage() {
                   </Button>
                 </Row>
                 {w.boards.map((x) => (
-                  <BoardRow key={x.id} entry={x} onSettings={() => openAddBoard(host, id, x.id)} onPin={(pinned) => save((c) => ({ ...c, boards: withPinned(c.boards ?? [], x.id, pinned) }))} />
+                  <BoardRow key={x.id} entry={x} onSettings={() => openAddBoard(host, id, { board: x.id })} onPin={(pinned) => save((c) => ({ ...c, boards: withPinned(c.boards ?? [], x.id, pinned) }))} />
                 ))}
               </Card>
             );
