@@ -1,6 +1,6 @@
 // Tasks mode (X45, X50): the sidebar's boards and the shown board of the workspace's tasks.
 
-import { Bot, ChevronDown, ChevronRight, ChevronUp, Columns3, Copy, ExternalLink, GitBranch, LayoutGrid, List, ListFilter, MoreHorizontal, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ChevronUp, Columns3, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
@@ -50,15 +50,18 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
-import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph, TrackerIcon } from "../ui";
+import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
 import { NewIssue } from "./NewIssue";
 
+
+/** The 2px rule under a column's header, by its category (the design's board). */
+const COLUMN_RULE: Record<Category, string> = { todo: "bg-[#2e2e2e]", in_progress: "bg-[#5e5e5e]", in_review: "bg-[#8c8c8c]", done: "bg-merged" };
 
 const TONE: Record<CardRow["meta"]["tone"], string> = {
   blocked: "text-blocked",
@@ -144,23 +147,23 @@ export function TasksSidebar() {
   const rows = useMemo(() => (ws ? sidebarBoards(config.boards, wsKey(ws.host, ws.id), shown?.board.id ?? null, data) : []), [ws, config, shown, data]);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <label className="mx-2 mb-1 flex items-center gap-2 rounded-md px-3 py-1.5 text-muted focus-within:bg-panel-2">
+      <label className="mx-2 mb-2.5 flex h-[30px] items-center gap-2 rounded-md px-2 text-muted focus-within:bg-panel-2">
         <Search size={14} />
         <span className="sr-only">Find a task</span>
         <input
-          className="min-w-0 flex-1 bg-transparent ui-text-14 text-fg outline-none placeholder:text-muted"
+          className="min-w-0 flex-1 bg-transparent ui-text-13 text-fg outline-none placeholder:text-muted"
           placeholder="Find a task"
           value={query}
           onChange={(e) => useTasks.setState({ query: e.target.value })}
         />
       </label>
-      <div className="flex items-center px-4 pb-1 pt-2">
-        <span className="flex-1 ui-text-11 font-medium uppercase tracking-[0.08em] text-faint">Boards</span>
+      <div className="mx-2 mt-1.5 flex h-7 items-center px-2">
+        <span className="flex-1 ui-text-11.5 uppercase tracking-[0.08em] text-faint">Boards</span>
         <IconButton title="Add a board" onClick={() => ws && openAddBoard(ws.host, ws.id)}>
-          <Plus size={13} />
+          <Plus size={12} />
         </IconButton>
       </div>
-      <nav aria-label="Boards" className="px-2">
+      <nav aria-label="Boards" className="px-2 pb-2">
         {rows.map((r) => {
           const b = config.boards?.find((x) => x.id === r.id);
           return (
@@ -169,23 +172,23 @@ export function TasksSidebar() {
               aria-current={r.current ? "page" : undefined}
               onClick={() => ws && showBoard(ws.host, ws.id, r.id)}
               className={cx(
-                "relative flex h-[34px] w-full items-center gap-2.5 rounded-md px-3 text-left ui-text-14",
-                r.current ? "bg-selected text-fg" : "text-muted hover:bg-panel-2 hover:text-fg",
+                "relative flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-left ui-text-13 text-fg",
+                r.current ? "bg-selected" : "hover:bg-panel-2",
               )}
             >
               {r.current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
-              {b && <BoardMark connection={b.connection} />}
+              {b && <BoardTile connection={b.connection} />}
               <span className="min-w-0 flex-1 truncate">{r.label}</span>
               {b && attention[b.connection] && <span title={attention[b.connection]} className="h-1.5 w-1.5 rounded-full bg-error" />}
-              <span className="font-mono ui-text-12 tabular-nums text-faint">{r.count}</span>
+              <span className="font-mono ui-text-11.5 tabular-nums text-faint">{r.count}</span>
             </button>
           );
         })}
       </nav>
       <div className="flex-1" />
       {ws && data && data.sources.length > 0 && (
-        <div className="flex items-center gap-2 px-4 py-2 ui-text-12 text-faint">
-          <RotateCw size={12} className="shrink-0" />
+        <div className="flex h-11 items-center gap-2 border-t border-border px-4 ui-text-12 text-muted">
+          <RotateCw size={13} className="shrink-0" />
           <span className={cx("min-w-0 flex-1 truncate", data.error && "text-error")} title={data.error ?? undefined}>
             {footerLine(data, shown?.board.id ?? null, footerTracker(shown?.board ?? null), now)}
           </span>
@@ -233,50 +236,53 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected }: { hos
     <article
       aria-label={`${card.task.key} ${card.task.title}`}
       className={cx(
-        "rounded-lg border px-3 py-2.5",
+        "flex flex-col gap-2 rounded-[10px] border px-3 py-2.5",
         selected ? "border-accent/60 bg-selected" : card.needsYou ? "border-blocked/35 bg-panel" : "border-border bg-panel",
         // Someone else's issue, shown under Assignee: anyone (X50).
-        isDimmed(card) && !selected && "opacity-60",
+        isDimmed(card) && !selected && "opacity-[0.72]",
       )}
     >
-      <div className="flex items-center gap-2 font-mono ui-text-11.5 text-faint">
-        {card.task.key}
-        {face.type && <span className="font-sans text-faint">{face.type}</span>}
-        <PriorityBars n={card.task.priority} />
-        {face.points && <span className="ml-auto">{face.points}</span>}
+      <div className="flex items-center gap-2">
+        <span className="font-mono ui-text-11.5 text-muted">{card.task.key}</span>
+        {face.type && <span className="ui-text-11 text-faint">{face.type}</span>}
+        {card.task.priority > 0 && <PriorityBars n={card.task.priority} />}
+        <span className="flex-1" />
+        {face.points && <span className="font-mono ui-text-10.5 text-faint">{face.points}</span>}
         {face.assignee && (
-          <span title={`Assigned to ${face.assignee.name}`} className={cx("rounded-full bg-panel-2 px-1.5 font-sans ui-text-10.5 text-muted", !face.points && "ml-auto")}>
+          <span title={`Assigned to ${face.assignee.name}`} className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full border border-border-strong bg-raised px-0.5 ui-text-8.5 font-semibold text-muted">
             {face.assignee.initials}
           </span>
         )}
       </div>
-      <button className="mt-1 block w-full text-left ui-text-13.5 text-fg hover:underline" onClick={pick}>
+      <button className="block w-full text-left ui-text-13 font-medium leading-[1.4] text-fg hover:underline" onClick={pick}>
         {card.task.title}
       </button>
-      {face.line && <div className="mt-0.5 truncate ui-text-12 text-faint">{face.line}</div>}
+      {face.line && <div className="truncate ui-text-12 text-faint">{face.line}</div>}
       {card.rows.length > 0 ? (
-        <div className="mt-2 flex flex-col gap-1">
-          {card.rows.map((r) => (
-            <button key={r.session.id} onClick={() => openSession(host, r.session.id)} className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-panel-2">
-              <StateGlyph state={r.session.state} size={12} />
-              <span className="min-w-0 flex-1 truncate ui-text-12.5 text-[#cfcfcf]">{r.session.name}</span>
-              <span className={cx("font-mono ui-text-11.5 tabular-nums", TONE[r.meta.tone])}>{r.meta.text}</span>
-            </button>
-          ))}
-          {card.note && <div className="px-1 ui-text-12 text-faint">{card.note}</div>}
+        <div className="flex flex-col gap-2">
+          <div className="-mx-1.5 flex flex-col gap-px">
+            {card.rows.map((r) => (
+              <button key={r.session.id} onClick={() => openSession(host, r.session.id)} className="flex h-[26px] items-center gap-[7px] rounded-md bg-bg px-1.5 text-left hover:bg-panel-2">
+                <StateGlyph state={r.session.state} size={12} />
+                <span className="min-w-0 flex-1 truncate ui-text-12.5 text-fg">{r.session.name}</span>
+                <span className={cx("whitespace-nowrap font-mono ui-text-11 tabular-nums", TONE[r.meta.tone])}>{r.meta.text}</span>
+              </button>
+            ))}
+          </div>
+          {card.note && <div className="ui-text-12 text-faint">{card.note}</div>}
         </div>
       ) : (
-        <div className="mt-2 flex items-center gap-1.5 ui-text-12 text-faint">
+        <div className="flex items-center gap-1.5 ui-text-12 text-faint">
           {card.orphans.length > 0 && <GitBranch size={12} />}
           {/* A note (X50) says more than "No sessions": whose issue it is. */}
-          <span>{card.note ?? card.empty}</span>
-          <button className="ml-auto font-medium text-accent hover:underline" onClick={() => startSession(host, workspaceId, card, card.orphans[0])}>
+          <span className="min-w-0">{card.note ?? card.empty}</span>
+          <button className="ml-auto shrink-0 whitespace-nowrap font-medium text-accent hover:underline" onClick={() => startSession(host, workspaceId, card, card.orphans[0])}>
             {card.orphans.length ? "Start session" : "Start"}
           </button>
         </div>
       )}
       {card.drift && (
-        <div className="mt-2 flex items-center gap-2 rounded-md bg-accent/[0.08] px-2 py-1 ui-text-12 text-accent">
+        <div className="flex items-center gap-2 rounded-md bg-accent/[0.08] px-2 py-1 ui-text-12 text-accent">
           <span className="min-w-0 flex-1 truncate">{card.drift.text}</span>
           {card.drift.fix && (
             <button className="font-medium hover:underline" onClick={() => void fixDrift(host, workspaceId, card)}>
@@ -448,7 +454,7 @@ export function TasksMode() {
           <div className="mt-3 flex flex-col divide-y divide-border rounded-lg border border-border">
             {/* GitHub needs no connecting: it opens Add a board on GitHub (X50). */}
             <button className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-panel-2" onClick={() => openAddBoard(ws.host, ws.id, { connection: GITHUB, build: "repo" })}>
-              <BoardMark connection={GITHUB} size={14} />
+              <BoardTile connection={GITHUB} size={26} />
               <div className="min-w-0 flex-1">
                 <div className="ui-text-13 text-fg">GitHub Issues</div>
                 <div className="ui-text-12 text-muted">Uses your gh login · a repository's issues or a GitHub Project</div>
@@ -463,7 +469,7 @@ export function TasksMode() {
               ] as const
             ).map(([kind, t, how]) => (
               <button key={t} className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-panel-2" onClick={() => void goSettings({ page: "trackers" })}>
-                <TrackerIcon kind={kind} />
+                <BoardTile connection={`${kind}:`} size={26} />
                 <div className="min-w-0 flex-1">
                   <div className="ui-text-13 text-fg">{t}</div>
                   <div className="ui-text-12 text-muted">{how} · then pick what this workspace shows</div>
@@ -515,9 +521,9 @@ export function TasksMode() {
     <div className="flex h-full min-w-0">
       <div className="flex min-w-0 flex-1 flex-col">
         {/* A narrow header (a small window, or the detail open) shows Expand all, Board and List by their icons, so the board's title keeps its room. */}
-        <header data-tauri-drag-region className="drag @container flex h-[56px] shrink-0 items-center gap-3 px-5">
+        <header data-tauri-drag-region className="drag @container flex min-h-[52px] shrink-0 items-center gap-2.5 border-b border-border bg-panel px-4 py-2">
           <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={header.title} subtitle={header.subtitle} stats={stats} />
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
             {layout === "list" && <ExpandAll cards={listCards} />}
             <Filters board={shown.board} columns={syncedColumns(shown.board, null)} />
             <LayoutSwitch />
@@ -528,13 +534,13 @@ export function TasksMode() {
                 void refreshTasks(ws.host, ws.id);
               }}
             >
-              <RotateCw size={13} />
+              <RotateCw size={14} />
             </IconButton>
           </div>
         </header>
         {problem && (
           // A board whose origin is gone (a Jira board deleted, a team archived) says why, with its settings (X50).
-          <div role="alert" className="mx-5 mb-3 flex items-center gap-3 rounded-lg border border-error/40 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">
+          <div role="alert" className="mx-4 mt-3 flex items-center gap-3 rounded-lg border border-error/40 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">
             <span className="min-w-0 flex-1">{problem}</span>
             <Button size="sm" variant="ghost" onClick={() => openAddBoard(ws.host, ws.id, { board: shown.board.id })}>
               Board settings
@@ -544,16 +550,16 @@ export function TasksMode() {
         {layout === "list" ? (
           <TasksList host={ws.host} workspaceId={ws.id} views={views} unlinked={unlinked} />
         ) : (
-          <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-5 pb-4">
+          <div className="flex min-h-0 flex-1 gap-2.5 overflow-x-auto px-4 py-3.5">
             {views.map((v) =>
               v.folded ? (
                 <FoldedColumn key={v.name} boardId={shown.board.id} view={v} />
               ) : (
-                <section key={v.name} aria-label={v.name} className="group/column flex w-[280px] shrink-0 flex-col">
-                  <div className="mb-2 border-b border-border pb-1.5">
-                    <div className="flex items-center gap-2 ui-text-13 font-medium text-fg">
+                <section key={v.name} aria-label={v.name} className="group/column flex w-[228px] shrink-0 flex-col gap-2">
+                  <div className="flex flex-col gap-[3px] px-1">
+                    <div className="flex h-[22px] items-center gap-2 ui-text-12.5 font-semibold text-fg">
                       <span className="min-w-0 truncate">{v.name}</span>
-                      <span className="font-mono ui-text-12 font-normal text-faint">{v.cards.length}</span>
+                      <span className="font-mono ui-text-11.5 font-normal text-faint">{v.cards.length}</span>
                       {plusFor(v.name) && (
                         // Shown on hover, keyboard focus, and always on a touch screen.
                         // A locked + stays in the tab order, so its reason can be reached.
@@ -578,14 +584,14 @@ export function TasksMode() {
                           ]}
                           trigger={(open) => (
                             <IconButton title={`${v.name} options`} onClick={open}>
-                              <MoreHorizontal size={14} />
+                              <MoreHorizontal size={13} />
                             </IconButton>
                           )}
                         />
                       </div>
                     </div>
-                    <div className="mt-0.5 flex items-center gap-1.5 ui-text-11.5 text-faint">
-                      <TaskGlyph column={v.category} size={11} />
+                    <div className="flex items-center gap-[5px] ui-text-11 text-faint">
+                      <TaskGlyph column={v.category} size={10} />
                       {CATEGORY_LABEL[v.category]}
                       {v.wip && (
                         <span className={cx(v.wip.full && "text-blocked")}>
@@ -595,6 +601,7 @@ export function TasksMode() {
                       )}
                     </div>
                   </div>
+                  <div aria-hidden="true" className={cx("h-[2px] shrink-0 rounded-[1px]", COLUMN_RULE[v.category])} />
                   <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                     {v.cards.map((c) => (
                       <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} estimate={estimate} selected={taskId(c.task) === selected} />
@@ -621,11 +628,11 @@ function FoldedColumn({ boardId, view }: { boardId: string; view: ColumnView }) 
       aria-label={`${view.name}: ${n} ${n === 1 ? "task" : "tasks"}${cleanUp ? `, ${cleanUp} needs clean-up` : ""}`}
       title={`Unfold ${view.name}`}
       onClick={() => setColumnShow(boardId, view.name, "show")}
-      className="flex w-[40px] shrink-0 flex-col items-center gap-2 self-stretch rounded-lg border border-border bg-panel py-2.5 text-muted hover:text-fg"
+      className="flex w-[40px] shrink-0 flex-col items-center gap-2.5 self-stretch rounded-[10px] border border-border bg-panel py-2.5 text-muted hover:text-fg"
     >
-      <TaskGlyph column={view.category} size={13} />
-      <span className="ui-text-12.5 font-medium text-fg [writing-mode:vertical-rl]">{view.name}</span>
-      <span className="font-mono ui-text-11.5 text-faint">{n}</span>
+      <TaskGlyph column={view.category} size={12} />
+      <span className="whitespace-nowrap ui-text-12.5 font-semibold text-fg [writing-mode:vertical-rl]">{view.name}</span>
+      <span className="font-mono ui-text-11.5">{n}</span>
       {cleanUp > 0 && <span className="rounded-full bg-error/20 px-1.5 font-mono ui-text-10.5 text-error">{cleanUp}</span>}
     </button>
   );
@@ -665,7 +672,7 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
         </span>
       ),
       checked: r.board.id === shown.id,
-      icon: <BoardMark connection={r.board.connection} />,
+      icon: <BoardTile connection={r.board.connection} />,
       onSelect: () => {
         const to = parseWsKey(r.board.workspace);
         openBoard(to.host, to.id, r.board.id);
@@ -678,21 +685,21 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
   ];
   return (
     <div className="flex min-w-0 items-center gap-2.5">
-      <BoardMark connection={shown.connection} />
-      <div className="min-w-0">
+      <BoardTile connection={shown.connection} size={26} />
+      <div className="flex min-w-0 flex-col gap-px">
         <Menu
           width={360}
           search={{ placeholder: "Find a board, team or project", query, onQuery: setQuery }}
           items={items}
           footer={footer}
           trigger={(open) => (
-            <button aria-label={`Switch board, current: ${shown.name}`} onClick={open} className="no-drag flex items-center gap-1 ui-text-15 font-medium text-fg">
+            <button aria-label={`Switch board, current: ${shown.name}`} onClick={open} className="no-drag flex items-center gap-1.5 ui-text-14 font-semibold text-fg">
               <span className="truncate">{title}</span>
-              <ChevronDown size={14} className="text-muted" />
+              <ChevronDown size={13} className="shrink-0 text-muted" />
             </button>
           )}
         />
-        <div className="truncate ui-text-12 text-faint">{subtitle}</div>
+        <div className="truncate ui-text-11.5 text-muted">{subtitle}</div>
       </div>
     </div>
   );
@@ -730,18 +737,20 @@ export function ModeSwitch() {
 function Filters({ board, columns }: { board: BoardConfig; columns: BoardColumn[] }) {
   const filters = useTasks((t) => t.filters);
   const who = useTasks((t) => assigneeOf(board, t.assignee));
-  const chip = "no-drag whitespace-nowrap rounded-md border px-2 py-1 ui-text-12";
+  const chip = "no-drag flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-border-strong px-2.5 ui-text-12";
+  const counts = columnCounts(columns);
   const show = (c: { show?: "fold" | "hide" }) => c.show ?? "show";
   return (
-    <div role="group" aria-label="Filters" className="flex items-center gap-1">
+    <div role="group" aria-label="Filters" className="flex items-center gap-2.5">
       <Menu
         width={200}
         items={(["me", "anyone"] as const).map((v) => ({ label: v === "me" ? "Me" : "Anyone", description: v === "me" ? "Issues assigned to you" : "Others' issues dimmed", checked: who === v, onSelect: () => setAssignee(board, v) }))}
         trigger={(open) => (
-          <button aria-label={`Assignee: ${who}`} onClick={open} className={cx(chip, "flex items-center gap-1 border-border-strong bg-raised text-fg")}>
-            <ListFilter size={12} className="text-muted" />
-            Assignee: <span className="font-medium">{who}</span>
-            <ChevronDown size={12} className="text-muted" />
+          <button aria-label={`Assignee: ${who}`} onClick={open} className={cx(chip, "text-muted hover:text-fg")}>
+            <Filter size={12} />
+            <span>
+              Assignee: <span className="text-fg">{who}</span>
+            </span>
           </button>
         )}
       />
@@ -754,16 +763,19 @@ function Filters({ board, columns }: { board: BoardConfig; columns: BoardColumn[
           items: (["show", "fold", "hide"] as const).map((v) => ({ label: v === "show" ? "Show" : v === "fold" ? "Fold" : "Hide", checked: show(c) === v, onSelect: () => setColumnShow(board.id, c.name, v) })),
         }))}
         trigger={(open) => (
-          <button onClick={open} className={cx(chip, "flex items-center gap-1 border-border text-muted hover:text-fg")}>
+          <button onClick={open} className={cx(chip, "text-muted hover:text-fg")}>
             <Columns3 size={12} />
-            {columnsSummary(columns)}
+            <span>
+              Columns <span className="text-fg">{counts.shown}</span>
+              {counts.folded > 0 && ` · ${counts.folded} folded`}
+            </span>
           </button>
         )}
       />
       <button
         aria-pressed={filters.hideEmptyDone}
         onClick={() => setFilters({ ...filters, hideEmptyDone: !filters.hideEmptyDone })}
-        className={cx(chip, filters.hideEmptyDone ? "border-border-strong bg-raised text-fg" : "border-border text-muted hover:text-fg")}
+        className={cx(chip, filters.hideEmptyDone ? "bg-raised text-fg" : "text-muted hover:text-fg")}
       >
         Hide empty Done
       </button>
@@ -776,7 +788,7 @@ function ExpandAll({ cards }: { cards: Card[] }) {
   const expanded = useTasks((t) => t.expanded);
   const allOpen = cards.length > 0 && cards.every((c) => expanded[taskId(c.task)]);
   return (
-    <button aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} className="no-drag flex items-center gap-1 whitespace-nowrap rounded-md border border-border px-2 py-1 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(cards.map((c) => [taskId(c.task), true])))}>
+    <button aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} className="no-drag flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-border-strong px-2.5 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(cards.map((c) => [taskId(c.task), true])))}>
       {allOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
       <span className="@max-[900px]:hidden">{allOpen ? "Collapse all" : "Expand all"}</span>
     </button>
@@ -792,14 +804,15 @@ function LayoutSwitch() {
       title={label}
       aria-pressed={layout === id}
       onClick={() => setLayout(id)}
-      className={cx("no-drag flex h-6 items-center gap-1.5 whitespace-nowrap rounded-[5px] px-2.5 ui-text-12.5", layout === id ? "bg-raised text-fg" : "text-muted hover:text-fg")}
+      className={cx("no-drag flex h-[22px] items-center whitespace-nowrap rounded-[5px] px-[9px] ui-text-12", layout === id ? "bg-raised text-fg" : "text-muted hover:text-fg")}
     >
-      {icon}
+      {/* Its name, or its icon in a narrow header. */}
+      <span className="hidden @max-[900px]:block">{icon}</span>
       <span className="@max-[900px]:hidden">{label}</span>
     </button>
   );
   return (
-    <div role="group" aria-label="Layout" className="flex gap-0.5 rounded-md bg-panel-2 p-0.5">
+    <div role="group" aria-label="Layout" className="flex gap-0.5 rounded-[7px] border border-border bg-bg p-0.5">
       {item("board", "Board", <LayoutGrid size={12} />)}
       {item("list", "List", <List size={12} />)}
     </div>

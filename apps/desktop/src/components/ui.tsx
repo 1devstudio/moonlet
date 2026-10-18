@@ -164,6 +164,20 @@ export function TrackerIcon({ kind, size = 14 }: { kind: keyof typeof TRACKER_MA
 }
 
 /** A board's tracker mark: Linear, Jira and ClickUp's logos, GH for GitHub. */
+/** The tinted tile a board's mark sits on, by tracker (the design's board tiles). */
+const TILE: Record<"github" | "linear" | "jira" | "clickup", string> = { github: "#1f1f1f", linear: "#2b2a3d", jira: "#1d2a3d", clickup: "#2b2a3d" };
+
+/** A board's tracker mark on its tinted tile: 26px in the board's header, 16px in lists. */
+export function BoardTile({ connection, size = 16 }: { connection: string; size?: 16 | 26 }) {
+  const kind = trackerOf(connection);
+  const big = size === 26;
+  return (
+    <span aria-hidden="true" className={cx("flex shrink-0 items-center justify-center", big ? "h-[26px] w-[26px] rounded-[7px]" : "h-4 w-4 rounded")} style={{ background: TILE[kind ?? "github"] }}>
+      {kind && kind !== "github" ? <TrackerIcon kind={kind} size={big ? 14 : 10} /> : <span className={cx("font-mono font-bold text-fg", big ? "text-[10px]" : "text-[7px]")}>GH</span>}
+    </span>
+  );
+}
+
 export function BoardMark({ connection, size = 12 }: { connection: string; size?: 12 | 14 }) {
   const kind = trackerOf(connection);
   if (kind && kind !== "github") return <TrackerIcon kind={kind} size={size} />;
