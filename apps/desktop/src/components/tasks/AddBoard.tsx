@@ -89,8 +89,9 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const config = useTasks((t) => trackersConfig(t));
   const workspaces = useStore((s) => s.workspaces);
   const data = useTasks((t) => t.data[wsKey(host, workspace)]);
-  const repoList = repoChoices(data?.repos);
-  const repos = repoList.map((r) => r.key);
+  // The workspace's GitHub repositories, as step 1's rows and as `owner/repo`.
+  const repoRows = repoChoices(data?.repos);
+  const repos = repoRows.map((r) => r.key);
   const editing = config.boards?.find((b) => b.id === boardId);
   const [draft, setDraft] = useState<Draft>(() => (editing ? draftFromBoard(editing) : { ...newDraft(wsKey(host, workspace)), connection: connection ?? null }));
   // The links of the workspace the board goes to, which step 4 can change.
@@ -135,7 +136,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     setChoicesError(null);
     if (!draft.connection) return;
     if (draft.connection === GITHUB && build === "repo") {
-      setChoices(repoList);
+      setChoices(repoRows);
       return;
     }
     let stale = false;
