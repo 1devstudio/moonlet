@@ -447,7 +447,7 @@ export function TasksMode() {
           </p>
           <div className="mt-3 flex flex-col divide-y divide-border rounded-lg border border-border">
             {/* GitHub needs no connecting: it opens Add a board on GitHub (X50). */}
-            <button className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-panel-2" onClick={() => openAddBoard(ws.host, ws.id, undefined, GITHUB)}>
+            <button className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-panel-2" onClick={() => openAddBoard(ws.host, ws.id, { connection: GITHUB, build: "repo" })}>
               <BoardMark connection={GITHUB} size={14} />
               <div className="min-w-0 flex-1">
                 <div className="ui-text-13 text-fg">GitHub Issues</div>
@@ -536,7 +536,7 @@ export function TasksMode() {
           // A board whose origin is gone (a Jira board deleted, a team archived) says why, with its settings (X50).
           <div role="alert" className="mx-5 mb-3 flex items-center gap-3 rounded-lg border border-error/40 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">
             <span className="min-w-0 flex-1">{problem}</span>
-            <Button size="sm" variant="ghost" onClick={() => openAddBoard(ws.host, ws.id, shown.board.id)}>
+            <Button size="sm" variant="ghost" onClick={() => openAddBoard(ws.host, ws.id, { board: shown.board.id })}>
               Board settings
             </Button>
           </div>
@@ -574,7 +574,7 @@ export function TasksMode() {
                             { label: "Fold", onSelect: () => setColumnShow(shown.board.id, v.name, "fold") },
                             { label: "Hide", onSelect: () => setColumnShow(shown.board.id, v.name, "hide") },
                             { kind: "divider" },
-                            { label: "Board settings…", onSelect: () => openAddBoard(ws.host, ws.id, shown.board.id) },
+                            { label: "Board settings…", onSelect: () => openAddBoard(ws.host, ws.id, { board: shown.board.id }) },
                           ]}
                           trigger={(open) => (
                             <IconButton title={`${v.name} options`} onClick={open}>

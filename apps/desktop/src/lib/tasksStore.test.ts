@@ -790,6 +790,18 @@ describe("saveTrackersConfig", () => {
     useTasks.setState({ config: null });
   });
 
+  it("shows no board while trackers.toml can't be read, not even the workspace's repository", async () => {
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = () => [issue];
+    useTasks.setState({ config: null, configError: null });
+    configFails.push(new Error("TOML parse error at line 3"));
+    await refreshTasks("local", "personal", 1_000);
+    expect(useTasks.getState().data["local/personal"].tasks).toEqual([]);
+    expect(useTasks.getState().data["local/personal"].sources).toEqual([]);
+    useTasks.setState({ config: null, configError: null });
+  });
+
   it("does not write over a file it could not read", async () => {
     saved.length = 0;
     configFails.push(new Error("TOML parse error at line 3"));

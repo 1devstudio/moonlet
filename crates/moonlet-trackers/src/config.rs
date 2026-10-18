@@ -652,6 +652,16 @@ project = "ui-kit"
     }
 
     #[test]
+    fn an_earlier_files_migrated_list_is_read_and_dropped() {
+        // Repositories once got their boards by it (X50); a file from then still reads.
+        let text =
+            "migrated = [\"local/acme github:github.com/acme/web\"]\n[sync]\ninterval = 300\n";
+        let c = parse(text).unwrap();
+        assert_eq!(c, parse("[sync]\ninterval = 300\n").unwrap());
+        assert!(!to_toml(&c).contains("migrated"));
+    }
+
+    #[test]
     fn a_board_written_with_only_its_essentials_takes_the_defaults() {
         let text = r#"
 [[boards]]
@@ -662,13 +672,6 @@ workspace = "local/1devstudio"
 finished = "sprint"
 origin = { kind = "linear_team", team = "MOON" }
 "#;
-        // A file from an earlier build, with the `migrated` list repositories once got their boards by, still reads.
-        let c = parse(&format!(
-            "migrated = [\"local/1devstudio github:github.com/acme/web\"]\n{text}"
-        ))
-        .unwrap();
-        assert_eq!(c, parse(text).unwrap());
-        assert!(!to_toml(&c).contains("migrated"));
         let b = &parse(text).unwrap().boards[0];
         assert_eq!(
             b.origin,
