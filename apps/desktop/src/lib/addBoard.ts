@@ -255,3 +255,18 @@ export function suggestedOf(prev: Partial<Record<string, BoardColumn["category"]
 
 /** Where a Jira board's filter is edited (X50 Edit in Jira). */
 export const jiraFilterUrl = (site: string, filterId: string) => `https://${site}/issues/?filter=${encodeURIComponent(filterId)}`;
+
+/**
+ * Status names by id (X50 step 3): a Jira board's setup's first, then the
+ * previewed issues' (a JQL board's), then those `known` from an earlier
+ * preview of the same source.
+ */
+export function statusNames(fromSetup: Record<string, string>, issues: Task[], known: Record<string, string> = {}): Record<string, string> {
+  const fromIssues = Object.fromEntries(issues.flatMap((t) => (t.tracker?.statusId ? [[t.tracker.statusId, t.tracker.state]] : [])));
+  return { ...known, ...fromIssues, ...fromSetup };
+}
+
+/** A column's statuses as step 3 lists them, by name where known: `Open · In Progress`. */
+export function statusText(column: BoardColumn, names: Record<string, string>): string {
+  return column.statuses.length ? column.statuses.map((s) => names[s] ?? s).join(" · ") : "no status";
+}
