@@ -1,7 +1,7 @@
 //! What every tracker's board sync gives the app (X50): a board's issue with
 //! its card fields, an issue's parent, and the sprint or cycle a board follows.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::task::TrackerTask;
 
@@ -58,4 +58,34 @@ pub struct Sprint {
     pub name: String,
     pub start_ms: u64,
     pub end_ms: u64,
+}
+
+/// A new issue from a board column's + (X52), as the form sends it.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewIssue {
+    pub title: String,
+    /// Markdown.
+    #[serde(default)]
+    pub description: String,
+    /// `me`, `none` (Unassigned), or a person's id in the tracker.
+    pub assignee: String,
+    /// Label names.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// The column's first status: a Jira status id, else a state's name.
+    pub status: String,
+    /// Jira: the issue type's id.
+    #[serde(default)]
+    pub issue_type: Option<String>,
+    /// Where it goes when the board's issues come from several places.
+    #[serde(default)]
+    pub place: Option<String>,
+}
+
+/// A person or label the form offers (X52), by id and name.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Named {
+    pub id: String,
+    pub name: String,
 }
