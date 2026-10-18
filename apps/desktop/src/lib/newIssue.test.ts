@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardColumn, BoardConfig } from "./boards";
-import { boardShows, createsIn, fitDraft, isJira, labelProblem, githubRepoOf, jiraProjectUrl, jiraProjects, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
+import { boardShows, createLockOn, createsIn, fitDraft, isJira, labelProblem, githubRepoOf, jiraProjectUrl, jiraProjects, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
 import type { Task } from "./tasks";
 
 const linear: BoardConfig = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } };
@@ -134,5 +134,14 @@ describe("the column + (X52)", () => {
     expect(jiraProjects(tasks, [])).toEqual([]);
     // Where to create it when Jira requires a field the form lacks.
     expect(jiraProjectUrl("jira:acme.atlassian.net", "EX")).toBe("https://acme.atlassian.net/browse/EX");
+  });
+
+  it("reads the lock from the app's state: the connection's attention, the workspace host's status, gh's scopes on it", () => {
+    const project: BoardConfig = { ...linear, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } };
+    const state = { attention: {}, hosts: { devbox: { status: "connected" } }, scopes: { devbox: ["repo", "project"] } };
+    expect(createLockOn(project, "devbox", state)).toBe(null);
+    expect(createLockOn(project, "devbox", { ...state, hosts: { devbox: { status: "reconnecting" } } })).toBe("The host that runs gh is offline");
+    expect(createLockOn(project, "devbox", { ...state, scopes: { devbox: ["repo"] } })).toBe("Adding issues to a Project needs gh's project scope: run gh auth refresh -s project");
+    expect(createLockOn(linear, "devbox", { ...state, attention: { "linear:acme": "Linear no longer accepts this token" } })).toBe("Reconnect Linear to create issues: Linear no longer accepts this token");
   });
 });

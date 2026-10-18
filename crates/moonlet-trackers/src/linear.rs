@@ -95,7 +95,16 @@ pub fn parse_create_options(raw: &[u8]) -> Result<CreateOptions, ApiError> {
         team: team["id"].as_str().unwrap_or_default().into(),
         me: d["viewer"]["id"].as_str().unwrap_or_default().into(),
         people: named(&team["members"]),
-        labels: [named(&team["labels"]), named(&d["issueLabels"])].concat(),
+        // The team's, then the workspace's; Linear lists a team's own among both.
+        labels: [named(&team["labels"]), named(&d["issueLabels"])]
+            .concat()
+            .into_iter()
+            .fold(Vec::new(), |mut all: Vec<Named>, l| {
+                if !all.iter().any(|x| x.id == l.id) {
+                    all.push(l);
+                }
+                all
+            }),
         states: named(&team["states"]),
         cycle: team["activeCycle"]["id"].as_str().map(String::from),
     })
@@ -434,20 +443,18 @@ mod tests {
     #[test]
     fn a_teams_people_labels_states_and_active_cycle_for_a_new_issue() {
         let o = parse_create_options(&fixture("linear-create-options.json")).unwrap();
-        assert_eq!(o.me, "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f");
+        assert_eq!(o.me, "e2e00000-0000-4000-8000-000000000001");
         assert_eq!(
             o.people.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-            ["Ada Lovelace", "Grace Hopper"]
+            ["Ada Lovelace"]
         );
-        // The team's labels, then the workspace's.
+        // The team's labels and the workspace's, each once: Linear lists a team's own among both.
         assert_eq!(
             o.labels.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
-            ["Backend", "Bug", "Customer"]
+            ["Feature", "Bug", "Improvement"]
         );
-        assert_eq!(
-            o.cycle.as_deref(),
-            Some("d4000000-0000-4000-8000-000000000042")
-        );
+        // The sandbox team runs no cycle.
+        assert_eq!(o.cycle, None);
     }
 
     #[test]
@@ -457,37 +464,48 @@ mod tests {
             title: "Retry failed webhook deliveries".into(),
             description: "Back off **exponentially**.".into(),
             assignee: "me".into(),
-            labels: vec!["backend".into(), "Customer".into()],
-            status: "In Review".into(),
+            labels: vec!["bug".into()],
+            status: "In Progress".into(),
             ..Default::default()
         };
+        // The input moonlet sent when capturing linear-issue-create.json.
         assert_eq!(
             create_input(&o, &issue, true).unwrap(),
             serde_json::json!({
-                "teamId": "b2000000-0000-4000-8000-000000000001",
+                "teamId": "e2e00000-0000-4000-8000-000000000002",
                 "title": "Retry failed webhook deliveries",
                 "description": "Back off **exponentially**.",
-                "stateId": "a1000000-0000-4000-8000-000000000004",
-                "assigneeId": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
-                "labelIds": ["c3000000-0000-4000-8000-000000000001", "c3000000-0000-4000-8000-000000000009"],
-                "cycleId": "d4000000-0000-4000-8000-000000000042"
+                "stateId": "e2e00000-0000-4000-8000-000000000008",
+                "assigneeId": "e2e00000-0000-4000-8000-000000000001",
+                "labelIds": ["e2e00000-0000-4000-8000-000000000004"]
             })
         );
-        // Unassigned, someone else, no cycle; a label or state the team lacks is refused.
+        // A team running a cycle: the issue joins it when the board follows it.
+        let cycling = CreateOptions {
+            cycle: Some("e2e00000-0000-4000-8000-000000000099".into()),
+            ..o.clone()
+        };
+        assert_eq!(
+            create_input(&cycling, &issue, true).unwrap()["cycleId"],
+            "e2e00000-0000-4000-8000-000000000099"
+        );
+        assert!(
+            create_input(&cycling, &issue, false)
+                .unwrap()
+                .get("cycleId")
+                .is_none()
+        );
+        // Unassigned, someone else, no description; a label or state the team lacks is refused.
         let other = NewIssue {
-            assignee: "9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d".into(),
+            assignee: "e2e00000-0000-4000-8000-000000000098".into(),
             labels: vec![],
             description: String::new(),
             ..issue.clone()
         };
         let input = create_input(&o, &other, false).unwrap();
         assert_eq!(
-            (
-                input["assigneeId"].as_str(),
-                input.get("cycleId"),
-                input.get("description")
-            ),
-            (Some("9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"), None, None)
+            (input["assigneeId"].as_str(), input.get("description")),
+            (Some("e2e00000-0000-4000-8000-000000000098"), None)
         );
         assert!(
             create_input(
@@ -531,18 +549,20 @@ mod tests {
     }
 
     #[test]
-    fn the_created_issue_as_a_board_issue() {
+    fn the_created_issue_as_a_board_issue_and_linears_refusal() {
         let issue = parse_created(&fixture("linear-issue-create.json"), "linear:acme").unwrap();
         assert_eq!(
             (
                 issue.task.key.as_str(),
                 issue.task.tracker.state.as_str(),
-                issue.task.labels.clone()
+                issue.task.labels.clone(),
+                issue.task.description.as_str()
             ),
             (
-                "ENG-142",
-                "In Review",
-                vec!["Backend".to_string(), "Customer".to_string()]
+                "ENG-1",
+                "In Progress",
+                vec!["Bug".to_string()],
+                "Back off **exponentially**."
             )
         );
         assert!(
@@ -551,6 +571,13 @@ mod tests {
                 "linear:acme"
             )
             .is_err()
+        );
+        // A state Linear doesn't know: its message for people.
+        assert_eq!(
+            parse_created(&fixture("linear-error-create.json"), "linear:acme")
+                .unwrap_err()
+                .message,
+            "An item needed to save your changes is unavailable."
         );
     }
 

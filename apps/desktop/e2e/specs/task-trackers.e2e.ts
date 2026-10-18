@@ -68,14 +68,21 @@ let issuesAsked = 0;
 let opsTeam = false;
 /** The `issueCreate` inputs Linear was sent (X52). */
 const linearCreates: object[] = [];
+/** How many times the form asked for a team's lists (X52: each time it opens). */
+let linearOptionsAsked = 0;
 
 /** Linear's GraphQL endpoint: an answer per query, and a record of every move. */
 function linear(query: string, variables: Record<string, unknown>): string {
   // Most specific first. A board's query (X50) reads one team.
   // A new issue from a column (X52): the form's lists, and the issue in the state asked for.
-  if (query.includes("CreateOptions")) return answer("linear-create-options.json");
+  if (query.includes("CreateOptions")) {
+    linearOptionsAsked++;
+    return answer("linear-create-options.json");
+  }
   if (query.includes("issueCreate")) {
-    const input = (variables as { input: { stateId: string } }).input;
+    const input = (variables as { input: { stateId: string; title: string } }).input;
+    // A title asking to be refused gets Linear's refusal, as captured.
+    if (input.title.includes("refuse")) return answer("linear-error-create.json");
     linearCreates.push(input);
     const states = JSON.parse(answer("linear-create-options.json")).data.teams.nodes[0].states.nodes as { id: string; name: string }[];
     const created = JSON.parse(answer("linear-issue-create.json"));
@@ -245,24 +252,43 @@ describe("Linear tracker", () => {
     await expect($(grace)).not.toBeExisting();
   });
 
-  it("creates an issue from a column's +, in that column, its card selected with its detail open (X52)", async () => {
+  it("creates an issue from a column's +, in that column, its card selected with its detail open; Escape creates nothing, a refusal keeps what was typed, ⌘↵ creates (X52)", async () => {
     const todo = '//section[@aria-label="Todo"]';
     // The + shows on hover of its column.
     await $(todo).moveTo();
     await $(`${todo}//button[@title="New issue in Todo"]`).click();
     const dialog = '//div[@role="dialog"][@aria-label="New issue in Todo"]';
     await expect($(`${dialog}//button[normalize-space()="Create"]`)).toBeDisabled();
-    await fill(`${dialog}//input`, "Retry failed webhook deliveries");
+    // Escape closes it, creating nothing.
+    await fill(`${dialog}//input`, "Not this one");
+    await browser.keys("Escape");
+    await $(dialog).waitForExist({ reverse: true, timeout: 5_000 });
+    expect(linearCreates).toEqual([]);
+    // A refusal shows Linear's message, and the form keeps what was typed. Opening it again reads the team's lists again.
+    const asked = linearOptionsAsked;
+    await $(todo).moveTo();
+    await $(`${todo}//button[@title="New issue in Todo"]`).click();
+    await browser.waitUntil(() => linearOptionsAsked > asked, { timeout: 10_000, timeoutMsg: "the form did not read the team's lists again" });
+    await fill(`${dialog}//input`, "Please refuse this");
     await $(`${dialog}//button[normalize-space()="Create"]`).click();
+    await expect($(`${dialog}//p[@role="alert"][normalize-space()="An item needed to save your changes is unavailable."]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($(`${dialog}//input`)).toHaveValue("Please refuse this");
+    // ⌘↵ creates.
+    await fill(`${dialog}//input`, "Retry failed webhook deliveries");
+    // WebKit's WebDriver sends no ⌘ with a key, so the keystroke is dispatched as the app gets it.
+    await browser.execute(() => {
+      const input = document.querySelector<HTMLInputElement>('[role="dialog"][aria-label="New issue in Todo"] input')!;
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }));
+    });
     await $(dialog).waitForExist({ reverse: true, timeout: 10_000 });
-    await expect($(`${todo}//article[starts-with(@aria-label, "ENG-142")]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($(`${todo}//article[starts-with(@aria-label, "ENG-1 ")]`)).toBeDisplayed({ wait: 10_000 });
     await expect($('//aside[@aria-label="Task detail"]')).toBeDisplayed();
     // In Todo's state, assigned to the user.
     expect(linearCreates.at(-1)).toEqual({
-      teamId: "b2000000-0000-4000-8000-000000000001",
+      teamId: "e2e00000-0000-4000-8000-000000000002",
       title: "Retry failed webhook deliveries",
-      stateId: "a1000000-0000-4000-8000-000000000001",
-      assigneeId: "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+      stateId: "e2e00000-0000-4000-8000-000000000009",
+      assigneeId: "e2e00000-0000-4000-8000-000000000001",
     });
     await $('//button[@title="Close detail"]').click();
   });

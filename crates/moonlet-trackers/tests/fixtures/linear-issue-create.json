@@ -3,36 +3,31 @@
     "issueCreate": {
       "success": true,
       "issue": {
-        "id": "1a2b3c4d-0000-4000-8000-000000000142",
-        "identifier": "ENG-142",
+        "id": "e2e00000-0000-4000-8000-000000000012",
+        "identifier": "ENG-1",
         "title": "Retry failed webhook deliveries",
         "description": "Back off **exponentially**.",
-        "url": "https://linear.app/acme/issue/ENG-142/retry-failed-webhook-deliveries",
-        "branchName": "ada/eng-142-retry-failed-webhook-deliveries",
+        "url": "https://linear.app/acme/issue/ENG-1/retry-failed-webhook-deliveries",
+        "branchName": "ada/eng-1-retry-failed-webhook-deliveries",
         "priority": 0,
-        "updatedAt": "2026-10-18T10:02:11.000Z",
+        "updatedAt": "2026-10-18T14:04:21.819Z",
         "state": {
-          "id": "a1000000-0000-4000-8000-000000000004",
-          "name": "In Review",
+          "id": "e2e00000-0000-4000-8000-000000000008",
+          "name": "In Progress",
           "type": "started"
         },
         "assignee": {
-          "id": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+          "id": "e2e00000-0000-4000-8000-000000000001",
           "name": "Ada Lovelace"
         },
         "labels": {
           "nodes": [
             {
-              "name": "Backend"
-            },
-            {
-              "name": "Customer"
+              "name": "Bug"
             }
           ]
         },
-        "cycle": {
-          "number": 42
-        },
+        "cycle": null,
         "team": {
           "key": "ENG"
         },
