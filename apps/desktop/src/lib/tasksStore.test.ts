@@ -5,6 +5,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
+import { createIssue } from "./tasksStore";
 import { activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -25,6 +26,9 @@ vi.mock("./daemon", () => ({
     // The app's command, tested in Rust (states.rs a_github_projects_columns_start_with_no_status).
     githubProjectColumns: (options: { id: string; name: string }[]) =>
       Promise.resolve([{ id: "", name: "No Status" }, ...options].map(({ id, name }) => ({ name, statuses: [id], category: name === "Done" ? "done" : name === "In Progress" ? "in_progress" : "todo", ...(name === "Done" && { show: "fold" }) }))),
+    // A new issue from a column (X52): what was asked, and the tracker's answer.
+    trackerCreateOptions: (id: string, place: string) => Promise.resolve(answers[`tracker_create_options ${id} ${place}`]?.({}) ?? { me: "u1", people: [], labels: [] }),
+    trackerCreate: (req: { id: string }) => (creates.push(req), answers[`tracker_create ${req.id}`] ? Promise.resolve(answers[`tracker_create ${req.id}`](req as object)) : Promise.reject(new Error("Linear: no such team"))),
     trackerBoardTasks: (q: { id: string; origin: { team?: string; list?: string; query?: string }; mine: boolean; sync?: number }) => {
       boardQueries.push(q);
       const answer = answers[`tracker_tasks ${q.id}${q.mine ? "" : " all"}`] ?? answers[`tracker_tasks ${q.id}`];
@@ -50,6 +54,8 @@ const configDelay = vi.hoisted(() => ({ ms: 0 }));
 const file = vi.hoisted(() => ({ config: null as object | null }));
 const saved = vi.hoisted(() => [] as object[]);
 const saveFails = vi.hoisted(() => [] as object[]);
+/** The tracker_create requests made (X52). */
+const creates = vi.hoisted(() => [] as object[]);
 /** The tracker_board_tasks queries made, in order. */
 const boardQueries = vi.hoisted(() => [] as { id: string; mine: boolean; sync?: number }[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
@@ -1301,6 +1307,48 @@ describe("a GitHub Project's board (X50 Sync)", () => {
     const inB = { ...shown, github: { ...shown.github!, project: { id: "PVT_B", item: "PVTI_B10", status: "Todo" } } };
     await moveTask("local", "personal", inB, "done", 2_000);
     expect(moves).toEqual([{ project: "PVT_B", item: "PVTI_B10", field: "FB", option: "b-done" }]);
+    useTasks.setState({ config: null });
+  });
+});
+
+describe("a new issue from a column (X52)", () => {
+  const issue = (key: string, state: string, assignees: string[] = ["Sam Rivera"]) => ({ connection: "linear:acme", key, title: "Retry failed webhook deliveries", url: `https://linear.app/acme/issue/${key}`, column: "in_review", priority: 0, assignees, labels: [], description: "", updatedMs: 0, statusId: "", tracker: { id: `i-${key}`, state, source: "MOON" } });
+  const review = { name: "In Review", statuses: ["In Review"], category: "in_review" as const };
+  const moon = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" }, columns: [{ name: "Todo", statuses: ["Todo"], category: "todo" as const }, review] };
+  const draft = { title: "Retry failed webhook deliveries", description: "", assignee: "me", labels: [] };
+
+  it("creates it in the column's state, shows its card selected with Activity, and keeps it through a sync that started before it", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [];
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
+    await refreshTasks("local", "personal", 500);
+    answers["tracker_create linear:acme"] = () => issue("MOON-142", "In Review");
+    creates.length = 0;
+    await createIssue("local", "personal", moon, review, draft, 2_000);
+    expect(creates).toEqual([{ id: "linear:acme", place: "MOON", issue: { ...draft, status: "In Review" }, inCycle: false }]);
+    const data = () => useTasks.getState().data["local/personal"];
+    expect([data().tasks.map((t) => t.key), data().boards?.moon.keys, useTasks.getState().selected]).toEqual([["MOON-142"], ["linear:acme MOON-142"], "linear:acme MOON-142"]);
+    expect(activityOf({ connection: "linear:acme", key: "MOON-142" })[0].text).toBe("moonlet created it");
+    // A sync that started at 1 000, before the create, without it: the card stays.
+    await refreshTasks("local", "personal", 1_000);
+    expect(data().tasks.map((t) => t.key)).toEqual(["MOON-142"]);
+    // One that started after it and still lacks it: the board doesn't show it.
+    await refreshTasks("local", "personal", 3_000);
+    expect(data().tasks.map((t) => t.key)).toEqual([]);
+    expect(useStore.getState().toasts.at(-1)?.text).toBe("Created MOON-142; this board doesn't show it");
+    useTasks.setState({ config: null });
+  });
+
+  it("says at once when the board can't show it, and keeps the form open on a refusal", async () => {
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
+    answers["tracker_create linear:acme"] = () => issue("MOON-143", "In Review", ["Kim Park"]);
+    // Assigned to someone else, on a board at Assignee: me.
+    await createIssue("local", "personal", moon, review, { ...draft, assignee: "kim" }, 2_000);
+    expect(useStore.getState().toasts.at(-1)?.text).toBe("Created MOON-143; this board doesn't show it");
+    expect(useTasks.getState().selected).toBe(null);
+    delete answers["tracker_create linear:acme"];
+    await expect(createIssue("local", "personal", moon, review, draft, 3_000)).rejects.toThrow("Linear: no such team");
     useTasks.setState({ config: null });
   });
 });

@@ -10,7 +10,7 @@ Gathered on 2026-10-15 from the trackers' official API documentation; no live ac
 
 | File | Kind | Source |
 |---|---|---|
-| `linear-viewer.json`, `linear-teams.json`, `linear-issues.json`, `linear-states.json`, `linear-issue-update.json`, `linear-comment.json`, `linear-board-issues.json`, `linear-active-cycle.json` | SCHEMA | Linear's GraphQL schema, `linear/linear` `packages/sdk/src/schema.graphql`; https://linear.app/developers/graphql |
+| `linear-viewer.json`, `linear-teams.json`, `linear-issues.json`, `linear-states.json`, `linear-issue-update.json`, `linear-comment.json`, `linear-board-issues.json`, `linear-active-cycle.json`, `linear-create-options.json`, `linear-issue-create.json` (X52) | SCHEMA | Linear's GraphQL schema, `linear/linear` `packages/sdk/src/schema.graphql`; https://linear.app/developers/graphql |
 | `linear-error-auth.json` | CAPTURED | HTTP 401 to a bad personal key (and a bad Bearer token) |
 | `linear-error-ratelimited.json` | VERBATIM+ | https://linear.app/developers/rate-limiting (message text is a placeholder) |
 | `jira-myself.json` | VERBATIM | `GET /rest/api/3/myself`, https://developer.atlassian.com/cloud/jira/platform/rest/v3/ |
