@@ -39,7 +39,7 @@ import { hostsApi, rpc } from "../../lib/daemon";
 import { type GhProject, M } from "../../lib/protocol";
 import { errorToast, useStore } from "../../lib/store";
 import { trackerName, trackerOf } from "../../lib/tasks";
-import { type BoardPreview, GITHUB, openBoard, previewBoard, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
+import { type BoardPreview, GITHUB, openBoard, previewBoard, previewFailed, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { BoardMark, Button, cx, IconButton, inputCls } from "../ui";
 import { TaskGlyph } from "./TasksMode";
@@ -198,8 +198,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   );
   useEffect(() => {
     setPreview(null);
-    if (!previewing) return paused.stop();
-    paused.change(() => previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).catch((e) => ({ tasks: [], columns: null, error: message(e), numberField: null, statusNames: {} })));
+    if (!previewing) return;
+    paused.change(() => previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).catch((e) => previewFailed(message(e))));
     return paused.stop;
   }, [previewKey, previewing]);
 
@@ -250,9 +250,10 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const sample = (preview?.tasks ?? []).slice(0, 3);
   useEffect(() => setSuggested((prev) => suggestedOf(prev, draft.columns)), [draft.columns]);
   const changed = changedCategories(draft.columns, suggested);
-  const names = statusNames(setupNames, preview?.tasks ?? [], knownNames, preview?.statusNames);
+  const names = statusNames({ setup: setupNames, issues: preview?.tasks, site: preview?.statusNames, known: knownNames });
+  // Names already seen stay while the next preview loads.
   useEffect(() => {
-    if (preview?.tasks.length) setKnownNames((known) => statusNames({}, preview.tasks, known));
+    if (preview && !preview.error) setKnownNames((known) => statusNames({ issues: preview.tasks, site: preview.statusNames, known }));
   }, [preview]);
   const site = (config.connections ?? []).find((c) => c.id === draft.connection)?.site;
   const moveAt = (i: number, by: number) => setDraft((d) => ({ ...d, columns: moveColumn(d.columns, i, by) }));

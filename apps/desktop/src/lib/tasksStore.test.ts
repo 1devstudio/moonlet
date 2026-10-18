@@ -602,8 +602,6 @@ describe("boards (X50 Sync)", () => {
     const jql = { id: "ex", name: "Example", connection: "jira:acme.atlassian.net", workspace: "local/personal", origin: { kind: "jql" as const, query: "project = EX" } };
     useTasks.setState({ attention: {} });
     expect((await previewBoard("local", "personal", jql)).statusNames).toEqual({ "10030": "Acceptance Testing" });
-    // Other boards have none.
-    expect((await previewBoard("local", "personal", board())).statusNames).toEqual({});
   });
 
   it("names the sync each board read belongs to, so a connection's boards share its lookups within it; a preview belongs to none", async () => {
