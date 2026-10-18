@@ -739,16 +739,15 @@ pub async fn tracker_create_options(id: String, place: String) -> Res<CreateChoi
         }
         TrackerKind::Clickup => {
             let list = safe_id(&place)?.to_string();
-            let me = clickup::parse_user_id(&s.clickup_send(s.clickup(reqwest::Method::GET, "/user")?).await?)?;
-            let people = clickup::parse_members(&s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/list/{list}/member"))?).await?)?;
-            // A task's tags are its space's.
-            let space = serde_json::from_slice::<Value>(&s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/list/{list}"))?).await?).map_err(fail)?["space"]["id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let labels = match safe_id(&space) {
-                Ok(space) => clickup::parse_space_tags(&s.clickup_send(s.clickup(reqwest::Method::GET, &format!("/space/{space}/tag"))?).await?)?,
-                Err(_) => vec![],
+            let session = &s;
+            let get = |path: String| async move { session.clickup_send(session.clickup(reqwest::Method::GET, &path)?).await };
+            let me = clickup::parse_user_id(&get("/user".into()).await?)?;
+            // A list ClickUp won't give leaves its field with the user's own choice (X52).
+            let people = get(format!("/list/{list}/member")).await.ok().and_then(|raw| clickup::parse_members(&raw).ok()).unwrap_or_default();
+            let space = get(format!("/list/{list}")).await.ok().and_then(|raw| clickup::parse_list_space(&raw).ok().flatten());
+            let labels = match space.as_deref().map(safe_id) {
+                Some(Ok(space)) => get(format!("/space/{space}/tag")).await.ok().and_then(|raw| clickup::parse_space_tags(&raw).ok()).unwrap_or_default(),
+                _ => vec![],
             };
             Ok(CreateChoices { me, people, labels })
         }
@@ -782,8 +781,12 @@ pub async fn tracker_create(req: CreateRequest) -> Res<BoardIssue> {
         }
         TrackerKind::Clickup => {
             let list = safe_id(&req.place)?.to_string();
-            let me = clickup::parse_user_id(&s.clickup_send(s.clickup(reqwest::Method::GET, "/user")?).await?)?;
-            let body = clickup::create_task_body(&req.issue, &me);
+            // Who the user is, only when the task is theirs.
+            let me = match req.issue.assignee.as_str() {
+                "me" => Some(clickup::parse_user_id(&s.clickup_send(s.clickup(reqwest::Method::GET, "/user")?).await?)?),
+                _ => None,
+            };
+            let body = clickup::create_task_body(&req.issue, me.as_deref())?;
             let raw = s.clickup_send(s.clickup(reqwest::Method::POST, &format!("/list/{list}/task"))?.json(&body)).await?;
             Ok(BoardIssue::from_task(clickup::parse_task(&raw, &s.conn.id)?))
         }

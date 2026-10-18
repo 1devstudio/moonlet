@@ -554,7 +554,8 @@ export async function createIssue(host: string, workspaceId: string, board: Boar
   // When the tracker answered: a sync that started before this may not have it yet.
   const now = Date.now();
   const columns = syncedColumns(board, null);
-  const [task] = categorize(columns, [{ ...taskFromBoardIssue(answer), mine: draft.assignee === "me" }]);
+  // The card shows the Markdown typed until a sync reads the tracker's own copy (ClickUp answers with plain text).
+  const [task] = categorize(columns, [{ ...taskFromBoardIssue(answer), ...(draft.description && { description: draft.description }), mine: draft.assignee === "me" }]);
   recordActivity(task, "moonlet created it", now);
   // Its column is moonlet's doing, not a move made outside it (X44).
   movedByMoonlet.set(taskId(task), task.column);

@@ -307,26 +307,35 @@ pub fn parse_space_tags(raw: &[u8]) -> Result<Vec<Named>, ApiError> {
         .collect())
 }
 
+/// The space a list is in (X52), whose tags its tasks can have; none when ClickUp doesn't say.
+pub fn parse_list_space(raw: &[u8]) -> Result<Option<String>, ApiError> {
+    Ok(Some(str_of(&parse(raw)?["space"]["id"])).filter(|id| !id.is_empty()))
+}
+
 /// `POST /list/{id}/task`'s body for `issue` (X52): in the column's status,
 /// the description as Markdown, assigned to the user (`me`, whose id is
-/// `me_id`), no one (`none`) or a member, with its tags.
-pub fn create_task_body(issue: &NewIssue, me_id: &str) -> Value {
+/// `me_id`), no one (`none`) or a member, with its tags. An assignee ClickUp
+/// would not take is refused rather than dropped.
+pub fn create_task_body(issue: &NewIssue, me_id: Option<&str>) -> Result<Value, ApiError> {
     let mut body = json!({ "name": issue.title, "status": issue.status });
     if !issue.description.is_empty() {
         body["markdown_content"] = issue.description.clone().into();
     }
     let assignee = match issue.assignee.as_str() {
         "none" => None,
-        "me" => me_id.parse::<u64>().ok(),
-        id => id.parse::<u64>().ok(),
+        "me" => Some(me_id.ok_or_else(|| ApiError::new("ClickUp did not say who you are"))?),
+        id => Some(id),
     };
     if let Some(id) = assignee {
+        let id: u64 = id
+            .parse()
+            .map_err(|_| ApiError::new(format!("ClickUp: no member {id}")))?;
         body["assignees"] = json!([id]);
     }
     if !issue.labels.is_empty() {
         body["tags"] = issue.labels.clone().into();
     }
-    body
+    Ok(body)
 }
 
 pub fn comment_body(text: &str) -> Value {
@@ -393,6 +402,18 @@ mod tests {
     }
 
     #[test]
+    fn a_lists_space_whose_tags_a_new_task_can_have() {
+        assert_eq!(
+            parse_list_space(&fixture("clickup-list.json")).unwrap(),
+            Some("789".to_string())
+        );
+        assert_eq!(
+            parse_list_space(br#"{"id":"124","name":"Updated List Name"}"#).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn a_new_task_goes_in_the_columns_status_with_its_assignee_and_tags() {
         let issue = NewIssue {
             title: "Retry failed webhook deliveries".into(),
@@ -404,7 +425,7 @@ mod tests {
         };
         // The body moonlet sent when capturing clickup-create-task.json.
         assert_eq!(
-            create_task_body(&issue, "81942673"),
+            create_task_body(&issue, Some("81942673")).unwrap(),
             json!({
                 "name": "Retry failed webhook deliveries",
                 "markdown_content": "Back off **exponentially**.",
@@ -420,18 +441,24 @@ mod tests {
             ..issue.clone()
         };
         assert_eq!(
-            create_task_body(&plain, "81942673"),
+            create_task_body(&plain, None).unwrap(),
             json!({ "name": "Retry failed webhook deliveries", "status": "in progress" })
         );
         assert_eq!(
             create_task_body(
                 &NewIssue {
                     assignee: "5550001".into(),
-                    ..issue
+                    ..issue.clone()
                 },
-                "81942673"
-            )["assignees"],
+                None
+            )
+            .unwrap()["assignees"],
             json!([5550001])
+        );
+        // An id ClickUp would not take is said, not dropped: the task would come out unassigned.
+        assert_eq!(
+            create_task_body(&issue, Some("u-1")).unwrap_err().message,
+            "ClickUp: no member u-1"
         );
     }
 

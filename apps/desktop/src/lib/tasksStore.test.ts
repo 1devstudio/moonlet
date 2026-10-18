@@ -1364,13 +1364,17 @@ describe("a new issue from a column (X52)", () => {
     }
   });
 
-  it("creates a ClickUp task in the board's list", async () => {
+  it("creates a ClickUp task in the board's list, its card showing the Markdown typed", async () => {
     const list = { id: "web", name: "Website", connection: "clickup:9015000001", workspace: "local/personal", origin: { kind: "clickup_list" as const, list: "901500000002" }, columns: [{ name: "in progress", statuses: ["in progress"], category: "in_progress" as const }] };
     useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [list] }, attention: {}, assignee: {}, selected: null });
-    answers["tracker_create clickup:9015000001"] = () => ({ ...issue("CU-869e2e001", "in progress"), connection: "clickup:9015000001", tracker: { id: "869e2e001", state: "in progress", source: "901500000002" } });
+    // ClickUp answers with the description as plain text.
+    answers["tracker_create clickup:9015000001"] = () => ({ ...issue("CU-869e2e001", "in progress"), description: "Back off exponentially.", connection: "clickup:9015000001", tracker: { id: "869e2e001", state: "in progress", source: "901500000002" } });
     creates.length = 0;
-    await createIssue("local", "personal", list, list.columns[0], draft);
-    expect(creates).toEqual([{ id: "clickup:9015000001", place: "901500000002", issue: { ...draft, status: "in progress" }, inCycle: false }]);
+    const typed = { ...draft, description: "Back off **exponentially**." };
+    const task = await createIssue("local", "personal", list, list.columns[0], typed);
+    expect(creates).toEqual([{ id: "clickup:9015000001", place: "901500000002", issue: { ...typed, status: "in progress" }, inCycle: false }]);
+    // The card shows the Markdown the user typed until the next sync reads ClickUp's.
+    expect(task.description).toBe("Back off **exponentially**.");
     useTasks.setState({ config: null });
   });
 
