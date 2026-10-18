@@ -272,7 +272,7 @@ export interface GhCreated {
 }
 
 /** What the new-issue form offers for a repository (X52). */
-export interface GhCreateOptions {
+export interface GhCreateChoices {
   me: string;
   people: string[];
   labels: string[];

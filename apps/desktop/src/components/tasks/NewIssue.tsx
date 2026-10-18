@@ -4,7 +4,7 @@
 import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { BoardColumn, BoardConfig } from "../../lib/boards";
-import { canSubmit, type NewIssue as Draft, newIssueDraft } from "../../lib/newIssue";
+import { canSubmit, type NewIssue as Draft, newIssueDraft, withAccess } from "../../lib/newIssue";
 import { createIssue, createOptions, message } from "../../lib/tasksStore";
 import { Menu } from "../Menu";
 import { Button, Dialog, inputCls } from "../ui";
@@ -25,8 +25,7 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
       (o) => {
         if (stale) return;
         setOptions(o);
-        // Not sent when they can't be set: GitHub would drop them.
-        if (!o.canSet) setDraft((d) => ({ ...d, assignee: "none", labels: [] }));
+        setDraft((d) => withAccess(d, o.canSet).draft);
       },
       () => {},
     );
@@ -83,8 +82,7 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
           <span className="ui-text-12 text-muted">Description</span>
           <textarea rows={5} placeholder="Markdown" className={inputCls} value={draft.description} onChange={(e) => set({ description: e.target.value })} />
         </label>
-        {/* GitHub drops assignees and labels set without triage access, so they are not offered (X52). */}
-        {options?.canSet !== false && (
+        {withAccess(draft, options?.canSet ?? true).assignment && (
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <span className="ui-text-12 text-muted">Assignee</span>

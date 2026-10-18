@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardColumn, BoardConfig } from "./boards";
-import { boardShows, createsIn, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
+import { boardShows, createsIn, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
 import type { Task } from "./tasks";
 
 const linear: BoardConfig = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } };
@@ -85,5 +85,11 @@ describe("the column + (X52)", () => {
     expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_repo", repo: "acme/web" } })).toBe(true);
     expect(createsIn({ ...linear, connection: "jira:acme.atlassian.net", origin: { kind: "jira_board", board: 10 } })).toBe(false);
     expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } })).toBe(false);
+  });
+
+  it("offers and sends no assignee or labels where they can't be set, as GitHub would drop them", () => {
+    const draft = { ...newIssueDraft({ ...linear, labels: ["frontend"] }), title: "Hosts" };
+    expect(withAccess(draft, true)).toEqual({ draft, assignment: true });
+    expect(withAccess(draft, false)).toEqual({ draft: { ...draft, assignee: "none", labels: [] }, assignment: false });
   });
 });
