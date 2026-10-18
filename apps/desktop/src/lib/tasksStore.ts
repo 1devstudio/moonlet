@@ -7,7 +7,7 @@ import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
 import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
-import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
@@ -383,7 +383,7 @@ export function workspaceProjects(s: StoreState, host: string, workspaceId: stri
 }
 
 /** An error's text: an Error's or a Tauri command's `{ message }`, else the value. */
-export const message = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
+export const message = errorMessage;
 const syncs = latestPerKey();
 
 /**

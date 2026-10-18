@@ -354,7 +354,7 @@ export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast
 }
 
 export function errorToast(e: unknown) {
-  toast(e instanceof Error ? e.message : String(e), "error");
+  toast(errorMessage(e), "error");
 }
 
 // ---------------------------------------------------------------- updates (X35)
@@ -366,7 +366,8 @@ let foundUpdate: Update | null = null;
 /** Set when the user asks while a check runs: that check reports to them. */
 let reportCheck = false;
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** An error as the user reads it: an `Error`'s message, a Tauri command's `{ message }`, else the value. */
+export const errorMessage = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
 
 /** Asks the updater endpoint for a newer release. `afterCheck` decides what
  *  the user sees. */
@@ -384,7 +385,7 @@ export async function checkForUpdates({ manual = false } = {}) {
     outcome = { found: found?.version ?? null };
   } catch (e) {
     console.warn("update check failed", e);
-    outcome = { error: checkError(message(e)) };
+    outcome = { error: checkError(errorMessage(e)) };
   }
   const prev = get().update;
   const { state, notice, error } = afterCheck(prev, outcome, { manual: reportCheck, running: get().appVersion });
@@ -411,7 +412,7 @@ export async function installUpdate() {
     await u.downloadAndInstall((e) => set((s) => ({ update: afterDownloadEvent(s.update, e) })));
     set({ update: { phase: "ready", version: u.version } });
   } catch (e) {
-    set({ update: prev, updateError: message(e) });
+    set({ update: prev, updateError: errorMessage(e) });
     errorToast(e);
   }
 }
@@ -463,7 +464,7 @@ export async function updateClaude() {
   try {
     run = await rpc<{ ok: boolean; output: string }>(LOCAL, M.claudeUpdate);
   } catch (e) {
-    run = { error: message(e) };
+    run = { error: errorMessage(e) };
   }
   await finishClaudeUpdate(run);
 }
