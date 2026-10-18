@@ -1389,6 +1389,36 @@ describe("a new issue from a column (X52)", () => {
     useTasks.setState({ config: null });
   });
 
+  it("creates a GitHub Project's issue in the chosen repository, adds it, and sets its Status to the column's option", async () => {
+    const columns = [{ name: "No Status", statuses: [""], category: "todo" as const }, { name: "In Progress", statuses: ["o2"], category: "in_progress" as const }];
+    const board = { id: "web-project", name: "Website", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_project" as const, owner: "acme", number: 2 }, columns };
+    const meta = { id: "PVT_1", field: "F", options: [{ id: "o2", name: "In Progress" }] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [board] }, attention: {}, assignee: {}, selected: null, data: { "local/personal": { tasks: [], worktrees: [], sources: [], repos: {}, sourceProjects: {}, syncedAt: 1, error: null, boards: { "web-project": { keys: [], project: meta } } } } });
+    const calls: [string, object][] = [];
+    const created = { task: { repo: "acme/web", number: 57, title: "Retry failed webhook deliveries", body: "", url: "https://github.com/acme/web/issues/57", closed: false, state_reason: null, assignees: ["sam-rivera"], labels: [], updated_ms: 0, closing_prs: [] }, node: "I_e2e0001" };
+    answers["gh.issue_create"] = (p) => (calls.push(["create", p]), created);
+    answers["gh.project_add"] = (p) => (calls.push(["add", p]), "PVTI_57");
+    answers["gh.project_move"] = (p) => (calls.push(["move", p]), true);
+    const task = await createIssue("local", "personal", board, columns[1], { ...draft, place: "acme/web" });
+    expect(calls).toEqual([
+      ["create", { repo: "acme/web", title: "Retry failed webhook deliveries", body: "", assignee: "me", labels: [] }],
+      ["add", { project: "PVT_1", content: "I_e2e0001" }],
+      ["move", { project: "PVT_1", item: "PVTI_57", field: "F", option: "o2" }],
+    ]);
+    expect([task.key, task.github?.project, useTasks.getState().selected]).toEqual(["acme/web#57", { id: "PVT_1", item: "PVTI_57", status: "In Progress", option: "o2" }, "github:github.com acme/web#57"]);
+    // No Status: added, no Status set.
+    calls.length = 0;
+    await createIssue("local", "personal", board, columns[0], { ...draft, place: "acme/web" });
+    expect(calls.map(([what]) => what)).toEqual(["create", "add"]);
+    // Adding it fails once the issue exists: the form closes and the notice says what was done.
+    answers["gh.project_add"] = () => {
+      throw new Error("GitHub did not add the issue to the Project");
+    };
+    await createIssue("local", "personal", board, columns[1], { ...draft, place: "acme/web" });
+    expect(useStore.getState().toasts.at(-1)?.text).toBe("Created acme/web#57; adding it to the Project failed: GitHub did not add the issue to the Project");
+    useTasks.setState({ config: null });
+  });
+
   it("says at once when the board can't show it, and keeps the form open on a refusal", async () => {
     useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
     answers["tracker_create linear:acme"] = () => issue("MOON-143", "In Review", ["Kim Park"]);

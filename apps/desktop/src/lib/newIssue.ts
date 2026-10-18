@@ -99,8 +99,21 @@ export function withCreated<B extends { keys: string[] }>(
   return { tasks: [...synced.tasks, ...kept.map((c) => c.task)], boards, pending, gone };
 }
 
-/** Whether the board's tracker is one moonlet creates issues in (X52): Linear, ClickUp and GitHub repositories so far; the others follow. */
-export const createsIn = (board: BoardConfig) => ["linear_team", "clickup_list", "github_repo"].includes(board.origin.kind);
+/** Whether the board's tracker is one moonlet creates issues in (X52): all but Jira so far. */
+export const createsIn = (board: BoardConfig) => ["linear_team", "clickup_list", "github_repo", "github_project"].includes(board.origin.kind);
+
+/** Whether the form asks where the issue goes (X52): a GitHub Project's issue lives in a repository. */
+export const needsPlace = (board: BoardConfig) => board.origin.kind === "github_project";
+
+/**
+ * The repositories a GitHub Project's new issue can go in (X52): the
+ * workspace's first, then those of the Project's items, each once whatever
+ * its case.
+ */
+export function projectRepos(workspaceRepos: string[], items: Task[]): string[] {
+  const seen = new Set<string>();
+  return [...workspaceRepos, ...items.flatMap((t) => (t.github ? [t.github.repo] : []))].filter((r) => !seen.has(r.toLowerCase()) && !!seen.add(r.toLowerCase()));
+}
 
 /**
  * The form where gh's user can or can't set an issue's assignee and labels
