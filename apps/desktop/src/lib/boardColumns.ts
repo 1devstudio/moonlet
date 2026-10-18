@@ -102,8 +102,8 @@ const taskNoun = (connection: string) => (trackerOf(connection) === "jira" ? "is
  * 12 issues · 5 sessions`. The dates show only while the board follows a
  * sprint, cycle or iteration; Jira counts issues, the others tasks.
  */
-export function boardSubtitle(connection: string, site: string, sprint: { startMs: number; endMs: number } | null, tasks: number, sessions: number): string {
-  const dates = sprint ? [`${day(sprint.startMs)} – ${day(sprint.endMs)}`] : [];
+export function boardSubtitle(connection: string, site: string, sprint: { startMs: number; endMs: number } | string | null, tasks: number, sessions: number): string {
+  const dates = typeof sprint === "string" ? [sprint] : sprint ? [`${day(sprint.startMs)} – ${day(sprint.endMs)}`] : [];
   return [trackerName(connection), site, ...dates, count(tasks, taskNoun(connection)), count(sessions, "session")].join(" · ");
 }
 

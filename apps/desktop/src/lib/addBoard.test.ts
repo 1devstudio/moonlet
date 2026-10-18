@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alreadyAdded, canContinue, cardChoices, clash, columnAt, draftFromBoard, finishedChoices, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { alreadyAdded, canContinue, cardChoices, clash, columnAt, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -14,10 +14,10 @@ const WEB: BoardColumn[] = [
 
 describe("Add a board, step 1 (X50)", () => {
   it("takes the picked board's name and the tracker's defaults", () => {
-    const jira = pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 41 }, "WEB · Website", "kanban");
+    const jira = pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 41 }, "WEB · Website", jiraSprints("kanban"));
     expect([jira.name, jira.finished, jira.cards, jira.step]).toEqual(["WEB · Website", 14, ["issue_type", "points", "assignee"], 1]);
     // A Scrum board follows its sprint; Linear a team's cycle; GitHub shows assignees.
-    expect(pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 10 }, "OPS board", "scrum").finished).toBe("sprint");
+    expect(pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 10 }, "OPS board", jiraSprints("scrum")).finished).toBe("sprint");
     expect(pickOrigin(newDraft("local/acme"), "linear:acme", { kind: "linear_team", team: "MOON" }, "Moonlet").cards).toEqual(["points", "assignee"]);
     expect(pickOrigin(newDraft("local/acme"), "github:github.com", { kind: "github_repo", repo: "acme/web" }, "acme/web").cards).toEqual(["assignee"]);
   });
@@ -33,7 +33,7 @@ describe("Add a board, step 1 (X50)", () => {
     const d = newDraft("local/acme");
     expect(canContinue(d, null)).toBe(false);
     expect(canContinue(pickOrigin(d, JIRA, { kind: "jql", query: " " }, "Query"), null)).toBe(false);
-    const picked = pickOrigin(d, JIRA, { kind: "jira_board", board: 41 }, "WEB · Website", "kanban");
+    const picked = pickOrigin(d, JIRA, { kind: "jira_board", board: 41 }, "WEB · Website", jiraSprints("kanban"));
     expect(canContinue(picked, null)).toBe(true);
     // Step 2 waits for the tracker to check the query, and while it rejects it.
     expect(canContinue({ ...picked, step: 2 }, null)).toBe(false);
@@ -49,15 +49,21 @@ describe("Add a board, step 1 (X50)", () => {
 
 describe("Add a board, step 2 (X50)", () => {
   it("offers the sprint or cycle only where there is one", () => {
-    expect(finishedChoices("jira", "scrum").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active sprint"]);
-    expect(finishedChoices("jira", "kanban").map((c) => c.label)).toEqual(["Hide after 14 days"]);
-    expect(finishedChoices("linear").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active cycle"]);
+    expect(finishedChoices("jira", true).map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active sprint"]);
+    expect(finishedChoices("jira", false).map((c) => c.label)).toEqual(["Hide after 14 days"]);
+    // A Linear team offers its cycle only when it uses cycles, and follows it by default.
+    expect(finishedChoices("linear", true).map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active cycle"]);
+    expect(finishedChoices("linear").map((c) => c.label)).toEqual(["Hide after 14 days"]);
+    expect(pickOrigin(newDraft("local/acme"), "linear:acme", { kind: "linear_team", team: "ENG" }, "Engineering", true).finished).toBe("sprint");
+    expect(pickOrigin(newDraft("local/acme"), "linear:acme", { kind: "linear_team", team: "DES" }, "Design").finished).toBe(14);
     expect(finishedChoices("github").map((c) => c.label)).toEqual(["Hide after 14 days"]);
+    // Scrum and team-managed Jira boards have sprints; Kanban and an unknown type do not.
+    expect(["scrum", "simple", "kanban", "something"].map(jiraSprints)).toEqual([true, true, false, false]);
     // A team-managed board has sprints; a Jira board of unknown type gets 14 days, as its choices say.
-    expect(pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 12 }, "MOB board", "simple").finished).toBe("sprint");
+    expect(pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 12 }, "MOB board", jiraSprints("simple")).finished).toBe("sprint");
     expect(pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 12 }, "MOB board").finished).toBe(14);
     // Board settings of a board following its sprint keeps the choice.
-    expect(finishedChoices("jira", undefined, "sprint").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active sprint"]);
+    expect(finishedChoices("jira", false, "sprint").map((c) => c.label)).toEqual(["Hide after 14 days", "Follow the active sprint"]);
   });
 
   it("says how many issues match, how many are the user's, and how many have a branch with their key", () => {
@@ -69,7 +75,7 @@ describe("Add a board, step 2 (X50)", () => {
 });
 
 describe("Add a board, step 4 (X50)", () => {
-  const draft = { ...pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 41 }, "WEB · Website", "kanban"), columns: WEB, step: 4 as const };
+  const draft = { ...pickOrigin(newDraft("local/acme"), JIRA, { kind: "jira_board", board: 41 }, "WEB · Website", jiraSprints("kanban")), columns: WEB, step: 4 as const };
 
   it("sums the board up as the summary card does", () => {
     expect(summaryLine(draft, 17, "Acme")).toBe("Jira board 41 · 3 columns shown, 1 folded, 1 hidden · 17 issues · Acme");
