@@ -529,9 +529,10 @@ function notShown(task: Task) {
   toast(`Created ${task.key}; this board doesn't show it`, "info", { label: "Open", run: () => void openUrl(task.url) });
 }
 
-/** Where a new issue goes in the tracker (X52): a Linear team. */
+/** Where a new issue goes in the tracker (X52): a Linear team, or a ClickUp list. */
 function placeOf(board: BoardConfig): string {
   if (board.origin.kind === "linear_team") return board.origin.team;
+  if (board.origin.kind === "clickup_list") return board.origin.list;
   throw new Error("moonlet can't create issues on this board yet");
 }
 
@@ -553,7 +554,8 @@ export async function createIssue(host: string, workspaceId: string, board: Boar
   // When the tracker answered: a sync that started before this may not have it yet.
   const now = Date.now();
   const columns = syncedColumns(board, null);
-  const [task] = categorize(columns, [{ ...taskFromBoardIssue(answer), mine: draft.assignee === "me" }]);
+  // The card shows the Markdown typed until a sync reads the tracker's own copy (ClickUp answers with plain text).
+  const [task] = categorize(columns, [{ ...taskFromBoardIssue(answer), ...(draft.description && { description: draft.description }), mine: draft.assignee === "me" }]);
   recordActivity(task, "moonlet created it", now);
   // Its column is moonlet's doing, not a move made outside it (X44).
   movedByMoonlet.set(taskId(task), task.column);

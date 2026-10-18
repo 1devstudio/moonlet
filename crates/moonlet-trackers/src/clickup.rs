@@ -1,8 +1,8 @@
 //! ClickUp's API v2 (X44): requests and their answers as moonlet's tasks.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::board::BoardIssue;
+use crate::board::{BoardIssue, Named, NewIssue};
 use crate::config::Finished;
 use crate::states::Column;
 use crate::task::{TrackerRef, TrackerTask};
@@ -280,6 +280,64 @@ pub fn status_for<'a>(
     })
 }
 
+/// The people a list's task can be assigned to (X52): its members.
+pub fn parse_members(raw: &[u8]) -> Result<Vec<Named>, ApiError> {
+    Ok(parse(raw)?["members"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|m| Named {
+            id: str_of(&m["id"]),
+            name: m["username"].as_str().unwrap_or_default().into(),
+        })
+        .collect())
+}
+
+/// A space's tags (X52), the labels a task can have; ClickUp knows them by name.
+pub fn parse_space_tags(raw: &[u8]) -> Result<Vec<Named>, ApiError> {
+    Ok(parse(raw)?["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["name"].as_str())
+        .map(|n| Named {
+            id: n.into(),
+            name: n.into(),
+        })
+        .collect())
+}
+
+/// The space a list is in (X52), whose tags its tasks can have; none when ClickUp doesn't say.
+pub fn parse_list_space(raw: &[u8]) -> Result<Option<String>, ApiError> {
+    Ok(Some(str_of(&parse(raw)?["space"]["id"])).filter(|id| !id.is_empty()))
+}
+
+/// `POST /list/{id}/task`'s body for `issue` (X52): in the column's status,
+/// the description as Markdown, assigned to the user (`me`, whose id is
+/// `me_id`), no one (`none`) or a member, with its tags. An assignee ClickUp
+/// would not take is refused rather than dropped.
+pub fn create_task_body(issue: &NewIssue, me_id: Option<&str>) -> Result<Value, ApiError> {
+    let mut body = json!({ "name": issue.title, "status": issue.status });
+    if !issue.description.is_empty() {
+        body["markdown_content"] = issue.description.clone().into();
+    }
+    let assignee = match issue.assignee.as_str() {
+        "none" => None,
+        "me" => Some(me_id.ok_or_else(|| ApiError::new("ClickUp did not say who you are"))?),
+        id => Some(id),
+    };
+    if let Some(id) = assignee {
+        let id: u64 = id
+            .parse()
+            .map_err(|_| ApiError::new(format!("ClickUp: no member {id}")))?;
+        body["assignees"] = json!([id]);
+    }
+    if !issue.labels.is_empty() {
+        body["tags"] = issue.labels.clone().into();
+    }
+    Ok(body)
+}
+
 pub fn comment_body(text: &str) -> Value {
     json!({ "comment_text": text, "notify_all": false })
 }
@@ -322,6 +380,111 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn a_lists_people_and_its_spaces_tags_for_a_new_task() {
+        assert_eq!(
+            parse_members(&fixture("clickup-list-members.json")).unwrap(),
+            [Named {
+                id: "81942673".into(),
+                name: "Sam Rivera".into()
+            }]
+        );
+        assert_eq!(
+            parse_space_tags(&fixture("clickup-space-tags.json"))
+                .unwrap()
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            ["frontend", "bug", "backend"]
+        );
+    }
+
+    #[test]
+    fn a_lists_space_whose_tags_a_new_task_can_have() {
+        assert_eq!(
+            parse_list_space(&fixture("clickup-list.json")).unwrap(),
+            Some("789".to_string())
+        );
+        assert_eq!(
+            parse_list_space(br#"{"id":"124","name":"Updated List Name"}"#).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_new_task_goes_in_the_columns_status_with_its_assignee_and_tags() {
+        let issue = NewIssue {
+            title: "Retry failed webhook deliveries".into(),
+            description: "Back off **exponentially**.".into(),
+            assignee: "me".into(),
+            labels: vec!["backend".into()],
+            status: "in progress".into(),
+            ..Default::default()
+        };
+        // The body moonlet sent when capturing clickup-create-task.json.
+        assert_eq!(
+            create_task_body(&issue, Some("81942673")).unwrap(),
+            json!({
+                "name": "Retry failed webhook deliveries",
+                "markdown_content": "Back off **exponentially**.",
+                "status": "in progress",
+                "assignees": [81942673],
+                "tags": ["backend"]
+            })
+        );
+        let plain = NewIssue {
+            description: String::new(),
+            assignee: "none".into(),
+            labels: vec![],
+            ..issue.clone()
+        };
+        assert_eq!(
+            create_task_body(&plain, None).unwrap(),
+            json!({ "name": "Retry failed webhook deliveries", "status": "in progress" })
+        );
+        assert_eq!(
+            create_task_body(
+                &NewIssue {
+                    assignee: "5550001".into(),
+                    ..issue.clone()
+                },
+                None
+            )
+            .unwrap()["assignees"],
+            json!([5550001])
+        );
+        // An id ClickUp would not take is said, not dropped: the task would come out unassigned.
+        assert_eq!(
+            create_task_body(&issue, Some("u-1")).unwrap_err().message,
+            "ClickUp: no member u-1"
+        );
+    }
+
+    #[test]
+    fn the_created_task_as_a_board_issue_and_a_refused_status() {
+        let task = parse_task(&fixture("clickup-create-task.json"), "clickup:9015000001").unwrap();
+        assert_eq!(
+            (
+                task.key.as_str(),
+                task.tracker.state.as_str(),
+                task.assignees.clone(),
+                task.labels.clone(),
+                task.tracker.source.as_str()
+            ),
+            (
+                "CU-869e2e001",
+                "in progress",
+                vec!["Sam Rivera".to_string()],
+                vec!["backend".to_string()],
+                "901500000002"
+            )
+        );
+        assert_eq!(
+            parse_error(400, &fixture("clickup-error-400-status.json")).message,
+            "ClickUp: Status not found"
+        );
     }
 
     #[test]
@@ -464,7 +627,10 @@ mod tests {
     #[test]
     fn the_lists_inside_a_spaces_folders_are_sources_named_with_their_folder() {
         // The documented folders answer has no lists in its example folders.
-        assert_eq!(parse_folder_lists(&fixture("clickup-folders.json")).unwrap(), []);
+        assert_eq!(
+            parse_folder_lists(&fixture("clickup-folders.json")).unwrap(),
+            []
+        );
         let raw = br#"{"folders":[{"id":"457","name":"Roadmap","lists":[{"id":"901","name":"Q4"},{"id":"902","name":"Bugs"}]}]}"#;
         assert_eq!(
             parse_folder_lists(raw).unwrap(),

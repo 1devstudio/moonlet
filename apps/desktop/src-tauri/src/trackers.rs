@@ -728,7 +728,7 @@ pub struct CreateChoices {
     pub labels: Vec<moonlet_trackers::board::Named>,
 }
 
-/// The new-issue form's lists for `place`, a Linear team's key (X52).
+/// The new-issue form's lists for `place`, a Linear team's key or a ClickUp list's id (X52).
 #[tauri::command]
 pub async fn tracker_create_options(id: String, place: String) -> Res<CreateChoices> {
     let s = Session::load(&id).await?;
@@ -736,6 +736,20 @@ pub async fn tracker_create_options(id: String, place: String) -> Res<CreateChoi
         TrackerKind::Linear => {
             let o = s.linear_create_options(&place).await?;
             Ok(CreateChoices { me: o.me, people: o.people, labels: o.labels })
+        }
+        TrackerKind::Clickup => {
+            let list = safe_id(&place)?.to_string();
+            let session = &s;
+            let get = |path: String| async move { session.clickup_send(session.clickup(reqwest::Method::GET, &path)?).await };
+            let me = clickup::parse_user_id(&get("/user".into()).await?)?;
+            // A list ClickUp won't give leaves its field with the user's own choice (X52).
+            let people = get(format!("/list/{list}/member")).await.ok().and_then(|raw| clickup::parse_members(&raw).ok()).unwrap_or_default();
+            let space = get(format!("/list/{list}")).await.ok().and_then(|raw| clickup::parse_list_space(&raw).ok().flatten());
+            let labels = match space.as_deref().map(safe_id) {
+                Some(Ok(space)) => get(format!("/space/{space}/tag")).await.ok().and_then(|raw| clickup::parse_space_tags(&raw).ok()).unwrap_or_default(),
+                _ => vec![],
+            };
+            Ok(CreateChoices { me, people, labels })
         }
         kind => Err(fail(format!("moonlet can't create {} issues yet", tracker_name(kind)))),
     }
@@ -746,7 +760,7 @@ pub async fn tracker_create_options(id: String, place: String) -> Res<CreateChoi
 #[serde(rename_all = "camelCase")]
 pub struct CreateRequest {
     pub id: String,
-    /// A Linear team's key.
+    /// A Linear team's key, or a ClickUp list's id.
     pub place: String,
     pub issue: moonlet_trackers::board::NewIssue,
     /// The board follows the active cycle or sprint: the issue joins it.
@@ -764,6 +778,17 @@ pub async fn tracker_create(req: CreateRequest) -> Res<BoardIssue> {
             let input = s.linear_ok(linear::create_input(&o, &req.issue, req.in_cycle))?;
             let raw = s.linear(&linear::issue_create_mutation(), json!({ "input": input })).await?;
             s.linear_ok(linear::parse_created(&raw, &s.conn.id))
+        }
+        TrackerKind::Clickup => {
+            let list = safe_id(&req.place)?.to_string();
+            // Who the user is, only when the task is theirs.
+            let me = match req.issue.assignee.as_str() {
+                "me" => Some(clickup::parse_user_id(&s.clickup_send(s.clickup(reqwest::Method::GET, "/user")?).await?)?),
+                _ => None,
+            };
+            let body = clickup::create_task_body(&req.issue, me.as_deref())?;
+            let raw = s.clickup_send(s.clickup(reqwest::Method::POST, &format!("/list/{list}/task"))?.json(&body)).await?;
+            Ok(BoardIssue::from_task(clickup::parse_task(&raw, &s.conn.id)?))
         }
         kind => Err(fail(format!("moonlet can't create {} issues yet", tracker_name(kind)))),
     }
