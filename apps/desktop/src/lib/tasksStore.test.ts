@@ -59,6 +59,9 @@ const configDelay = vi.hoisted(() => ({ ms: 0 }));
 const file = vi.hoisted(() => ({ config: null as object | null }));
 const saved = vi.hoisted(() => [] as object[]);
 const saveFails = vi.hoisted(() => [] as object[]);
+/** The links the app opened in the browser. */
+const opened = vi.hoisted(() => [] as string[]);
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (url: string) => (opened.push(url), Promise.resolve()) }));
 /** The tracker_create requests made (X52). */
 const creates = vi.hoisted(() => [] as object[]);
 /** The tracker_board_tasks queries made, in order. */
@@ -1468,12 +1471,11 @@ describe("a new issue from a column (X52)", () => {
     useStore.setState({ sessions: { local: [{ id: "s1", project_id: "web", name: "Retry", branch: "moon-142-retry", base: "main", path: "/w/retry", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: { connection: "linear:acme", key: "MOON-142", url: "" } }] } });
     answers["tracker_tasks linear:acme"] = () => [issue("MOON-142", "In Review")];
     await refreshTasks("local", "personal", Date.now() + 1_000);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(shown).toEqual([]);
-    // Someone moves it back to Todo in Linear: that is news.
+    // Someone moves it back to Todo in Linear: that is news, and the only notice, so the sync before raised none.
     answers["tracker_tasks linear:acme"] = () => [{ ...issue("MOON-142", "Todo"), column: "todo" }];
     await refreshTasks("local", "personal", Date.now() + 2_000);
-    await vi.waitFor(() => expect(shown).toEqual([{ title: "MOON-142 moved to Todo", body: "Retry failed webhook deliveries" }]));
+    await vi.waitFor(() => expect(shown).toHaveLength(1));
+    expect(shown).toEqual([{ title: "MOON-142 moved to Todo", body: "Retry failed webhook deliveries" }]);
     useStore.setState({ sessions: {} });
     useTasks.setState({ config: null });
   });
@@ -1485,7 +1487,10 @@ describe("a new issue from a column (X52)", () => {
     await createIssue("local", "personal", moon, review, { ...draft, assignee: "kim" });
     expect(useStore.getState().toasts.at(-1)?.text).toBe("Created MOON-143; this board doesn't show it");
     // With a link to it in the tracker.
-    expect(useStore.getState().toasts.at(-1)?.action?.label).toBe("Open");
+    const open = useStore.getState().toasts.at(-1)?.action;
+    expect(open?.label).toBe("Open");
+    open?.run();
+    expect(opened).toEqual(["https://linear.app/acme/issue/MOON-143"]);
     expect(useTasks.getState().selected).toBe(null);
     delete answers["tracker_create linear:acme"];
     await expect(createIssue("local", "personal", moon, review, draft)).rejects.toThrow("Linear: no such team");

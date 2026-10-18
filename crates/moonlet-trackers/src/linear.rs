@@ -95,16 +95,16 @@ pub fn parse_create_options(raw: &[u8]) -> Result<CreateOptions, ApiError> {
         team: team["id"].as_str().unwrap_or_default().into(),
         me: d["viewer"]["id"].as_str().unwrap_or_default().into(),
         people: named(&team["members"]),
-        // The team's, then the workspace's; Linear lists a team's own among both.
-        labels: [named(&team["labels"]), named(&d["issueLabels"])]
-            .concat()
-            .into_iter()
-            .fold(Vec::new(), |mut all: Vec<Named>, l| {
-                if !all.iter().any(|x| x.id == l.id) {
-                    all.push(l);
-                }
-                all
-            }),
+        // The team's, then the workspace's, each once: Linear also lists the
+        // workspace's labels among the team's.
+        labels: {
+            let mut seen = std::collections::HashSet::new();
+            [named(&team["labels"]), named(&d["issueLabels"])]
+                .concat()
+                .into_iter()
+                .filter(|l| seen.insert(l.id.clone()))
+                .collect()
+        },
         states: named(&team["states"]),
         cycle: team["activeCycle"]["id"].as_str().map(String::from),
     })
@@ -453,8 +453,17 @@ mod tests {
             o.labels.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
             ["Feature", "Bug", "Improvement"]
         );
-        // The sandbox team runs no cycle.
+        // The sandbox team runs no cycle; a team running one gives its id.
         assert_eq!(o.cycle, None);
+        let mut cycling: Value =
+            serde_json::from_slice(&fixture("linear-create-options.json")).unwrap();
+        cycling["data"]["teams"]["nodes"][0]["activeCycle"] =
+            serde_json::json!({ "id": "e2e00000-0000-4000-8000-000000000099" });
+        let o = parse_create_options(&serde_json::to_vec(&cycling).unwrap()).unwrap();
+        assert_eq!(
+            o.cycle.as_deref(),
+            Some("e2e00000-0000-4000-8000-000000000099")
+        );
     }
 
     #[test]
