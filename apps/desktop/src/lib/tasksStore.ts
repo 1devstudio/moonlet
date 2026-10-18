@@ -417,7 +417,9 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     ? addRepoBoards(DEFAULT_CONFIG, key, repoList).boards ?? []
     : workspaceBoards(trackersConfig(useTasks.getState()).boards, key, useTasks.getState().shownBoard[key] ?? null);
   const chosen = useTasks.getState().assignee;
-  const read = await Promise.all(boards.map((b) => readBoard(host, b, per, assigneeOf(b, chosen) === "anyone")));
+  // One sync: a connection's boards share its lookups within it (X50).
+  const sync = ++lastSync;
+  const read = await Promise.all(boards.map((b) => readBoard(host, b, per, assigneeOf(b, chosen) === "anyone", sync)));
   if (!isLatest()) return;
   const prev = useTasks.getState().data[key];
   const tasks = new Map<string, Task>();
@@ -525,14 +527,18 @@ function ownAndOthers<T>(own: T[], all: T[] | null, key: (t: T) => string | numb
  * with that origin, a tracker's through the app. The account's own, and with
  * Assignee: me off, everyone's open ones too.
  */
-async function readBoard(host: string, b: BoardConfig, projects: { path: string; repo: string | null }[], everyoneToo: boolean): Promise<BoardRead> {
-  const r = await readOrigin(host, b, projects, everyoneToo);
+/** The last sync's id; from the clock, so a reloaded window starts past the app's earlier syncs. */
+let lastSync = Date.now();
+
+/** A board's issues; `sync` names the sync it is read in, none for a preview, which reads everything afresh. */
+async function readBoard(host: string, b: BoardConfig, projects: { path: string; repo: string | null }[], everyoneToo: boolean, sync?: number): Promise<BoardRead> {
+  const r = await readOrigin(host, b, projects, everyoneToo, sync);
   // A label filter keeps the issues with any of its labels (X50 Issues).
   const labels = new Set((b.labels ?? []).map((l) => l.toLowerCase()));
   return labels.size ? { ...r, tasks: r.tasks.filter((t) => t.labels.some((l) => labels.has(l.toLowerCase()))) } : r;
 }
 
-async function readOrigin(host: string, b: BoardConfig, projects: { path: string; repo: string | null }[], everyoneToo: boolean): Promise<BoardRead> {
+async function readOrigin(host: string, b: BoardConfig, projects: { path: string; repo: string | null }[], everyoneToo: boolean, sync?: number): Promise<BoardRead> {
   const none = (error: string | null): BoardRead => ({ tasks: [], columns: null, sprint: null, error });
   if (b.origin.kind === "github_repo") {
     const repo = b.origin.repo.toLowerCase();
@@ -572,7 +578,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
   }
   // A rejected token is not tried again until the user reconnects (X44).
   if (useTasks.getState().attention[b.connection] !== undefined) return none("");
-  const query = (mine: boolean) => hostsApi.trackerBoardTasks({ id: b.connection, origin: b.origin, narrow: b.narrow, mine, finished: b.finished ?? 14 });
+  const query = (mine: boolean) => hostsApi.trackerBoardTasks({ id: b.connection, origin: b.origin, narrow: b.narrow, mine, finished: b.finished ?? 14, ...(sync !== undefined && { sync }) });
   try {
     const own = await query(true);
     const everyone = everyoneToo ? await query(false) : null;

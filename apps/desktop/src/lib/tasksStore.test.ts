@@ -25,7 +25,8 @@ vi.mock("./daemon", () => ({
     // The app's command, tested in Rust (states.rs a_github_projects_columns_start_with_no_status).
     githubProjectColumns: (options: string[]) =>
       Promise.resolve(["", ...options].map((name) => ({ name: name || "No Status", statuses: [name], category: name === "Done" ? "done" : name === "In Progress" ? "in_progress" : "todo", ...(name === "Done" && { show: "fold" }) }))),
-    trackerBoardTasks: (q: { id: string; origin: { team?: string; list?: string; query?: string }; mine: boolean }) => {
+    trackerBoardTasks: (q: { id: string; origin: { team?: string; list?: string; query?: string }; mine: boolean; sync?: number }) => {
+      boardQueries.push(q);
       const answer = answers[`tracker_tasks ${q.id}${q.mine ? "" : " all"}`] ?? answers[`tracker_tasks ${q.id}`];
       if (!answer) return Promise.reject(new Error(`no tracker_board_tasks ${q.id}`));
       const source = q.origin.team ?? q.origin.list;
@@ -48,6 +49,8 @@ const configDelay = vi.hoisted(() => ({ ms: 0 }));
 const file = vi.hoisted(() => ({ config: null as object | null }));
 const saved = vi.hoisted(() => [] as object[]);
 const saveFails = vi.hoisted(() => [] as object[]);
+/** The tracker_board_tasks queries made, in order. */
+const boardQueries = vi.hoisted(() => [] as { id: string; mine: boolean; sync?: number }[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(true),
   requestPermission: () => Promise.resolve("granted"),
@@ -589,6 +592,28 @@ describe("boards (X50 Sync)", () => {
     expect(useStore.getState().tasksMode["local/acme"]).toBe(true);
     expect(useTasks.getState().shownBoard["local/acme"]).toBe("acme-board");
     useTasks.setState({ shownBoard: {} });
+  });
+
+  it("names the sync each board read belongs to, so a connection's boards share its lookups within it; a preview belongs to none", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    const design = board({ id: "des", name: "Design", origin: { kind: "linear_team" as const, team: "DES" } });
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [board({ assignee: "anyone" }), design] }, attention: {}, assignee: {} });
+    boardQueries.length = 0;
+    await refreshTasks("local", "personal", 1_000);
+    // Moonlet's two reads (the user's issues and everyone's) and Design's, all one sync.
+    expect(boardQueries.length).toBe(3);
+    expect(new Set(boardQueries.map((q) => q.sync)).size).toBe(1);
+    expect(boardQueries[0].sync).toEqual(expect.any(Number));
+    const first = boardQueries[0].sync;
+    boardQueries.length = 0;
+    await refreshTasks("local", "personal", 2_000);
+    expect(boardQueries.every((q) => q.sync !== undefined && q.sync !== first)).toBe(true);
+    boardQueries.length = 0;
+    await previewBoard("local", "personal", board());
+    expect(boardQueries.map((q) => q.sync)).toEqual([undefined, undefined]);
+    useTasks.setState({ config: null });
   });
 
   it("syncs the board shown even when it is not pinned, keeping each board's tasks apart", async () => {

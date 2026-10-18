@@ -543,12 +543,31 @@ impl Session {
         if self.conn.kind == TrackerKind::Jira { Ok(()) } else { Err(fail(format!("{} is not a Jira connection", self.conn.id))) }
     }
 
-    /// A Jira board's configuration with each column's suggested category.
-    async fn jira_setup(&self, board: u64) -> Res<BoardSetup> {
+    /// A Jira board's configuration with each column's suggested category,
+    /// in `sync` (none: read afresh).
+    async fn jira_setup(&self, board: u64, sync: Option<u64>) -> Res<BoardSetup> {
         self.only_jira()?;
-        let config = self.jira_send(self.jira(reqwest::Method::GET, &format!("/rest/agile/1.0/board/{board}/configuration"))?).await?;
-        let statuses = self.jira_send(self.jira(reqwest::Method::GET, "/rest/api/3/status")?).await?;
+        let config = self.jira_get(&format!("/rest/agile/1.0/board/{board}/configuration"), sync).await?;
+        let statuses = self.jira_get("/rest/api/3/status", sync).await?;
         Ok(jira_board::parse_board_config(&config, &jira_board::parse_statuses(&statuses)?)?)
+    }
+
+    /// A Jira GET; in a sync, one the connection's boards share there when
+    /// [`crate::shared::shared_in_a_sync`] says so (X50 Sync).
+    async fn jira_get(&self, path: &str, sync: Option<u64>) -> Res<Vec<u8>> {
+        let ask = || async { self.jira_send(self.jira(reqwest::Method::GET, path)?).await };
+        match sync {
+            Some(sync) if crate::shared::shared_in_a_sync(path) => crate::shared::SYNC_ANSWERS.get(&format!("{} {sync} {path}", self.conn.id), moonlet_core::paths::now_ms, ask).await,
+            _ => ask().await,
+        }
+    }
+
+    /// A source's states; in a sync, asked once there (X50).
+    async fn states_in(&self, source: &str, sync: Option<u64>) -> Res<Vec<(String, String)>> {
+        let Some(sync) = sync else { return self.states_of(source).await };
+        let ask = || async { serde_json::to_vec(&self.states_of(source).await?).map_err(fail) };
+        let raw = crate::shared::SYNC_ANSWERS.get(&format!("{} {sync} states {source}", self.conn.id), moonlet_core::paths::now_ms, ask).await?;
+        serde_json::from_slice(&raw).map_err(fail)
     }
 }
 
@@ -557,7 +576,8 @@ impl Session {
 #[tauri::command]
 pub async fn tracker_board_setup(id: String, board: u64) -> Res<BoardSetup> {
     let s = Session::load(&id).await?;
-    let mut setup = s.jira_setup(board).await?;
+    // Add a board reads Jira afresh: the user may just have changed the board there.
+    let mut setup = s.jira_setup(board, None).await?;
     let filter_id = safe_id(&setup.filter_id)?.to_string();
     // A filter the user may not read leaves the board's columns to pick from.
     setup.filter_jql = match s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/filter/{filter_id}"))?).await {
@@ -583,6 +603,10 @@ pub struct BoardQuery {
     pub narrow: String,
     pub mine: bool,
     pub finished: Finished,
+    /// The sync this read is in: its reads share the connection's lookups
+    /// (X50). None for a preview, which reads everything afresh.
+    #[serde(default)]
+    pub sync: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -622,13 +646,13 @@ pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
             Finished::Sprint => s.linear_ok(linear::parse_active_cycle(&s.linear(linear::ACTIVE_CYCLE, json!({ "team": team })).await?))?,
             Finished::Days(_) => None,
         };
-        let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_of(&team).await?);
+        let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_in(&team, query.sync).await?);
         return Ok(BoardTasks { issues, sprint, columns: Some(columns), kind: None });
     }
     // A ClickUp list: X44's fetch of that one source, and its states as columns.
     if let Origin::ClickupList { list: key } = &query.origin {
         let issues = s.clickup_tasks(key, query.mine, &query.finished).await?;
-        let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_of(key).await?);
+        let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_in(key, query.sync).await?);
         return Ok(BoardTasks { issues, sprint: None, columns: Some(columns), kind: None });
     }
     if !matches!(query.origin, Origin::JiraBoard { .. } | Origin::Jql { .. }) {
@@ -636,20 +660,21 @@ pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
     }
     s.only_jira()?;
     // A token Jira no longer accepts makes searches come back empty, not
-    // refused: ask who we are first, which does fail.
-    s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/myself")?).await?;
+    // refused: ask who we are first, which does fail. A sync asks once for
+    // all the connection's boards (X50).
+    s.jira_get("/rest/api/3/myself", query.sync).await?;
     let (filter, sub_query, points, board, columns, kind) = match &query.origin {
         Origin::JiraBoard { board } => {
-            let setup = s.jira_setup(*board).await?;
+            let setup = s.jira_setup(*board, query.sync).await?;
             let filter_id = safe_id(&setup.filter_id)?.to_string();
-            let filter = jira_board::parse_filter(&s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/filter/{filter_id}"))?).await?)?;
+            let filter = jira_board::parse_filter(&s.jira_get(&format!("/rest/api/3/filter/{filter_id}"), query.sync).await?)?;
             (filter, setup.sub_query, setup.points_field, Some(*board), Some(setup.columns), Some(setup.kind))
         }
         Origin::Jql { query: jql } => (jql.clone(), None, None, None, None, None),
         _ => unreachable!("checked above"),
     };
     // A site that won't list its fields just gives no sprint.
-    let sprint = match s.jira_send(s.jira(reqwest::Method::GET, "/rest/api/3/field")?).await {
+    let sprint = match s.jira_get("/rest/api/3/field", query.sync).await {
         Ok(raw) => jira_board::sprint_field(&raw).unwrap_or(None),
         Err(_) => None,
     };

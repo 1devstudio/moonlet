@@ -464,7 +464,7 @@ describe("Jira and ClickUp trackers", () => {
     await closeSettings();
   });
 
-  it("adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged, and says when it is gone (X50)", async () => {
+  it("adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged, its lookups shared with the site's other board, and says when it is gone (X50)", async () => {
     await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
@@ -499,6 +499,14 @@ describe("Jira and ClickUp trackers", () => {
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     await $(`${dialog}//button[normalize-space()="Create board"]`).click();
     await expect($('//button[starts-with(@aria-label, "Switch board, current: OPS board")]')).toBeDisplayed({ wait: 15_000 });
+    // The site's two boards, Example and OPS board, share its lookups: a sync asks who the user is and its fields once (X50).
+    await new Promise((r) => setTimeout(r, 2_000));
+    asked.length = 0;
+    await $('//button[@title="Refresh tasks"]').click();
+    const count = (path: string) => asked.filter((x) => x.path.startsWith(path)).length;
+    await browser.waitUntil(() => count("/jira/rest/api/3/search/jql") >= 2, { timeout: 15_000, timeoutMsg: JSON.stringify(asked) });
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect([count("/jira/rest/api/3/myself"), count("/jira/rest/api/3/field"), count("/jira/rest/api/3/search/jql")]).toEqual([1, 1, 2]);
     // A board whose origin is gone says Jira's error, with its settings.
     jiraBoardGone = true;
     try {
