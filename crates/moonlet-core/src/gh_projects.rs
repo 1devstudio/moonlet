@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use moonlet_proto::types::{GhOption, GhProject, GhProjectBoard, GhProjectItem};
 use serde_json::{Value, json};
 
@@ -131,6 +131,47 @@ pub fn parse_project_items(raw: &[u8]) -> Result<(GhProjectBoard, String, Option
     ))
 }
 
+/// Sets an item's Status (X50 moves): needs gh's `project` scope.
+pub const MOVE_MUTATION: &str = "mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) { \
+     updateProjectV2ItemFieldValue(input: { projectId: $project, itemId: $item, fieldId: $field, value: { singleSelectOptionId: $option } }) \
+     { projectV2Item { id } } }";
+
+/// Whether a [`MOVE_MUTATION`] answer moved the item; a missing scope is named with its command.
+pub fn parse_move(raw: &[u8]) -> Result<()> {
+    let data = graphql_data(raw)?;
+    if data["updateProjectV2ItemFieldValue"]["projectV2Item"]["id"].is_null() {
+        bail!("GitHub did not move the item");
+    }
+    Ok(())
+}
+
+/// The token scopes of gh's active github.com account, from `gh auth status`:
+/// the account marked active, or with older gh, which marks none, the first.
+/// `None` when no account is signed in.
+pub fn parse_scopes(status: &str) -> Option<Vec<String>> {
+    let mut accounts: Vec<(bool, Vec<String>)> = Vec::new();
+    for line in status.lines().map(str::trim) {
+        let line = line.trim_start_matches(['✓', '-', ' ']);
+        if line.starts_with("Logged in to") {
+            accounts.push((false, Vec::new()));
+        } else if line == "Active account: true" {
+            if let Some(a) = accounts.last_mut() {
+                a.0 = true;
+            }
+        } else if let Some(list) = line.strip_prefix("Token scopes:") {
+            if let Some(a) = accounts.last_mut() {
+                a.1 = list
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+        }
+    }
+    let active = accounts.iter().find(|a| a.0).or(accounts.first())?;
+    Some(active.1.clone())
+}
+
 /// A Status field's options.
 fn options(v: &Value) -> Vec<GhOption> {
     v.as_array()
@@ -145,6 +186,10 @@ fn options(v: &Value) -> Vec<GhOption> {
 
 /// What gh sends back about a missing scope, as the user can act on it (X50).
 pub fn scope_hint(scope: &str) -> String {
+    if scope == "project" {
+        // A move: there is no Check again, the next move tries again.
+        return "Moving a Project's items needs gh's project scope. Run gh auth refresh -s project.".into();
+    }
     format!(
         "GitHub Projects need gh's {scope} scope. Run gh auth refresh -s {scope}, then Check again."
     )
@@ -294,6 +339,32 @@ pub async fn gh_project_items(owner: &str, number: u64, mine: bool) -> Result<Gh
     board.ok_or_else(|| anyhow::anyhow!("GitHub sent no Project"))
 }
 
+/// Sets a Project item's Status to `option` (X50 moves).
+pub async fn gh_project_move(project: &str, item: &str, field: &str, option: &str) -> Result<()> {
+    let vars = [
+        ("project", Var::Str(project.into())),
+        ("item", Var::Str(item.into())),
+        ("field", Var::Str(field.into())),
+        ("option", Var::Str(option.into())),
+    ];
+    parse_move(&graphql(MOVE_MUTATION, &vars).await?)
+}
+
+/// gh's token scopes for github.com, from `gh auth status`.
+pub async fn gh_scopes() -> Result<Vec<String>> {
+    let out = run_raw(
+        "gh",
+        Path::new("/"),
+        &["auth", "status", "--hostname", "github.com"],
+        None,
+        Duration::from_secs(30),
+    )
+    .await?;
+    // gh before 2.40 prints it to stderr.
+    let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), out.stderr);
+    parse_scopes(&text).context("gh is not signed in to github.com")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,7 +469,7 @@ mod tests {
             parse_project_items(&fixture("gh-error-project-scope.json"))
                 .unwrap_err()
                 .to_string(),
-            "GitHub Projects need gh's project scope. Run gh auth refresh -s project, then Check again."
+            "Moving a Project's items needs gh's project scope. Run gh auth refresh -s project."
         );
     }
 
@@ -470,5 +541,35 @@ mod tests {
                 .unwrap()
             );
         assert_eq!(parse_projects(raw.as_bytes()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_move_sets_the_status_or_says_the_scope_it_needs() {
+        assert!(parse_move(&fixture("gh-project-move.json")).is_ok());
+        assert_eq!(
+            parse_move(&fixture("gh-error-project-scope.json"))
+                .unwrap_err()
+                .to_string(),
+            "Moving a Project's items needs gh's project scope. Run gh auth refresh -s project."
+        );
+    }
+
+    #[test]
+    fn the_active_accounts_token_scopes() {
+        let status = String::from_utf8(fixture("gh-auth-status.txt")).unwrap();
+        assert_eq!(
+            parse_scopes(&status).unwrap(),
+            ["gist", "project", "read:org", "repo", "workflow"]
+        );
+        // Not captured (one account here): two accounts, the active one's; and
+        // older gh, which marks none and prefixes its lines with ✓, the first.
+        let two = "github.com\n  ✓ Logged in to github.com account kim (keyring)\n  - Active account: false\n  - Token scopes: 'repo'\n  ✓ Logged in to github.com account sam-rivera (keyring)\n  - Active account: true\n  - Token scopes: 'repo', 'read:project'\n";
+        assert_eq!(parse_scopes(two).unwrap(), ["repo", "read:project"]);
+        let older = "github.com\n  ✓ Logged in to github.com as sam-rivera (oauth_token)\n  ✓ Token scopes: gist, read:org, repo\n";
+        assert_eq!(parse_scopes(older).unwrap(), ["gist", "read:org", "repo"]);
+        assert_eq!(
+            parse_scopes("You are not logged into any GitHub hosts. To log in, run: gh auth login"),
+            None
+        );
     }
 }

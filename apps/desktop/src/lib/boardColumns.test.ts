@@ -304,7 +304,7 @@ describe("a GitHub Project's items (X50)", () => {
     labels: [],
     description: "",
     updatedMs: 0,
-    github: { repo: "acme/web", number, closingPrs: [], project: { item: `PVTI_${number}`, status } },
+    github: { repo: "acme/web", number, closingPrs: [], project: { id: "PVT_1", item: `PVTI_${number}`, status } },
   });
 
   it("sit in the column of their Status, whatever the issue's own state; one with no Status is not drawn", () => {
