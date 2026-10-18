@@ -517,6 +517,8 @@ describe("boards (X50 Sync)", () => {
     answers["board_columns linear:acme"] = () => [{ name: "Todo", statuses: ["Todo"], category: "todo" }];
     useTasks.setState({ attention: {} });
     const p = await previewBoard("local", "personal", board());
+    // Only a GitHub Project has a number field to offer.
+    expect(p.numberField).toBe(null);
     expect([p.error, p.tasks.map((t) => [t.key, t.mine]), p.columns]).toEqual([
       null,
       [

@@ -478,13 +478,21 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
  * everyone's with the user's own marked, the tracker's columns, or why the
  * tracker refused it.
  */
-export async function previewBoard(host: string, workspaceId: string, board: BoardConfig): Promise<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null; numberField?: string | null }> {
+/** A board's issues before it is saved (X50 step 2 and Board settings). */
+export interface BoardPreview {
+  tasks: Task[];
+  columns: BoardColumn[] | null;
+  error: string | null;
+  /** A GitHub Project's first number field, which Cards show offers; null for any other board. */
+  numberField: string | null;
+}
+
+export async function previewBoard(host: string, workspaceId: string, board: BoardConfig): Promise<BoardPreview> {
   const repos = useTasks.getState().data[wsKey(host, workspaceId)]?.repos ?? {};
   const projects = workspaceProjects(useStore.getState(), host, workspaceId).map((p) => ({ path: p.path, repo: repos[p.id] ?? null }));
   const r = await readBoard(host, board, projects, true);
   const error = r.error === "" ? (useTasks.getState().attention[board.connection] ?? "Reconnect this tracker") : r.error;
-  // A GitHub Project's number field, which Cards show offers (X50).
-  return { tasks: r.tasks, columns: r.columns, error, ...(r.project && { numberField: r.project.numberField ?? null }) };
+  return { tasks: r.tasks, columns: r.columns, error, numberField: r.project?.numberField ?? null };
 }
 
 interface BoardRead {
