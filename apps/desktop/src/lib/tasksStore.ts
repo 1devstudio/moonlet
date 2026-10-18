@@ -487,14 +487,19 @@ export interface BoardPreview {
   error: string | null;
   /** A GitHub Project's first number field, which Cards show offers; null for any other board. */
   numberField: string | null;
+  /** A JQL board's site status names by id, for step 3; empty for any other board. */
+  statusNames: Record<string, string>;
 }
+
+/** A preview that could not be read: no issues, and why. */
+export const previewFailed = (error: string): BoardPreview => ({ tasks: [], columns: null, error, numberField: null, statusNames: {} });
 
 export async function previewBoard(host: string, workspaceId: string, board: BoardConfig): Promise<BoardPreview> {
   const repos = useTasks.getState().data[wsKey(host, workspaceId)]?.repos ?? {};
   const projects = workspaceProjects(useStore.getState(), host, workspaceId).map((p) => ({ path: p.path, repo: repos[p.id] ?? null }));
   const r = await readBoard(host, board, projects, true);
   const error = r.error === "" ? (useTasks.getState().attention[board.connection] ?? "Reconnect this tracker") : r.error;
-  return { tasks: r.tasks, columns: r.columns, error, numberField: r.project?.numberField ?? null };
+  return { tasks: r.tasks, columns: r.columns, error, numberField: r.project?.numberField ?? null, statusNames: r.statusNames ?? {} };
 }
 
 interface BoardRead {
@@ -504,6 +509,8 @@ interface BoardRead {
   sprint: BoardData["sprint"];
   kind?: string;
   project?: ProjectMeta;
+  /** A JQL board's site status names by id. */
+  statusNames?: Record<string, string>;
   /** Why it failed; null when it worked. */
   error: string | null;
 }
@@ -588,7 +595,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
       ...(everyone?.issues ?? []).map((t) => ({ ...taskFromBoardIssue(t), mine: ownKeys.has(t.key) })),
       ...own.issues.filter((t) => !seen.has(t.key)).map((t) => ({ ...taskFromBoardIssue(t), mine: true })),
     ];
-    return { tasks, columns: own.columns, sprint: own.sprint, ...(own.kind && { kind: own.kind }), error: null };
+    return { tasks, columns: own.columns, sprint: own.sprint, ...(own.kind && { kind: own.kind }), ...(own.statusNames && { statusNames: own.statusNames }), error: null };
   } catch (e) {
     const err = e as { auth?: boolean; message?: string };
     const text = err.message ?? message(e);
