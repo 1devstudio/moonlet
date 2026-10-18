@@ -155,7 +155,11 @@ function storedShownBoard(): Record<string, string> {
   }
 }
 
-/** Shows board `id` in workspace `wsKey` (X50), and syncs it if it is not pinned. */
+/** Opens Add a board for workspace `workspace` of `host`, or with `board` that board's settings (X50), over Settings too. */
+export function openAddBoard(host: string, workspace: string, board?: string) {
+  useStore.setState({ settingsPage: null, dialog: { kind: "add-board", host, workspace, ...(board && { board }) } });
+}
+
 /** Opens board `id` from the board switcher (X50): another workspace's is shown there, in Tasks mode. */
 export function openBoard(host: string, workspaceId: string, id: string) {
   const shown = shownWorkspace(useStore.getState());
@@ -165,6 +169,7 @@ export function openBoard(host: string, workspaceId: string, id: string) {
   showBoard(host, workspaceId, id);
 }
 
+/** Shows board `id` in workspace `workspaceId` of `host` (X50), and syncs it if it is not pinned. */
 export function showBoard(host: string, workspaceId: string, id: string) {
   const shownBoard = { ...useTasks.getState().shownBoard, [wsKey(host, workspaceId)]: id };
   useTasks.setState({ shownBoard });
@@ -425,6 +430,18 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
   else forgetSeenMoves(mapped.tasks);
 }
 
+/**
+ * A board that is not saved yet (Add a board's preview, X50): its issues,
+ * everyone's with the user's own marked, the tracker's columns, or why the
+ * tracker refused it.
+ */
+export async function previewBoard(host: string, workspaceId: string, board: BoardConfig): Promise<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null }> {
+  const repos = useTasks.getState().data[wsKey(host, workspaceId)]?.repos ?? {};
+  const projects = workspaceProjects(useStore.getState(), host, workspaceId).map((p) => ({ path: p.path, repo: repos[p.id] ?? null }));
+  const r = await readBoard(host, board, projects, true);
+  return { tasks: r.tasks, columns: r.columns, error: r.error === "" ? (useTasks.getState().attention[board.connection] ?? "Reconnect this tracker") : r.error };
+}
+
 interface BoardRead {
   tasks: Task[];
   /** The tracker's columns now, or null when it gave none (GitHub's are fixed). */
@@ -440,6 +457,13 @@ interface BoardRead {
  * Assignee: me off, everyone's open ones too.
  */
 async function readBoard(host: string, b: BoardConfig, projects: { path: string; repo: string | null }[], everyoneToo: boolean): Promise<BoardRead> {
+  const r = await readOrigin(host, b, projects, everyoneToo);
+  // A label filter keeps the issues with any of its labels (X50 Issues).
+  const labels = new Set((b.labels ?? []).map((l) => l.toLowerCase()));
+  return labels.size ? { ...r, tasks: r.tasks.filter((t) => t.labels.some((l) => labels.has(l.toLowerCase()))) } : r;
+}
+
+async function readOrigin(host: string, b: BoardConfig, projects: { path: string; repo: string | null }[], everyoneToo: boolean): Promise<BoardRead> {
   const none = (error: string | null): BoardRead => ({ tasks: [], columns: null, sprint: null, error });
   if (b.origin.kind === "github_repo") {
     const repo = b.origin.repo.toLowerCase();
