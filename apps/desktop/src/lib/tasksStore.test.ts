@@ -5,7 +5,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
-import { createIssue } from "./tasksStore";
+import { createIssue, setColumnShow } from "./tasksStore";
 import { activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -1494,6 +1494,19 @@ describe("a new issue from a column (X52)", () => {
     expect(useTasks.getState().selected).toBe(null);
     delete answers["tracker_create linear:acme"];
     await expect(createIssue("local", "personal", moon, review, draft)).rejects.toThrow("Linear: no such team");
+    useTasks.setState({ config: null });
+  });
+});
+
+describe("errors as the user reads them", () => {
+  it("shows a Tauri command's refusal by its message, not [object Object]", async () => {
+    // Tauri commands reject with a plain { message } object, here trackers.toml's save.
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [{ id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } }] } });
+    // Earlier tests' saves land first.
+    await saveTrackersConfig((c) => c).catch(() => {});
+    saveFails.push({ message: "Could not write trackers.toml: permission denied" });
+    setColumnShow("moon", "Todo", "fold");
+    await vi.waitFor(() => expect(useStore.getState().toasts.at(-1)?.text).toBe("Could not write trackers.toml: permission denied"));
     useTasks.setState({ config: null });
   });
 });

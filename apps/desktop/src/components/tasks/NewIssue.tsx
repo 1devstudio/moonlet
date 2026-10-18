@@ -7,7 +7,8 @@ import type { BoardColumn, BoardConfig } from "../../lib/boards";
 import { canSubmit, type NewIssue as Draft, fitDraft, isJira, jiraProjectUrl, jiraProjects, labelProblem, needsPlace, needsType, newIssueDraft, projectRepos, withAccess } from "../../lib/newIssue";
 import { trackerName } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
-import { createIssue, createOptions, message, useTasks } from "../../lib/tasksStore";
+import { errorMessage } from "../../lib/store";
+import { createIssue, createOptions, useTasks } from "../../lib/tasksStore";
 import { Menu } from "../Menu";
 import { Button, Dialog, inputCls, selectCls } from "../ui";
 
@@ -39,7 +40,7 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
         setOptions(o);
         setDraft((d) => fitDraft(d, o.people.map((p) => p.id)));
       },
-      (e) => !stale && setOptionsError(message(e)),
+      (e) => !stale && setOptionsError(errorMessage(e)),
     );
     return () => {
       stale = true;
@@ -58,7 +59,7 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
     setError(null);
     createIssue(host, workspaceId, board, column, access.draft).then(onClose, (e) => {
       setBusy(false);
-      setError(message(e));
+      setError(errorMessage(e));
     });
   };
   const people = (options?.people ?? []).filter((p) => p.id !== options?.me);

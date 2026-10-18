@@ -7,7 +7,7 @@ import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
 import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
-import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
@@ -301,7 +301,7 @@ export async function loadTrackersConfig(force = false) {
       await saveTrackersConfig(migrateSources).catch((e) => errorToast(e));
     }
   } catch (e) {
-    useTasks.setState({ configError: message(e) });
+    useTasks.setState({ configError: errorMessage(e) });
     errorToast(e);
   }
 }
@@ -382,8 +382,6 @@ export function workspaceProjects(s: StoreState, host: string, workspaceId: stri
   return (s.projects[host] ?? []).filter((p) => ids.has(p.id));
 }
 
-/** An error's text: an Error's or a Tauri command's `{ message }`, else the value. */
-export const message = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
 const syncs = latestPerKey();
 
 /**
@@ -572,7 +570,7 @@ async function addToProject(host: string, meta: ProjectMeta, node: string, task:
   try {
     item = await rpc<string>(host, M.ghProjectAdd, { project: meta.id, content: node });
   } catch (e) {
-    return { task, failed: `; adding it to the Project failed: ${message(e)}`, off: true };
+    return { task, failed: `; adding it to the Project failed: ${errorMessage(e)}`, off: true };
   }
   const inProject = (option: string | null): Task => ({ ...task, github: { ...task.github!, project: { id: meta.id, item, status: meta.options.find((o) => o.id === option)?.name ?? null, option } } });
   const req = status === "" ? null : projectMove(meta, item, status);
@@ -582,7 +580,7 @@ async function addToProject(host: string, meta: ProjectMeta, node: string, task:
     await rpc(host, M.ghProjectMove, req);
     return { task: inProject(req.option) };
   } catch (e) {
-    return { task: inProject(null), failed: `; setting its Status failed: ${message(e)}` };
+    return { task: inProject(null), failed: `; setting its Status failed: ${errorMessage(e)}` };
   }
 }
 
@@ -697,7 +695,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
       const list = ownAndOthers(own, all, (gh) => gh.number, (gh) => !gh.closed);
       return { tasks: list.map(({ it, mine }) => ({ ...taskFromGh(it, GITHUB), mine })), columns: b.columns?.length ? null : GITHUB_REPO_COLUMNS, sprint: null, error: null };
     } catch (e) {
-      return none(message(e));
+      return none(errorMessage(e));
     }
   }
   if (b.origin.kind === "github_project") {
@@ -721,7 +719,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
       const statusNames = { "": NO_STATUS, ...Object.fromEntries(own.options.map((o) => [o.id, o.name])) };
       return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id, own.options), mine })), columns, sprint: null, project, statusNames, error: null };
     } catch (e) {
-      return none(message(e));
+      return none(errorMessage(e));
     }
   }
   // A rejected token is not tried again until the user reconnects (X44).
@@ -739,7 +737,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
     return { tasks, columns: own.columns, sprint: own.sprint, ...(own.kind && { kind: own.kind }), ...(own.statusNames && { statusNames: own.statusNames }), error: null };
   } catch (e) {
     const err = e as { auth?: boolean; message?: string };
-    const text = err.message ?? message(e);
+    const text = err.message ?? errorMessage(e);
     if (!err.auth) return none(text);
     // Its own row says what to do (X44); the workspace shows no sync error for it.
     useTasks.setState((t) => ({ attention: { ...t.attention, [b.connection]: text } }));
@@ -915,7 +913,7 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
     recordActivity({ connection: start.ref.connection, key: start.key }, `moonlet moved it to ${name} and assigned it to you`, now + 1);
   } catch (e) {
     movedByMoonlet.delete(id);
-    toast(`${start.key}: ${message(e)}`, "error");
+    toast(`${start.key}: ${errorMessage(e)}`, "error");
   }
 }
 
@@ -928,7 +926,7 @@ export async function assignToMe(host: string, workspaceId: string, github: { re
     await rpc(host, M.ghTaskUpdate, { path, number: github.number, assign_me: true });
     recordActivity({ connection: GITHUB, key }, "moonlet assigned it to you");
   } catch (e) {
-    toast(`${key}: ${message(e)}`, "error");
+    toast(`${key}: ${errorMessage(e)}`, "error");
   }
 }
 
@@ -1030,7 +1028,7 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
     return true;
   } catch (e) {
     movedByMoonlet.delete(id);
-    setFailure(card.task, message(e));
+    setFailure(card.task, errorMessage(e));
     return false;
   }
 }
@@ -1098,7 +1096,7 @@ export async function runAutoFixes(host: string, workspaceId: string, board: Boa
           await before?.();
           await comment();
         });
-        if (!before) setFailure(c.card.task, message(e), "comment");
+        if (!before) setFailure(c.card.task, errorMessage(e), "comment");
       }
     };
     await comment();
@@ -1224,7 +1222,7 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
     void refreshTasks(host, workspaceId);
   } catch (e) {
     movedByMoonlet.delete(id);
-    const why = message(e);
+    const why = errorMessage(e);
     setFailure(task, why);
     toast(`${task.key}: ${why}`, "error");
   }

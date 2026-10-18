@@ -5,7 +5,7 @@ import { Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
-import { errorToast, shownWorkspace, useStore } from "../../lib/store";
+import { errorMessage, errorToast, shownWorkspace, useStore } from "../../lib/store";
 import { type Connection, loadTrackersConfig, openAddBoard, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
 import { boardRows, rowsToBoards, sourceKeyOf, withStates } from "../../lib/boards";
@@ -22,7 +22,6 @@ const TOKEN_PAGE: Record<Connection["kind"], string> = {
   clickup: "https://app.clickup.com/settings/apps",
 };
 
-const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
 /** Which sources a connection shows, in which workspace and starting in which project. */
 function SourcesEditor({ connection, choices, onDone }: { connection: Connection; choices: { key: string; name: string }[]; onDone: () => void }) {
@@ -47,7 +46,7 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
       await saveTrackersConfig((config) => ({ ...config, boards: rowsToBoards(connection, rows, config.boards) }));
       onDone();
     } catch (e) {
-      errorToast(message(e));
+      errorToast(e);
     }
   };
   const grid = "grid grid-cols-[minmax(0,1fr)_200px_24px] items-center gap-2";
@@ -152,7 +151,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
       reconnected(r.connection.id);
       setDone(r);
     } catch (e) {
-      setError(message(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -166,7 +165,7 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
       reconnected(r.connection.id);
       setDone(r);
     } catch (e) {
-      setError(message(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -253,7 +252,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
     try {
       setEditing(await hostsApi.trackerSources(c.id));
     } catch (e) {
-      errorToast(message(e));
+      errorToast(e);
     }
   };
   const disconnect = async () => {
@@ -264,7 +263,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
       reconnected(c.id);
       await loadTrackersConfig(true);
     } catch (e) {
-      errorToast(message(e));
+      errorToast(e);
     }
   };
   return (
@@ -336,7 +335,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
   useEffect(() => {
     if (!source) return;
     setStates(null);
-    hostsApi.trackerStates(c.id, source).then(setStates, (e) => errorToast(message(e)));
+    hostsApi.trackerStates(c.id, source).then(setStates, (e) => errorToast(e));
   }, [c.id, source]);
   const save = async () => {
     // Only states moved off their default column are kept.
@@ -345,7 +344,7 @@ export function StatesEditor({ c, onClose }: { c: Connection; onClose: () => voi
       await saveTrackersConfig((config) => ({ ...config, boards: config.boards?.map((b) => (b.id === boardId ? withStates(b, kept) : b)) }));
       onClose();
     } catch (e) {
-      errorToast(message(e));
+      errorToast(e);
     }
   };
   return (
