@@ -28,7 +28,7 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
     return () => {
       stale = true;
     };
-  }, [board.id]);
+  }, [board.id, board.connection]);
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   const ready = canSubmit(draft, { busy });
   const create = () => {
@@ -41,14 +41,14 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
     });
   };
   const people = (options?.people ?? []).filter((p) => p.id !== options?.me);
-  const assigneeName = draft.assignee === "me" ? "Me" : draft.assignee === "none" ? "Unassigned" : (people.find((p) => p.id === draft.assignee)?.name ?? "Me");
+  const assigneeName = draft.assignee === "me" ? "Me" : draft.assignee === "none" ? "Unassigned" : (people.find((p) => p.id === draft.assignee)?.name ?? draft.assignee);
   const labels = [...new Set([...draft.labels, ...(options?.labels ?? []).map((l) => l.name)])];
   const has = (name: string) => draft.labels.some((l) => l.toLowerCase() === name.toLowerCase());
   return (
     <Dialog
       title={`New issue in ${column.name}`}
       onClose={onClose}
-      width={520}
+      width={560}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

@@ -2,13 +2,12 @@
 
 import { Bot, ChevronDown, Copy, ExternalLink, GitBranch, LayoutGrid, List, MoreHorizontal, Plus, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { createLock, createsIn, createTarget } from "../../lib/newIssue";
-import { NewIssue } from "./NewIssue";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
+import { createLock, createsIn, createTarget } from "../../lib/newIssue";
 import { type Column, type Task, taskId, taskStart, trackerName } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
@@ -57,6 +56,7 @@ import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } f
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
+import { NewIssue } from "./NewIssue";
 
 
 const TONE: Record<CardRow["meta"]["tone"], string> = {
@@ -540,11 +540,12 @@ export function TasksMode() {
                       <span className="font-mono ui-text-12 font-normal text-faint">{v.cards.length}</span>
                       {plusFor(v.name) && (
                         // Shown on hover, keyboard focus, and always on a touch screen.
+                        // A locked + stays in the tab order, so its reason can be reached.
                         <IconButton
                           title={createLocked ?? `New issue in ${v.name}`}
-                          disabled={!!createLocked}
-                          onClick={() => setCreating(plusFor(v.name))}
-                          className="opacity-0 focus-visible:opacity-100 group-hover/column:opacity-100 [@media(hover:none)]:opacity-100"
+                          aria-disabled={!!createLocked || undefined}
+                          onClick={() => !createLocked && setCreating(plusFor(v.name))}
+                          className="opacity-0 focus-visible:opacity-100 group-hover/column:opacity-100 aria-disabled:cursor-default aria-disabled:text-faint [@media(hover:none)]:opacity-100"
                         >
                           <Plus size={14} />
                         </IconButton>

@@ -74,6 +74,9 @@ describe("the column + (X52)", () => {
     expect(withCreated(withIt, created, 3_000)).toEqual({ ...withIt, pending: [], gone: [] });
     // One that started at 3 000 without it: the board doesn't show it.
     expect(withCreated(synced, created, 3_000)).toEqual({ ...synced, pending: [], gone: created });
+    // A sync that didn't read its board (unpinned and no longer shown) leaves it pending, untouched.
+    const other = [{ boardId: "design", task: issue("DES-7"), at: 2_000 }];
+    expect(withCreated(synced, other, 3_000)).toEqual({ ...synced, pending: other, gone: [] });
   });
 
   it("shows on the boards of the trackers moonlet creates issues in: Linear so far", () => {
