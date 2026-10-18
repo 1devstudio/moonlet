@@ -209,7 +209,7 @@ describe("Tasks mode", () => {
     await $(`${dialog}//button[normalize-space()="Create board"]`).click();
     // The user's own issue sits in its Status column, with its Estimate.
     await expect(card("acme/web#10", "Todo")).toBeDisplayed({ wait: 15_000 });
-    await expect(card("acme/web#10", "Todo").$('.//*[normalize-space()="3 pt"]')).toBeDisplayed();
+    await expect(card("acme/web#10", "Todo").$('.//*[normalize-space()="Estimate 3"]')).toBeDisplayed();
     await expect($('//button[starts-with(@aria-label, "Switch board, current: Website")]')).toBeDisplayed();
     // Its State menu sets the item's Status through gh.
     await card("acme/web#10", "Todo").$('.//button[normalize-space()="Retry failed webhook deliveries"]').click();

@@ -144,13 +144,15 @@ function dueDay(due: string): string {
 export function cardFace(
   task: Pick<Task, "key" | "assignees"> & Partial<Pick<Task, "issueType" | "points" | "parent" | "due">>,
   fields: CardField[],
+  /** A GitHub Project's number field, whose name the estimate shows with. */
+  estimate?: string | null,
 ): { type?: string; points?: string; assignee?: { initials: string; name: string }; line?: string } {
   const on = (f: CardField) => fields.includes(f);
   const line = [on("parent") && task.parent && `${task.parent.key} ${task.parent.title}`, on("due") && task.due && `Due ${dueDay(task.due)}`].filter(Boolean).join(" · ");
   const name = task.assignees[0];
   return {
     ...(on("issue_type") && task.issueType && { type: task.issueType }),
-    ...(on("points") && task.points !== undefined && { points: `${task.points} pt` }),
+    ...(on("points") && task.points !== undefined && { points: estimate ? `${estimate} ${task.points}` : `${task.points} pt` }),
     ...(on("assignee") && name && { assignee: { initials: initials(name), name } }),
     ...(line && { line }),
   };

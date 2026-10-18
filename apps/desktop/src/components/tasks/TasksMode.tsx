@@ -223,9 +223,9 @@ export function startSession(host: string, workspaceId: string, card: Card, work
   });
 }
 
-function TaskCard({ host, workspaceId, card, fields, selected }: { host: string; workspaceId: string; card: Card; fields: CardField[]; selected: boolean }) {
+function TaskCard({ host, workspaceId, card, fields, estimate, selected }: { host: string; workspaceId: string; card: Card; fields: CardField[]; estimate: string | null; selected: boolean }) {
   const pick = () => useTasks.setState({ selected: `${card.task.connection} ${card.task.key}` });
-  const face = cardFace(card.task, fields);
+  const face = cardFace(card.task, fields, estimate);
   return (
     <article
       aria-label={`${card.task.key} ${card.task.title}`}
@@ -480,6 +480,8 @@ export function TasksMode() {
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
   const problem = boardProblem(shown.board, data.boards?.[shown.board.id]);
   const fields = cardFields(shown.board);
+  // A GitHub Project's estimate is named after its number field (X50).
+  const estimate = data.boards?.[shown.board.id]?.project?.numberField ?? null;
   const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id])]));
   const listCards = views.flatMap((v) => (v.folded ? [] : v.cards));
   return (
@@ -555,7 +557,7 @@ export function TasksMode() {
                   </div>
                   <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                     {v.cards.map((c) => (
-                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} selected={taskId(c.task) === selected} />
+                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} estimate={estimate} selected={taskId(c.task) === selected} />
                     ))}
                   </div>
                 </section>

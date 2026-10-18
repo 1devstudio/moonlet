@@ -147,6 +147,8 @@ describe("cardFace (X50 Cards show)", () => {
       line: "WEB-200 Pricing page · Due Oct 20",
     });
     expect(cardFace(task, ["points"])).toEqual({ points: "3 pt" });
+    // A GitHub Project's estimate is its number field's value, by the field's name.
+    expect(cardFace({ ...task, points: 0.5 }, ["points"], "Hours")).toEqual({ points: "Hours 0.5" });
     expect(cardFace({ ...task, parent: undefined }, ["parent", "due"])).toEqual({ line: "Due Oct 20" });
     // A field the issue has no value for shows nothing.
     expect(cardFace({ key: "MOON-1", assignees: [] }, ["issue_type", "points", "assignee", "parent", "due"])).toEqual({});

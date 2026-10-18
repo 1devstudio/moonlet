@@ -263,8 +263,6 @@ export interface GhProject {
   title: string;
   status_field: string | null;
   options: { id: string; name: string }[];
-  /** Its first number field's name, a card's estimate. */
-  number_field?: string | null;
 }
 
 /** A GitHub Project as a board reads it (X50 Sync): its Status options and its items that are issues. */

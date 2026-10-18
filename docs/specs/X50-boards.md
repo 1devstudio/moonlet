@@ -109,7 +109,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   (`boards.test.ts` names the projects whose committed config links the board's tracker project, or any of its connection's for a Jira board, names the projects that link the tracker project, by name where known; `boards.test.ts` takes the first matching component or label rule, then the board's default, then the projects linking the tracker project; `addBoard.test.ts` makes the board, leaving out what is at its default)
 - [x] "Cards show" checkboxes, only those the tracker has:
   - issue type (Jira)
-  - story points (Jira) or estimate (Linear; for a GitHub Project, its first number field, offered under that field's name, such as **Estimate**)
+  - story points (Jira) or estimate (Linear; for a GitHub Project, its first number field in the Project's field order, offered under that field's name, such as **Hours**; reordering the Project's fields can change which one it is). A board that shows it keeps the box, as **Estimate**, while the field's name is not known yet or once the Project has no number field, so it can be unticked.
   - assignee
   - epic (Jira) or parent
   - due date
@@ -179,7 +179,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 - [x] A card shows the X45 card plus the board's card fields, the board's own choice or else its tracker's (Jira: issue type, story points, assignee; Linear: estimate, assignee; GitHub and ClickUp: assignee): (`boardScreen.test.ts` shows the fields the board's cards show, the parent and due date on a line under the title, gives a board without its own choice its tracker's fields; `task-trackers.e2e.ts` adds a board of a Linear team that uses cycles, following its active cycle, with the card fields picked, and removes it after asking (X50))
   - issue type, after the key
-  - story points as `<n> pt`, before the assignee's initials
+  - story points or estimate as `<n> pt`, before the assignee's initials; a GitHub Project's as `<field> <n>`, by its number field's name (`Hours 0.5`)
   - epic or parent and due date, on a line under the title
 - [x] Under Assignee: anyone, a card assigned to someone else is dimmed, unless a session of the user's is on it. (`boardScreen.test.ts` dims someone else's issue that has no session of yours)
 - [x] A card can have a note line, the first that applies: (`boardColumns.test.ts` names whose issue it is when it is someone else's and no session is on it, says a merged PR waits for the next column as expected, on a board with several In review columns; `task-trackers.e2e.ts` shows everyone's open issues once the board's Assignee is anyone, others' dimmed (X50))
