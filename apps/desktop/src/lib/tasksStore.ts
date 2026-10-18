@@ -383,7 +383,6 @@ export function workspaceProjects(s: StoreState, host: string, workspaceId: stri
 }
 
 /** An error's text: an Error's or a Tauri command's `{ message }`, else the value. */
-/** An error as the user reads it: a Tauri command's `{ message }`, an `Error`, or the value. */
 export const message = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
 const syncs = latestPerKey();
 
@@ -537,7 +536,7 @@ function placeOf(board: BoardConfig): string {
 }
 
 /** The new-issue form's lists for a board (X52): the user, the people and the labels. */
-export function createOptions(board: BoardConfig) {
+export async function createOptions(board: BoardConfig) {
   return hostsApi.trackerCreateOptions(board.connection, placeOf(board));
 }
 
@@ -547,13 +546,17 @@ export function createOptions(board: BoardConfig) {
  * when the board can't show it, a notice says so. A tracker's refusal is
  * thrown, for the form to show.
  */
-export async function createIssue(host: string, workspaceId: string, board: BoardConfig, column: BoardColumn, draft: NewIssue, now = Date.now()): Promise<Task> {
+export async function createIssue(host: string, workspaceId: string, board: BoardConfig, column: BoardColumn, draft: NewIssue): Promise<Task> {
   const target = createTarget(board, column);
   if (!target) throw new Error(`${column.name} takes no new issues`);
   const answer = await hostsApi.trackerCreate({ id: board.connection, place: placeOf(board), issue: { ...draft, status: target.status }, inCycle: board.finished === "sprint" });
+  // When the tracker answered: a sync that started before this may not have it yet.
+  const now = Date.now();
   const columns = syncedColumns(board, null);
   const [task] = categorize(columns, [{ ...taskFromBoardIssue(answer), mine: draft.assignee === "me" }]);
   recordActivity(task, "moonlet created it", now);
+  // Its column is moonlet's doing, not a move made outside it (X44).
+  movedByMoonlet.set(taskId(task), task.column);
   if (!boardShows(board, assigneeOf(board, useTasks.getState().assignee), columns, task)) {
     notShown(task);
     return task;

@@ -1325,7 +1325,11 @@ describe("a new issue from a column (X52)", () => {
     await refreshTasks("local", "personal", 500);
     answers["tracker_create linear:acme"] = () => issue("MOON-142", "In Review");
     creates.length = 0;
-    await createIssue("local", "personal", moon, review, draft, 2_000);
+    // Linear answers at 2 000.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(2_000);
+    await createIssue("local", "personal", moon, review, draft);
+    vi.useRealTimers();
     expect(creates).toEqual([{ id: "linear:acme", place: "MOON", issue: { ...draft, status: "In Review" }, inCycle: false }]);
     const data = () => useTasks.getState().data["local/personal"];
     expect([data().tasks.map((t) => t.key), data().boards?.moon.keys, useTasks.getState().selected]).toEqual([["MOON-142"], ["linear:acme MOON-142"], "linear:acme MOON-142"]);
@@ -1340,15 +1344,35 @@ describe("a new issue from a column (X52)", () => {
     useTasks.setState({ config: null });
   });
 
+  it("keeps the card through a sync that started while the tracker was creating it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1_000);
+      answers["git.origin_url"] = () => null;
+      answers["project.worktrees"] = () => [];
+      answers["tracker_tasks linear:acme"] = () => [];
+      useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
+      await refreshTasks("local", "personal", 500);
+      // Linear answers at 5 000; a sync that started at 3 000, while it worked, read it without the issue.
+      answers["tracker_create linear:acme"] = () => (vi.setSystemTime(5_000), issue("MOON-144", "In Review"));
+      await createIssue("local", "personal", moon, review, draft);
+      await refreshTasks("local", "personal", 3_000);
+      expect(useTasks.getState().data["local/personal"].tasks.map((t) => t.key)).toEqual(["MOON-144"]);
+    } finally {
+      vi.useRealTimers();
+      useTasks.setState({ config: null });
+    }
+  });
+
   it("says at once when the board can't show it, and keeps the form open on a refusal", async () => {
     useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
     answers["tracker_create linear:acme"] = () => issue("MOON-143", "In Review", ["Kim Park"]);
     // Assigned to someone else, on a board at Assignee: me.
-    await createIssue("local", "personal", moon, review, { ...draft, assignee: "kim" }, 2_000);
+    await createIssue("local", "personal", moon, review, { ...draft, assignee: "kim" });
     expect(useStore.getState().toasts.at(-1)?.text).toBe("Created MOON-143; this board doesn't show it");
     expect(useTasks.getState().selected).toBe(null);
     delete answers["tracker_create linear:acme"];
-    await expect(createIssue("local", "personal", moon, review, draft, 3_000)).rejects.toThrow("Linear: no such team");
+    await expect(createIssue("local", "personal", moon, review, draft)).rejects.toThrow("Linear: no such team");
     useTasks.setState({ config: null });
   });
 });

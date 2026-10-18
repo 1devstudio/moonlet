@@ -80,7 +80,8 @@ export interface Created {
  * A sync's tasks and boards with the issues moonlet created (X52). One the
  * sync has is done: the tracker's copy wins. One created after the sync
  * started is kept on its board, still `pending`. One a sync started after
- * creating lacks is `gone`: the board doesn't show it.
+ * creating lacks is `gone`: the board doesn't show it. One whose board the
+ * sync didn't read stays `pending`, untouched.
  */
 export function withCreated<B extends { keys: string[] }>(
   synced: { tasks: Task[]; boards?: Record<string, B> },
@@ -88,15 +89,14 @@ export function withCreated<B extends { keys: string[] }>(
   syncStartedAt: number,
 ): { tasks: Task[]; boards?: Record<string, B>; pending: Created[]; gone: Created[] } {
   const has = new Set(synced.tasks.map(taskId));
-  const pending = created.filter((c) => !has.has(taskId(c.task)) && c.at >= syncStartedAt);
-  const gone = created.filter((c) => !has.has(taskId(c.task)) && c.at < syncStartedAt);
-  if (!pending.length) return { ...synced, pending, gone };
+  const read = (c: Created) => !!synced.boards?.[c.boardId];
+  const kept = created.filter((c) => read(c) && !has.has(taskId(c.task)) && c.at >= syncStartedAt);
+  const gone = created.filter((c) => read(c) && !has.has(taskId(c.task)) && c.at < syncStartedAt);
+  const pending = [...kept, ...created.filter((c) => !read(c))];
+  if (!kept.length) return { ...synced, pending, gone };
   const boards = { ...synced.boards };
-  for (const c of pending) {
-    const b = boards[c.boardId];
-    if (b) boards[c.boardId] = { ...b, keys: [...b.keys, taskId(c.task)] };
-  }
-  return { tasks: [...synced.tasks, ...pending.map((c) => c.task)], boards, pending, gone };
+  for (const c of kept) boards[c.boardId] = { ...boards[c.boardId], keys: [...boards[c.boardId].keys, taskId(c.task)] };
+  return { tasks: [...synced.tasks, ...kept.map((c) => c.task)], boards, pending, gone };
 }
 
 /** Whether the board's tracker is one moonlet creates issues in (X52): Linear so far; the others follow. */
