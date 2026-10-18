@@ -582,10 +582,19 @@ impl Session {
     }
 }
 
-/// A Jira board's columns, filter and estimation (X50 Add a board, step 3).
+/// A Jira board's columns, filter (with its JQL) and story points field
+/// (X50 Add a board, steps 2 and 3).
 #[tauri::command]
 pub async fn tracker_board_setup(id: String, board: u64) -> Res<BoardSetup> {
-    Session::load(&id).await?.jira_setup(board).await
+    let s = Session::load(&id).await?;
+    let mut setup = s.jira_setup(board).await?;
+    let filter_id = safe_id(&setup.filter_id)?.to_string();
+    // A filter the user may not read leaves the board's columns to pick from.
+    setup.filter_jql = match s.jira_send(s.jira(reqwest::Method::GET, &format!("/rest/api/3/filter/{filter_id}"))?).await {
+        Ok(raw) => jira_board::parse_filter(&raw).ok(),
+        Err(_) => None,
+    };
+    Ok(setup)
 }
 
 /// What `tracker_board_tasks` searches with: a board's origin and filters.

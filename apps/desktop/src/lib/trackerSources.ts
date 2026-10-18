@@ -6,6 +6,8 @@ import { trackerName, trackerOf } from "./tasks";
 import type { Connection, Source } from "./tasksStore";
 
 export interface SourceEntry {
+  /** The board's id, for its settings (X50). */
+  id: string;
   tracker: string;
   name: string;
   /** Why its connection needs attention, if it does (X44). */
@@ -14,7 +16,7 @@ export interface SourceEntry {
 
 /** A workspace's boards, by tracker and name, with why a board's connection needs attention (X44, X50). */
 export function sourceList(wsKey: string, boards: BoardConfig[] | undefined, attention: Record<string, string>): SourceEntry[] {
-  return (boards ?? []).filter((b) => b.workspace === wsKey).map((b) => ({ tracker: trackerName(b.connection), name: b.name, attention: attention[b.connection] }));
+  return (boards ?? []).filter((b) => b.workspace === wsKey).map((b) => ({ id: b.id, tracker: trackerName(b.connection), name: b.name, attention: attention[b.connection] }));
 }
 
 /** The States dialog's mapping as saved: only states moved off their default column (X44). */
