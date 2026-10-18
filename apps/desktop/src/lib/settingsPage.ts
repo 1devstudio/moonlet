@@ -11,7 +11,10 @@ import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./
 /** The app-wide pages, in nav order. */
 export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
 
-export type SettingsRoute = { page: AppPage } | { page: "workspace"; host: string; id: string } | { page: "project"; host: string; id: string; focus?: "run" };
+export type SettingsRoute =
+  /** `focus` is a row's `data-setting`, scrolled to and highlighted (X50 Manage › Boards). */
+  | { page: AppPage; focus?: string }
+  | { page: "workspace"; host: string; id: string } | { page: "project"; host: string; id: string; focus?: "run" };
 
 export interface NavEntry {
   /** Unique within the nav. */
@@ -83,6 +86,9 @@ export function settingsNav(input: NavInput): NavGroup[] {
 }
 
 /** The key of the nav entry for `route`. */
+/** The row an app page route opens on (its `data-setting`), if it names one. */
+export const routeFocus = (route: SettingsRoute): string | undefined => (route.page !== "project" && "focus" in route ? route.focus : undefined);
+
 export function routeKey(route: SettingsRoute): string {
   if (route.page === "workspace") return `ws:${route.host}:${route.id}`;
   if (route.page === "project") return `project:${route.host}:${route.id}`;
