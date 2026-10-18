@@ -70,6 +70,8 @@ let opsTeam = false;
 const linearCreates: object[] = [];
 /** How many times the form asked for a team's lists (X52: each time it opens). */
 let linearOptionsAsked = 0;
+/** Whether Linear refuses the form's lists. */
+let linearOptionsRefused = false;
 
 /** Linear's GraphQL endpoint: an answer per query, and a record of every move. */
 function linear(query: string, variables: Record<string, unknown>): string {
@@ -77,7 +79,7 @@ function linear(query: string, variables: Record<string, unknown>): string {
   // A new issue from a column (X52): the form's lists, and the issue in the state asked for.
   if (query.includes("CreateOptions")) {
     linearOptionsAsked++;
-    return answer("linear-create-options.json");
+    return answer(linearOptionsRefused ? "linear-error-ratelimited.json" : "linear-create-options.json");
   }
   if (query.includes("issueCreate")) {
     const input = (variables as { input: { stateId: string; title: string } }).input;
@@ -252,20 +254,32 @@ describe("Linear tracker", () => {
     await expect($(grace)).not.toBeExisting();
   });
 
-  it("creates an issue from a column's +, in that column, its card selected with its detail open; Escape creates nothing, a refusal keeps what was typed, ⌘↵ creates (X52)", async () => {
+  it("creates an issue from a column's +, in that column, its card selected with its detail open; Escape creates nothing, lists Linear won't give are said, a refusal keeps what was typed, ⌘↵ creates (X52)", async () => {
     const todo = '//section[@aria-label="Todo"]';
     // The + shows on hover of its column.
     await $(todo).moveTo();
     await $(`${todo}//button[@title="New issue in Todo"]`).click();
     const dialog = '//div[@role="dialog"][@aria-label="New issue in Todo"]';
     await expect($(`${dialog}//button[normalize-space()="Create"]`)).toBeDisabled();
+    // The board's name under the title; Title takes the keys.
+    await expect($(`${dialog}//p[normalize-space()="Engineering"]`)).toBeDisplayed();
+    await expect($(`${dialog}//input`)).toBeFocused();
     // Escape closes it, creating nothing.
     await fill(`${dialog}//input`, "Not this one");
     await browser.keys("Escape");
     await $(dialog).waitForExist({ reverse: true, timeout: 5_000 });
     expect(linearCreates).toEqual([]);
     // A refusal shows Linear's message, and the form keeps what was typed. Opening it again reads the team's lists again.
-    const asked = linearOptionsAsked;
+    // The first time, Linear won't give the lists: the form says so.
+    linearOptionsRefused = true;
+    let asked = linearOptionsAsked;
+    await $(todo).moveTo();
+    await $(`${todo}//button[@title="New issue in Todo"]`).click();
+    await expect($(`${dialog}//p[@role="alert"][starts-with(normalize-space(), "moonlet could not read Linear's choices:")]`)).toBeDisplayed({ wait: 10_000 });
+    linearOptionsRefused = false;
+    await browser.keys("Escape");
+    await $(dialog).waitForExist({ reverse: true, timeout: 5_000 });
+    asked = linearOptionsAsked;
     await $(todo).moveTo();
     await $(`${todo}//button[@title="New issue in Todo"]`).click();
     await browser.waitUntil(() => linearOptionsAsked > asked, { timeout: 10_000, timeoutMsg: "the form did not read the team's lists again" });
@@ -275,7 +289,7 @@ describe("Linear tracker", () => {
     await expect($(`${dialog}//input`)).toHaveValue("Please refuse this");
     // ⌘↵ creates.
     await fill(`${dialog}//input`, "Retry failed webhook deliveries");
-    // WebKit's WebDriver sends no ⌘ with a key, so the keystroke is dispatched as the app gets it.
+    // WebKit's WebDriver sends Enter without ⌘ even with the field focused (tried), so the keystroke is dispatched as the app gets it.
     await browser.execute(() => {
       const input = document.querySelector<HTMLInputElement>('[role="dialog"][aria-label="New issue in Todo"] input')!;
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }));
