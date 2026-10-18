@@ -11,3 +11,4 @@ Each file is gh's real output, captured from the maintainer's own GitHub account
 | `gh-error-project-scope.json` | `updateProjectV2ItemFieldValue` with a token without `project` | Captured 2026-10-17, unchanged (a move to the item's own status, so nothing changed) |
 | `gh-project-move.json` | `updateProjectV2ItemFieldValue` with the `project` scope (X50 moves) | Captured 2026-10-17, unchanged but for the item id (a move to the item's own status, so nothing changed) |
 | `gh-auth-status.txt` | `gh auth status` with one account (X50: the scopes moves need) | Captured 2026-10-17; the login and the masked token replaced |
+| `gh-project-clear.json` | `clearProjectV2ItemFieldValue` with the `project` scope (X50 No Status) | Captured 2026-10-17 on an issue with no Status already, so nothing changed; the item id replaced |

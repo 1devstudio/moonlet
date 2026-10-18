@@ -109,6 +109,8 @@ describe("boardHeader (X50 header)", () => {
     const moon = b("moon", "local/w", { name: "Moonlet", connection: "linear:acme", origin: { kind: "linear_team", team: "MOON" }, finished: "sprint" });
     expect(boardHeader(moon, null, "acme", []).subtitle).toBe("Linear · acme · No active cycle · 0 tasks · 0 sessions");
     expect(boardHeader(b("web", "local/w", { connection: "github:github.com", origin: { kind: "github_repo", repo: "acme/web" } }), null, "", []).subtitle).toBe("GitHub · acme/web · 0 tasks · 0 sessions");
+    // A GitHub Project names itself where a site would go.
+    expect(boardHeader(b("site", "local/w", { connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } }), null, "", []).subtitle).toBe("GitHub · Project #2 of acme · 0 tasks · 0 sessions");
   });
 });
 

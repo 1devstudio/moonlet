@@ -5,15 +5,16 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use moonlet_proto::types::{GhOption, GhProject, GhProjectBoard, GhProjectItem};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::git::{parse_gh_tasks, run_raw};
 
 /// What a Project needs to be a board: its id, owner, number, title and the
 /// Status field's options.
-const PROJECT_FIELDS: &str = "id number title closed owner { ... on User { login } ... on Organization { login } } \
+const PROJECT_FIELDS: &str =
+    "id number title closed owner { ... on User { login } ... on Organization { login } } \
      field(name: \"Status\") { ... on ProjectV2SingleSelectField { id name options { id name } } }";
 
 /// The user's own Projects, and those of each owner in `owners`.
@@ -136,10 +137,21 @@ pub const MOVE_MUTATION: &str = "mutation($project: ID!, $item: ID!, $field: ID!
      updateProjectV2ItemFieldValue(input: { projectId: $project, itemId: $item, fieldId: $field, value: { singleSelectOptionId: $option } }) \
      { projectV2Item { id } } }";
 
-/// Whether a [`MOVE_MUTATION`] answer moved the item; a missing scope is named with its command.
+/// Clears an item's Status, to No Status (X50 moves).
+pub const CLEAR_MUTATION: &str = "mutation($project: ID!, $item: ID!, $field: ID!) { \
+     clearProjectV2ItemFieldValue(input: { projectId: $project, itemId: $item, fieldId: $field }) { projectV2Item { id } } }";
+
+/// Whether a [`MOVE_MUTATION`] or [`CLEAR_MUTATION`] answer moved the item; a
+/// missing scope is named with its command.
 pub fn parse_move(raw: &[u8]) -> Result<()> {
     let data = graphql_data(raw)?;
-    if data["updateProjectV2ItemFieldValue"]["projectV2Item"]["id"].is_null() {
+    let moved = [
+        "updateProjectV2ItemFieldValue",
+        "clearProjectV2ItemFieldValue",
+    ]
+    .iter()
+    .any(|m| !data[*m]["projectV2Item"]["id"].is_null());
+    if !moved {
         bail!("GitHub did not move the item");
     }
     Ok(())
@@ -252,7 +264,10 @@ pub fn graphql_args(query: &str, vars: &[(&str, Var)]) -> Vec<String> {
 /// Runs a GraphQL query through gh; its answer even when gh exits with an
 /// error, since GraphQL errors come in the answer.
 async fn graphql(query: &str, vars: &[(&str, Var)]) -> Result<Vec<u8>> {
-    let args = graphql_args(query, vars);
+    run_graphql(graphql_args(query, vars)).await
+}
+
+async fn run_graphql(args: Vec<String>) -> Result<Vec<u8>> {
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let out = run_raw("gh", Path::new("/"), &refs, None, Duration::from_secs(60)).await?;
     if out.status != 0 && !out.stdout.starts_with(b"{") {
@@ -339,15 +354,32 @@ pub async fn gh_project_items(owner: &str, number: u64, mine: bool) -> Result<Gh
     board.ok_or_else(|| anyhow::anyhow!("GitHub sent no Project"))
 }
 
-/// Sets a Project item's Status to `option` (X50 moves).
-pub async fn gh_project_move(project: &str, item: &str, field: &str, option: &str) -> Result<()> {
-    let vars = [
+/// Sets a Project item's Status to `option`, or with none clears it (X50 moves).
+pub async fn gh_project_move(
+    project: &str,
+    item: &str,
+    field: &str,
+    option: Option<&str>,
+) -> Result<()> {
+    parse_move(&run_graphql(move_args(project, item, field, option)).await?)
+}
+
+/// `gh api graphql`'s arguments for a move: [`MOVE_MUTATION`] to set the
+/// item's Status to `option`, [`CLEAR_MUTATION`] with none (No Status).
+pub fn move_args(project: &str, item: &str, field: &str, option: Option<&str>) -> Vec<String> {
+    let mut vars = vec![
         ("project", Var::Str(project.into())),
         ("item", Var::Str(item.into())),
         ("field", Var::Str(field.into())),
-        ("option", Var::Str(option.into())),
     ];
-    parse_move(&graphql(MOVE_MUTATION, &vars).await?)
+    let query = match option {
+        Some(o) => {
+            vars.push(("option", Var::Str(o.into())));
+            MOVE_MUTATION
+        }
+        None => CLEAR_MUTATION,
+    };
+    graphql_args(query, &vars)
 }
 
 /// gh's token scopes for github.com, from `gh auth status`.
@@ -399,18 +431,18 @@ mod tests {
         );
         // An owner's Projects come in the same answer, under their own key, and a Project seen twice counts once.
         let both = format!(
-                r#"{{"data":{{"viewer":{},"o0":{}}}}}"#,
-                serde_json::to_string(
-                    &serde_json::from_slice::<Value>(&fixture("gh-projects.json")).unwrap()["data"]
-                        ["viewer"]
-                )
-                .unwrap(),
-                serde_json::to_string(
-                    &serde_json::from_slice::<Value>(&fixture("gh-projects.json")).unwrap()["data"]
-                        ["viewer"]
-                )
-                .unwrap(),
-            );
+            r#"{{"data":{{"viewer":{},"o0":{}}}}}"#,
+            serde_json::to_string(
+                &serde_json::from_slice::<Value>(&fixture("gh-projects.json")).unwrap()["data"]
+                    ["viewer"]
+            )
+            .unwrap(),
+            serde_json::to_string(
+                &serde_json::from_slice::<Value>(&fixture("gh-projects.json")).unwrap()["data"]
+                    ["viewer"]
+            )
+            .unwrap(),
+        );
         assert_eq!(parse_projects(both.as_bytes()).unwrap().len(), 2);
     }
 
@@ -531,21 +563,55 @@ mod tests {
 
     #[test]
     fn an_owner_gh_may_not_read_leaves_the_others() {
-        let raw =
-            format!(
-                r#"{{"data":{{"viewer":{},"o0":null}},"errors":[{{"type":"FORBIDDEN","message":"Resource protected by organization SAML enforcement."}}]}}"#,
-                serde_json::to_string(
-                    &serde_json::from_slice::<Value>(&fixture("gh-projects.json")).unwrap()["data"]
-                        ["viewer"]
-                )
-                .unwrap()
-            );
+        let raw = format!(
+            r#"{{"data":{{"viewer":{},"o0":null}},"errors":[{{"type":"FORBIDDEN","message":"Resource protected by organization SAML enforcement."}}]}}"#,
+            serde_json::to_string(
+                &serde_json::from_slice::<Value>(&fixture("gh-projects.json")).unwrap()["data"]
+                    ["viewer"]
+            )
+            .unwrap()
+        );
         assert_eq!(parse_projects(raw.as_bytes()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_move_to_an_option_sets_the_status_and_one_to_no_option_clears_it() {
+        let set = move_args("PVT_1", "PVTI_10", "PVTSSF_1", Some("o2"));
+        assert_eq!(set[3], format!("query={MOVE_MUTATION}"));
+        assert_eq!(
+            set[4..],
+            [
+                "-f",
+                "project=PVT_1",
+                "-f",
+                "item=PVTI_10",
+                "-f",
+                "field=PVTSSF_1",
+                "-f",
+                "option=o2"
+            ]
+        );
+        let clear = move_args("PVT_1", "PVTI_10", "PVTSSF_1", None);
+        assert_eq!(clear[3], format!("query={CLEAR_MUTATION}"));
+        assert_eq!(
+            clear[4..],
+            [
+                "-f",
+                "project=PVT_1",
+                "-f",
+                "item=PVTI_10",
+                "-f",
+                "field=PVTSSF_1"
+            ]
+        );
     }
 
     #[test]
     fn a_move_sets_the_status_or_says_the_scope_it_needs() {
         assert!(parse_move(&fixture("gh-project-move.json")).is_ok());
+        // Clearing it, to No Status.
+        assert!(parse_move(&fixture("gh-project-clear.json")).is_ok());
+        assert!(parse_move(br#"{"data":{"clearProjectV2ItemFieldValue":null}}"#).is_err());
         assert_eq!(
             parse_move(&fixture("gh-error-project-scope.json"))
                 .unwrap_err()

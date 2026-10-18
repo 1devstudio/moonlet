@@ -567,12 +567,11 @@ pub async fn tracker_board_setup(id: String, board: u64) -> Res<BoardSetup> {
     Ok(setup)
 }
 
-/// A GitHub Project's columns from its Status options (X50): each option a
-/// column, its category by its name (X44's rule).
+/// A GitHub Project's columns (X50): No Status, then each Status option, its
+/// category by its name (X44's rule).
 #[tauri::command]
 pub fn github_project_columns(options: Vec<String>) -> Vec<BoardColumn> {
-    let states: Vec<(String, String)> = options.into_iter().map(|n| (n, String::new())).collect();
-    moonlet_trackers::states::board_columns(TrackerKind::Github, &states)
+    moonlet_trackers::states::project_columns(&options)
 }
 
 /// What `tracker_board_tasks` searches with: a board's origin and filters.

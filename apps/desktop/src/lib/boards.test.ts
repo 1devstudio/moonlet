@@ -179,6 +179,20 @@ describe("taskFromBoardIssue (X50 a Jira board's issues)", () => {
 });
 
 describe("matchColumns (X50 a board's columns on each sync)", () => {
+  it("puts a column new in the tracker where the tracker has it, before the next column the board already had", () => {
+    const saved: BoardColumn[] = [
+      { name: "Todo", statuses: ["Todo"], category: "todo" },
+      { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+    ];
+    const fresh: BoardColumn[] = [
+      { name: "No Status", statuses: [""], category: "todo" },
+      { name: "Todo", statuses: ["Todo"], category: "todo" },
+      { name: "Review", statuses: ["Review"], category: "in_review" },
+      { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+    ];
+    expect(matchColumns(saved, fresh).map((c) => c.name)).toEqual(["No Status", "Todo", "Review", "Done"]);
+  });
+
   it("keeps the user's order, folding and categories, takes Jira's names and statuses, adds new columns and drops removed ones", () => {
     const saved: BoardColumn[] = [
       { name: "To Do", statuses: ["10000"], category: "todo" },
@@ -423,6 +437,10 @@ describe("projectMove (X50 moving a GitHub Project item)", () => {
 
   it("sets the item's Status field to the option of that name", () => {
     expect(projectMove(project, "PVTI_10", "Done")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o3" });
+    // No Status, the column of no option, clears it; an option the team named "No Status" is an option like any other.
+    expect(projectMove(project, "PVTI_10", "")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: null });
+    const named = { ...project, options: [...project.options, { id: "o4", name: "No Status" }] };
+    expect(projectMove(named, "PVTI_10", "No Status")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o4" });
     // An option the Project no longer has, or a Project without a Status field: nothing to send.
     expect(projectMove(project, "PVTI_10", "QA")).toBe(null);
     expect(projectMove({ ...project, field: null }, "PVTI_10", "Done")).toBe(null);

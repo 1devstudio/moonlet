@@ -23,7 +23,7 @@ export interface ColumnView {
  * `not_planned` (how it was closed).
  */
 export function statusKey(task: Task): string {
-  // A GitHub Project's item is where its Status puts it (X50).
+  // A GitHub Project's item is where its Status puts it (X50); without one, `""` (No Status).
   if (task.github?.project) return task.github.project.status ?? "";
   if (task.github) return task.column === "open" ? "open" : task.column === "done" ? "completed" : "not_planned";
   return task.tracker?.statusId || task.tracker?.state || "";
