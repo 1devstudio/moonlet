@@ -28,7 +28,12 @@ vi.mock("./daemon", () => ({
       Promise.resolve([{ id: "", name: "No Status" }, ...options].map(({ id, name }) => ({ name, statuses: [id], category: name === "Done" ? "done" : name === "In Progress" ? "in_progress" : "todo", ...(name === "Done" && { show: "fold" }) }))),
     // A new issue from a column (X52): what was asked, and the tracker's answer.
     trackerCreateOptions: (id: string, place: string) => Promise.resolve(answers[`tracker_create_options ${id} ${place}`]?.({}) ?? { me: "u1", people: [], labels: [] }),
-    trackerCreate: (req: { id: string }) => (creates.push(req), answers[`tracker_create ${req.id}`] ? Promise.resolve(answers[`tracker_create ${req.id}`](req as object)) : Promise.reject(new Error("Linear: no such team"))),
+    // The command answers with the issue and what failed once it existed; a test may give either.
+    trackerCreate: (req: { id: string }) => {
+      creates.push(req);
+      const answer = answers[`tracker_create ${req.id}`]?.(req as object) as { issue?: object } | undefined;
+      return answer ? Promise.resolve(answer.issue ? answer : { issue: answer }) : Promise.reject(new Error("Linear: no such team"));
+    },
     trackerBoardTasks: (q: { id: string; origin: { team?: string; list?: string; query?: string }; mine: boolean; sync?: number }) => {
       boardQueries.push(q);
       const answer = answers[`tracker_tasks ${q.id}${q.mine ? "" : " all"}`] ?? answers[`tracker_tasks ${q.id}`];
@@ -1330,7 +1335,7 @@ describe("a new issue from a column (X52)", () => {
     vi.setSystemTime(2_000);
     await createIssue("local", "personal", moon, review, draft);
     vi.useRealTimers();
-    expect(creates).toEqual([{ id: "linear:acme", place: "MOON", issue: { ...draft, status: "In Review" }, inCycle: false }]);
+    expect(creates).toEqual([{ id: "linear:acme", place: "MOON", issue: { ...draft, status: "In Review" }, inCycle: false, statuses: ["In Review"], column: "In Review" }]);
     const data = () => useTasks.getState().data["local/personal"];
     expect([data().tasks.map((t) => t.key), data().boards?.moon.keys, useTasks.getState().selected]).toEqual([["MOON-142"], ["linear:acme MOON-142"], "linear:acme MOON-142"]);
     expect(activityOf({ connection: "linear:acme", key: "MOON-142" })[0].text).toBe("moonlet created it");
@@ -1372,7 +1377,7 @@ describe("a new issue from a column (X52)", () => {
     creates.length = 0;
     const typed = { ...draft, description: "Back off **exponentially**." };
     const task = await createIssue("local", "personal", list, list.columns[0], typed);
-    expect(creates).toEqual([{ id: "clickup:9015000001", place: "901500000002", issue: { ...typed, status: "in progress" }, inCycle: false }]);
+    expect(creates).toEqual([{ id: "clickup:9015000001", place: "901500000002", issue: { ...typed, status: "in progress" }, inCycle: false, statuses: ["in progress"], column: "in progress" }]);
     // The card shows the Markdown the user typed until the next sync reads ClickUp's.
     expect(task.description).toBe("Back off **exponentially**.");
     useTasks.setState({ config: null });
@@ -1430,6 +1435,23 @@ describe("a new issue from a column (X52)", () => {
     useTasks.setState((t) => ({ data: { ...t.data, "local/personal": { ...t.data["local/personal"], boards: {} } } }));
     await expect(createIssue("local", "personal", board, columns[1], { ...draft, place: "acme/web" })).rejects.toThrow("The board hasn't read its Project yet; refresh it first");
     expect(calls).toEqual([]);
+    useTasks.setState({ config: null });
+  });
+
+  it("creates a Jira issue in the picked project and the column, in the board's sprint, and says when Jira can't move it there", async () => {
+    const columns = [{ name: "To Do", statuses: ["10000"], category: "todo" as const }, { name: "In Progress", statuses: ["3", "5"], category: "in_progress" as const }];
+    const board = { id: "ex", name: "Example", connection: "jira:acme.atlassian.net", workspace: "local/personal", origin: { kind: "jql" as const, query: "project = EX" }, finished: "sprint" as const, columns };
+    const sprint = { id: 42, name: "Sprint 42", startMs: 0, endMs: 1 };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [board] }, attention: {}, assignee: {}, selected: null, data: { "local/personal": { tasks: [], worktrees: [], sources: [], repos: {}, sourceProjects: {}, syncedAt: 1, error: null, boards: { ex: { keys: [], sprint } } } } });
+    // Jira created it in To Do and has no transition to In Progress from there.
+    answers["tracker_create jira:acme.atlassian.net"] = () => ({ issue: { ...issue("EX-24", "To Do"), connection: "jira:acme.atlassian.net", statusId: "10000", tracker: { id: "10024", state: "To Do", source: "EX", statusId: "10000" } }, failed: " in To Do; Jira has no way to move it to In Progress from there" });
+    creates.length = 0;
+    const jira = { ...draft, place: "EX", issueType: "10001" };
+    const task = await createIssue("local", "personal", board, columns[1], jira);
+    expect(creates).toEqual([{ id: "jira:acme.atlassian.net", place: "EX", issue: { ...jira, status: "3" }, inCycle: true, statuses: ["3", "5"], column: "In Progress", sprint: 42 }]);
+    expect(useStore.getState().toasts.at(-1)?.text).toBe("Created EX-24 in To Do; Jira has no way to move it to In Progress from there");
+    // It shows where Jira put it.
+    expect(task.column).toBe("todo");
     useTasks.setState({ config: null });
   });
 
