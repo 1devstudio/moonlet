@@ -27,7 +27,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 - [x] The two buttons are titled with the shortcut as the user bound it (`Sessions ⌃⌘T` and `Tasks ⌃⌘T` by default). (`tasksView.test.ts` modeSwitch)
 - [x] The Tasks button counts the tasks that are out of sync. In Sessions mode too, the shown workspace's tasks load when it opens. (`tasksBoard.test.ts` outOfSync, `tasksStore.test.ts` ensureTasks)
 - [x] The Tasks button shows an accent dot and the label `Tasks, <n> out of sync` when tasks are out of sync, and in Sessions mode the shown workspace's tasks are asked for again every 5 minutes (X44 Sync limits how often). (`tasksView.test.ts` modeSwitch, `tasksStore.test.ts` the out-of-sync dot's poll)
-- [x] With no source in the current workspace, Tasks mode shows a "Connect a task tracker" panel in the centre: a GitHub Issues row (add a project with a GitHub origin to the workspace), Linear, Jira Cloud and ClickUp rows that open Settings › Task trackers, "Open Settings › Task trackers" and "Not now". (`tasks-mode.e2e.ts`)
+- [x] With no source in the current workspace, Tasks mode shows a "Connect a task tracker" panel in the centre: a GitHub Issues row (since X50, it opens Add a board on GitHub's repositories), Linear, Jira Cloud and ClickUp rows that open Settings › Task trackers, "Open Settings › Task trackers" and "Not now". (`tasks-mode.e2e.ts`)
 - [x] The mode is remembered per workspace across restarts. (`tasksStore.test.ts` remembers Tasks mode per workspace across restarts)
 
 ### Sidebar in Tasks mode
