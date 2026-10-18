@@ -106,6 +106,68 @@ fn inline(node: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_as_an_atlassian_document() {
+        let md = "Retry **failed** deliveries, see [the runbook](https://example.com/runbook).\nThen `requeue`.\n\n- back off\n- *log* each try\n\n```\nretry(3)\n```";
+        assert_eq!(
+            from_markdown(md),
+            json!({ "type": "doc", "version": 1, "content": [
+                { "type": "paragraph", "content": [
+                    { "type": "text", "text": "Retry " },
+                    { "type": "text", "text": "failed", "marks": [{ "type": "strong" }] },
+                    { "type": "text", "text": " deliveries, see " },
+                    { "type": "text", "text": "the runbook", "marks": [{ "type": "link", "attrs": { "href": "https://example.com/runbook" } }] },
+                    { "type": "text", "text": "." },
+                    { "type": "hardBreak" },
+                    { "type": "text", "text": "Then " },
+                    { "type": "text", "text": "requeue", "marks": [{ "type": "code" }] },
+                    { "type": "text", "text": "." }
+                ] },
+                { "type": "bulletList", "content": [
+                    { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "back off" }] }] },
+                    { "type": "listItem", "content": [{ "type": "paragraph", "content": [
+                        { "type": "text", "text": "log", "marks": [{ "type": "em" }] },
+                        { "type": "text", "text": " each try" }
+                    ] }] }
+                ] },
+                { "type": "codeBlock", "content": [{ "type": "text", "text": "retry(3)" }] }
+            ] })
+        );
+    }
+
+    #[test]
+    fn markdown_with_accents_emoji_and_stray_marks_stays_text() {
+        assert_eq!(
+            from_markdown("Café **déjà vu** 🚀 *lone"),
+            json!({ "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [
+                { "type": "text", "text": "Café " },
+                { "type": "text", "text": "déjà vu", "marks": [{ "type": "strong" }] },
+                { "type": "text", "text": " 🚀 *lone" }
+            ] }] })
+        );
+        // An unclosed fence keeps its lines as code.
+        assert_eq!(
+            from_markdown("```\nretry(3)")["content"][0]["type"],
+            "codeBlock"
+        );
+    }
+
+    #[test]
+    fn underscores_and_stars_inside_words_stay_text_and_nothing_empty_is_sent() {
+        assert_eq!(
+            from_markdown("snake_case_name and 2 * 3 * 4"),
+            json!({ "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "snake_case_name and 2 * 3 * 4" }] }] })
+        );
+        // An empty fence sends no code block; a link with no text shows its address.
+        assert_eq!(
+            from_markdown("```\n```\n\n[](https://example.com)"),
+            json!({ "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [
+                { "type": "text", "text": "https://example.com", "marks": [{ "type": "link", "attrs": { "href": "https://example.com" } }] }
+            ] }] })
+        );
+    }
+
     use serde_json::json;
 
     #[test]
@@ -170,7 +232,10 @@ pub fn from_markdown(markdown: &str) -> Value {
                 i += 1;
             }
             i += 1;
-            content.push(json!({ "type": "codeBlock", "content": [{ "type": "text", "text": code.join("\n") }] }));
+            // An empty fence sends nothing: ADF's text nodes can't be empty.
+            if !code.is_empty() {
+                content.push(json!({ "type": "codeBlock", "content": [{ "type": "text", "text": code.join("\n") }] }));
+            }
         } else if bullet(line).is_some() {
             let mut items = Vec::new();
             while let Some(item) = lines.get(i).and_then(|l| bullet(l)) {
@@ -207,18 +272,40 @@ fn marked_text(line: &str) -> Vec<Value> {
     let mut out = Vec::new();
     let mut plain = String::new();
     let mut rest = line;
+    // The character before `rest`, for marks that need a word boundary.
+    let mut prev: Option<char> = None;
     let flush = |plain: &mut String, out: &mut Vec<Value>| {
         if !plain.is_empty() {
             out.push(json!({ "type": "text", "text": std::mem::take(plain) }));
         }
     };
+    let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
     while let Some(c) = rest.chars().next() {
-        let marked = |open: &str, close: &str, mark: Value| -> Option<(Value, usize)> {
-            let body = rest.strip_prefix(open)?;
-            let end = body.find(close).filter(|&e| e > 0)?;
+        // Emphasis opens before a non-space and closes after one; `_` and a lone
+        // `*` also need a word boundary, so `snake_case` and `2 * 3` stay text.
+        let marked =
+            |open: &str, close: &str, bounded: bool, mark: Value| -> Option<(Value, usize)> {
+                let body = rest.strip_prefix(open)?;
+                if bounded && word(prev) || body.chars().next().is_none_or(char::is_whitespace) {
+                    return None;
+                }
+                let end = body.find(close).filter(|&e| e > 0)?;
+                let text = &body[..end];
+                let after = body[end + close.len()..].chars().next();
+                if text.chars().last().is_some_and(char::is_whitespace) || bounded && word(after) {
+                    return None;
+                }
+                Some((
+                    json!({ "type": "text", "text": text, "marks": [mark] }),
+                    open.len() + end + close.len(),
+                ))
+            };
+        let code = || -> Option<(Value, usize)> {
+            let body = rest.strip_prefix('`')?;
+            let end = body.find('`').filter(|&e| e > 0)?;
             Some((
-                json!({ "type": "text", "text": &body[..end], "marks": [mark] }),
-                open.len() + end + close.len(),
+                json!({ "type": "text", "text": &body[..end], "marks": [{ "type": "code" }] }),
+                end + 2,
             ))
         };
         let link = || -> Option<(Value, usize)> {
@@ -226,14 +313,20 @@ fn marked_text(line: &str) -> Vec<Value> {
             let text_end = body.find("](")?;
             let href_end = body[text_end + 2..].find(')')?;
             let href = &body[text_end + 2..text_end + 2 + href_end];
-            let node = json!({ "type": "text", "text": &body[..text_end], "marks": [{ "type": "link", "attrs": { "href": href } }] });
+            // A link with no text shows its address: ADF's text can't be empty.
+            let text = if text_end == 0 {
+                href
+            } else {
+                &body[..text_end]
+            };
+            let node = json!({ "type": "text", "text": text, "marks": [{ "type": "link", "attrs": { "href": href } }] });
             Some((node, 1 + text_end + 2 + href_end + 1))
         };
         let found = match c {
-            '*' if rest.starts_with("**") => marked("**", "**", json!({ "type": "strong" })),
-            '*' => marked("*", "*", json!({ "type": "em" })),
-            '_' => marked("_", "_", json!({ "type": "em" })),
-            '`' => marked("`", "`", json!({ "type": "code" })),
+            '*' if rest.starts_with("**") => marked("**", "**", false, json!({ "type": "strong" })),
+            '*' => marked("*", "*", true, json!({ "type": "em" })),
+            '_' => marked("_", "_", true, json!({ "type": "em" })),
+            '`' => code(),
             '[' => link(),
             _ => None,
         };
@@ -241,10 +334,12 @@ fn marked_text(line: &str) -> Vec<Value> {
             Some((node, len)) => {
                 flush(&mut plain, &mut out);
                 out.push(node);
+                prev = rest[..len].chars().last();
                 rest = &rest[len..];
             }
             None => {
                 plain.push(c);
+                prev = Some(c);
                 rest = &rest[c.len_utf8()..];
             }
         }

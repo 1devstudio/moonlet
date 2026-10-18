@@ -15,7 +15,7 @@ import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, trackerOf } from "./tasks";
 import { parseTrackerLink } from "./trackerSources";
-import { boardShows, type Created, createTarget, githubRepoOf, type NewIssue, withCreated } from "./newIssue";
+import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
@@ -552,7 +552,7 @@ async function createInTracker(host: string, workspaceId: string, board: BoardCo
   const sprint = board.finished === "sprint" ? useTasks.getState().data[wsKey(host, workspaceId)]?.boards?.[board.id]?.sprint?.id : undefined;
   const answer = await hostsApi.trackerCreate({
     id: board.connection,
-    place: placeOf(board, draft),
+    place: placeOf(board, draft.place),
     issue: { ...draft, status },
     inCycle: board.finished === "sprint",
     statuses: column.statuses,
@@ -587,12 +587,12 @@ async function addToProject(host: string, meta: ProjectMeta, node: string, task:
 }
 
 /** Where a new issue goes in the tracker (X52): a Linear team, a ClickUp list, or the Jira project picked. */
-function placeOf(board: BoardConfig, draft?: NewIssue): string {
+function placeOf(board: BoardConfig, place?: string): string {
   if (board.origin.kind === "linear_team") return board.origin.team;
   if (board.origin.kind === "clickup_list") return board.origin.list;
-  if (board.origin.kind === "jira_board" || board.origin.kind === "jql") {
-    if (!draft?.place) throw new Error("Pick the project the issue goes in");
-    return draft.place;
+  if (isJira(board)) {
+    if (!place) throw new Error("Pick the project the issue goes in");
+    return place;
   }
   throw new Error("moonlet can't create issues on this board yet");
 }
@@ -603,7 +603,7 @@ export async function createOptions(
   board: BoardConfig,
   place?: string,
   issueType?: string,
-): Promise<{ me: string; people: { id: string; name: string }[]; labels: { id: string; name: string }[]; canSet: boolean; issueTypes?: { id: string; name: string }[]; missing?: string[] }> {
+): Promise<{ me: string; people: { id: string; name: string }[]; labels: { id: string; name: string }[]; canSet: boolean; issueTypes?: { id: string; name: string }[]; missing?: string[]; fields?: string[] }> {
   if (board.origin.kind === "github_repo" || board.origin.kind === "github_project") {
     // GitHub through gh on the workspace's host; people and labels by login and name. A Project's, of the repository picked.
     const repo = githubRepoOf(board, place);
@@ -613,8 +613,8 @@ export async function createOptions(
     return { me: o.me, people: named(o.people), labels: named(o.labels), canSet: o.can_set };
   }
   // A Jira project's lists come with its issue types and what the type's create screen requires.
-  if ((board.origin.kind === "jira_board" || board.origin.kind === "jql") && !place) return { me: "", people: [], labels: [], canSet: true };
-  return { ...(await hostsApi.trackerCreateOptions(board.connection, placeOf(board, { place } as NewIssue), issueType)), canSet: true };
+  if (isJira(board) && !place) return { me: "", people: [], labels: [], canSet: true };
+  return { ...(await hostsApi.trackerCreateOptions(board.connection, placeOf(board, place), issueType)), canSet: true };
 }
 
 /**
