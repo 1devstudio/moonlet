@@ -1,6 +1,6 @@
 # X52 — New issue from a column
 
-- **Status:** draft
+- **Status:** approved (2026-10-18)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** X50 (boards), X44 (task trackers), X45 (Tasks mode), X46 (tasks in sessions)
 - **Related ADRs:** [0010](../adr/0010-task-trackers-in-the-app.md)
