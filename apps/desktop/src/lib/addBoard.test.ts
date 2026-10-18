@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { canSplit, groupsStatuses, groupStatus, splitStatus, pausedPreview, alreadyAdded, byGroup, canContinue, cardChoices, projectChoice, projectOwners, scopeNeeded, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { repoChoices, canSplit, groupsStatuses, groupStatus, splitStatus, pausedPreview, alreadyAdded, byGroup, canContinue, cardChoices, projectChoice, projectOwners, scopeNeeded, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -27,6 +27,9 @@ describe("Add a board, step 1 (X50)", () => {
     expect(alreadyAdded([existing], "local/acme", JIRA, { kind: "jira_board", board: 10 })).toBe(true);
     expect(alreadyAdded([existing], "local/other", JIRA, { kind: "jira_board", board: 10 })).toBe(false);
     expect(alreadyAdded([existing], "local/acme", JIRA, { kind: "jira_board", board: 41 })).toBe(false);
+    // GitHub names a repository whatever its case.
+    const repo: BoardConfig = { id: "github:github.com/acme/storefront@local/acme", name: "acme/storefront", connection: "github:github.com", workspace: "local/acme", origin: { kind: "github_repo", repo: "Acme/Storefront" } };
+    expect(alreadyAdded([repo], "local/acme", "github:github.com", { kind: "github_repo", repo: "acme/storefront" })).toBe(true);
   });
 
   it("waits for a board, a non-empty query, columns and a name", () => {
@@ -345,5 +348,16 @@ describe("grouping a JQL board's statuses (X50 step 3)", () => {
   it("groups only a JQL board's statuses: a tracker's own columns come back on each sync as the tracker has them", () => {
     expect(groupsStatuses({ kind: "jql", query: "project = EX" })).toBe(true);
     expect([groupsStatuses({ kind: "jira_board", board: 10 }), groupsStatuses({ kind: "linear_team", team: "MOON" }), groupsStatuses(null)]).toEqual([false, false, false]);
+  });
+});
+
+describe("a GitHub repository's board (X50 step 1)", () => {
+  it("lists the workspace's GitHub repositories, each once, leaving out projects with none", () => {
+    // Projects by id, each with its origin's owner/repo, or none.
+    expect(repoChoices({ web: "acme/storefront", api: "acme/api", docs: null, web2: "Acme/Storefront" })).toEqual([
+      { key: "acme/storefront", name: "acme/storefront", origin: { kind: "github_repo", repo: "acme/storefront" } },
+      { key: "acme/api", name: "acme/api", origin: { kind: "github_repo", repo: "acme/api" } },
+    ]);
+    expect(repoChoices(undefined)).toEqual([]);
   });
 });

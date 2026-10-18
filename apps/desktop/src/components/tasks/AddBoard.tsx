@@ -8,6 +8,7 @@ import {
   byGroup,
   canContinue,
   canSplit,
+  repoChoices,
   cardChoices,
   groupsStatuses,
   groupStatus,
@@ -88,7 +89,9 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const config = useTasks((t) => trackersConfig(t));
   const workspaces = useStore((s) => s.workspaces);
   const data = useTasks((t) => t.data[wsKey(host, workspace)]);
-  const repos = [...new Set(Object.values(data?.repos ?? {}).filter((r): r is string => !!r))];
+  // The workspace's GitHub repositories, as step 1's rows and as `owner/repo`.
+  const repoRows = repoChoices(data?.repos);
+  const repos = repoRows.map((r) => r.key);
   const editing = config.boards?.find((b) => b.id === boardId);
   const [draft, setDraft] = useState<Draft>(() => (editing ? draftFromBoard(editing) : { ...newDraft(wsKey(host, workspace)), connection: connection ?? null }));
   // The links of the workspace the board goes to, which step 4 can change.
@@ -133,7 +136,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     setChoicesError(null);
     if (!draft.connection) return;
     if (draft.connection === GITHUB && build === "repo") {
-      setChoices(repos.map((repo) => ({ key: repo, name: repo, origin: { kind: "github_repo", repo } })));
+      setChoices(repoRows);
       return;
     }
     let stale = false;

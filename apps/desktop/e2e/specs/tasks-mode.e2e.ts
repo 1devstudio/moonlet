@@ -181,7 +181,7 @@ describe("Tasks mode", () => {
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="acme/storefront"]]')).toBeDisplayed({ wait: 10_000 });
   });
 
-  it("adds a board of a GitHub Project, after gh gets its read:project scope, with No Status and the Project's Status as columns and its estimate on cards, and moves an item by its Status (X50)", async () => {
+  it("adds a board of a GitHub Project, after gh gets its read:project scope and next to the workspace's repositories, with No Status and the Project's Status as columns and its estimate on cards, and moves an item by its Status (X50)", async () => {
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
@@ -194,6 +194,10 @@ describe("Tasks mode", () => {
       rmSync(ghNoScope, { force: true });
     }
     await $(`${dialog}//button[normalize-space()="Check again"]`).click();
+    // A repository's issues lists the workspace's repositories.
+    await $(`${dialog}//button[.//span[normalize-space()="A repository's issues"]]`).click();
+    await expect($(`${dialog}//button[@role="radio"][.//span[normalize-space()="acme/storefront"]]`)).toBeDisplayed({ wait: 10_000 });
+    await $(`${dialog}//button[.//span[normalize-space()="A GitHub Project"]]`).click();
     const website = `${dialog}//button[@role="radio"][.//span[normalize-space()="Website"]]`;
     await expect($(`${website}//span[normalize-space()="3 columns"]`)).toBeDisplayed({ wait: 15_000 });
     await $(website).click();
