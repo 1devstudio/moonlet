@@ -84,11 +84,15 @@ pub fn board_columns(
 pub const NO_STATUS: &str = "No Status";
 
 /// A GitHub Project's columns (X50): No Status first, as GitHub shows it,
-/// then the Status options, each by its name.
-pub fn project_columns(options: &[String]) -> Vec<crate::config::BoardColumn> {
+/// then the Status options, `(id, name)`: each named after its option, its
+/// category by that name, and holding the option's id, so renaming an
+/// option in GitHub keeps its column.
+pub fn project_columns(options: &[(String, String)]) -> Vec<crate::config::BoardColumn> {
     use crate::config::{BoardColumn, Category, Show};
-    let states: Vec<(String, String)> =
-        options.iter().map(|n| (n.clone(), String::new())).collect();
+    let states: Vec<(String, String)> = options
+        .iter()
+        .map(|(_, name)| (name.clone(), String::new()))
+        .collect();
     let mut out = vec![BoardColumn {
         name: NO_STATUS.into(),
         statuses: vec![String::new()],
@@ -96,7 +100,15 @@ pub fn project_columns(options: &[String]) -> Vec<crate::config::BoardColumn> {
         show: Show::Show,
         wip: None,
     }];
-    out.extend(board_columns(TrackerKind::Github, &states));
+    out.extend(
+        board_columns(TrackerKind::Github, &states)
+            .into_iter()
+            .zip(options)
+            .map(|(c, (id, _))| BoardColumn {
+                statuses: vec![id.clone()],
+                ..c
+            }),
+    );
     out
 }
 
@@ -324,7 +336,15 @@ mod tests {
 
     #[test]
     fn a_github_projects_columns_start_with_no_status() {
-        let options: Vec<String> = ["Todo", "In Progress", "Done"].map(String::from).to_vec();
+        // The Status options as gh gives them: `(id, name)`.
+        let options: Vec<(String, String)> = [
+            ("f75a_e2e0003", "Todo"),
+            ("47fc_e2e0004", "In Progress"),
+            ("9823_e2e0005", "Done"),
+        ]
+        .map(|(id, name)| (id.to_string(), name.to_string()))
+        .to_vec();
+        // Each column holds its option's id, so a renamed option stays the same column.
         assert_eq!(
             project_columns(&options)
                 .iter()
@@ -332,14 +352,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 ("No Status", vec![String::new()], Category::Todo, Show::Show),
-                ("Todo", vec!["Todo".to_string()], Category::Todo, Show::Show),
+                (
+                    "Todo",
+                    vec!["f75a_e2e0003".to_string()],
+                    Category::Todo,
+                    Show::Show
+                ),
                 (
                     "In Progress",
-                    vec!["In Progress".to_string()],
+                    vec!["47fc_e2e0004".to_string()],
                     Category::InProgress,
                     Show::Show
                 ),
-                ("Done", vec!["Done".to_string()], Category::Done, Show::Fold),
+                (
+                    "Done",
+                    vec!["9823_e2e0005".to_string()],
+                    Category::Done,
+                    Show::Fold
+                ),
             ]
         );
     }
