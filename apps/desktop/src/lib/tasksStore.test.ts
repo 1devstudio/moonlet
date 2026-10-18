@@ -5,7 +5,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
-import { createIssue, linkTask } from "./tasksStore";
+import { createIssue, setColumnShow } from "./tasksStore";
 import { activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -1499,11 +1499,14 @@ describe("a new issue from a column (X52)", () => {
 });
 
 describe("errors as the user reads them", () => {
-  it("shows a refusal's own message, not [object Object], when the daemon or a command refuses with a plain object", async () => {
-    answers["session.update"] = () => {
-      throw { message: "No session s9" };
-    };
-    await linkTask("local", "s9", null);
-    expect(useStore.getState().toasts.at(-1)?.text).toBe("No session s9");
+  it("shows a Tauri command's refusal by its message, not [object Object]", async () => {
+    // Tauri commands reject with a plain { message } object, here trackers.toml's save.
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [{ id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } }] } });
+    // Earlier tests' saves land first.
+    await saveTrackersConfig((c) => c).catch(() => {});
+    saveFails.push({ message: "Could not write trackers.toml: permission denied" });
+    setColumnShow("moon", "Todo", "fold");
+    await vi.waitFor(() => expect(useStore.getState().toasts.at(-1)?.text).toBe("Could not write trackers.toml: permission denied"));
+    useTasks.setState({ config: null });
   });
 });

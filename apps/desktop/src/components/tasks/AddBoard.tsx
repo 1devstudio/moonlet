@@ -79,7 +79,6 @@ interface Choice {
 
 const CATEGORY_CHOICES = Object.entries(CATEGORY_LABEL) as [BoardColumn["category"], string][];
 
-const message = errorMessage;
 
 /** Add a board, starting on `connection` when given, or with `boardId` that board's settings (X50). */
 export function AddBoardDialog({ host, workspace, boardId, connection }: { host: string; workspace: string; boardId?: string; connection?: string }) {
@@ -152,7 +151,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                 ...(s.group && { group: s.group }), origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
     ask.then(
       (c) => !stale && setChoices(c),
-      (e) => !stale && setChoicesError(message(e)),
+      (e) => !stale && setChoicesError(errorMessage(e)),
     );
     return () => {
       stale = true;
@@ -206,7 +205,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   useEffect(() => {
     setPreview(null);
     if (!previewing) return;
-    paused.change(() => previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).catch((e) => previewFailed(message(e))));
+    paused.change(() => previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).catch((e) => previewFailed(errorMessage(e))));
     return paused.stop;
   }, [previewKey, previewing]);
 
