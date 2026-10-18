@@ -117,6 +117,19 @@ describe("Add a board, step 4 cards (X50)", () => {
     expect(cardChoices("linear").map(([, label]) => label)).toEqual(["Estimate", "Assignee", "Parent", "Due date"]);
     expect(cardChoices("github").map(([, label]) => label)).toEqual(["Assignee"]);
   });
+
+  it("offers a GitHub Project's number field as the estimate, under its own name", () => {
+    expect(cardChoices("github", "Hours")).toEqual([
+      ["points", "Hours"],
+      ["assignee", "Assignee"],
+    ]);
+    expect(cardChoices("github", null)).toEqual([["assignee", "Assignee"]]);
+    // A board that shows it keeps the box while the field's name is not known, or once the field is gone, so it can be unticked.
+    expect(cardChoices("github", null, ["points", "assignee"])).toEqual([
+      ["points", "Estimate"],
+      ["assignee", "Assignee"],
+    ]);
+  });
 });
 
 describe("Saving a board (X50)", () => {

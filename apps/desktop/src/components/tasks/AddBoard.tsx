@@ -37,8 +37,8 @@ import { type BoardColumn, CATEGORY_BAR, CATEGORY_LABEL, GITHUB_REPO_COLUMNS, by
 import { hostsApi, rpc } from "../../lib/daemon";
 import { type GhProject, M } from "../../lib/protocol";
 import { errorToast, useStore } from "../../lib/store";
-import { type Task, trackerName, trackerOf } from "../../lib/tasks";
-import { GITHUB, openBoard, previewBoard, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
+import { trackerName, trackerOf } from "../../lib/tasks";
+import { type BoardPreview, GITHUB, openBoard, previewBoard, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { BoardMark, Button, cx, IconButton, inputCls } from "../ui";
 import { TaskGlyph } from "./TasksMode";
@@ -104,7 +104,9 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const [suggested, setSuggested] = useState<Partial<Record<string, BoardColumn["category"]>>>({});
   // The row being dragged in step 3.
   const dragged = useRef<number | null>(null);
-  const [preview, setPreview] = useState<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null } | null>(null);
+  const [preview, setPreview] = useState<BoardPreview | null>(null);
+  // A Project's number field as last previewed, so its box keeps its name while the preview reloads.
+  const [numberField, setNumberField] = useState<string | null>(null);
   const tracker = draft.connection ? (trackerOf(draft.connection) ?? "github") : null;
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   // The furthest step reached: the steps before it are done and stay clickable after Back.
@@ -191,13 +193,14 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     setPreview(null);
     if (!previewing) return;
     const t = setTimeout(() => {
-      const answer = (p: { tasks: Task[]; columns: BoardColumn[] | null; error: string | null }) => {
+      const answer = (p: BoardPreview) => {
         if (latest.current !== previewKey) return;
         setPreview(p);
+        if (!p.error) setNumberField(p.numberField);
         // A JQL board's, a Linear team's and a ClickUp list's columns come with their issues.
         if (p.columns) setDraft((d) => (d.columns.length ? d : { ...d, columns: p.columns ?? [] }));
       };
-      previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).then(answer, (e) => answer({ tasks: [], columns: null, error: message(e) }));
+      previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).then(answer, (e) => answer({ tasks: [], columns: null, error: message(e), numberField: null }));
     }, 500);
     return () => clearTimeout(t);
   }, [previewKey, previewing]);
@@ -693,7 +696,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                 <section aria-label="Cards show">
                   <div className="mb-1.5 ui-text-12 text-muted">Cards show</div>
                   <div className="flex flex-wrap gap-4">
-                    {cardChoices(tracker ?? "github").map(([id, label]) => (
+                    {cardChoices(tracker ?? "github", numberField, draft.cards).map(([id, label]) => (
                       <label key={id} className="flex items-center gap-1.5 ui-text-12.5 text-fg">
                         <input type="checkbox" checked={draft.cards.includes(id)} onChange={(e) => set({ cards: e.target.checked ? [...draft.cards, id] : draft.cards.filter((x) => x !== id) })} />
                         {label}

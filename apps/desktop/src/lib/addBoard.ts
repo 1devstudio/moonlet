@@ -63,8 +63,15 @@ const CARD_CHOICES: Record<TrackerKind, [CardField, string][]> = {
   ],
 };
 
-/** "Cards show": the fields `tracker` has, with their names. */
-export const cardChoices = (tracker: TrackerKind) => CARD_CHOICES[tracker];
+/**
+ * "Cards show": the fields `tracker` has, with their names. A GitHub
+ * Project's first number field (`numberField`) is the estimate, by its name;
+ * a board whose `cards` show it keeps the box while the name is not known.
+ */
+export function cardChoices(tracker: TrackerKind, numberField?: string | null, cards: CardField[] = []): [CardField, string][] {
+  const estimate = numberField ?? (cards.includes("points") ? "Estimate" : null);
+  return tracker === "github" && estimate ? [["points", estimate], ...CARD_CHOICES.github] : CARD_CHOICES[tracker];
+}
 
 /** Whether a Jira board of type `kind` has sprints: Scrum and team-managed (`simple`) ones do. */
 export const jiraSprints = (kind: string) => kind === "scrum" || kind === "simple";
