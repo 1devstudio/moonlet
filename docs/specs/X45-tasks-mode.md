@@ -4,6 +4,7 @@
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** X44 (task trackers), X46 (tasks in sessions), X2 (pull requests), X32 (workspaces), X42 (subagents), A1 (agent state)
 - **Related ADRs:** [0010](../adr/0010-task-trackers-in-the-app.md)
+- **Superseded in part by:** [X50](X50-boards.md) — the board shows a tracker's own columns; the sidebar lists boards instead of Views and Trackers.
 
 ## Summary
 
