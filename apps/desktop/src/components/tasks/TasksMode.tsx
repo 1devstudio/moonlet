@@ -47,7 +47,7 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch, syncedLabel } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
@@ -183,7 +183,7 @@ export function TasksSidebar() {
         <div className="flex items-center gap-2 px-4 py-2 ui-text-12 text-faint">
           <RotateCw size={12} className="shrink-0" />
           <span className={cx("min-w-0 flex-1 truncate", data.error && "text-error")} title={data.error ?? undefined}>
-            {data.error ? `Sync failed · ${data.error}` : syncedLabel(data.sources.some((x) => x.includes(":")) ? "Tasks" : "GitHub", data.syncedAt, now)}
+            {data.error ? `Sync failed · ${data.error}` : syncedLabel(footerTracker(shown?.board ?? null), data.syncedAt, now)}
           </span>
           <span aria-hidden="true" className={cx("h-1.5 w-1.5 rounded-full", data.error ? "bg-error" : "bg-done")} />
         </div>
