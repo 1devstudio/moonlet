@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardColumn, BoardConfig } from "./boards";
-import { boardShows, createsIn, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
+import { boardShows, createsIn, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
 import type { Task } from "./tasks";
 
 const linear: BoardConfig = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } };
@@ -79,17 +79,24 @@ describe("the column + (X52)", () => {
     expect(withCreated(synced, other, 3_000)).toEqual({ ...synced, pending: other, gone: [] });
   });
 
-  it("shows on the boards of the trackers moonlet creates issues in: Linear, ClickUp and GitHub repositories so far", () => {
+  it("shows on the boards of the trackers moonlet creates issues in: all but Jira so far", () => {
     expect(createsIn(linear)).toBe(true);
     expect(createsIn({ ...linear, connection: "clickup:9015000001", origin: { kind: "clickup_list", list: "901500000002" } })).toBe(true);
     expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_repo", repo: "acme/web" } })).toBe(true);
+    expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } })).toBe(true);
     expect(createsIn({ ...linear, connection: "jira:acme.atlassian.net", origin: { kind: "jira_board", board: 10 } })).toBe(false);
-    expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } })).toBe(false);
   });
 
   it("offers and sends no assignee or labels where they can't be set, as GitHub would drop them", () => {
     const draft = { ...newIssueDraft({ ...linear, labels: ["frontend"] }), title: "Hosts" };
     expect(withAccess(draft, true)).toEqual({ draft, assignment: true });
     expect(withAccess(draft, false)).toEqual({ draft: { ...draft, assignee: "none", labels: [] }, assignment: false });
+  });
+
+  it("asks a GitHub Project's new issue for its repository: the workspace's first, then those of the Project's items", () => {
+    const project: BoardConfig = { ...linear, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } };
+    expect([needsPlace(project), needsPlace(linear)]).toEqual([true, false]);
+    const item = (repo: string): Task => ({ connection: "github:github.com", key: `${repo}#1`, title: "", url: "", column: "open", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, github: { repo, number: 1, closingPrs: [], project: { id: "PVT_1", item: "PVTI_1", status: null } } });
+    expect(projectRepos(["acme/storefront"], [item("acme/web"), item("Acme/Storefront"), item("acme/api"), item("acme/web")])).toEqual(["acme/storefront", "acme/web", "acme/api"]);
   });
 });

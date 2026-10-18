@@ -183,6 +183,20 @@ pub fn parse_move(raw: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Adds an issue (its node id) to a Project (X52): needs gh's `project` scope.
+pub const ADD_MUTATION: &str = "mutation($project: ID!, $content: ID!) { \
+     addProjectV2ItemById(input: { projectId: $project, contentId: $content }) { item { id } } }";
+
+/// The new item's id from an [`ADD_MUTATION`] answer; a missing scope is
+/// named with its command.
+pub fn parse_added(raw: &[u8]) -> Result<String> {
+    let data = graphql_data(raw)?;
+    match data["addProjectV2ItemById"]["item"]["id"].as_str() {
+        Some(id) => Ok(id.into()),
+        None => bail!("GitHub did not add the issue to the Project"),
+    }
+}
+
 /// The token scopes of gh's active github.com account, from `gh auth status`:
 /// the account marked active, or with older gh, which marks none, the first.
 /// `None` when no account is signed in.
@@ -406,6 +420,15 @@ pub fn move_args(project: &str, item: &str, field: &str, option: Option<&str>) -
         None => CLEAR_MUTATION,
     };
     graphql_args(query, &vars)
+}
+
+/// Adds the issue `content` (a node id) to `project`, answering with its item (X52).
+pub async fn gh_project_add(project: &str, content: &str) -> Result<String> {
+    let vars = [
+        ("project", Var::Str(project.into())),
+        ("content", Var::Str(content.into())),
+    ];
+    parse_added(&graphql(ADD_MUTATION, &vars).await?)
 }
 
 /// gh's token scopes for github.com, from `gh auth status`.
@@ -646,6 +669,26 @@ mod tests {
                 "-f",
                 "field=PVTSSF_1"
             ]
+        );
+    }
+
+    #[test]
+    fn a_new_issue_added_to_the_project_answers_with_its_item() {
+        assert_eq!(
+            parse_added(&fixture("gh-project-add.json")).unwrap(),
+            "PVTI_e2e0050"
+        );
+        assert_eq!(
+            parse_added(&fixture("gh-error-project-scope.json"))
+                .unwrap_err()
+                .to_string(),
+            "Moving a Project's items needs gh's project scope. Run gh auth refresh -s project."
+        );
+        assert_eq!(
+            parse_added(br#"{"data":{"addProjectV2ItemById":null}}"#)
+                .unwrap_err()
+                .to_string(),
+            "GitHub did not add the issue to the Project"
         );
     }
 
