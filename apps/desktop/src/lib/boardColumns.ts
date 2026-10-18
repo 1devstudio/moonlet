@@ -120,7 +120,7 @@ export interface BoardSwitcherRow {
   board: BoardConfig;
   kind: string;
   /** One bar per shown or folded column, by category. */
-  bars: Column[];
+  bars: Category[];
   /** `6 columns · 12 issues`, as much as is known. */
   meta: string;
   /** Null until its tasks have loaded. */
@@ -154,7 +154,7 @@ export function switcherGroups(
     const rows = found
       .filter((b) => b.workspace === ws)
       .map((board): BoardSwitcherRow => {
-        const bars = (board.columns ?? []).filter((c) => c.show !== "hide").map((c) => c.category);
+        const bars = syncedColumns(board, null).filter((c) => c.show !== "hide").map((c) => c.category);
         const live = stats[board.id];
         return {
           board,

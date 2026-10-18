@@ -28,6 +28,7 @@ vi.mock("./daemon", () => ({
         issues: (answer({ id: source }) as { tracker?: { source: string } }[]).filter((t) => !source || t.tracker?.source === source).map((t) => ({ ...t, statusId: "" })),
         sprint: null,
         columns: answers[`board_columns ${q.id}`]?.({}) ?? null,
+        ...(answers[`board_kind ${q.id}`] && { kind: answers[`board_kind ${q.id}`]({}) }),
       }));
     },
   },
@@ -520,6 +521,18 @@ describe("boards (X50 Sync)", () => {
     useTasks.setState({ attention: {} });
     const p = await previewBoard("local", "personal", board({ labels: ["frontend", "design"] }));
     expect(p.tasks.map((t) => t.key)).toEqual(["MOON-1", "MOON-3"]);
+  });
+
+  it("keeps a board's type as its sync read it, for the board switcher", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    answers["board_kind linear:acme"] = () => "kanban";
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [board()] }, attention: {} });
+    await refreshTasks("local", "personal", 1_000);
+    expect(useTasks.getState().data["local/personal"].boards?.moon).toEqual({ keys: ["linear:acme MOON-1"], sprint: null, kind: "kanban" });
+    delete answers["board_kind linear:acme"];
+    useTasks.setState({ config: null });
   });
 
   it("opens a board of another workspace there, in Tasks mode", () => {

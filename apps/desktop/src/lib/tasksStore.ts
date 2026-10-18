@@ -43,6 +43,8 @@ export interface TasksData {
 export interface BoardData {
   keys: string[];
   sprint: { id: number; name: string; startMs: number; endMs: number } | null;
+  /** A Jira board's type as its last sync read it: `scrum`, `kanban`, `simple`. */
+  kind?: string;
 }
 
 interface TasksState {
@@ -402,7 +404,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     // Before a board's columns are known, a task keeps its tracker category.
     const placed = cols.length ? categorize(cols, r.tasks) : r.tasks;
     for (const t of placed) if (!tasks.has(taskId(t))) tasks.set(taskId(t), t);
-    boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint };
+    boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint, ...(r.kind && { kind: r.kind }) };
   }
   // A board whose columns changed in its tracker keeps them, matched to the
   // board as it is when the write runs, so a change made meanwhile stays.
@@ -451,6 +453,7 @@ interface BoardRead {
   /** The tracker's columns now, or null when it gave none (GitHub's are fixed). */
   columns: BoardColumn[] | null;
   sprint: BoardData["sprint"];
+  kind?: string;
   /** Why it failed; null when it worked. */
   error: string | null;
 }
@@ -497,7 +500,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
       ...(everyone?.issues ?? []).map((t) => ({ ...taskFromBoardIssue(t), mine: ownKeys.has(t.key) })),
       ...own.issues.filter((t) => !seen.has(t.key)).map((t) => ({ ...taskFromBoardIssue(t), mine: true })),
     ];
-    return { tasks, columns: own.columns, sprint: own.sprint, error: null };
+    return { tasks, columns: own.columns, sprint: own.sprint, ...(own.kind && { kind: own.kind }), error: null };
   } catch (e) {
     const err = e as { auth?: boolean; message?: string };
     const text = err.message ?? message(e);
