@@ -64,30 +64,41 @@ let rejecting = false;
 let endlessPages = false;
 let issuesAsked = 0;
 
+/** Whether Linear lists a third team, OPS (X50 Add a board). */
+let opsTeam = false;
+
 /** Linear's GraphQL endpoint: an answer per query, and a record of every move. */
 function linear(query: string, variables: Record<string, unknown>): string {
-  // Most specific first: the issues query names its `$teams` variable.
+  // Most specific first. A board's query (X50) reads one team.
   if (query.includes("issueUpdate")) {
     moves.push(variables as (typeof moves)[number]);
     return answer("linear-issue-update.json");
   }
   if (query.includes("issues(")) {
     issuesAsked++;
+    const issues = query.includes("BoardIssues") ? "linear-board-issues.json" : "linear-issues.json";
     if (!endlessPages && !query.includes("isMe")) {
       // Everyone's open issues: the account's, and one of Grace's (X45 Assignee: me off).
-      const all = JSON.parse(answer("linear-issues.json"));
+      const all = JSON.parse(answer(issues));
       const ada = all.data.issues.nodes[1];
       all.data.issues.nodes.push({ ...ada, id: "1a2b3c4d-0000-4000-8000-000000000200", identifier: "ENG-200", title: "Tidy the onboarding copy", url: "https://linear.app/acme/issue/ENG-200", branchName: "grace/eng-200", assignee: { id: "g", name: "Grace Hopper" } });
       return JSON.stringify(all);
     }
-    if (!endlessPages) return answer("linear-issues.json");
-    const page = JSON.parse(answer("linear-issues.json"));
+    if (!endlessPages) return answer(issues);
+    const page = JSON.parse(answer(issues));
     page.data.issues.pageInfo = { hasNextPage: true, endCursor: `c${issuesAsked}` };
     return JSON.stringify(page);
   }
   if (query.includes("organization")) return JSON.stringify({ data: { viewer: { id: "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f", name: "Ada Lovelace", email: "ada@example.com" }, organization: { urlKey: "acme", name: "Acme" } } });
   if (query.includes("workflowStates")) return answer("linear-states.json");
-  if (query.includes("teams")) return answer("linear-teams.json");
+  if (query.includes("activeCycle")) return answer("linear-active-cycle.json");
+  if (query.includes("teams")) {
+    if (!opsTeam) return answer("linear-teams.json");
+    // A third team, with cycles and no board yet (X50 Add a board).
+    const teams = JSON.parse(answer("linear-teams.json"));
+    teams.data.teams.nodes.push({ id: "5d4c3b2a-0000-4000-8000-000000000003", key: "OPS", name: "Operations", cyclesEnabled: true });
+    return JSON.stringify(teams);
+  }
   if (query.includes("viewer")) return answer("linear-viewer.json");
   return JSON.stringify({ errors: [{ message: "unknown query" }] });
 }
@@ -213,6 +224,42 @@ describe("Linear tracker", () => {
       input: { stateId: "a1000000-0000-4000-8000-000000000002", assigneeId: "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f" },
     });
     await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId);
+  });
+
+  it("adds a board of a Linear team that uses cycles, following its active cycle, and removes it after asking (X50)", async () => {
+    opsTeam = true;
+    try {
+      const tasks = '//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]';
+      if ((await $(tasks).getAttribute("aria-pressed")) !== "true") await $(tasks).click();
+      await $('//button[@title="Add a board"]').click();
+      const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+      await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
+      await $(`(${dialog}//button[.//span[normalize-space()="Linear"]])[1]`).click();
+      const ops = `${dialog}//button[@role="radio"][.//span[normalize-space()="Operations"]]`;
+      await expect($(`${ops}//span[normalize-space()="Cycles"]`)).toBeDisplayed({ wait: 10_000 });
+      await expect($(`${dialog}//button[@role="radio"][.//span[normalize-space()="Design"]]//span[normalize-space()="Cycles"]`)).not.toBeExisting();
+      await $(ops).click();
+      await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+      await expect($(`${dialog}//p[contains(normalize-space(), "issues match")]`)).toBeDisplayed({ wait: 15_000 });
+      await expect($(`${dialog}//select[@aria-label="Finished issues"]`)).toHaveValue("sprint");
+      await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+      // The team's workflow states are the columns.
+      await expect($(`${dialog}//div[@role="row"][@aria-label="In Review"]`)).toBeDisplayed({ wait: 10_000 });
+      await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+      await $(`${dialog}//button[normalize-space()="Create board"]`).click();
+      await expect($('//button[starts-with(@aria-label, "Switch board, current: Operations")]')).toBeDisplayed({ wait: 15_000 });
+      const sidebarRow = '//nav[@aria-label="Boards"]//button[.//span[normalize-space()="Operations · Cycle 42"]]';
+      await expect($(sidebarRow)).toBeDisplayed();
+      // Board settings remove it, after asking; the team's other board stays.
+      await $('//button[@title="In Review options"]').click();
+      await $('//button[normalize-space()="Board settings…"]').click();
+      await $('//div[@role="dialog"][@aria-label="Board settings"]//button[normalize-space()="Remove board"]').click();
+      await $(sel.confirmButton("Remove")).click();
+      await expect($(sidebarRow)).not.toBeExisting({ wait: 10_000 });
+      await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="Engineering"]]')).toBeDisplayed();
+    } finally {
+      opsTeam = false;
+    }
   });
 
   it("reads Linear's issues in pages, at most 5 of them", async () => {
