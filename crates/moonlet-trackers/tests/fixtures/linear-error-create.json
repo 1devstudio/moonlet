@@ -1,0 +1,29 @@
+{
+  "errors": [
+    {
+      "message": "Entity not found in validateAccess: stateId",
+      "path": [
+        "issueCreate"
+      ],
+      "locations": [
+        {
+          "line": 1,
+          "column": 46
+        }
+      ],
+      "extensions": {
+        "meta": {
+          "missingIds": [
+            "e2e00000-0000-4000-8000-000000000013"
+          ]
+        },
+        "type": "invalid input",
+        "code": "INPUT_ERROR",
+        "statusCode": 400,
+        "userError": true,
+        "userPresentableMessage": "An item needed to save your changes is unavailable."
+      }
+    }
+  ],
+  "data": null
+}

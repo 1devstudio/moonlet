@@ -7,7 +7,7 @@ import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../.
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
-import { createLock, createsIn, createTarget } from "../../lib/newIssue";
+import { createLockOn, createsIn, createTarget } from "../../lib/newIssue";
 import { type Column, type Task, taskId, taskStart, trackerName } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
@@ -428,6 +428,7 @@ export function TasksMode() {
   const selected = useTasks((t) => t.selected);
   const attention = useTasks((t) => t.attention);
   const hosts = useStore((s) => s.hosts);
+  const ghScopes = useTasks((t) => t.ghScopes);
   // The column whose + opened New issue (X52).
   const [creating, setCreating] = useState<BoardColumn | null>(null);
   if (!ws) return null;
@@ -488,7 +489,7 @@ export function TasksMode() {
   const fields = cardFields(shown.board);
   // The + on a column (X52): where it creates, and why it can't.
   const savedColumns = syncedColumns(shown.board, null);
-  const createLocked = createLock(shown.board, { attention: attention[shown.board.connection], hostOnline: hosts[ws.host]?.status === "connected" });
+  const createLocked = createLockOn(shown.board, ws.host, { attention, hosts, scopes: ghScopes });
   const plusFor = (name: string) => {
     const column = savedColumns.find((c) => c.name === name);
     return column && createsIn(shown.board) && createTarget(shown.board, column) ? column : null;

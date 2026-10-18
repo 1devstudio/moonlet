@@ -170,3 +170,15 @@ export function labelProblem(board: BoardConfig, labels: string[]): string | nul
 
 /** A Jira project's page, where an issue the form can't create is made (X52); `connection` is `jira:<site>`. */
 export const jiraProjectUrl = (connection: string, project: string) => `https://${connection.replace(/^jira:/, "")}/browse/${encodeURIComponent(project)}`;
+
+/**
+ * Why a board's + is disabled, from the app's state (X52): the connection's
+ * attention (X44), the status of the workspace's `host`, and gh's scopes on it.
+ */
+export function createLockOn(
+  board: BoardConfig,
+  host: string,
+  state: { attention: Record<string, string>; hosts: Record<string, { status: string } | undefined>; scopes: Record<string, string[] | undefined> },
+): string | null {
+  return createLock(board, { attention: state.attention[board.connection], hostOnline: state.hosts[host]?.status === "connected", scopes: state.scopes[host] });
+}

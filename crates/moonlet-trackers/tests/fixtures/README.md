@@ -10,9 +10,10 @@ Gathered on 2026-10-15 from the trackers' official API documentation; no live ac
 
 | File | Kind | Source |
 |---|---|---|
-| `linear-viewer.json`, `linear-teams.json`, `linear-issues.json`, `linear-states.json`, `linear-issue-update.json`, `linear-comment.json`, `linear-board-issues.json`, `linear-active-cycle.json`, `linear-create-options.json`, `linear-issue-create.json` (X52) | SCHEMA | Linear's GraphQL schema, `linear/linear` `packages/sdk/src/schema.graphql`; https://linear.app/developers/graphql |
+| `linear-viewer.json`, `linear-teams.json`, `linear-issues.json`, `linear-states.json`, `linear-issue-update.json`, `linear-comment.json`, `linear-board-issues.json`, `linear-active-cycle.json` | SCHEMA | Linear's GraphQL schema, `linear/linear` `packages/sdk/src/schema.graphql`; https://linear.app/developers/graphql |
 | `linear-error-auth.json` | CAPTURED | HTTP 401 to a bad personal key (and a bad Bearer token) |
 | `linear-error-ratelimited.json` | VERBATIM+ | https://linear.app/developers/rate-limiting (message text is a placeholder) |
+| `linear-create-options.json`, `linear-issue-create.json`, `linear-error-create.json` (X52) | CAPTURED, SANITISED | 2026-10-18, from a sandbox team with moonlet's own Linear token: `CREATE_OPTIONS`, `issue_create_mutation()` with the input in `linear.rs` a_new_issue_goes_in_the_columns_state_with_its_assignee_labels_and_cycle, and the same with an unknown `stateId`; every id `e2e00000-…`, the user Ada Lovelace, the workspace `acme`, the team key ENG; the issue was deleted after |
 | `jira-myself.json` | VERBATIM | `GET /rest/api/3/myself`, https://developer.atlassian.com/cloud/jira/platform/rest/v3/ |
 | `jira-projects.json` | VERBATIM | `GET /rest/api/3/project/search` |
 | `jira-search.json` | VERBATIM+ | `POST /rest/api/3/search/jql`; status category keys are the real `new`, `indeterminate`, `done` (the doc example uses placeholders); descriptions follow the ADF docs |
