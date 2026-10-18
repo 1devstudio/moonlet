@@ -511,7 +511,7 @@ export function TasksMode() {
   return (
     <div className="flex h-full min-w-0">
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* A narrow header (the detail open) shows Expand all, Board and List by their icons, so the board's title keeps its room. */}
+        {/* A narrow header (a small window, or the detail open) shows Expand all, Board and List by their icons, so the board's title keeps its room. */}
         <header data-tauri-drag-region className="drag @container flex h-[56px] shrink-0 items-center gap-3 px-5">
           <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={header.title} subtitle={header.subtitle} stats={stats} />
           <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -773,7 +773,7 @@ function ExpandAll({ cards }: { cards: Card[] }) {
   const expanded = useTasks((t) => t.expanded);
   const allOpen = cards.length > 0 && cards.every((c) => expanded[taskId(c.task)]);
   return (
-    <button aria-label={allOpen ? "Collapse all" : "Expand all"} className="no-drag flex items-center gap-1 whitespace-nowrap rounded-md border border-border px-2 py-1 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(cards.map((c) => [taskId(c.task), true])))}>
+    <button aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} className="no-drag flex items-center gap-1 whitespace-nowrap rounded-md border border-border px-2 py-1 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(cards.map((c) => [taskId(c.task), true])))}>
       {allOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
       <span className="@max-[900px]:hidden">{allOpen ? "Collapse all" : "Expand all"}</span>
     </button>
