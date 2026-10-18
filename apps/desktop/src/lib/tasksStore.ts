@@ -15,6 +15,8 @@ import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, trackerOf } from "./tasks";
 import { parseTrackerLink } from "./trackerSources";
+import { boardShows, type Created, createTarget, type NewIssue, withCreated } from "./newIssue";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
 import { parseWsKey, wsKey } from "./workspaces";
@@ -381,7 +383,8 @@ export function workspaceProjects(s: StoreState, host: string, workspaceId: stri
 }
 
 /** An error's text: an Error's or a Tauri command's `{ message }`, else the value. */
-const message = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
+/** An error as the user reads it: a Tauri command's `{ message }`, an `Error`, or the value. */
+export const message = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
 const syncs = latestPerKey();
 
 /**
@@ -458,15 +461,19 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
       const source = link && sourceKey(link.connection, link.key);
       if (source) sourceProjects[source] = [...(sourceProjects[source] ?? []), x.id];
     }
+  // The issues moonlet created stay on their boards until a sync has them (X52).
+  const merged = withCreated({ tasks: [...tasks.values()], boards: boardData }, created.filter((c) => c.ws === key), now);
+  created = [...created.filter((c) => c.ws !== key), ...merged.pending.map((c) => ({ ...c, ws: key }))];
+  for (const c of merged.gone) notShown(c.task);
   const next: TasksData = {
-    tasks: [...tasks.values()],
+    tasks: merged.tasks,
     worktrees: per.flatMap((x) => x.worktrees),
     sources,
     repos,
     sourceProjects,
     syncedAt: error ? (prev?.syncedAt ?? null) : now,
     error,
-    boards: boardData,
+    boards: merged.boards ?? boardData,
   };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next } }));
   // Compared as the board shows them: with its columns as saved now.
@@ -513,6 +520,53 @@ interface BoardRead {
   statusNames?: Record<string, string>;
   /** Why it failed; null when it worked. */
   error: string | null;
+}
+
+/** The issues moonlet created, per workspace, until a sync has them (X52). */
+let created: (Created & { ws: string })[] = [];
+
+/** The notice for a new issue the board doesn't show (X52), with a link to it. */
+function notShown(task: Task) {
+  toast(`Created ${task.key}; this board doesn't show it`, "info", { label: "Open", run: () => void openUrl(task.url) });
+}
+
+/** Where a new issue goes in the tracker (X52): a Linear team. */
+function placeOf(board: BoardConfig): string {
+  if (board.origin.kind === "linear_team") return board.origin.team;
+  throw new Error("moonlet can't create issues on this board yet");
+}
+
+/** The new-issue form's lists for a board (X52): the user, the people and the labels. */
+export function createOptions(board: BoardConfig) {
+  return hostsApi.trackerCreateOptions(board.connection, placeOf(board));
+}
+
+/**
+ * Creates an issue from `column`'s + (X52), in its first status. Its card
+ * shows there at once, selected, with "moonlet created it" in its Activity;
+ * when the board can't show it, a notice says so. A tracker's refusal is
+ * thrown, for the form to show.
+ */
+export async function createIssue(host: string, workspaceId: string, board: BoardConfig, column: BoardColumn, draft: NewIssue, now = Date.now()): Promise<Task> {
+  const target = createTarget(board, column);
+  if (!target) throw new Error(`${column.name} takes no new issues`);
+  const answer = await hostsApi.trackerCreate({ id: board.connection, place: placeOf(board), issue: { ...draft, status: target.status }, inCycle: board.finished === "sprint" });
+  const columns = syncedColumns(board, null);
+  const [task] = categorize(columns, [{ ...taskFromBoardIssue(answer), mine: draft.assignee === "me" }]);
+  recordActivity(task, "moonlet created it", now);
+  if (!boardShows(board, assigneeOf(board, useTasks.getState().assignee), columns, task)) {
+    notShown(task);
+    return task;
+  }
+  const key = wsKey(host, workspaceId);
+  const entry = { boardId: board.id, task, at: now };
+  created.push({ ...entry, ws: key });
+  useTasks.setState((st) => {
+    const d = st.data[key];
+    const merged = d ? withCreated({ tasks: d.tasks, boards: d.boards }, [entry], now) : null;
+    return { selected: taskId(task), ...(d && merged && { data: { ...st.data, [key]: { ...d, tasks: merged.tasks, boards: merged.boards } } }) };
+  });
+  return task;
 }
 
 /** When each host's gh scopes were last read. */

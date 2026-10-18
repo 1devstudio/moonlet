@@ -719,6 +719,73 @@ fn wants_site_names(origin: &Origin, sync: Option<u64>, mine: bool) -> bool {
     matches!(origin, Origin::Jql { .. }) && sync.is_none() && mine
 }
 
+/// What the new-issue form offers for a place (X52): who the user is, the
+/// people an issue can be assigned to, and the labels it can have.
+#[derive(Serialize)]
+pub struct CreateChoices {
+    pub me: String,
+    pub people: Vec<moonlet_trackers::board::Named>,
+    pub labels: Vec<moonlet_trackers::board::Named>,
+}
+
+/// The new-issue form's lists for `place`, a Linear team's key (X52).
+#[tauri::command]
+pub async fn tracker_create_options(id: String, place: String) -> Res<CreateChoices> {
+    let s = Session::load(&id).await?;
+    match s.conn.kind {
+        TrackerKind::Linear => {
+            let o = s.linear_create_options(&place).await?;
+            Ok(CreateChoices { me: o.me, people: o.people, labels: o.labels })
+        }
+        kind => Err(fail(format!("moonlet can't create {} issues yet", tracker_name(kind)))),
+    }
+}
+
+/// A new issue from a board column (X52).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRequest {
+    pub id: String,
+    /// A Linear team's key.
+    pub place: String,
+    pub issue: moonlet_trackers::board::NewIssue,
+    /// The board follows the active cycle or sprint: the issue joins it.
+    #[serde(default)]
+    pub in_cycle: bool,
+}
+
+/// Creates the issue in its column's status, answering with it as the board shows it (X52).
+#[tauri::command]
+pub async fn tracker_create(req: CreateRequest) -> Res<BoardIssue> {
+    let s = Session::load(&req.id).await?;
+    match s.conn.kind {
+        TrackerKind::Linear => {
+            let o = s.linear_create_options(&req.place).await?;
+            let input = s.linear_ok(linear::create_input(&o, &req.issue, req.in_cycle))?;
+            let raw = s.linear(&linear::issue_create_mutation(), json!({ "input": input })).await?;
+            s.linear_ok(linear::parse_created(&raw, &s.conn.id))
+        }
+        kind => Err(fail(format!("moonlet can't create {} issues yet", tracker_name(kind)))),
+    }
+}
+
+/// A tracker's name, as the app writes it.
+fn tracker_name(kind: TrackerKind) -> &'static str {
+    match kind {
+        TrackerKind::Jira => "Jira",
+        TrackerKind::Linear => "Linear",
+        TrackerKind::Github => "GitHub",
+        TrackerKind::Clickup => "ClickUp",
+    }
+}
+
+impl Session {
+    async fn linear_create_options(&self, team: &str) -> Res<linear::CreateOptions> {
+        let team = safe_id(team)?.to_string();
+        self.linear_ok(linear::parse_create_options(&self.linear(linear::CREATE_OPTIONS, json!({ "team": team })).await?))
+    }
+}
+
 /// A tracker state and the column it lands in by default.
 #[derive(Serialize)]
 pub struct StateChoice {

@@ -2,7 +2,8 @@
 
 use serde_json::Value;
 
-use crate::board::{BoardIssue, Parent, Sprint};
+pub use crate::board::NewIssue;
+use crate::board::{BoardIssue, Named, Parent, Sprint};
 use crate::config::Finished;
 use crate::task::{TrackerRef, TrackerTask};
 use crate::{ApiError, TrackerKind};
@@ -55,6 +56,115 @@ pub fn parse_board_issues(raw: &[u8], connection: &str) -> Result<Vec<BoardIssue
             ..BoardIssue::from_task(issue_task(i, connection))
         })
         .collect())
+}
+
+/// What the new-issue form needs of a team (X52): who the user is, the
+/// team's members, its labels and the workspace's, its states, and its active cycle.
+pub const CREATE_OPTIONS: &str = "query CreateOptions($team: String!) { viewer { id } \
+     teams(filter: { key: { eq: $team } }) { nodes { id members { nodes { id name } } labels { nodes { id name } } \
+     states { nodes { id name } } activeCycle { id } } } issueLabels(filter: { team: { null: true } }) { nodes { id name } } }";
+
+/// A [`CREATE_OPTIONS`] answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateOptions {
+    pub team: String,
+    /// The viewer's id.
+    pub me: String,
+    pub people: Vec<Named>,
+    /// The team's labels, then the workspace's.
+    pub labels: Vec<Named>,
+    pub states: Vec<Named>,
+    /// The active cycle's id, when the team has one.
+    pub cycle: Option<String>,
+}
+
+pub fn parse_create_options(raw: &[u8]) -> Result<CreateOptions, ApiError> {
+    let d = data(raw)?;
+    let team = nodes(&d["teams"])
+        .next()
+        .ok_or_else(|| ApiError::new("Linear has no such team"))?;
+    let named = |v: &Value| -> Vec<Named> {
+        nodes(v)
+            .map(|n| Named {
+                id: n["id"].as_str().unwrap_or_default().into(),
+                name: n["name"].as_str().unwrap_or_default().into(),
+            })
+            .collect()
+    };
+    Ok(CreateOptions {
+        team: team["id"].as_str().unwrap_or_default().into(),
+        me: d["viewer"]["id"].as_str().unwrap_or_default().into(),
+        people: named(&team["members"]),
+        labels: [named(&team["labels"]), named(&d["issueLabels"])].concat(),
+        states: named(&team["states"]),
+        cycle: team["activeCycle"]["id"].as_str().map(String::from),
+    })
+}
+
+/// `issueCreate`'s input for `issue` (X52): in the column's state, assigned
+/// to the user (`me`), no one (`none`) or a person, with its labels by name
+/// (any case), in the active cycle when the board follows it.
+pub fn create_input(
+    o: &CreateOptions,
+    issue: &NewIssue,
+    in_cycle: bool,
+) -> Result<Value, ApiError> {
+    let state = o
+        .states
+        .iter()
+        .find(|s| s.name == issue.status)
+        .ok_or_else(|| {
+            ApiError::new(format!("Linear has no state {} in this team", issue.status))
+        })?;
+    let labels = issue
+        .labels
+        .iter()
+        .map(|name| {
+            o.labels
+                .iter()
+                .find(|l| l.name.eq_ignore_ascii_case(name))
+                .map(|l| l.id.clone())
+                .ok_or_else(|| ApiError::new(format!("Linear has no label {name}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut input =
+        serde_json::json!({ "teamId": o.team, "title": issue.title, "stateId": state.id });
+    if !issue.description.is_empty() {
+        input["description"] = issue.description.clone().into();
+    }
+    match issue.assignee.as_str() {
+        "none" => {}
+        "me" => input["assigneeId"] = o.me.clone().into(),
+        id => input["assigneeId"] = id.into(),
+    }
+    if !labels.is_empty() {
+        input["labelIds"] = labels.into();
+    }
+    if let (true, Some(cycle)) = (in_cycle, &o.cycle) {
+        input["cycleId"] = cycle.clone().into();
+    }
+    Ok(input)
+}
+
+/// Creates an issue (X52), answering with it as a board shows it.
+pub fn issue_create_mutation() -> String {
+    format!(
+        "mutation Create($input: IssueCreateInput!) {{ issueCreate(input: $input) {{ success issue {{ {ISSUE_FIELDS} {BOARD_FIELDS} }} }} }}"
+    )
+}
+
+/// An [`issue_create_mutation`] answer: the new issue.
+pub fn parse_created(raw: &[u8], connection: &str) -> Result<BoardIssue, ApiError> {
+    let d = data(raw)?;
+    let i = &d["issueCreate"]["issue"];
+    if d["issueCreate"]["success"] != true || !i.is_object() {
+        return Err(ApiError::new("Linear did not create the issue"));
+    }
+    Ok(BoardIssue {
+        points: i["estimate"].as_f64(),
+        due: i["dueDate"].as_str().map(String::from),
+        ..BoardIssue::from_task(issue_task(i, connection))
+    })
 }
 
 /// A team's active cycle, which a board following it names (X50).
@@ -322,6 +432,129 @@ mod tests {
     }
 
     #[test]
+    fn a_teams_people_labels_states_and_active_cycle_for_a_new_issue() {
+        let o = parse_create_options(&fixture("linear-create-options.json")).unwrap();
+        assert_eq!(o.me, "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f");
+        assert_eq!(
+            o.people.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["Ada Lovelace", "Grace Hopper"]
+        );
+        // The team's labels, then the workspace's.
+        assert_eq!(
+            o.labels.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            ["Backend", "Bug", "Customer"]
+        );
+        assert_eq!(
+            o.cycle.as_deref(),
+            Some("d4000000-0000-4000-8000-000000000042")
+        );
+    }
+
+    #[test]
+    fn a_new_issue_goes_in_the_columns_state_with_its_assignee_labels_and_cycle() {
+        let o = parse_create_options(&fixture("linear-create-options.json")).unwrap();
+        let issue = NewIssue {
+            title: "Retry failed webhook deliveries".into(),
+            description: "Back off **exponentially**.".into(),
+            assignee: "me".into(),
+            labels: vec!["backend".into(), "Customer".into()],
+            status: "In Review".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            create_input(&o, &issue, true).unwrap(),
+            serde_json::json!({
+                "teamId": "b2000000-0000-4000-8000-000000000001",
+                "title": "Retry failed webhook deliveries",
+                "description": "Back off **exponentially**.",
+                "stateId": "a1000000-0000-4000-8000-000000000004",
+                "assigneeId": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+                "labelIds": ["c3000000-0000-4000-8000-000000000001", "c3000000-0000-4000-8000-000000000009"],
+                "cycleId": "d4000000-0000-4000-8000-000000000042"
+            })
+        );
+        // Unassigned, someone else, no cycle; a label or state the team lacks is refused.
+        let other = NewIssue {
+            assignee: "9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d".into(),
+            labels: vec![],
+            description: String::new(),
+            ..issue.clone()
+        };
+        let input = create_input(&o, &other, false).unwrap();
+        assert_eq!(
+            (
+                input["assigneeId"].as_str(),
+                input.get("cycleId"),
+                input.get("description")
+            ),
+            (Some("9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"), None, None)
+        );
+        assert!(
+            create_input(
+                &o,
+                &NewIssue {
+                    assignee: "none".into(),
+                    ..issue.clone()
+                },
+                false
+            )
+            .unwrap()
+            .get("assigneeId")
+            .is_none()
+        );
+        assert_eq!(
+            create_input(
+                &o,
+                &NewIssue {
+                    labels: vec!["Nope".into()],
+                    ..issue.clone()
+                },
+                false
+            )
+            .unwrap_err()
+            .message,
+            "Linear has no label Nope"
+        );
+        assert_eq!(
+            create_input(
+                &o,
+                &NewIssue {
+                    status: "Shipped".into(),
+                    ..issue
+                },
+                false
+            )
+            .unwrap_err()
+            .message,
+            "Linear has no state Shipped in this team"
+        );
+    }
+
+    #[test]
+    fn the_created_issue_as_a_board_issue() {
+        let issue = parse_created(&fixture("linear-issue-create.json"), "linear:acme").unwrap();
+        assert_eq!(
+            (
+                issue.task.key.as_str(),
+                issue.task.tracker.state.as_str(),
+                issue.task.labels.clone()
+            ),
+            (
+                "ENG-142",
+                "In Review",
+                vec!["Backend".to_string(), "Customer".to_string()]
+            )
+        );
+        assert!(
+            parse_created(
+                br#"{"data":{"issueCreate":{"success":false,"issue":null}}}"#,
+                "linear:acme"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn one_issue_by_its_key() {
         let list: serde_json::Value =
             serde_json::from_slice(&fixture("linear-issues.json")).unwrap();
@@ -336,8 +569,10 @@ mod tests {
         let missing =
             br#"{"data":{"issue":null},"errors":[{"message":"Entity not found: Issue"}]}"#;
         assert_eq!(parse_issue(missing, "linear:acme").unwrap(), None);
-        assert!(issue_query()
-            .starts_with("query Issue($id: String!) { issue(id: $id) { id identifier title"));
+        assert!(
+            issue_query()
+                .starts_with("query Issue($id: String!) { issue(id: $id) { id identifier title")
+        );
     }
 
     #[test]

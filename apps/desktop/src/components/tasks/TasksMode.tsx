@@ -2,6 +2,8 @@
 
 import { Bot, ChevronDown, Copy, ExternalLink, GitBranch, LayoutGrid, List, MoreHorizontal, Plus, RotateCw, Search, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { createLock, createsIn, createTarget } from "../../lib/newIssue";
+import { NewIssue } from "./NewIssue";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
@@ -424,6 +426,9 @@ export function TasksMode() {
   const filters = useTasks((t) => t.filters);
   const assignee = useTasks((t) => t.assignee);
   const selected = useTasks((t) => t.selected);
+  const attention = useTasks((t) => t.attention);
+  // The column whose + opened New issue (X52).
+  const [creating, setCreating] = useState<BoardColumn | null>(null);
   if (!ws) return null;
   if (!data) return <Empty title="Loading tasks…" />;
   if (!shown) {
@@ -480,6 +485,13 @@ export function TasksMode() {
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
   const problem = boardProblem(shown.board, data.boards?.[shown.board.id]);
   const fields = cardFields(shown.board);
+  // The + on a column (X52): where it creates, and why it can't.
+  const savedColumns = syncedColumns(shown.board, null);
+  const createLocked = createLock(shown.board, { attention: attention[shown.board.connection], hostOnline: true });
+  const plusFor = (name: string) => {
+    const column = savedColumns.find((c) => c.name === name);
+    return column && createsIn(shown.board) && createTarget(shown.board, column) ? column : null;
+  };
   // A GitHub Project's estimate is named after its number field (X50).
   const estimate = data.boards?.[shown.board.id]?.project?.numberField ?? null;
   const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id])]));
@@ -521,11 +533,22 @@ export function TasksMode() {
               v.folded ? (
                 <FoldedColumn key={v.name} boardId={shown.board.id} view={v} />
               ) : (
-                <section key={v.name} aria-label={v.name} className="flex w-[280px] shrink-0 flex-col">
+                <section key={v.name} aria-label={v.name} className="group/column flex w-[280px] shrink-0 flex-col">
                   <div className="mb-2 border-b border-border pb-1.5">
                     <div className="flex items-center gap-2 ui-text-13 font-medium text-fg">
                       <span className="min-w-0 truncate">{v.name}</span>
                       <span className="font-mono ui-text-12 font-normal text-faint">{v.cards.length}</span>
+                      {plusFor(v.name) && (
+                        // Shown on hover, keyboard focus, and always on a touch screen.
+                        <IconButton
+                          title={createLocked ?? `New issue in ${v.name}`}
+                          disabled={!!createLocked}
+                          onClick={() => setCreating(plusFor(v.name))}
+                          className="opacity-0 focus-visible:opacity-100 group-hover/column:opacity-100 [@media(hover:none)]:opacity-100"
+                        >
+                          <Plus size={14} />
+                        </IconButton>
+                      )}
                       <div className="ml-auto">
                         <Menu
                           align="right"
@@ -567,6 +590,7 @@ export function TasksMode() {
         )}
       </div>
       {detail && <TaskDetail host={ws.host} workspaceId={ws.id} card={detail} />}
+      {creating && <NewIssue host={ws.host} workspaceId={ws.id} board={shown.board} column={creating} onClose={() => setCreating(null)} />}
     </div>
   );
 }

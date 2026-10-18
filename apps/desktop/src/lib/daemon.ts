@@ -64,6 +64,12 @@ export const hostsApi = {
   trackerBoardSetup: (id: string, board: number) =>
     invoke<{ filterId: string; filterJql?: string; subQuery: string | null; pointsField: string | null; sprints: boolean; statusNames: Record<string, string>; columns: import("./boards").BoardColumn[] }>("tracker_board_setup", { id, board }),
   /** A board's issues, its active sprint, and a Jira board's columns as Jira has them now (X50). */
+  /** The new-issue form's lists for a place (X52): the user, people and labels, by id and name. */
+  trackerCreateOptions: (id: string, place: string) =>
+    invoke<{ me: string; people: { id: string; name: string }[]; labels: { id: string; name: string }[] }>("tracker_create_options", { id, place }),
+  /** Creates an issue in a column's status (X52), answering with it as a board shows it. */
+  trackerCreate: (req: { id: string; place: string; issue: import("./newIssue").NewIssue & { status: string }; inCycle: boolean }) =>
+    invoke<import("./boards").BoardIssue>("tracker_create", { req }),
   /** `sync` names the sync the read is in: its reads share the connection's lookups (X50). */
   trackerBoardTasks: (query: { id: string; origin: import("./boards").Origin; narrow?: string; mine: boolean; finished: number | "sprint"; sync?: number }) =>
     invoke<{ issues: import("./boards").BoardIssue[]; sprint: { id: number; name: string; startMs: number; endMs: number } | null; columns: import("./boards").BoardColumn[] | null; kind?: string; statusNames?: Record<string, string> }>(
