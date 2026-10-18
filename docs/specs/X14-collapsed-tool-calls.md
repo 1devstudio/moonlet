@@ -24,7 +24,7 @@ A long agent turn is mostly tool calls, which push the agent's answers off scree
 - [x] Items that render nothing (assistant text not yet streamed, redacted thinking) do not split a run. (`chat.test.ts`)
 - [x] A group starts closed. Clicking it shows the tool rows, which work as in X6 (expand for output or diff). The group stays open while more calls stream into it. (`agent-view.e2e.ts`)
 - [x] The group row shows the distinct icons of its tools (up to 4) and a status mark: a spinner while any call runs, otherwise the red mark of an error or a denial. No mark when every call succeeded. (`chat.test.ts` for the status)
-- [x] Thinking is a row like a tool call, a brain icon and `Thinking`, with the whole thought under it: it adds context the user should not have to click for. Clicking the row folds the thought to one line (whitespace collapsed, truncated to the width); clicking again shows it in full. While streaming it shows the `Thinking…` shimmer, as before. (`chat.test.ts` for the preview, `agent-view.e2e.ts`)
+- [x] Thinking is a row like a tool call, a brain icon and `Thinking`, with the whole thought under it, without the blank lines Claude ends every thought with: it adds context the user should not have to click for. Clicking the row folds the thought to one line (whitespace collapsed, truncated to the width); clicking again shows it in full. While streaming it shows the `Thinking…` shimmer, as before. (`chat.test.ts` for the preview and the opened thought, `agent-view.e2e.ts`)
 - [x] A shell call's row shows only the first line of its command, truncated to the width. Opening the row shows the whole command, every line wrapped, as `$ <command>` above the output. A running call with no output yet can be opened too. (`chat.test.ts` for `toolCommand`, `agent-view.e2e.ts`)
 - [x] With **Expanded**, every tool call has its own row as in X6. Thinking keeps its row in both modes. (`chat.test.ts`, `agent-view.e2e.ts`)
 - [x] The setting defaults to Collapsed, also for users with settings saved by an older version. It applies to open conversations immediately.
@@ -64,7 +64,7 @@ None new. Tool output and thinking are still rendered as plain text, as in X6.
 
 ## Test plan
 
-- Unit (`apps/desktop/src/lib/chat.test.ts`): `chatBlocks` for both views, `toolGroupLabel`, `toolGroupStatus`, `thinkingPreview`, `toolCommand`.
+- Unit (`apps/desktop/src/lib/chat.test.ts`): `chatBlocks` for both views, `toolGroupLabel`, `toolGroupStatus`, `thinkingPreview`, `thinkingBody`, `toolCommand`.
 - E2E (`apps/desktop/e2e/specs/agent-view.e2e.ts`): a fake `claude` replays a turn with thinking, two `Bash` calls and an answer. The first command has two lines. The spec checks the collapsed group, opening it, the whole command in an opened row, the whole thought and folding it, and the Expanded setting.
 
 ## Open questions
