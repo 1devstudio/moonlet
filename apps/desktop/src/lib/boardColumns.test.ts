@@ -326,4 +326,19 @@ describe("a GitHub Project's items (X50)", () => {
       ["Done", ["acme/web#3"]],
     ]);
   });
+
+  it("sit by their option's name on a board still saved with names, until a sync moves it onto ids", () => {
+    const saved: BoardColumn[] = [
+      { name: "No Status", statuses: [""], category: "todo" },
+      { name: "Todo", statuses: ["Todo"], category: "todo" },
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
+    ];
+    const tasks = [item(1, "Todo"), item(2, "In Progress"), item(4, null)];
+    expect(categorize(saved, tasks).map((t) => t.column)).toEqual(["todo", "in_progress", "todo"]);
+    expect(boardView(saved, { tasks, sessions: [], worktrees: [], sessionStartRule: "auto" }).map((c) => [c.name, c.cards.map((x) => x.task.key)])).toEqual([
+      ["No Status", ["acme/web#4"]],
+      ["Todo", ["acme/web#1"]],
+      ["In Progress", ["acme/web#2"]],
+    ]);
+  });
 });

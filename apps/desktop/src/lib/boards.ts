@@ -355,7 +355,8 @@ export function syncedColumns(board: BoardConfig, fresh: BoardColumn[] | null): 
  */
 function withOptionIds(saved: BoardColumn[], fresh: BoardColumn[]): BoardColumn[] {
   const ids = new Set(fresh.flatMap((f) => f.statuses));
-  const idOf = (s: string) => (ids.has(s) ? s : (fresh.find((f) => f.name === s)?.statuses[0] ?? s));
+  // A saved name is an option's, never No Status's `""`, even when a team named an option "No Status".
+  const idOf = (s: string) => (ids.has(s) ? s : (fresh.find((f) => f.name === s && !f.statuses.includes(""))?.statuses[0] ?? s));
   return saved.map((c) => ({ ...c, statuses: c.statuses.map(idOf) }));
 }
 
@@ -405,13 +406,15 @@ export interface ProjectMeta {
 
 /**
  * The `gh.project_move` that sets `item`'s Status to the option whose id is
- * `status`, a column's status, or clears it for `""`, the status of No
- * Status; null when the Project has no such option.
+ * `status`, a column's status (or whose name it is, on a board still saved
+ * with names), or clears it for `""`, the status of No Status; null when the
+ * Project has no such option.
  */
 export function projectMove(project: ProjectMeta, item: string, status: string): { project: string; item: string; field: string; option: string | null } | null {
   if (!project.field) return null;
   if (status === "") return { project: project.id, item, field: project.field, option: null };
-  const option = project.options.find((o) => o.id === status);
+  // By id; a board still saved with option names, by the name.
+  const option = project.options.find((o) => o.id === status) ?? project.options.find((o) => o.name === status);
   return option ? { project: project.id, item, field: project.field, option: option.id } : null;
 }
 

@@ -1206,8 +1206,18 @@ describe("a GitHub Project's board (X50 Sync)", () => {
       ["acme/web#11", undefined],
     ]);
     expect(p.numberField).toBe("Hours");
-    // Step 3 names its columns' statuses, the options' ids, by the options' names.
-    expect(p.statusNames).toEqual({ "": "No Status", o1: "Todo" });
+  });
+
+  it("names a Project's column statuses, its options' ids, by the options' names for step 3, and gives an older host's items their option by name", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const options = [{ id: "o1", name: "Todo" }, { id: "o2", name: "In Progress" }];
+    // An older daemon sends no option id.
+    answers["gh.project_items"] = () => ({ id: "PVT_1", status_field: "F", options, items: [{ ...item(10, "In Progress", ["sam-rivera"]), option: undefined }] });
+    const project = { id: "web-project", name: "Website", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_project" as const, owner: "acme", number: 2 } };
+    const p = await previewBoard("local", "personal", project);
+    expect(p.statusNames).toEqual({ "": "No Status", o1: "Todo", o2: "In Progress" });
+    expect(p.tasks.map((t) => t.github?.project?.option)).toEqual(["o2"]);
   });
 
   it("reads the Project's issues with their Status, the user's own marked, and its columns from the Status options", async () => {

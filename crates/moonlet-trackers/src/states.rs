@@ -100,6 +100,7 @@ pub fn project_columns(options: &[(String, String)]) -> Vec<crate::config::Board
         show: Show::Show,
         wip: None,
     }];
+    // `board_columns` gives one column per state, in order, so each lines up with its option.
     out.extend(
         board_columns(TrackerKind::Github, &states)
             .into_iter()

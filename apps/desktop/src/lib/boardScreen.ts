@@ -1,7 +1,7 @@
 // What Tasks mode's board screen shows (X50): the board shown, the sidebar's
 // Boards, the header's Columns menu and the detail's State menu.
 
-import { boardSubtitle, boardView, type ColumnView, statusKey } from "./boardColumns";
+import { boardSubtitle, boardView, type ColumnView, holds } from "./boardColumns";
 import { type BoardColumn, type BoardConfig, type CardField, type Category, jiraBoardType, syncedColumns } from "./boards";
 import type { AgentState } from "./protocol";
 import type { BoardData } from "./tasksStore";
@@ -58,8 +58,7 @@ export function columnsSummary(columns: BoardColumn[]): string {
  */
 export function stateChoices(columns: BoardColumn[], task: Task): { choices: { label: string; category: Category; status: string }[]; current: number } {
   const shown = columns.filter((c) => c.show !== "hide" && c.statuses.length);
-  const key = statusKey(task);
-  return { choices: shown.map((c) => ({ label: c.name, category: c.category, status: c.statuses[0] })), current: shown.findIndex((c) => c.statuses.includes(key)) };
+  return { choices: shown.map((c) => ({ label: c.name, category: c.category, status: c.statuses[0] })), current: shown.findIndex((c) => holds(c, task)) };
 }
 
 /** A board's title (X50): its name, with the sprint or cycle it follows. */
