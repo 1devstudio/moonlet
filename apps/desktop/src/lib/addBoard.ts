@@ -317,3 +317,43 @@ export function pausedPreview<T>(show: (answer: T) => void, wait = 500) {
     stop,
   };
 }
+
+/**
+ * A JQL board's status dragged onto the column at `to` (X50 step 3): it
+ * joins that column's statuses, and a column it leaves without any goes.
+ */
+export function groupStatus(columns: BoardColumn[], status: string, to: number): BoardColumn[] {
+  const target = columns[to];
+  if (!target || target.statuses.includes(status)) return columns;
+  return columns.flatMap((c) => {
+    if (c === target) return [{ ...c, statuses: [...c.statuses, status] }];
+    if (!c.statuses.includes(status)) return [c];
+    const statuses = c.statuses.filter((s) => s !== status);
+    return statuses.length ? [{ ...c, statuses }] : [];
+  });
+}
+
+/**
+ * A grouped status given its own column again (X50 step 3), beside the
+ * column it leaves, in that column's category and showing as it does. The
+ * status the column is named after keeps the name; the rest take their first
+ * status's. A name another column has gets the status's id after it.
+ */
+export function splitStatus(columns: BoardColumn[], status: string, names: Record<string, string>): BoardColumn[] {
+  const from = columns.find((c) => c.statuses.includes(status));
+  if (!from || from.statuses.length < 2) return columns;
+  const nameOf = (id: string) => names[id] ?? id;
+  const free = (name: string, id: string) => (columns.some((c) => c !== from && c.name === name) ? `${name} (${id})` : name);
+  const rest = from.statuses.filter((s) => s !== status);
+  const own: BoardColumn = { ...from, name: free(nameOf(status), status), statuses: [status] };
+  const left: BoardColumn = from.name === nameOf(status) ? { ...from, name: free(nameOf(rest[0]), rest[0]), statuses: rest } : { ...from, statuses: rest };
+  return columns.flatMap((c) => (c !== from ? [c] : from.name === nameOf(status) ? [own, left] : [left, own]));
+}
+
+/**
+ * Whether step 3 groups a board's statuses (X50): only a JQL board's, whose
+ * columns moonlet makes from its issues' statuses. A Jira board's, a Linear
+ * team's or a ClickUp list's columns come back on each sync as the tracker
+ * has them, which would undo a group.
+ */
+export const groupsStatuses = (origin: Origin | null) => origin?.kind === "jql";
