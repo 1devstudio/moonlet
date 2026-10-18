@@ -74,6 +74,8 @@ const LINKED = "Checkout on Safari";
 const ghFails = join(w.root, "gh-fails");
 // While this file exists, gh lacks the read:project scope (X50 GitHub Projects).
 const ghNoScope = join(w.root, "gh-no-scope");
+// While this file exists, gh lacks the project scope that moves need.
+const ghNoMove = join(w.root, "gh-no-move");
 // gh's GraphQL answers for GitHub Projects, captured and sanitised (crates/moonlet-core/tests/fixtures).
 const ghFixture = (name: string) => join(process.cwd(), "../../crates/moonlet-core/tests/fixtures", name);
 const wt16 = join(w.root, "wt-16-old-banner");
@@ -88,7 +90,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\ncase "$*" in *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -179,7 +181,7 @@ describe("Tasks mode", () => {
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="acme/storefront"]]')).toBeDisplayed({ wait: 10_000 });
   });
 
-  it("adds a board of a GitHub Project, after gh gets its read:project scope, with the Project's Status as columns (X50)", async () => {
+  it("adds a board of a GitHub Project, after gh gets its read:project scope, with the Project's Status as columns, and moves an item by its Status (X50)", async () => {
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
@@ -204,6 +206,20 @@ describe("Tasks mode", () => {
     // The user's own issue sits in its Status column.
     await expect(card("acme/web#10", "Todo")).toBeDisplayed({ wait: 15_000 });
     await expect($('//button[starts-with(@aria-label, "Switch board, current: Website")]')).toBeDisplayed();
+    // Its State menu sets the item's Status through gh.
+    await card("acme/web#10", "Todo").$('.//button[normalize-space()="Retry failed webhook deliveries"]').click();
+    const state = '//select[@aria-label="State of acme/web#10"]';
+    await choose(state, "1");
+    await browser.waitUntil(() => existsSync(ghLog) && readFileSync(ghLog, "utf8").includes("option=47fc_e2e0004"), { timeout: 10_000, timeoutMsg: existsSync(ghLog) ? readFileSync(ghLog, "utf8") : "no gh log" });
+    // Without gh's project scope the menu is disabled and says what to run.
+    writeFileSync(ghNoMove, "");
+    try {
+      await $('//button[@title="Refresh tasks"]').click();
+      await expect($(state)).toBeDisabled({ wait: 15_000 });
+      await expect($('//span[normalize-space()="Moving needs gh\'s project scope: run gh auth refresh -s project"]')).toBeDisplayed();
+    } finally {
+      rmSync(ghNoMove, { force: true });
+    }
     // Removed again, the repository's board shows.
     await $('//button[@title="Todo options"]').click();
     await $('//button[normalize-space()="Board settings…"]').click();

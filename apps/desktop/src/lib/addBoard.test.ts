@@ -228,7 +228,7 @@ describe("Add a board, step 3 statuses (X50)", () => {
 describe("Add a board, GitHub Projects (X50)", () => {
   it("knows when gh lacks a scope, from the daemon's message, and which", () => {
     expect(scopeNeeded("gh.projects: GitHub Projects need gh's read:project scope. Run gh auth refresh -s read:project, then Check again.")).toBe("read:project");
-    expect(scopeNeeded("GitHub Projects need gh's project scope. Run gh auth refresh -s project, then Check again.")).toBe("project");
+    expect(scopeNeeded("Moving a Project's items needs gh's project scope. Run gh auth refresh -s project.")).toBe("project");
     expect(scopeNeeded("gh api graphql: could not connect")).toBe(null);
   });
 

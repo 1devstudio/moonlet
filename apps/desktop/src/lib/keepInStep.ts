@@ -12,7 +12,9 @@ export type FixPlan =
   | { kind: "github"; repo: string; number: number; close: true }
   /** On a board (X50), `status` and `name` are the next column's first status and its name. */
   | { kind: "move"; column: Exclude<Column, "hidden">; status?: string; name?: string }
-  | { kind: "clean_up"; sessions: string[]; worktrees: string[] };
+  | { kind: "clean_up"; sessions: string[]; worktrees: string[] }
+  /** A GitHub Project's item (X50): its Status set to the next column's. */
+  | { kind: "project"; item: string; status: string; name: string; column: Exclude<Column, "hidden"> };
 
 /** What the chip's button does. */
 export function driftFix(card: Card): FixPlan | null {
@@ -23,11 +25,14 @@ export function driftFix(card: Card): FixPlan | null {
   if (!d.fix) return null;
   if (d.to) {
     const gh = card.task.github;
+    if (gh?.project) return { kind: "project", item: gh.project.item, status: d.to.statuses[0], name: d.to.column, column: d.to.category };
     if (gh) return d.to.category === "done" ? { kind: "github", repo: gh.repo, number: gh.number, close: true } : null;
     return { kind: "move", column: d.to.category, status: d.to.statuses[0], name: d.to.column };
   }
   const column = d.kind === "merged" ? "done" : d.kind === "pr_open" ? "in_review" : "in_progress";
   const gh = card.task.github;
+  // A Project's item moves only to a column of its board.
+  if (gh?.project) return null;
   if (gh) return column === "done" ? { kind: "github", repo: gh.repo, number: gh.number, close: true } : null;
   return { kind: "move", column };
 }
@@ -169,7 +174,8 @@ export function outsideMoves(before: Task[] | null, after: Task[], linked: Set<s
     // moonlet's own move is not news; a task that ended up elsewhere is.
     if (!from || from === t.column || !linked.has(id) || byMoonlet.get(id) === t.column) return [];
     const say = (text: string) => [{ id, title: t.title, text }];
-    if (t.github) {
+    // A GitHub Project's item moves between columns, as a tracker's issue does (X50).
+    if (t.github && !t.github.project) {
       if (closed(t.column) === closed(from)) return [];
       if (closed(t.column)) return byMoonlet.get(id) === "done" ? [] : say(`${t.key} was closed`);
       return say(`${t.key} was reopened`);

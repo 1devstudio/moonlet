@@ -1168,11 +1168,73 @@ describe("a GitHub Project's board (X50 Sync)", () => {
     await refreshTasks("local", "personal", 1_000);
     const tasks = useTasks.getState().data["local/personal"].tasks;
     expect(tasks.map((t) => [t.key, t.column, t.mine, t.github?.project])).toEqual([
-      ["acme/web#10", "todo", true, { item: "PVTI_10", status: "Todo" }],
-      ["acme/web#11", "in_progress", false, { item: "PVTI_11", status: "In Progress" }],
+      ["acme/web#10", "todo", true, { id: "PVT_1", item: "PVTI_10", status: "Todo" }],
+      ["acme/web#11", "in_progress", false, { id: "PVT_1", item: "PVTI_11", status: "In Progress" }],
     ]);
     // Its columns come from the Status options, as the app names them.
     await vi.waitFor(() => expect((saved.at(-1) as { boards?: { columns?: { name: string }[] }[] } | undefined)?.boards?.[0].columns?.map((c) => c.name)).toEqual(["Todo", "In Progress", "Done"]));
+    useTasks.setState({ config: null });
+  });
+
+  it("moves an item by setting its Status to the option of the column picked, and knows gh's scopes", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const options = [{ id: "o1", name: "Todo" }, { id: "o2", name: "In Progress" }, { id: "o3", name: "Done" }];
+    answers["gh.project_items"] = () => ({ id: "PVT_1", status_field: "F", options, items: [item(10, "Todo", ["sam-rivera"])] });
+    answers["gh.scopes"] = () => ["repo", "project"];
+    const moves: object[] = [];
+    answers["gh.project_move"] = (p) => (moves.push(p), true);
+    const project = { id: "web-project", name: "Website", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_project" as const, owner: "acme", number: 2 }, columns: [
+      { name: "Todo", statuses: ["Todo"], category: "todo" as const },
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress" as const },
+      { name: "Done", statuses: ["Done"], category: "done" as const, show: "fold" as const },
+    ] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [project] }, attention: {}, assignee: {} });
+    await refreshTasks("local", "personal", 1_000);
+    await vi.waitFor(() => expect(useTasks.getState().ghScopes.local).toEqual(["repo", "project"]));
+    const task = useTasks.getState().data["local/personal"].tasks[0];
+    // The State menu's In Progress, by its status; a fix's category goes to its column's first status.
+    await moveTask("local", "personal", task, "in_progress", 2_000, "In Progress");
+    await moveTask("local", "personal", task, "done", 3_000);
+    expect(moves).toEqual([
+      { project: "PVT_1", item: "PVTI_10", field: "F", option: "o2" },
+      { project: "PVT_1", item: "PVTI_10", field: "F", option: "o3" },
+    ]);
+    expect(activityOf(task)[0].text).toBe("moonlet moved it to Done");
+    // "Open" or "Closed" never reaches a Project's item: no column, no move, and the issue is left alone.
+    moves.length = 0;
+    await moveTask("local", "personal", task, null, 4_000);
+    expect(moves).toEqual([]);
+    // A fix that moves to the next column sets that option.
+    const drift = { kind: "pr_open" as const, text: "#31 open", fix: "Move to In Progress", to: { column: "In Progress", category: "in_progress" as const, statuses: ["In Progress"] } };
+    await fixDrift("local", "personal", { task, column: "todo", rows: [], needsYou: false, orphans: [], empty: null, drift });
+    expect(moves).toEqual([{ project: "PVT_1", item: "PVTI_10", field: "F", option: "o2" }]);
+    useTasks.setState({ config: null });
+  });
+
+  it("moves an issue on two Projects through the Project its item is in", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const options = (p: string) => [{ id: `${p}-todo`, name: "Todo" }, { id: `${p}-done`, name: "Done" }];
+    answers["gh.project_items"] = (p) =>
+      (p as { number: number }).number === 1
+        ? { id: "PVT_A", status_field: "FA", options: options("a"), items: [{ ...item(10, "Todo", ["sam-rivera"]), item: "PVTI_A10" }] }
+        : { id: "PVT_B", status_field: "FB", options: options("b"), items: [{ ...item(10, "Todo", ["sam-rivera"]), item: "PVTI_B10" }] };
+    answers["gh.scopes"] = () => ["project"];
+    const moves: object[] = [];
+    answers["gh.project_move"] = (p) => (moves.push(p), true);
+    const cols = [
+      { name: "Todo", statuses: ["Todo"], category: "todo" as const },
+      { name: "Done", statuses: ["Done"], category: "done" as const },
+    ];
+    const board = (id: string, number: number) => ({ id, name: id, connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_project" as const, owner: "acme", number }, columns: cols });
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [board("a", 1), board("b", 2)] }, attention: {}, assignee: {} });
+    await refreshTasks("local", "personal", 1_000);
+    const shown = useTasks.getState().data["local/personal"].tasks[0];
+    // The issue as Project B's item, as its board shows it: the move goes to B, not to A listed first.
+    const inB = { ...shown, github: { ...shown.github!, project: { id: "PVT_B", item: "PVTI_B10", status: "Todo" } } };
+    await moveTask("local", "personal", inB, "done", 2_000);
+    expect(moves).toEqual([{ project: "PVT_B", item: "PVTI_B10", field: "FB", option: "b-done" }]);
     useTasks.setState({ config: null });
   });
 });
