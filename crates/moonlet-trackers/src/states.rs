@@ -78,6 +78,28 @@ pub fn board_columns(
         .collect()
 }
 
+/// The column a GitHub Project's issue with no Status shows under (X50), as
+/// GitHub names it. Its status is `""`, so an option a team named "No Status"
+/// stays an option.
+pub const NO_STATUS: &str = "No Status";
+
+/// A GitHub Project's columns (X50): No Status first, as GitHub shows it,
+/// then the Status options, each by its name.
+pub fn project_columns(options: &[String]) -> Vec<crate::config::BoardColumn> {
+    use crate::config::{BoardColumn, Category, Show};
+    let states: Vec<(String, String)> =
+        options.iter().map(|n| (n.clone(), String::new())).collect();
+    let mut out = vec![BoardColumn {
+        name: NO_STATUS.into(),
+        statuses: vec![String::new()],
+        category: Category::Todo,
+        show: Show::Show,
+        wip: None,
+    }];
+    out.extend(board_columns(TrackerKind::Github, &states));
+    out
+}
+
 /// A connection's state mapping: state name → the column the user put it in,
 /// where that differs from [`default_column`] (`trackers.toml` `states`).
 pub type Mapping = std::collections::BTreeMap<String, Column>;
@@ -115,8 +137,8 @@ fn looks_like_review(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TrackerKind::*;
     use crate::config::{Category, Show};
+    use crate::TrackerKind::*;
 
     #[test]
     fn a_clickup_lists_statuses_as_board_columns() {
@@ -296,6 +318,28 @@ mod tests {
                 ("In Progress", Category::InProgress, Show::Show),
                 ("In review", Category::InReview, Show::Show),
                 ("Done", Category::Done, Show::Fold),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_github_projects_columns_start_with_no_status() {
+        let options: Vec<String> = ["Todo", "In Progress", "Done"].map(String::from).to_vec();
+        assert_eq!(
+            project_columns(&options)
+                .iter()
+                .map(|c| (c.name.as_str(), c.statuses.clone(), c.category, c.show))
+                .collect::<Vec<_>>(),
+            [
+                ("No Status", vec![String::new()], Category::Todo, Show::Show),
+                ("Todo", vec!["Todo".to_string()], Category::Todo, Show::Show),
+                (
+                    "In Progress",
+                    vec!["In Progress".to_string()],
+                    Category::InProgress,
+                    Show::Show
+                ),
+                ("Done", vec!["Done".to_string()], Category::Done, Show::Fold),
             ]
         );
     }

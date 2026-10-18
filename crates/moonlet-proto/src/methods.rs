@@ -125,8 +125,8 @@ pub const GH_PROJECTS: &str = "gh.projects";
 /// `{owner, number, mine?}`: a Project's items that are issues, with their
 /// Status (X50 Sync); the user's own when `mine`.
 pub const GH_PROJECT_ITEMS: &str = "gh.project_items";
-/// `{project, item, field, option}`: sets a Project item's Status (X50).
-/// Needs gh's `project` scope.
+/// `{project, item, field, option}`: sets a Project item's Status (X50), or
+/// clears it with no `option` (No Status). Needs gh's `project` scope.
 pub const GH_PROJECT_MOVE: &str = "gh.project_move";
 /// gh's token scopes for github.com, such as `read:project` (X50).
 pub const GH_SCOPES: &str = "gh.scopes";
@@ -686,7 +686,9 @@ pub struct GhProjectMove {
     pub project: String,
     pub item: String,
     pub field: String,
-    pub option: String,
+    /// The Status option; none clears the Status.
+    #[serde(default)]
+    pub option: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
