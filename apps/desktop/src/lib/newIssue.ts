@@ -50,8 +50,9 @@ export function newIssueDraft(board: BoardConfig): NewIssue {
 }
 
 /** Whether Create can be pressed: a title, and the place and issue type the board needs, while nothing is being asked. */
-export function canSubmit(draft: NewIssue, state: { busy: boolean; needsPlace?: boolean; needsType?: boolean }): boolean {
-  if (state.busy || !draft.title.trim()) return false;
+export function canSubmit(draft: NewIssue, state: { busy: boolean; needsPlace?: boolean; needsType?: boolean; missing?: string[]; problem?: string | null }): boolean {
+  // A field Jira requires that the form lacks: the issue is created in Jira. A label it would refuse: fixed first.
+  if (state.busy || !draft.title.trim() || state.missing?.length || state.problem) return false;
   return !(state.needsPlace && !draft.place) && !(state.needsType && !draft.issueType);
 }
 
@@ -99,11 +100,25 @@ export function withCreated<B extends { keys: string[] }>(
   return { tasks: [...synced.tasks, ...kept.map((c) => c.task)], boards, pending, gone };
 }
 
-/** Whether the board's tracker is one moonlet creates issues in (X52): all but Jira so far. */
-export const createsIn = (board: BoardConfig) => ["linear_team", "clickup_list", "github_repo", "github_project"].includes(board.origin.kind);
+/** Whether the board's tracker is one moonlet creates issues in (X52): every board's. */
+export const createsIn = (board: BoardConfig) => ["linear_team", "clickup_list", "github_repo", "github_project", "jira_board", "jql"].includes(board.origin.kind);
 
-/** Whether the form asks where the issue goes (X52): a GitHub Project's issue lives in a repository. */
-export const needsPlace = (board: BoardConfig) => board.origin.kind === "github_project";
+/** Whether the issue needs a place the form picks (X52): a GitHub Project's repository, a Jira board's project. */
+export const needsPlace = (board: BoardConfig) => board.origin.kind === "github_project" || isJira(board);
+
+/** Whether the form asks for an issue type (X52): Jira's. */
+export const needsType = (board: BoardConfig) => isJira(board);
+
+/**
+ * The projects a Jira board's new issue can go in (X52): those of the
+ * board's issues (the tasks whose keys it lists), the most common first.
+ */
+export function jiraProjects(tasks: Task[], keys: string[]): string[] {
+  const onBoard = new Set(keys);
+  const counts = new Map<string, number>();
+  for (const t of tasks) if (onBoard.has(taskId(t))) counts.set(t.key.split("-")[0], (counts.get(t.key.split("-")[0]) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([project]) => project);
+}
 
 /**
  * The repositories a GitHub Project's new issue can go in (X52): the
@@ -133,10 +148,25 @@ export function fitDraft(draft: NewIssue, people: string[]): NewIssue {
 }
 
 /**
- * The form where gh's user can or can't set an issue's assignee and labels
- * (X52): without that access GitHub drops both silently, so the fields are
- * not offered (`assignment`) and the draft sends neither.
+ * The form's Assignee and Labels where they can't be set (X52): GitHub drops
+ * them without gh's user's access (`canSet`), and a Jira create screen may
+ * lack them (`fields`, its field ids). Those not offered are not sent.
  */
-export function withAccess(draft: NewIssue, canSet: boolean): { draft: NewIssue; assignment: boolean } {
-  return canSet ? { draft, assignment: true } : { draft: { ...draft, assignee: "none", labels: [] }, assignment: false };
+export function withAccess(draft: NewIssue, access: { canSet: boolean; fields?: string[] }): { draft: NewIssue; assignee: boolean; labels: boolean } {
+  const on = (field: string) => access.canSet && (!access.fields || access.fields.includes(field));
+  const assignee = on("assignee");
+  const labels = on("labels");
+  return { draft: { ...draft, ...(!assignee && { assignee: "none" }), ...(!labels && { labels: [] }) }, assignee, labels };
 }
+
+/** Whether a board is Jira's: a Jira board or a JQL query. */
+export const isJira = (board: BoardConfig) => board.origin.kind === "jira_board" || board.origin.kind === "jql";
+
+/** Why the labels can't be sent (X52): Jira refuses a label with a space. */
+export function labelProblem(board: BoardConfig, labels: string[]): string | null {
+  const spaced = isJira(board) ? labels.filter((l) => /\s/.test(l)) : [];
+  return spaced.length ? `Jira labels can't have spaces: ${spaced.join(", ")}` : null;
+}
+
+/** A Jira project's page, where an issue the form can't create is made (X52); `connection` is `jira:<site>`. */
+export const jiraProjectUrl = (connection: string, project: string) => `https://${connection.replace(/^jira:/, "")}/browse/${encodeURIComponent(project)}`;

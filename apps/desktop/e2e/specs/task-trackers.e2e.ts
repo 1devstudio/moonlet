@@ -376,12 +376,12 @@ describe("Linear tracker", () => {
 });
 
 /** Jira's and ClickUp's REST APIs: an answer per path, and what was asked. */
-const asked: { method: string; path: string; auth?: string }[] = [];
+const asked: { method: string; path: string; auth?: string; body?: string }[] = [];
 let jiraEndless = false;
 /** Whether Jira answers that the OPS board is gone (X50). */
 let jiraBoardGone = false;
 function jiraClickup(method: string, path: string, auth: string | undefined, body: string): { status: number; body: string } {
-  asked.push({ method, path, auth });
+  asked.push({ method, path, auth, body });
   const ok = (b: string) => ({ status: 200, body: b });
   if (path.startsWith("/jira/")) {
     // Basic auth: "e2e@acme.example:bad" is a token Jira refuses.
@@ -390,7 +390,20 @@ function jiraClickup(method: string, path: string, auth: string | undefined, bod
     if (path.startsWith("/jira/rest/api/3/project/search")) return ok(answer("jira-projects.json"));
     // A query with "nonsense" in it is one Jira refuses (X50 Add a board's preview).
     if (path.startsWith("/jira/rest/api/3/search/jql") && body.includes("nonsense")) return { status: 400, body: answer("jira-error-400-jql.json") };
+    // A new issue from a column (X52): read back; the project's issue types, its create screen (without its required Team), its people.
+    if (path.startsWith("/jira/rest/api/3/issue/EX-24?")) {
+      const found = JSON.parse(answer("jira-search.json")).issues[0];
+      return ok(JSON.stringify({ ...found, id: "10024", key: "EX-24" }));
+    }
     if (path.startsWith("/jira/rest/api/3/search/jql")) return ok(answer(jiraEndless ? "jira-search-page1.json" : "jira-search.json"));
+    if (path === "/jira/rest/api/3/issue" && method === "POST") return { status: 201, body: answer("jira-issue-create.json").replaceAll("ED-24", "EX-24") };
+    if (/^\/jira\/rest\/api\/3\/issue\/createmeta\/[A-Z]+\/issuetypes\/\d+/.test(path)) {
+      const screen = JSON.parse(answer("jira-createmeta-fields.json"));
+      screen.fields = screen.fields.filter((f: { fieldId: string }) => f.fieldId !== "customfield_10050");
+      return ok(JSON.stringify(screen));
+    }
+    if (/^\/jira\/rest\/api\/3\/issue\/createmeta\/[A-Z]+\/issuetypes/.test(path)) return ok(answer("jira-createmeta-issuetypes.json"));
+    if (path.startsWith("/jira/rest/api/3/user/assignable/search")) return ok(answer("jira-assignable-users.json"));
     if (path.includes("/transitions")) return ok(JSON.stringify({ transitions: [] }));
     // A Jira Software site's boards, a Scrum board's configuration and filter (X50 Add a board).
     if (/^\/jira\/rest\/agile\/1\.0\/board\/\d+\/configuration/.test(path)) return jiraBoardGone ? { status: 404, body: answer("jira-error-404-board.json") } : ok(answer("jira-board-scrum-configuration.json"));
@@ -584,7 +597,7 @@ describe("Jira and ClickUp trackers", () => {
     await expect($('//aside[@aria-label="Task detail"]').$(sel.text("No Jira transition leads to that column from here"))).toBeDisplayed({ wait: 15_000 });
   });
 
-  it("adds a board from a JQL query the workspace has no board for, groups a status into another column and back, shows it, renames it in Board settings, and removes it from Settings (X50)", async () => {
+  it("adds a board from a JQL query the workspace has no board for, groups a status into another column and back, shows it, creates an issue from a column's + (X52), renames it in Board settings, and removes it from Settings (X50)", async () => {
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
@@ -640,6 +653,20 @@ describe("Jira and ClickUp trackers", () => {
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX query"]]')).toBeDisplayed({ wait: 10_000 });
     await expect($('//button[starts-with(@aria-label, "Switch board, current: EX query")]')).toBeDisplayed();
     await expect($('//article[starts-with(@aria-label, "EX-1")]')).toBeDisplayed({ wait: 15_000 });
+    // A column's + creates a Jira issue in the board's one project, as a Task, in that column (X52).
+    const inProgress = '//section[@aria-label="In Progress"]';
+    await $(inProgress).moveTo();
+    await $(`${inProgress}//button[@title="New issue in In Progress"]`).click();
+    const newIssue = '//div[@role="dialog"][@aria-label="New issue in In Progress"]';
+    await expect($(`${newIssue}//label[.//span[normalize-space()="Issue type"]]//select`)).toHaveValue("10001", { wait: 10_000 });
+    await fill(`${newIssue}//input`, "Retry failed webhook deliveries");
+    await $(`${newIssue}//button[normalize-space()="Create"]`).waitForEnabled({ timeout: 10_000 });
+    await $(`${newIssue}//button[normalize-space()="Create"]`).click();
+    await expect($(`${inProgress}//article[starts-with(@aria-label, "EX-24")]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($('//aside[@aria-label="Task detail"]')).toBeDisplayed();
+    const created = JSON.parse(asked.find((x) => x.method === "POST" && x.path === "/jira/rest/api/3/issue")?.body ?? "{}");
+    expect([created.fields?.project, created.fields?.issuetype, created.fields?.summary, created.fields?.assignee]).toEqual([{ key: "EX" }, { id: "10001" }, "Retry failed webhook deliveries", { accountId: "5b10a2844c20165700ede21g" }]);
+    await $('//button[@title="Close detail"]').click();
     // A column's ⋯ menu opens Board settings, which saves the board where it was.
     await $('//button[@title="In Progress options"]').click();
     await $('//button[normalize-space()="Board settings…"]').click();
