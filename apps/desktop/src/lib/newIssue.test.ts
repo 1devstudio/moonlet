@@ -79,10 +79,11 @@ describe("the column + (X52)", () => {
     expect(withCreated(synced, other, 3_000)).toEqual({ ...synced, pending: other, gone: [] });
   });
 
-  it("shows on the boards of the trackers moonlet creates issues in: Linear and ClickUp so far", () => {
+  it("shows on the boards of the trackers moonlet creates issues in: Linear, ClickUp and GitHub repositories so far", () => {
     expect(createsIn(linear)).toBe(true);
     expect(createsIn({ ...linear, connection: "clickup:9015000001", origin: { kind: "clickup_list", list: "901500000002" } })).toBe(true);
+    expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_repo", repo: "acme/web" } })).toBe(true);
     expect(createsIn({ ...linear, connection: "jira:acme.atlassian.net", origin: { kind: "jira_board", board: 10 } })).toBe(false);
-    expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_repo", repo: "acme/web" } })).toBe(false);
+    expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } })).toBe(false);
   });
 });

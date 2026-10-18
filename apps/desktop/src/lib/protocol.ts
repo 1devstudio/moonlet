@@ -265,6 +265,21 @@ export interface GhProject {
   options: { id: string; name: string }[];
 }
 
+/** A new issue from a board column (X52): the issue, and its node id for a GitHub Project. */
+export interface GhCreated {
+  task: GhTask;
+  node: string;
+}
+
+/** What the new-issue form offers for a repository (X52). */
+export interface GhCreateOptions {
+  me: string;
+  people: string[];
+  labels: string[];
+  /** Whether gh's user can set assignees and labels; GitHub drops them otherwise. */
+  can_set: boolean;
+}
+
 /** A GitHub Project as a board reads it (X50 Sync): its Status options and its items that are issues. */
 export interface GhProjectBoard {
   id: string;
@@ -605,6 +620,8 @@ export const M = {
   ghTasks: "gh.tasks",
   ghProjects: "gh.projects",
   ghProjectItems: "gh.project_items",
+  ghCreateOptions: "gh.create_options",
+  ghIssueCreate: "gh.issue_create",
   ghProjectMove: "gh.project_move",
   ghScopes: "gh.scopes",
   ghTask: "gh.task",

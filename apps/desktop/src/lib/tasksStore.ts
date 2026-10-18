@@ -6,7 +6,7 @@ import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
+import { type GhCreated, type GhCreateOptions, type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
@@ -529,6 +529,16 @@ function notShown(task: Task) {
   toast(`Created ${task.key}; this board doesn't show it`, "info", { label: "Open", run: () => void openUrl(task.url) });
 }
 
+/** Asks the board's tracker to create the issue in `status` (X52): GitHub through gh on the host, the others through the app. */
+async function createInTracker(host: string, board: BoardConfig, draft: NewIssue, status: string): Promise<Task> {
+  if (board.origin.kind === "github_repo") {
+    const req = { repo: board.origin.repo, title: draft.title, body: draft.description, assignee: draft.assignee, labels: draft.labels };
+    return taskFromGh((await rpc<GhCreated>(host, M.ghIssueCreate, req)).task, GITHUB);
+  }
+  const answer = await hostsApi.trackerCreate({ id: board.connection, place: placeOf(board), issue: { ...draft, status }, inCycle: board.finished === "sprint" });
+  return taskFromBoardIssue(answer);
+}
+
 /** Where a new issue goes in the tracker (X52): a Linear team, or a ClickUp list. */
 function placeOf(board: BoardConfig): string {
   if (board.origin.kind === "linear_team") return board.origin.team;
@@ -536,9 +546,15 @@ function placeOf(board: BoardConfig): string {
   throw new Error("moonlet can't create issues on this board yet");
 }
 
-/** The new-issue form's lists for a board (X52): the user, the people and the labels. */
-export async function createOptions(board: BoardConfig) {
-  return hostsApi.trackerCreateOptions(board.connection, placeOf(board));
+/** The new-issue form's lists for a board (X52): the user, the people and the labels, and whether they can be set. */
+export async function createOptions(host: string, board: BoardConfig): Promise<{ me: string; people: { id: string; name: string }[]; labels: { id: string; name: string }[]; canSet: boolean }> {
+  if (board.origin.kind === "github_repo") {
+    // GitHub through gh on the workspace's host; people and labels by login and name.
+    const o = await rpc<GhCreateOptions>(host, M.ghCreateOptions, { repo: board.origin.repo });
+    const named = (xs: string[]) => xs.map((x) => ({ id: x, name: x }));
+    return { me: o.me, people: named(o.people), labels: named(o.labels), canSet: o.can_set };
+  }
+  return { ...(await hostsApi.trackerCreateOptions(board.connection, placeOf(board))), canSet: true };
 }
 
 /**
@@ -550,12 +566,12 @@ export async function createOptions(board: BoardConfig) {
 export async function createIssue(host: string, workspaceId: string, board: BoardConfig, column: BoardColumn, draft: NewIssue): Promise<Task> {
   const target = createTarget(board, column);
   if (!target) throw new Error(`${column.name} takes no new issues`);
-  const answer = await hostsApi.trackerCreate({ id: board.connection, place: placeOf(board), issue: { ...draft, status: target.status }, inCycle: board.finished === "sprint" });
+  const answer = await createInTracker(host, board, draft, target.status);
   // When the tracker answered: a sync that started before this may not have it yet.
   const now = Date.now();
   const columns = syncedColumns(board, null);
   // The card shows the Markdown typed until a sync reads the tracker's own copy (ClickUp answers with plain text).
-  const [task] = categorize(columns, [{ ...taskFromBoardIssue(answer), ...(draft.description && { description: draft.description }), mine: draft.assignee === "me" }]);
+  const [task] = categorize(columns, [{ ...answer, ...(draft.description && { description: draft.description }), mine: draft.assignee === "me" }]);
   recordActivity(task, "moonlet created it", now);
   // Its column is moonlet's doing, not a move made outside it (X44).
   movedByMoonlet.set(taskId(task), task.column);
