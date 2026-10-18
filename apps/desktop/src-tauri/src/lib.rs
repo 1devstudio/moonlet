@@ -6,6 +6,7 @@ mod attach;
 mod hosts;
 mod remote;
 mod secrets;
+mod shared;
 mod trackers;
 mod webview_data;
 
