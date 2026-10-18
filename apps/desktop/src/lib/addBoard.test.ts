@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alreadyAdded, byGroup, canContinue, cardChoices, clash, columnAt, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { alreadyAdded, byGroup, canContinue, cardChoices, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -180,5 +180,32 @@ describe("Add a board, step 1 groups (X50 ClickUp)", () => {
     ]);
     // Linear's teams and Jira's boards come as one group with no name.
     expect(byGroup<{ key: string; group?: string }>([{ key: "ENG" }, { key: "DES" }]).map((g) => [g.group, g.rows.length])).toEqual([[null, 2]]);
+  });
+});
+
+describe("Add a board, step 3 polish (X50)", () => {
+  it("drops a dragged column where it lands", () => {
+    expect(dropColumn(WEB, 4, 1).map((c) => c.name)).toEqual(["Backlog", "Done", "Selected for Development", "In Progress", "Design Review"]);
+    expect(dropColumn(WEB, 0, 3).map((c) => c.name)).toEqual(["Selected for Development", "In Progress", "Design Review", "Backlog", "Done"]);
+    expect(dropColumn(WEB, 2, 2)).toEqual(WEB);
+  });
+
+  it("names the columns whose category differs from the one suggested", () => {
+    const suggested = { "Design Review": "in_review", Done: "done" } as const;
+    expect(changedCategories(columnAt(WEB, 3, { category: "in_progress" }), suggested)).toEqual(["Design Review"]);
+    expect(changedCategories(WEB, suggested)).toEqual([]);
+  });
+
+  it("takes the columns' categories as suggested when they first come, and again for a new source", () => {
+    const first = suggestedOf({}, WEB);
+    expect(first).toEqual({ Backlog: "todo", "Selected for Development": "todo", "In Progress": "in_progress", "Design Review": "in_review", Done: "done" });
+    // A change keeps the first suggestion; Board settings start from the board's columns as saved.
+    expect(suggestedOf(first, columnAt(WEB, 3, { category: "in_progress" }))).toBe(first);
+    // A new source clears the columns, and its own come as suggested.
+    expect(suggestedOf(first, [])).toEqual({});
+  });
+
+  it("links a Jira board's filter for editing in Jira", () => {
+    expect(jiraFilterUrl("acme.atlassian.net", "10021")).toBe("https://acme.atlassian.net/issues/?filter=10021");
   });
 });

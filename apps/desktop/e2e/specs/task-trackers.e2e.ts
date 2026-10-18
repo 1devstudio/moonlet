@@ -354,6 +354,12 @@ function jiraClickup(method: string, path: string, auth: string | undefined, bod
     if (path.startsWith("/jira/rest/api/3/project/search")) return ok(answer("jira-projects.json"));
     if (path.startsWith("/jira/rest/api/3/search/jql")) return ok(answer(jiraEndless ? "jira-search-page1.json" : "jira-search.json"));
     if (path.includes("/transitions")) return ok(JSON.stringify({ transitions: [] }));
+    // A Jira Software site's boards, a Scrum board's configuration and filter (X50 Add a board).
+    if (/^\/jira\/rest\/agile\/1\.0\/board\/\d+\/configuration/.test(path)) return ok(answer("jira-board-scrum-configuration.json"));
+    if (path.startsWith("/jira/rest/agile/1.0/board")) return ok(answer("jira-boards.json"));
+    if (path.startsWith("/jira/rest/api/3/filter/")) return ok(answer("jira-filter-scrum.json"));
+    if (path.startsWith("/jira/rest/api/3/status")) return ok(answer("jira-statuses.json"));
+    if (path.startsWith("/jira/rest/api/3/field")) return ok(answer("jira-fields.json"));
     void body;
     return { status: 404, body: "{}" };
   }
@@ -454,6 +460,40 @@ describe("Jira and ClickUp trackers", () => {
     await closeSettings();
   });
 
+  it("adds an existing Jira board: its filter with Edit in Jira, a changed category outlined, a column dragged (X50)", async () => {
+    await $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]').click();
+    await $('//button[@title="Add a board"]').click();
+    const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+    await $(`(${dialog}//button[.//span[normalize-space()="Jira Cloud"]])[1]`).click();
+    await $(`${dialog}//button[@role="radio"][.//span[normalize-space()="OPS board"]]`).click();
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    // Step 2: the board's filter, read-only, with a link to edit it in Jira.
+    await expect($(`${dialog}//section[@aria-label="Board filter"]//span[normalize-space()="project = 10008 ORDER BY Rank ASC"]`)).toBeDisplayed({ wait: 15_000 });
+    await expect($(`${dialog}//a[normalize-space()="Edit in Jira"]`)).toHaveAttribute("href", "https://acme.atlassian.net/issues/?filter=10021");
+    await $(`${dialog}//button[normalize-space()="Continue"]`).waitForEnabled({ timeout: 15_000 });
+    await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    // Step 3: Jira's columns; a category changed from its suggestion is outlined.
+    const row = (name: string) => `${dialog}//div[@role="row"][@aria-label="${name}"]`;
+    await expect($(row("QA Testing"))).toBeDisplayed({ wait: 10_000 });
+    await choose(`${row("QA Testing")}//select`, "in_progress");
+    await expect($(`${row("QA Testing")}//select`)).toHaveAttribute("data-changed", "true");
+    await expect($(`${row("Open")}//select`)).not.toHaveAttribute("data-changed");
+    // Dragging Done onto Open puts it first.
+    await browser.execute(() => {
+      const rows = [...document.querySelectorAll<HTMLElement>('[role="dialog"] [role="row"][aria-label]')];
+      const at = (name: string) => rows.find((r) => r.getAttribute("aria-label") === name)!;
+      const data = new DataTransfer();
+      // A column drags by its grip.
+      document.querySelector<HTMLElement>('[role="dialog"] [aria-label="Drag Done"]')!.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: data }));
+      at("Open").dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data }));
+      at("Open").dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
+    });
+    await browser.waitUntil(async () => (await $(`(${dialog}//div[@role="row"][@aria-label])[1]`).getAttribute("aria-label")) === "Done", { timeout: 5_000 });
+    await expect($(`${dialog}//*[contains(normalize-space(), "Drag to reorder.")]`)).toBeDisplayed();
+    await browser.keys("Escape");
+    await $(dialog).waitForExist({ reverse: true });
+  });
+
   it("asks Jira who the user is before each search, and reads at most 5 pages", async () => {
     jiraEndless = true;
     try {
@@ -487,10 +527,13 @@ describe("Jira and ClickUp trackers", () => {
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
     await $(`(${dialog}//button[.//span[normalize-space()="Jira Cloud"]])[1]`).click();
     await $(`${dialog}//button[.//span[normalize-space()="A JQL query"]]`).click();
+    // Each step's footer says what moonlet does with the tracker.
+    await expect($(`${dialog}//*[normalize-space()="moonlet reads the board's configuration; it never changes it in Jira."]`)).toBeDisplayed();
     await fill(`${dialog}//textarea`, "project = EX");
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     // Step 2 counts what the query brings.
     await expect($(`${dialog}//p[contains(normalize-space(), "3 issues match")]`)).toBeDisplayed({ wait: 15_000 });
+    await expect($(`${dialog}//*[normalize-space()="Counts update as you type."]`)).toBeDisplayed();
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     // Step 3: a column per status the issues are in.
     await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
@@ -502,6 +545,7 @@ describe("Jira and ClickUp trackers", () => {
     await fill(`${dialog}//textarea`, "project = EX AND type = Bug");
     await $(`${dialog}//nav//button[.//span[normalize-space()="Finish"]]`).click();
     await fill(`${dialog}//label[.//span[normalize-space()="Name"]]//input`, "EX query");
+    await expect($(`${dialog}//*[normalize-space()="Saved to ~/.moonlet/trackers.toml."]`)).toBeDisplayed();
     await $(`${dialog}//button[normalize-space()="Create board"]`).click();
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="EX query"]]')).toBeDisplayed({ wait: 10_000 });
     await expect($('//button[starts-with(@aria-label, "Switch board, current: EX query")]')).toBeDisplayed();
@@ -511,6 +555,11 @@ describe("Jira and ClickUp trackers", () => {
     await $('//button[normalize-space()="Board settings…"]').click();
     const settings = '//div[@role="dialog"][@aria-label="Board settings"]';
     await expect($(settings)).toBeDisplayed({ wait: 10_000 });
+    // Board settings outline a category changed from the board's own.
+    await $(`${settings}//nav//button[.//span[normalize-space()="Columns"]]`).click();
+    await choose(`${settings}//div[@role="row"][@aria-label="In Progress"]//select`, "in_review");
+    await expect($(`${settings}//div[@role="row"][@aria-label="In Progress"]//select`)).toHaveAttribute("data-changed", "true");
+    await choose(`${settings}//div[@role="row"][@aria-label="In Progress"]//select`, "in_progress");
     await $(`${settings}//nav//button[.//span[normalize-space()="Finish"]]`).click();
     await fill(`${settings}//label[.//span[normalize-space()="Name"]]//input`, "EX issues");
     await $(`${settings}//button[normalize-space()="Save"]`).click();
