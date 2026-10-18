@@ -368,6 +368,9 @@ pub struct GhProject {
     pub status_field: Option<String>,
     #[serde(default)]
     pub options: Vec<GhOption>,
+    /// The name of its first number field, a card's estimate (X50 Cards show).
+    #[serde(default)]
+    pub number_field: Option<String>,
 }
 
 /// An option of a Project's Status field.
@@ -387,6 +390,9 @@ pub struct GhProjectBoard {
     pub status_field: Option<String>,
     #[serde(default)]
     pub options: Vec<GhOption>,
+    /// The name of its first number field, as on [`GhProject`].
+    #[serde(default)]
+    pub number_field: Option<String>,
     pub items: Vec<GhProjectItem>,
 }
 
@@ -399,6 +405,9 @@ pub struct GhProjectItem {
     /// Its Status option's name; `None` when it has none.
     #[serde(default)]
     pub status: Option<String>,
+    /// Its value in the Project's first number field, when it has one.
+    #[serde(default)]
+    pub estimate: Option<f64>,
     pub task: GhTask,
 }
 

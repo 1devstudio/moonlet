@@ -15,7 +15,18 @@ use crate::git::{parse_gh_tasks, run_raw};
 /// Status field's options.
 const PROJECT_FIELDS: &str =
     "id number title closed owner { ... on User { login } ... on Organization { login } } \
-     field(name: \"Status\") { ... on ProjectV2SingleSelectField { id name options { id name } } }";
+     field(name: \"Status\") { ... on ProjectV2SingleSelectField { id name options { id name } } } \
+     fields(first: 50) { nodes { ... on ProjectV2Field { id name dataType } } }";
+
+/// A Project's first number field, `(id, name)`, from its `fields` (the
+/// other kinds of field come as `{}`).
+fn number_field(project: &Value) -> Option<(&str, &str)> {
+    project["fields"]["nodes"]
+        .as_array()?
+        .iter()
+        .find(|f| f["dataType"] == "NUMBER")
+        .and_then(|f| Some((f["id"].as_str()?, f["name"].as_str()?)))
+}
 
 /// The user's own Projects, and those of each owner in `owners`.
 pub fn projects_query(owners: usize) -> String {
@@ -62,6 +73,7 @@ pub fn parse_projects(raw: &[u8]) -> Result<Vec<GhProject>> {
             title: p["title"].as_str().unwrap_or_default().into(),
             status_field: field["id"].as_str().map(String::from),
             options: options(&field["options"]),
+            number_field: number_field(p).map(|(_, name)| name.into()),
         });
     }
     Ok(out)
@@ -70,8 +82,10 @@ pub fn parse_projects(raw: &[u8]) -> Result<Vec<GhProject>> {
 /// A page of a Project's items, by its owner and number, with the user's login.
 pub const ITEMS_QUERY: &str = "query($owner: String!, $number: Int!, $after: String) { viewer { login } \
      repositoryOwner(login: $owner) { ... on ProjectV2Owner { projectV2(number: $number) { id \
-     field(name: \"Status\") { ... on ProjectV2SingleSelectField { id options { id name } } } items(first: 100, after: $after) { \
+     field(name: \"Status\") { ... on ProjectV2SingleSelectField { id options { id name } } } \
+     fields(first: 50) { nodes { ... on ProjectV2Field { id name dataType } } } items(first: 100, after: $after) { \
      nodes { id type isArchived fieldValueByName(name: \"Status\") { ... on ProjectV2ItemFieldSingleSelectValue { name optionId } } \
+     fieldValues(first: 50) { nodes { ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2Field { id } } } } } \
      content { ... on Issue { number title body url state stateReason updatedAt repository { nameWithOwner } \
      assignees(first: 10) { nodes { login } } labels(first: 20) { nodes { name } } \
      closedByPullRequestsReferences(first: 5) { nodes { number repository { name owner { login } } } } } } } \
@@ -107,12 +121,23 @@ pub fn parse_project_items(raw: &[u8]) -> Result<(GhProjectBoard, String, Option
         })
         .collect();
     let tasks = parse_gh_tasks(&serde_json::to_vec(&listed)?)?;
+    let numbers = number_field(project);
+    // The item's value in the first number field; the others are left out.
+    let estimate = |i: &Value| {
+        let (id, _) = numbers?;
+        i["fieldValues"]["nodes"]
+            .as_array()?
+            .iter()
+            .find(|v| v["field"]["id"] == id)?["number"]
+            .as_f64()
+    };
     let items_out = issues
         .iter()
         .zip(tasks)
         .map(|(i, task)| GhProjectItem {
             item: i["id"].as_str().unwrap_or_default().into(),
             status: i["fieldValueByName"]["name"].as_str().map(String::from),
+            estimate: estimate(i),
             task,
         })
         .collect();
@@ -123,6 +148,7 @@ pub fn parse_project_items(raw: &[u8]) -> Result<(GhProjectBoard, String, Option
         id: project["id"].as_str().unwrap_or_default().into(),
         status_field: project["field"]["id"].as_str().map(String::from),
         options: options(&project["field"]["options"]),
+        number_field: numbers.map(|(_, name)| name.into()),
         items: items_out,
     };
     Ok((
@@ -444,6 +470,29 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(parse_projects(both.as_bytes()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_projects_first_number_field_and_each_issues_value_in_it() {
+        let projects = parse_projects(&fixture("gh-projects.json")).unwrap();
+        // Website has Estimate and then Hours; Pricing has no number field.
+        assert_eq!(
+            projects
+                .iter()
+                .map(|p| p.number_field.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("Estimate"), None]
+        );
+        let (board, _, _) = parse_project_items(&fixture("gh-project-items.json")).unwrap();
+        assert_eq!(board.number_field.as_deref(), Some("Estimate"));
+        // #10 has 3 and Hours 8, #11 half a point, #12 only Hours.
+        assert_eq!(
+            board.items[..3]
+                .iter()
+                .map(|i| (i.task.number, i.estimate))
+                .collect::<Vec<_>>(),
+            [(10, Some(3.0)), (11, Some(0.5)), (12, None)]
+        );
     }
 
     #[test]

@@ -104,7 +104,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const [suggested, setSuggested] = useState<Partial<Record<string, BoardColumn["category"]>>>({});
   // The row being dragged in step 3.
   const dragged = useRef<number | null>(null);
-  const [preview, setPreview] = useState<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null } | null>(null);
+  const [preview, setPreview] = useState<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null; numberField?: string | null } | null>(null);
   const tracker = draft.connection ? (trackerOf(draft.connection) ?? "github") : null;
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   // The furthest step reached: the steps before it are done and stay clickable after Back.
@@ -191,7 +191,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
     setPreview(null);
     if (!previewing) return;
     const t = setTimeout(() => {
-      const answer = (p: { tasks: Task[]; columns: BoardColumn[] | null; error: string | null }) => {
+      const answer = (p: { tasks: Task[]; columns: BoardColumn[] | null; error: string | null; numberField?: string | null }) => {
         if (latest.current !== previewKey) return;
         setPreview(p);
         // A JQL board's, a Linear team's and a ClickUp list's columns come with their issues.
@@ -693,7 +693,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                 <section aria-label="Cards show">
                   <div className="mb-1.5 ui-text-12 text-muted">Cards show</div>
                   <div className="flex flex-wrap gap-4">
-                    {cardChoices(tracker ?? "github").map(([id, label]) => (
+                    {cardChoices(tracker ?? "github", preview?.numberField).map(([id, label]) => (
                       <label key={id} className="flex items-center gap-1.5 ui-text-12.5 text-fg">
                         <input type="checkbox" checked={draft.cards.includes(id)} onChange={(e) => set({ cards: e.target.checked ? [...draft.cards, id] : draft.cards.filter((x) => x !== id) })} />
                         {label}

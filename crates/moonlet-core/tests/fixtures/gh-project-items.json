@@ -23,6 +23,31 @@
             }
           ]
         },
+        "fields": {
+          "nodes": [
+            {
+              "id": "PVTF_e2e0020",
+              "name": "Title",
+              "dataType": "TITLE"
+            },
+            {
+              "id": "PVTF_e2e0021",
+              "name": "Assignees",
+              "dataType": "ASSIGNEES"
+            },
+            {},
+            {
+              "id": "PVTF_e2e0022",
+              "name": "Estimate",
+              "dataType": "NUMBER"
+            },
+            {
+              "id": "PVTF_e2e0023",
+              "name": "Hours",
+              "dataType": "NUMBER"
+            }
+          ]
+        },
         "items": {
           "nodes": [
             {
@@ -32,6 +57,23 @@
               "fieldValueByName": {
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {},
+                  {
+                    "number": 3,
+                    "field": {
+                      "id": "PVTF_e2e0022"
+                    }
+                  },
+                  {
+                    "number": 8,
+                    "field": {
+                      "id": "PVTF_e2e0023"
+                    }
+                  }
+                ]
               },
               "content": {
                 "number": 10,
@@ -71,6 +113,17 @@
                 "name": "In Progress",
                 "optionId": "47fc_e2e0004"
               },
+              "fieldValues": {
+                "nodes": [
+                  {},
+                  {
+                    "number": 0.5,
+                    "field": {
+                      "id": "PVTF_e2e0022"
+                    }
+                  }
+                ]
+              },
               "content": {
                 "number": 11,
                 "title": "Add dark mode to settings",
@@ -100,6 +153,17 @@
               "fieldValueByName": {
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {},
+                  {
+                    "number": 5,
+                    "field": {
+                      "id": "PVTF_e2e0023"
+                    }
+                  }
+                ]
               },
               "content": {
                 "number": 12,
@@ -131,6 +195,11 @@
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {
                 "number": 2,
                 "title": "Gift cards at checkout",
@@ -160,6 +229,11 @@
               "fieldValueByName": {
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
               },
               "content": {
                 "number": 13,
@@ -191,6 +265,11 @@
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {}
             },
             {
@@ -200,6 +279,11 @@
               "fieldValueByName": {
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
               },
               "content": {}
             },
@@ -211,6 +295,11 @@
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {}
             },
             {
@@ -220,6 +309,11 @@
               "fieldValueByName": {
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
               },
               "content": {}
             },
@@ -231,6 +325,11 @@
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {}
             },
             {
@@ -241,6 +340,11 @@
                 "name": "Todo",
                 "optionId": "f75a_e2e0003"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {}
             },
             {
@@ -250,6 +354,11 @@
               "fieldValueByName": {
                 "name": "Done",
                 "optionId": "9823_e2e0005"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
               },
               "content": {
                 "number": 5,
@@ -285,6 +394,11 @@
                 "name": "Done",
                 "optionId": "9823_e2e0005"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {
                 "number": 6,
                 "title": "Search by order number",
@@ -314,6 +428,11 @@
               "fieldValueByName": {
                 "name": "Done",
                 "optionId": "9823_e2e0005"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
               },
               "content": {
                 "number": 7,
@@ -345,6 +464,11 @@
                 "name": "Done",
                 "optionId": "9823_e2e0005"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {
                 "number": 8,
                 "title": "Remember the last filter",
@@ -374,6 +498,11 @@
               "fieldValueByName": {
                 "name": "Done",
                 "optionId": "9823_e2e0005"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
               },
               "content": {
                 "number": 3,
@@ -405,6 +534,11 @@
                 "name": "Done",
                 "optionId": "9823_e2e0005"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {
                 "number": 9,
                 "title": "Resize product images",
@@ -435,6 +569,11 @@
                 "name": "Done",
                 "optionId": "9823_e2e0005"
               },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {
                 "number": 1,
                 "title": "Email receipts",
@@ -462,6 +601,11 @@
               "type": "DRAFT_ISSUE",
               "isArchived": false,
               "fieldValueByName": null,
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {}
             },
             {
@@ -469,6 +613,11 @@
               "type": "ISSUE",
               "isArchived": false,
               "fieldValueByName": null,
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
+              },
               "content": {
                 "number": 4,
                 "title": "Fix the date picker on Safari",
@@ -498,6 +647,11 @@
               "fieldValueByName": {
                 "name": "In Progress",
                 "optionId": "47fc_e2e0004"
+              },
+              "fieldValues": {
+                "nodes": [
+                  {}
+                ]
               },
               "content": {}
             }

@@ -478,11 +478,13 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
  * everyone's with the user's own marked, the tracker's columns, or why the
  * tracker refused it.
  */
-export async function previewBoard(host: string, workspaceId: string, board: BoardConfig): Promise<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null }> {
+export async function previewBoard(host: string, workspaceId: string, board: BoardConfig): Promise<{ tasks: Task[]; columns: BoardColumn[] | null; error: string | null; numberField?: string | null }> {
   const repos = useTasks.getState().data[wsKey(host, workspaceId)]?.repos ?? {};
   const projects = workspaceProjects(useStore.getState(), host, workspaceId).map((p) => ({ path: p.path, repo: repos[p.id] ?? null }));
   const r = await readBoard(host, board, projects, true);
-  return { tasks: r.tasks, columns: r.columns, error: r.error === "" ? (useTasks.getState().attention[board.connection] ?? "Reconnect this tracker") : r.error };
+  const error = r.error === "" ? (useTasks.getState().attention[board.connection] ?? "Reconnect this tracker") : r.error;
+  // A GitHub Project's number field, which Cards show offers (X50).
+  return { tasks: r.tasks, columns: r.columns, error, ...(r.project && { numberField: r.project.numberField ?? null }) };
 }
 
 interface BoardRead {
@@ -554,7 +556,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
           () => scopesReadAt.delete(host),
         );
       }
-      const project = { id: own.id, field: own.status_field, options: own.options };
+      const project = { id: own.id, field: own.status_field, options: own.options, numberField: own.number_field ?? null };
       return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id), mine })), columns, sprint: null, project, error: null };
     } catch (e) {
       return none(message(e));

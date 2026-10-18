@@ -28,6 +28,21 @@
                   "name": "Done"
                 }
               ]
+            },
+            "fields": {
+              "nodes": [
+                {
+                  "id": "PVTF_e2e0020",
+                  "name": "Title",
+                  "dataType": "TITLE"
+                },
+                {
+                  "id": "PVTF_e2e0021",
+                  "name": "Assignees",
+                  "dataType": "ASSIGNEES"
+                },
+                {}
+              ]
             }
           },
           {
@@ -53,6 +68,31 @@
                 {
                   "id": "9823_e2e0005",
                   "name": "Done"
+                }
+              ]
+            },
+            "fields": {
+              "nodes": [
+                {
+                  "id": "PVTF_e2e0020",
+                  "name": "Title",
+                  "dataType": "TITLE"
+                },
+                {
+                  "id": "PVTF_e2e0021",
+                  "name": "Assignees",
+                  "dataType": "ASSIGNEES"
+                },
+                {},
+                {
+                  "id": "PVTF_e2e0022",
+                  "name": "Estimate",
+                  "dataType": "NUMBER"
+                },
+                {
+                  "id": "PVTF_e2e0023",
+                  "name": "Hours",
+                  "dataType": "NUMBER"
                 }
               ]
             }
@@ -81,6 +121,21 @@
                   "id": "9823_e2e0005",
                   "name": "Done"
                 }
+              ]
+            },
+            "fields": {
+              "nodes": [
+                {
+                  "id": "PVTF_e2e0020",
+                  "name": "Title",
+                  "dataType": "TITLE"
+                },
+                {
+                  "id": "PVTF_e2e0021",
+                  "name": "Assignees",
+                  "dataType": "ASSIGNEES"
+                },
+                {}
               ]
             }
           }
