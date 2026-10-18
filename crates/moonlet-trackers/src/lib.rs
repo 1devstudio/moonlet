@@ -11,6 +11,7 @@ pub mod clickup;
 pub mod config;
 pub mod jira;
 pub mod jira_board;
+pub mod jira_create;
 pub mod linear;
 pub mod oauth;
 pub mod priority;
