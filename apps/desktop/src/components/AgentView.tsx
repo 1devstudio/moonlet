@@ -56,6 +56,7 @@ import {
   questionAnswers,
   rememberPrompt,
   saveChatDraft,
+  thinkingBody,
   thinkingPreview,
   toolCommand,
   toolGroupLabel,
@@ -383,7 +384,7 @@ export function Thinking({ item }: { item: ChatItem }) {
           {open ? <ChevronDown size={13} className="text-faint opacity-0 group-hover:opacity-100" /> : <ChevronRight size={13} className="text-faint" />}
         </span>
       </button>
-      {open && <div className="selectable mb-2 ml-6 mt-1 whitespace-pre-wrap border-l border-border pl-3 ui-text-13 italic leading-relaxed text-muted">{item.text}</div>}
+      {open && <div className="selectable mb-2 ml-6 mt-1 whitespace-pre-wrap border-l border-border pl-3 ui-text-13 italic leading-relaxed text-muted">{thinkingBody(item.text)}</div>}
     </div>
   );
 }

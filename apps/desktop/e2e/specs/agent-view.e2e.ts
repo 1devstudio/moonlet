@@ -16,8 +16,8 @@ const THOUGHT = "The resume URL is session-bound so I cannot fetch it. Try the p
 const ANSWER = "Found the error, and it is a one-setting fix.";
 
 /** Speaks just enough stream-json: an init, then for any message a turn of
- *  thinking, two Bash calls and an answer. printf, because /bin/sh's echo
- *  expands the \n in the JSON. */
+ *  thinking (ending in a blank line, as Claude's does), two Bash calls and an
+ *  answer. printf, because /bin/sh's echo expands the \n in the JSON. */
 const FAKE_CLAUDE = String.raw`#!/bin/sh
 out() { printf '%s\n' "$1"; }
 while IFS= read -r line; do
@@ -27,7 +27,7 @@ while IFS= read -r line; do
       id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
       out '{"type":"control_response","response":{"subtype":"success","request_id":"'"$id"'","response":{"categories":[{"name":"System prompt","tokens":8100,"kind":"used"},{"name":"Messages","tokens":116100,"kind":"used"},{"name":"Free space","tokens":75800,"kind":"free"}],"totalTokens":124200,"maxTokens":200000,"autoCompactThreshold":190000,"isAutoCompactEnabled":true}}}' ;;
     *'"type":"user"'*)
-      out '{"type":"assistant","message":{"id":"m1","content":[{"type":"thinking","thinking":"The resume URL is session-bound so I cannot fetch it.\nTry the probe with cookies kept."},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"echo first\necho the-tail-the-row-cuts-off"}}]}}'
+      out '{"type":"assistant","message":{"id":"m1","content":[{"type":"thinking","thinking":"The resume URL is session-bound so I cannot fetch it.\nTry the probe with cookies kept.\n\n"},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"echo first\necho the-tail-the-row-cuts-off"}}]}}'
       out '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","content":"first-output"}]}}'
       out '{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"b2","name":"Bash","input":{"command":"echo second"}}]}}'
       out '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b2","content":"second-output"}]}}'
@@ -97,6 +97,8 @@ describe("agent view", () => {
     const body = `//div[not(ancestor::button)][normalize-space()=${JSON.stringify(THOUGHT)}]`;
     const preview = `${row}//span[normalize-space()=${JSON.stringify(THOUGHT)}]`;
     await expect($(body)).toBeDisplayed();
+    // Claude ends every thought with a blank line; the opened row leaves it out.
+    expect(await $(body).getProperty("textContent")).toBe("The resume URL is session-bound so I cannot fetch it.\nTry the probe with cookies kept.");
     await expect($(preview)).not.toBeExisting();
     await $(row).click();
     await expect($(body)).not.toBeExisting();

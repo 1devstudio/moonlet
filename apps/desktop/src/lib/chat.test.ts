@@ -23,6 +23,7 @@ import {
   planOf,
   questionAnswers,
   saveChatDraft,
+  thinkingBody,
   thinkingPreview,
   toolCommand,
   toolGroupLabel,
@@ -149,6 +150,11 @@ describe("chat helpers", () => {
 
   it("previews thinking on one line", () => {
     expect(thinkingPreview("\n  It's odd that the no-connection case\n  jumps straight from /authorize.  ")).toBe("It's odd that the no-connection case jumps straight from /authorize.");
+  });
+
+  it("shows opened thinking without the blank lines Claude ends it with", () => {
+    expect(thinkingBody("Typecheck is clean and all 893 lib tests pass.\n\n")).toBe("Typecheck is clean and all 893 lib tests pass.");
+    expect(thinkingBody("\n\nFirst I'll read the spec.\n\nThen:\n  - run the e2e\n\n")).toBe("First I'll read the spec.\n\nThen:\n  - run the e2e");
   });
 
   it("gives the whole command of a shell call for its opened row", () => {
