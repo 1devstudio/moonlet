@@ -1,0 +1,43 @@
+{
+  "issueTypes": [
+    {
+      "description": "An error in the code",
+      "iconUrl": "https://your-domain.atlassian.net/images/icons/issuetypes/bug.png",
+      "id": "1",
+      "name": "Bug",
+      "self": "https://your-domain.atlassian.net/rest/api/3/issueType/1",
+      "subtask": false,
+      "hierarchyLevel": 0
+    },
+    {
+      "description": "",
+      "iconUrl": "https://your-domain.atlassian.net/images/icons/issuetypes/task.png",
+      "id": "10001",
+      "name": "Task",
+      "self": "https://your-domain.atlassian.net/rest/api/3/issueType/10001",
+      "subtask": false,
+      "hierarchyLevel": 0
+    },
+    {
+      "description": "",
+      "iconUrl": "https://your-domain.atlassian.net/images/icons/issuetypes/epic.png",
+      "id": "10000",
+      "name": "Epic",
+      "self": "https://your-domain.atlassian.net/rest/api/3/issueType/10000",
+      "subtask": false,
+      "hierarchyLevel": 1
+    },
+    {
+      "description": "",
+      "iconUrl": "https://your-domain.atlassian.net/images/icons/issuetypes/subtask.png",
+      "id": "10003",
+      "name": "Sub-task",
+      "self": "https://your-domain.atlassian.net/rest/api/3/issueType/10003",
+      "subtask": true,
+      "hierarchyLevel": -1
+    }
+  ],
+  "maxResults": 4,
+  "startAt": 0,
+  "total": 4
+}

@@ -50,8 +50,9 @@ export function newIssueDraft(board: BoardConfig): NewIssue {
 }
 
 /** Whether Create can be pressed: a title, and the place and issue type the board needs, while nothing is being asked. */
-export function canSubmit(draft: NewIssue, state: { busy: boolean; needsPlace?: boolean; needsType?: boolean }): boolean {
-  if (state.busy || !draft.title.trim()) return false;
+export function canSubmit(draft: NewIssue, state: { busy: boolean; needsPlace?: boolean; needsType?: boolean; missing?: string[] }): boolean {
+  // A field Jira requires that the form lacks: the issue is created in Jira.
+  if (state.busy || !draft.title.trim() || state.missing?.length) return false;
   return !(state.needsPlace && !draft.place) && !(state.needsType && !draft.issueType);
 }
 
@@ -99,11 +100,25 @@ export function withCreated<B extends { keys: string[] }>(
   return { tasks: [...synced.tasks, ...kept.map((c) => c.task)], boards, pending, gone };
 }
 
-/** Whether the board's tracker is one moonlet creates issues in (X52): all but Jira so far. */
-export const createsIn = (board: BoardConfig) => ["linear_team", "clickup_list", "github_repo", "github_project"].includes(board.origin.kind);
+/** Whether the board's tracker is one moonlet creates issues in (X52): every board's. */
+export const createsIn = (board: BoardConfig) => ["linear_team", "clickup_list", "github_repo", "github_project", "jira_board", "jql"].includes(board.origin.kind);
 
-/** Whether the form asks where the issue goes (X52): a GitHub Project's issue lives in a repository. */
-export const needsPlace = (board: BoardConfig) => board.origin.kind === "github_project";
+/** Whether the issue needs a place the form picks (X52): a GitHub Project's repository, a Jira board's project. */
+export const needsPlace = (board: BoardConfig) => ["github_project", "jira_board", "jql"].includes(board.origin.kind);
+
+/** Whether the form asks for an issue type (X52): Jira's. */
+export const needsType = (board: BoardConfig) => board.origin.kind === "jira_board" || board.origin.kind === "jql";
+
+/**
+ * The projects a Jira board's new issue can go in (X52): those of the
+ * board's issues (the tasks whose keys it lists), the most common first.
+ */
+export function jiraProjects(tasks: Task[], keys: string[]): string[] {
+  const onBoard = new Set(keys);
+  const counts = new Map<string, number>();
+  for (const t of tasks) if (onBoard.has(taskId(t))) counts.set(t.key.split("-")[0], (counts.get(t.key.split("-")[0]) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([project]) => project);
+}
 
 /**
  * The repositories a GitHub Project's new issue can go in (X52): the
@@ -140,3 +155,6 @@ export function fitDraft(draft: NewIssue, people: string[]): NewIssue {
 export function withAccess(draft: NewIssue, canSet: boolean): { draft: NewIssue; assignment: boolean } {
   return canSet ? { draft, assignment: true } : { draft: { ...draft, assignee: "none", labels: [] }, assignment: false };
 }
+
+/** A Jira project's page, where an issue the form can't create is made (X52); `connection` is `jira:<site>`. */
+export const jiraProjectUrl = (connection: string, project: string) => `https://${connection.replace(/^jira:/, "")}/browse/${encodeURIComponent(project)}`;

@@ -2,7 +2,7 @@
 //! a Jira issue reads like the others and its checklist becomes acceptance
 //! criteria (X46).
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Markdown for an ADF document; unknown nodes keep their text.
 pub fn to_markdown(doc: &Value) -> String {
@@ -149,4 +149,106 @@ mod tests {
     fn no_description_is_empty() {
         assert_eq!(to_markdown(&serde_json::Value::Null), "");
     }
+}
+
+/// An ADF document for Markdown (X52: a new Jira issue's description):
+/// paragraphs with their line breaks, bullet lists, fenced code blocks, and
+/// bold, italic, inline code and links; anything else stays as its text.
+pub fn from_markdown(markdown: &str) -> Value {
+    let mut content = Vec::new();
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if line.trim().is_empty() {
+            i += 1;
+        } else if line.trim_start().starts_with("```") {
+            let mut code = Vec::new();
+            i += 1;
+            while i < lines.len() && !lines[i].trim_start().starts_with("```") {
+                code.push(lines[i]);
+                i += 1;
+            }
+            i += 1;
+            content.push(json!({ "type": "codeBlock", "content": [{ "type": "text", "text": code.join("\n") }] }));
+        } else if bullet(line).is_some() {
+            let mut items = Vec::new();
+            while let Some(item) = lines.get(i).and_then(|l| bullet(l)) {
+                items.push(json!({ "type": "listItem", "content": [{ "type": "paragraph", "content": marked_text(item) }] }));
+                i += 1;
+            }
+            content.push(json!({ "type": "bulletList", "content": items }));
+        } else {
+            let mut nodes = Vec::new();
+            while let Some(l) = lines.get(i).filter(|l| {
+                !l.trim().is_empty() && bullet(l).is_none() && !l.trim_start().starts_with("```")
+            }) {
+                if !nodes.is_empty() {
+                    nodes.push(json!({ "type": "hardBreak" }));
+                }
+                nodes.extend(marked_text(l));
+                i += 1;
+            }
+            content.push(json!({ "type": "paragraph", "content": nodes }));
+        }
+    }
+    json!({ "type": "doc", "version": 1, "content": content })
+}
+
+/// A bullet list item's text (`- ` or `* `).
+fn bullet(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    t.strip_prefix("- ").or_else(|| t.strip_prefix("* "))
+}
+
+/// A line's text nodes with their marks: `**strong**`, `*em*` or `_em_`,
+/// `` `code` ``, `[text](href)`.
+fn marked_text(line: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut plain = String::new();
+    let mut rest = line;
+    let flush = |plain: &mut String, out: &mut Vec<Value>| {
+        if !plain.is_empty() {
+            out.push(json!({ "type": "text", "text": std::mem::take(plain) }));
+        }
+    };
+    while let Some(c) = rest.chars().next() {
+        let marked = |open: &str, close: &str, mark: Value| -> Option<(Value, usize)> {
+            let body = rest.strip_prefix(open)?;
+            let end = body.find(close).filter(|&e| e > 0)?;
+            Some((
+                json!({ "type": "text", "text": &body[..end], "marks": [mark] }),
+                open.len() + end + close.len(),
+            ))
+        };
+        let link = || -> Option<(Value, usize)> {
+            let body = rest.strip_prefix('[')?;
+            let text_end = body.find("](")?;
+            let href_end = body[text_end + 2..].find(')')?;
+            let href = &body[text_end + 2..text_end + 2 + href_end];
+            let node = json!({ "type": "text", "text": &body[..text_end], "marks": [{ "type": "link", "attrs": { "href": href } }] });
+            Some((node, 1 + text_end + 2 + href_end + 1))
+        };
+        let found = match c {
+            '*' if rest.starts_with("**") => marked("**", "**", json!({ "type": "strong" })),
+            '*' => marked("*", "*", json!({ "type": "em" })),
+            '_' => marked("_", "_", json!({ "type": "em" })),
+            '`' => marked("`", "`", json!({ "type": "code" })),
+            '[' => link(),
+            _ => None,
+        };
+        match found {
+            Some((node, len)) => {
+                flush(&mut plain, &mut out);
+                out.push(node);
+                rest = &rest[len..];
+            }
+            None => {
+                plain.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    flush(&mut plain, &mut out);
+    out
 }

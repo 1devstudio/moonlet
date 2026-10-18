@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardColumn, BoardConfig } from "./boards";
-import { boardShows, createsIn, fitDraft, githubRepoOf, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
+import { boardShows, createsIn, fitDraft, githubRepoOf, jiraProjectUrl, jiraProjects, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
 import type { Task } from "./tasks";
 
 const linear: BoardConfig = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } };
@@ -46,6 +46,8 @@ describe("the column + (X52)", () => {
     // A Jira board over several projects needs a project and an issue type.
     expect(canSubmit(draft, { busy: false, needsPlace: true, needsType: true })).toBe(false);
     expect(canSubmit({ ...draft, place: "OPS", issueType: "10001" }, { busy: false, needsPlace: true, needsType: true })).toBe(true);
+    // A field Jira requires that the form lacks: create it in Jira.
+    expect(canSubmit({ ...draft, place: "OPS", issueType: "10001" }, { busy: false, needsPlace: true, needsType: true, missing: ["Team"] })).toBe(false);
   });
 
   it("knows when the board can't show the new issue: someone else's on an Assignee: me board, outside its labels, or in a hidden column", () => {
@@ -79,12 +81,13 @@ describe("the column + (X52)", () => {
     expect(withCreated(synced, other, 3_000)).toEqual({ ...synced, pending: other, gone: [] });
   });
 
-  it("shows on the boards of the trackers moonlet creates issues in: all but Jira so far", () => {
+  it("shows on the boards of every tracker", () => {
     expect(createsIn(linear)).toBe(true);
     expect(createsIn({ ...linear, connection: "clickup:9015000001", origin: { kind: "clickup_list", list: "901500000002" } })).toBe(true);
     expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_repo", repo: "acme/web" } })).toBe(true);
     expect(createsIn({ ...linear, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } })).toBe(true);
-    expect(createsIn({ ...linear, connection: "jira:acme.atlassian.net", origin: { kind: "jira_board", board: 10 } })).toBe(false);
+    expect(createsIn({ ...linear, connection: "jira:acme.atlassian.net", origin: { kind: "jira_board", board: 10 } })).toBe(true);
+    expect(createsIn({ ...linear, connection: "jira:acme.atlassian.net", origin: { kind: "jql", query: "project = EX" } })).toBe(true);
   });
 
   it("offers and sends no assignee or labels where they can't be set, as GitHub would drop them", () => {
@@ -110,5 +113,14 @@ describe("the column + (X52)", () => {
     expect(fitDraft(draft, ["kim", "sam-rivera"])).toEqual(draft);
     expect(fitDraft(draft, ["sam-rivera"])).toEqual({ ...draft, assignee: "me" });
     expect(fitDraft({ ...draft, assignee: "none" }, [])).toEqual({ ...draft, assignee: "none" });
+  });
+
+  it("asks a Jira board's new issue for its project: the projects of the board's issues, the most common first", () => {
+    const jira = (key: string): Task => ({ connection: "jira:acme.atlassian.net", key, title: "", url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: key, state: "To Do", source: key.split("-")[0] } });
+    const tasks = [jira("OPS-1"), jira("WEB-2"), jira("WEB-3"), jira("OPS-4"), jira("WEB-5"), jira("DES-6")];
+    expect(jiraProjects(tasks, tasks.slice(0, 5).map((t) => `${t.connection} ${t.key}`))).toEqual(["WEB", "OPS"]);
+    expect(jiraProjects(tasks, [])).toEqual([]);
+    // Where to create it when Jira requires a field the form lacks.
+    expect(jiraProjectUrl("jira:acme.atlassian.net", "EX")).toBe("https://acme.atlassian.net/browse/EX");
   });
 });

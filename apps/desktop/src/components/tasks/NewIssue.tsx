@@ -4,7 +4,8 @@
 import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { BoardColumn, BoardConfig } from "../../lib/boards";
-import { canSubmit, type NewIssue as Draft, fitDraft, needsPlace, newIssueDraft, projectRepos, withAccess } from "../../lib/newIssue";
+import { canSubmit, type NewIssue as Draft, fitDraft, jiraProjectUrl, jiraProjects, needsPlace, needsType, newIssueDraft, projectRepos, withAccess } from "../../lib/newIssue";
+import { trackerName } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
 import { createIssue, createOptions, message, useTasks } from "../../lib/tasksStore";
 import { Menu } from "../Menu";
@@ -15,10 +16,13 @@ type Options = Awaited<ReturnType<typeof createOptions>>;
 export function NewIssue({ host, workspaceId, board, column, onClose }: { host: string; workspaceId: string; board: BoardConfig; column: BoardColumn; onClose: () => void }) {
   // A GitHub Project's issue goes in a repository: the workspace's first, then those of the Project's items.
   const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
-  const places = needsPlace(board) ? projectRepos(data?.repos, data?.tasks ?? [], data?.boards?.[board.id]?.keys ?? []) : [];
+  // A GitHub Project's repository, or a Jira board's project.
+  const keys = data?.boards?.[board.id]?.keys ?? [];
+  const places = !needsPlace(board) ? [] : board.origin.kind === "github_project" ? projectRepos(data?.repos, data?.tasks ?? [], keys) : jiraProjects(data?.tasks ?? [], keys);
   const [chosen, setDraft] = useState<Draft>(() => newIssueDraft(board));
   // The repository picked, else the first, which can arrive after the form opens.
   const draft = { ...chosen, ...(!chosen.place && places[0] && { place: places[0] }) };
+  // Jira's issue type: the one picked, else the project's first (Task when it has one).
   // Until the tracker's lists arrive, the user's own choices: assigned to them, the board's labels.
   const [options, setOptions] = useState<Options | null>(null);
   const [busy, setBusy] = useState(false);
@@ -28,7 +32,7 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
   useEffect(() => {
     let stale = false;
     setOptions(null);
-    createOptions(host, board, draft.place).then(
+    createOptions(host, board, draft.place, draft.issueType).then(
       (o) => {
         if (stale) return;
         setOptions(o);
@@ -39,15 +43,16 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
     return () => {
       stale = true;
     };
-  }, [host, board.id, board.connection, draft.place]);
+  }, [host, board.id, board.connection, draft.place, draft.issueType]);
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
-  const ready = canSubmit(draft, { busy, needsPlace: needsPlace(board) });
+  const typed = { ...draft, ...(!draft.issueType && options?.issueTypes?.[0] && { issueType: options.issueTypes[0].id }) };
+  const ready = canSubmit(typed, { busy, needsPlace: needsPlace(board), needsType: needsType(board), missing: options?.missing });
   const create = () => {
     if (!ready) return;
     setBusy(true);
     setError(null);
     // Where gh's user can't set them, no assignee or labels are sent: GitHub would drop them.
-    createIssue(host, workspaceId, board, column, withAccess(draft, options?.canSet ?? true).draft).then(onClose, (e) => {
+    createIssue(host, workspaceId, board, column, withAccess(typed, options?.canSet ?? true).draft).then(onClose, (e) => {
       setBusy(false);
       setError(message(e));
     });
@@ -82,11 +87,11 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
         }}
       >
         <p className="-mt-1 ui-text-12 text-faint">{board.name}</p>
-        {needsPlace(board) && (
+        {needsPlace(board) && (board.origin.kind === "github_project" || places.length > 1) && (
           <label className="flex flex-col gap-1.5">
-            <span className="ui-text-12 text-muted">Repository</span>
+            <span className="ui-text-12 text-muted">{board.origin.kind === "github_project" ? "Repository" : "Project"}</span>
             <select className={selectCls} value={draft.place ?? ""} onChange={(e) => set({ place: e.target.value })}>
-              {!places.length && <option value="">No repository to create it in</option>}
+              {!places.length && <option value="">{board.origin.kind === "github_project" ? "No repository to create it in" : "No project to create it in"}</option>}
               {places.map((r) => (
                 <option key={r} value={r}>
                   {r}
@@ -94,6 +99,28 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
               ))}
             </select>
           </label>
+        )}
+        {needsType(board) && (
+          <label className="flex flex-col gap-1.5">
+            <span className="ui-text-12 text-muted">Issue type</span>
+            <select className={selectCls} value={typed.issueType ?? ""} onChange={(e) => set({ issueType: e.target.value })}>
+              {(options?.issueTypes ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {!!options?.missing?.length && (
+          <p role="alert" className="ui-text-12.5 text-blocked">
+            {trackerName(board.connection)} also requires {options.missing.join(", ")}; create it in {trackerName(board.connection)}.{" "}
+            {draft.place && (
+              <a href={jiraProjectUrl(board.connection, draft.place)} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                Open in Jira
+              </a>
+            )}
+          </p>
         )}
         <label className="flex flex-col gap-1.5">
           <span className="ui-text-12 text-muted">Title</span>

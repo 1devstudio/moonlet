@@ -1,0 +1,87 @@
+{
+  "fields": [
+    {
+      "fieldId": "summary",
+      "hasDefaultValue": false,
+      "key": "summary",
+      "name": "Summary",
+      "operations": [
+        "set"
+      ],
+      "required": true
+    },
+    {
+      "fieldId": "issuetype",
+      "hasDefaultValue": false,
+      "key": "issuetype",
+      "name": "Issue Type",
+      "operations": [
+        "set"
+      ],
+      "required": true
+    },
+    {
+      "fieldId": "project",
+      "hasDefaultValue": false,
+      "key": "project",
+      "name": "Project",
+      "operations": [
+        "set"
+      ],
+      "required": true
+    },
+    {
+      "fieldId": "assignee",
+      "hasDefaultValue": false,
+      "key": "assignee",
+      "name": "Assignee",
+      "operations": [
+        "set"
+      ],
+      "required": true
+    },
+    {
+      "fieldId": "labels",
+      "hasDefaultValue": false,
+      "key": "labels",
+      "name": "Labels",
+      "operations": [
+        "set"
+      ],
+      "required": false
+    },
+    {
+      "fieldId": "description",
+      "hasDefaultValue": false,
+      "key": "description",
+      "name": "Description",
+      "operations": [
+        "set"
+      ],
+      "required": false
+    },
+    {
+      "fieldId": "reporter",
+      "hasDefaultValue": true,
+      "key": "reporter",
+      "name": "Reporter",
+      "operations": [
+        "set"
+      ],
+      "required": true
+    },
+    {
+      "fieldId": "customfield_10050",
+      "hasDefaultValue": false,
+      "key": "customfield_10050",
+      "name": "Team",
+      "operations": [
+        "set"
+      ],
+      "required": true
+    }
+  ],
+  "maxResults": 8,
+  "startAt": 0,
+  "total": 8
+}
