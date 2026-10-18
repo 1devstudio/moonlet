@@ -75,10 +75,14 @@ pub fn pick<'a, T>(
     })
 }
 
-/// "In Review", "Code review", "QA", "Ready for QA"; not "Preview".
+/// "In Review", "Code review", "Needs Reviews", "QA", "Ready for QA"; not
+/// "Preview": a word that starts with "review", or the word "QA".
 fn looks_like_review(name: &str) -> bool {
-    name.split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|w| w.eq_ignore_ascii_case("review") || w.eq_ignore_ascii_case("qa"))
+    name.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+        w.get(..6)
+            .is_some_and(|start| start.eq_ignore_ascii_case("review"))
+            || w.eq_ignore_ascii_case("qa")
+    })
 }
 
 #[cfg(test)]
@@ -98,6 +102,10 @@ mod tests {
             Column::InReview
         );
         assert_eq!(default_column(Linear, "started", "QA"), Column::InReview);
+        assert_eq!(
+            default_column(Linear, "started", "Reviewing"),
+            Column::InReview
+        );
         // "review" must be a word: a "Preview" state is still in progress.
         assert_eq!(
             default_column(Linear, "started", "Preview"),
@@ -124,6 +132,15 @@ mod tests {
             Column::InReview
         );
         assert_eq!(default_column(Jira, "done", "Closed"), Column::Done);
+        // A board's real review column (X50): "review" may take an ending.
+        assert_eq!(
+            default_column(Jira, "indeterminate", "Needs Reviews"),
+            Column::InReview
+        );
+        assert_eq!(
+            default_column(Jira, "indeterminate", "Reviewing"),
+            Column::InReview
+        );
     }
 
     #[test]

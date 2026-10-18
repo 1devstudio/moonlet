@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrateWorkspace, startProjects } from "./boards";
+import { type BoardColumn, matchColumns, migrateWorkspace, startProjects, taskFromBoardIssue } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -117,5 +117,62 @@ describe("startProjects (X50 New sessions from this board start in)", () => {
     expect(startProjects([...rules, { when: "default", project: "docs-site" }, { when: { label: "docs" }, project: "guides" }], task([], ["docs"]), [])).toEqual(["handbook", "guides"]);
     expect(startProjects([...rules, { when: "default", project: "docs-site" }], task([], []), [])).toEqual(["website", "docs-site"]);
     expect(startProjects(undefined, task([], []), [])).toEqual([]);
+  });
+});
+
+describe("taskFromBoardIssue (X50 a Jira board's issues)", () => {
+  it("keeps the status id with the tracker's state, and the card's fields", () => {
+    // As `tracker_board_tasks` sends OPS-487 of jira-board-search.json.
+    const issue = JSON.parse(
+      '{"connection":"jira:acme.atlassian.net","key":"OPS-487","title":"Split the billing worker into two queues","url":"https://acme.atlassian.net/browse/OPS-487","column":"in_review","priority":1,"assignees":["Sam Rivera"],"labels":["billing","refined"],"description":"","updatedMs":1792168918885,"issueType":"Story","tracker":{"id":"149613","state":"Needs Reviews","source":"OPS"},"statusId":"10018","components":["billing"],"points":5.0,"parent":{"key":"OPS-480","title":"Billing reliability"}}',
+    );
+    expect(taskFromBoardIssue(issue)).toEqual({
+      connection: "jira:acme.atlassian.net",
+      key: "OPS-487",
+      title: "Split the billing worker into two queues",
+      url: "https://acme.atlassian.net/browse/OPS-487",
+      column: "in_review",
+      priority: 1,
+      assignees: ["Sam Rivera"],
+      labels: ["billing", "refined"],
+      description: "",
+      updatedMs: 1792168918885,
+      issueType: "Story",
+      tracker: { id: "149613", state: "Needs Reviews", source: "OPS", statusId: "10018" },
+      components: ["billing"],
+      points: 5,
+      parent: { key: "OPS-480", title: "Billing reliability" },
+    });
+  });
+});
+
+describe("matchColumns (X50 a board's columns on each sync)", () => {
+  it("keeps the user's order, folding and categories, takes Jira's names and statuses, adds new columns and drops removed ones", () => {
+    const saved: BoardColumn[] = [
+      { name: "To Do", statuses: ["10000"], category: "todo" },
+      // Folded and moved before In Progress by the user.
+      { name: "Code Review", statuses: ["10018"], category: "in_review", show: "fold" },
+      { name: "In Progress", statuses: ["3"], category: "in_progress" },
+      { name: "Old", statuses: ["999"], category: "todo" },
+    ];
+    const fresh: BoardColumn[] = [
+      { name: "To Do", statuses: ["10000"], category: "todo" },
+      { name: "Doing", statuses: ["3", "10012"], category: "in_progress", wip: 4 },
+      { name: "Code Review", statuses: ["10018"], category: "in_review" },
+      { name: "QA", statuses: ["5"], category: "in_review" },
+      { name: "Done", statuses: ["10097"], category: "done", show: "fold" },
+    ];
+    expect(matchColumns(saved, fresh)).toEqual([
+      { name: "To Do", statuses: ["10000"], category: "todo" },
+      { name: "Code Review", statuses: ["10018"], category: "in_review", show: "fold" },
+      { name: "Doing", statuses: ["3", "10012"], category: "in_progress", wip: 4 },
+      { name: "QA", statuses: ["5"], category: "in_review" },
+      { name: "Done", statuses: ["10097"], category: "done", show: "fold" },
+    ]);
+  });
+
+  it("takes the tracker's columns as they are for a board that has none yet", () => {
+    const fresh: BoardColumn[] = [{ name: "Todo", statuses: ["s1"], category: "todo" }];
+    expect(matchColumns(undefined, fresh)).toEqual(fresh);
   });
 });

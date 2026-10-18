@@ -1,0 +1,84 @@
+{
+  "id": 224,
+  "name": "PLAT tasks",
+  "type": "kanban",
+  "self": "https://acme.atlassian.net/rest/agile/1.0/board/224/configuration",
+  "location": {
+    "type": "project",
+    "key": "PLAT",
+    "id": "10173",
+    "self": "https://acme.atlassian.net/rest/api/2/project/10173",
+    "name": "Platform"
+  },
+  "filter": {
+    "id": "10650",
+    "self": "https://acme.atlassian.net/rest/api/2/filter/10650"
+  },
+  "subQuery": {
+    "query": "fixVersion in unreleasedVersions() OR fixVersion is EMPTY"
+  },
+  "columnConfig": {
+    "columns": [
+      {
+        "name": "Backlog",
+        "statuses": []
+      },
+      {
+        "name": "To Do",
+        "statuses": [
+          {
+            "id": "10000",
+            "self": "https://acme.atlassian.net/rest/api/2/status/10000"
+          }
+        ]
+      },
+      {
+        "name": "In Progress",
+        "statuses": [
+          {
+            "id": "3",
+            "self": "https://acme.atlassian.net/rest/api/2/status/3"
+          }
+        ]
+      },
+      {
+        "name": "IN REVIEW",
+        "statuses": [
+          {
+            "id": "10129",
+            "self": "https://acme.atlassian.net/rest/api/2/status/10129"
+          }
+        ]
+      },
+      {
+        "name": "In Testing",
+        "statuses": [
+          {
+            "id": "10349",
+            "self": "https://acme.atlassian.net/rest/api/2/status/10349"
+          }
+        ]
+      },
+      {
+        "name": "Tested - Pending Deployment",
+        "statuses": [
+          {
+            "id": "10382",
+            "self": "https://acme.atlassian.net/rest/api/2/status/10382"
+          }
+        ]
+      },
+      {
+        "name": "Done",
+        "statuses": [
+          {
+            "id": "10097",
+            "self": "https://acme.atlassian.net/rest/api/2/status/10097"
+          }
+        ]
+      }
+    ],
+    "constraintType": "issueCount"
+  },
+  "ranking": {}
+}
