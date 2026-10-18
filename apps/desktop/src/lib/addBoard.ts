@@ -265,12 +265,13 @@ export const jiraFilterUrl = (site: string, filterId: string) => `https://${site
 
 /**
  * Status names by id (X50 step 3): a Jira board's setup's first, then the
- * previewed issues' (a JQL board's), then those `known` from an earlier
- * preview of the same source.
+ * previewed issues' (a JQL board's), then the `site`'s statuses (for a status
+ * no issue is in today), then those `known` from an earlier preview of the
+ * same source.
  */
-export function statusNames(fromSetup: Record<string, string>, issues: Task[], known: Record<string, string> = {}): Record<string, string> {
+export function statusNames(fromSetup: Record<string, string>, issues: Task[], known: Record<string, string> = {}, site: Record<string, string> = {}): Record<string, string> {
   const fromIssues = Object.fromEntries(issues.flatMap((t) => (t.tracker?.statusId ? [[t.tracker.statusId, t.tracker.state]] : [])));
-  return { ...known, ...fromIssues, ...fromSetup };
+  return { ...known, ...site, ...fromIssues, ...fromSetup };
 }
 
 /** A column's statuses as step 3 lists them, by name where known: `Open · In Progress`. */
@@ -292,4 +293,26 @@ export function projectChoice(p: { owner: string; number: number; title: string;
 /** Whose GitHub Projects step 1 lists besides the user's (X50): the owners of the workspace's repositories, each once. */
 export function projectOwners(repos: (string | null)[]): string[] {
   return [...new Set(repos.flatMap((r) => (r ? [r.split("/")[0]] : [])))];
+}
+
+/**
+ * Step 2's preview (X50): the tracker is asked `wait` ms after the last
+ * change, and only the latest change's answer is shown, so typing a query
+ * asks once. `stop` drops a pending ask, for leaving the step.
+ */
+export function pausedPreview<T>(show: (answer: T) => void, wait = 500) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let latest = 0;
+  const stop = () => {
+    clearTimeout(timer);
+    latest++;
+  };
+  return {
+    change(ask: () => Promise<T>) {
+      stop();
+      const mine = latest;
+      timer = setTimeout(() => void ask().then((answer) => mine === latest && show(answer)), wait);
+    },
+    stop,
+  };
 }

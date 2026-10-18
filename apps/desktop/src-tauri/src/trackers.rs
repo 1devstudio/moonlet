@@ -619,6 +619,10 @@ pub struct BoardTasks {
     /// A Jira board's type (`scrum`, `kanban`, `simple`), for the switcher.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// A JQL board's site status names by id, so a column whose status no
+    /// issue is in today shows by its name.
+    #[serde(rename = "statusNames", skip_serializing_if = "Option::is_none")]
+    pub status_names: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// A board's issues (X50 Sync): a Jira board's filter and sub-filter, or a
@@ -647,16 +651,16 @@ pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
             Finished::Days(_) => None,
         };
         let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_in(&team, query.sync).await?);
-        return Ok(BoardTasks { issues, sprint, columns: Some(columns), kind: None });
+        return Ok(BoardTasks { issues, sprint, columns: Some(columns), kind: None, status_names: None });
     }
     // A ClickUp list: X44's fetch of that one source, and its states as columns.
     if let Origin::ClickupList { list: key } = &query.origin {
         let issues = s.clickup_tasks(key, query.mine, &query.finished).await?;
         let columns = moonlet_trackers::states::board_columns(s.conn.kind, &s.states_in(key, query.sync).await?);
-        return Ok(BoardTasks { issues, sprint: None, columns: Some(columns), kind: None });
+        return Ok(BoardTasks { issues, sprint: None, columns: Some(columns), kind: None, status_names: None });
     }
     if !matches!(query.origin, Origin::JiraBoard { .. } | Origin::Jql { .. }) {
-        return Ok(BoardTasks { issues: vec![], sprint: None, columns: None, kind: None });
+        return Ok(BoardTasks { issues: vec![], sprint: None, columns: None, kind: None, status_names: None });
     }
     s.only_jira()?;
     // A token Jira no longer accepts makes searches come back empty, not
@@ -694,9 +698,17 @@ pub async fn tracker_board_tasks(query: BoardQuery) -> Res<BoardTasks> {
             break;
         }
     }
-    // A JQL board's columns are the statuses its issues are in.
-    let columns = columns.or_else(|| matches!(query.origin, Origin::Jql { .. }).then(|| jira_board::columns_from_issues(&issues)));
-    Ok(BoardTasks { issues, sprint, columns, kind })
+    // A JQL board's columns are the statuses its issues are in, named by the
+    // site's statuses; a site that won't list them leaves the names to its issues.
+    let jql = matches!(query.origin, Origin::Jql { .. });
+    let columns = columns.or_else(|| jql.then(|| jira_board::columns_from_issues(&issues)));
+    let status_names = if jql {
+        let raw = s.jira_get("/rest/api/3/status", query.sync).await.ok();
+        raw.and_then(|raw| jira_board::parse_statuses(&raw).ok()).map(|st| jira_board::status_names(&st))
+    } else {
+        None
+    };
+    Ok(BoardTasks { issues, sprint, columns, kind, status_names })
 }
 
 /// A tracker state and the column it lands in by default.

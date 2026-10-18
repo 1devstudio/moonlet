@@ -8,6 +8,7 @@ import {
   byGroup,
   canContinue,
   cardChoices,
+  pausedPreview,
   changedCategories,
   clash,
   columnAt,
@@ -186,23 +187,20 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   // until it answers, Continue waits.
   const target = parseWsKey(draft.workspace);
   const previewKey = JSON.stringify([draft.connection, draft.origin, draft.narrow, draft.labels, draft.finished, draft.workspace]);
-  const latest = useRef(previewKey);
-  latest.current = previewKey;
   const previewing = (draft.step >= 2 || !!editing) && canContinue({ ...draft, step: 1 }, null);
+  const [paused] = useState(() =>
+    pausedPreview<BoardPreview>((p) => {
+      setPreview(p);
+      if (!p.error) setNumberField(p.numberField);
+      // A JQL board's, a Linear team's and a ClickUp list's columns come with their issues.
+      if (p.columns) setDraft((d) => (d.columns.length ? d : { ...d, columns: p.columns ?? [] }));
+    }),
+  );
   useEffect(() => {
     setPreview(null);
-    if (!previewing) return;
-    const t = setTimeout(() => {
-      const answer = (p: BoardPreview) => {
-        if (latest.current !== previewKey) return;
-        setPreview(p);
-        if (!p.error) setNumberField(p.numberField);
-        // A JQL board's, a Linear team's and a ClickUp list's columns come with their issues.
-        if (p.columns) setDraft((d) => (d.columns.length ? d : { ...d, columns: p.columns ?? [] }));
-      };
-      previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).then(answer, (e) => answer({ tasks: [], columns: null, error: message(e), numberField: null }));
-    }, 500);
-    return () => clearTimeout(t);
+    if (!previewing) return paused.stop();
+    paused.change(() => previewBoard(target.host, target.id, { ...toBoard(draft), assignee: "anyone" }).catch((e) => ({ tasks: [], columns: null, error: message(e), numberField: null, statusNames: {} })));
+    return paused.stop;
   }, [previewKey, previewing]);
 
   useEffect(() => {
@@ -252,7 +250,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const sample = (preview?.tasks ?? []).slice(0, 3);
   useEffect(() => setSuggested((prev) => suggestedOf(prev, draft.columns)), [draft.columns]);
   const changed = changedCategories(draft.columns, suggested);
-  const names = statusNames(setupNames, preview?.tasks ?? [], knownNames);
+  const names = statusNames(setupNames, preview?.tasks ?? [], knownNames, preview?.statusNames);
   useEffect(() => {
     if (preview?.tasks.length) setKnownNames((known) => statusNames({}, preview.tasks, known));
   }, [preview]);

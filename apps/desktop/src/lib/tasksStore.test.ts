@@ -35,6 +35,7 @@ vi.mock("./daemon", () => ({
         sprint: null,
         columns: answers[`board_columns ${q.id}`]?.({}) ?? null,
         ...(answers[`board_kind ${q.id}`] && { kind: answers[`board_kind ${q.id}`]({}) }),
+        ...(answers[`status_names ${q.id}`] && { statusNames: answers[`status_names ${q.id}`]({}) }),
       }));
     },
   },
@@ -592,6 +593,17 @@ describe("boards (X50 Sync)", () => {
     expect(useStore.getState().tasksMode["local/acme"]).toBe(true);
     expect(useTasks.getState().shownBoard["local/acme"]).toBe("acme-board");
     useTasks.setState({ shownBoard: {} });
+  });
+
+  it("previews a JQL board with the site's status names, for a column whose status no issue is in", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["tracker_tasks jira:acme.atlassian.net"] = () => [];
+    answers["status_names jira:acme.atlassian.net"] = () => ({ "10030": "Acceptance Testing" });
+    const jql = { id: "ex", name: "Example", connection: "jira:acme.atlassian.net", workspace: "local/personal", origin: { kind: "jql" as const, query: "project = EX" } };
+    useTasks.setState({ attention: {} });
+    expect((await previewBoard("local", "personal", jql)).statusNames).toEqual({ "10030": "Acceptance Testing" });
+    // Other boards have none.
+    expect((await previewBoard("local", "personal", board())).statusNames).toEqual({});
   });
 
   it("names the sync each board read belongs to, so a connection's boards share its lookups within it; a preview belongs to none", async () => {

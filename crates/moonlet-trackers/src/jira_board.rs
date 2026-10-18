@@ -64,6 +64,15 @@ pub fn parse_statuses(raw: &[u8]) -> Result<Vec<JiraStatus>, ApiError> {
         .collect())
 }
 
+/// The site's status names by id, for a JQL board's columns: a status no
+/// issue is in today still shows by its name (X50 step 3).
+pub fn status_names(statuses: &[JiraStatus]) -> std::collections::BTreeMap<String, String> {
+    statuses
+        .iter()
+        .map(|s| (s.id.clone(), s.name.clone()))
+        .collect()
+}
+
 /// What a board's configuration says (`GET /rest/agile/1.0/board/{id}/configuration`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -402,6 +411,16 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn the_sites_status_names_by_id() {
+        let names = status_names(&parse_statuses(&fixture("jira-statuses.json")).unwrap());
+        assert_eq!(names.len(), 13);
+        assert_eq!(
+            [&names["1"], &names["10018"], &names["10382"]],
+            ["Open", "Needs Reviews", "Tested - Pending Deployment"]
+        );
     }
 
     #[test]

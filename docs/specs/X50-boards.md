@@ -72,19 +72,19 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - **Follow the active sprint** on a Jira Scrum or team-managed board, **Follow the active cycle** on a Linear team with cycles.
 
   The sprint and cycle options are only offered where they exist. (`addBoard.test.ts` offers the sprint or cycle only where there is one; `linear.rs` the_viewer_teams_and_states; `task-trackers.e2e.ts` adds a board of a Linear team that uses cycles, following its active cycle, with the card fields picked, and removes it after asking (X50))
-- [ ] A preview below says `<n> issues match · <n> assigned to you · <n> already have a branch with their key`, with three of the issues (key, title, status). It updates as the user types, after a short pause. A query the tracker rejects shows the tracker's error instead, and Continue waits. (Partly: no test shows the pause before the count updates. `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings (X50); `addBoard.test.ts` says how many issues match, how many are the user's, and how many have a branch with their key, waits for a board, a non-empty query, columns and a name; `tasksStore.test.ts` previews a board not saved yet: everyone's issues, the user's own marked, and the tracker's columns (Add a board))
+- [x] A preview below says `<n> issues match · <n> assigned to you · <n> already have a branch with their key`, with three of the issues (key, title, status). It updates as the user types, after a short pause (half a second after the last change; only the latest change's answer shows). A query the tracker rejects shows the tracker's error instead, and Continue waits. (`addBoard.test.ts` asks the tracker a moment after the last change, and shows only the latest change's answer; `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings (X50); `addBoard.test.ts` says how many issues match, how many are the user's, and how many have a branch with their key, waits for a board, a non-empty query, columns and a name; `tasksStore.test.ts` previews a board not saved yet: everyone's issues, the user's own marked, and the tracker's columns (Add a board))
 
 #### 3. Columns
 
 - [x] A strip previews the board, its columns in order, a folded one narrow. (Seen in the app; React components have no unit tests.)
-- [ ] One row per column, in order:
+- [x] One row per column, in order:
   - a drag handle
   - the column's name and its statuses
   - "moonlet treats it as": To do, In progress, In review or Done
   - Show / Fold / Hide
   - WIP
 
-  Up and down buttons move a column too, for the keyboard. Statuses show by name: a Jira board's from its setup, a JQL board's from its issues. (Partly: a JQL board's status that no issue is in today shows its id. `addBoard.test.ts` lists a column's statuses by name: Jira's board setup, else the previewed issues, else the id; `jira_board.rs` a_scrum_boards_columns_with_their_suggested_categories; `addBoard.test.ts` moves a column up or down, and sets its category and how it shows, drops a dragged column where it lands; `task-trackers.e2e.ts` adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged, its lookups shared with the site's other board, and says when it is gone (X50); `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings (X50))
+  Up and down buttons move a column too, for the keyboard. Statuses show by name: a Jira board's from its setup, a JQL board's from its issues, and a JQL board's status that no issue is in today from the site's statuses. (`addBoard.test.ts` lists a column's statuses by name: Jira's board setup, else the previewed issues, else the site's statuses, else the id; `jira_board.rs` the_sites_status_names_by_id; `tasksStore.test.ts` previews a JQL board with the site's status names, for a column whose status no issue is in; `jira_board.rs` a_scrum_boards_columns_with_their_suggested_categories; `addBoard.test.ts` moves a column up or down, and sets its category and how it shows, drops a dragged column where it lands; `task-trackers.e2e.ts` adds an existing Jira board: its filter with Edit in Jira, statuses by name, a changed category outlined, a column dragged, its lookups shared with the site's other board, and says when it is gone (X50); `task-trackers.e2e.ts` adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings (X50))
 - [ ] Where columns come from:
   - Jira board: Jira's columns, their statuses and their WIP limits (max).
   - JQL board: one column per status its issues are in, ordered by category; a status seen later gets a column of its own, and no column goes by itself, since its statuses may just have no issue today. A status can be dragged onto another column to group them, as the design's "which you can then group and order" says. (`boards.test.ts` only adds columns to a JQL board, since its columns come from the statuses its issues happen to be in)
@@ -287,7 +287,7 @@ Daemon RPCs, since `gh` runs on the project's host:
 
 - An "Across boards" section (My tasks, In review, Out of sync, Sessions without a task over every board).
 - A Current cycle view across Linear teams; boards built from Linear projects or custom views.
-- Creating tasks (the `+` on a column) and drag and drop between columns.
+- Drag and drop between columns. Creating tasks (the `+` on a column) gets a spec of its own.
 - WIP limits for Linear, GitHub and ClickUp.
 - Writing anything back to the tracker's board: column order, folding and categories are moonlet-only.
 - An "Opens on" setting per workspace: Tasks mode opens on the board last shown.
@@ -314,5 +314,5 @@ Daemon RPCs, since `gh` runs on the project's host:
 
 ## Open questions
 
-- **Opens on.** The design's Settings page lets each workspace open Tasks mode on its current cycle, active sprint or Sessions mode. This spec leaves it out (Tasks mode opens on the board last shown). Keep it out?
-- **`+` on a column.** The design's Linear board has a `+` per column, which would create a task there. Creating tasks stays out of scope. Keep it out?
+- **Opens on.** Decided 2026-10-18: left out. The design's Settings page lets each workspace open Tasks mode on its current cycle, active sprint or Sessions mode; Tasks mode opens on the board last shown.
+- **`+` on a column.** Decided 2026-10-18: built, under a spec of its own. The design's Linear board has a `+` per column that creates a task there, in that column's status.
