@@ -226,7 +226,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 The designs are the "Tasks mode · Board", "Tasks mode · Jira board", "Tasks mode · List", "Board switcher", "Add a board" and "Task card states" boards of the Tasks mode design.
 - The design's "Across boards" sidebar section is left out (see Sidebar and header, and Out of scope).
-- The design's `+` on Linear columns is left out.
+- The design's `+` on a column is [X52](X52-new-issue-from-a-column.md).
 - The design shows only the Jira path through Add a board. Linear, GitHub and ClickUp follow the same four steps, with the differences listed above.
 
 States:
@@ -287,7 +287,7 @@ Daemon RPCs, since `gh` runs on the project's host:
 
 - An "Across boards" section (My tasks, In review, Out of sync, Sessions without a task over every board).
 - A Current cycle view across Linear teams; boards built from Linear projects or custom views.
-- Drag and drop between columns. Creating tasks (the `+` on a column) gets a spec of its own.
+- Drag and drop between columns. Creating tasks (the `+` on a column) is [X52](X52-new-issue-from-a-column.md).
 - WIP limits for Linear, GitHub and ClickUp.
 - Writing anything back to the tracker's board: column order, folding and categories are moonlet-only.
 - An "Opens on" setting per workspace: Tasks mode opens on the board last shown.
@@ -315,4 +315,4 @@ Daemon RPCs, since `gh` runs on the project's host:
 ## Open questions
 
 - **Opens on.** Decided 2026-10-18: left out. The design's Settings page lets each workspace open Tasks mode on its current cycle, active sprint or Sessions mode; Tasks mode opens on the board last shown.
-- **`+` on a column.** Decided 2026-10-18: built, under a spec of its own. The design's Linear board has a `+` per column that creates a task there, in that column's status.
+- **`+` on a column.** Decided 2026-10-18: built, under [X52](X52-new-issue-from-a-column.md). The design's Linear board has a `+` per column that creates a task there, in that column's status.
