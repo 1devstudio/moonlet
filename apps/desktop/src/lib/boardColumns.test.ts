@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardSubtitle, boardView, switcherGroups } from "./boardColumns";
+import { boardSubtitle, boardView, categorize, placeOnBoards, statusFor, switcherGroups } from "./boardColumns";
 import type { BoardConfig } from "./boards";
 import type { BoardColumn } from "./boards";
 import type { PullRequest } from "./protocol";
@@ -213,6 +213,38 @@ describe("boardView (X50 Board)", () => {
     it("finds a board by its name, its key or its workspace", () => {
       const ids = (q: string) => switcherGroups(boards, "local/acme", q, names, {}).flatMap((g) => g.rows.map((r) => r.board.id));
       expect([ids("sprint"), ids("moon"), ids("ACME"), ids("acme/web"), ids("nothing")]).toEqual([["ops"], ["moon"], ["ops", "web"], ["web"], []]);
+    });
+  });
+
+  describe("categorize (X50 a task's state is its board column's category)", () => {
+    it("gives a tracker task its column's category, hides one in no column or a hidden one, and leaves GitHub issues as they are", () => {
+      const gh: Task = { ...jira("acme/web#12", ""), connection: "github:github.com", column: "open", tracker: undefined, github: { repo: "acme/web", number: 12, closingPrs: [] } };
+      const tasks = [jira("OPS-487", "10018"), jira("OPS-1", "10000"), jira("OPS-2", "99999"), { ...jira("OPS-3", "10020"), column: "in_progress" as const }, gh];
+      expect(categorize(OPS, tasks).map((t) => [t.key, t.column])).toEqual([
+        ["OPS-487", "in_review"],
+        ["OPS-1", "hidden"],
+        ["OPS-2", "hidden"],
+        ["OPS-3", "in_review"],
+        ["acme/web#12", "open"],
+      ]);
+    });
+  });
+
+  describe("statusFor (X50 Keep in step's moves on a board)", () => {
+    it("is the first status of the first shown or folded column of that category", () => {
+      expect([statusFor(OPS, "in_review"), statusFor(OPS, "done"), statusFor(OPS, "todo")]).toEqual(["10018", "10002", "10001"]);
+      expect(statusFor([], "done")).toBeNull();
+    });
+  });
+
+  describe("placeOnBoards (X50 the board's columns as saved now)", () => {
+    it("places each task by the columns of the board it came from, so a changed mapping shows without a sync", () => {
+      const board = { id: "ops", name: "OPS", connection: "jira:acme.atlassian.net", workspace: "local/w", origin: { kind: "jira_board" as const, board: 10 }, columns: OPS };
+      const tasks = [{ ...jira("OPS-476", "10020"), column: "in_progress" as const }, jira("OPS-9", "10020")];
+      expect(placeOnBoards(tasks, { ops: { keys: ["jira:acme.atlassian.net OPS-476"], sprint: null } }, [board]).map((t) => [t.key, t.column])).toEqual([
+        ["OPS-476", "in_review"],
+        ["OPS-9", "todo"],
+      ]);
     });
   });
 });

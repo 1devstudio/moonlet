@@ -98,11 +98,8 @@ export function TasksSidebar() {
   const query = useTasks((t) => t.query);
   const config = useTasks((t) => trackersConfig(t));
   const attention = useTasks((t) => t.attention);
-  // The workspace's sources: GitHub repositories, then each connection's teams, projects or lists here.
-  const trackers = useMemo(
-    () => (ws && data ? sourceList(wsKey(ws.host, ws.id), data.sources.filter((x) => !x.includes(":")), config.connections, attention) : []),
-    [ws, data, config, attention],
-  );
+  // The workspace's boards (X50), by tracker and name.
+  const trackers = useMemo(() => (ws ? sourceList(wsKey(ws.host, ws.id), config.boards, attention) : []), [ws, config, attention]);
   const now = useNow(true);
   const counts = board ? viewCounts(board, unlinked.length) : null;
   return (

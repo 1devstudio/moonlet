@@ -1,7 +1,8 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import type { BoardConfig } from "./boards";
+import { addRepoBoards, type BoardColumn, type BoardConfig, type Category, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
@@ -12,9 +13,8 @@ import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKe
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, trackerOf } from "./tasks";
-import { parseTrackerLink, workspaceConnections } from "./trackerSources";
-import { applyStateMapping } from "./stateMapping";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, type Task, type TaskStart, taskFromGh, taskId, trackerOf } from "./tasks";
+import { parseTrackerLink } from "./trackerSources";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters, TaskView } from "./tasksView";
 import { wsKey } from "./workspaces";
@@ -35,6 +35,14 @@ export interface TasksData {
   syncedAt: number | null;
   /** Why the last sync failed; the last good list stays. */
   error: string | null;
+  /** Each synced board's tasks (`connection key`) and active sprint or cycle (X50). */
+  boards?: Record<string, BoardData>;
+}
+
+/** What a sync read for one board (X50). */
+export interface BoardData {
+  keys: string[];
+  sprint: { id: number; name: string; startMs: number; endMs: number } | null;
 }
 
 interface TasksState {
@@ -65,6 +73,8 @@ interface TasksState {
   paused: Record<string, true>;
   /** The last action on a task that failed, with its error (X46), by `connection key`. */
   failures: Record<string, string>;
+  /** The board each workspace shows, by `host/workspaceId` (X50); kept across restarts. */
+  shownBoard: Record<string, string>;
 }
 
 /** One tracker's branch names and rules. */
@@ -107,7 +117,7 @@ export interface TrackersConfig {
   link?: LinkRules;
   /** What Tasks mode shows, one board at a time (X50). */
   boards?: BoardConfig[];
-  /** Workspaces whose sources and GitHub repositories became boards (X50). */
+  /** Each GitHub repository that got its board, so a removed one is not added again (X50). */
   migrated?: string[];
 }
 
@@ -136,7 +146,24 @@ export const useTasks = create<TasksState>(() => ({
   query: "",
   paused: storedPaused(),
   failures: {},
+  shownBoard: storedShownBoard(),
 }));
+
+function storedShownBoard(): Record<string, string> {
+  try {
+    return JSON.parse(readStored("tasks.board") ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+/** Shows board `id` in workspace `wsKey` (X50), and syncs it if it is not pinned. */
+export function showBoard(host: string, workspaceId: string, id: string) {
+  const shownBoard = { ...useTasks.getState().shownBoard, [wsKey(host, workspaceId)]: id };
+  useTasks.setState({ shownBoard });
+  writeStored("tasks.board", JSON.stringify(shownBoard));
+  void refreshTasks(host, workspaceId);
+}
 
 function storedFilters(): BoardFilters {
   try {
@@ -203,11 +230,19 @@ function withDefaults(c: Partial<TrackersConfig>): TrackersConfig {
   return { ...c, sync: { ...DEFAULT_CONFIG.sync, ...c.sync }, github: c.github ?? DEFAULT_TRACKER, connections: c.connections ?? [], link: { ...DEFAULT_LINK, ...c.link } };
 }
 
+let sourcesMigrated = false;
+
 /** Reads `trackers.toml` once; a broken file shows its error and the defaults apply. */
 export async function loadTrackersConfig(force = false) {
   if (useTasks.getState().config && !force) return;
   try {
-    useTasks.setState({ config: withDefaults(await hostsApi.trackersConfig()), configError: null });
+    const config = withDefaults(await hostsApi.trackersConfig());
+    useTasks.setState({ config, configError: null });
+    // X44's sources become boards as soon as the file is read (X50), once a run.
+    if (!sourcesMigrated && migrateSources(config) !== config) {
+      sourcesMigrated = true;
+      await saveTrackersConfig(migrateSources).catch((e) => errorToast(e));
+    }
   } catch (e) {
     useTasks.setState({ configError: message(e) });
     errorToast(e);
@@ -294,73 +329,70 @@ export function workspaceProjects(s: StoreState, host: string, workspaceId: stri
 const message = (e: unknown) => (e instanceof Error ? e.message : typeof (e as { message?: unknown })?.message === "string" ? (e as { message: string }).message : String(e));
 const syncs = latestPerKey();
 
-/** Reads a workspace's GitHub issues and worktrees. A failed read keeps the last good list. */
+/**
+ * Reads a workspace's boards (X50): its pinned ones and the one shown, each
+ * by its origin, with the projects' worktrees. The first sync of a workspace
+ * turns its X44 sources and GitHub repositories into boards. A board that
+ * fails keeps its last good tasks.
+ */
 export async function refreshTasks(host: string, workspaceId: string, now = Date.now()) {
   const key = wsKey(host, workspaceId);
   const isLatest = syncs.start(key);
+  await loadTrackersConfig();
   const projects = workspaceProjects(useStore.getState(), host, workspaceId);
   let error: string | null = null;
-  // Sources that failed this time keep their last good tasks; the others are fresh.
-  const failed = new Set<string>();
   const everyoneToo = !useTasks.getState().filters.mine;
   const per = await Promise.all(
     projects.map(async (p) => {
       const repo = githubRepo(await rpc<string | null>(host, M.gitOriginUrl, { path: p.path }).catch(() => null));
-      // The user's issues; with Assignee: me off (X45), the repository's other open ones too.
-      const ask = (mine: boolean) => rpc<GhTask[]>(host, M.ghTasks, { path: p.path, mine });
-      const issues = repo
-        ? await Promise.all([ask(true), everyoneToo ? ask(false) : []])
-            .then(([own, all]) => {
-              const ownNumbers = new Set(own.map((gh) => gh.number));
-              // `gh.tasks` without `mine` also gives closed issues: only others' open ones join.
-              return [...own.map((gh) => ({ gh, mine: true })), ...all.filter((gh) => !ownNumbers.has(gh.number) && !gh.closed).map((gh) => ({ gh, mine: false }))];
-            })
-            .catch((e) => {
-              error = message(e);
-              failed.add(GITHUB);
-              return [];
-            })
-        : [];
       const worktrees = await rpc<Worktree[]>(host, M.projectWorktrees, { id: p.id }).catch(() => []);
       // The tracker projects its sessions start from (X44 Project settings › Task trackers).
       const trackers = await rpc<ProjectConfig>(host, M.projectConfig, { id: p.id })
         .then((c) => c.trackers ?? [])
         .catch(() => []);
-      return { id: p.id, repo, issues, trackers, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo, project: p.id })) };
+      return { id: p.id, path: p.path, repo, trackers, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo, project: p.id })) };
     }),
   );
-  // Linear, Jira and ClickUp sources of this workspace (X44).
-  const conns = workspaceConnections(trackersConfig(useTasks.getState()).connections, key);
-  const fromTrackers = await Promise.all(
-    conns.map(async (c) => {
-      // A rejected token is not tried again until the user reconnects (X44).
-      // Its own row and the Settings dot say so; the workspace's other
-      // sources keep syncing.
-      if (useTasks.getState().attention[c.id] !== undefined) {
-        failed.add(c.id);
-        return [];
-      }
-      try {
-        // The account's own, as the tracker decides who that is; with
-        // Assignee: me off (X45), everyone's open issues too.
-        const mine = await hostsApi.trackerTasks(c.id, true);
-        const everyone = everyoneToo ? await hostsApi.trackerTasks(c.id, false) : [];
-        // Everyone's, then the account's own that everyone's left out (it stops at 500).
-        const own = new Set(mine.map((t) => t.key));
-        const seen = new Set(everyone.map((t) => t.key));
-        const list = [...everyone.map((t) => ({ ...t, mine: own.has(t.key) })), ...mine.filter((t) => !seen.has(t.key)).map((t) => ({ ...t, mine: true }))];
-        return list.filter((t) => t.tracker && c.keys.includes(t.tracker.source));
-      } catch (e) {
-        const err = e as { auth?: boolean; message?: string };
-        error = err.message ?? message(e);
-        failed.add(c.id);
-        if (err.auth) useTasks.setState((t) => ({ attention: { ...t.attention, [c.id]: error ?? "" } }));
-        return [];
-      }
-    }),
-  );
+  const repoList = per.flatMap((x) => (x.repo ? [x.repo] : []));
+  const loaded = useTasks.getState();
+  // Each repository gets its board the first time a sync sees it (X50).
+  if (loaded.config && !loaded.configError && addRepoBoards(loaded.config, key, repoList) !== loaded.config)
+    await saveTrackersConfig((c) => addRepoBoards(c, key, repoList)).catch(() => {});
+  // With trackers.toml unreadable, the repositories still show, on boards that are not saved.
+  const boards = useTasks.getState().configError
+    ? addRepoBoards(DEFAULT_CONFIG, key, repoList).boards ?? []
+    : workspaceBoards(trackersConfig(useTasks.getState()).boards, key, useTasks.getState().shownBoard[key] ?? null);
+  const read = await Promise.all(boards.map((b) => readBoard(host, b, per, everyoneToo)));
   if (!isLatest()) return;
-  const sources = [...new Set(per.flatMap((x) => (x.repo ? [x.repo] : []))), ...conns.map((c) => c.id)];
+  const prev = useTasks.getState().data[key];
+  const tasks = new Map<string, Task>();
+  const boardData: Record<string, BoardData> = {};
+  const fresh: Record<string, BoardColumn[]> = {};
+  for (const [i, b] of boards.entries()) {
+    const r = read[i];
+    if (r.error !== null) {
+      // A connection that needs attention says so on its own row (X44), not as the workspace's error.
+      if (r.error) error = r.error;
+      // The board keeps its last good tasks.
+      const last = prev?.boards?.[b.id];
+      if (last) {
+        boardData[b.id] = last;
+        for (const t of prev?.tasks ?? []) if (last.keys.includes(taskId(t)) && !tasks.has(taskId(t))) tasks.set(taskId(t), t);
+      }
+      continue;
+    }
+    const cols = syncedColumns(b, r.columns);
+    if (r.columns && JSON.stringify(cols) !== JSON.stringify(b.columns ?? [])) fresh[b.id] = r.columns;
+    // Before a board's columns are known, a task keeps its tracker category.
+    const placed = cols.length ? categorize(cols, r.tasks) : r.tasks;
+    for (const t of placed) if (!tasks.has(taskId(t))) tasks.set(taskId(t), t);
+    boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint };
+  }
+  // A board whose columns changed in its tracker keeps them, matched to the
+  // board as it is when the write runs, so a change made meanwhile stays.
+  if (Object.keys(fresh).length && !useTasks.getState().configError)
+    void saveTrackersConfig((c) => ({ ...c, boards: c.boards?.map((b) => (fresh[b.id] ? { ...b, columns: syncedColumns(b, fresh[b.id]) } : b)) })).catch(() => {});
+  const sources = [...new Set(boards.map((b) => (b.origin.kind === "github_repo" ? b.origin.repo : b.connection)))];
   const repos = Object.fromEntries(per.map((x) => [x.id, x.repo]));
   const sourceProjects: Record<string, string[]> = {};
   for (const x of per)
@@ -369,11 +401,6 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
       const source = link && `${link.connection} ${link.key}`;
       if (source) sourceProjects[source] = [...(sourceProjects[source] ?? []), x.id];
     }
-  const tasks = new Map<string, Task>();
-  for (const x of per) for (const { gh, mine } of x.issues) tasks.set(`${GITHUB} ${gh.repo}#${gh.number}`, { ...taskFromGh(gh, GITHUB), mine });
-  for (const t of fromTrackers.flat()) tasks.set(`${t.connection} ${t.key}`, t);
-  const prev = useTasks.getState().data[key];
-  for (const t of prev?.tasks ?? []) if (failed.has(t.connection) && !tasks.has(`${t.connection} ${t.key}`)) tasks.set(`${t.connection} ${t.key}`, t);
   const next: TasksData = {
     tasks: [...tasks.values()],
     worktrees: per.flatMap((x) => x.worktrees),
@@ -382,12 +409,68 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     sourceProjects,
     syncedAt: error ? (prev?.syncedAt ?? null) : now,
     error,
+    boards: boardData,
   };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next } }));
-  // Compared as the board shows them: with the state mapping as saved now.
-  const mapped = { ...next, tasks: mappedTasks(next.tasks) };
-  if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev ? mappedTasks(prev.tasks) : null, mapped);
+  // Compared as the board shows them: with its columns as saved now.
+  const mapped = { ...next, tasks: placedTasks(next) };
+  if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev ? placedTasks(prev) : null, mapped);
   else forgetSeenMoves(mapped.tasks);
+}
+
+interface BoardRead {
+  tasks: Task[];
+  /** The tracker's columns now, or null when it gave none (GitHub's are fixed). */
+  columns: BoardColumn[] | null;
+  sprint: BoardData["sprint"];
+  /** Why it failed; null when it worked. */
+  error: string | null;
+}
+
+/**
+ * One board's tasks (X50): a GitHub repository's through `gh` on a project
+ * with that origin, a tracker's through the app. The account's own, and with
+ * Assignee: me off, everyone's open ones too.
+ */
+async function readBoard(host: string, b: BoardConfig, projects: { path: string; repo: string | null }[], everyoneToo: boolean): Promise<BoardRead> {
+  const none = (error: string | null): BoardRead => ({ tasks: [], columns: null, sprint: null, error });
+  if (b.origin.kind === "github_repo") {
+    const repo = b.origin.repo.toLowerCase();
+    const p = projects.find((x) => x.repo?.toLowerCase() === repo);
+    if (!p) return { ...none(null), columns: b.columns?.length ? null : GITHUB_REPO_COLUMNS };
+    const ask = (mine: boolean) => rpc<GhTask[]>(host, M.ghTasks, { path: p.path, mine });
+    try {
+      const [own, all] = await Promise.all([ask(true), everyoneToo ? ask(false) : []]);
+      const ownNumbers = new Set(own.map((gh) => gh.number));
+      // `gh.tasks` without `mine` also gives closed issues: only others' open ones join.
+      const list = [...own.map((gh) => ({ gh, mine: true })), ...all.filter((gh) => !ownNumbers.has(gh.number) && !gh.closed).map((gh) => ({ gh, mine: false }))];
+      return { tasks: list.map(({ gh, mine }) => ({ ...taskFromGh(gh, GITHUB), mine })), columns: b.columns?.length ? null : GITHUB_REPO_COLUMNS, sprint: null, error: null };
+    } catch (e) {
+      return none(message(e));
+    }
+  }
+  if (b.origin.kind === "github_project") return none(null);
+  // A rejected token is not tried again until the user reconnects (X44).
+  if (useTasks.getState().attention[b.connection] !== undefined) return none("");
+  const query = (mine: boolean) => hostsApi.trackerBoardTasks({ id: b.connection, origin: b.origin, narrow: b.narrow, mine, finished: b.finished ?? 14 });
+  try {
+    const own = await query(true);
+    const everyone = everyoneToo ? await query(false) : null;
+    const ownKeys = new Set(own.issues.map((t) => t.key));
+    const seen = new Set((everyone?.issues ?? []).map((t) => t.key));
+    const tasks = [
+      ...(everyone?.issues ?? []).map((t) => ({ ...taskFromBoardIssue(t), mine: ownKeys.has(t.key) })),
+      ...own.issues.filter((t) => !seen.has(t.key)).map((t) => ({ ...taskFromBoardIssue(t), mine: true })),
+    ];
+    return { tasks, columns: own.columns, sprint: own.sprint, error: null };
+  } catch (e) {
+    const err = e as { auth?: boolean; message?: string };
+    const text = err.message ?? message(e);
+    if (!err.auth) return none(text);
+    // Its own row says what to do (X44); the workspace shows no sync error for it.
+    useTasks.setState((t) => ({ attention: { ...t.attention, [b.connection]: text } }));
+    return none("");
+  }
 }
 
 /**
@@ -418,8 +501,8 @@ function forgetSeenMoves(tasks: Task[]) {
 }
 
 /** Tasks in the columns the user's state mapping puts them in (X44). */
-export function mappedTasks(tasks: Task[]): Task[] {
-  return applyStateMapping(tasks, trackersConfig(useTasks.getState()).connections);
+export function placedTasks(data: Pick<TasksData, "tasks" | "boards">, config: TrackersConfig = trackersConfig(useTasks.getState())): Task[] {
+  return placeOnBoards(data.tasks, data.boards, config.boards);
 }
 
 /** What the board needs of a workspace's sessions (X45). */
@@ -446,13 +529,24 @@ export function boardInput(s: StoreState, host: string, workspaceId: string, dat
       originRepo: data.repos[x.project_id] ?? null,
     }));
   return {
-    // The mapping as saved now, so a change shows without a sync (X44).
-    tasks: applyStateMapping(data.tasks, config.connections),
+    // The board's columns as saved now, so a change shows without a sync (X44, X50).
+    tasks: placedTasks(data, config),
     sessions,
     worktrees: data.worktrees,
     sessionStartRule: (t) => rulesFor(config, t).session_starts,
     link: config.link ?? DEFAULT_LINK,
   };
+}
+
+/**
+ * The status a move of `task` to `category` lands on (X50): on the board the
+ * task came from, the first status of its first column of that category;
+ * undefined when the task is on no board with columns.
+ */
+function boardStatus(host: string, workspaceId: string, task: Pick<Task, "connection" | "key">, category: Category): string | undefined {
+  const data = useTasks.getState().data[wsKey(host, workspaceId)];
+  const board = trackersConfig(useTasks.getState()).boards?.find((b) => data?.boards?.[b.id]?.keys.includes(taskId(task)));
+  return (board && statusFor(syncedColumns(board, null), category)) ?? undefined;
 }
 
 /** The project path of a workspace project in GitHub repository `repo`. */
@@ -504,11 +598,13 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
   const id = `${start.ref.connection} ${start.key}`;
   movedByMoonlet.set(id, "in_progress");
   try {
+    const status = boardStatus(host, workspaceId, { connection: start.ref.connection, key: start.key }, "in_progress");
     await hostsApi.trackerUpdate({
       id: start.ref.connection,
       task: start.tracker.id,
       source: start.tracker.source,
       column: "in_progress",
+      ...(status && { status }),
       assign_me: true,
     });
     recordActivity({ connection: start.ref.connection, key: start.key }, "moonlet moved it to In Progress and assigned it to you", now + 1);
@@ -594,9 +690,11 @@ export async function fixDrift(host: string, workspaceId: string, card: Card): P
       const t = card.task.tracker;
       if (!t) return false;
       movedByMoonlet.set(id, plan.column);
-      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column });
-      recordActivity(card.task, `moonlet moved it to ${COLUMN_LABEL[plan.column]}`);
-      toast(`Moved ${card.task.key} to ${COLUMN_LABEL[plan.column]}`);
+      const status = plan.status ?? boardStatus(host, workspaceId, card.task, plan.column);
+      await hostsApi.trackerUpdate({ id: card.task.connection, task: t.id, source: t.source, column: plan.column, ...(status && { status }) });
+      const to = plan.name ?? COLUMN_LABEL[plan.column];
+      recordActivity(card.task, `moonlet moved it to ${to}`);
+      toast(`Moved ${card.task.key} to ${to}`);
     } else {
       const sessions = useStore.getState().sessions[host]?.filter((s) => plan.sessions.includes(s.id)) ?? [];
       const paths = [...sessions.map((s) => s.path), ...plan.worktrees];
@@ -799,7 +897,8 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
       movedByMoonlet.set(id, column);
-      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column });
+      const status = boardStatus(host, workspaceId, task, column);
+      await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, ...(status && { status }) });
       recordActivity(task, `moonlet moved it to ${COLUMN_LABEL[column]}`, now);
     } else return;
     setFailure(task, null);
