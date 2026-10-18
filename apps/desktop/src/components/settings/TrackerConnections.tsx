@@ -22,8 +22,6 @@ const TOKEN_PAGE: Record<Connection["kind"], string> = {
   clickup: "https://app.clickup.com/settings/apps",
 };
 
-/** The Sources and States dialogs' menus, as tall as a text field (X44). */
-
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
 /** Which sources a connection shows, in which workspace and starting in which project. */

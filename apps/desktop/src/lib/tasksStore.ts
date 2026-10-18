@@ -15,7 +15,7 @@ import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, trackerOf } from "./tasks";
 import { parseTrackerLink } from "./trackerSources";
-import { boardShows, type Created, createTarget, type NewIssue, withCreated } from "./newIssue";
+import { boardShows, type Created, createTarget, githubRepoOf, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
@@ -530,14 +530,24 @@ function notShown(task: Task) {
 }
 
 /** Asks the board's tracker to create the issue in `status` (X52): GitHub through gh on the host, the others through the app. */
-async function createInTracker(host: string, workspaceId: string, board: BoardConfig, draft: NewIssue, status: string): Promise<{ task: Task; failed?: string; off?: boolean }> {
+/** What creating left (X52): the issue, what failed once it existed, and whether the board can't show it (`off`). */
+interface CreateResult {
+  task: Task;
+  failed?: string;
+  off?: boolean;
+}
+
+async function createInTracker(host: string, workspaceId: string, board: BoardConfig, draft: NewIssue, status: string): Promise<CreateResult> {
+  const repo = githubRepoOf(board, draft.place);
   if (board.origin.kind === "github_repo" || board.origin.kind === "github_project") {
-    const repo = board.origin.kind === "github_repo" ? board.origin.repo : draft.place;
     if (!repo) throw new Error("Pick the repository the issue goes in");
+    // A Project's issue needs the Project the board read: checked before anything is created.
+    const meta = useTasks.getState().data[wsKey(host, workspaceId)]?.boards?.[board.id]?.project;
+    if (board.origin.kind === "github_project" && !meta) throw new Error("The board hasn't read its Project yet; refresh it first");
     const req = { repo, title: draft.title, body: draft.description, assignee: draft.assignee, labels: draft.labels };
     const created = await rpc<GhCreated>(host, M.ghIssueCreate, req);
     const task = taskFromGh(created.task, GITHUB);
-    return board.origin.kind === "github_project" ? addToProject(host, workspaceId, board, created.node, task, status) : { task };
+    return meta && board.origin.kind === "github_project" ? addToProject(host, meta, created.node, task, status) : { task };
   }
   const answer = await hostsApi.trackerCreate({ id: board.connection, place: placeOf(board), issue: { ...draft, status }, inCycle: board.finished === "sprint" });
   return { task: taskFromBoardIssue(answer) };
@@ -548,18 +558,17 @@ async function createInTracker(host: string, workspaceId: string, board: BoardCo
  * Status (X52); `""` (No Status) sets none. Once the issue exists a failure
  * is reported, not thrown: not added, the board can't show it (`off`).
  */
-async function addToProject(host: string, workspaceId: string, board: BoardConfig, node: string, task: Task, status: string): Promise<{ task: Task; failed?: string; off?: boolean }> {
-  const meta = useTasks.getState().data[wsKey(host, workspaceId)]?.boards?.[board.id]?.project;
+async function addToProject(host: string, meta: ProjectMeta, node: string, task: Task, status: string): Promise<CreateResult> {
   let item: string;
   try {
-    if (!meta) throw new Error("the board has not read its Project yet");
     item = await rpc<string>(host, M.ghProjectAdd, { project: meta.id, content: node });
   } catch (e) {
     return { task, failed: `adding it to the Project failed: ${message(e)}`, off: true };
   }
   const inProject = (option: string | null): Task => ({ ...task, github: { ...task.github!, project: { id: meta.id, item, status: meta.options.find((o) => o.id === option)?.name ?? null, option } } });
   const req = status === "" ? null : projectMove(meta, item, status);
-  if (!req) return { task: inProject(null), ...(status !== "" && { failed: "setting its Status failed: the Project has no such option" }) };
+  if (!req && status !== "") return { task: inProject(null), failed: `setting its Status failed: ${meta.field ? "the Project has no such option" : "the Project has no Status field"}` };
+  if (!req) return { task: inProject(null) };
   try {
     await rpc(host, M.ghProjectMove, req);
     return { task: inProject(req.option) };
@@ -579,7 +588,7 @@ function placeOf(board: BoardConfig): string {
 export async function createOptions(host: string, board: BoardConfig, place?: string): Promise<{ me: string; people: { id: string; name: string }[]; labels: { id: string; name: string }[]; canSet: boolean }> {
   if (board.origin.kind === "github_repo" || board.origin.kind === "github_project") {
     // GitHub through gh on the workspace's host; people and labels by login and name. A Project's, of the repository picked.
-    const repo = board.origin.kind === "github_repo" ? board.origin.repo : place;
+    const repo = githubRepoOf(board, place);
     if (!repo) return { me: "", people: [], labels: [], canSet: true };
     const o = await rpc<GhCreateChoices>(host, M.ghCreateOptions, { repo });
     const named = (xs: string[]) => xs.map((x) => ({ id: x, name: x }));
@@ -603,12 +612,13 @@ export async function createIssue(host: string, workspaceId: string, board: Boar
   const columns = syncedColumns(board, null);
   // The card shows the Markdown typed until a sync reads the tracker's own copy (ClickUp answers with plain text).
   const [task] = categorize(columns, [{ ...result.task, ...(draft.description && { description: draft.description }), mine: draft.assignee === "me" }]);
+  // Once the issue exists, a later step that failed is said, with what was done (X52).
+  if (result.failed) toast(`Created ${task.key}; ${result.failed}`, "error", { label: "Open", run: () => void openUrl(task.url) });
+  // Not on the board: nothing of it to show or record here.
+  if (result.off) return task;
   recordActivity(task, "moonlet created it", now);
   // Its column is moonlet's doing, not a move made outside it (X44).
   movedByMoonlet.set(taskId(task), task.column);
-  // Once the issue exists, a later step that failed is said, with what was done (X52).
-  if (result.failed) toast(`Created ${task.key}; ${result.failed}`, "error", { label: "Open", run: () => void openUrl(task.url) });
-  if (result.off) return task;
   if (!boardShows(board, assigneeOf(board, useTasks.getState().assignee), columns, task)) {
     notShown(task);
     return task;

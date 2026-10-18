@@ -4,8 +4,7 @@
 import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { BoardColumn, BoardConfig } from "../../lib/boards";
-import { canSubmit, type NewIssue as Draft, needsPlace, newIssueDraft, projectRepos, withAccess } from "../../lib/newIssue";
-import { taskId } from "../../lib/tasks";
+import { canSubmit, type NewIssue as Draft, fitDraft, needsPlace, newIssueDraft, projectRepos, withAccess } from "../../lib/newIssue";
 import { wsKey } from "../../lib/workspaces";
 import { createIssue, createOptions, message, useTasks } from "../../lib/tasksStore";
 import { Menu } from "../Menu";
@@ -16,13 +15,10 @@ type Options = Awaited<ReturnType<typeof createOptions>>;
 export function NewIssue({ host, workspaceId, board, column, onClose }: { host: string; workspaceId: string; board: BoardConfig; column: BoardColumn; onClose: () => void }) {
   // A GitHub Project's issue goes in a repository: the workspace's first, then those of the Project's items.
   const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
-  const places = needsPlace(board)
-    ? projectRepos(
-        Object.values(data?.repos ?? {}).filter((r): r is string => !!r),
-        (data?.tasks ?? []).filter((t) => data?.boards?.[board.id]?.keys.includes(taskId(t))),
-      )
-    : [];
-  const [draft, setDraft] = useState<Draft>(() => ({ ...newIssueDraft(board), ...(places[0] && { place: places[0] }) }));
+  const places = needsPlace(board) ? projectRepos(data?.repos, data?.tasks ?? [], data?.boards?.[board.id]?.keys ?? []) : [];
+  const [chosen, setDraft] = useState<Draft>(() => newIssueDraft(board));
+  // The repository picked, else the first, which can arrive after the form opens.
+  const draft = { ...chosen, ...(!chosen.place && places[0] && { place: places[0] }) };
   // Until the tracker's lists arrive, the user's own choices: assigned to them, the board's labels.
   const [options, setOptions] = useState<Options | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,7 +32,7 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
       (o) => {
         if (stale) return;
         setOptions(o);
-        setDraft((d) => withAccess(d, o.canSet).draft);
+        setDraft((d) => fitDraft(d, o.people.map((p) => p.id)));
       },
       () => {},
     );
@@ -50,7 +46,8 @@ export function NewIssue({ host, workspaceId, board, column, onClose }: { host: 
     if (!ready) return;
     setBusy(true);
     setError(null);
-    createIssue(host, workspaceId, board, column, draft).then(onClose, (e) => {
+    // Where gh's user can't set them, no assignee or labels are sent: GitHub would drop them.
+    createIssue(host, workspaceId, board, column, withAccess(draft, options?.canSet ?? true).draft).then(onClose, (e) => {
       setBusy(false);
       setError(message(e));
     });

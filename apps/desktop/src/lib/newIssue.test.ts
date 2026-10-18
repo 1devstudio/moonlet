@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardColumn, BoardConfig } from "./boards";
-import { boardShows, createsIn, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
+import { boardShows, createsIn, fitDraft, githubRepoOf, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
 import type { Task } from "./tasks";
 
 const linear: BoardConfig = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } };
@@ -97,6 +97,18 @@ describe("the column + (X52)", () => {
     const project: BoardConfig = { ...linear, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 } };
     expect([needsPlace(project), needsPlace(linear)]).toEqual([true, false]);
     const item = (repo: string): Task => ({ connection: "github:github.com", key: `${repo}#1`, title: "", url: "", column: "open", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, github: { repo, number: 1, closingPrs: [], project: { id: "PVT_1", item: "PVTI_1", status: null } } });
-    expect(projectRepos(["acme/storefront"], [item("acme/web"), item("Acme/Storefront"), item("acme/api"), item("acme/web")])).toEqual(["acme/storefront", "acme/web", "acme/api"]);
+    // The workspace's projects' origins, then the repositories of the board's items (by their keys).
+    const items = [item("acme/web"), item("Acme/Storefront"), { ...item("acme/api"), key: "acme/api#1" }, item("acme/web")];
+    expect(projectRepos({ web: "acme/storefront", docs: null }, items, ["github:github.com acme/web#1", "github:github.com Acme/Storefront#1"])).toEqual(["acme/storefront", "acme/web"]);
+    expect(githubRepoOf(project, "acme/web")).toBe("acme/web");
+    expect(githubRepoOf({ ...project, origin: { kind: "github_repo", repo: "acme/storefront" } }, "acme/web")).toBe("acme/storefront");
+    expect(githubRepoOf(linear, "acme/web")).toBe(undefined);
+  });
+
+  it("keeps the user's choices when the repository changes, but an assignee the new one doesn't have goes back to Me", () => {
+    const draft = { ...newIssueDraft({ ...linear, labels: ["frontend"] }), assignee: "kim" };
+    expect(fitDraft(draft, ["kim", "sam-rivera"])).toEqual(draft);
+    expect(fitDraft(draft, ["sam-rivera"])).toEqual({ ...draft, assignee: "me" });
+    expect(fitDraft({ ...draft, assignee: "none" }, [])).toEqual({ ...draft, assignee: "none" });
   });
 });

@@ -239,8 +239,8 @@ fn options(v: &Value) -> Vec<GhOption> {
 /// What gh sends back about a missing scope, as the user can act on it (X50).
 pub fn scope_hint(scope: &str) -> String {
     if scope == "project" {
-        // A move: there is no Check again, the next move tries again.
-        return "Moving a Project's items needs gh's project scope. Run gh auth refresh -s project.".into();
+        // A move or an add: there is no Check again, the next one tries again.
+        return "Changing a Project's items needs gh's project scope. Run gh auth refresh -s project.".into();
     }
     format!(
         "GitHub Projects need gh's {scope} scope. Run gh auth refresh -s {scope}, then Check again."
@@ -567,7 +567,7 @@ mod tests {
             parse_project_items(&fixture("gh-error-project-scope.json"))
                 .unwrap_err()
                 .to_string(),
-            "Moving a Project's items needs gh's project scope. Run gh auth refresh -s project."
+            "Changing a Project's items needs gh's project scope. Run gh auth refresh -s project."
         );
     }
 
@@ -682,7 +682,7 @@ mod tests {
             parse_added(&fixture("gh-error-project-scope.json"))
                 .unwrap_err()
                 .to_string(),
-            "Moving a Project's items needs gh's project scope. Run gh auth refresh -s project."
+            "Changing a Project's items needs gh's project scope. Run gh auth refresh -s project."
         );
         assert_eq!(
             parse_added(br#"{"data":{"addProjectV2ItemById":null}}"#)
@@ -702,7 +702,7 @@ mod tests {
             parse_move(&fixture("gh-error-project-scope.json"))
                 .unwrap_err()
                 .to_string(),
-            "Moving a Project's items needs gh's project scope. Run gh auth refresh -s project."
+            "Changing a Project's items needs gh's project scope. Run gh auth refresh -s project."
         );
     }
 

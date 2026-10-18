@@ -50,7 +50,6 @@ import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { BoardMark, Button, cx, IconButton, inputCls, selectCls } from "../ui";
 import { TaskGlyph } from "./TasksMode";
 
-
 type Build = "board" | "jql" | "project" | "repo";
 
 /** What a Jira or GitHub board can be built from (X50 step 1). */

@@ -1410,12 +1410,26 @@ describe("a new issue from a column (X52)", () => {
     calls.length = 0;
     await createIssue("local", "personal", board, columns[0], { ...draft, place: "acme/web" });
     expect(calls.map(([what]) => what)).toEqual(["create", "add"]);
-    // Adding it fails once the issue exists: the form closes and the notice says what was done.
+    // Setting its Status fails once it is added: the card is in No Status, and the notice says so.
+    answers["gh.project_move"] = () => {
+      throw new Error("Changing a Project's items needs gh's project scope. Run gh auth refresh -s project.");
+    };
+    const unset = await createIssue("local", "personal", board, columns[1], { ...draft, place: "acme/web" });
+    expect([unset.github?.project?.option, unset.column]).toEqual([null, "todo"]);
+    expect(useStore.getState().toasts.at(-1)?.text).toBe("Created acme/web#57; setting its Status failed: Changing a Project's items needs gh's project scope. Run gh auth refresh -s project.");
+    // Adding it fails once the issue exists: the form closes, the notice says what was done, and no card is selected.
+    useTasks.setState({ selected: null });
     answers["gh.project_add"] = () => {
       throw new Error("GitHub did not add the issue to the Project");
     };
     await createIssue("local", "personal", board, columns[1], { ...draft, place: "acme/web" });
     expect(useStore.getState().toasts.at(-1)?.text).toBe("Created acme/web#57; adding it to the Project failed: GitHub did not add the issue to the Project");
+    expect(useTasks.getState().selected).toBe(null);
+    // Before the board has read its Project, nothing is created and the form says why.
+    calls.length = 0;
+    useTasks.setState((t) => ({ data: { ...t.data, "local/personal": { ...t.data["local/personal"], boards: {} } } }));
+    await expect(createIssue("local", "personal", board, columns[1], { ...draft, place: "acme/web" })).rejects.toThrow("The board hasn't read its Project yet; refresh it first");
+    expect(calls).toEqual([]);
     useTasks.setState({ config: null });
   });
 
