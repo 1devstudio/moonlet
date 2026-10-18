@@ -52,15 +52,15 @@ const BAR: Record<BoardColumn["category"], string> = { todo: "bg-[#4a4a4a]", in_
 
 const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
-/** Add a board, or with `boardId` that board's settings (X50). */
-export function AddBoardDialog({ host, workspace, boardId }: { host: string; workspace: string; boardId?: string }) {
+/** Add a board, starting on `connection` when given, or with `boardId` that board's settings (X50). */
+export function AddBoardDialog({ host, workspace, boardId, connection }: { host: string; workspace: string; boardId?: string; connection?: string }) {
   const close = () => useStore.setState({ dialog: null });
   const config = useTasks((t) => trackersConfig(t));
   const workspaces = useStore((s) => s.workspaces);
   const data = useTasks((t) => t.data[wsKey(host, workspace)]);
   const repos = [...new Set(Object.values(data?.repos ?? {}).filter((r): r is string => !!r))];
   const editing = config.boards?.find((b) => b.id === boardId);
-  const [draft, setDraft] = useState<Draft>(() => (editing ? draftFromBoard(editing) : newDraft(wsKey(host, workspace))));
+  const [draft, setDraft] = useState<Draft>(() => (editing ? draftFromBoard(editing) : { ...newDraft(wsKey(host, workspace)), connection: connection ?? null }));
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [choicesError, setChoicesError] = useState<string | null>(null);
   const [build, setBuild] = useState<"board" | "jql">("board");

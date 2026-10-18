@@ -1,15 +1,15 @@
-// Linear, Jira Cloud and ClickUp in Settings › Task trackers (X44): connect
-// with a token, pick the sources each workspace shows, disconnect.
+// Linear, Jira Cloud and ClickUp in Settings › Task trackers (X44, X50):
+// connect with a token, then add a board; edit boards as sources; disconnect.
 
 import { Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi } from "../../lib/daemon";
-import { errorToast, useStore } from "../../lib/store";
-import { type Connection, loadTrackersConfig, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
+import { errorToast, shownWorkspace, useStore } from "../../lib/store";
+import { type Connection, loadTrackersConfig, openAddBoard, reconnected, saveTrackersConfig, type Source, useTasks } from "../../lib/tasksStore";
 import { connectionLine } from "../../lib/trackersPage";
 import { boardRows, rowsToBoards, sourceKeyOf, withStates } from "../../lib/boards";
-import { blankSource, changedStates, sourceChoices, sourceNoun } from "../../lib/trackerSources";
+import { blankSource, changedStates, connectedText, disconnectText, sourceChoices, sourceNoun } from "../../lib/trackerSources";
 import type { Column } from "../../lib/tasks";
 import { wsKey } from "../../lib/workspaces";
 import { Button, cx, Dialog, Field, IconButton, inputCls, TrackerIcon } from "../ui";
@@ -107,7 +107,34 @@ function SourcesEditor({ connection, choices, onDone }: { connection: Connection
   );
 }
 
-/** Connect (or reconnect) a tracker with a token, then pick its sources. */
+/** After connecting (X50): Add a board on that connection, in the workspace shown, or later. */
+function AddBoardNext({ connection, hint, onClose }: { connection: Connection; hint: string; onClose: () => void }) {
+  const ws = useStore((s) => shownWorkspace(s));
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="ui-text-12.5 text-muted">{ws ? hint : "Open a workspace to add a board to it."}</p>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" className="field-height" onClick={onClose}>
+          Later
+        </Button>
+        <Button
+          size="sm"
+          variant="primary"
+          className="field-height"
+          disabled={!ws}
+          onClick={() => {
+            onClose();
+            if (ws) openAddBoard(ws.host, ws.id, undefined, connection.id);
+          }}
+        >
+          Add a board
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Connect (or reconnect) a tracker with a token, then add a board. */
 export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection["kind"]; reconnect?: Connection; onClose: () => void }) {
   const [site, setSite] = useState(reconnect?.site ?? "");
   const [email, setEmail] = useState(reconnect?.email ?? "");
@@ -147,14 +174,23 @@ export function ConnectTracker({ kind, reconnect, onClose }: { kind: Connection[
       setBusy(false);
     }
   };
+  const signedIn = done && connectedText(kind, done.connection.account, done.sources.length);
   return (
-    <Dialog title={`${reconnect ? "Reconnect" : "Connect"} ${NAME[kind]}`} onClose={onClose} width={done ? 680 : 560}>
+    <Dialog title={`${reconnect ? "Reconnect" : "Connect"} ${NAME[kind]}`} onClose={onClose} width={560}>
       {done ? (
         <>
           <p className="mb-2 ui-text-12.5 text-done">
-            Signed in as {done.connection.account} · {done.sources.length} {done.sources.length === 1 ? "source" : "sources"} visible
+            {signedIn?.line}
           </p>
-          <SourcesEditor connection={done.connection} choices={done.sources} onDone={onClose} />
+          {reconnect ? (
+            <div className="flex justify-end">
+              <Button size="sm" variant="primary" className="field-height" onClick={onClose}>
+                Done
+              </Button>
+            </div>
+          ) : (
+            <AddBoardNext connection={done.connection} hint={signedIn?.hint ?? ""} onClose={onClose} />
+          )}
         </>
       ) : (
         <div className="flex flex-col gap-3">
@@ -224,7 +260,7 @@ export function ConnectionRow({ c }: { c: Connection }) {
     }
   };
   const disconnect = async () => {
-    const ok = await askConfirm({ title: `Disconnect ${NAME[c.kind]}?`, message: `moonlet forgets the token for ${c.site} and stops showing its issues. Sessions keep their links.`, action: "Disconnect", variant: "danger" });
+    const ok = await askConfirm({ title: `Disconnect ${NAME[c.kind]}?`, message: disconnectText(c, boards), action: "Disconnect", variant: "danger" });
     if (!ok) return;
     try {
       await hostsApi.trackerDisconnect(c.id);
