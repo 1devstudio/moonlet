@@ -4,6 +4,7 @@
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** X2 (pull requests), X32 (workspaces), X43 (settings page), X45 (Tasks mode), X46 (tasks in sessions)
 - **Related ADRs:** [0010](../adr/0010-task-trackers-in-the-app.md)
+- **Superseded in part by:** [X50](X50-boards.md) — boards replace sources and the per-connection States dialog.
 
 ## Summary
 
