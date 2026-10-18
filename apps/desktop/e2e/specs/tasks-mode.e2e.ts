@@ -181,7 +181,7 @@ describe("Tasks mode", () => {
     await expect($('//nav[@aria-label="Boards"]//button[.//span[normalize-space()="acme/storefront"]]')).toBeDisplayed({ wait: 10_000 });
   });
 
-  it("adds a board of a GitHub Project, after gh gets its read:project scope, with No Status and the Project's Status as columns, and moves an item by its Status (X50)", async () => {
+  it("adds a board of a GitHub Project, after gh gets its read:project scope, with No Status and the Project's Status as columns and its estimate on cards, and moves an item by its Status (X50)", async () => {
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
@@ -204,9 +204,12 @@ describe("Tasks mode", () => {
     // No Status comes first, as GitHub shows it.
     await expect($(`(${dialog}//div[@role="row"][@aria-label])[1]`)).toHaveAttribute("aria-label", "No Status");
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
+    // The Project's first number field is offered as the estimate, by its name.
+    await $(`${dialog}//label[normalize-space()="Estimate"]`).click();
     await $(`${dialog}//button[normalize-space()="Create board"]`).click();
-    // The user's own issue sits in its Status column.
+    // The user's own issue sits in its Status column, with its Estimate.
     await expect(card("acme/web#10", "Todo")).toBeDisplayed({ wait: 15_000 });
+    await expect(card("acme/web#10", "Todo").$('.//*[normalize-space()="3 pt"]')).toBeDisplayed();
     await expect($('//button[starts-with(@aria-label, "Switch board, current: Website")]')).toBeDisplayed();
     // Its State menu sets the item's Status through gh.
     await card("acme/web#10", "Todo").$('.//button[normalize-space()="Retry failed webhook deliveries"]').click();
