@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { pausedPreview, alreadyAdded, byGroup, canContinue, cardChoices, projectChoice, projectOwners, scopeNeeded, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
+import { groupsStatuses, groupStatus, splitStatus, pausedPreview, alreadyAdded, byGroup, canContinue, cardChoices, projectChoice, projectOwners, scopeNeeded, changedCategories, clash, columnAt, dropColumn, jiraFilterUrl, statusNames, statusText, suggestedOf, draftFromBoard, finishedChoices, jiraSprints, moveColumn, newDraft, pickOrigin, previewLine, putBoard, summaryLine, toBoard } from "./addBoard";
 import type { BoardColumn, BoardConfig } from "./boards";
 import type { Task } from "./tasks";
 
@@ -294,5 +294,38 @@ describe("the preview's pause (X50 step 2)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("grouping a JQL board's statuses (X50 step 3)", () => {
+  const open: BoardColumn = { name: "Open", statuses: ["1"], category: "todo" };
+  const progress: BoardColumn = { name: "In Progress", statuses: ["3"], category: "in_progress" };
+  const review: BoardColumn = { name: "Needs Reviews", statuses: ["10018"], category: "in_review", show: "fold" };
+
+  it("moves a status dragged onto another column into it, and drops the column it leaves empty", () => {
+    expect(groupStatus([open, progress, review], "10018", 1)).toEqual([open, { name: "In Progress", statuses: ["3", "10018"], category: "in_progress" }]);
+    // Onto its own column, nothing changes.
+    expect(groupStatus([open, progress], "1", 0)).toEqual([open, progress]);
+    // A column that keeps other statuses stays.
+    expect(groupStatus([{ ...open, statuses: ["1", "10000"] }, progress], "10000", 1)).toEqual([open, { ...progress, statuses: ["3", "10000"] }]);
+  });
+
+  it("gives a grouped status its own column again, beside the one it leaves and in its category", () => {
+    const names = { "1": "Open", "10000": "To Do", "10097": "Done", "6": "Closed" };
+    expect(splitStatus([{ ...open, statuses: ["1", "10000"] }, progress], "10000", names)).toEqual([open, { name: "To Do", statuses: ["10000"], category: "todo" }, progress]);
+    // Taking the status the column is named after: it keeps that name, and the rest takes its first status's.
+    const done: BoardColumn = { name: "Done", statuses: ["10097", "6"], category: "done", show: "fold" };
+    expect(splitStatus([done], "10097", names)).toEqual([
+      { name: "Done", statuses: ["10097"], category: "done", show: "fold" },
+      { name: "Closed", statuses: ["6"], category: "done", show: "fold" },
+    ]);
+    // A name another column has gets the status's id after it; a status alone in its column stays.
+    expect(splitStatus([{ ...open, statuses: ["1", "10000"] }, { name: "To Do", statuses: ["3"], category: "todo" }], "10000", names).map((c) => c.name)).toEqual(["Open", "To Do (10000)", "To Do"]);
+    expect(splitStatus([open], "1", names)).toEqual([open]);
+  });
+
+  it("groups only a JQL board's statuses: a tracker's own columns come back on each sync as the tracker has them", () => {
+    expect(groupsStatuses({ kind: "jql", query: "project = EX" })).toBe(true);
+    expect([groupsStatuses({ kind: "jira_board", board: 10 }), groupsStatuses({ kind: "linear_team", team: "MOON" }), groupsStatuses(null)]).toEqual([false, false, false]);
   });
 });

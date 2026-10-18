@@ -550,7 +550,7 @@ describe("Jira and ClickUp trackers", () => {
     await expect($('//aside[@aria-label="Task detail"]').$(sel.text("No Jira transition leads to that column from here"))).toBeDisplayed({ wait: 15_000 });
   });
 
-  it("adds a board from a JQL query the workspace has no board for, shows it, renames it in Board settings, and removes it from Settings (X50)", async () => {
+  it("adds a board from a JQL query the workspace has no board for, groups a status into another column and back, shows it, renames it in Board settings, and removes it from Settings (X50)", async () => {
     await $('//button[@title="Add a board"]').click();
     const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
     await expect($(dialog)).toBeDisplayed({ wait: 10_000 });
@@ -576,6 +576,20 @@ describe("Jira and ClickUp trackers", () => {
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     // Step 3: a column per status the issues are in.
     await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]`)).toBeDisplayed({ wait: 10_000 });
+    // A status dragged onto another column joins it; its own column goes.
+    await browser.execute(() => {
+      const data = new DataTransfer();
+      document.querySelector<HTMLElement>('[role="dialog"] [aria-label="Drag status To Do"]')!.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: data }));
+      const row = document.querySelector<HTMLElement>('[role="dialog"] [role="row"][aria-label="In Progress"]')!;
+      row.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data }));
+      row.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
+    });
+    await expect($(`${dialog}//div[@role="row"][@aria-label="To Do"]`)).not.toBeExisting({ wait: 5_000 });
+    await expect($(`${dialog}//div[@role="row"][@aria-label="In Progress"]//span[@aria-label="Drag status To Do"]`)).toBeDisplayed();
+    await expect($(`${dialog}//*[contains(normalize-space(), "drag a status onto another column to group them")]`)).toBeDisplayed();
+    // And it gets its own column back.
+    await $(`${dialog}//button[@aria-label="Give To Do its own column"]`).click();
+    await expect($(`${dialog}//div[@role="row"][@aria-label="To Do"]`)).toBeDisplayed({ wait: 5_000 });
     await $(`${dialog}//button[normalize-space()="Continue"]`).click();
     // The workspace already has a `project = EX` board.
     await expect($(`${dialog}//span[normalize-space()="This workspace already has a board from JQL query."]`)).toBeDisplayed({ wait: 10_000 });

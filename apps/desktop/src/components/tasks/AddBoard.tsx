@@ -8,7 +8,10 @@ import {
   byGroup,
   canContinue,
   cardChoices,
+  groupsStatuses,
+  groupStatus,
   pausedPreview,
+  splitStatus,
   changedCategories,
   clash,
   columnAt,
@@ -105,6 +108,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const [suggested, setSuggested] = useState<Partial<Record<string, BoardColumn["category"]>>>({});
   // The row being dragged in step 3.
   const dragged = useRef<number | null>(null);
+  // A JQL board's status being dragged onto another column (X50).
+  const draggedStatus = useRef<string | null>(null);
   const [preview, setPreview] = useState<BoardPreview | null>(null);
   // A Project's number field as last previewed, so its box keeps its name while the preview reloads.
   const [numberField, setNumberField] = useState<string | null>(null);
@@ -250,6 +255,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const sample = (preview?.tasks ?? []).slice(0, 3);
   useEffect(() => setSuggested((prev) => suggestedOf(prev, draft.columns)), [draft.columns]);
   const changed = changedCategories(draft.columns, suggested);
+  const grouping = groupsStatuses(draft.origin);
   const names = statusNames({ setup: setupNames, issues: preview?.tasks, site: preview?.statusNames, known: knownNames });
   // Names already seen stay while the next preview loads.
   useEffect(() => {
@@ -554,14 +560,16 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       key={c.name}
                       role="row"
                       aria-label={c.name}
-                      // Only a column dragged by its grip lands here.
-                      onDragOver={(e) => dragged.current !== null && e.preventDefault()}
+                      // A column dragged by its grip lands here, and a JQL board's status joins it.
+                      onDragOver={(e) => (dragged.current !== null || draggedStatus.current !== null) && e.preventDefault()}
                       onDrop={(e) => {
                         const from = dragged.current;
+                        const status = draggedStatus.current;
                         dragged.current = null;
-                        if (from === null) return;
+                        draggedStatus.current = null;
+                        if (from === null && status === null) return;
                         e.preventDefault();
-                        setDraft((d) => ({ ...d, columns: dropColumn(d.columns, from, i) }));
+                        setDraft((d) => ({ ...d, columns: status !== null ? groupStatus(d.columns, status, i) : dropColumn(d.columns, from!, i) }));
                       }}
                       className={cx("grid items-center gap-2 border-b border-border px-2 py-1.5 last:border-b-0", grid)}
                     >
@@ -589,7 +597,38 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       </span>
                       <span className="min-w-0">
                         <span className={cx("block truncate ui-text-13", c.show === "hide" ? "text-faint" : "text-fg")}>{c.name}</span>
-                        <span className="block truncate ui-text-11.5 text-faint">{statusText(c, names)}</span>
+                        {grouping ? (
+                          <span className="flex flex-wrap gap-1 pt-0.5">
+                            {c.statuses.map((st) => (
+                              <span
+                                key={st}
+                                draggable
+                                aria-label={`Drag status ${names[st] ?? st}`}
+                                onDragStart={(e) => {
+                                  draggedStatus.current = st;
+                                  e.dataTransfer.effectAllowed = "move";
+                                  e.dataTransfer.setData("text/plain", names[st] ?? st);
+                                }}
+                                onDragEnd={() => (draggedStatus.current = null)}
+                                className="inline-flex cursor-grab items-center gap-0.5 rounded-[4px] bg-panel-2 px-1.5 ui-text-11.5 text-muted"
+                              >
+                                {names[st] ?? st}
+                                {c.statuses.length > 1 && (
+                                  <button
+                                    title={`Give ${names[st] ?? st} its own column`}
+                                    aria-label={`Give ${names[st] ?? st} its own column`}
+                                    onClick={() => setDraft((d) => ({ ...d, columns: splitStatus(d.columns, st, names) }))}
+                                    className="text-faint hover:text-fg"
+                                  >
+                                    <X size={10} />
+                                  </button>
+                                )}
+                              </span>
+                            ))}
+                          </span>
+                        ) : (
+                          <span className="block truncate ui-text-11.5 text-faint">{statusText(c, names)}</span>
+                        )}
                       </span>
                       <span className="flex items-center gap-1.5">
                         <TaskGlyph column={c.category} size={12} />
@@ -724,7 +763,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
               {clashText && draft.step === 4 ? clashText : null}
               {draft.step === 1 && `moonlet reads the board's configuration; it never changes it in ${trackerName(draft.connection ?? "jira")}.`}
               {draft.step === 2 && "Counts update as you type."}
-              {draft.step === 3 && `Drag to reorder. Order and folding are moonlet-only and don't change ${trackerName(draft.connection ?? "jira")}.`}
+              {draft.step === 3 && `Drag to reorder${grouping ? ", or drag a status onto another column to group them" : ""}. Order and folding are moonlet-only and don't change ${trackerName(draft.connection ?? "jira")}.`}
               {draft.step === 4 && !clashText && "Saved to ~/.moonlet/trackers.toml."}
             </span>
             {editing && (
