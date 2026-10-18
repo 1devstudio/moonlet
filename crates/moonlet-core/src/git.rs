@@ -1023,16 +1023,20 @@ pub async fn gh_task_update(repo: &Path, number: u64, assign_me: bool, close: bo
     Ok(())
 }
 
+/// `repo` as a GitHub `owner/name`, checked before gh is run with it: it can
+/// come from the clipboard or a board's settings.
+pub(crate) fn check_repo(repo: &str) -> Result<&str> {
+    let part = |s: &str| !s.is_empty() && !s.starts_with(['-', '.']) && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    match repo.split_once('/') {
+        Some((owner, name)) if part(owner) && part(name) => Ok(repo),
+        _ => anyhow::bail!("{repo} is not a GitHub repository"),
+    }
+}
+
 /// One issue of `owner/name` by its number, for a key pasted into the link
 /// dialog (X46). `repo` comes from the clipboard, so it is checked first.
 pub async fn gh_task(dir: &Path, repo: &str, number: u64) -> Result<moonlet_proto::types::GhTask> {
-    let ok = repo.split_once('/').is_some_and(|(owner, name)| {
-        let part = |s: &str| !s.is_empty() && !s.starts_with(['-', '.']) && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
-        part(owner) && part(name)
-    });
-    if !ok {
-        anyhow::bail!("{repo} is not a GitHub repository");
-    }
+    check_repo(repo)?;
     let n = number.to_string();
     let out = gh(dir, &["issue", "view", &n, "--repo", repo, "--json", GH_TASK_FIELDS]).await?;
     let one: serde_json::Value = serde_json::from_slice(&out)?;

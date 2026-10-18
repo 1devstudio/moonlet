@@ -427,6 +427,7 @@ export function TasksMode() {
   const assignee = useTasks((t) => t.assignee);
   const selected = useTasks((t) => t.selected);
   const attention = useTasks((t) => t.attention);
+  const hosts = useStore((s) => s.hosts);
   // The column whose + opened New issue (X52).
   const [creating, setCreating] = useState<BoardColumn | null>(null);
   if (!ws) return null;
@@ -487,7 +488,7 @@ export function TasksMode() {
   const fields = cardFields(shown.board);
   // The + on a column (X52): where it creates, and why it can't.
   const savedColumns = syncedColumns(shown.board, null);
-  const createLocked = createLock(shown.board, { attention: attention[shown.board.connection], hostOnline: true });
+  const createLocked = createLock(shown.board, { attention: attention[shown.board.connection], hostOnline: hosts[ws.host]?.status === "connected" });
   const plusFor = (name: string) => {
     const column = savedColumns.find((c) => c.name === name);
     return column && createsIn(shown.board) && createTarget(shown.board, column) ? column : null;

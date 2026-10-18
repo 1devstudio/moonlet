@@ -1378,6 +1378,17 @@ describe("a new issue from a column (X52)", () => {
     useTasks.setState({ config: null });
   });
 
+  it("creates a GitHub issue in the board's repository through gh, its card in Open", async () => {
+    const repo = { id: "github:github.com/acme/web@local/personal", name: "acme/web", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_repo" as const, repo: "acme/web" }, columns: [{ name: "Open", statuses: ["open"], category: "todo" as const }, { name: "Closed", statuses: ["completed", "not_planned"], category: "done" as const, show: "fold" as const }] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [repo] }, attention: {}, assignee: {}, selected: null });
+    const asked: object[] = [];
+    answers["gh.issue_create"] = (p) => (asked.push(p), { task: { repo: "acme/web", number: 1, title: "Retry failed webhook deliveries", body: "", url: "https://github.com/acme/web/issues/1", closed: false, state_reason: null, assignees: ["sam-rivera"], labels: ["bug"], updated_ms: 0, closing_prs: [] }, node: "I_e2e0001" });
+    const task = await createIssue("local", "personal", repo, repo.columns[0], { ...draft, labels: ["bug"] });
+    expect(asked).toEqual([{ repo: "acme/web", title: "Retry failed webhook deliveries", body: "", assignee: "me", labels: ["bug"] }]);
+    expect([task.key, task.column, useTasks.getState().selected]).toEqual(["acme/web#1", "open", "github:github.com acme/web#1"]);
+    useTasks.setState({ config: null });
+  });
+
   it("says at once when the board can't show it, and keeps the form open on a refusal", async () => {
     useTasks.setState({ config: { ...DEFAULT_CONFIG, migrated: ["local/personal"], boards: [moon] }, attention: {}, assignee: {}, selected: null });
     answers["tracker_create linear:acme"] = () => issue("MOON-143", "In Review", ["Kim Park"]);

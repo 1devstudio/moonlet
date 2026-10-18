@@ -99,5 +99,14 @@ export function withCreated<B extends { keys: string[] }>(
   return { tasks: [...synced.tasks, ...kept.map((c) => c.task)], boards, pending, gone };
 }
 
-/** Whether the board's tracker is one moonlet creates issues in (X52): Linear and ClickUp so far; the others follow. */
-export const createsIn = (board: BoardConfig) => board.origin.kind === "linear_team" || board.origin.kind === "clickup_list";
+/** Whether the board's tracker is one moonlet creates issues in (X52): Linear, ClickUp and GitHub repositories so far; the others follow. */
+export const createsIn = (board: BoardConfig) => ["linear_team", "clickup_list", "github_repo"].includes(board.origin.kind);
+
+/**
+ * The form where gh's user can or can't set an issue's assignee and labels
+ * (X52): without that access GitHub drops both silently, so the fields are
+ * not offered (`assignment`) and the draft sends neither.
+ */
+export function withAccess(draft: NewIssue, canSet: boolean): { draft: NewIssue; assignment: boolean } {
+  return canSet ? { draft, assignment: true } : { draft: { ...draft, assignee: "none", labels: [] }, assignment: false };
+}
