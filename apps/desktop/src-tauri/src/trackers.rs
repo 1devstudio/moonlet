@@ -590,7 +590,8 @@ pub async fn tracker_board_setup(id: String, board: u64) -> Res<BoardSetup> {
 /// A GitHub Project's columns (X50): No Status, then each Status option, its
 /// category by its name (X44's rule).
 #[tauri::command]
-pub fn github_project_columns(options: Vec<String>) -> Vec<BoardColumn> {
+pub fn github_project_columns(options: Vec<moonlet_proto::types::GhOption>) -> Vec<BoardColumn> {
+    let options: Vec<(String, String)> = options.into_iter().map(|o| (o.id, o.name)).collect();
     moonlet_trackers::states::project_columns(&options)
 }
 

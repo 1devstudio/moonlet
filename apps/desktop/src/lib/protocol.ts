@@ -272,7 +272,7 @@ export interface GhProjectBoard {
   options: { id: string; name: string }[];
   /** Its first number field's name; each item's `estimate` is its value there. */
   number_field?: string | null;
-  items: { item: string; status: string | null; estimate?: number | null; task: GhTask }[];
+  items: { item: string; status: string | null; option?: string | null; estimate?: number | null; task: GhTask }[];
 }
 
 export interface GhTask {

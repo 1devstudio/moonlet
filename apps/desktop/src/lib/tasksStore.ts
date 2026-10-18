@@ -1,7 +1,7 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { addRepoBoards, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
+import { addRepoBoards, NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
@@ -568,7 +568,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
     try {
       const [own, all] = await Promise.all([ask(true), everyoneToo ? ask(false) : null]);
       const list = ownAndOthers(own.items, all?.items ?? null, (i) => i.item);
-      const columns = await hostsApi.githubProjectColumns(own.options.map((o) => o.name));
+      const columns = await hostsApi.githubProjectColumns(own.options);
       // Whether its items can be moved: gh's project scope (X50), read at most once a minute.
       if (Date.now() - (scopesReadAt.get(host) ?? 0) > 60_000) {
         scopesReadAt.set(host, Date.now());
@@ -578,7 +578,9 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
         );
       }
       const project = { id: own.id, field: own.status_field, options: own.options, numberField: own.number_field ?? null };
-      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id), mine })), columns, sprint: null, project, error: null };
+      // Its columns hold option ids; step 3 names them by the options' names.
+      const statusNames = { "": NO_STATUS, ...Object.fromEntries(own.options.map((o) => [o.id, o.name])) };
+      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id), mine })), columns, sprint: null, project, statusNames, error: null };
     } catch (e) {
       return none(message(e));
     }

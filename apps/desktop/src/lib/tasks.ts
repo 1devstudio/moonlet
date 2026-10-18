@@ -41,7 +41,8 @@ export interface Task {
     number: number;
     closingPrs: number[];
     /** On a GitHub Project's board (X50): the Project's id, the item and its Status, none when it has none. */
-    project?: { id: string; item: string; status: string | null };
+    /** A GitHub Project's item (X50): its Status option's name, for showing, and its id, which columns match by. */
+    project?: { id: string; item: string; status: string | null; option?: string | null };
   };
   /** Linear, Jira and ClickUp issues: their id, state name and team/project/list in the tracker. */
   tracker?: { id: string; state: string; source: string; statusId?: string };
@@ -51,9 +52,9 @@ export interface Task {
 export const taskId = (t: Pick<Task, "connection" | "key">) => `${t.connection} ${t.key}`;
 
 /** A GitHub Project's item (X50) as a task: the issue, with its item, Status and estimate (its number field's value). */
-export function taskFromProjectItem(i: { item: string; status: string | null; estimate?: number | null; task: GhTask }, connection: string, projectId: string): Task {
+export function taskFromProjectItem(i: { item: string; status: string | null; option?: string | null; estimate?: number | null; task: GhTask }, connection: string, projectId: string): Task {
   const t = taskFromGh(i.task, connection);
-  return { ...t, ...(typeof i.estimate === "number" && { points: i.estimate }), github: { ...t.github!, project: { id: projectId, item: i.item, status: i.status } } };
+  return { ...t, ...(typeof i.estimate === "number" && { points: i.estimate }), github: { ...t.github!, project: { id: projectId, item: i.item, status: i.status, option: i.option ?? null } } };
 }
 
 /** A GitHub issue from `gh.tasks` as a task. */

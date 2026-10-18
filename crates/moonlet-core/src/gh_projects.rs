@@ -136,6 +136,7 @@ pub fn parse_project_items(raw: &[u8]) -> Result<(GhProjectBoard, String, Option
         .map(|(i, task)| GhProjectItem {
             item: i["id"].as_str().unwrap_or_default().into(),
             status: i["fieldValueByName"]["name"].as_str().map(String::from),
+            option: i["fieldValueByName"]["optionId"].as_str().map(String::from),
             estimate: estimate(i),
             task,
         })
@@ -514,6 +515,8 @@ mod tests {
             ),
             ("acme/web", 10, Some("Todo"))
         );
+        // Its Status option's id, which board columns match by.
+        assert_eq!(first.option.as_deref(), Some("f75a_e2e0003"));
         assert_eq!(
             (first.task.assignees.clone(), first.task.labels.clone()),
             (vec!["sam-rivera".to_string()], vec!["bug".to_string()])
