@@ -46,7 +46,7 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch, syncedLabel } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { type BoardColumn, type BoardConfig, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph, TrackerIcon } from "../ui";
@@ -480,7 +480,7 @@ export function TasksMode() {
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
   const fields = cardFields(shown.board);
-  const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id]?.sprint ?? null)]));
+  const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id])]));
   const listCards = views.flatMap((v) => (v.folded ? [] : v.cards));
   return (
     <div className="flex h-full min-w-0">
@@ -583,7 +583,29 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
     { kind: "label" as const, label: `${g.name} · ${g.hint}` },
     ...g.rows.map((r) => ({
       label: r.board.name,
-      description: [r.kind, r.meta, r.sessions?.text].filter(Boolean).join(" · "),
+      description: (
+        <>
+          {[r.kind, r.meta].filter(Boolean).join(" · ")}
+          {r.sessions && (
+            <>
+              {" · "}
+              {r.sessions.state && (
+                <span className="inline-block align-[-1px]">
+                  <StateGlyph state={r.sessions.state} size={10} />
+                </span>
+              )}{" "}
+              {r.sessions.text}
+            </>
+          )}
+        </>
+      ),
+      aside: (
+        <span aria-label={`${r.bars.length} columns`} className="flex items-end gap-[2px]">
+          {r.bars.map((c, i) => (
+            <span key={i} className={cx("h-[10px] w-[3px] rounded-[1px]", CATEGORY_BAR[c])} />
+          ))}
+        </span>
+      ),
       checked: r.board.id === shown.id,
       icon: <BoardMark connection={r.board.connection} />,
       onSelect: () => {
@@ -592,11 +614,10 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
       },
     })),
   ]);
-  items.push(
-    { kind: "divider" },
+  const footer: MenuItem[] = [
     { label: "New board", icon: <Plus size={13} />, onSelect: () => openAddBoard(host, workspaceId) },
     { label: "Manage", onSelect: () => void goSettings({ page: "trackers" }) },
-  );
+  ];
   return (
     <div className="flex min-w-0 items-center gap-2.5">
       <BoardMark connection={shown.connection} />
@@ -605,6 +626,7 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
           width={360}
           search={{ placeholder: "Find a board, team or project", query, onQuery: setQuery }}
           items={items}
+          footer={footer}
           trigger={(open) => (
             <button aria-label={`Switch board, current: ${shown.name}`} onClick={open} className="no-drag flex items-center gap-1 ui-text-15 font-medium text-fg">
               <span className="truncate">{title}</span>

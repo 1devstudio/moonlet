@@ -2,7 +2,7 @@
 // Boards, the header's Columns menu and the detail's State menu.
 
 import { boardSubtitle, boardView, type ColumnView, statusKey } from "./boardColumns";
-import { type BoardColumn, type BoardConfig, type CardField, type Category, syncedColumns } from "./boards";
+import { type BoardColumn, type BoardConfig, type CardField, type Category, jiraBoardType, syncedColumns } from "./boards";
 import type { AgentState } from "./protocol";
 import type { BoardData } from "./tasksStore";
 import { initials } from "./taskDetails";
@@ -79,12 +79,12 @@ export function boardHeader(board: BoardConfig, sprint: BoardData["sprint"] | un
 
 const URGENCY: AgentState[] = ["blocked", "error", "working", "done", "idle"];
 
-/** A board's counts for its switcher row (X50): tasks, sessions, the most urgent agent state, and the sprint or cycle it follows. */
-export function boardStats(board: BoardConfig, views: ColumnView[], sprint: BoardData["sprint"]): { tasks: number; sessions: number; state: AgentState | null; kind?: string } {
+/** A board's counts for its switcher row (X50): tasks, sessions, the most urgent agent state, and a Jira board's type, else the cycle it follows. */
+export function boardStats(board: BoardConfig, views: ColumnView[], data: Pick<BoardData, "sprint" | "kind"> | undefined): { tasks: number; sessions: number; state: AgentState | null; kind?: string } {
   const cards = views.flatMap((v) => v.cards);
   const states = cards.flatMap((c) => c.rows.map((r) => r.session.state)).filter((s): s is AgentState => !!s);
   const state = URGENCY.find((u) => states.includes(u)) ?? null;
-  const kind = board.finished === "sprint" ? sprint?.name : undefined;
+  const kind = data?.kind ? jiraBoardType(data.kind) : board.finished === "sprint" ? data?.sprint?.name : undefined;
   return { tasks: cards.length, sessions: cards.reduce((n, c) => n + c.rows.length, 0), state, ...(kind ? { kind } : {}) };
 }
 

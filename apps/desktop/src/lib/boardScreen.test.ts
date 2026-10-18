@@ -115,8 +115,14 @@ describe("boardStats (X50 switcher rows)", () => {
   it("counts a synced board's tasks and sessions, its most urgent agent state, and names its sprint or cycle", () => {
     const ops = b("ops", "local/w", { finished: "sprint" });
     const views = [{ name: "To Do", category: "todo" as const, folded: false, cards: [{ rows: [{ session: { state: "working" } }, { session: { state: "blocked" } }] }, { rows: [] }] }];
-    expect(boardStats(ops, views as never, { id: 5, name: "Sprint 42", startMs: 0, endMs: 0 })).toEqual({ tasks: 2, sessions: 2, state: "blocked", kind: "Sprint 42" });
-    expect(boardStats(b("plat", "local/w"), [], null)).toEqual({ tasks: 0, sessions: 0, state: null });
+    expect(boardStats(ops, views as never, { sprint: { id: 5, name: "Sprint 42", startMs: 0, endMs: 0 } })).toEqual({ tasks: 2, sessions: 2, state: "blocked", kind: "Sprint 42" });
+    expect(boardStats(b("plat", "local/w"), [], { sprint: null })).toEqual({ tasks: 0, sessions: 0, state: null });
+    // A Jira board not following a sprint is named by its type once a sync has read it.
+    expect(boardStats(b("plat", "local/w"), [], { sprint: null, kind: "kanban" }).kind).toBe("Kanban");
+    expect(boardStats(b("plat", "local/w"), [], { sprint: null, kind: "simple" }).kind).toBe("Team-managed");
+    expect(boardStats({ ...ops, finished: 14 }, [], { sprint: null, kind: "scrum" }).kind).toBe("Scrum");
+    // Following its sprint, a Jira board is still named by its type; the title names the sprint.
+    expect(boardStats(ops, [], { sprint: { id: 5, name: "Sprint 42", startMs: 0, endMs: 0 }, kind: "scrum" }).kind).toBe("Scrum");
   });
 });
 
