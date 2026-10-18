@@ -390,11 +390,10 @@ function jiraClickup(method: string, path: string, auth: string | undefined, bod
     if (path.startsWith("/jira/rest/api/3/project/search")) return ok(answer("jira-projects.json"));
     // A query with "nonsense" in it is one Jira refuses (X50 Add a board's preview).
     if (path.startsWith("/jira/rest/api/3/search/jql") && body.includes("nonsense")) return { status: 400, body: answer("jira-error-400-jql.json") };
-    // A new issue from a column (X52): read back by its key; the project's issue types, its create screen (without its required Team), its people.
-    if (path.startsWith("/jira/rest/api/3/search/jql") && body.includes("key = EX-24")) {
-      const found = JSON.parse(answer("jira-search.json"));
-      found.issues = [{ ...found.issues[0], id: "10024", key: "EX-24" }];
-      return ok(JSON.stringify(found));
+    // A new issue from a column (X52): read back; the project's issue types, its create screen (without its required Team), its people.
+    if (path.startsWith("/jira/rest/api/3/issue/EX-24?")) {
+      const found = JSON.parse(answer("jira-search.json")).issues[0];
+      return ok(JSON.stringify({ ...found, id: "10024", key: "EX-24" }));
     }
     if (path.startsWith("/jira/rest/api/3/search/jql")) return ok(answer(jiraEndless ? "jira-search-page1.json" : "jira-search.json"));
     if (path === "/jira/rest/api/3/issue" && method === "POST") return { status: 201, body: answer("jira-issue-create.json").replaceAll("ED-24", "EX-24") };

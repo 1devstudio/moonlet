@@ -65,7 +65,7 @@ export const hostsApi = {
     invoke<{ filterId: string; filterJql?: string; subQuery: string | null; pointsField: string | null; sprints: boolean; statusNames: Record<string, string>; columns: import("./boards").BoardColumn[] }>("tracker_board_setup", { id, board }),
   /** The new-issue form's lists for a place (X52): the user, people and labels, by id and name. */
   trackerCreateOptions: (id: string, place: string, issueType?: string) =>
-    invoke<{ me: string; people: { id: string; name: string }[]; labels: { id: string; name: string }[]; issueTypes?: { id: string; name: string }[]; missing?: string[] }>("tracker_create_options", {
+    invoke<{ me: string; people: { id: string; name: string }[]; labels: { id: string; name: string }[]; issueTypes?: { id: string; name: string }[]; missing?: string[]; fields?: string[] }>("tracker_create_options", {
       id,
       place,
       issueType: issueType ?? null,

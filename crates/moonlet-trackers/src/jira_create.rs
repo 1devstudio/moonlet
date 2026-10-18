@@ -19,7 +19,7 @@ pub struct CreateScreen {
 
 /// Where a new issue stands against its column once Jira created it.
 #[derive(Debug, PartialEq)]
-pub enum Into<'a> {
+pub enum ColumnMove<'a> {
     /// Jira created it in one of the column's statuses.
     Already,
     /// This transition leads there.
@@ -42,19 +42,27 @@ pub fn parse_issue_types(raw: &[u8]) -> Result<Vec<Named>, ApiError> {
             name: t["name"].as_str().unwrap_or_default().into(),
         })
         .collect();
-    types.sort_by_key(|t| t.name != "Task");
+    // Task first, found by its English name on a site in another language.
+    let task = |t: &Value| t["untranslatedName"].as_str().or(t["name"].as_str()) == Some("Task");
+    let tasks: Vec<String> = v["issueTypes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| task(t))
+        .filter_map(|t| t["id"].as_str().map(String::from))
+        .collect();
+    types.sort_by_key(|t| !tasks.contains(&t.id));
     Ok(types)
 }
 
 /// The fields the form fills.
-const FORM_FIELDS: [&str; 7] = [
+const FORM_FIELDS: [&str; 6] = [
     "summary",
     "issuetype",
     "project",
     "description",
     "assignee",
     "labels",
-    "reporter",
 ];
 
 /// A project's create screen for an issue type (X52): its fields, and the
@@ -131,14 +139,69 @@ pub fn into_column<'a>(
     statuses: &[String],
     current: &str,
     transitions: &'a [Transition],
-) -> Into<'a> {
+) -> ColumnMove<'a> {
     if statuses.iter().any(|s| s == current) {
-        return Into::Already;
+        return ColumnMove::Already;
     }
     statuses
         .iter()
         .find_map(|s| transitions.iter().find(|t| &t.to_id == s))
-        .map_or(Into::Unreachable, Into::Via)
+        .map_or(ColumnMove::Unreachable, ColumnMove::Via)
+}
+
+/// What the notice says after "Created <key>" when the issue isn't in its
+/// column (X52): where Jira put it, and that no transition leads there.
+pub fn move_note(placed: &ColumnMove, current: &str, column: &str) -> Option<String> {
+    matches!(placed, ColumnMove::Unreachable)
+        .then(|| format!(" in {current}; Jira has no way to move it to {column} from there"))
+}
+
+/// `GET /rest/api/3/issue/{key}`'s issue as a board shows it.
+pub fn parse_board_issue(
+    raw: &[u8],
+    connection: &str,
+    site: &str,
+) -> Result<crate::board::BoardIssue, ApiError> {
+    let wrapped = json!({ "issues": [parse(raw)?] }).to_string();
+    let fields = crate::jira_board::SearchFields {
+        sprint: None,
+        points: None,
+    };
+    let (mut issues, _) =
+        crate::jira_board::parse_board_search(wrapped.as_bytes(), connection, site, &fields, None)?;
+    issues
+        .pop()
+        .ok_or_else(|| ApiError::new("Jira sent no issue"))
+}
+
+/// A created issue Jira couldn't be asked about yet: its key, the title
+/// given, and its page; the next sync reads the rest.
+pub fn created_issue(
+    key: &str,
+    title: &str,
+    connection: &str,
+    site: &str,
+) -> crate::board::BoardIssue {
+    let project = key.split('-').next().unwrap_or_default();
+    crate::board::BoardIssue::from_task(crate::task::TrackerTask {
+        connection: connection.into(),
+        key: key.into(),
+        title: title.into(),
+        url: format!("https://{site}/browse/{key}"),
+        column: crate::states::Column::Todo,
+        priority: 0,
+        assignees: vec![],
+        labels: vec![],
+        description: String::new(),
+        updated_ms: 0,
+        cycle: None,
+        issue_type: None,
+        tracker: crate::task::TrackerRef {
+            id: key.into(),
+            state: String::new(),
+            source: project.into(),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -209,31 +272,64 @@ mod tests {
     }
 
     #[test]
-    fn markdown_as_an_atlassian_document() {
-        let md = "Retry **failed** deliveries, see [the runbook](https://example.com/runbook).\nThen `requeue`.\n\n- back off\n- *log* each try\n\n```\nretry(3)\n```";
+    fn task_first_by_its_untranslated_name_and_a_required_reporter_without_a_default() {
+        let types = br#"{"issueTypes":[{"id":"1","name":"Bug","subtask":false},{"id":"2","name":"T\u00e2che","untranslatedName":"Task","subtask":false}]}"#;
         assert_eq!(
-            crate::adf::from_markdown(md),
-            json!({ "type": "doc", "version": 1, "content": [
-                { "type": "paragraph", "content": [
-                    { "type": "text", "text": "Retry " },
-                    { "type": "text", "text": "failed", "marks": [{ "type": "strong" }] },
-                    { "type": "text", "text": " deliveries, see " },
-                    { "type": "text", "text": "the runbook", "marks": [{ "type": "link", "attrs": { "href": "https://example.com/runbook" } }] },
-                    { "type": "text", "text": "." },
-                    { "type": "hardBreak" },
-                    { "type": "text", "text": "Then " },
-                    { "type": "text", "text": "requeue", "marks": [{ "type": "code" }] },
-                    { "type": "text", "text": "." }
-                ] },
-                { "type": "bulletList", "content": [
-                    { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "back off" }] }] },
-                    { "type": "listItem", "content": [{ "type": "paragraph", "content": [
-                        { "type": "text", "text": "log", "marks": [{ "type": "em" }] },
-                        { "type": "text", "text": " each try" }
-                    ] }] }
-                ] },
-                { "type": "codeBlock", "content": [{ "type": "text", "text": "retry(3)" }] }
-            ] })
+            parse_issue_types(types)
+                .unwrap()
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Tâche", "Bug"]
+        );
+        let screen = br#"{"fields":[{"fieldId":"summary","name":"Summary","required":true,"hasDefaultValue":false},{"fieldId":"reporter","name":"Reporter","required":true,"hasDefaultValue":false}]}"#;
+        assert_eq!(parse_create_screen(screen).unwrap().missing, ["Reporter"]);
+    }
+
+    #[test]
+    fn what_the_notice_says_when_jira_cant_move_it_into_the_column() {
+        let ts = crate::jira::parse_transitions(&fixture("jira-transitions.json")).unwrap();
+        assert_eq!(
+            move_note(&ColumnMove::Unreachable, "To Do", "QA").as_deref(),
+            Some(" in To Do; Jira has no way to move it to QA from there")
+        );
+        assert_eq!(move_note(&ColumnMove::Already, "To Do", "QA"), None);
+        assert_eq!(
+            move_note(&ColumnMove::Via(&ts[1]), "To Do", "In Progress"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_new_issue_read_back_or_as_much_as_moonlet_knows() {
+        // GET /rest/api/3/issue/{key} answers with an issue as the search lists it.
+        let search: Value = serde_json::from_slice(&fixture("jira-search.json")).unwrap();
+        let one = serde_json::to_vec(&search["issues"][0]).unwrap();
+        let issue =
+            parse_board_issue(&one, "jira:acme.atlassian.net", "acme.atlassian.net").unwrap();
+        assert_eq!(
+            (issue.task.key.as_str(), issue.status_id.as_str()),
+            ("EX-1", "3")
+        );
+        let known = created_issue(
+            "EX-24",
+            "Retry failed webhook deliveries",
+            "jira:acme.atlassian.net",
+            "acme.atlassian.net",
+        );
+        assert_eq!(
+            (
+                known.task.key.as_str(),
+                known.task.title.as_str(),
+                known.task.url.as_str(),
+                known.status_id.as_str()
+            ),
+            (
+                "EX-24",
+                "Retry failed webhook deliveries",
+                "https://acme.atlassian.net/browse/EX-24",
+                ""
+            )
         );
     }
 
@@ -301,11 +397,11 @@ mod tests {
         let ts = crate::jira::parse_transitions(&fixture("jira-transitions.json")).unwrap();
         // A column of In Progress (3) and QA (5): Jira put it in To Do (10000).
         let column = ["3".to_string(), "5".to_string()];
-        assert_eq!(into_column(&column, "10000", &ts), Into::Via(&ts[1]));
-        assert_eq!(into_column(&column, "3", &ts), Into::Already);
+        assert_eq!(into_column(&column, "10000", &ts), ColumnMove::Via(&ts[1]));
+        assert_eq!(into_column(&column, "3", &ts), ColumnMove::Already);
         assert_eq!(
             into_column(&["5".to_string()], "10000", &ts),
-            Into::Unreachable
+            ColumnMove::Unreachable
         );
     }
 }

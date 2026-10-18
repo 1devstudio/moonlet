@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardColumn, BoardConfig } from "./boards";
-import { boardShows, createsIn, fitDraft, githubRepoOf, jiraProjectUrl, jiraProjects, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
+import { boardShows, createsIn, fitDraft, isJira, labelProblem, githubRepoOf, jiraProjectUrl, jiraProjects, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
 import type { Task } from "./tasks";
 
 const linear: BoardConfig = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } };
@@ -48,6 +48,8 @@ describe("the column + (X52)", () => {
     expect(canSubmit({ ...draft, place: "OPS", issueType: "10001" }, { busy: false, needsPlace: true, needsType: true })).toBe(true);
     // A field Jira requires that the form lacks: create it in Jira.
     expect(canSubmit({ ...draft, place: "OPS", issueType: "10001" }, { busy: false, needsPlace: true, needsType: true, missing: ["Team"] })).toBe(false);
+    // A label Jira would refuse.
+    expect(canSubmit({ ...draft, place: "OPS", issueType: "10001" }, { busy: false, problem: "Jira labels can't have spaces: needs review" })).toBe(false);
   });
 
   it("knows when the board can't show the new issue: someone else's on an Assignee: me board, outside its labels, or in a hidden column", () => {
@@ -90,10 +92,20 @@ describe("the column + (X52)", () => {
     expect(createsIn({ ...linear, connection: "jira:acme.atlassian.net", origin: { kind: "jql", query: "project = EX" } })).toBe(true);
   });
 
-  it("offers and sends no assignee or labels where they can't be set, as GitHub would drop them", () => {
+  it("offers and sends no assignee or labels where they can't be set: GitHub would drop them, a Jira create screen may lack them", () => {
     const draft = { ...newIssueDraft({ ...linear, labels: ["frontend"] }), title: "Hosts" };
-    expect(withAccess(draft, true)).toEqual({ draft, assignment: true });
-    expect(withAccess(draft, false)).toEqual({ draft: { ...draft, assignee: "none", labels: [] }, assignment: false });
+    expect(withAccess(draft, { canSet: true })).toEqual({ draft, assignee: true, labels: true });
+    expect(withAccess(draft, { canSet: false })).toEqual({ draft: { ...draft, assignee: "none", labels: [] }, assignee: false, labels: false });
+    // A Jira screen with labels but no assignee.
+    expect(withAccess(draft, { canSet: true, fields: ["summary", "labels"] })).toEqual({ draft: { ...draft, assignee: "none" }, assignee: false, labels: true });
+  });
+
+  it("refuses a Jira label with a space, which Jira would refuse", () => {
+    const jira: BoardConfig = { ...linear, connection: "jira:acme.atlassian.net", origin: { kind: "jql", query: "project = EX" } };
+    expect([isJira(jira), isJira(linear)]).toEqual([true, false]);
+    expect(labelProblem(jira, ["backend", "needs review"])).toBe("Jira labels can't have spaces: needs review");
+    expect(labelProblem(jira, ["backend"])).toBe(null);
+    expect(labelProblem(linear, ["needs review"])).toBe(null);
   });
 
   it("asks a GitHub Project's new issue for its repository: the workspace's first, then those of the Project's items", () => {

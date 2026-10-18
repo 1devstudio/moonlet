@@ -733,6 +733,9 @@ pub struct CreateChoices {
     /// Jira: the fields the type's create screen requires that the form lacks.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
+    /// Jira: the fields the type's create screen has; the form leaves out those it lacks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
 }
 
 /// The new-issue form's lists for `place`, a Linear team's key or a ClickUp list's id (X52).
@@ -742,7 +745,7 @@ pub async fn tracker_create_options(id: String, place: String, issue_type: Optio
     match s.conn.kind {
         TrackerKind::Linear => {
             let o = s.linear_create_options(&place).await?;
-            Ok(CreateChoices { me: o.me, people: o.people, labels: o.labels, issue_types: vec![], missing: vec![] })
+            Ok(CreateChoices { me: o.me, people: o.people, labels: o.labels, issue_types: vec![], missing: vec![], fields: None })
         }
         TrackerKind::Jira => {
             let project = safe_id(&place)?.to_string();
@@ -750,11 +753,11 @@ pub async fn tracker_create_options(id: String, place: String, issue_type: Optio
             let issue_types = jira_create::parse_issue_types(&s.jira_get(&format!("/rest/api/3/issue/createmeta/{project}/issuetypes"), None).await?)?;
             // A list Jira won't give leaves the user's own choice (X52); Jira's labels are free text.
             let people = s.jira_get(&format!("/rest/api/3/user/assignable/search?project={project}&maxResults=100"), None).await.ok().and_then(|raw| jira_create::parse_assignable(&raw).ok()).unwrap_or_default();
-            let missing = match issue_type.or_else(|| issue_types.first().map(|t| t.id.clone())) {
-                Some(t) => s.jira_create_screen(&project, &t).await?.missing,
-                None => vec![],
+            let screen = match issue_type.or_else(|| issue_types.first().map(|t| t.id.clone())) {
+                Some(t) => s.jira_create_screen(&project, &t).await?,
+                None => jira_create::CreateScreen::default(),
             };
-            Ok(CreateChoices { me, people, labels: vec![], issue_types, missing })
+            Ok(CreateChoices { me, people, labels: vec![], issue_types, missing: screen.missing, fields: Some(screen.fields) })
         }
         TrackerKind::Clickup => {
             let list = safe_id(&place)?.to_string();
@@ -768,7 +771,7 @@ pub async fn tracker_create_options(id: String, place: String, issue_type: Optio
                 Some(Ok(space)) => get(format!("/space/{space}/tag")).await.ok().and_then(|raw| clickup::parse_space_tags(&raw).ok()).unwrap_or_default(),
                 _ => vec![],
             };
-            Ok(CreateChoices { me, people, labels, issue_types: vec![], missing: vec![] })
+            Ok(CreateChoices { me, people, labels, issue_types: vec![], missing: vec![], fields: None })
         }
         kind => Err(fail(format!("moonlet can't create {} issues yet", tracker_name(kind)))),
     }
@@ -849,20 +852,17 @@ impl Session {
         Ok(jira_create::parse_create_screen(&self.jira_get(&format!("/rest/api/3/issue/createmeta/{project}/issuetypes/{issue_type}"), None).await?)?)
     }
 
-    /// A Jira issue by its key, as a board shows it.
+    /// A Jira issue by its key, as a board shows it: read directly, as a
+    /// search may not list an issue just created.
     async fn jira_board_issue(&self, key: &str) -> Res<BoardIssue> {
-        let fields = SearchFields { sprint: None, points: None };
-        let body = jira_board::board_search_body(&format!("key = {key}"), &fields, None);
-        let raw = self.jira_send(self.jira(reqwest::Method::POST, "/rest/api/3/search/jql")?.json(&body)).await?;
-        let (mut issues, _) = jira_board::parse_board_search(&raw, &self.conn.id, &self.conn.site, &fields, None)?;
-        issues.pop().ok_or_else(|| fail(format!("Jira did not find {key}")))
+        let raw = self.jira_send(self.jira(reqwest::Method::GET, &jira::issue_path(key))?).await?;
+        Ok(jira_create::parse_board_issue(&raw, &self.conn.id, &self.conn.site)?)
     }
 
     /// Creates a Jira issue in its column (X52): created, moved there by a
     /// transition when Jira put it elsewhere, and added to the board's
     /// sprint. Once it exists a later step that fails is reported, not thrown.
     async fn jira_create(&self, req: &CreateRequest) -> Res<CreateAnswer> {
-        self.only_jira()?;
         let project = safe_id(&req.place)?.to_string();
         let issue_type = req.issue.issue_type.clone().ok_or_else(|| fail("Pick the issue type"))?;
         let screen = self.jira_create_screen(&project, &issue_type).await?;
@@ -873,21 +873,36 @@ impl Session {
         let body = jira_create::create_body(&req.issue, &project, &me, &screen);
         let key = jira_create::parse_created(&self.jira_send(self.jira(reqwest::Method::POST, "/rest/api/3/issue")?.json(&body)).await?)?;
         let key = safe_id(&key)?.to_string();
-        let mut issue = self.jira_board_issue(&key).await?;
         let mut failed = Vec::new();
+        // Once it exists, what can't be read is reported: the card shows what moonlet knows.
+        let mut issue = match self.jira_board_issue(&key).await {
+            Ok(issue) => issue,
+            Err(e) => {
+                failed.push(format!("; reading it back failed: {}", e.message));
+                let issue = jira_create::created_issue(&key, &req.issue.title, &self.conn.id, &self.conn.site);
+                return Ok(CreateAnswer { issue, failed: Some(failed.concat()) });
+            }
+        };
         let path = format!("/rest/api/3/issue/{key}/transitions");
         let moved = match self.jira_send(self.jira(reqwest::Method::GET, &path)?).await.map_err(TrackerError::from).and_then(|raw| Ok(jira::parse_transitions(&raw)?)) {
-            Err(e) => Err(e.message),
-            Ok(ts) => match jira_create::into_column(&req.statuses, &issue.status_id, &ts) {
-                jira_create::Into::Already => Ok(false),
-                jira_create::Into::Unreachable => Err(format!("Jira has no way to move it to {} from there", req.column)),
-                jira_create::Into::Via(t) => self.jira_send(self.jira(reqwest::Method::POST, &path)?.json(&jira::transition_body(&t.id))).await.map(|_| true).map_err(|e| e.message),
-            },
+            Err(e) => Err(format!("; moving it to {} failed: {}", req.column, e.message)),
+            Ok(ts) => {
+                let placed = jira_create::into_column(&req.statuses, &issue.status_id, &ts);
+                match (&placed, jira_create::move_note(&placed, &issue.task.tracker.state, &req.column)) {
+                    (_, Some(note)) => Err(note),
+                    (jira_create::ColumnMove::Via(t), None) => self
+                        .jira_send(self.jira(reqwest::Method::POST, &path)?.json(&jira::transition_body(&t.id)))
+                        .await
+                        .map(|_| true)
+                        .map_err(|e| format!("; moving it to {} failed: {}", req.column, e.message)),
+                    _ => Ok(false),
+                }
+            }
         };
         match moved {
             Ok(true) => issue = self.jira_board_issue(&key).await.unwrap_or(issue),
             Ok(false) => {}
-            Err(why) => failed.push(format!(" in {}; {why}", issue.task.tracker.state)),
+            Err(why) => failed.push(why),
         }
         if let (true, Some(sprint)) = (req.in_cycle, req.sprint) {
             let path = format!("/rest/agile/1.0/sprint/{sprint}/issue");
