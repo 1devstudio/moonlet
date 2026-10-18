@@ -226,7 +226,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 
 The designs are the "Tasks mode · Board", "Tasks mode · Jira board", "Tasks mode · List", "Board switcher", "Add a board" and "Task card states" boards of the Tasks mode design.
 - The design's "Across boards" sidebar section is left out (see Sidebar and header, and Out of scope).
-- The design's `+` on Linear columns is left out.
+- The design's `+` on a column is [X52](X52-new-issue-from-a-column.md).
 - The design shows only the Jira path through Add a board. Linear, GitHub and ClickUp follow the same four steps, with the differences listed above.
 
 States:
