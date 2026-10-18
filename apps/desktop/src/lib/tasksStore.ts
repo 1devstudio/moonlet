@@ -1,7 +1,7 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { addRepoBoards, NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
+import { NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
@@ -129,8 +129,6 @@ export interface TrackersConfig {
   link?: LinkRules;
   /** What Tasks mode shows, one board at a time (X50). */
   boards?: BoardConfig[];
-  /** Each GitHub repository that got its board, so a removed one is not added again (X50). */
-  migrated?: string[];
 }
 
 const DEFAULT_TRACKER: TrackerSettings = { branch_template: "", max_length: 48, rules: DEFAULT_RULES };
@@ -407,14 +405,9 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
       return { id: p.id, path: p.path, repo, trackers, worktrees: worktrees.map((w) => ({ path: w.path, branch: w.branch, originRepo: repo, project: p.id })) };
     }),
   );
-  const repoList = per.flatMap((x) => (x.repo ? [x.repo] : []));
-  const loaded = useTasks.getState();
-  // Each repository gets its board the first time a sync sees it (X50).
-  if (loaded.config && !loaded.configError && addRepoBoards(loaded.config, key, repoList) !== loaded.config)
-    await saveTrackersConfig((c) => addRepoBoards(c, key, repoList)).catch(() => {});
-  // With trackers.toml unreadable, the repositories still show, on boards that are not saved.
+  // A repository is a board only once the user adds it (X50); with trackers.toml unreadable, there is none.
   const boards = useTasks.getState().configError
-    ? addRepoBoards(DEFAULT_CONFIG, key, repoList).boards ?? []
+    ? []
     : workspaceBoards(trackersConfig(useTasks.getState()).boards, key, useTasks.getState().shownBoard[key] ?? null);
   const chosen = useTasks.getState().assignee;
   // One sync: a connection's boards share its lookups within it (X50).

@@ -119,13 +119,8 @@ export interface BoardConfig {
   pinned?: false;
 }
 
-const GITHUB = "github:github.com";
-
 /** A migrated board's id: its tracker project's link (`<connection>/<key>`) in workspace `wsKey`. */
 export const boardId = (connection: string, key: string, wsKey: string) => `${trackerLink(connection, key)}@${wsKey}`;
-
-/** How `migrated` records that repository `repo` of workspace `wsKey` got its board. */
-const repoSeen = (wsKey: string, repo: string) => `${wsKey} ${trackerLink(GITHUB, repo.toLowerCase())}`;
 
 /**
  * Turns every X44 source into a pinned board in its workspace (X50), as
@@ -154,29 +149,6 @@ export function migrateSources(config: TrackersConfig): TrackersConfig {
     connections: config.connections?.map((c) => ({ ...c, sources: [], states: undefined })),
     boards: [...(config.boards ?? []), ...fromSources],
   };
-}
-
-/**
- * Gives each GitHub repository of workspace `wsKey`'s projects (`repos`,
- * `owner/name`, any case) a pinned board the first time a sync sees it
- * (X50). `migrated` remembers it, so a board the user removes stays
- * removed, while a repository whose origin could not be read this time (a
- * host offline, a remote added later) gets its board on a later sync.
- * Returns `config` itself when there is nothing to add.
- */
-export function addRepoBoards(config: TrackersConfig, wsKey: string, repos: string[]): TrackersConfig {
-  const done = new Set(config.migrated ?? []);
-  const fresh = new Map<string, string>();
-  for (const repo of repos) if (!done.has(repoSeen(wsKey, repo)) && !fresh.has(repo.toLowerCase())) fresh.set(repo.toLowerCase(), repo);
-  if (!fresh.size) return config;
-  const added: BoardConfig[] = [...fresh.values()].map((repo) => ({
-    id: boardId(GITHUB, repo.toLowerCase(), wsKey),
-    name: repo,
-    connection: GITHUB,
-    workspace: wsKey,
-    origin: { kind: "github_repo", repo },
-  }));
-  return { ...config, boards: [...(config.boards ?? []), ...added], migrated: [...(config.migrated ?? []), ...[...fresh.values()].map((repo) => repoSeen(wsKey, repo))] };
 }
 
 /** A Jira project's board query, and the project back from it (X50: a migrated Jira source). */
