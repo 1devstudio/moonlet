@@ -678,11 +678,12 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                 <section aria-label="New sessions from this board start in">
                   <div className="mb-1.5 ui-text-12 text-muted">New sessions from this board start in</div>
                   <div className="flex flex-col divide-y divide-border rounded-lg border border-border">
-                    <div className="grid grid-cols-[minmax(0,1fr)_16px_200px_24px] items-center gap-2 px-3 py-2">
+                    <div className="grid grid-cols-[minmax(0,1fr)_16px_280px_24px] items-center gap-2 px-3 py-2">
                       <span className="ui-text-12.5 text-muted">By default</span>
                       <ArrowRight size={12} className="text-faint" />
                       <select
                         aria-label="Project by default"
+                        title={defaultRule ? undefined : linkedHint}
                         className={selectCls}
                         value={defaultRule?.project ?? ""}
                         onChange={(e) => setRules([...(e.target.value ? [{ when: "default" as const, project: e.target.value }] : []), ...otherRules])}
@@ -701,7 +702,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       const value = r.when === "default" ? "" : "component" in r.when ? r.when.component : r.when.label;
                       const update = (next: StartRule | null) => setRules([...(defaultRule ? [defaultRule] : []), ...otherRules.flatMap((x, j) => (j === i ? (next ? [next] : []) : [x]))]);
                       return (
-                        <div key={i} className="grid grid-cols-[minmax(0,1fr)_16px_200px_24px] items-center gap-2 px-3 py-2">
+                        <div key={i} className="grid grid-cols-[minmax(0,1fr)_16px_280px_24px] items-center gap-2 px-3 py-2">
                           <span className="flex min-w-0 items-center gap-1.5">
                             <select aria-label="Rule by" className={cx(selectCls, "w-[110px]")} value={by} onChange={(e) => update({ when: e.target.value === "component" ? { component: value } : { label: value }, project: r.project })}>
                               <option value="component">Component</option>
@@ -737,7 +738,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                   <div className="flex flex-wrap gap-4">
                     {cardChoices(tracker ?? "github", numberField, draft.cards).map(([id, label]) => (
                       <label key={id} className="flex items-center gap-1.5 ui-text-12.5 text-fg">
-                        <input type="checkbox" checked={draft.cards.includes(id)} onChange={(e) => set({ cards: e.target.checked ? [...draft.cards, id] : draft.cards.filter((x) => x !== id) })} />
+                        <input type="checkbox" className="accent-accent" checked={draft.cards.includes(id)} onChange={(e) => set({ cards: e.target.checked ? [...draft.cards, id] : draft.cards.filter((x) => x !== id) })} />
                         {label}
                       </label>
                     ))}
@@ -752,7 +753,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                     <span className="block truncate ui-text-12 text-faint">{summaryLine(draft, preview?.tasks.length ?? 0, wsName)}</span>
                   </span>
                   <label className="flex items-center gap-1.5 ui-text-12.5 text-muted">
-                    <input type="checkbox" checked={draft.pinned} onChange={(e) => set({ pinned: e.target.checked })} />
+                    <input type="checkbox" className="accent-accent" checked={draft.pinned} onChange={(e) => set({ pinned: e.target.checked })} />
                     Pin in sidebar
                   </label>
                 </section>
