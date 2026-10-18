@@ -353,6 +353,55 @@ pub struct GhTask {
     pub closing_prs: Vec<u64>,
 }
 
+/// An open GitHub Project (X50 Add a board): its Status field's options are
+/// the board's columns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhProject {
+    /// The project's node id, for moves.
+    pub id: String,
+    /// The user or organisation that owns it.
+    pub owner: String,
+    pub number: u64,
+    pub title: String,
+    /// The Status field's node id, for moves; `None` when it has none.
+    #[serde(default)]
+    pub status_field: Option<String>,
+    #[serde(default)]
+    pub options: Vec<GhOption>,
+}
+
+/// An option of a Project's Status field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhOption {
+    pub id: String,
+    pub name: String,
+}
+
+/// A GitHub Project as a board reads it (X50 Sync): its Status options and
+/// its items that are issues.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhProjectBoard {
+    /// The project's node id, for moves.
+    pub id: String,
+    #[serde(default)]
+    pub status_field: Option<String>,
+    #[serde(default)]
+    pub options: Vec<GhOption>,
+    pub items: Vec<GhProjectItem>,
+}
+
+/// A GitHub Project's item that is an issue (X50 Sync): drafts and pull
+/// requests are left out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhProjectItem {
+    /// The item's node id, for moves.
+    pub item: String,
+    /// Its Status option's name; `None` when it has none.
+    #[serde(default)]
+    pub status: Option<String>,
+    pub task: GhTask,
+}
+
 /// A linked git work tree of a project (X45).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Worktree {

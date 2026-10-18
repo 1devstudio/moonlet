@@ -1,0 +1,96 @@
+{
+  "data": {
+    "viewer": {
+      "projectsV2": {
+        "nodes": [
+          {
+            "id": "PVT_e2e0001",
+            "number": 3,
+            "title": "Mobile app",
+            "closed": true,
+            "owner": {
+              "login": "sam-rivera"
+            },
+            "field": {
+              "id": "PVTSSF_e2e0002",
+              "name": "Status",
+              "options": [
+                {
+                  "id": "f75a_e2e0003",
+                  "name": "Todo"
+                },
+                {
+                  "id": "47fc_e2e0004",
+                  "name": "In Progress"
+                },
+                {
+                  "id": "9823_e2e0005",
+                  "name": "Done"
+                }
+              ]
+            }
+          },
+          {
+            "id": "PVT_e2e0006",
+            "number": 2,
+            "title": "Website",
+            "closed": false,
+            "owner": {
+              "login": "sam-rivera"
+            },
+            "field": {
+              "id": "PVTSSF_e2e0007",
+              "name": "Status",
+              "options": [
+                {
+                  "id": "f75a_e2e0003",
+                  "name": "Todo"
+                },
+                {
+                  "id": "47fc_e2e0004",
+                  "name": "In Progress"
+                },
+                {
+                  "id": "9823_e2e0005",
+                  "name": "Done"
+                }
+              ]
+            }
+          },
+          {
+            "id": "PVT_e2e0008",
+            "number": 1,
+            "title": "Pricing",
+            "closed": false,
+            "owner": {
+              "login": "sam-rivera"
+            },
+            "field": {
+              "id": "PVTSSF_e2e0009",
+              "name": "Status",
+              "options": [
+                {
+                  "id": "f75a_e2e0003",
+                  "name": "Todo"
+                },
+                {
+                  "id": "47fc_e2e0004",
+                  "name": "In Progress"
+                },
+                {
+                  "id": "9823_e2e0005",
+                  "name": "Done"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "o0": {
+      "projectsV2": {
+        "nodes": []
+      }
+    }
+  }
+}

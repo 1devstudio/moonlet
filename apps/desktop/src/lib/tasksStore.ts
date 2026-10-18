@@ -6,14 +6,14 @@ import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
+import { type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
 import { errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskId, trackerOf } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, trackerOf } from "./tasks";
 import { parseTrackerLink } from "./trackerSources";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
@@ -490,6 +490,12 @@ interface BoardRead {
   error: string | null;
 }
 
+/** The user's own items, then the others' that `keep` lets join (Assignee: anyone), each once by `key`. */
+function ownAndOthers<T>(own: T[], all: T[] | null, key: (t: T) => string | number, keep: (t: T) => boolean = () => true): { it: T; mine: boolean }[] {
+  const ownKeys = new Set(own.map(key));
+  return [...own.map((it) => ({ it, mine: true })), ...(all ?? []).filter((t) => !ownKeys.has(key(t)) && keep(t)).map((it) => ({ it, mine: false }))];
+}
+
 /**
  * One board's tasks (X50): a GitHub repository's through `gh` on a project
  * with that origin, a tracker's through the app. The account's own, and with
@@ -511,15 +517,26 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
     const ask = (mine: boolean) => rpc<GhTask[]>(host, M.ghTasks, { path: p.path, mine });
     try {
       const [own, all] = await Promise.all([ask(true), everyoneToo ? ask(false) : []]);
-      const ownNumbers = new Set(own.map((gh) => gh.number));
       // `gh.tasks` without `mine` also gives closed issues: only others' open ones join.
-      const list = [...own.map((gh) => ({ gh, mine: true })), ...all.filter((gh) => !ownNumbers.has(gh.number) && !gh.closed).map((gh) => ({ gh, mine: false }))];
-      return { tasks: list.map(({ gh, mine }) => ({ ...taskFromGh(gh, GITHUB), mine })), columns: b.columns?.length ? null : GITHUB_REPO_COLUMNS, sprint: null, error: null };
+      const list = ownAndOthers(own, all, (gh) => gh.number, (gh) => !gh.closed);
+      return { tasks: list.map(({ it, mine }) => ({ ...taskFromGh(it, GITHUB), mine })), columns: b.columns?.length ? null : GITHUB_REPO_COLUMNS, sprint: null, error: null };
     } catch (e) {
       return none(message(e));
     }
   }
-  if (b.origin.kind === "github_project") return none(null);
+  if (b.origin.kind === "github_project") {
+    // A GitHub Project (X50): its issues with their Status, its columns from the Status options.
+    const { owner, number } = b.origin;
+    const ask = (mine: boolean) => rpc<GhProjectBoard>(host, M.ghProjectItems, { owner, number, mine });
+    try {
+      const [own, all] = await Promise.all([ask(true), everyoneToo ? ask(false) : null]);
+      const list = ownAndOthers(own.items, all?.items ?? null, (i) => i.item);
+      const columns = await hostsApi.githubProjectColumns(own.options.map((o) => o.name));
+      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB), mine })), columns, sprint: null, error: null };
+    } catch (e) {
+      return none(message(e));
+    }
+  }
   // A rejected token is not tried again until the user reconnects (X44).
   if (useTasks.getState().attention[b.connection] !== undefined) return none("");
   const query = (mine: boolean) => hostsApi.trackerBoardTasks({ id: b.connection, origin: b.origin, narrow: b.narrow, mine, finished: b.finished ?? 14 });

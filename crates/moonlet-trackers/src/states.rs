@@ -279,6 +279,28 @@ mod tests {
     }
 
     #[test]
+    fn a_github_projects_status_options_as_board_columns() {
+        let options: Vec<(String, String)> =
+            ["Backlog", "Todo", "In Progress", "In review", "Done"]
+                .into_iter()
+                .map(|n| (n.to_string(), String::new()))
+                .collect();
+        assert_eq!(
+            board_columns(Github, &options)
+                .iter()
+                .map(|c| (c.name.as_str(), c.category, c.show))
+                .collect::<Vec<_>>(),
+            [
+                ("Backlog", Category::Todo, Show::Hide),
+                ("Todo", Category::Todo, Show::Show),
+                ("In Progress", Category::InProgress, Show::Show),
+                ("In review", Category::InReview, Show::Show),
+                ("Done", Category::Done, Show::Fold),
+            ]
+        );
+    }
+
+    #[test]
     fn github_project_status_options_by_name() {
         assert_eq!(default_column(Github, "", "Todo"), Column::Todo);
         assert_eq!(

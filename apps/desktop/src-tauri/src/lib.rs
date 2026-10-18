@@ -481,6 +481,7 @@ pub fn run() {
             trackers::tracker_states,
             trackers::tracker_boards,
             trackers::tracker_board_setup,
+            trackers::github_project_columns,
             trackers::tracker_board_tasks,
             trackers::tracker_oauth_available,
             trackers::tracker_oauth_linear,

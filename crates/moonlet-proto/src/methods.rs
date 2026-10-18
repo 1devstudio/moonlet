@@ -119,6 +119,12 @@ pub const GH_PRS: &str = "gh.prs";
 /// `{path, mine}` → the repository's 100 most recently updated issues, open
 /// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
 pub const GH_TASKS: &str = "gh.tasks";
+/// `{owners}`: the open GitHub Projects of the signed-in user and of
+/// `owners` (X50 Add a board). Needs gh's `read:project` scope.
+pub const GH_PROJECTS: &str = "gh.projects";
+/// `{owner, number, mine?}`: a Project's items that are issues, with their
+/// Status (X50 Sync); the user's own when `mine`.
+pub const GH_PROJECT_ITEMS: &str = "gh.project_items";
 /// One issue of any repository by its number (X46: a pasted key or URL).
 pub const GH_TASK: &str = "gh.task";
 /// `{path, number, assign_me?, close?, reopen?}`: assigns a GitHub issue to
@@ -653,6 +659,21 @@ pub struct SessionRun {
     pub cols: u16,
     #[serde(default = "default_rows")]
     pub rows: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhProjects {
+    /// Users and organisations whose Projects to list besides the user's.
+    #[serde(default)]
+    pub owners: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhProjectItems {
+    pub owner: String,
+    pub number: u64,
+    #[serde(default)]
+    pub mine: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
