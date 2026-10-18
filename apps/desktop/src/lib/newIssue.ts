@@ -107,12 +107,29 @@ export const needsPlace = (board: BoardConfig) => board.origin.kind === "github_
 
 /**
  * The repositories a GitHub Project's new issue can go in (X52): the
- * workspace's first, then those of the Project's items, each once whatever
- * its case.
+ * workspace's (its projects' origins, `repos`), then those of the board's
+ * items (the tasks whose keys the board lists), each once whatever its case.
  */
-export function projectRepos(workspaceRepos: string[], items: Task[]): string[] {
+export function projectRepos(repos: Record<string, string | null> | undefined, tasks: Task[], keys: string[]): string[] {
+  const onBoard = new Set(keys);
+  const items = tasks.flatMap((t) => (onBoard.has(taskId(t)) && t.github ? [t.github.repo] : []));
   const seen = new Set<string>();
-  return [...workspaceRepos, ...items.flatMap((t) => (t.github ? [t.github.repo] : []))].filter((r) => !seen.has(r.toLowerCase()) && !!seen.add(r.toLowerCase()));
+  return [...Object.values(repos ?? {}).filter((r): r is string => !!r), ...items].filter((r) => !seen.has(r.toLowerCase()) && !!seen.add(r.toLowerCase()));
+}
+
+/** The GitHub repository a board's new issue goes in (X52): a repository board's own, a Project's picked one; none for other trackers. */
+export function githubRepoOf(board: BoardConfig, place?: string): string | undefined {
+  if (board.origin.kind === "github_repo") return board.origin.repo;
+  return board.origin.kind === "github_project" ? place : undefined;
+}
+
+/**
+ * The form once the lists for its place arrive (X52): what the user chose
+ * stays, but an assignee the place doesn't have (a person of the repository
+ * picked before) goes back to the user.
+ */
+export function fitDraft(draft: NewIssue, people: string[]): NewIssue {
+  return draft.assignee === "me" || draft.assignee === "none" || people.includes(draft.assignee) ? draft : { ...draft, assignee: "me" };
 }
 
 /**
