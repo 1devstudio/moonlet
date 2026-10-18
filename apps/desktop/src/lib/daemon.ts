@@ -63,6 +63,8 @@ export const hostsApi = {
   /** A Jira board's columns, filter and story points field (X50). */
   trackerBoardSetup: (id: string, board: number) =>
     invoke<{ filterId: string; filterJql?: string; subQuery: string | null; pointsField: string | null; sprints: boolean; statusNames: Record<string, string>; columns: import("./boards").BoardColumn[] }>("tracker_board_setup", { id, board }),
+  /** Forgets the tracker answers boards share, for Refresh (X50). */
+  trackersForgetShared: () => invoke("trackers_forget_shared"),
   /** A board's issues, its active sprint, and a Jira board's columns as Jira has them now (X50). */
   trackerBoardTasks: (query: { id: string; origin: import("./boards").Origin; narrow?: string; mine: boolean; finished: number | "sprint" }) =>
     invoke<{ issues: import("./boards").BoardIssue[]; sprint: { id: number; name: string; startMs: number; endMs: number } | null; columns: import("./boards").BoardColumn[] | null; kind?: string }>(

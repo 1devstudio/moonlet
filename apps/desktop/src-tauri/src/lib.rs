@@ -6,6 +6,7 @@ mod attach;
 mod hosts;
 mod remote;
 mod secrets;
+mod shared;
 mod trackers;
 mod webview_data;
 
@@ -483,6 +484,7 @@ pub fn run() {
             trackers::tracker_board_setup,
             trackers::github_project_columns,
             trackers::tracker_board_tasks,
+            trackers::trackers_forget_shared,
             trackers::tracker_oauth_available,
             trackers::tracker_oauth_linear,
             app_info
