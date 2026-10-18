@@ -34,10 +34,6 @@ pub struct TrackersConfig {
     /// What Tasks mode shows, one board at a time (X50).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub boards: Vec<Board>,
-    /// Each GitHub repository the app gave a board, `<workspace>
-    /// <connection>/<owner/name>`, so a removed one is not added again (X50).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub migrated: Vec<String>,
 }
 
 /// "Link a session to an issue when…" (X44 Branch names and linking).
@@ -656,6 +652,16 @@ project = "ui-kit"
     }
 
     #[test]
+    fn an_earlier_files_migrated_list_is_read_and_dropped() {
+        // Repositories once got their boards by it (X50); a file from then still reads.
+        let text =
+            "migrated = [\"local/acme github:github.com/acme/web\"]\n[sync]\ninterval = 300\n";
+        let c = parse(text).unwrap();
+        assert_eq!(c, parse("[sync]\ninterval = 300\n").unwrap());
+        assert!(!to_toml(&c).contains("migrated"));
+    }
+
+    #[test]
     fn a_board_written_with_only_its_essentials_takes_the_defaults() {
         let text = r#"
 [[boards]]
@@ -666,9 +672,6 @@ workspace = "local/1devstudio"
 finished = "sprint"
 origin = { kind = "linear_team", team = "MOON" }
 "#;
-        let c = parse(&format!("migrated = [\"local/1devstudio\"]\n{text}")).unwrap();
-        assert_eq!(c.migrated, ["local/1devstudio"]);
-        assert_eq!(parse(&to_toml(&c)).unwrap(), c);
         let b = &parse(text).unwrap().boards[0];
         assert_eq!(
             b.origin,

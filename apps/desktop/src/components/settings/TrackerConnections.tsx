@@ -120,7 +120,7 @@ function AddBoardNext({ connection, hint, onClose }: { connection: Connection; h
           disabled={!ws}
           onClick={() => {
             onClose();
-            if (ws) openAddBoard(ws.host, ws.id, undefined, connection.id);
+            if (ws) openAddBoard(ws.host, ws.id, { connection: connection.id });
           }}
         >
           Add a board

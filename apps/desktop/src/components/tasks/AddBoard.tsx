@@ -81,7 +81,7 @@ const CATEGORY_CHOICES = Object.entries(CATEGORY_LABEL) as [BoardColumn["categor
 
 
 /** Add a board, starting on `connection` when given, or with `boardId` that board's settings (X50). */
-export function AddBoardDialog({ host, workspace, boardId, connection }: { host: string; workspace: string; boardId?: string; connection?: string }) {
+export function AddBoardDialog({ host, workspace, boardId, connection, build: first }: { host: string; workspace: string; boardId?: string; connection?: string; build?: "repo" }) {
   const close = () => useStore.setState({ dialog: null });
   const config = useTasks((t) => trackersConfig(t));
   const workspaces = useStore((s) => s.workspaces);
@@ -95,8 +95,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   const sourceProjects = useTasks((t) => t.data[draft.workspace]?.sourceProjects);
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [choicesError, setChoicesError] = useState<string | null>(null);
-  // What a Jira or GitHub board is built from; GitHub starts on a Project.
-  const [build, setBuild] = useState<Build>(() => (editing?.origin.kind === "github_repo" ? "repo" : connection === GITHUB ? "project" : "board"));
+  // What a Jira or GitHub board is built from; GitHub starts on a Project, or on a repository when asked (Connect a task tracker's GitHub Issues).
+  const [build, setBuild] = useState<Build>(() => (editing?.origin.kind === "github_repo" ? "repo" : connection === GITHUB ? (first ?? "project") : "board"));
   // Check again (gh's scope) reads the list once more.
   const [reload, setReload] = useState(0);
   // The board's filter: undefined while it is read, null when Jira does not share it.

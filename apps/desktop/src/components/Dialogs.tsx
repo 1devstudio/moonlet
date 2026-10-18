@@ -292,7 +292,7 @@ export function Dialogs() {
     case "link-task":
       return <LinkTaskDialog host={dialog.host} sessionId={dialog.session} />;
     case "add-board":
-      return <AddBoardDialog host={dialog.host} workspace={dialog.workspace} boardId={dialog.board} connection={dialog.connection} />;
+      return <AddBoardDialog host={dialog.host} workspace={dialog.workspace} boardId={dialog.board} connection={dialog.connection} build={dialog.build} />;
     case "commit":
       return <CommitDialog />;
     case "create-pr":
