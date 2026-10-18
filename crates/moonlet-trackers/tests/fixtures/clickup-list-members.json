@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 81942673,
+      "username": "Sam Rivera",
+      "email": "sam@acme.example",
+      "color": "#595d66",
+      "initials": "SR",
+      "profilePicture": null,
+      "profileInfo": {
+        "display_profile": null,
+        "verified_ambassador": null,
+        "verified_consultant": null,
+        "top_tier_user": null,
+        "ai_expert": null,
+        "viewed_verified_ambassador": null,
+        "viewed_verified_consultant": null,
+        "viewed_top_tier_user": null,
+        "viewed_ai_expert": null
+      }
+    }
+  ]
+}
