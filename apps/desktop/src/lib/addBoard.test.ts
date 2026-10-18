@@ -27,6 +27,9 @@ describe("Add a board, step 1 (X50)", () => {
     expect(alreadyAdded([existing], "local/acme", JIRA, { kind: "jira_board", board: 10 })).toBe(true);
     expect(alreadyAdded([existing], "local/other", JIRA, { kind: "jira_board", board: 10 })).toBe(false);
     expect(alreadyAdded([existing], "local/acme", JIRA, { kind: "jira_board", board: 41 })).toBe(false);
+    // GitHub names a repository whatever its case.
+    const repo: BoardConfig = { id: "github:github.com/acme/storefront@local/acme", name: "acme/storefront", connection: "github:github.com", workspace: "local/acme", origin: { kind: "github_repo", repo: "Acme/Storefront" } };
+    expect(alreadyAdded([repo], "local/acme", "github:github.com", { kind: "github_repo", repo: "acme/storefront" })).toBe(true);
   });
 
   it("waits for a board, a non-empty query, columns and a name", () => {

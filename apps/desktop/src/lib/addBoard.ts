@@ -86,9 +86,13 @@ export function pickOrigin(draft: Draft, connection: string, origin: Origin, nam
   return { ...draft, connection, origin, sprints, name, columns: [], finished: sprints ? "sprint" : 14, cards: DEFAULT_CARDS[tracker] };
 }
 
-/** Whether `origin` of `connection` is already a board in workspace `wsKey`: "Already added". */
+/**
+ * Whether `origin` of `connection` is already a board in workspace `wsKey`:
+ * "Already added". A GitHub repository is the same whatever its case.
+ */
 export function alreadyAdded(boards: BoardConfig[] | undefined, wsKey: string, connection: string, origin: Origin): boolean {
-  return (boards ?? []).some((b) => b.workspace === wsKey && b.connection === connection && b.origin.kind === origin.kind && originKey(b.origin) === originKey(origin));
+  const key = (o: Origin) => (o.kind === "github_repo" ? originKey(o).toLowerCase() : originKey(o));
+  return (boards ?? []).some((b) => b.workspace === wsKey && b.connection === connection && b.origin.kind === origin.kind && key(b.origin) === key(origin));
 }
 
 /** "Finished issues": 14 days, or the sprint or cycle where the board has one, or already follows it. */
