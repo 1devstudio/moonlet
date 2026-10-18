@@ -290,10 +290,11 @@ describe("boardView (X50 Board)", () => {
 describe("a GitHub Project's items (X50)", () => {
   const PROJECT: BoardColumn[] = [
     { name: "No Status", statuses: [""], category: "todo" },
-    { name: "Todo", statuses: ["Todo"], category: "todo" },
-    { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
-    { name: "Done", statuses: ["Done"], category: "done", show: "fold" },
+    { name: "Todo", statuses: ["o1"], category: "todo" },
+    { name: "In Progress", statuses: ["o2"], category: "in_progress" },
+    { name: "Done", statuses: ["o3"], category: "done", show: "fold" },
   ];
+  const OPTION: Record<string, string> = { Todo: "o1", "To do": "o1", "In Progress": "o2", Done: "o3" };
   const item = (number: number, status: string | null, closed = false): Task => ({
     connection: "github:github.com",
     key: `acme/web#${number}`,
@@ -305,11 +306,12 @@ describe("a GitHub Project's items (X50)", () => {
     labels: [],
     description: "",
     updatedMs: 0,
-    github: { repo: "acme/web", number, closingPrs: [], project: { id: "PVT_1", item: `PVTI_${number}`, status } },
+    github: { repo: "acme/web", number, closingPrs: [], project: { id: "PVT_1", item: `PVTI_${number}`, status, option: status && OPTION[status] } },
   });
 
-  it("sit in the column of their Status, whatever the issue's own state; one with no Status under No Status", () => {
-    const tasks = [item(1, "Todo"), item(2, "In Progress"), item(3, "Done", true), item(4, null)];
+  it("sit in the column of their Status option, whatever the issue's own state or the option's name now; one with no Status under No Status", () => {
+    // #1's option was renamed "To do" in GitHub: still the Todo column.
+    const tasks = [item(1, "To do"), item(2, "In Progress"), item(3, "Done", true), item(4, null)];
     expect(categorize(PROJECT, tasks).map((t) => [t.key, t.column])).toEqual([
       ["acme/web#1", "todo"],
       ["acme/web#2", "in_progress"],
@@ -322,6 +324,21 @@ describe("a GitHub Project's items (X50)", () => {
       ["Todo", ["acme/web#1"]],
       ["In Progress", ["acme/web#2"]],
       ["Done", ["acme/web#3"]],
+    ]);
+  });
+
+  it("sit by their option's name on a board still saved with names, until a sync moves it onto ids", () => {
+    const saved: BoardColumn[] = [
+      { name: "No Status", statuses: [""], category: "todo" },
+      { name: "Todo", statuses: ["Todo"], category: "todo" },
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
+    ];
+    const tasks = [item(1, "Todo"), item(2, "In Progress"), item(4, null)];
+    expect(categorize(saved, tasks).map((t) => t.column)).toEqual(["todo", "in_progress", "todo"]);
+    expect(boardView(saved, { tasks, sessions: [], worktrees: [], sessionStartRule: "auto" }).map((c) => [c.name, c.cards.map((x) => x.task.key)])).toEqual([
+      ["No Status", ["acme/web#4"]],
+      ["Todo", ["acme/web#1"]],
+      ["In Progress", ["acme/web#2"]],
     ]);
   });
 });

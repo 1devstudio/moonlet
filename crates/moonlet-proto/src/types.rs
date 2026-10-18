@@ -402,6 +402,9 @@ pub struct GhProjectItem {
     /// Its Status option's name; `None` when it has none.
     #[serde(default)]
     pub status: Option<String>,
+    /// That option's id, which a board's columns match by (X50).
+    #[serde(default)]
+    pub option: Option<String>,
     /// Its value in the Project's first number field, when it has one.
     #[serde(default)]
     pub estimate: Option<f64>,

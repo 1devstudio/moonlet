@@ -314,6 +314,57 @@ describe("syncedColumns (X50 a board's columns after a sync)", () => {
   const base = { id: "b", name: "b", connection: "jira:acme.atlassian.net", workspace: "local/w" };
   const todo: BoardColumn = { name: "To Do", statuses: ["10000"], category: "todo" };
   const review: BoardColumn = { name: "Needs Reviews", statuses: ["10018"], category: "in_review", show: "fold" };
+  it("moves a Project board saved with option names onto option ids, keeping the user's order, folding and categories", () => {
+    const board: BoardConfig = {
+      ...base,
+      connection: "github:github.com",
+      origin: { kind: "github_project", owner: "acme", number: 2 },
+      columns: [
+        { name: "No Status", statuses: [""], category: "todo", show: "hide" },
+        { name: "In Progress", statuses: ["In Progress"], category: "in_review" },
+        { name: "Todo", statuses: ["Todo"], category: "todo" },
+        { name: "Done", statuses: ["Done"], category: "done" },
+      ],
+    };
+    const fresh: BoardColumn[] = [
+      { name: "No Status", statuses: [""], category: "todo" },
+      { name: "Todo", statuses: ["o1"], category: "todo" },
+      { name: "In Progress", statuses: ["o2"], category: "in_progress" },
+      { name: "Done", statuses: ["o3"], category: "done", show: "fold" },
+    ];
+    expect(syncedColumns(board, fresh)).toEqual([
+      { name: "No Status", statuses: [""], category: "todo", show: "hide" },
+      { name: "In Progress", statuses: ["o2"], category: "in_review" },
+      { name: "Todo", statuses: ["o1"], category: "todo" },
+      { name: "Done", statuses: ["o3"], category: "done" },
+    ]);
+  });
+
+  it("keeps a Project column whose option was renamed in GitHub, under the new name, with the user's folding and category", () => {
+    const board: BoardConfig = { ...base, connection: "github:github.com", origin: { kind: "github_project", owner: "acme", number: 2 }, columns: [{ name: "Todo", statuses: ["o1"], category: "in_progress", show: "fold" }] };
+    expect(syncedColumns(board, [{ name: "To do", statuses: ["o1"], category: "todo" }])).toEqual([{ name: "To do", statuses: ["o1"], category: "in_progress", show: "fold" }]);
+  });
+
+  it("moves a team's own No Status option onto its id, not onto the column of items with no Status", () => {
+    const board: BoardConfig = {
+      ...base,
+      connection: "github:github.com",
+      origin: { kind: "github_project", owner: "acme", number: 2 },
+      columns: [
+        { name: "No Status", statuses: [""], category: "todo" },
+        { name: "No Status", statuses: ["No Status"], category: "in_progress", show: "fold" },
+      ],
+    };
+    const fresh: BoardColumn[] = [
+      { name: "No Status", statuses: [""], category: "todo" },
+      { name: "No Status", statuses: ["o4"], category: "todo" },
+    ];
+    expect(syncedColumns(board, fresh)).toEqual([
+      { name: "No Status", statuses: [""], category: "todo" },
+      { name: "No Status", statuses: ["o4"], category: "in_progress", show: "fold" },
+    ]);
+  });
+
   it("only adds columns to a JQL board, since its columns come from the statuses its issues happen to be in", () => {
     const board: BoardConfig = { ...base, origin: { kind: "jql", query: "project = OPS" }, columns: [todo, review] };
     // No issue is in review today: the folded column stays.
@@ -446,15 +497,17 @@ describe("byDefaultHint (X50 Add a board: By default)", () => {
 describe("projectMove (X50 moving a GitHub Project item)", () => {
   const project = { id: "PVT_1", field: "PVTSSF_1", options: [{ id: "o1", name: "Todo" }, { id: "o2", name: "In Progress" }, { id: "o3", name: "Done" }] };
 
-  it("sets the item's Status field to the option of that name", () => {
-    expect(projectMove(project, "PVTI_10", "Done")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o3" });
+  it("sets the item's Status field to the column's option", () => {
+    expect(projectMove(project, "PVTI_10", "o3")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o3" });
     // No Status, the column of no option, clears it; an option the team named "No Status" is an option like any other.
     expect(projectMove(project, "PVTI_10", "")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: null });
     const named = { ...project, options: [...project.options, { id: "o4", name: "No Status" }] };
-    expect(projectMove(named, "PVTI_10", "No Status")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o4" });
+    expect(projectMove(named, "PVTI_10", "o4")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o4" });
     // An option the Project no longer has, or a Project without a Status field: nothing to send.
-    expect(projectMove(project, "PVTI_10", "QA")).toBe(null);
-    expect(projectMove({ ...project, field: null }, "PVTI_10", "Done")).toBe(null);
+    expect(projectMove(project, "PVTI_10", "o9")).toBe(null);
+    // A board still saved with option names moves by the name.
+    expect(projectMove(project, "PVTI_10", "Done")).toEqual({ project: "PVT_1", item: "PVTI_10", field: "PVTSSF_1", option: "o3" });
+    expect(projectMove({ ...project, field: null }, "PVTI_10", "o3")).toBe(null);
   });
 
   it("locks a Project item's State menu without gh's project scope, saying what to run", () => {

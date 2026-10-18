@@ -48,7 +48,7 @@ import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
-import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
@@ -933,7 +933,7 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
     );
   }
   // A Project's item before its board's columns are known: no Open/Closed to fall back on.
-  if (task.github?.project) return <span className="ui-text-12.5 text-muted">{task.github.project.status ?? "No Status"}</span>;
+  if (task.github?.project) return <span className="ui-text-12.5 text-muted">{task.github.project.status ?? NO_STATUS}</span>;
   const options = stateOptions(task);
   const current = options.findIndex((o) => o.current);
   return (

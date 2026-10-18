@@ -345,7 +345,19 @@ export function syncedColumns(board: BoardConfig, fresh: BoardColumn[] | null): 
   if (!fresh) return saved.length || board.origin.kind !== "github_repo" ? saved : GITHUB_REPO_COLUMNS;
   if (!saved.length) return firstColumns(fresh, board.states);
   if (board.origin.kind === "jql") return [...saved, ...fresh.filter((f) => !f.statuses.some((id) => saved.some((c) => c.statuses.includes(id))))];
-  return matchColumns(saved, fresh);
+  return matchColumns(board.origin.kind === "github_project" ? withOptionIds(saved, fresh) : saved, fresh);
+}
+
+/**
+ * A Project board saved when its columns held option names (before X50 kept
+ * option ids): each name becomes the id of the fresh column of that name, so
+ * the user's order, folding and categories carry over.
+ */
+function withOptionIds(saved: BoardColumn[], fresh: BoardColumn[]): BoardColumn[] {
+  const ids = new Set(fresh.flatMap((f) => f.statuses));
+  // A saved name is an option's, never No Status's `""`, even when a team named an option "No Status".
+  const idOf = (s: string) => (ids.has(s) ? s : (fresh.find((f) => f.name === s && !f.statuses.includes(""))?.statuses[0] ?? s));
+  return saved.map((c) => ({ ...c, statuses: c.statuses.map(idOf) }));
 }
 
 /** Board `board` with column `name` shown, folded or hidden (X50); moonlet-only, the tracker is not told. */
@@ -380,6 +392,9 @@ export function byDefaultHint(linked: string[], projects: { id: string; name: st
   return `The projects that link it: ${linked.length ? linked.map((id) => projects.find((p) => p.id === id)?.name ?? id).join(", ") : "none yet"}`;
 }
 
+/** The column of a GitHub Project's items with no Status (X50), as GitHub names it; its status is `""`. */
+export const NO_STATUS = "No Status";
+
 /** A GitHub Project as moves need it (X50): its id, its Status field and the field's options. */
 export interface ProjectMeta {
   id: string;
@@ -390,14 +405,16 @@ export interface ProjectMeta {
 }
 
 /**
- * The `gh.project_move` that sets `item`'s Status to the option named
- * `status`, or clears it for `""`, the status of No Status (an option a team
- * named "No Status" is an option); null when the Project has no such option.
+ * The `gh.project_move` that sets `item`'s Status to the option whose id is
+ * `status`, a column's status (or whose name it is, on a board still saved
+ * with names), or clears it for `""`, the status of No Status; null when the
+ * Project has no such option.
  */
 export function projectMove(project: ProjectMeta, item: string, status: string): { project: string; item: string; field: string; option: string | null } | null {
   if (!project.field) return null;
   if (status === "") return { project: project.id, item, field: project.field, option: null };
-  const option = project.options.find((o) => o.name === status);
+  // By id; a board still saved with option names, by the name.
+  const option = project.options.find((o) => o.id === status) ?? project.options.find((o) => o.name === status);
   return option ? { project: project.id, item, field: project.field, option: option.id } : null;
 }
 
