@@ -247,4 +247,13 @@ describe("boardView (X50 Board)", () => {
       ]);
     });
   });
+
+  describe("mapCards and WIP (X50)", () => {
+    it("counts the WIP of the cards a filter leaves", async () => {
+      const { mapCards } = await import("./boardScreen");
+      const columns = view([jira("OPS-487", "10018"), jira("OPS-490", "10019")]);
+      const filtered = mapCards(columns, (c) => (c.task.key === "OPS-487" ? c : null));
+      expect(filtered.find((c) => c.name === "Code Review")?.wip).toEqual({ count: 1, max: 2, full: false });
+    });
+  });
 });

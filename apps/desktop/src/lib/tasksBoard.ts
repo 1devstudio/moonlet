@@ -70,6 +70,8 @@ export interface Card {
   /** The line shown instead of rows when no session works on the task. */
   empty: string | null;
   drift: Drift | null;
+  /** On a board (X50): its column, as the tracker names it. */
+  columnName?: string;
 }
 
 /** How a task's tracker state disagrees with its work, and the fix (X45). */

@@ -12,7 +12,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 ## User journey
 
-1. The user clicks the Tasks button in the sidebar's mode switch (or presses ⌃⌘T). The sidebar lists views and trackers; the centre shows My issues as a board.
+1. The user clicks the Tasks button in the sidebar's mode switch (or presses ⌃⌘T). The sidebar lists views and trackers; the centre shows My issues as a board. (Since X50: the sidebar lists boards and the centre shows one.)
 2. Each card shows the issue key, priority, title, and one row per session with its state glyph and its most useful fact. A card with a session waiting on the user is outlined amber.
 3. Clicking a card's title opens its detail on the right: state, assignee, priority, labels, description, sessions, worktrees without a session and activity.
 4. Clicking a session row (or **Open**) switches to Sessions mode with that session selected (X46).
@@ -32,18 +32,18 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 ### Sidebar in Tasks mode
 
-- [x] Rows: workspace switcher, mode switch, a "Find a task" field, **Views**, **Trackers**, and a footer `<tracker> synced <age>` with a refresh button. "Find a task" filters the board by key or title. (`tasksView.test.ts` syncedLabel, `taskDetails.test.ts` findTasks, `tasks-mode.e2e.ts`)
+- [x] *(Since X50 the sidebar lists the workspace's Boards instead of Views and Trackers.)* Rows: workspace switcher, mode switch, a "Find a task" field, **Views**, **Trackers**, and a footer `<tracker> synced <age>` with a refresh button (since X50 the refresh button is in the header). "Find a task" filters the board by key or title. (`tasksView.test.ts` syncedLabel, `taskDetails.test.ts` findTasks, `tasks-mode.e2e.ts`)
 - [x] After a failed sync the footer reads `Sync failed · <error>` instead. (`tasks-mode.e2e.ts`)
-- [x] Views, each with a count: My issues, In review, Out of sync (count in the accent colour), Sessions without a task. (`tasksView.test.ts`)
-- [x] Trackers lists each source of the workspace as `<tracker> · <source>`, with a red dot when its connection needs attention. (`trackerSources.test.ts` lists the workspace's boards by tracker and name, marking a board whose connection needs attention, `task-trackers.e2e.ts`)
+- [x] ~~Views, each with a count: My issues, In review, Out of sync (count in the accent colour), Sessions without a task.~~ Replaced by X50: the sidebar lists boards; Sessions without a task is the List's last group, out of sync is on the cards and the Tasks button. (`tasks-mode.e2e.ts` lists sessions without a task, with the issue their name looks like)
+- [x] *(Replaced by X50's Boards.)* Trackers lists each source of the workspace as `<tracker> · <source>`, with a red dot when its connection needs attention. (`trackerSources.test.ts` lists the workspace's boards by tracker and name, marking a board whose connection needs attention, `task-trackers.e2e.ts`)
 
 ### Board
 
-- [x] The header shows the view name and a summary such as `9 tasks · 6 sessions`, then filters (`Assignee: me`, on for a new install, which keeps a task you have a session on and decides whose issues are fetched: off, every source also brings everyone's open issues, GitHub included, fetched as soon as it is turned off (X44); `Hide empty Done`; both kept across restarts) and the Board / List switch. (`tasksView.test.ts` boardSummary, filterBoard, `tasksStore.test.ts` the header's filters and Assignee: me decides whose issues are fetched, `tasks-mode.e2e.ts`, `task-trackers.e2e.ts` shows everyone's open issues once Assignee: me is off)
-- [x] Columns Todo, In Progress and In Review, each with its glyph and count. (`tasks-mode.e2e.ts`)
-- [x] Done is a narrow column: a button that opens List. (`tasks-mode.e2e.ts`)
+- [x] The header shows the view name and a summary such as `9 tasks · 6 sessions` (since X50, the board's name and X50's subtitle, `boardColumns.test.ts` names the tracker, its site, the sprint's dates and the counts, Jira counting issues), then filters (`Assignee: me`, on for a new install, which keeps a task you have a session on and decides whose issues are fetched: off, every source also brings everyone's open issues, GitHub included, fetched as soon as it is turned off (X44); `Hide empty Done`; both kept across restarts) and the Board / List switch. (`tasksView.test.ts` filterBoard, `tasksStore.test.ts` the header's filters and Assignee: me decides whose issues are fetched, `tasks-mode.e2e.ts`, `task-trackers.e2e.ts` shows everyone's open issues once Assignee: me is off)
+- [x] *(Replaced by X50: the tracker's own columns.)* Columns Todo, In Progress and In Review, each with its glyph and count. (`tasks-mode.e2e.ts`)
+- [x] *(Replaced by X50: Done, like any column, can be folded to a strip that unfolds when clicked.)* Done is a narrow column: a button that opens List. (`tasks-mode.e2e.ts`)
 - [x] The Done button shows its count and a badge counting done tasks that still have sessions or worktrees (`1 needs clean-up`). (`tasksList.test.ts` groups In Progress, In Review, Todo and Done, `tasks-mode.e2e.ts`)
-- [x] **Card:** key, priority bars, the task's source (its repository, or its team, project or list; in full, such as `acme/web` or `globex ENG`, when two share a name) when the workspace's tasks come from more than one source, assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`, and **Start**. (`taskDetails.test.ts` initials, `tasksView.test.ts` sourceLabels, `tasksBoard.test.ts`, `tasks-mode.e2e.ts`)
+- [x] **Card:** key, priority bars, the task's source (its repository, or its team, project or list; in full, such as `acme/web` or `globex ENG`, when two share a name) when the workspace's tasks come from more than one source (dropped by X50: a board shows one source), assignee initials, title. Then one row per session: state glyph, session name, meta. With no session: `No sessions` or `1 worktree, no session`, and **Start**. (`taskDetails.test.ts` initials, `tasksBoard.test.ts`, `tasks-mode.e2e.ts`)
 - [x] A card whose task has a worktree without a session shows **Start session** (on the worktree) instead of Start. (`tasks-mode.e2e.ts`)
 - [x] **Row meta**, first match wins: `needs you` (amber) when the session waits on the user; `#<n>` in its PR state colour, `#<n> merged` or `#<n> ✕` for failing checks; `◑ <n>` when the agent has running subagents (X42); otherwise `+<added>`. (`tasksBoard.test.ts`)
 - [x] The card is outlined amber when any session needs the user, and highlighted with the accent when selected. (`tasksBoard.test.ts`)
@@ -59,7 +59,7 @@ A task is out of sync when the work and the tracker disagree. Each case has an O
 - [x] Work started also reads `Session running` while an agent waits on the user, and it is never fixed by itself. (`tasksBoard.test.ts`, `keepInStep.test.ts` never moves a task by itself for work started)
 - [x] **Done, still open:** the task is Done and still has sessions that are not archived, or worktrees → `<n> session, <n> worktree`, fix **Clean up**: archive the sessions and remove the worktrees after a confirm, which warns about uncommitted changes. (`keepInStep.test.ts`, `a_worktree_without_a_session_can_be_removed`)
 - [x] A rule set to Off (X46), or the Task tab's Keep in step switch turned off, hides that task's chips, work started included. (`keepInStep.test.ts` rules, `tasksStore.test.ts` Keep in step switch)
-- [x] Out of sync tasks are listed by the Out of sync view and counted on the Tasks button. (`tasksView.test.ts`)
+- [x] Out of sync tasks are counted on the Tasks button, over the workspace's boards (X50); the Out of sync view is gone. (`tasksBoard.test.ts` outOfSync, `boardScreen.test.ts` lays out each board's own tasks in its columns, and gathers their cards once by category with the board's out of sync)
 - [x] **Not now** on the detail hides that chip until the task or its sessions change. (`keepInStep.test.ts` driftKey, withoutPutOff)
 
 ### Detail panel

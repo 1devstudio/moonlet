@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./tasks";
 import { type Board, type BoardSession, tasksBoard } from "./tasksBoard";
-import { boardSummary, filterBoard, modeSwitch, sessionTaskLines, sourceLabels, syncedLabel, viewBoard, viewCounts } from "./tasksView";
+import { filterBoard, modeSwitch, sessionTaskLines, syncedLabel } from "./tasksView";
 
 const task = (key: string, column: Task["column"]): Task => ({
   connection: "github:github.com",
@@ -37,23 +37,6 @@ const board = tasksBoard({
   worktrees: [],
   sessionStartRule: "auto",
 });
-const keys = (b: ReturnType<typeof viewBoard>) => Object.values(b).flat().map((c) => c.task.key);
-
-describe("Tasks mode views (X45)", () => {
-  it("counts each view: open tasks, In Review, out of sync, sessions without a task", () => {
-    expect(viewCounts(board, 1)).toEqual({ mine: 4, review: 2, drift: 1, unlinked: 1 });
-  });
-
-  it("filters the board for a view, keeping the columns", () => {
-    expect(keys(viewBoard(board, "mine"))).toEqual(["MOON-151", "MOON-142", "MOON-144", "MOON-139", "MOON-131"]);
-    expect(keys(viewBoard(board, "review"))).toEqual(["MOON-144", "MOON-139"]);
-    expect(keys(viewBoard(board, "drift"))).toEqual(["MOON-144"]);
-  });
-
-  it("sums up the board in the header", () => {
-    expect(boardSummary(board)).toBe("5 tasks · 2 sessions");
-  });
-});
 
 describe("syncedLabel", () => {
   it("says when the tracker last synced, or that it is syncing", () => {
@@ -70,38 +53,10 @@ describe("sessionTaskLines (X46 sidebar)", () => {
       Tabs: { key: "MOON-144", title: "MOON-144", column: "in_review", text: "In Review · out of sync", outOfSync: true },
     });
   });
-});
 
-describe("sourceLabels (X45 card)", () => {
-  const t = (connection: string, key: string, source?: string, repo?: string): Task => ({
-    connection,
-    key,
-    title: key,
-    url: "",
-    column: "todo",
-    priority: 0,
-    assignees: [],
-    labels: [],
-    description: "",
-    updatedMs: 0,
-    ...(source && { tracker: { id: key, state: "Todo", source } }),
-    ...(repo && { github: { repo, number: 1, closingPrs: [] } }),
-  });
-  it("names each task's source only when the workspace's tasks come from more than one", () => {
-    const oneTeam = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("linear:acme", "ENG-2", "ENG")]);
-    expect(oneTeam(t("linear:acme", "ENG-1", "ENG"))).toBe(undefined);
-    // One connection, two teams.
-    const twoTeams = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("linear:acme", "DES-1", "DES")]);
-    expect(twoTeams(t("linear:acme", "DES-1", "DES"))).toBe("DES");
-    const mixed = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("github:github.com", "acme/web#7", undefined, "acme/web")]);
-    expect(mixed(t("github:github.com", "acme/web#7", undefined, "acme/web"))).toBe("web");
-  });
-
-  it("names a source in full when two sources share a short name", () => {
-    const repos = sourceLabels([t("github:github.com", "acme/web#7", undefined, "acme/web"), t("github:github.com", "other/web#2", undefined, "other/web")]);
-    expect(repos(t("github:github.com", "other/web#2", undefined, "other/web"))).toBe("other/web");
-    const teams = sourceLabels([t("linear:acme", "ENG-1", "ENG"), t("linear:globex", "ENG-2", "ENG")]);
-    expect(teams(t("linear:globex", "ENG-2", "ENG"))).toBe("globex ENG");
+  it("names a board column as the tracker does (X50)", () => {
+    const named = { ...board, in_progress: board.in_progress.map((c) => ({ ...c, columnName: "Doing" })) };
+    expect(sessionTaskLines(named).Hosts.text).toBe("Doing");
   });
 });
 

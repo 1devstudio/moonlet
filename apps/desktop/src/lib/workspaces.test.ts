@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
+import { parseWsKey, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -247,5 +247,13 @@ describe("composerProjects (X44 the composer's project search)", () => {
   it("keeps the projects whose name has the query, ignoring case", () => {
     expect(ids("STORE")).toEqual([[], ["1", "2"]]);
     expect(ids("api", ["3"])).toEqual([[], ["2"]]);
+  });
+});
+
+describe("wsKey and parseWsKey (one build, one parse)", () => {
+  it("writes and reads a workspace's host/id key, an id with a slash included", () => {
+    expect(wsKey("mac-mini", "personal")).toBe("mac-mini/personal");
+    expect(parseWsKey("mac-mini/personal")).toEqual({ host: "mac-mini", id: "personal" });
+    expect(parseWsKey("local/a/b")).toEqual({ host: "local", id: "a/b" });
   });
 });

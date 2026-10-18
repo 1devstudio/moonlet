@@ -132,31 +132,37 @@ describe("Tasks mode", () => {
   it("shows the project's GitHub issues with the sessions working on them", async () => {
     await expect($(sel.text(PROJECT))).toBeDisplayed({ wait: 30_000 });
     await tasksButton().click();
-    await expect(card("acme/storefront#12", "In Progress")).toBeDisplayed({ wait: 30_000 });
-    await expect(card("acme/storefront#15", "Todo")).toBeDisplayed();
-    await expect(card("acme/storefront#12", "In Progress").$(sel.text(LINKED))).toBeDisplayed();
-    await expect(card("acme/storefront#15", "Todo").$(sel.text("No sessions"))).toBeDisplayed();
+    await expect(card("acme/storefront#12", "Open")).toBeDisplayed({ wait: 30_000 });
+    await expect(card("acme/storefront#15", "Open")).toBeDisplayed();
+    await expect(card("acme/storefront#12", "Open").$(sel.text(LINKED))).toBeDisplayed();
+    await expect(card("acme/storefront#15", "Open").$(sel.text("No sessions"))).toBeDisplayed();
+    // The board's name opens the board switcher, with this workspace's boards (X50).
+    await $('//button[starts-with(@aria-label, "Switch board, current: acme/storefront")]').click();
+    await expect($('//input[@placeholder="Find a board, team or project"]')).toBeDisplayed();
+    await expect($('//button[.//span[normalize-space()="acme/storefront"]][.//span[contains(normalize-space(), "Repository")]]')).toBeDisplayed();
+    await browser.keys("Escape");
   });
 
   it("opens a session from its card in Sessions mode", async () => {
-    await card("acme/storefront#12", "In Progress").$(`.//button[.//span[normalize-space()=${JSON.stringify(LINKED)}]]`).click();
+    await card("acme/storefront#12", "Open").$(`.//button[.//span[normalize-space()=${JSON.stringify(LINKED)}]]`).click();
     await expect(sessionsButton()).toHaveAttribute("aria-pressed", "true");
     await expect($(sel.sessionRow(LINKED))).toHaveAttribute("aria-current", "true");
   });
 
   it("lists sessions without a task, with the issue their name looks like", async () => {
     await tasksButton().click();
-    await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "Sessions without a task")]').click();
+    // Sessions without a task are the List's last group (X50).
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
     const row = $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]`);
     await expect(row).toBeDisplayed();
     await expect(row.$(sel.text("Looks like acme/storefront#12 Fix checkout button"))).toBeDisplayed();
-    await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "My issues")]').click();
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
 
   it("starts a session from a task with the issue as the first message, its branch and the link", async () => {
     // "Terminal only", so no agent starts (the composer reads this each time it opens).
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), projectId(w));
-    await card("acme/storefront#15", "Todo").$(sel.button("Start")).click();
+    await card("acme/storefront#15", "Open").$(sel.button("Start")).click();
     await expect($(sel.text("For acme/storefront#15"))).toBeDisplayed();
     await expect($('//textarea[@placeholder="What do you want to work on?"]')).toHaveValue("acme/storefront#15 · Gift cards at checkout");
     // Keep in step: "session starts" is Automatically, so the issue is assigned (X46).
@@ -180,7 +186,7 @@ describe("Tasks mode", () => {
       await tasksButton().click();
       await $('//button[@title="Refresh tasks"]').click();
       // #12 has sessions, so its worktree without one is in the detail panel.
-      await card("acme/storefront#12", "In Progress").$('//button[normalize-space()="Fix checkout button"]').click();
+      await card("acme/storefront#12", "Open").$('//button[normalize-space()="Fix checkout button"]').click();
       // `.//`: within the detail, not the whole page.
       const start = $('//aside[@aria-label="Task detail"]').$(`.${sel.button("Start session")}`);
       await start.waitForDisplayed({ timeout: 15_000 });
@@ -209,19 +215,20 @@ describe("Tasks mode", () => {
     }
   });
 
-  it("counts done tasks left to clean up on the Done button, and filters the board", async () => {
+  it("counts done tasks left to clean up on the folded Closed column, and filters the board", async () => {
     await tasksButton().click();
     await $('//button[@title="Refresh tasks"]').click();
-    const done = $('//button[starts-with(@aria-label, "Done: ")]');
-    await expect(done).toHaveAttribute("aria-label", "Done: 2 tasks, 1 needs clean-up", { wait: 15_000 });
+    // A GitHub repository board folds its Closed column (X50).
+    const done = $('//button[starts-with(@aria-label, "Closed: ")]');
+    await expect(done).toHaveAttribute("aria-label", "Closed: 2 tasks, 1 needs clean-up", { wait: 15_000 });
     await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Hide empty Done"]').click();
-    await expect(done).toHaveAttribute("aria-label", "Done: 1 task, 1 needs clean-up");
+    await expect(done).toHaveAttribute("aria-label", "Closed: 1 task, 1 needs clean-up");
     await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Hide empty Done"]').click();
   });
 
   it("offers Start session on a card whose task has a worktree and no session, and No sessions yet on one with neither", async () => {
-    await expect(card("acme/storefront#18", "Todo").$(`.${sel.button("Start session")}`)).toBeDisplayed();
-    await card("acme/storefront#19", "Todo").$('//button[normalize-space()="Saved carts"]').click();
+    await expect(card("acme/storefront#18", "Open").$(`.${sel.button("Start session")}`)).toBeDisplayed();
+    await card("acme/storefront#19", "Open").$('//button[normalize-space()="Saved carts"]').click();
     const detail = $('//aside[@aria-label="Task detail"]');
     await expect(detail.$(`.${sel.text("No sessions yet. Starting one names the branch after the issue.")}`)).toBeDisplayed();
     // + New session opens the composer for the task.
@@ -239,7 +246,7 @@ describe("Tasks mode", () => {
   });
 
   it("shows each session's card in the detail, and ↵ opens the first", async () => {
-    await card("acme/storefront#12", "In Progress").$('.//button[normalize-space()="Fix checkout button"]').click();
+    await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
     const session = $('//aside[@aria-label="Task detail"]').$(`.//div[@role="group"][@aria-label="Session ${LINKED}"]`);
     await expect(session.$(`.${sel.text("e2e-repo/12-fix-checkout")}`)).toBeDisplayed({ wait: 10_000 });
     await expect(session.$(`.${sel.text("No pull request · Create PR ⇧⌘P")}`)).toBeDisplayed();
@@ -251,7 +258,7 @@ describe("Tasks mode", () => {
   });
 
   it("copies a task's key from its detail", async () => {
-    await card("acme/storefront#19", "Todo").$('//button[normalize-space()="Saved carts"]').click();
+    await card("acme/storefront#19", "Open").$('//button[normalize-space()="Saved carts"]').click();
     await $('//aside[@aria-label="Task detail"]').$('.//button[@title="Copy issue key"]').click();
     await expect($(sel.text("Copied acme/storefront#19"))).toBeDisplayed({ wait: 5_000 });
   });
@@ -286,7 +293,7 @@ describe("Tasks mode", () => {
     }
     await expect($('button[aria-label="Switch workspace, current: Personal"]')).toBeDisplayed({ wait: 15_000 });
     await tasksButton().click();
-    await expect(card("acme/storefront#19", "Todo")).toBeDisplayed({ wait: 15_000 });
+    await expect(card("acme/storefront#19", "Open")).toBeDisplayed({ wait: 15_000 });
     await sessionsButton().click();
   });
 
@@ -329,7 +336,8 @@ describe("Tasks mode", () => {
 
   it("links a session to a task from a pasted key", async () => {
     await tasksButton().click();
-    await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "Sessions without a task")]').click();
+    // Sessions without a task are the List's last group (X50).
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
     await $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]//button[normalize-space()="Link to task"]`).click();
     await expect($(`//div[@role="dialog"]`).$(sel.text(`Link “${SESSION}” to a task`))).toBeDisplayed();
     await expect($(sel.text("Links live in moonlet; the tracker hears of a PR only through Keep in step."))).toBeDisplayed();
@@ -343,7 +351,7 @@ describe("Tasks mode", () => {
       timeout: 10_000,
       timeoutMsg: "the seeded session was not linked to acme/storefront#12",
     });
-    await $('//nav[@aria-label="Views"]//button[starts-with(normalize-space(), "My issues")]').click();
+    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
 
   it("shows the task bar on a session of a task with two sessions", async () => {
@@ -360,14 +368,14 @@ describe("Tasks mode", () => {
     await tasksButton().click();
   });
 
-  it("shows the same tasks as a list whose rows open into their sessions", async () => {
+  it("shows the same tasks as a list whose rows open into their sessions, and unfolds and folds a column", async () => {
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
-    const row = $('//section[@aria-label="In Progress"]//div[@role="row"][starts-with(@aria-label, "acme/storefront#15")]');
+    const row = $('//section[@aria-label="Open"]//div[@role="row"][starts-with(@aria-label, "acme/storefront#15")]');
     await expect(row).toBeDisplayed({ wait: 10_000 });
     await expect(row.$(sel.text("1 session"))).toBeDisplayed();
     await row.$('button[aria-label="Expand acme/storefront#15"]').click();
     await expect(row.$('//button[normalize-space()="Gift cards at checkout"]')).toBeDisplayed();
-    await expect($('//section[@aria-label="Todo"]')).toBeDisplayed();
+    await expect($('//section[@aria-label="Closed"]')).toBeDisplayed();
     // Expand all opens every row; Collapse all closes them.
     const twelve = $('button[aria-label="Expand acme/storefront#12"], button[aria-label="Collapse acme/storefront#12"]');
     await $(sel.button("Expand all")).click();
@@ -376,10 +384,12 @@ describe("Tasks mode", () => {
     await expect(twelve).toHaveAttribute("aria-expanded", "false");
     await expect(row.$('button[aria-label="Expand acme/storefront#15"]')).toHaveAttribute("aria-expanded", "false");
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
-    // The board's Done column opens the list.
-    await $('//button[starts-with(@aria-label, "Done: ")]').click();
-    await expect($('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]')).toHaveAttribute("aria-pressed", "true");
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+    // A folded column unfolds when clicked, and its ⋯ menu folds it again (X50).
+    await $('//button[starts-with(@aria-label, "Closed: ")]').click();
+    await expect($('//section[@aria-label="Closed"]')).toBeDisplayed({ wait: 10_000 });
+    await $('//button[@title="Closed options"]').click();
+    await $(sel.button("Fold")).click();
+    await expect($('//button[starts-with(@aria-label, "Closed: ")]')).toBeDisplayed({ wait: 10_000 });
   });
 
   const rowStyle = async (option: string) => {
@@ -394,7 +404,7 @@ describe("Tasks mode", () => {
     await rowStyle("A · Issue number column");
     await expect($(`${sel.sessionRow("Gift cards at checkout")}//span[normalize-space()="15"]`)).toBeDisplayed({ wait: 10_000 });
     await expect($(`//aside//button[.//span[normalize-space()=${JSON.stringify(PROJECT)}]]//span[normalize-space()="#"]`)).toBeDisplayed();
-    await expect($(sel.sessionRow("Gift cards at checkout"))).toHaveAttribute("title", /^acme\/storefront#15 · In Progress · Gift cards at checkout/);
+    await expect($(sel.sessionRow("Gift cards at checkout"))).toHaveAttribute("title", /^acme\/storefront#15 · Open · Gift cards at checkout/);
   });
 
   it("B · puts the sessions under a line for their task, those without a task last (X48)", async () => {
@@ -423,10 +433,10 @@ describe("Tasks mode", () => {
   it("finds a task by its title, and closes an issue from the detail's state menu", async () => {
     await tasksButton().click();
     await fill('//input[@placeholder="Find a task"]', "Gift");
-    await expect(card("acme/storefront#15", "In Progress")).toBeDisplayed({ wait: 10_000 });
-    await expect(card("acme/storefront#12", "In Progress")).not.toBeExisting();
+    await expect(card("acme/storefront#15", "Open")).toBeDisplayed({ wait: 10_000 });
+    await expect(card("acme/storefront#12", "Open")).not.toBeExisting();
     await fill('//input[@placeholder="Find a task"]', "");
-    await card("acme/storefront#15", "In Progress").$('//button[normalize-space()="Gift cards at checkout"]').click();
+    await card("acme/storefront#15", "Open").$('//button[normalize-space()="Gift cards at checkout"]').click();
     await choose('//select[@aria-label="State of acme/storefront#15"]', "1");
     await browser.waitUntil(() => asked().includes("issue close 15 --reason completed"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
     await expect($('//section[@aria-label="Activity"]').$(sel.text("moonlet closed it"))).toBeDisplayed({ wait: 10_000 });
