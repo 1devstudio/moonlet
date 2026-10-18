@@ -390,14 +390,22 @@ describe("Jira and ClickUp trackers", () => {
     await new Promise((r) => server.close(r));
   });
 
-  it("connects ClickUp with its raw token to the account's first workspace", async () => {
+  it("connects ClickUp with its raw token to the account's first workspace, its lists grouped by space in Add a board", async () => {
     await openSettings("Task trackers");
     await $(sel.settingsButton("Connect ClickUp")).click();
     await expect($('//div[@role="dialog"]').$(sel.text("The token is saved in the macOS Keychain."))).toBeDisplayed();
     await fill('//div[@role="dialog"]//input[@type="password"]', "pk_e2e_token");
     await $('//div[@role="dialog"]//button[normalize-space()="Connect"]').click();
     await expect($(sel.text("Signed in as John Doe · 4 lists visible"))).toBeDisplayed({ wait: 15_000 });
-    await $('//div[@role="dialog"]//button[normalize-space()="Later"]').click();
+    // Add a board lists ClickUp's lists under their space (X50).
+    await $('//div[@role="dialog"]//button[normalize-space()="Add a board"]').click();
+    const dialog = '//div[@role="dialog"][@aria-label="Add a board"]';
+    await expect($(`${dialog}//div[normalize-space()="Second Space Name"]`)).toBeDisplayed({ wait: 15_000 });
+    await expect($(`${dialog}//div[normalize-space()="Updated Space Name"]`)).toBeDisplayed();
+    await expect($(`${dialog}//button[@role="radio"][.//span[normalize-space()="Sprint Backlog"]]`)).toBeDisplayed();
+    await browser.keys("Escape");
+    await $(dialog).waitForExist({ reverse: true });
+    await openSettings("Task trackers");
     // The token goes as the raw Authorization value, not as a Bearer.
     expect(asked.filter((x) => x.path.startsWith("/clickup/")).every((x) => x.auth === "pk_e2e_token")).toBe(true);
     expect(readFileSync(join(w.home, "trackers.toml"), "utf8")).toContain('id = "clickup:1111"');

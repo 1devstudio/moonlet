@@ -2,6 +2,8 @@
 
 use serde_json::{json, Value};
 
+use crate::board::BoardIssue;
+use crate::config::Finished;
 use crate::states::Column;
 use crate::task::{TrackerRef, TrackerTask};
 use crate::{ApiError, TrackerKind};
@@ -59,14 +61,56 @@ pub fn parse_lists(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
     Ok(pairs(&parse(raw)?["lists"]))
 }
 
-/// The lists inside the folders of `GET /space/{id}/folder`.
-pub fn parse_folder_lists(raw: &[u8]) -> Result<Vec<(String, String)>, ApiError> {
+/// The lists inside the folders of `GET /space/{id}/folder`, each with its
+/// folder's name, which Add a board groups them by (X50).
+pub fn parse_folder_lists(raw: &[u8]) -> Result<Vec<(String, String, String)>, ApiError> {
     Ok(parse(raw)?["folders"]
         .as_array()
         .into_iter()
         .flatten()
-        .flat_map(|f| pairs(&f["lists"]))
+        .flat_map(|f| {
+            let folder = f["name"].as_str().unwrap_or_default().to_string();
+            pairs(&f["lists"])
+                .into_iter()
+                .map(move |(id, name)| (id, name, folder.clone()))
+        })
         .collect())
+}
+
+/// Since when a board's closed tasks are read (ms): its finished days back
+/// from `now`; ClickUp has no sprint to follow, so that takes the default.
+pub fn closed_since(now: u64, finished: &Finished) -> u64 {
+    let days = match finished {
+        Finished::Days(n) => u64::from(*n),
+        Finished::Sprint => 14,
+    };
+    now.saturating_sub(days * 86_400_000)
+}
+
+/// A page of a list's tasks on a board (X50), each with its due date's time.
+pub fn parse_board_tasks(raw: &[u8], connection: &str) -> Result<Vec<BoardIssue>, ApiError> {
+    let due: Vec<Option<u64>> = parse(raw)?["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| str_of(&t["due_date"]).parse().ok())
+        .collect();
+    Ok(parse_tasks(raw, connection)?
+        .into_iter()
+        .zip(due)
+        .map(|(task, due_ms)| BoardIssue {
+            due_ms,
+            ..BoardIssue::from_task(task)
+        })
+        .collect())
+}
+
+/// How Add a board heads a list (X50): its space, and folder.
+pub fn list_group(space: &str, folder: Option<&str>) -> String {
+    match folder {
+        Some(f) => format!("{space} › {f}"),
+        None => space.into(),
+    }
 }
 
 /// A page of a list's tasks for the user (or all): the open ones, or with
@@ -94,16 +138,25 @@ pub fn tasks_path(
 /// "closed"-type statuses), by the user's state `mapping` where it has one,
 /// then the recent pass's tasks not already in.
 pub fn merge_passes(
-    open: Vec<TrackerTask>,
-    recent: Vec<TrackerTask>,
+    open: Vec<BoardIssue>,
+    recent: Vec<BoardIssue>,
     mapping: &crate::states::Mapping,
-) -> Vec<TrackerTask> {
-    let done = |t: &TrackerTask| {
-        mapping.get(&t.tracker.state).copied().unwrap_or(t.column) == Column::Done
+) -> Vec<BoardIssue> {
+    let done = |i: &BoardIssue| {
+        mapping
+            .get(&i.task.tracker.state)
+            .copied()
+            .unwrap_or(i.task.column)
+            == Column::Done
     };
-    let mut out: Vec<TrackerTask> = open.into_iter().filter(|t| !done(t)).collect();
-    let mut seen: std::collections::HashSet<String> = out.iter().map(|t| t.key.clone()).collect();
-    out.extend(recent.into_iter().filter(|t| seen.insert(t.key.clone())));
+    let mut out: Vec<BoardIssue> = open.into_iter().filter(|i| !done(i)).collect();
+    let mut seen: std::collections::HashSet<String> =
+        out.iter().map(|i| i.task.key.clone()).collect();
+    out.extend(
+        recent
+            .into_iter()
+            .filter(|i| seen.insert(i.task.key.clone())),
+    );
     out
 }
 
@@ -256,6 +309,10 @@ pub fn parse_error(status: u16, raw: &[u8]) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn issues(tasks: Vec<TrackerTask>) -> Vec<BoardIssue> {
+        tasks.into_iter().map(BoardIssue::from_task).collect()
+    }
     use crate::states::Column;
     use crate::task::{TrackerRef, TrackerTask};
 
@@ -366,9 +423,9 @@ mod tests {
             with("CU-a", Column::InProgress),
             with("CU-new", Column::Done),
         ];
-        let keys: Vec<String> = merge_passes(open, recent, &Default::default())
+        let keys: Vec<String> = merge_passes(issues(open), issues(recent), &Default::default())
             .into_iter()
-            .map(|t| t.key)
+            .map(|i| i.task.key)
             .collect();
         assert_eq!(keys, ["CU-a", "CU-new"]);
     }
@@ -397,21 +454,24 @@ mod tests {
             // A status not shown is no Done: kept.
             with("CU-h", Column::Hidden, "on hold"),
         ];
-        let keys: Vec<String> = merge_passes(open, vec![], &mapping)
+        let keys: Vec<String> = merge_passes(issues(open), vec![], &mapping)
             .into_iter()
-            .map(|t| t.key)
+            .map(|i| i.task.key)
             .collect();
         assert_eq!(keys, ["CU-s", "CU-h"]);
     }
 
     #[test]
-    fn the_lists_inside_a_spaces_folders_are_sources() {
+    fn the_lists_inside_a_spaces_folders_are_sources_named_with_their_folder() {
         // The documented folders answer has no lists in its example folders.
         assert_eq!(parse_folder_lists(&fixture("clickup-folders.json")).unwrap(), []);
         let raw = br#"{"folders":[{"id":"457","name":"Roadmap","lists":[{"id":"901","name":"Q4"},{"id":"902","name":"Bugs"}]}]}"#;
         assert_eq!(
             parse_folder_lists(raw).unwrap(),
-            [("901".to_string(), "Q4".to_string()), ("902".to_string(), "Bugs".to_string())]
+            [
+                ("901".to_string(), "Q4".to_string(), "Roadmap".to_string()),
+                ("902".to_string(), "Bugs".to_string(), "Roadmap".to_string())
+            ]
         );
     }
 
@@ -454,5 +514,38 @@ mod tests {
             (other.auth, other.message.as_str()),
             (false, "ClickUp: Rate limit reached")
         );
+    }
+
+    #[test]
+    fn a_boards_tasks_carry_their_due_dates_time() {
+        let tasks = parse_board_tasks(&fixture("clickup-tasks.json"), "clickup:9012345").unwrap();
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|i| (i.task.tracker.id.as_str(), i.due_ms))
+                .collect::<Vec<_>>(),
+            [
+                ("9hx", Some(1_508_369_194_377)),
+                ("9hz", None),
+                ("86d2m1awy", None)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_list_is_headed_by_its_space_and_folder() {
+        assert_eq!(
+            list_group("Engineering", Some("Roadmap")),
+            "Engineering › Roadmap"
+        );
+        assert_eq!(list_group("Engineering", None), "Engineering");
+    }
+
+    #[test]
+    fn closed_tasks_are_read_back_to_the_boards_finished_days() {
+        let now = 1_792_972_800_000;
+        assert_eq!(closed_since(now, &Finished::Days(7)), 1_792_368_000_000);
+        // ClickUp has no sprint to follow: the default 14 days.
+        assert_eq!(closed_since(now, &Finished::Sprint), 1_791_763_200_000);
     }
 }

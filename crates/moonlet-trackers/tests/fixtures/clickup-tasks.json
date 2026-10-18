@@ -45,7 +45,8 @@
         "id": "15505202",
         "name": "Sprint Backlog",
         "access": true
-      }
+      },
+      "due_date": "1508369194377"
     },
     {
       "id": "9hz",
@@ -71,7 +72,8 @@
         "id": "15505202",
         "name": "Sprint Backlog",
         "access": true
-      }
+      },
+      "due_date": null
     },
     {
       "id": "86d2m1awy",

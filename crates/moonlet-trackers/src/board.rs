@@ -22,6 +22,10 @@ pub struct BoardIssue {
     /// `YYYY-MM-DD`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due: Option<String>,
+    /// A due date given as a time (ClickUp's), whose day the app takes
+    /// where the user is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_ms: Option<u64>,
 }
 
 impl BoardIssue {
@@ -34,6 +38,7 @@ impl BoardIssue {
             points: None,
             parent: None,
             due: None,
+            due_ms: None,
         }
     }
 }

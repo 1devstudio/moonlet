@@ -222,3 +222,10 @@ export function putBoard(boards: BoardConfig[] | undefined, board: BoardConfig, 
   const at = list.findIndex((b) => b.id === (replacing ?? board.id));
   return at < 0 ? [...list, board] : list.map((b, i) => (i === at ? board : b));
 }
+
+/** Step 1's rows under their group (a ClickUp list's space and folder), groups in the order they first came; null for a tracker without groups. */
+export function byGroup<T extends { group?: string }>(rows: T[]): { group: string | null; rows: T[] }[] {
+  const groups = new Map<string | null, T[]>();
+  for (const r of rows) groups.set(r.group ?? null, [...(groups.get(r.group ?? null) ?? []), r]);
+  return [...groups].map(([group, list]) => ({ group, rows: list }));
+}

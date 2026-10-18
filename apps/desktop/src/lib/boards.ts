@@ -221,11 +221,16 @@ export const originLabel = (o: Origin) => ORIGIN_KINDS[o.kind].label;
 export const originKey = (o: Origin) => (ORIGIN_KINDS[o.kind].key as (o: Origin) => string)(o);
 
 /** A Jira board's issue as `tracker_board_tasks` sends it. */
-export type BoardIssue = Task & { statusId: string };
+export type BoardIssue = Task & { statusId: string; /** A due date given as a time (ClickUp's). */ dueMs?: number };
 
-/** A board issue as a task: its status id goes with the tracker's state. */
-export function taskFromBoardIssue({ statusId, ...task }: BoardIssue): Task {
-  return { ...task, tracker: task.tracker && { ...task.tracker, statusId } };
+/** Unix milliseconds as the day they fall on where the user is, `offsetMinutes` behind UTC as `Date.getTimezoneOffset` gives it. */
+export function localDay(ms: number, offsetMinutes: number): string {
+  return new Date(ms - offsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
+/** A board issue as a task: its status id goes with the tracker's state, and a due time becomes the user's day. */
+export function taskFromBoardIssue({ statusId, dueMs, ...task }: BoardIssue, offsetMinutes = new Date(dueMs ?? 0).getTimezoneOffset()): Task {
+  return { ...task, ...(dueMs !== undefined && !task.due && { due: localDay(dueMs, offsetMinutes) }), tracker: task.tracker && { ...task.tracker, statusId } };
 }
 
 /**
