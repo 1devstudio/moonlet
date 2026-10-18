@@ -15,7 +15,7 @@ import {
   boardInput,
   failureOf,
   fixDrift,
-  forgetGhScopes,
+  forgetLookups,
   isTasksMode,
   leaveTasksMode,
   loadTrackersConfig,
@@ -496,7 +496,7 @@ export function TasksMode() {
             <IconButton
               title="Refresh tasks"
               onClick={() => {
-                forgetGhScopes(ws.host);
+                forgetLookups(ws.host);
                 void refreshTasks(ws.host, ws.id);
               }}
             >

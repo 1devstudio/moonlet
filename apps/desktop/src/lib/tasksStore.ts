@@ -509,9 +509,13 @@ interface BoardRead {
 /** When each host's gh scopes were last read. */
 const scopesReadAt = new Map<string, number>();
 
-/** Refresh reads everything again: gh's scopes too, at the next GitHub Project sync. */
-export function forgetGhScopes(host: string) {
+/**
+ * Refresh reads everything again: gh's scopes too, at the next GitHub
+ * Project sync, and the tracker answers boards share (X50).
+ */
+export function forgetLookups(host: string) {
   scopesReadAt.delete(host);
+  void hostsApi.trackersForgetShared().catch(() => {});
 }
 
 /** The user's own items, then the others' that `keep` lets join (Assignee: anyone), each once by `key`. */
