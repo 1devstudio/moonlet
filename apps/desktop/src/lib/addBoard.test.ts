@@ -93,8 +93,10 @@ describe("Add a board, step 4 (X50)", () => {
       assignee: "anyone",
       columns: WEB,
       rules: [{ when: "default", project: "website" }],
-      cards: ["issue_type", "points", "assignee"],
     });
+    // Cards at the tracker's fields are left out; none at all is a choice of its own.
+    expect(toBoard({ ...draft, cards: [] }).cards).toEqual([]);
+    expect(toBoard({ ...draft, cards: ["due"] }).cards).toEqual(["due"]);
     expect(toBoard({ ...draft, finished: "sprint", pinned: false })).toMatchObject({ finished: "sprint", pinned: false });
   });
 });
@@ -156,5 +158,9 @@ describe("Board settings (X50)", () => {
     const d = draftFromBoard(board);
     expect([d.step, d.name, d.narrow, d.assignee, d.finished, d.cards, d.pinned]).toEqual([1, "WEB · Website", "component = frontend", "me", "sprint", ["points"], false]);
     expect(toBoard(d)).toEqual(board);
+    // A board that never picked shows its tracker's fields, ticked as such.
+    const { cards: _, ...unpicked } = board;
+    expect(draftFromBoard(unpicked).cards).toEqual(["issue_type", "points", "assignee"]);
+    expect(toBoard(draftFromBoard(unpicked)).cards).toBe(undefined);
   });
 });

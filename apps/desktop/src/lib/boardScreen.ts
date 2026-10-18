@@ -2,9 +2,10 @@
 // Boards, the header's Columns menu and the detail's State menu.
 
 import { boardSubtitle, boardView, type ColumnView, statusKey } from "./boardColumns";
-import { type BoardColumn, type BoardConfig, type Category, syncedColumns } from "./boards";
+import { type BoardColumn, type BoardConfig, type CardField, type Category, syncedColumns } from "./boards";
 import type { AgentState } from "./protocol";
 import type { BoardData } from "./tasksStore";
+import { initials } from "./taskDetails";
 import type { Board, BoardInput, Card } from "./tasksBoard";
 import { type Task, taskId, type TrackerKind, trackerOf } from "./tasks";
 import type { TasksData } from "./tasksStore";
@@ -125,6 +126,32 @@ export function mapCards(views: ColumnView[], f: (c: Card) => Card | null): Colu
     const cards = v.cards.flatMap((c) => f(c) ?? []);
     return { ...v, cards, ...(v.wip && { wip: { ...v.wip, count: cards.length, full: cards.length >= v.wip.max } }) };
   });
+}
+
+/** `2026-10-20` as `Oct 20`, in the user's own day; a date that doesn't read stays as written. */
+function dueDay(due: string): string {
+  const d = new Date(`${due}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? due : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/**
+ * What a card shows of `fields` (X50 Cards show): issue type after the key,
+ * `<n> pt` and the assignee's initials, and the parent and due date on a
+ * line under the title. A field the issue has no value for shows nothing.
+ */
+export function cardFace(
+  task: Pick<Task, "key" | "assignees"> & Partial<Pick<Task, "issueType" | "points" | "parent" | "due">>,
+  fields: CardField[],
+): { type?: string; points?: string; assignee?: { initials: string; name: string }; line?: string } {
+  const on = (f: CardField) => fields.includes(f);
+  const line = [on("parent") && task.parent && `${task.parent.key} ${task.parent.title}`, on("due") && task.due && `Due ${dueDay(task.due)}`].filter(Boolean).join(" · ");
+  const name = task.assignees[0];
+  return {
+    ...(on("issue_type") && task.issueType && { type: task.issueType }),
+    ...(on("points") && task.points !== undefined && { points: `${task.points} pt` }),
+    ...(on("assignee") && name && { assignee: { initials: initials(name), name } }),
+    ...(line && { line }),
+  };
 }
 
 /** A card of someone else's issue with no session on it: dimmed under Assignee: anyone (X50). */
