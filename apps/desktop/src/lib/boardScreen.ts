@@ -45,12 +45,7 @@ export function sidebarBoards(boards: BoardConfig[] | undefined, wsKey: string, 
 }
 
 /** The header's Columns menu button (X50): `Columns 6 · 2 folded`. */
-export function columnsSummary(columns: BoardColumn[]): string {
-  const { shown, folded } = columnCounts(columns);
-  return `Columns ${shown}${folded ? ` · ${folded} folded` : ""}`;
-}
-
-/** The columns a board draws, folded ones included, and how many of them are folded. */
+/** The header's Columns button (X50): the columns a board draws, folded ones included, and how many of them are folded. */
 export function columnCounts(columns: BoardColumn[]): { shown: number; folded: number } {
   const shown = columns.filter((c) => c.show !== "hide");
   return { shown: shown.length, folded: shown.filter((c) => c.show === "fold").length };

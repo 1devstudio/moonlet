@@ -1,6 +1,6 @@
 // Tasks mode (X45, X50): the sidebar's boards and the shown board of the workspace's tasks.
 
-import { Bot, ChevronDown, ChevronRight, ChevronUp, Columns3, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
@@ -8,7 +8,7 @@ import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { createLockOn, createsIn, createTarget } from "../../lib/newIssue";
-import { type Column, type Task, taskId, taskStart, trackerName } from "../../lib/tasks";
+import { type Column, type Task, taskId, taskStart, trackerName, trackerOf } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
 import {
@@ -60,8 +60,17 @@ import { ago } from "../../lib/mobile";
 import { NewIssue } from "./NewIssue";
 
 
+/** The Columns button's glyph: four upright lines, as the design draws it. */
+function ColumnsGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M4 4v16M10 4v16M16 4v16M22 4v16" />
+    </svg>
+  );
+}
+
 /** The 2px rule under a column's header, by its category (the design's board). */
-const COLUMN_RULE: Record<Category, string> = { todo: "bg-[#2e2e2e]", in_progress: "bg-[#5e5e5e]", in_review: "bg-[#8c8c8c]", done: "bg-merged" };
+const COLUMN_RULE: Record<Category, string> = { todo: "bg-border-strong", in_progress: "bg-idle", in_review: "bg-muted", done: "bg-merged" };
 
 const TONE: Record<CardRow["meta"]["tone"], string> = {
   blocked: "text-blocked",
@@ -177,7 +186,7 @@ export function TasksSidebar() {
               )}
             >
               {r.current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
-              {b && <BoardTile connection={b.connection} />}
+              {b && <BoardTile tracker={trackerOf(b.connection)} />}
               <span className="min-w-0 flex-1 truncate">{r.label}</span>
               {b && attention[b.connection] && <span title={attention[b.connection]} className="h-1.5 w-1.5 rounded-full bg-error" />}
               <span className="font-mono ui-text-11.5 tabular-nums text-faint">{r.count}</span>
@@ -454,7 +463,7 @@ export function TasksMode() {
           <div className="mt-3 flex flex-col divide-y divide-border rounded-lg border border-border">
             {/* GitHub needs no connecting: it opens Add a board on GitHub (X50). */}
             <button className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-panel-2" onClick={() => openAddBoard(ws.host, ws.id, { connection: GITHUB, build: "repo" })}>
-              <BoardTile connection={GITHUB} size={26} />
+              <BoardTile tracker="github" size={26} />
               <div className="min-w-0 flex-1">
                 <div className="ui-text-13 text-fg">GitHub Issues</div>
                 <div className="ui-text-12 text-muted">Uses your gh login · a repository's issues or a GitHub Project</div>
@@ -469,7 +478,7 @@ export function TasksMode() {
               ] as const
             ).map(([kind, t, how]) => (
               <button key={t} className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-panel-2" onClick={() => void goSettings({ page: "trackers" })}>
-                <BoardTile connection={`${kind}:`} size={26} />
+                <BoardTile tracker={kind} size={26} />
                 <div className="min-w-0 flex-1">
                   <div className="ui-text-13 text-fg">{t}</div>
                   <div className="ui-text-12 text-muted">{how} · then pick what this workspace shows</div>
@@ -672,7 +681,7 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
         </span>
       ),
       checked: r.board.id === shown.id,
-      icon: <BoardTile connection={r.board.connection} />,
+      icon: <BoardTile tracker={trackerOf(r.board.connection)} />,
       onSelect: () => {
         const to = parseWsKey(r.board.workspace);
         openBoard(to.host, to.id, r.board.id);
@@ -684,23 +693,26 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
     { label: "Manage", onSelect: () => void goSettings({ page: "trackers", focus: "boards" }) },
   ];
   return (
-    <div className="flex min-w-0 items-center gap-2.5">
-      <BoardTile connection={shown.connection} size={26} />
-      <div className="flex min-w-0 flex-col gap-px">
-        <Menu
-          width={360}
-          search={{ placeholder: "Find a board, team or project", query, onQuery: setQuery }}
-          items={items}
-          footer={footer}
-          trigger={(open) => (
-            <button aria-label={`Switch board, current: ${shown.name}`} onClick={open} className="no-drag flex items-center gap-1.5 ui-text-14 font-semibold text-fg">
-              <span className="truncate">{title}</span>
-              <ChevronDown size={13} className="shrink-0 text-muted" />
-            </button>
-          )}
-        />
-        <div className="truncate ui-text-11.5 text-muted">{subtitle}</div>
-      </div>
+    // The tile, title and subtitle are one button, as the design draws it.
+    <div className="min-w-0">
+      <Menu
+        width={360}
+        search={{ placeholder: "Find a board, team or project", query, onQuery: setQuery }}
+        items={items}
+        footer={footer}
+        trigger={(open) => (
+          <button aria-label={`Switch board, current: ${shown.name}`} onClick={open} className="no-drag flex max-w-full items-center gap-2.5 rounded-lg py-1 pl-1 pr-2 text-left hover:bg-hover">
+            <BoardTile tracker={trackerOf(shown.connection)} size={26} />
+            <span className="flex min-w-0 flex-col gap-px">
+              <span className="flex min-w-0 items-center gap-1.5 ui-text-14 font-semibold text-fg">
+                <span className="truncate">{title}</span>
+                <ChevronDown size={13} className="shrink-0 text-muted" />
+              </span>
+              <span className="truncate ui-text-11.5 text-muted">{subtitle}</span>
+            </span>
+          </button>
+        )}
+      />
     </div>
   );
 }
@@ -764,7 +776,7 @@ function Filters({ board, columns }: { board: BoardConfig; columns: BoardColumn[
         }))}
         trigger={(open) => (
           <button onClick={open} className={cx(chip, "text-muted hover:text-fg")}>
-            <Columns3 size={12} />
+            <ColumnsGlyph />
             <span>
               Columns <span className="text-fg">{counts.shown}</span>
               {counts.folded > 0 && ` · ${counts.folded} folded`}
@@ -831,7 +843,7 @@ function TasksList({ host, workspaceId, views, unlinked }: { host: string; works
   const keyOf = (c: Card) => taskId(c.task);
   const toggle = (c: Card) => toggleExpanded(keyOf(c));
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-3.5">
       {groups.map((g) => (
         <section key={g.name} aria-label={g.name} className="mb-4">
           <div className="flex items-center gap-2 border-b border-border pb-1.5 ui-text-13 text-fg">
