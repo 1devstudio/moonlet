@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnsSummary, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
 import { isDimmed } from "./tasksBoard";
 import type { BoardSession } from "./tasksBoard";
 import { type BoardColumn, type BoardConfig, cardFields } from "./boards";
@@ -44,10 +44,10 @@ describe("sidebarBoards (X50 sidebar Boards)", () => {
   });
 });
 
-describe("columnsSummary (X50 header)", () => {
+describe("columnCounts (X50 header)", () => {
   it("counts the shown and folded columns", () => {
-    expect(columnsSummary(OPS)).toBe("Columns 5 · 2 folded");
-    expect(columnsSummary(OPS.slice(1, 4))).toBe("Columns 3");
+    expect(columnCounts(OPS)).toEqual({ shown: 5, folded: 2 });
+    expect(columnCounts(OPS.slice(1, 4))).toEqual({ shown: 3, folded: 0 });
   });
 });
 

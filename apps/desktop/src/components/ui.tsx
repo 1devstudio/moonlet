@@ -4,7 +4,7 @@ import type { AgentState } from "../lib/protocol";
 import { fromOtherDialog, tabWrap } from "../lib/modal";
 
 import { cx } from "../lib/cx";
-import { trackerOf } from "../lib/tasks";
+import { type TrackerKind, trackerOf } from "../lib/tasks";
 
 export { cx };
 
@@ -160,6 +160,19 @@ export function TrackerIcon({ kind, size = 14 }: { kind: keyof typeof TRACKER_MA
     <svg viewBox="0 0 24 24" width={size} height={size} className="shrink-0" fill={m.color} aria-hidden="true">
       <path d={m.d} />
     </svg>
+  );
+}
+
+/** The tinted tile a board's mark sits on, by tracker (the design's board tiles). */
+const TILE: Record<TrackerKind, string> = { github: "var(--color-raised)", linear: "#2b2a3d", jira: "#1d2a3d", clickup: "#2b2a3d" };
+
+/** A tracker's mark on its tinted tile: 26px in the board's header, 16px in lists. GitHub's is GH. */
+export function BoardTile({ tracker, size = 16 }: { tracker: TrackerKind | null; size?: 16 | 26 }) {
+  const big = size === 26;
+  return (
+    <span aria-hidden="true" className={cx("flex shrink-0 items-center justify-center", big ? "h-[26px] w-[26px] rounded-[7px]" : "h-4 w-4 rounded")} style={{ background: TILE[tracker ?? "github"] }}>
+      {tracker && tracker !== "github" ? <TrackerIcon kind={tracker} size={big ? 14 : 10} /> : <span className={cx("font-mono font-bold text-fg", big ? "ui-text-10" : "ui-text-7")}>GH</span>}
+    </span>
   );
 }
 
