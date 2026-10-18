@@ -38,11 +38,16 @@ export function stateOptions(task: Task): StateOption[] {
   ).map(([label, column]) => ({ label, column, current: task.column === column }));
 }
 
+/** Whether Find a task's `query` finds `task`, by key or title. */
+export function findsTask(task: Pick<Task, "key" | "title">, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  return !q || task.key.toLowerCase().includes(q) || task.title.toLowerCase().includes(q);
+}
+
 /** The cards whose key or title has `query` (Find a task, ⌘K in Tasks mode). */
 export function findTasks(board: Board, query: string): Board {
-  const q = query.trim().toLowerCase();
-  if (!q) return board;
-  const keep = (cards: Card[]) => cards.filter((c) => c.task.key.toLowerCase().includes(q) || c.task.title.toLowerCase().includes(q));
+  if (!query.trim()) return board;
+  const keep = (cards: Card[]) => cards.filter((c) => findsTask(c.task, query));
   return { todo: keep(board.todo), in_progress: keep(board.in_progress), in_review: keep(board.in_review), done: keep(board.done) };
 }
 
