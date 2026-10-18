@@ -177,10 +177,10 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
   - story points as `<n> pt`, before the assignee's initials
   - epic or parent and due date, on a line under the title
 - [x] Under Assignee: anyone, a card assigned to someone else is dimmed, unless a session of the user's is on it. (`boardScreen.test.ts` dims someone else's issue that has no session of yours)
-- [ ] A card with no sessions can have a note line instead of `No sessions`. The first that applies:
-  - `Assigned to <name>`: the issue is someone else's.
+- [x] A card can have a note line, the first that applies: (`boardColumns.test.ts` names whose issue it is when it is someone else's and no session is on it, says a merged PR waits for the next column as expected, on a board with several In review columns; `task-trackers.e2e.ts` shows everyone's open issues once the board's Assignee is anyone, others' dimmed (X50))
+  - `Assigned to <name>`, in place of `No sessions`: the issue is someone else's, and no session or worktree of the user's is on it.
   - `Merged · waiting for <column>, as expected`: every session's PR is merged and the task is in an In review column of a board with several (see Out of sync below).
-- [ ] With a session, a card's note line reads `<agent> is fixing <n> failing checks` when the session's PR has failing checks and its agent is working.
+- [x] With a session, a card's note line reads `<agent> is fixing <n> failing checks` when the session's PR has failing checks and its agent is working. (`boardColumns.test.ts` says the agent is fixing the session's failing checks while it works)
 
 ### Out of sync and moves
 

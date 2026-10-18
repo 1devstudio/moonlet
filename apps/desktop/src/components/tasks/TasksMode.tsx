@@ -9,7 +9,7 @@ import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { type Column, type Task, taskId, taskStart, trackerName } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
-import { type BoardWorktree, type Card, type CardRow, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
+import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
 import {
   activityOf,
   boardInput,
@@ -49,7 +49,7 @@ import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, isDimmed, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { asBoard, boardHeader, boardStats, cardFace, columnsSummary, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { BoardMark, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
@@ -259,11 +259,13 @@ function TaskCard({ host, workspaceId, card, fields, selected }: { host: string;
               <span className={cx("font-mono ui-text-11.5 tabular-nums", TONE[r.meta.tone])}>{r.meta.text}</span>
             </button>
           ))}
+          {card.note && <div className="px-1 ui-text-12 text-faint">{card.note}</div>}
         </div>
       ) : (
         <div className="mt-2 flex items-center gap-1.5 ui-text-12 text-faint">
           {card.orphans.length > 0 && <GitBranch size={12} />}
-          <span>{card.empty}</span>
+          {/* A note (X50) says more than "No sessions": whose issue it is. */}
+          <span>{card.note ?? card.empty}</span>
           <button className="ml-auto font-medium text-accent hover:underline" onClick={() => startSession(host, workspaceId, card, card.orphans[0])}>
             {card.orphans.length ? "Start session" : "Start"}
           </button>

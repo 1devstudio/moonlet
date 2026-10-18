@@ -72,6 +72,8 @@ export interface Card {
   drift: Drift | null;
   /** On a board (X50): its column, as the tracker names it. */
   columnName?: string;
+  /** On a board (X50): a line about the card, `Assigned to Kim Park`. */
+  note?: string;
 }
 
 /** How a task's tracker state disagrees with its work, and the fix (X45). */
@@ -88,12 +90,22 @@ export type Board = Record<Exclude<Column, "hidden">, Card[]>;
 
 const PASSING = new Set(["success", "neutral", "skipped"]);
 
+/** A PR's checks that finished: those that failed and those that passed (or were skipped). */
+export function checkCounts(checks: { conclusion: string | null }[]): { failing: number; passed: number } {
+  const done = checks.filter((c) => c.conclusion);
+  const passed = done.filter((c) => PASSING.has(c.conclusion ?? "")).length;
+  return { failing: done.length - passed, passed };
+}
+
+/** Someone else's issue with no session of the user's on it: dimmed under Assignee: anyone, and noted whose it is (X50). */
+export const isDimmed = (card: { task: Pick<Task, "mine">; rows: unknown[] }) => card.task.mine === false && card.rows.length === 0;
+
 /** The most useful fact about a session on its card, first match wins (X45). */
 function rowMeta(s: BoardSession): RowMeta {
   if (s.state === "blocked") return { text: "needs you", tone: "blocked" };
   if (s.pr) {
     if (s.pr.state === "merged") return { text: `#${s.pr.number} merged`, tone: "merged" };
-    if (s.pr.checks.some((c) => c.conclusion && !PASSING.has(c.conclusion))) return { text: `#${s.pr.number} ✕`, tone: "error" };
+    if (checkCounts(s.pr.checks).failing) return { text: `#${s.pr.number} ✕`, tone: "error" };
     return { text: `#${s.pr.number}`, tone: s.pr.state === "closed" ? "error" : "open" };
   }
   if (s.subagents) return { text: `◑ ${s.subagents}`, tone: "muted" };

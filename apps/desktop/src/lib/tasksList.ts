@@ -3,7 +3,7 @@
 import { ago } from "./mobile";
 import type { AgentState } from "./protocol";
 import type { ColumnView } from "./boardColumns";
-import type { Board, Card } from "./tasksBoard";
+import { type Board, type Card, checkCounts } from "./tasksBoard";
 
 export interface ListGroup {
   name: string;
@@ -66,7 +66,6 @@ export interface ListRow {
   updated: string;
 }
 
-const PASSING = new Set(["success", "neutral", "skipped"]);
 
 /** A task's row: its sessions' glyphs and a summary, its PR, its worktrees. */
 export function listRow(card: Card, now = Date.now()): ListRow {
@@ -86,8 +85,7 @@ export function listRow(card: Card, now = Date.now()): ListRow {
   if (p?.state === "merged") pr = { pr: `#${p.number} merged`, prTone: "merged" };
   else if (p?.state === "closed") pr = { pr: `#${p.number} closed`, prTone: "error" };
   else if (p) {
-    const failing = p.checks.filter((c) => c.conclusion && !PASSING.has(c.conclusion)).length;
-    const passed = p.checks.filter((c) => c.conclusion && PASSING.has(c.conclusion)).length;
+    const { failing, passed } = checkCounts(p.checks);
     pr = failing
       ? { pr: `#${p.number} · ${failing} failing`, prTone: "error" }
       : { pr: p.checks.length ? `#${p.number} · ${passed}/${p.checks.length} ✓` : `#${p.number}`, prTone: "open" };
