@@ -385,6 +385,9 @@ export function toolGroupStatus(tools: readonly ChatItem[]): ToolCall["status"] 
 /** Thinking squeezed onto one line for its collapsed row. */
 export const thinkingPreview = (text: string) => text.replace(/\s+/g, " ").trim();
 
+/** Thinking for its opened row, without the blank lines around it: Claude ends every thought with "\n\n". */
+export const thinkingBody = (text: string) => text.replace(/^\s*\n/, "").trimEnd();
+
 /** The whole command of a shell call, for its opened row: the row itself shows
  *  only the summary's first line. Null for other tools. */
 export function toolCommand(tool: ToolCall): string | null {
