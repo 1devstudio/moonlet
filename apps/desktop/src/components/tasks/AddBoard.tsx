@@ -7,11 +7,13 @@ import {
   alreadyAdded,
   byGroup,
   canContinue,
+  canSplit,
   cardChoices,
   groupsStatuses,
   groupStatus,
   pausedPreview,
   splitStatus,
+  statusName,
   changedCategories,
   clash,
   columnAt,
@@ -107,9 +109,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
   // Each column's category as the tracker suggested it, to outline one the user changed.
   const [suggested, setSuggested] = useState<Partial<Record<string, BoardColumn["category"]>>>({});
   // The row being dragged in step 3.
-  const dragged = useRef<number | null>(null);
-  // A JQL board's status being dragged onto another column (X50).
-  const draggedStatus = useRef<string | null>(null);
+  // What is being dragged: a column by its grip, or a JQL board's status onto another column (X50).
+  const dragged = useRef<{ column: number } | { status: string } | null>(null);
   const [preview, setPreview] = useState<BoardPreview | null>(null);
   // A Project's number field as last previewed, so its box keeps its name while the preview reloads.
   const [numberField, setNumberField] = useState<string | null>(null);
@@ -561,15 +562,13 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       role="row"
                       aria-label={c.name}
                       // A column dragged by its grip lands here, and a JQL board's status joins it.
-                      onDragOver={(e) => (dragged.current !== null || draggedStatus.current !== null) && e.preventDefault()}
+                      onDragOver={(e) => dragged.current && e.preventDefault()}
                       onDrop={(e) => {
-                        const from = dragged.current;
-                        const status = draggedStatus.current;
+                        const what = dragged.current;
                         dragged.current = null;
-                        draggedStatus.current = null;
-                        if (from === null && status === null) return;
+                        if (!what) return;
                         e.preventDefault();
-                        setDraft((d) => ({ ...d, columns: status !== null ? groupStatus(d.columns, status, i) : dropColumn(d.columns, from!, i) }));
+                        setDraft((d) => ({ ...d, columns: "status" in what ? groupStatus(d.columns, what.status, i, names) : dropColumn(d.columns, what.column, i) }));
                       }}
                       className={cx("grid items-center gap-2 border-b border-border px-2 py-1.5 last:border-b-0", grid)}
                     >
@@ -579,7 +578,7 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                           title={`Drag ${c.name}`}
                           aria-label={`Drag ${c.name}`}
                           onDragStart={(e) => {
-                            dragged.current = i;
+                            dragged.current = { column: i };
                             e.dataTransfer.effectAllowed = "move";
                             e.dataTransfer.setData("text/plain", c.name);
                           }}
@@ -598,26 +597,27 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       <span className="min-w-0">
                         <span className={cx("block truncate ui-text-13", c.show === "hide" ? "text-faint" : "text-fg")}>{c.name}</span>
                         {grouping ? (
-                          <span className="flex flex-wrap gap-1 pt-0.5">
+                          <span role="list" aria-label={`Statuses of ${c.name}`} className="flex flex-wrap gap-1 pt-0.5">
                             {c.statuses.map((st) => (
                               <span
                                 key={st}
+                                role="listitem"
                                 draggable
-                                aria-label={`Drag status ${names[st] ?? st}`}
+                                aria-label={`Drag status ${statusName(names, st)}`}
                                 onDragStart={(e) => {
-                                  draggedStatus.current = st;
+                                  dragged.current = { status: st };
                                   e.dataTransfer.effectAllowed = "move";
-                                  e.dataTransfer.setData("text/plain", names[st] ?? st);
+                                  e.dataTransfer.setData("text/plain", statusName(names, st));
                                 }}
-                                onDragEnd={() => (draggedStatus.current = null)}
+                                onDragEnd={() => (dragged.current = null)}
                                 className="inline-flex cursor-grab items-center gap-0.5 rounded-[4px] bg-panel-2 px-1.5 ui-text-11.5 text-muted"
                               >
-                                {names[st] ?? st}
-                                {c.statuses.length > 1 && (
+                                {statusName(names, st)}
+                                {canSplit(draft.columns, st, names) && (
                                   <button
-                                    title={`Give ${names[st] ?? st} its own column`}
-                                    aria-label={`Give ${names[st] ?? st} its own column`}
-                                    onClick={() => setDraft((d) => ({ ...d, columns: splitStatus(d.columns, st, names) }))}
+                                    title={`Give ${statusName(names, st)} its own column`}
+                                    aria-label={`Give ${statusName(names, st)} its own column`}
+                                    onClick={() => setDraft((d) => ({ ...d, columns: splitStatus(d.columns, st, names, suggested) }))}
                                     className="text-faint hover:text-fg"
                                   >
                                     <X size={10} />

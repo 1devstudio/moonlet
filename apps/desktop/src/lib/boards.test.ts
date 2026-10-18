@@ -324,6 +324,17 @@ describe("syncedColumns (X50 a board's columns after a sync)", () => {
     ]);
   });
 
+  it("keeps a JQL board's grouped statuses together on each sync, and gives a status seen later a column of its own", () => {
+    const grouped: BoardColumn = { name: "In Progress", statuses: ["3", "10000"], category: "in_progress" };
+    const board: BoardConfig = { ...base, origin: { kind: "jql", query: "project = EX" }, columns: [grouped] };
+    const fresh: BoardColumn[] = [
+      { name: "To Do", statuses: ["10000"], category: "todo" },
+      { name: "In Progress", statuses: ["3"], category: "in_progress" },
+      { name: "QA Testing", statuses: ["5"], category: "in_review" },
+    ];
+    expect(syncedColumns(board, fresh)).toEqual([grouped, { name: "QA Testing", statuses: ["5"], category: "in_review" }]);
+  });
+
   it("matches a Jira board's, starts from the tracker's with the old mapping, and keeps what it has without news", () => {
     const board: BoardConfig = { ...base, origin: { kind: "jira_board", board: 10 }, columns: [todo, review] };
     expect(syncedColumns(board, [todo])).toEqual([todo]);
