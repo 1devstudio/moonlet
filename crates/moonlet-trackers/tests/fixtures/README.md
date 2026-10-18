@@ -22,7 +22,7 @@ Gathered on 2026-10-15 from the trackers' official API documentation; no live ac
 | `jira-error-401.json` | VERBATIM+ | the documented error body shape (`errorMessages`) |
 | `jira-error-401.txt` | CAPTURED | what Jira actually sends with bad credentials: plain text with a JSON content type |
 | `clickup-user.json`, `clickup-teams.json`, `clickup-spaces.json`, `clickup-folders.json`, `clickup-list.json`, `clickup-comment.json` | VERBATIM | https://developer.clickup.com/reference (append `.md` to a page for its OpenAPI) |
-| `clickup-lists.json`, `clickup-tasks.json`, `clickup-update-task-request.json`, `clickup-comment-request.json` | VERBATIM+ | same; tasks use the object form of `assignees` and `tags` from the Get Task example |
+| `clickup-lists.json`, `clickup-tasks.json`, `clickup-update-task-request.json`, `clickup-comment-request.json` | VERBATIM+ | same; tasks use the object form of `assignees` and `tags` from the Get Task example, and its `due_date` on the first task, `null` on the second (X50) |
 | `clickup-error-401.json`, `clickup-error-no-header.json` | CAPTURED | a bad token, and no Authorization header |
 | `jira-boards.json` | CAPTURED, SANITISED | `GET /rest/agile/1.0/board`; four of the site's boards (Scrum, Kanban, simple, and one with no project) |
 | `jira-board-scrum-configuration.json` | CAPTURED, SANITISED | `GET /rest/agile/1.0/board/{id}/configuration` of a Scrum board; `max` added on one column in the documented `columnConfig` shape, since none of the site's columns had a limit |

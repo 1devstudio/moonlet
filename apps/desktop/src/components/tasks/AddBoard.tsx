@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUp, ArrowRight, Check, Lock, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   alreadyAdded,
+  byGroup,
   canContinue,
   cardChoices,
   clash,
@@ -42,6 +43,8 @@ interface Choice {
   kind?: string;
   /** Whether it has sprints or cycles to follow. */
   sprints?: boolean;
+  /** A ClickUp list's space and folder, which the list is grouped by. */
+  group?: string;
   origin: Origin;
 }
 
@@ -93,7 +96,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
         ? hostsApi.trackerBoards(draft.connection).then((bs) => bs.map((b): Choice => ({ key: b.project ?? String(b.id), name: b.name, kind: jiraBoardType(b.kind), sprints: jiraSprints(b.kind), origin: { kind: "jira_board", board: b.id } })))
         : hostsApi
             .trackerSources(draft.connection)
-            .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, ...(s.cycles && { kind: "Cycles", sprints: true }), origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
+            .then((ss) => ss.map((s): Choice => ({ key: s.key, name: s.name, ...(s.cycles && { kind: "Cycles", sprints: true }),
+                ...(s.group && { group: s.group }), origin: kind === "linear" ? { kind: "linear_team", team: s.key } : { kind: "clickup_list", list: s.key } })));
     ask.then(
       (c) => !stale && setChoices(c),
       (e) => !stale && setChoicesError(message(e)),
@@ -327,12 +331,15 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                       {!choices && !choicesError && <p className="ui-text-12.5 text-muted">Loading…</p>}
                       {choices && choices.length === 0 && <p className="ui-text-12.5 text-muted">{tracker === "github" ? "No project of this workspace has a GitHub origin." : "Nothing to pick."}</p>}
                       <div role="radiogroup" className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
-                        {(choices ?? []).map((c) => {
+                        {byGroup(choices ?? []).flatMap(({ group, rows }) => [
+                          // A ClickUp list's space and folder heads its lists.
+                          ...(group ? [<div key={`group ${group}`} className="bg-bg/40 px-3 py-1.5 ui-text-11.5 font-medium text-faint">{group}</div>] : []),
+                          ...rows.map((c) => {
                           const added = alreadyAdded(config.boards, draft.workspace, draft.connection ?? "", c.origin);
                           const on = JSON.stringify(draft.origin) === JSON.stringify(c.origin);
                           return (
                             <button
-                              key={JSON.stringify(c.origin)}
+                              key={`${group ?? ""} ${JSON.stringify(c.origin)}`}
                               role="radio"
                               aria-checked={on}
                               disabled={added}
@@ -350,7 +357,8 @@ export function AddBoardDialog({ host, workspace, boardId, connection }: { host:
                               <span className="w-[100px] text-right ui-text-12 text-faint">{added ? "Already added" : on && draft.columns.length ? `${draft.columns.length} columns` : ""}</span>
                             </button>
                           );
-                        })}
+                          }),
+                        ])}
                       </div>
                     </section>
                   )
