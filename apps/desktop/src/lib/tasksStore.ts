@@ -1,7 +1,7 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { addRepoBoards, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
+import { addRepoBoards, NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor } from "./boardColumns";
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
@@ -487,7 +487,7 @@ export interface BoardPreview {
   error: string | null;
   /** A GitHub Project's first number field, which Cards show offers; null for any other board. */
   numberField: string | null;
-  /** A JQL board's site status names by id, for step 3; empty for any other board. */
+  /** Status names by id for step 3: a JQL board's site's, a GitHub Project's options'; empty for any other board. */
   statusNames: Record<string, string>;
 }
 
@@ -509,7 +509,7 @@ interface BoardRead {
   sprint: BoardData["sprint"];
   kind?: string;
   project?: ProjectMeta;
-  /** A JQL board's site status names by id. */
+  /** Status names by id: a JQL board's site's, a GitHub Project's options'. */
   statusNames?: Record<string, string>;
   /** Why it failed; null when it worked. */
   error: string | null;
@@ -568,7 +568,7 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
     try {
       const [own, all] = await Promise.all([ask(true), everyoneToo ? ask(false) : null]);
       const list = ownAndOthers(own.items, all?.items ?? null, (i) => i.item);
-      const columns = await hostsApi.githubProjectColumns(own.options.map((o) => o.name));
+      const columns = await hostsApi.githubProjectColumns(own.options);
       // Whether its items can be moved: gh's project scope (X50), read at most once a minute.
       if (Date.now() - (scopesReadAt.get(host) ?? 0) > 60_000) {
         scopesReadAt.set(host, Date.now());
@@ -578,7 +578,9 @@ async function readOrigin(host: string, b: BoardConfig, projects: { path: string
         );
       }
       const project = { id: own.id, field: own.status_field, options: own.options, numberField: own.number_field ?? null };
-      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id), mine })), columns, sprint: null, project, error: null };
+      // Its columns hold option ids; step 3 names them by the options' names.
+      const statusNames = { "": NO_STATUS, ...Object.fromEntries(own.options.map((o) => [o.id, o.name])) };
+      return { tasks: list.map(({ it, mine }) => ({ ...taskFromProjectItem(it, GITHUB, own.id, own.options), mine })), columns, sprint: null, project, statusNames, error: null };
     } catch (e) {
       return none(message(e));
     }
@@ -692,7 +694,7 @@ async function moveProjectItem(host: string, workspaceId: string, task: Task, st
   const meta = Object.values(data?.boards ?? {}).find((b) => b.project && b.project.id === own?.id)?.project;
   const item = own?.item;
   const req = meta && item ? projectMove(meta, item, status) : null;
-  if (!req) throw new Error(`The Project has no Status called ${status}`);
+  if (!req) throw new Error("The Project no longer has that Status option");
   await rpc(host, M.ghProjectMove, req);
 }
 

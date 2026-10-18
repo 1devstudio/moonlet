@@ -18,16 +18,28 @@ export interface ColumnView {
 }
 
 /**
- * The key a board column lists a task's status by: Jira's status id, else its
- * state's name; a GitHub repository issue's is `open`, `completed` or
- * `not_planned` (how it was closed).
+ * The keys a board column may list a task by, the first one a column has
+ * wins: Jira's status id, else its state's name; a GitHub repository issue's
+ * `open`, `completed` or `not_planned` (how it was closed). A GitHub
+ * Project's item goes by its Status option's id (X50), so a renamed option
+ * keeps its column, then by the option's name, for a board still saved with
+ * names; without a Status, `""` (No Status).
  */
-export function statusKey(task: Task): string {
-  // A GitHub Project's item is where its Status puts it (X50); without one, `""` (No Status).
-  if (task.github?.project) return task.github.project.status ?? "";
-  if (task.github) return task.column === "open" ? "open" : task.column === "done" ? "completed" : "not_planned";
-  return task.tracker?.statusId || task.tracker?.state || "";
+function statusKeys(task: Task): string[] {
+  const project = task.github?.project;
+  if (project) return project.status ? [project.option ?? "", project.status].filter(Boolean) : [""];
+  if (task.github) return [task.column === "open" ? "open" : task.column === "done" ? "completed" : "not_planned"];
+  return [task.tracker?.statusId || task.tracker?.state || ""];
 }
+
+/** The entry of `index`, by status, that holds `task`, if any. */
+function indexOf<T>(index: Map<string, T>, task: Task): T | undefined {
+  for (const key of statusKeys(task)) if (index.has(key)) return index.get(key);
+  return undefined;
+}
+
+/** Whether `column` holds `task`, by any of its keys. */
+export const holds = (column: BoardColumn, task: Task) => statusKeys(task).some((k) => column.statuses.includes(k));
 
 /**
  * Tracker tasks in their board column's category (X50), so out of sync,
@@ -40,7 +52,7 @@ export function categorize(columns: BoardColumn[], tasks: Task[]): Task[] {
   for (const c of columns) for (const s of c.statuses) index.set(s, c);
   return tasks.map((task) => {
     if (task.github && !task.github.project) return task;
-    const c = index.get(statusKey(task));
+    const c = indexOf(index, task);
     return { ...task, column: c && c.show !== "hide" ? c.category : "hidden" };
   });
 }
@@ -56,7 +68,7 @@ export function boardView(columns: BoardColumn[], input: BoardInput): ColumnView
   // and the board column it sits in.
   const placed = new Map<Task, number>();
   for (const task of input.tasks) {
-    const i = index.get(statusKey(task));
+    const i = indexOf(index, task);
     if (i !== undefined && columns[i].show !== "hide") placed.set({ ...task, column: columns[i].category }, i);
   }
   const byColumn = columns.map((): Card[] => []);
