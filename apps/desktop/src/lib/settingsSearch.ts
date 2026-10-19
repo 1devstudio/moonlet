@@ -3,7 +3,7 @@
 
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "./agents";
 import { EDITOR_THEMES, resolveEditorTheme } from "./editorThemes";
-import type { ProjectConfig, WorkspaceColor } from "./protocol";
+import type { GitSettings, ProjectConfig, WorkspaceColor } from "./protocol";
 import { routeKey, type SettingsRoute } from "./settingsPage";
 import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
@@ -28,6 +28,8 @@ export interface SearchContext {
   workspaces: { host: string; id: string; name: string; color: WorkspaceColor; profile: string }[];
   /** `config`: the project's `.moonlet/config.toml`, once read. */
   projects: { host: string; id: string; name: string; base_branch: string; config?: ProjectConfig | null }[];
+  /** This Mac's Git settings (X55), once read. */
+  git?: GitSettings | null;
   /** `trackers.toml` (X44), once read. */
   trackers?: TrackersConfig;
 }
@@ -89,6 +91,15 @@ function trackerEntries(t: TrackersConfig | undefined): [string | undefined, str
   ];
 }
 
+/** Settings › Git rows (X55) as `[setting, label, value, also]`. */
+function gitEntries(g: GitSettings | null | undefined): [string, string, string, string?][] {
+  if (!g) return [];
+  return [
+    ["git-stage-all", "Stage all changes before committing", onOff(g.stage_all), "commit"],
+    ["git-draft-prs", "Open pull requests as drafts", onOff(g.draft_prs), "pull request PR"],
+  ];
+}
+
 function index(c: SearchContext): Entry[] {
   const s = c.settings;
   const t = s.term;
@@ -126,6 +137,7 @@ function index(c: SearchContext): Entry[] {
     app("notifications", "App › Notifications", "sound-blocked", "Sound when an agent needs you", soundFor(s.sounds, "blocked") ?? "Off"),
     app("notifications", "App › Notifications", "sound-done", "Sound when an agent is done", soundFor(s.sounds, "done") ?? "Off"),
     app("notifications", "App › Notifications", "sound-error", "Sound when an agent fails", soundFor(s.sounds, "error") ?? "Off"),
+    ...gitEntries(c.git).map(([setting, label, value, also]) => app("git", "App › Git", setting, label, value, also)),
     ...trackerEntries(c.trackers).map(([setting, label, value, also]) => app("trackers", "App › Task trackers", setting, label, value, also)),
     app("shortcuts", "App › Keyboard shortcuts", undefined, "Keyboard shortcuts", custom ? `${custom} custom` : "", "keys bindings"),
     ...ACTIONS.map((a) => app("shortcuts", "App › Keyboard shortcuts", `shortcut-${a.id}`, a.label, keys[a.id] ? keyLabel(keys[a.id]) : "Not set", "shortcut key")),

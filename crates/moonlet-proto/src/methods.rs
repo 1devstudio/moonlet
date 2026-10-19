@@ -91,6 +91,11 @@ pub const GIT_BRANCHES: &str = "git.branches";
 pub const GIT_BASE_STATUS: &str = "git.base_status";
 pub const GIT_PULL_BASE: &str = "git.pull_base";
 pub const GIT_ORIGIN_URL: &str = "git.origin_url";
+/// The host's Git settings (X55): `{}` → `GitSettings`.
+pub const GIT_SETTINGS: &str = "git.settings";
+/// Changes some of the host's Git settings: a partial `GitSettings` → the
+/// whole, as saved (X55).
+pub const GIT_SET_SETTINGS: &str = "git.set_settings";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
 pub const GH_ISSUES: &str = "gh.issues";
 pub const SHELL_HISTORY: &str = "shell.history";
