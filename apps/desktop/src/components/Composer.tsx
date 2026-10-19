@@ -521,13 +521,13 @@ export function Composer({
             <>
               <GitPullRequest size={13} className="shrink-0 text-done" />
               <span className="shrink-0 text-done">PR #{row.number}</span>
-              <span className="min-w-0 truncate font-mono text-fg">{row.name}</span>
+              <span className="min-w-0 shrink-[100000] truncate font-mono text-fg">{row.name}</span>
               {row.detail && <span className="shrink-0 text-faint">{row.detail}</span>}
             </>
           ) : (
             <>
               <GitBranch size={13} className="shrink-0" />
-              {row.name ? <span className="min-w-0 truncate font-mono text-fg">{row.name}</span> : <span className="shrink-0 text-fg">New branch</span>}
+              {row.name ? <span className="min-w-0 shrink-[100000] truncate font-mono text-fg">{row.name}</span> : <span className="shrink-0 text-fg">New branch</span>}
               <span className="shrink-0 text-faint">{row.detail}</span>
               {row.clear && (
                 <IconButton
@@ -544,15 +544,16 @@ export function Composer({
               )}
             </>
           )}
-          {!editingFrom &&
-            addDirs.map((d) => (
-              <span key={d} className="flex min-w-0 max-w-[160px] shrink items-center gap-1.5 rounded-md bg-hover px-2 py-0.5 font-mono ui-text-12" title={d}>
-                <FolderPlus size={12} className="shrink-0" /> <span className="truncate">{d.slice(d.lastIndexOf("/") + 1)}</span>
-                <button title={`Remove ${d}`} onClick={() => setAddDirs((ds) => ds.filter((x) => x !== d))} className="hover:text-fg">
-                  <X size={11} />
-                </button>
-              </span>
-            ))}
+          {/* The branch name gives way before the chips: its shrink-[100000] leaves them
+              less than a layout unit of the shortfall, so they keep their whole name. */}
+          {addDirs.map((d) => (
+            <span key={d} className="flex min-w-0 max-w-[160px] shrink items-center gap-1.5 rounded-md bg-hover px-2 py-0.5 font-mono ui-text-12" title={d}>
+              <FolderPlus size={12} className="shrink-0" /> <span className="truncate">{d.slice(d.lastIndexOf("/") + 1)}</span>
+              <button title={`Remove ${d}`} onClick={() => setAddDirs((ds) => ds.filter((x) => x !== d))} className="hover:text-fg">
+                <X size={11} />
+              </button>
+            </span>
+          ))}
           <span className="flex-1" />
           {task?.assign && (
             <label className="flex shrink-0 items-center gap-1.5" title={task.assign.title}>
