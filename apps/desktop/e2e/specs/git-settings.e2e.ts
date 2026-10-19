@@ -2,7 +2,7 @@
 // dialogs it names start the way it says.
 
 import { $, browser, expect } from "@wdio/globals";
-import { closeSettings, openSettings, rpc, sel, SESSION, world } from "../fixtures";
+import { closeSettings, fill, openSettings, rpc, sel, SESSION, world } from "../fixtures";
 
 const w = world();
 const drafts = sel.settingsSwitch("Open pull requests as drafts");
@@ -44,5 +44,21 @@ describe("Git settings", () => {
     await expect($(`${prDialog}//label[contains(normalize-space(), "Draft")]/input`)).toBeSelected();
     await $(`${prDialog}//button[normalize-space()="Cancel"]`).click();
     await expect($(prDialog)).not.toBeExisting();
+  });
+
+  it("starts Commit without staging everything when switched off", async () => {
+    await openSettings("Git");
+    await $(sel.settingsSwitch("Stage all changes before committing")).click();
+    await browser.waitUntil(() => !rpc<{ stage_all: boolean }>(w, "git.settings", {}).stage_all, { timeoutMsg: "stage_all was never saved" });
+    await closeSettings();
+    await $(sel.sessionRow(SESSION)).click();
+    await press("k", "KeyK", { metaKey: true });
+    await fill('//div[@role="dialog"][@aria-label="Run action"]//input', "commit");
+    await press("Enter", "Enter");
+    const commit = '//div[@role="dialog"][.//*[normalize-space()="Commit changes"]]';
+    await expect($(commit)).toBeDisplayed();
+    await expect($(`${commit}//label[contains(normalize-space(), "Stage all changes first")]/input`)).not.toBeSelected();
+    await $(`${commit}//button[normalize-space()="Cancel"]`).click();
+    rpc(w, "git.set_settings", { stage_all: true });
   });
 });
