@@ -1019,6 +1019,9 @@ function handleEvent(e: DaemonEvent) {
     case EV.workspacesChanged:
       set((s) => ({ workspaces: { ...s.workspaces, [host]: data as Workspace[] } }));
       break;
+    case EV.gitSettingsChanged:
+      set((s) => ({ gitSettings: { ...s.gitSettings, [host]: data as GitSettings } }));
+      break;
     case EV.sectionsChanged:
       set((s) => ({ sections: { ...s.sections, [host]: data as Section[] } }));
       break;

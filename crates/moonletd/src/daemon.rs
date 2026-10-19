@@ -688,9 +688,9 @@ impl Daemon {
             m::SESSION_ARCHIVE => {
                 let r: m::SessionArchive = params(p)?;
                 let id = r.id.clone();
-                w.archive(r).await.map_err(internal)?;
+                let done = w.archive(r).await.map_err(internal)?;
                 self.reads.clear_grant(&id);
-                ok(true)
+                ok(done)
             }
             m::SESSION_UNARCHIVE => {
                 let r: m::IdRef = params(p)?;
@@ -766,7 +766,11 @@ impl Daemon {
                     .map_err(internal)?)
             }
             m::GIT_SETTINGS => ok(git_settings::load(&git_settings::path())),
-            m::GIT_SET_SETTINGS => ok(git_settings::update(&git_settings::path(), p).map_err(internal)?),
+            m::GIT_SET_SETTINGS => {
+                let saved = git_settings::update(&git_settings::path(), p).map_err(internal)?;
+                self.terminals.emit(Message::event(m::EV_GIT_SETTINGS_CHANGED, &saved));
+                ok(saved)
+            }
             m::GIT_ORIGIN_URL => {
                 let r: m::GitPath = params(p)?;
                 ok(git::origin_url(&path(&r.path)).await)

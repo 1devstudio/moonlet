@@ -263,7 +263,7 @@ async fn workspace_lifecycle_over_rpc() {
         .await
         .unwrap();
     assert_eq!(shell.cwd, ws.path);
-    let _: bool = c
+    let _: moonlet_proto::types::SessionArchived = c
         .request(methods::SESSION_ARCHIVE, serde_json::json!({"id": ws.id}))
         .await
         .unwrap();
@@ -566,6 +566,22 @@ async fn git_settings_are_kept_by_the_daemon_in_git_toml() {
     let s: GitSettings = other.request(methods::GIT_SETTINGS, serde_json::json!({})).await.unwrap();
     assert!(s.draft_prs);
     assert!(s.stage_all);
+
+    // Every client hears of a change, such as the app of one made with the CLI.
+    let _: GitSettings = c
+        .request(methods::GIT_SET_SETTINGS, serde_json::json!({"stage_all": false}))
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let f = tokio::time::timeout_at(deadline, other.next_frame()).await.expect("timeout").unwrap().unwrap();
+        let Frame::Json(Message::Event { name, data }) = f else { continue };
+        if name == methods::EV_GIT_SETTINGS_CHANGED {
+            assert_eq!(data["stage_all"], false);
+            assert_eq!(data["draft_prs"], true);
+            break;
+        }
+    }
 }
 
 fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
@@ -671,6 +687,57 @@ async fn starting_from_origin_without_one_starts_from_the_local_base() {
         git_in(std::path::Path::new(&s.path), &["rev-parse", "HEAD"]).unwrap(),
         git_in(&repo, &["rev-parse", "main"]).unwrap()
     );
+}
+
+#[tokio::test]
+async fn archiving_can_delete_the_branch_on_origin_too() {
+    use moonlet_proto::types::{Project, SessionArchived};
+    let d = TestDaemon::start().await;
+    let root = d.home.path();
+    let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
+    let (origin, repo) = (root.join("origin.git"), root.join("repo"));
+    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
+    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    let mut c = d.client().await;
+    let p: Project = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    let s = new_session(&mut c, &p.id, "Merged work").await;
+    git(std::path::Path::new(&s.path), &["push", "-q", "-u", "origin", "HEAD"]);
+    assert_eq!(git(&origin, &["branch", "--list", &s.branch]).trim_start_matches(['*', ' ']), s.branch);
+
+    let done: SessionArchived = c
+        .request(
+            methods::SESSION_ARCHIVE,
+            serde_json::json!({"id": s.id, "delete_branch": true, "delete_remote": true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(done.remote_error, None);
+    assert_eq!(git(&origin, &["branch", "--list", &s.branch]), "");
+    assert_eq!(git(&repo, &["branch", "--list", &s.branch]), "");
+}
+
+#[tokio::test]
+async fn archiving_still_archives_when_origin_refuses_the_delete() {
+    use moonlet_proto::types::{Session, SessionArchived};
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (_repo, p) = project_with_repo(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "No origin").await;
+    let done: SessionArchived = c
+        .request(
+            methods::SESSION_ARCHIVE,
+            serde_json::json!({"id": s.id, "delete_branch": true, "delete_remote": true}),
+        )
+        .await
+        .unwrap();
+    assert!(done.remote_error.is_some());
+    let list: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    assert!(list.iter().find(|x| x.id == s.id).unwrap().archived);
 }
 
 #[tokio::test]

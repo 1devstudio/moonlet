@@ -2,7 +2,8 @@
 // dialogs it names start the way it says.
 
 import { $, browser, expect } from "@wdio/globals";
-import { closeSettings, fill, openSettings, projectId, rpc, sel, SESSION, world } from "../fixtures";
+import { execFileSync } from "node:child_process";
+import { choose, closeSettings, fill, openSettings, projectId, rpc, sel, SESSION, world } from "../fixtures";
 
 const w = world();
 const drafts = sel.settingsSwitch("Open pull requests as drafts");
@@ -20,7 +21,7 @@ async function press(key: string, code: string, mods: { metaKey?: boolean; shift
 
 describe("Git settings", () => {
   after(() => {
-    rpc(w, "git.set_settings", { draft_prs: false, branch_prefix: "moonlet/" });
+    rpc(w, "git.set_settings", { draft_prs: false, branch_prefix: "moonlet/", archive_branch: "merged" });
   });
 
   it("is a page of the App group", async () => {
@@ -63,6 +64,26 @@ describe("Git settings", () => {
     await $(sel.settingsOption("Fetch from origin", "5 min")).click();
     await browser.waitUntil(() => rpc<{ fetch_minutes: number }>(w, "git.settings", {}).fetch_minutes === 5, { timeoutMsg: "5 min was never saved" });
     await closeSettings();
+  });
+
+  it("archives as the Local branch setting says, without asking", async () => {
+    await openSettings("Git");
+    await choose(sel.settingsField("Local branch"), "always");
+    await expect($(sel.text("Deleted with git branch -D, merged or not."))).toBeDisplayed();
+    await browser.waitUntil(() => rpc<{ archive_branch: string }>(w, "git.settings", {}).archive_branch === "always", { timeoutMsg: "Always delete was never saved" });
+    await closeSettings();
+
+    const s = rpc<{ branch: string }>(w, "session.create", { project_id: projectId(w), name: "Throwaway", agent: "none" });
+    await $(sel.sessionRow("Throwaway")).click();
+    await $('button[title="More"]').click();
+    await $(sel.button("Archive session…")).click();
+    await expect($(sel.text('Archive "Throwaway"? Its terminals stop and the worktree folder is removed. The branch is deleted too.'))).toBeDisplayed();
+    await expect($(`${sel.confirm("Archive session")}//input[@type="checkbox"]`)).not.toBeExisting();
+    await $(sel.confirmButton("Archive")).click();
+    await expect($(sel.sessionRow("Throwaway"))).not.toBeExisting({ wait: 15_000 });
+    await browser.waitUntil(() => execFileSync("git", ["-C", w.repo, "branch", "--list", s.branch], { encoding: "utf8" }).trim() === "", { timeoutMsg: "the branch is still there" });
+    // Specs share the daemon: put the default back at once (confirm-modal asks).
+    rpc(w, "git.set_settings", { archive_branch: "merged" });
   });
 
   it("starts Create pull request as a draft", async () => {

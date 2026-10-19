@@ -46,10 +46,10 @@ Settings gains a **Git** page under App: how new sessions name and start their b
 
 ### Archiving a session
 
-- [ ] "Worktree folder": Remove (default) or Keep. Kept folders stay on disk and the archive prompt says so; unarchiving reuses them (as today).
-- [ ] "Local branch": Ask each time (the prompt's "Also delete the branch" checkbox, as today), Keep, Delete when its PR merged (default), Always delete. The hint under it explains the picked option.
-- [ ] With "Delete when its PR merged", the branch is deleted when the session's PR is known to be merged, and kept otherwise. The prompt says which.
-- [ ] "Also delete the branch on origin" (default off): when the session's PR merged and the local branch is deleted, `origin/<branch>` is deleted too. A failure to delete it on origin does not stop the archive; it shows as a toast.
+- [x] "Worktree folder": Remove (default) or Keep. Kept folders stay on disk and the archive prompt says so; unarchiving reuses them (as today).
+- [x] "Local branch": Ask each time (the prompt's "Also delete the branch" checkbox, as today), Keep, Delete when its PR merged (default), Always delete. The hint under it explains the picked option. A kept folder keeps its branch (it is checked out there), and the project's base branch is never deleted.
+- [x] With "Delete when its PR merged", the branch is deleted when the session's PR is known to be merged, and kept otherwise. The prompt says which.
+- [x] "Also delete the branch on origin" (default off): when the session's PR merged and the local branch is deleted, `origin/<branch>` is deleted too. A failure to delete it on origin does not stop the archive; it shows as a toast.
 - [ ] "Warn before losing unpushed work" (default on): before archiving, moonlet reads the session's uncommitted files (when the folder will be removed) and its commits not on origin (when the branch will be deleted, or the folder removed while the branch has no upstream).
 
 ### Archive prompt with unpushed work
@@ -71,9 +71,10 @@ As the design (`Settings · Git` and `Archive prompt · unpushed work`): page he
 
 - `git.settings` `{}` → `GitSettings`.
 - `git.set_settings` `{ ...partial GitSettings }` → `GitSettings` (the whole, after the change). Refuses an invalid branch prefix.
+- Event `git.settings_changed`: the whole `GitSettings` after a change, to every client (a change made with the CLI reaches the app).
 - `git.unpushed` `{ path, branch, files: bool }` → `{ files: [{ status, path }], commits, upstream }`.
 - `git.push` `{ path }`: `git push -u origin HEAD`.
-- `session.archive` gains `delete_remote` (default false).
+- `session.archive` gains `delete_remote` (default false) and returns `{ remote_error }`: why origin refused the delete, if it did.
 - `session.create` reads the host's prefix and start point when `branch` and `from` are absent. New branches are created with `--no-track`.
 - `daemon.info` gains `data_dir`, the daemon's data folder (the page shows its `worktrees`).
 

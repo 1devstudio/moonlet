@@ -3,7 +3,8 @@ import { archiveSession } from "./actions";
 import { LOADERS } from "./archiveLoader";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
-import type { Session } from "./protocol";
+import type { PullRequest, Session } from "./protocol";
+import { DEFAULT_GIT_SETTINGS } from "./gitSettings";
 
 const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", () => ({ rpc: daemon.rpc, sendInput: vi.fn() }));
@@ -31,7 +32,14 @@ const ws: Session = {
 describe("archiveSession", () => {
   beforeEach(() => {
     daemon.rpc.mockReset();
-    useStore.setState({ sessions: { local: [ws] }, selected: { host: "local", session: "s1" }, toasts: [], archiving: {} });
+    useStore.setState({
+      sessions: { local: [ws] },
+      selected: { host: "local", session: "s1" },
+      toasts: [],
+      archiving: {},
+      gitSettings: { local: { ...DEFAULT_GIT_SETTINGS, archive_branch: "ask" } },
+      prs: {},
+    });
     reply = { ok: true, checked: false };
     vi.useFakeTimers();
   });
@@ -42,7 +50,7 @@ describe("archiveSession", () => {
     const done = archiveSession();
     await vi.runAllTimersAsync();
     await done;
-    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.archive", { id: "s1", remove_worktree: true, delete_branch: false });
+    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.archive", { id: "s1", remove_worktree: true, delete_branch: false, delete_remote: false });
   });
 
   it("deletes the branch too when the modal's box is checked", async () => {
@@ -51,7 +59,32 @@ describe("archiveSession", () => {
     const done = archiveSession();
     await vi.runAllTimersAsync();
     await done;
-    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.archive", { id: "s1", remove_worktree: true, delete_branch: true });
+    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.archive", { id: "s1", remove_worktree: true, delete_branch: true, delete_remote: false });
+  });
+
+  const merged: PullRequest = { number: 7, url: "", state: "merged", title: "s1", checks: [], review_decision: null };
+
+  it("deletes a merged PR's branch without asking, by default (X55)", async () => {
+    daemon.rpc.mockResolvedValue({ remote_error: null });
+    useStore.setState({ gitSettings: {}, prs: { "local/s1": merged } });
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.archive", { id: "s1", remove_worktree: true, delete_branch: true, delete_remote: false });
+  });
+
+  it("says when origin refused to delete the branch (X55)", async () => {
+    daemon.rpc.mockResolvedValue({ remote_error: "remote rejected" });
+    useStore.setState({ gitSettings: { local: { ...DEFAULT_GIT_SETTINGS, delete_remote_branch: true } }, prs: { "local/s1": merged } });
+    // Toasts go away on a timer; keep every one shown.
+    const shown = new Set<string>();
+    const stop = useStore.subscribe((s) => s.toasts.forEach((t) => shown.add(t.text)));
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    stop();
+    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.archive", { id: "s1", remove_worktree: true, delete_branch: true, delete_remote: true });
+    expect([...shown]).toContain("Couldn't delete moonlet/s1 on origin: remote rejected");
   });
 
   it("does nothing when the modal is cancelled", async () => {
