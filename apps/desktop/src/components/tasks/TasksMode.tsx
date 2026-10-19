@@ -984,6 +984,9 @@ function TasksList({ host, workspaceId, views, unlinked }: { host: string; works
 
 const PRIORITY = ["No priority", "Low", "Medium", "High"];
 
+/** The state menu as a chip in a row of text, the task bar's (X46). */
+const CHIP_SELECT = "chip-select shrink-0 rounded-full border border-border-strong bg-transparent pl-[7px] ui-text-11.5 text-muted outline-none hover:text-fg focus:border-accent";
+
 /** Priority as 0–3 bars (X44). */
 function PriorityBars({ n }: { n: number }) {
   return (
@@ -1001,8 +1004,6 @@ function PriorityBars({ n }: { n: number }) {
  * status (X50); otherwise the four columns, or Open and Closed on GitHub.
  */
 export function StateMenu({ host, workspaceId, task, chip = false }: { host: string; workspaceId: string; task: Task; chip?: boolean }) {
-  // A chip sits in a row of text, the task bar's, and keeps a lock to its tooltip.
-  const chipCls = "chip-select shrink-0 rounded-full border border-border-strong bg-transparent pl-[7px] ui-text-11.5 text-muted outline-none hover:text-fg focus:border-accent";
   // The board's columns as saved, and the task's board after each sync.
   const boards = useTasks((t) => t.config?.boards);
   const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
@@ -1019,7 +1020,7 @@ export function StateMenu({ host, workspaceId, task, chip = false }: { host: str
         aria-label={`State of ${task.key}`}
         disabled={locked}
         title={lock ?? undefined}
-        className={chip ? chipCls : cx(inputCls, "menu-select field-height")}
+        className={chip ? CHIP_SELECT : cx(inputCls, "menu-select field-height")}
         value={current}
         onChange={(e) => {
           const c = choices[Number(e.target.value)];
@@ -1034,7 +1035,7 @@ export function StateMenu({ host, workspaceId, task, chip = false }: { host: str
         ))}
       </select>
     );
-    if (!locked || chip) return select;
+    if (!locked) return select;
     return (
       <span className="flex flex-col gap-1">
         {select}
@@ -1049,7 +1050,7 @@ export function StateMenu({ host, workspaceId, task, chip = false }: { host: str
   return (
     <select
       aria-label={`State of ${task.key}`}
-      className={chip ? chipCls : "rounded-md border border-border-strong bg-panel-2 px-1.5 py-0.5 ui-text-12.5 text-fg"}
+      className={chip ? CHIP_SELECT : "rounded-md border border-border-strong bg-panel-2 px-1.5 py-0.5 ui-text-12.5 text-fg"}
       value={current}
       onChange={(e) => void moveTask(host, workspaceId, task, options[Number(e.target.value)].column)}
     >
