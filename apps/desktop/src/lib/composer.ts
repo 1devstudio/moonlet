@@ -3,6 +3,7 @@
 
 import { withoutComments } from "./markdown";
 import type { IssueRef } from "./protocol";
+import { mentionsKey, type Task } from "./tasks";
 
 /** What the composer knows about where the session's branch comes from. */
 export interface BranchFacts {
@@ -175,4 +176,25 @@ export function pickerHint(tab: "issue" | "pr", task: { key: string; branch: str
     return `Picking a PR starts the session on its branch, instead of creating ${task.branch ? shortBranch(task.branch) : "the task's branch"} from ${base}. The task link stays.`;
   }
   return task ? `Adds the issue as a second attachment next to ${task.key}’s description. It doesn’t replace the task.` : "Adds the issue as an attachment, and names the session after it.";
+}
+
+/**
+ * The task a picked PR or issue points at, for the Link a task slot's
+ * one-click Link: a key in the PR's title, body or head branch, or the
+ * GitHub issue the PR closes; else a key in the issue's title or body.
+ */
+export function suggestedTask(picked: { pr: IssueRef | null; issue: IssueRef | null }, tasks: Task[]): { task: Task; reason: string } | null {
+  const { pr, issue } = picked;
+  if (pr) {
+    const text = [pr.title, pr.body, pr.head_branch ?? ""];
+    for (const t of tasks) {
+      if (t.github?.closingPrs.includes(pr.number)) return { task: t, reason: `PR #${pr.number} closes ${t.key}` };
+      if (!t.github && text.some((x) => mentionsKey(x, t.key))) return { task: t, reason: `PR #${pr.number} mentions ${t.key}` };
+    }
+  }
+  if (issue) {
+    const t = tasks.find((x) => !x.github && (mentionsKey(issue.title, x.key) || mentionsKey(issue.body, x.key)));
+    if (t) return { task: t, reason: `#${issue.number} mentions ${t.key}` };
+  }
+  return null;
 }

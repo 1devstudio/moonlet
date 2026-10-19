@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, Plus, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import type { TaskStart } from "../lib/tasks";
-import { branchUser, leaveTasksMode, startedFromTask } from "../lib/tasksStore";
-import { composerOptions, composerPick, composerProjects, composerTarget } from "../lib/workspaces";
-import { attachments, branchRow, firstMessage, pickerHint, placeholder, sessionName, type Attachment } from "../lib/composer";
+import type { Task, TaskStart } from "../lib/tasks";
+import { branchUser, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
+import { linkChoices } from "../lib/taskLinking";
+import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
+import { attachments, branchRow, firstMessage, pickerHint, placeholder, sessionName, suggestedTask, type Attachment } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
@@ -14,6 +15,7 @@ import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { Markdown } from "./AgentView";
+import { composerTask } from "./tasks/TasksMode";
 import { fileMention } from "../lib/plusMenu";
 import { fromOtherDialog } from "../lib/modal";
 
@@ -327,6 +329,14 @@ export function Composer({
   const [flash, setFlash] = useState(false);
   const [addDirs, setAddDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  // Link a task (X54): the target workspace's tasks, when it has a task source.
+  const taskData = useTasks((t) => (target ? t.data[wsKey(target.host, target.id)] : undefined));
+  const tasksConfig = useTasks((t) => t.config);
+  const wsTasks = useMemo(() => (taskData ? placedTasks(taskData) : []), [taskData, tasksConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (target) ensureTasks(target.host, target.id);
+  }, [target?.host, target?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [taskQuery, setTaskQuery] = useState("");
   const ta = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -467,6 +477,25 @@ export function Composer({
     }
   };
 
+  // Linked here, a task starts as if the composer had opened on it, in the
+  // project already picked (X54).
+  const linkTo = (t: Task) => {
+    if (!target) return;
+    const start = composerTask(target.host, target.id, t);
+    setTask(start);
+    setAssign(!!start.assign?.checked);
+    setTaskQuery("");
+  };
+  const canLink = !task && !worktree && !!target && !!taskData?.sources.length;
+  const suggestion = canLink ? suggestedTask({ pr, issue }, wsTasks) : null;
+  const choices = canLink ? linkChoices({ name: sessionName({ task: null, pr, issue }) ?? prompt.split("\n")[0], branch: pr?.head_branch ?? "" }, wsTasks, taskQuery) : { suggested: [], recent: [] };
+  const taskItem = (t: Task, hint?: string): MenuItem => ({ label: `${t.key} ${t.title}`, hint, onSelect: () => linkTo(t) });
+  const linkItems: MenuItem[] = [
+    ...(choices.suggested.length ? [{ kind: "label" as const, label: "Suggested" }, ...choices.suggested.map((c) => taskItem(c.task, c.reason))] : []),
+    ...(choices.recent.length ? [{ kind: "label" as const, label: "Recent" }, ...choices.recent.map((t) => taskItem(t))] : []),
+    ...(choices.suggested.length + choices.recent.length ? [] : [{ kind: "label" as const, label: "No tasks match" }]),
+  ];
+
   const sent = attachments({ task, issue, pr: pr && prSend ? pr : null, prContext });
   const row = branchRow({
     base: current?.project.base_branch ?? "base",
@@ -530,6 +559,37 @@ export function Composer({
               <IconButton title="Remove the task link" className="shrink-0" onClick={() => setTask(null)}>
                 <X size={12} />
               </IconButton>
+            </span>
+          ) : canLink ? (
+            // No task yet: a slot that links one, suggesting the one a pick points at (X54).
+            <span role="group" aria-label="Link a task" className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg border border-dashed border-border-strong pl-2 pr-1 ui-text-13 text-muted">
+              <Menu
+                items={linkItems}
+                width={420}
+                search={{ placeholder: "Search tasks by key or title", query: taskQuery, onQuery: setTaskQuery }}
+                trigger={(open) => (
+                  <button className="flex shrink-0 items-center gap-2 hover:text-fg" onClick={open}>
+                    <Plus size={13} />
+                    Link a task
+                  </button>
+                )}
+              />
+              {suggestion && (
+                <>
+                  <span className="text-border-strong">·</span>
+                  <span className="min-w-0 flex-1 truncate text-faint">
+                    {suggestion.reason.slice(0, -suggestion.task.key.length)}
+                    <span className="font-mono ui-text-12 text-fg">{suggestion.task.key}</span>
+                  </span>
+                  <button
+                    title={`Link ${suggestion.task.key} ${suggestion.task.title}`}
+                    className="h-[22px] shrink-0 rounded-[5px] bg-accent/12 px-2 ui-text-12 text-accent-2 hover:bg-accent/20"
+                    onClick={() => linkTo(suggestion.task)}
+                  >
+                    Link
+                  </button>
+                </>
+              )}
             </span>
           ) : (
             <span className="flex-1" />
