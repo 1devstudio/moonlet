@@ -4,7 +4,7 @@
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** X44 (task trackers), X45 (Tasks mode), X5 (sessions), X2 (pull requests)
 - **Related ADRs:** [0010](../adr/0010-task-trackers-in-the-app.md)
-- **Superseded in part by:** [X50](X50-boards.md) — moves and fixes go to a board's columns (a fix to the next column), and a GitHub repository board has only Open and Closed.
+- **Superseded in part by:** [X50](X50-boards.md) — moves and fixes go to a board's columns (a fix to the next column), and a GitHub repository board has only Open and Closed. [X54](X54-new-session-composer.md) — the composer shows the task as a chip without `For`, its description as a folded attachment above an empty prompt, and the "session starts" checkbox with a short label in its branch row.
 
 ## Summary
 
@@ -12,7 +12,7 @@ A session can belong to a task. The link is made when a session starts from a ta
 
 ## User journey
 
-1. **Start from a task.** In Tasks mode the user clicks **Start** on a card. The new-session composer opens with `For MOON-151 Drag sessions between sections`, the issue as the first message, the branch `moon-151-drag-sessions-between-sections`, the project that links the issue's tracker project, and "Move MOON-151 to In Progress and assign it to me" ticked. ⌘↵ starts the session.
+1. **Start from a task.** In Tasks mode the user clicks **Start** on a card. The new-session composer opens with the task chip `MOON-151 Drag sessions between sections`, the issue as a folded attachment sent as the first message (X54), the branch `moon-151-drag-sessions-between-sections`, the project that links the issue's tracker project, and "Move to In Progress" ticked. ⌘↵ starts the session.
 2. **Work on it.** Above the conversation a task bar shows `Tasks / MOON-142 Remote hosts sidebar`, its state, `Session 1 of 2` with arrows to the task's other sessions, and `Linear ↗`. The right panel's Task tab shows the description, acceptance criteria, the Keep in step switch and the task's sessions.
 3. **Link a session made without a task.** From **Link to task…** in a session's right-click menu, or "Link to task" in Tasks mode, a dialog searches tasks, suggests matches and links the session.
 4. **Ship it.** Opening the PR (not as a draft) moves the issue to In Review and comments the PR link; merging every session's PR suggests moving it to Done.
@@ -28,18 +28,18 @@ A session can belong to a task. The link is made when a session starts from a ta
 
 ### Starting a session from a task
 
-- [x] **Start** on a card opens the composer with a removable task chip `For <key> <title>`, and the first message: (`tasks.test.ts` taskStart, `tasks-mode.e2e.ts`)
+- [x] **Start** on a card opens the composer with a removable task chip `<key> <title>` (X54), and the first message, shown as a folded attachment (X54): (`tasks.test.ts` taskStart, `tasks-mode.e2e.ts`)
 
 ```
 <key> · <title>
 <description, as Markdown>
 ```
 
-  The user can edit it before sending.
+  What the user types is sent after it (X54).
 - [x] `+ New session` in the detail and `Start a session for <key>` in the list open the same composer. (`tasks-mode.e2e.ts`)
 - [x] Project: for a GitHub issue, the project whose `origin` is the issue's repository; for a tracker issue, the workspace's project whose Project settings link its tracker project (X44). When several do, none is preselected: the project menu lists them first under `Linked to <key>`, and Create waits for a pick. When none does, the composer starts on the current session's project or the first. The project menu has a search box over the workspace's projects. (`workspaces.test.ts` composerPick, composerProjects, `tasks.test.ts` taskStart, `tasksStore.test.ts` the projects that link them, `task-trackers.e2e.ts` moves the issue to In Progress) Branch: the tracker's template filled in and cut to the max length (X44), then made unique the same way session branches are (`-2`, `-3`). (`tasks.test.ts` taskStart, `a_task_branch_follows_the_trackers_default_template`, `tasks-mode.e2e.ts`)
 - [x] A quick ⌘↵ waits for the branch name. (`tasks-mode.e2e.ts`)
-- [x] "Move <key> to In Progress and assign it to me" is shown and ticked when the "session starts" rule is Automatically, shown unticked when it is Suggest, and hidden when Off. It only acts on a task in Todo (or a state not shown); a task further along is left alone. For a GitHub repository issue it reads "Assign <key> to me", and if the assignment fails an error toast says why. (`keepInStep.test.ts` startAction, `tasksStore.test.ts` moves a tracker issue to In Progress and assigns it, starting a session on a GitHub issue whose repository is in no project says so; `tasks-mode.e2e.ts`, `task-trackers.e2e.ts`)
+- [x] The "session starts" checkbox, `Move to In Progress` with the tooltip "Move <key> to In Progress and assign it to me" (X54), is shown and ticked when the "session starts" rule is Automatically, shown unticked when it is Suggest, and hidden when Off. It only acts on a task in Todo (or a state not shown); a task further along is left alone. For a GitHub repository issue it reads `Assign to me`, with the tooltip "Assign <key> to me", and if the assignment fails an error toast says why. (`keepInStep.test.ts` startAction, `tasksStore.test.ts` moves a tracker issue to In Progress and assigns it, starting a session on a GitHub issue whose repository is in no project says so; `tasks-mode.e2e.ts`, `task-trackers.e2e.ts`)
 - [x] If the move or the assignment of a Linear, Jira or ClickUp issue fails, an error toast says why. (`tasksStore.test.ts` says why when the move or assignment of a tracker issue fails)
 - [x] **Start session** on a worktree without a session creates a session on that worktree and branch instead of making a new one. A worktree is matched by its real path, so `/var/…` and `/private/var/…` name the same one. (`worktrees_made_outside_moonlet_are_listed_and_can_be_adopted`, `tasks-mode.e2e.ts`)
 - [x] The project picker stays on the worktree's project. (`tasks-mode.e2e.ts`)
