@@ -550,6 +550,9 @@ async fn git_settings_are_kept_by_the_daemon_in_git_toml() {
     let s: GitSettings = c.request(methods::GIT_SETTINGS, serde_json::json!({})).await.unwrap();
     assert!(s.stage_all);
     assert!(!s.draft_prs);
+    // Where its worktrees folder is, for the page.
+    let info: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
+    assert_eq!(std::path::Path::new(&info.data), d.home.path());
 
     let s: GitSettings = c
         .request(methods::GIT_SET_SETTINGS, serde_json::json!({"draft_prs": true}))
@@ -563,6 +566,111 @@ async fn git_settings_are_kept_by_the_daemon_in_git_toml() {
     let s: GitSettings = other.request(methods::GIT_SETTINGS, serde_json::json!({})).await.unwrap();
     assert!(s.draft_prs);
     assert!(s.stage_all);
+}
+
+fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    if out.status.success() {
+        Ok(String::from_utf8(out.stdout).unwrap().trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).into_owned())
+    }
+}
+
+async fn new_session(c: &mut Client, project: &str, name: &str) -> moonlet_proto::types::Session {
+    c.request(
+        methods::SESSION_CREATE,
+        serde_json::json!({"project_id": project, "name": name, "agent": "none"}),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_new_sessions_branch_takes_the_hosts_prefix_unless_its_project_has_one() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (repo, p) = project_with_repo(&d, &mut c).await;
+    assert_eq!(new_session(&mut c, &p.id, "Add search").await.branch, "moonlet/add-search");
+
+    let _: serde_json::Value = c
+        .request(methods::GIT_SET_SETTINGS, serde_json::json!({"branch_prefix": "marcin/"}))
+        .await
+        .unwrap();
+    assert_eq!(new_session(&mut c, &p.id, "Add filters").await.branch, "marcin/add-filters");
+
+    let _: serde_json::Value = c
+        .request(methods::GIT_SET_SETTINGS, serde_json::json!({"branch_prefix": ""}))
+        .await
+        .unwrap();
+    assert_eq!(new_session(&mut c, &p.id, "Add sorting").await.branch, "add-sorting");
+
+    std::fs::create_dir_all(repo.join(".moonlet")).unwrap();
+    std::fs::write(repo.join(".moonlet/config.toml"), "branch_prefix = \"team/\"\n").unwrap();
+    assert_eq!(new_session(&mut c, &p.id, "Add paging").await.branch, "team/add-paging");
+
+    let refused = c
+        .request::<_, serde_json::Value>(methods::GIT_SET_SETTINGS, serde_json::json!({"branch_prefix": "my prefix/"}))
+        .await;
+    assert!(refused.is_err());
+}
+
+#[tokio::test]
+async fn starting_from_origin_fetches_and_does_not_track_the_base() {
+    use moonlet_proto::types::Project;
+    let d = TestDaemon::start().await;
+    let root = d.home.path();
+    let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
+    let (origin, repo, other) = (root.join("origin.git"), root.join("repo"), root.join("other"));
+    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
+    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    let local = git(&repo, &["rev-parse", "HEAD"]);
+    git(root, &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    git(&other, &["commit", "-q", "--allow-empty", "-m", "Merge pull request #7"]);
+    git(&other, &["push", "-q", "origin", "main"]);
+    let merged = git(&other, &["rev-parse", "HEAD"]);
+
+    let mut c = d.client().await;
+    let p: Project = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    let local_session = new_session(&mut c, &p.id, "Before").await;
+    assert_eq!(git(std::path::Path::new(&local_session.path), &["rev-parse", "HEAD"]), local);
+
+    let _: serde_json::Value = c
+        .request(methods::GIT_SET_SETTINGS, serde_json::json!({"start_from": "origin"}))
+        .await
+        .unwrap();
+    let s = new_session(&mut c, &p.id, "After").await;
+    let dir = std::path::Path::new(&s.path);
+    assert_eq!(git(dir, &["rev-parse", "HEAD"]), merged);
+    assert_eq!(s.base, "main");
+    assert!(git_in(dir, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_err(), "the branch tracks origin/main");
+    assert_eq!(git(&repo, &["rev-parse", "main"]), local, "the local main moved");
+}
+
+#[tokio::test]
+async fn starting_from_origin_without_one_starts_from_the_local_base() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (repo, p) = project_with_repo(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::GIT_SET_SETTINGS, serde_json::json!({"start_from": "origin"}))
+        .await
+        .unwrap();
+    let s = new_session(&mut c, &p.id, "Offline").await;
+    assert_eq!(
+        git_in(std::path::Path::new(&s.path), &["rev-parse", "HEAD"]).unwrap(),
+        git_in(&repo, &["rev-parse", "main"]).unwrap()
+    );
 }
 
 #[tokio::test]

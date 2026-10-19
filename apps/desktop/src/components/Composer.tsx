@@ -16,6 +16,7 @@ import { PlusMenu } from "./PlusMenu";
 import { Markdown } from "./AgentView";
 import { fileMention } from "../lib/plusMenu";
 import { fromOtherDialog } from "../lib/modal";
+import { defaultStartLabel, gitSettingsOf } from "../lib/gitSettings";
 
 
 interface Choice {
@@ -419,8 +420,9 @@ export function Composer({
     { label: "Add project…", icon: <FolderPlus size={14} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "add-project" } }) },
   ];
 
+  const startFrom = useStore((s) => gitSettingsOf(s.gitSettings, current?.host ?? "local").start_from);
   const moreItems: MenuItem[] = [
-    { label: `Start from ${current?.project.base_branch ?? "base"} (default)`, checked: !from && !pr, onSelect: () => (setFrom(null), setPr(null)) },
+    { label: defaultStartLabel(current?.project.base_branch ?? "base", startFrom), checked: !from && !pr, onSelect: () => (setFrom(null), setPr(null)) },
     { label: "Start from branch or commit…", checked: !!from && !from.existing, onSelect: () => setEditingFrom("from") },
     { label: "Use an existing branch…", checked: !!from?.existing, onSelect: () => setEditingFrom("existing") },
   ];

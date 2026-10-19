@@ -95,6 +95,9 @@ function trackerEntries(t: TrackersConfig | undefined): [string | undefined, str
 function gitEntries(g: GitSettings | null | undefined): [string, string, string, string?][] {
   if (!g) return [];
   return [
+    ["git-branch-prefix", "Branch prefix", g.branch_prefix || "None", "git new session"],
+    ["git-start-from", "Start new branches from", g.start_from === "origin" ? "origin/main" : "main", "git new session base fetch"],
+    ["git-worktrees", "Worktrees folder", "", "git reveal finder"],
     ["git-stage-all", "Stage all changes before committing", onOff(g.stage_all), "commit"],
     ["git-draft-prs", "Open pull requests as drafts", onOff(g.draft_prs), "pull request PR"],
   ];
@@ -169,6 +172,7 @@ function index(c: SearchContext): Entry[] {
         { label: "Default agent", path, route, setting: "project-default-agent", value: cfg ? labelOf(DEFAULT_AGENTS, cfg.default_agent ?? "") : "" },
         { label: "Custom agents", path, route, setting: "project-agents", value: cfg ? (agents ? n(agents, "agent") : "None") : "" },
         { label: "Base branch", path, route, setting: "project-base", value: cfg?.base_branch?.trim() || p.base_branch },
+        { label: "Branch prefix", path, route, setting: "project-branch-prefix", value: cfg?.branch_prefix?.trim() ?? "", also: "git" },
       ];
     }),
   ];
