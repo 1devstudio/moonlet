@@ -65,13 +65,17 @@ export function driftKey(card: Card): string {
   return `${card.task.connection} ${card.task.key}|${card.drift?.kind}|${card.task.column}|${work}|${card.orphans.length}`;
 }
 
-/** The composer's checkbox for the "session starts" rule, or null when it does nothing here. */
-export function startAction(task: Task, rule: RuleSetting): { label: string; checked: boolean } | null {
+/**
+ * The composer's checkbox for the "session starts" rule, or null when it does
+ * nothing here. The label is short, as the task chip names the key; the title
+ * says it all (X54).
+ */
+export function startAction(task: Task, rule: RuleSetting): { label: string; title: string; checked: boolean } | null {
   if (rule === "off") return null;
-  if (task.github) return { label: `Assign ${task.key} to me`, checked: rule === "auto" };
+  if (task.github) return { label: "Assign to me", title: `Assign ${task.key} to me`, checked: rule === "auto" };
   // Only from Todo or a state not shown; an issue further along is left alone.
   if (task.column !== "todo" && task.column !== "hidden") return null;
-  return { label: `Move ${task.key} to In Progress and assign it to me`, checked: rule === "auto" };
+  return { label: "Move to In Progress", title: `Move ${task.key} to In Progress and assign it to me`, checked: rule === "auto" };
 }
 
 /** A card without the chip the user put off with Not now. */
