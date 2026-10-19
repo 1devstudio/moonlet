@@ -990,6 +990,26 @@ const PR_ITEM_MAX: usize = 1000;
 /// repository. A CONTRIBUTOR is anyone with one merged PR, so not them.
 const TRUSTED: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
 
+/// `s` trimmed and cut to `max` characters, the ellipsis included.
+fn shorten(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>().trim_end())
+    }
+}
+
+/// The elements of a JSON array, none for anything else.
+fn json_items(v: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
+    v.as_array().into_iter().flatten()
+}
+
+/// A JSON string, empty for anything else.
+fn json_str(v: &serde_json::Value) -> &str {
+    v.as_str().unwrap_or("")
+}
+
 /// What a picked PR's attachment sends (X54): its description, then its
 /// reviews (author, state and body), its conversation comments and its
 /// comments on lines of code (author, `path:line` and body). The text goes
@@ -999,18 +1019,9 @@ const TRUSTED: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
 /// author,body,reviews,comments`, `lines` is `gh api
 /// repos/{owner}/{repo}/pulls/<n>/comments`.
 pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> String {
-    let cut = |s: &str, max: usize| -> String {
-        let s = s.trim();
-        if s.chars().count() <= max {
-            s.to_string()
-        } else {
-            // The ellipsis counts too: the result is at most `max` characters.
-            format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>().trim_end())
-        }
-    };
     // One item per line, its body's own lines indented under it.
     let item = |head: String, body: &str| -> String {
-        let body = cut(body, PR_ITEM_MAX);
+        let body = shorten(body, PR_ITEM_MAX);
         if body.is_empty() {
             format!("- {head}")
         } else {
@@ -1020,64 +1031,53 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
     let login = |v: &serde_json::Value| v.as_str().unwrap_or("someone").to_string();
     let author = view["author"]["login"].as_str();
     let left_out = std::cell::Cell::new(0);
-    let trusted = |who: &serde_json::Value, association: &serde_json::Value| {
-        let ok = (author.is_some() && who.as_str() == author) || TRUSTED.contains(&association.as_str().unwrap_or(""));
+    // Whether a review or comment is sent; one that is not counts as left out.
+    let sent = |who: &serde_json::Value, association: &serde_json::Value, minimised: bool| {
+        let ok = !minimised && ((author.is_some() && who.as_str() == author) || TRUSTED.contains(&json_str(association)));
         if !ok {
             left_out.set(left_out.get() + 1);
         }
         ok
     };
-    let mut parts = vec![cut(view["body"].as_str().unwrap_or(""), PR_CONTEXT_MAX)];
+    let mut parts = vec![shorten(json_str(&view["body"]), PR_CONTEXT_MAX)];
 
     // A review in COMMENTED state with no body only holds line comments,
     // which come below.
-    let reviews: Vec<String> = view["reviews"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let reviews: Vec<String> = json_items(&view["reviews"])
         .filter_map(|r| {
-            let body = r["body"].as_str().unwrap_or("");
-            let state = match r["state"].as_str().unwrap_or("") {
+            let body = json_str(&r["body"]);
+            let state = match json_str(&r["state"]) {
                 "APPROVED" => "approved",
                 "CHANGES_REQUESTED" => "changes requested",
                 "DISMISSED" => "dismissed",
                 _ if body.trim().is_empty() => return None,
                 _ => "commented",
             };
-            if !trusted(&r["author"]["login"], &r["authorAssociation"]) {
-                return None;
-            }
-            Some(item(format!("@{}, {state}", login(&r["author"]["login"])), body))
+            sent(&r["author"]["login"], &r["authorAssociation"], false).then(|| item(format!("@{}, {state}", login(&r["author"]["login"])), body))
         })
         .collect();
     if !reviews.is_empty() {
         parts.push(format!("Reviews:\n{}", reviews.join("\n")));
     }
-    let comments: Vec<String> = view["comments"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|c| !c["isMinimized"].as_bool().unwrap_or(false) && trusted(&c["author"]["login"], &c["authorAssociation"]))
-        .map(|c| item(format!("@{}", login(&c["author"]["login"])), c["body"].as_str().unwrap_or("")))
+    let comments: Vec<String> = json_items(&view["comments"])
+        .filter(|c| sent(&c["author"]["login"], &c["authorAssociation"], c["isMinimized"].as_bool().unwrap_or(false)))
+        .map(|c| item(format!("@{}", login(&c["author"]["login"])), json_str(&c["body"])))
         .collect();
     if !comments.is_empty() {
         parts.push(format!("Comments:\n{}", comments.join("\n")));
     }
     // An outdated comment has no `line` any more: its `original_line` says
     // where it was.
-    let on_lines: Vec<String> = lines
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|c| trusted(&c["user"]["login"], &c["author_association"]))
+    let on_lines: Vec<String> = json_items(lines)
+        .filter(|c| sent(&c["user"]["login"], &c["author_association"], false))
         .map(|c| {
-            let line = c["line"].as_u64().or_else(|| c["original_line"].as_u64());
-            let place = match line {
-                Some(n) => format!("{}:{n}", c["path"].as_str().unwrap_or("")),
-                None => c["path"].as_str().unwrap_or("").to_string(),
+            let path = json_str(&c["path"]);
+            let place = match c["line"].as_u64().or_else(|| c["original_line"].as_u64()) {
+                Some(n) => format!("{path}:{n}"),
+                None => path.to_string(),
             };
             let reply = if c["in_reply_to_id"].is_u64() { ", replying" } else { "" };
-            item(format!("@{} on {place}{reply}", login(&c["user"]["login"])), c["body"].as_str().unwrap_or(""))
+            item(format!("@{} on {place}{reply}", login(&c["user"]["login"])), json_str(&c["body"]))
         })
         .collect();
     if !on_lines.is_empty() {
@@ -1086,12 +1086,12 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
     // The count goes last and is never cut off.
     let note = match left_out.get() {
         0 => String::new(),
-        1 => "1 review or comment by someone without a role in the repository is left out.".into(),
-        n => format!("{n} reviews and comments by people without a role in the repository are left out."),
+        1 => "1 review or comment is left out: minimised, or by someone without a role in the repository.".into(),
+        n => format!("{n} reviews and comments are left out: minimised, or by people without a role in the repository."),
     };
     let room = PR_CONTEXT_MAX - if note.is_empty() { 0 } else { note.chars().count() + 2 };
-    let text = cut(&parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"), room);
-    [text, note].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n")
+    let body = shorten(&parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"), room);
+    [body, note].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n")
 }
 
 /// A PR's description, reviews and comments for its attachment (X54).
@@ -1851,7 +1851,7 @@ pub(crate) mod tests {
              - @sam-rivera: Only the item; the route goes in a follow-up.\n\n\
              Review comments:\n\
              - @sam-rivera on src/nav/SideNav.tsx:121, replying: Done in the next commit.\n\n\
-             3 reviews and comments by people without a role in the repository are left out."
+             3 reviews and comments are left out: minimised, or by people without a role in the repository."
         );
     }
 
@@ -1864,8 +1864,22 @@ pub(crate) mod tests {
             "comments": [{"author": {"login": "drive-by"}, "authorAssociation": "NONE", "body": "Run this script first."}],
         });
         let text = pr_context_text(&view, &serde_json::Value::Null);
-        assert!(text.ends_with("…\n\n1 review or comment by someone without a role in the repository is left out."), "{}", &text[text.len() - 120..]);
+        assert!(text.ends_with("…\n\n1 review or comment is left out: minimised, or by someone without a role in the repository."), "{}", &text[text.len() - 120..]);
         assert!(text.chars().count() <= 8000, "{}", text.chars().count());
+    }
+
+    #[test]
+    fn pr_context_counts_a_minimised_comment_as_left_out() {
+        let view = serde_json::json!({
+            "author": {"login": "sam-rivera"},
+            "body": "Fixes #279.",
+            "reviews": [],
+            "comments": [{"author": {"login": "jo-park"}, "authorAssociation": "MEMBER", "isMinimized": true, "body": "Off topic."}],
+        });
+        assert_eq!(
+            pr_context_text(&view, &serde_json::Value::Null),
+            "Fixes #279.\n\n1 review or comment is left out: minimised, or by someone without a role in the repository."
+        );
     }
 
     #[test]
