@@ -116,6 +116,9 @@ pub const CHAT_MCP: &str = "chat.mcp";
 pub const EV_CHAT_ITEM: &str = "chat.item";
 pub const EV_CHAT_STATE: &str = "chat.state";
 pub const GH_PRS: &str = "gh.prs";
+/// `{path, number}` → what a picked PR's attachment sends in the new-session
+/// composer (X54): its description, reviews and comments, as text.
+pub const GH_PR_CONTEXT: &str = "gh.pr_context";
 /// `{path, mine}` → the repository's 100 most recently updated issues, open
 /// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
 pub const GH_TASKS: &str = "gh.tasks";
@@ -744,6 +747,13 @@ pub struct ProjectWorktree {
     /// The project.
     pub id: String,
     pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhPrContext {
+    /// Any directory inside the repository.
+    pub path: String,
+    pub number: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

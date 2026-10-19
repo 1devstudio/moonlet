@@ -161,3 +161,18 @@ export function placeholder(attached: Attachment["id"][]): string {
 export function sessionName(f: Picks): string | null {
   return f.task?.title ?? f.pr?.title ?? f.issue?.title ?? null;
 }
+
+/** A branch by its first two parts: `web-279-remove-…` is `web-279-…`. */
+function shortBranch(branch: string): string {
+  const parts = branch.split("-");
+  return parts.length > 2 ? `${parts.slice(0, 2).join("-")}-…` : branch;
+}
+
+/** The source picker's footer: what picking from its tab does. */
+export function pickerHint(tab: "issue" | "pr", task: { key: string; branch: string | null } | null, base: string): string {
+  if (tab === "pr") {
+    if (!task) return `Picking a PR starts the session on its branch, instead of a new branch from ${base}.`;
+    return `Picking a PR starts the session on its branch, instead of creating ${task.branch ? shortBranch(task.branch) : "the task's branch"} from ${base}. The task link stays.`;
+  }
+  return task ? `Adds the issue as a second attachment next to ${task.key}’s description. It doesn’t replace the task.` : "Adds the issue as an attachment, and names the session after it.";
+}
