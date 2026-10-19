@@ -658,7 +658,7 @@ export function Composer({
                 void create();
               }
             }}
-            placeholder={placeholder({ task: !!task, issue: !!issue, pr: !!pr })}
+            placeholder={placeholder(sent.map((a) => a.id))}
             className={cx("block min-h-[52px] w-full flex-1 resize-none bg-transparent ui-text-14 leading-[1.6] text-fg outline-none placeholder:text-faint", sent.length > 0 && "pt-1")}
           />
         </div>

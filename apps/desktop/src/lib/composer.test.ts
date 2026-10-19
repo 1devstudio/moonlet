@@ -155,12 +155,18 @@ describe("firstMessage (X54)", () => {
 
 describe("placeholder (X54)", () => {
   it("follows what is attached", () => {
-    expect(placeholder({ task: true, issue: false, pr: true })).toBe("Anything to add? e.g. “Address the review comments”");
-    expect(placeholder({ task: true, issue: true, pr: false })).toBe("Anything to add?");
-    expect(placeholder({ task: true, issue: false, pr: false })).toBe("Anything to add? Leave empty to start from the issue.");
-    expect(placeholder({ task: false, issue: true, pr: false })).toBe("Anything to add? Leave empty to start from the issue.");
-    expect(placeholder({ task: false, issue: false, pr: true })).toBe("What should the agent do on this PR? e.g. “Address the review comments”");
-    expect(placeholder({ task: false, issue: false, pr: false })).toBe("What do you want to work on?");
+    expect(placeholder(["task", "pr"])).toBe("Anything to add? e.g. “Address the review comments”");
+    expect(placeholder(["task", "issue"])).toBe("Anything to add?");
+    expect(placeholder(["task"])).toBe("Anything to add? Leave empty to start from the issue.");
+    expect(placeholder(["issue"])).toBe("Anything to add? Leave empty to start from the issue.");
+    expect(placeholder(["pr"])).toBe("What should the agent do on this PR? e.g. “Address the review comments”");
+    expect(placeholder([])).toBe("What do you want to work on?");
+  });
+
+  it("no longer mentions review comments once the PR's attachment is removed", () => {
+    // "Don’t send the PR description": the PR stays picked, nothing of it is attached.
+    const sent = attachments({ task: webTask, issue: null, pr: null, prContext: null });
+    expect(placeholder(sent.map((a) => a.id))).toBe("Anything to add? Leave empty to start from the issue.");
   });
 });
 
