@@ -384,7 +384,9 @@ export function Composer({
     taskBranchLoad.current = branchUser(current?.host ?? "local", task.ref.connection)
       .then((user) => hostsApi.taskBranch({ kind: task.kind, key: task.key, title: task.title, number: task.number, template: task.template, maxLen: task.maxLen, user, issueType: task.issueType }))
       .catch(() => null);
-    void taskBranchLoad.current.then(setTaskBranch);
+    // A task linked after this one wins (X54 Link a task).
+    const load = taskBranchLoad.current;
+    void load.then((b) => taskBranchLoad.current === load && setTaskBranch(b));
   }, [task, worktree, current?.host]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
