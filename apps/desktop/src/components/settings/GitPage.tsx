@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Folder, GitBranch } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { branchPreview, fetchOptions, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "../../lib/gitSettings";
+import { ARCHIVE_BRANCHES, branchPreview, fetchOptions, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "../../lib/gitSettings";
 import { M, type DaemonInfo, type GitSettings } from "../../lib/protocol";
 import { errorToast, setGitSettings, useStore } from "../../lib/store";
 import { Button, cx, selectCls } from "../ui";
@@ -153,13 +153,6 @@ const WORKTREE = [
   { id: "keep", label: "Keep" },
 ] as const;
 
-const BRANCH: { id: GitSettings["archive_branch"]; label: string; hint: string }[] = [
-  { id: "ask", label: "Ask each time", hint: "The archive prompt asks with a checkbox." },
-  { id: "keep", label: "Keep", hint: "The branch stays; unarchiving checks it out again." },
-  { id: "merged", label: "Delete when its PR merged", hint: "Deleted when its PR merged on GitHub, kept otherwise." },
-  { id: "always", label: "Always delete", hint: "Deleted with git branch -D, merged or not." },
-];
-
 export function GitPage() {
   const [picked, setPicked] = useState("local");
   const connected = useStore((s) => gitHosts(s.hosts).some((o) => o.id === picked));
@@ -189,9 +182,9 @@ export function GitPage() {
           <Row setting="git-archive-worktree" label="Worktree folder" labelId={worktreeId} hint="Kept folders stay on disk; unarchiving reuses them.">
             <Segmented value={g.archive_worktree} options={WORKTREE} onChange={(v) => !tooOld && set({ archive_worktree: v })} labelledBy={worktreeId} />
           </Row>
-          <Row setting="git-archive-branch" label="Local branch" htmlFor="git-archive-branch" hint={BRANCH.find((b) => b.id === g.archive_branch)?.hint}>
+          <Row setting="git-archive-branch" label="Local branch" htmlFor="git-archive-branch" hint={ARCHIVE_BRANCHES.find((b) => b.id === g.archive_branch)?.hint}>
             <select id="git-archive-branch" className={cx(selectCls, "w-[220px] shrink-0")} disabled={tooOld} value={g.archive_branch} onChange={(e) => set({ archive_branch: e.target.value as GitSettings["archive_branch"] })}>
-              {BRANCH.map((b) => (
+              {ARCHIVE_BRANCHES.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.label}
                 </option>

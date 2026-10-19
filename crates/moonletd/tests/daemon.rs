@@ -722,6 +722,36 @@ async fn archiving_can_delete_the_branch_on_origin_too() {
 }
 
 #[tokio::test]
+async fn archiving_never_deletes_the_projects_base_branch() {
+    use moonlet_proto::types::{Project, Session, SessionArchived};
+    let d = TestDaemon::start().await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| git_in(&repo, args).unwrap();
+    git(&["init", "-q", "-b", "work"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(&["branch", "develop"]);
+    let mut c = d.client().await;
+    let p: Project = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    assert_eq!(p.base_branch, "develop");
+    let s: Session = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({"project_id": p.id, "name": "On develop", "agent": "none", "branch": "develop", "existing_branch": true}),
+        )
+        .await
+        .unwrap();
+    let _: SessionArchived = c
+        .request(methods::SESSION_ARCHIVE, serde_json::json!({"id": s.id, "delete_branch": true}))
+        .await
+        .unwrap();
+    assert_eq!(git(&["branch", "--list", "develop"]).trim_start_matches(['*', ' ', '+']), "develop");
+}
+
+#[tokio::test]
 async fn archiving_still_archives_when_origin_refuses_the_delete() {
     use moonlet_proto::types::{Session, SessionArchived};
     let d = TestDaemon::start().await;

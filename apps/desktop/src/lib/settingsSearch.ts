@@ -5,7 +5,7 @@ import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "
 import { EDITOR_THEMES, resolveEditorTheme } from "./editorThemes";
 import type { GitSettings, ProjectConfig, WorkspaceColor } from "./protocol";
 import { routeKey, type SettingsRoute } from "./settingsPage";
-import { fetchLabel } from "./gitSettings";
+import { ARCHIVE_BRANCHES, fetchLabel } from "./gitSettings";
 import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
 import { bannerOn } from "./alerts";
@@ -92,8 +92,6 @@ function trackerEntries(t: TrackersConfig | undefined): [string | undefined, str
   ];
 }
 
-const ARCHIVE_BRANCH: Record<GitSettings["archive_branch"], string> = { ask: "Ask each time", keep: "Keep", merged: "Delete when its PR merged", always: "Always delete" };
-
 /** Settings › Git rows (X55) as `[setting, label, value, also]`. */
 function gitEntries(g: GitSettings | null | undefined): [string, string, string, string?][] {
   if (!g) return [];
@@ -102,7 +100,7 @@ function gitEntries(g: GitSettings | null | undefined): [string, string, string,
     ["git-start-from", "Start new branches from", g.start_from === "origin" ? "origin/main" : "main", "git new session base fetch"],
     ["git-worktrees", "Worktrees folder", "", "git reveal finder"],
     ["git-archive-worktree", "Worktree folder when archiving", g.archive_worktree === "keep" ? "Keep" : "Remove", "git archive remove keep"],
-    ["git-archive-branch", "Local branch when archiving", ARCHIVE_BRANCH[g.archive_branch], "git archive delete merged"],
+    ["git-archive-branch", "Local branch when archiving", ARCHIVE_BRANCHES.find((b) => b.id === g.archive_branch)?.label ?? g.archive_branch, "git archive delete merged"],
     ["git-delete-remote", "Also delete the branch on origin", onOff(g.delete_remote_branch), "git archive remote push"],
     ["git-stage-all", "Stage all changes before committing", onOff(g.stage_all), "commit"],
     ["git-draft-prs", "Open pull requests as drafts", onOff(g.draft_prs), "pull request PR"],

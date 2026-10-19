@@ -1468,7 +1468,8 @@ impl SessionManager {
             git::worktree_remove(Path::new(&repo.path), Path::new(&ws.path)).await?;
         }
         let mut done = SessionArchived::default();
-        if req.delete_branch {
+        // The project's base branch is never deleted (X55), whoever asks.
+        if req.delete_branch && ws.branch != repo.base_branch {
             git::delete_branch(Path::new(&repo.path), &ws.branch).await?;
             if req.delete_remote
                 && let Err(e) = git::delete_remote_branch(Path::new(&repo.path), &ws.branch).await

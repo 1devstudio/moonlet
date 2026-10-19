@@ -67,6 +67,14 @@ export const worktreesFolder = (info: { home: string; data_dir?: string }) => `$
 /** Where sessions' worktrees go, as the page shows it. */
 export const worktreesText = (folder: string, home: string) => `${tildePath(folder, home)}/‹project›/‹session›`;
 
+/** "Local branch" choices, as the page and search show them. */
+export const ARCHIVE_BRANCHES: { id: GitSettings["archive_branch"]; label: string; hint: string }[] = [
+  { id: "ask", label: "Ask each time", hint: "The archive prompt asks with a checkbox." },
+  { id: "keep", label: "Keep", hint: "The branch stays; unarchiving checks it out again." },
+  { id: "merged", label: "Delete when its PR merged", hint: "Deleted when its PR merged on GitHub, kept otherwise." },
+  { id: "always", label: "Always delete", hint: "Deleted with git branch -D, merged or not." },
+];
+
 /** What archiving a session will do, before the prompt asks (X55). */
 export interface ArchivePlan {
   removeWorktree: boolean;
