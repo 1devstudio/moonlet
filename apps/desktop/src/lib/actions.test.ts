@@ -113,6 +113,14 @@ describe("archiveSession", () => {
     expect(archived()).toEqual([]);
   });
 
+  it("doesn't look for unpushed work with the warning off (X55)", async () => {
+    useStore.setState({ gitSettings: { local: { ...DEFAULT_GIT_SETTINGS, archive_branch: "ask", warn_unpushed: false } } });
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["session.archive"]);
+  });
+
   it("does nothing when the modal is cancelled", async () => {
     reply = { ok: false, checked: true };
     await archiveSession();
