@@ -221,9 +221,12 @@ describe("suggestedTask (X54)", () => {
     expect(suggestedTask({ pr, issue: null }, [web])).toBe(null);
   });
 
-  it("finds the GitHub issue a picked PR closes, and the task a picked issue mentions", () => {
+  it("finds the GitHub issue a picked PR closes, in the PR's own repository, and the task a picked issue mentions", () => {
     const gh = task("acme/web#279", { repo: "acme/web", number: 279, closingPrs: [214] });
-    expect(suggestedTask({ pr, issue: null }, [gh])).toEqual({ task: gh, reason: "PR #214 closes acme/web#279" });
+    const webPr = { ...pr, url: "https://github.com/acme/web/pull/214" };
+    expect(suggestedTask({ pr: webPr, issue: null }, [gh])).toEqual({ task: gh, reason: "PR #214 closes acme/web#279" });
+    // #214 of another repository closes nothing here.
+    expect(suggestedTask({ pr: { ...pr, url: "https://github.com/acme/storefront/pull/214" }, issue: null }, [gh])).toBe(null);
     const issue = { number: 57, title: "Flicker", body: "Seen while testing WEB-279.", url: "" };
     expect(suggestedTask({ pr: null, issue }, [web])).toEqual({ task: web, reason: "#57 mentions WEB-279" });
     expect(suggestedTask({ pr: null, issue: null }, [web])).toBe(null);

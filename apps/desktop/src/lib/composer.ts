@@ -187,8 +187,10 @@ export function suggestedTask(picked: { pr: IssueRef | null; issue: IssueRef | n
   const { pr, issue } = picked;
   if (pr) {
     const text = [pr.title, pr.body, pr.head_branch ?? ""];
+    // PR numbers are per repository: a PR closes an issue of its own only.
+    const repo = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\//.exec(pr.url)?.[1]?.toLowerCase();
     for (const t of tasks) {
-      if (t.github?.closingPrs.includes(pr.number)) return { task: t, reason: `PR #${pr.number} closes ${t.key}` };
+      if (t.github && t.github.repo.toLowerCase() === repo && t.github.closingPrs.includes(pr.number)) return { task: t, reason: `PR #${pr.number} closes ${t.key}` };
       if (!t.github && text.some((x) => mentionsKey(x, t.key))) return { task: t, reason: `PR #${pr.number} mentions ${t.key}` };
     }
   }
