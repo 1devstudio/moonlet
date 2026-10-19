@@ -65,7 +65,7 @@ A task is out of sync when the work and the tracker disagree. Each case has an O
 ### Detail panel
 
 - [x] Header: key, copy key, `Open in <tracker>` naming the task's own tracker, close. (`tasks.test.ts` trackerName, `tasks-mode.e2e.ts`)
-- [x] Title, then State (a menu: Todo, In Progress, In Review and Done for a tracker issue, Open and Closed for a GitHub issue; picking one moves it), Assignee, Priority (with the cycle when there is one), Labels, and the description cut to four lines. A move that fails shows on the task with Retry and as an error toast. (`taskDetails.test.ts` stateOptions, `tasksStore.test.ts` moveTask and a failed action shows on its task with Retry, `tasks-mode.e2e.ts`, the cycle in `task-trackers.e2e.ts` shows the team's issues in Tasks mode)
+- [x] Title, then State (a menu: Todo, In Progress, In Review and Done for a tracker issue, Open and Closed for a GitHub issue; picking one moves it), Assignee, Priority (with the cycle when there is one), Labels, and the whole description, its Markdown rendered as the session's Task tab renders it (X46). A move that fails shows on the task with Retry and as an error toast. (`taskDetails.test.ts` stateOptions, `tasksStore.test.ts` moveTask and a failed action shows on its task with Retry, `tasks-mode.e2e.ts` "shows the whole description in the detail, its Markdown rendered", the cycle in `task-trackers.e2e.ts` shows the team's issues in Tasks mode)
 - [x] An out-of-sync block shows the chip's text with the fix and **Not now**. (`tasksStore.test.ts` chip's fix, `keepInStep.test.ts` withoutPutOff)
 - [x] **Sessions** with a count and `+ New session`. Each session card: glyph, name, **Open** (↵ on the first, outside a field or button and with nothing over Tasks mode), `project/branch`, diff stat, one line per agent (name, state and time since its last output), and the PR line (`#131 open · 7/7 checks · approved`, or `No pull request · Create PR ⇧⌘P`). (`taskDetails.test.ts` sessionCard, enterOpensFirst, `tasks-mode.e2e.ts`)
 - [x] With no session: "No sessions yet. Starting one names the branch after the issue." (`tasks-mode.e2e.ts`)
@@ -102,7 +102,7 @@ States: a workspace with no source shows the "Connect a task tracker" panel; "Lo
 
 ## Security considerations
 
-Titles, descriptions and labels from trackers are untrusted and shown as plain text. Clean up archives sessions and removes worktrees only after a confirm, which names any uncommitted changes.
+Titles, descriptions and labels from trackers are untrusted. Titles and labels are shown as plain text; a description's Markdown is rendered to sanitized HTML, as in the Task tab (X46). Clean up archives sessions and removes worktrees only after a confirm, which names any uncommitted changes.
 
 ## Out of scope
 

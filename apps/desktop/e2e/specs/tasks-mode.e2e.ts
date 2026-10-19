@@ -440,6 +440,17 @@ describe("Tasks mode", () => {
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
 
+  it("shows the whole description in the detail, its Markdown rendered", async () => {
+    await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
+    const detail = $('//aside[@aria-label="Task detail"]');
+    await expect(detail.$('.//h3[normalize-space()="Steps"]')).toBeDisplayed({ wait: 10_000 });
+    await expect(detail.$('.//li[normalize-space()="Press Checkout."]/strong[normalize-space()="Checkout"]')).toBeDisplayed();
+    await expect(detail.$('.//li[normalize-space()="Reproduced on Safari 18"]/*[@aria-label="Done"]')).toBeDisplayed();
+    // The last paragraph, past where four lines would have cut it.
+    await expect(detail.$('.//p[normalize-space()="Three customers reported it this week."]')).toBeDisplayed();
+    await expect(detail.$('.//*[contains(text(), "###") or contains(text(), "[x]")]')).not.toBeExisting();
+  });
+
   it("shows each session's card in the detail, and ↵ opens the first", async () => {
     await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
     const session = $('//aside[@aria-label="Task detail"]').$(`.//div[@role="group"][@aria-label="Session ${LINKED}"]`);

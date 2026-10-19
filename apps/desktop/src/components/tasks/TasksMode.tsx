@@ -53,6 +53,7 @@ import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
@@ -365,7 +366,11 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
             </>
           )}
         </dl>
-        {card.task.description && <p className="selectable mt-3 line-clamp-4 whitespace-pre-wrap ui-text-12.5 text-muted">{card.task.description}</p>}
+        {card.task.description && (
+          <div className="mt-3">
+            <Markdown text={card.task.description} task />
+          </div>
+        )}
         {failure && (
           <div role="alert" className="mt-3 flex items-start gap-2 rounded-md border border-error/30 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">
             <span className="min-w-0 flex-1">{failure}</span>
