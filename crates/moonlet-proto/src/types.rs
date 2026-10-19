@@ -666,7 +666,7 @@ pub struct DaemonInfo {
     /// The daemon's data folder: `~/.moonlet`, or `$MOONLET_HOME` (X55
     /// shows its worktrees folder).
     #[serde(default)]
-    pub data: String,
+    pub data_dir: String,
     pub started_at: u64,
     #[serde(alias = "sessions")]
     pub terminals: usize,

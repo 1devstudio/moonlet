@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchPreview, defaultStartLabel, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesText } from "./gitSettings";
+import { branchPreview, defaultStartLabel, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "./gitSettings";
 import type { HostInfo } from "./protocol";
 
 const host = (id: string, label: string, remote: boolean, status: HostInfo["status"] = "connected"): HostInfo => ({
@@ -54,6 +54,8 @@ describe("prefixError", () => {
     for (const bad of ["my prefix/", "a~", "a^", "a:", "a?", "a*", "a[", "a\\b"]) expect(prefixError(bad)).toBe("Branch names cannot hold spaces or ~ ^ : ? * [ \\");
     for (const bad of ["a..b/", "a//", "a@{"]) expect(prefixError(bad)).toBe("Branch names cannot hold .., // or @{");
     for (const bad of ["/a", ".a", "-a"]) expect(prefixError(bad)).toBe("Start with a letter or digit.");
+    for (const bad of ["team/.x/", "x.lock/", "a/b.lock/c"]) expect(prefixError(bad)).toBe("No part can start with . or end with .lock");
+    expect(prefixError("a\u0007b")).toBe("Branch names cannot hold spaces or ~ ^ : ? * [ \\");
   });
 });
 
@@ -68,8 +70,13 @@ describe("new session branches", () => {
     expect(defaultStartLabel("develop", "origin")).toBe("Start from origin/develop (default)");
   });
 
+  it("finds the worktrees in the daemon's data folder, or ~/.moonlet for an older daemon", () => {
+    expect(worktreesFolder({ home: "/Users/alex", data_dir: "/srv/moonlet" })).toBe("/srv/moonlet/worktrees");
+    expect(worktreesFolder({ home: "/Users/alex" })).toBe("/Users/alex/.moonlet/worktrees");
+  });
+
   it("shows the worktrees folder under the user's home as ~", () => {
-    expect(worktreesText("/Users/alex/.moonlet", "/Users/alex")).toBe("~/.moonlet/worktrees/‹project›/‹session›");
-    expect(worktreesText("/srv/moonlet", "/home/alex")).toBe("/srv/moonlet/worktrees/‹project›/‹session›");
+    expect(worktreesText("/Users/alex/.moonlet/worktrees", "/Users/alex")).toBe("~/.moonlet/worktrees/‹project›/‹session›");
+    expect(worktreesText("/srv/moonlet/worktrees", "/home/alex")).toBe("/srv/moonlet/worktrees/‹project›/‹session›");
   });
 });

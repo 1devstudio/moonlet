@@ -212,7 +212,7 @@ impl Daemon {
             pid: std::process::id(),
             host: hostname(),
             home: dirs_home(),
-            data: moonlet_core::paths::home().display().to_string(),
+            data_dir: moonlet_core::paths::home().display().to_string(),
             started_at: self.started_at,
             terminals: self.terminals.len(),
         }

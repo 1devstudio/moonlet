@@ -1,12 +1,12 @@
 // Settings › Git (X55): branches, worktrees and archiving, per host. Each
 // host's daemon keeps its own, in `~/.moonlet/git.toml`.
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Folder, GitBranch } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { branchPreview, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesText } from "../../lib/gitSettings";
-import { M, type GitSettings } from "../../lib/protocol";
+import { branchPreview, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "../../lib/gitSettings";
+import { M, type DaemonInfo, type GitSettings } from "../../lib/protocol";
 import { errorToast, setGitSettings, useStore } from "../../lib/store";
 import { Button, cx } from "../ui";
 import { Card, PageHeading, Section, Segmented, SwitchRow, fieldCls, radioProps } from "./controls";
@@ -28,7 +28,8 @@ function HostSwitch({ host, onChange }: { host: string; onChange: (host: string)
 
 const mono = (text: string) => <span className="font-mono">{text}</span>;
 
-/** "Branch prefix": saved when the field is left, if git would take it. */
+/** "Branch prefix": saved when the field is left or the page closes, if
+ * git would take it. */
 function PrefixRow({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (prefix: string) => void }) {
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
@@ -36,6 +37,10 @@ function PrefixRow({ value, disabled, onSave }: { value: string; disabled: boole
   const save = () => {
     if (!error && text !== value) onSave(text);
   };
+  // Closing Settings unmounts the field without a blur.
+  const latest = useRef(save);
+  latest.current = save;
+  useEffect(() => () => latest.current(), []);
   return (
     <div data-setting="git-branch-prefix" className="grid grid-cols-[220px_minmax(0,1fr)] items-start gap-4 px-4 py-3.5">
       <div className="flex flex-col gap-[3px] pt-[5px]">
@@ -122,20 +127,20 @@ function StartRow({ value, disabled, onChange }: { value: GitSettings["start_fro
 
 /** Where the host's daemon puts worktrees; Reveal in Finder on This Mac. */
 function WorktreesRow({ host }: { host: string }) {
-  const [info, setInfo] = useState<{ home: string; data?: string } | null>(null);
+  const [info, setInfo] = useState<DaemonInfo | null>(null);
   useEffect(() => {
     setInfo(null);
-    void rpc<{ home: string; data?: string }>(host, M.daemonInfo).then(setInfo, () => {});
+    void rpc<DaemonInfo>(host, M.daemonInfo).then(setInfo, () => {});
   }, [host]);
-  const data = info ? info.data || `${info.home}/.moonlet` : null;
+  const folder = info && worktreesFolder(info);
   return (
     <div data-setting="git-worktrees" className="flex items-center gap-6 px-4 py-3.5">
       <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
         <span className="ui-text-13">Worktrees folder</span>
-        <span className="truncate font-mono ui-text-12 text-muted">{data && info ? worktreesText(data, info.home) : "…"}</span>
+        <span className="truncate font-mono ui-text-12 text-muted">{info && folder ? worktreesText(folder, info.home) : "…"}</span>
       </div>
-      {host === "local" && data && (
-        <Button variant="ghost" size="sm" onClick={() => void revealItemInDir(`${data}/worktrees`).catch(errorToast)}>
+      {host === "local" && folder && (
+        <Button variant="ghost" size="sm" onClick={() => void revealItemInDir(folder).catch(errorToast)}>
           <Folder size={12} /> Reveal in Finder
         </Button>
       )}

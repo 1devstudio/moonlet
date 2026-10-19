@@ -24,9 +24,12 @@ export const tooOldText = (host: string) => `${host}'s moonletd is too old for G
 /** Why git would reject branches named `<prefix>…`, or "". The daemon
  * checks the same. */
 export function prefixError(p: string): string {
-  if (/[\s~^:?*[\\]/.test(p)) return "Branch names cannot hold spaces or ~ ^ : ? * [ \\";
+  if (/[\s\x00-\x1f\x7f~^:?*[\\]/.test(p)) return "Branch names cannot hold spaces or ~ ^ : ? * [ \\";
   if (p.includes("..") || p.includes("//") || p.includes("@{")) return "Branch names cannot hold .., // or @{";
   if (/^[/.-]/.test(p)) return "Start with a letter or digit.";
+  // The last part goes on with the session's name.
+  const parts = p.split("/");
+  if (parts.some((part, i) => part.startsWith(".") || (i < parts.length - 1 && part.endsWith(".lock")))) return "No part can start with . or end with .lock";
   return "";
 }
 
@@ -36,5 +39,9 @@ export const branchPreview = (prefix: string) => `${prefix}add-search-to-the-pro
 /** The composer's item for starting where the host's settings say. */
 export const defaultStartLabel = (base: string, from: GitSettings["start_from"]) => `Start from ${from === "origin" ? `origin/${base}` : base} (default)`;
 
-/** Where sessions' worktrees go, from the daemon's data folder. */
-export const worktreesText = (data: string, home: string) => `${tildePath(`${data}/worktrees`, home)}/‹project›/‹session›`;
+/** The host's worktrees folder, from `daemon.info`; a daemon from before
+ * `data_dir` keeps them in `~/.moonlet`. */
+export const worktreesFolder = (info: { home: string; data_dir?: string }) => `${info.data_dir || `${info.home}/.moonlet`}/worktrees`;
+
+/** Where sessions' worktrees go, as the page shows it. */
+export const worktreesText = (folder: string, home: string) => `${tildePath(folder, home)}/‹project›/‹session›`;

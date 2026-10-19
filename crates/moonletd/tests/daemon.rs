@@ -552,7 +552,7 @@ async fn git_settings_are_kept_by_the_daemon_in_git_toml() {
     assert!(!s.draft_prs);
     // Where its worktrees folder is, for the page.
     let info: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
-    assert_eq!(std::path::Path::new(&info.data), d.home.path());
+    assert_eq!(std::path::Path::new(&info.data_dir), d.home.path());
 
     let s: GitSettings = c
         .request(methods::GIT_SET_SETTINGS, serde_json::json!({"draft_prs": true}))
