@@ -122,6 +122,8 @@ pub struct GitSettings {
     pub archive_branch: BranchOnArchive,
     /// Also delete a merged PR's branch on origin when it is deleted here.
     pub delete_remote_branch: bool,
+    /// Before archiving, list uncommitted files and commits not on origin.
+    pub warn_unpushed: bool,
     /// How the Commit dialog's "Stage all changes first" starts.
     pub stage_all: bool,
     /// How the Create pull request dialog's "Draft" starts.
@@ -141,6 +143,7 @@ impl Default for GitSettings {
             archive_worktree: WorktreeOnArchive::Remove,
             archive_branch: BranchOnArchive::Merged,
             delete_remote_branch: false,
+            warn_unpushed: true,
             stage_all: true,
             draft_prs: false,
             fetch_minutes: 5,
@@ -182,6 +185,24 @@ pub enum BranchOnArchive {
     #[default]
     Merged,
     Always,
+}
+
+/// Work in a session that is only on its host, read before archiving (X55).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnpushedWork {
+    /// Uncommitted files, with git's one-letter status (`M`, `A`, `D`, `R`, `?`).
+    pub files: Vec<UnpushedFile>,
+    /// Commits not on origin: ahead of the upstream, or on no other branch
+    /// or remote when there is none.
+    pub commits: u32,
+    /// The branch's upstream, such as `origin/moonlet/fix`, if it has one.
+    pub upstream: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnpushedFile {
+    pub status: String,
+    pub path: String,
 }
 
 /// `session.archive`'s result (X55).

@@ -199,6 +199,14 @@ export function GitPage() {
             disabled={tooOld}
             onChange={(on) => set({ delete_remote_branch: on })}
           />
+          <SwitchRow
+            setting="git-warn-unpushed"
+            label="Warn before losing unpushed work"
+            hint="Lists uncommitted files and commits not on origin before the folder or branch goes."
+            on={g.warn_unpushed}
+            disabled={tooOld}
+            onChange={(on) => set({ warn_unpushed: on })}
+          />
         </Card>
       </Section>
       <Section title="Commits and pull requests">

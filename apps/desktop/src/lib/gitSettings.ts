@@ -2,7 +2,7 @@
 // `~/.moonlet/git.toml`. Pure helpers for the page and the dialogs that
 // follow them.
 
-import type { GitSettings, HostInfo } from "./protocol";
+import type { GitSettings, HostInfo, UnpushedWork } from "./protocol";
 import { tildePath } from "./profiles";
 
 export const DEFAULT_GIT_SETTINGS: GitSettings = {
@@ -11,6 +11,7 @@ export const DEFAULT_GIT_SETTINGS: GitSettings = {
   archive_worktree: "remove",
   archive_branch: "merged",
   delete_remote_branch: false,
+  warn_unpushed: true,
   stage_all: true,
   draft_prs: false,
   fetch_minutes: 5,
@@ -110,4 +111,38 @@ export function archivePlan(g: GitSettings, prState: string | null | undefined, 
 export function archiveFlags(plan: ArchivePlan, checked: boolean) {
   const del = plan.branch === "delete" || (plan.branch === "ask" && checked);
   return { remove_worktree: plan.removeWorktree, delete_branch: del, delete_remote: del && plan.remote };
+}
+
+/** The archive prompt's box of work only on this machine (X55). */
+export interface UnpushedView {
+  heading: string;
+  /** The first 8 uncommitted files. */
+  files: UnpushedWork["files"];
+  /** Uncommitted files past those. */
+  more: number;
+  summary: string;
+  /** Pushing would save it all: commits, and no uncommitted files. */
+  canPush: boolean;
+}
+
+const MAX_FILES = 8;
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** What archiving with `plan` would take that is only on `host` ("this Mac", or a host's name), or null.
+ * Files go with a removed folder; commits too, or with a deleted branch. */
+export function unpushedView(work: UnpushedWork, plan: ArchivePlan, branch: string, host: string): UnpushedView | null {
+  const files = plan.removeWorktree ? work.files : [];
+  const commits = plan.removeWorktree || plan.branch !== "keep" ? work.commits : 0;
+  if (!files.length && !commits) return null;
+  const parts = [
+    ...(files.length ? [plural(files.length, "uncommitted file", "uncommitted files")] : []),
+    ...(commits ? [`${plural(commits, "commit", "commits")} not pushed to ${work.upstream ?? `origin/${branch}`}`] : []),
+  ];
+  return {
+    heading: `This work is only on ${host}`,
+    files: files.slice(0, MAX_FILES),
+    more: Math.max(0, files.length - MAX_FILES),
+    summary: parts.join(" · "),
+    canPush: !files.length && commits > 0,
+  };
 }

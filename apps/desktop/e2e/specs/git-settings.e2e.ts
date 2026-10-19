@@ -3,6 +3,8 @@
 
 import { $, browser, expect } from "@wdio/globals";
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { choose, closeSettings, fill, openSettings, projectId, rpc, sel, SESSION, world } from "../fixtures";
 
 const w = world();
@@ -84,6 +86,21 @@ describe("Git settings", () => {
     await browser.waitUntil(() => execFileSync("git", ["-C", w.repo, "branch", "--list", s.branch], { encoding: "utf8" }).trim() === "", { timeoutMsg: "the branch is still there" });
     // Specs share the daemon: put the default back at once (confirm-modal asks).
     rpc(w, "git.set_settings", { archive_branch: "merged" });
+  });
+
+  it("warns before archiving work that is only on this Mac", async () => {
+    const s = rpc<{ path: string; branch: string }>(w, "session.create", { project_id: projectId(w), name: "Unpushed", agent: "none" });
+    writeFileSync(join(s.path, "notes.md"), "draft\n");
+    await $(sel.sessionRow("Unpushed")).click();
+    await $('button[title="More"]').click();
+    await $(sel.button("Archive session…")).click();
+    const box = `${sel.confirm("Archive session")}//*[@role="group"][@aria-label="This work is only on this Mac"]`;
+    await expect($(box)).toBeDisplayed();
+    await expect($(`${box}//*[normalize-space()="? notes.md"]`)).toBeExisting();
+    await expect($(`${box}//*[normalize-space()="1 uncommitted file"]`)).toBeDisplayed();
+    await expect($(sel.confirmButton("Push, then archive"))).toBeDisabled();
+    await $(sel.confirmButton("Archive anyway")).click();
+    await expect($(sel.sessionRow("Unpushed"))).not.toBeExisting({ wait: 15_000 });
   });
 
   it("starts Create pull request as a draft", async () => {
