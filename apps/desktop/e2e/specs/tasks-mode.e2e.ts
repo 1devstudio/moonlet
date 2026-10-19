@@ -476,8 +476,10 @@ describe("Tasks mode", () => {
     // The issue's state moves from the tab, as from the task bar and the detail.
     const state = '//*[@role="tabpanel"]//select[@aria-label="State of acme/storefront#12"]';
     await choose(state, "1");
+    await expect($(`${state}/option[normalize-space()="Closed"]`)).toBeSelected();
     await browser.waitUntil(() => asked().includes("issue close 12 --reason completed"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
     await choose(state, "0");
+    await expect($(`${state}/option[normalize-space()="Open"]`)).toBeSelected();
     await browser.waitUntil(() => asked().includes("issue reopen 12"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
     await expect($('//section[@aria-label="Sessions on this task"]').$(sel.text("this session"))).toBeDisplayed();
     await $('//*[@role="tabpanel"]//button[normalize-space()="Unlink"]').click();
