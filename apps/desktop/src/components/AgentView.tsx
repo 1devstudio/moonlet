@@ -68,7 +68,7 @@ import {
 } from "../lib/chat";
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
-import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown } from "../lib/markdown";
+import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown } from "../lib/markdown";
 import { openAgents, openChanges, openFileTab } from "../lib/actions";
 import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, sendNowLabel, sendNowParams, sendNowWarning, unqueued, waitingOn } from "../lib/queued";
@@ -127,9 +127,10 @@ export function useProjectFiles(host: string, root: string, reloadWhen: unknown)
   return useMemo(() => (path: string) => !!files?.has(path), [files]);
 }
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+/** Chat Markdown; `task` renders a task's description (X46), at the panel's smaller size. */
+export const Markdown = memo(function Markdown({ text, task = false }: { text: string; task?: boolean }) {
   const files = useContext(FileLinks);
-  const html = useMemo(() => renderChatMarkdown(text, files?.exists), [text, files?.exists]);
+  const html = useMemo(() => (task ? renderTaskMarkdown(text) : renderChatMarkdown(text, files?.exists)), [text, task, files?.exists]);
   const [link, setLink] = useState<{ url: string; rect: DOMRect } | null>(null);
   const hideTimer = useRef<number>(undefined);
   const keep = () => window.clearTimeout(hideTimer.current);
@@ -156,7 +157,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <>
       <div
-        className="chat-md selectable"
+        className={cx("chat-md selectable", task && "task-md")}
         // Sanitized: markdown-it with HTML disabled, then DOMPurify.
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={(e) => {

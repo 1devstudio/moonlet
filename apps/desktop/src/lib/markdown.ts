@@ -309,12 +309,58 @@ export function linkToolbarPosition(
   return link.top > 40 ? { left, bottom: win.height - link.top + 2 } : { left, top: link.bottom + 2 };
 }
 
-/** Agent message HTML; only paths `exists` accepts become file links (X30), none without it. */
-export function renderChatMarkdown(source: string, exists?: FileCheck): string {
-  return DOMPurify.sanitize(chatMd.render(source, { exists }), {
+// In a task's description (X46), a checklist item (`- [ ]`, `- [x]`) starts
+// with a box, ticked or not, in place of its brackets.
+chatMd.core.ruler.push("task_checklists", (state) => {
+  if (!(state.env as { task?: boolean } | undefined)?.task) return;
+  state.tokens.forEach((tok, i) => {
+    const first = tok.type === "inline" ? tok.children?.[0] : undefined;
+    const item = state.tokens[i - 2];
+    const m = first?.type === "text" && item?.type === "list_item_open" ? /^\[([ xX])\]\s+/.exec(first.content) : null;
+    if (!first || !m) return;
+    first.content = first.content.slice(m[0].length);
+    const done = m[1] !== " ";
+    const box = Object.assign(new state.Token("html_inline", "", 0), {
+      content: `<span class="task-check${done ? " done" : ""}" aria-label="${done ? "Done" : "Not done"}"></span>`,
+    });
+    tok.children!.unshift(box);
+    item.attrJoin("class", "task-item");
+  });
+});
+
+// Chat shows no images (nothing remote loads); a task's description shows
+// each as a link to it, named by its alt text.
+const defaultImage = chatMd.renderer.rules.image!;
+chatMd.renderer.rules.image = (tokens, idx, options, env, self) => {
+  if (!(env as { task?: boolean } | undefined)?.task) return defaultImage(tokens, idx, options, env, self);
+  const alt = self.renderInlineAsText(tokens[idx].children ?? [], options, env).trim();
+  return `<a href="${escapeHtml(String(tokens[idx].attrGet("src") ?? ""))}">${escapeHtml(alt ? `Image: ${alt}` : "Image")}</a>`;
+};
+
+const chatSanitize = (html: string) =>
+  DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input", "button", "img", "style"],
     FORBID_ATTR: ["srcset", "ping", "style"],
     ALLOW_UNKNOWN_PROTOCOLS: false,
   });
+
+/** `source` without HTML comments (issue templates' hints), except in code fences. */
+const withoutComments = (source: string) =>
+  source
+    .split(/(^```[^\n]*\n[\s\S]*?^```)/m)
+    .map((part, i) => (i % 2 ? part : part.replace(/<!--[\s\S]*?-->/g, "")))
+    .join("");
+
+/**
+ * A task's description (X46) as chat Markdown: checklist items with boxes,
+ * images as links, and no HTML comments, as GitHub shows an issue.
+ */
+export function renderTaskMarkdown(source: string): string {
+  return chatSanitize(chatMd.render(withoutComments(source), { task: true }));
+}
+
+/** Agent message HTML; only paths `exists` accepts become file links (X30), none without it. */
+export function renderChatMarkdown(source: string, exists?: FileCheck): string {
+  return chatSanitize(chatMd.render(source, { exists }));
 }
