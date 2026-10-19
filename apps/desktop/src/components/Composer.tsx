@@ -3,7 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, Plus, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
-import { branchUser, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
+import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { linkChoices } from "../lib/taskLinking";
 import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
 import { attachments, branchRow, firstMessage, pickerHint, placeholder, sessionName, suggestedTask, type Attachment } from "../lib/composer";
@@ -15,7 +15,6 @@ import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { Markdown } from "./AgentView";
-import { composerTask } from "./tasks/TasksMode";
 import { fileMention } from "../lib/plusMenu";
 import { fromOtherDialog } from "../lib/modal";
 
