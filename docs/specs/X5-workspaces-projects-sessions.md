@@ -28,6 +28,8 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 
 ## Composer (new session)
 
+The composer's layout and source picks are now X54's: a header with the project, the task and the source picker, a branch row, and attachments above the prompt. The rest of this section still holds.
+
 - Opened by `+` on a project, ⇧⌘N, or the palette. It is a large dialog:
   - **Header:** the project picker (`name ⌄`) and `⋯`, which holds "Start from branch…", "Use existing branch…" and "Base branch". On the right is a source picker (GitHub ⌄) to start from an issue or PR (`gh issue list` / `gh pr list`). An issue fills the prompt with its title and body and links it; a PR checks out its branch.
   - **Body:** a textarea, "What do you want to work on?" (optional).
