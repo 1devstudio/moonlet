@@ -73,6 +73,11 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
         <div className="flex items-center gap-2 font-mono ui-text-12 text-muted">
           <TaskGlyph column={card.column} size={13} />
           {card.task.key}
+          {ws.workspace_id && (
+            <span className="ml-auto font-sans">
+              <StateMenu host={host} workspaceId={ws.workspace_id} task={card.task} />
+            </span>
+          )}
         </div>
         <h2 className="mt-1 ui-text-15 font-medium text-fg">{card.task.title}</h2>
         <div className="mt-1 ui-text-12 text-faint">
