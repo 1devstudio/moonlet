@@ -96,6 +96,13 @@ describe("new session composer (X54)", () => {
     await expect($(`${row}//span[normalize-space()="PR #214"]`)).toBeDisplayed();
     await expect($(`${row}//span[normalize-space()="fix/side-nav-cleanup"]`)).toBeDisplayed();
     await expect($(`${row}//span[normalize-space()="existing branch · checks out in a new worktree"]`)).toBeDisplayed();
+    // The attachment's × stops sending the PR's text; the branch stays the PR's (X54).
+    const attachment = $(`${dialog}//div[@role="group"][@aria-label="PR #214 description and review comments · Clean up the side nav before the Catalyst release"]`);
+    await attachment.$('.//button[@title="Don’t send the PR description"]').click();
+    await expect(attachment).not.toBeExisting();
+    await expect($(`${row}//span[normalize-space()="PR #214"]`)).toBeDisplayed();
+    // Nothing of the PR is attached any more: the placeholder says no more of its review comments.
+    await expect($(`${dialog}//textarea[@placeholder="What do you want to work on?"]`)).toBeDisplayed();
     await $(`${row}//button[normalize-space()="New branch instead"][@title="Create a new branch from main instead"]`).click();
     await expect($(`${row}//span[normalize-space()="New branch"]`)).toBeDisplayed();
     await expect($(`${row}//span[normalize-space()="PR #214"]`)).not.toBeExisting();

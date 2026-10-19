@@ -9,11 +9,11 @@ import { focusThrottle, latestPerKey } from "./prPoll";
 import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
 import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
-import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules } from "./keepInStep";
+import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules, startAction } from "./keepInStep";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, trackerOf } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, taskStart, trackerOf } from "./tasks";
 import { parseTrackerLink } from "./trackerSources";
 import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -1313,6 +1313,23 @@ const OFF: Rules = { session_starts: "off", pr_opens: "off", all_merged: "off", 
 /** The rules for a task: its tracker's, or all off when its Keep in step switch is off (X46). */
 export function rulesFor(config: TrackersConfig, task: Pick<Task, "connection" | "key">): Rules {
   return useTasks.getState().paused[`${task.connection} ${task.key}`] ? OFF : trackerSettings(config, task.connection).rules;
+}
+
+/**
+ * What the new-session composer starts with for `task` in a workspace (X46):
+ * the link, the description, the "session starts" checkbox and the branch
+ * template. Tasks mode's Start and the composer's Link a task use it (X54).
+ */
+export function composerTask(host: string, workspaceId: string, task: Task): TaskStart {
+  const state = useTasks.getState();
+  const data = state.data[wsKey(host, workspaceId)];
+  const settings = trackerSettings(trackersConfig(state), task.connection);
+  return {
+    ...taskStart(task, data?.repos ?? {}, data?.sourceProjects ?? {}),
+    assign: startAction(task, rulesFor(trackersConfig(state), task).session_starts),
+    template: settings.branch_template || undefined,
+    maxLen: settings.max_length,
+  };
 }
 
 function storedPaused(): Record<string, true> {
