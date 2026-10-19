@@ -24,7 +24,7 @@ const ISSUES = JSON.stringify([
   {
     number: 12,
     title: "Fix checkout button",
-    body: "The checkout button does nothing on Safari.",
+    body: "### Context\n\nThe checkout button does nothing on Safari.\n\n### Steps\n\n1. Add any product to the cart.\n2. Open the cart in Safari.\n3. Press **Checkout**.\n\nNothing happens, and the console shows no error.\n\n![Safari console](https://example.com/console.png)\n\n- [x] Reproduced on Safari 18\n- [ ] Fixed\n\nThree customers reported it this week.",
     url: "https://github.com/acme/storefront/issues/12",
     state: "OPEN",
     stateReason: "",
@@ -446,6 +446,14 @@ describe("Tasks mode", () => {
     await expect(bar.$(sel.text("acme/storefront#12"))).toBeDisplayed({ wait: 30_000 });
     await expect(bar.$(sel.text("Fix checkout button"))).toBeDisplayed();
     await $('//button[@role="tab"][normalize-space()="Task"]').click();
+    // The whole description, its Markdown rendered.
+    const tab = $('//*[@role="tabpanel"]');
+    await expect(tab.$('.//h3[normalize-space()="Steps"]')).toBeDisplayed();
+    await expect(tab.$('.//li[normalize-space()="Press Checkout."]/strong[normalize-space()="Checkout"]')).toBeDisplayed();
+    await expect(tab.$('.//p[normalize-space()="Three customers reported it this week."]')).toBeDisplayed();
+    await expect(tab.$('.//li[normalize-space()="Reproduced on Safari 18"]/*[@aria-label="Done"]')).toBeDisplayed();
+    await expect(tab.$('.//a[@href="https://example.com/console.png"][normalize-space()="Image: Safari console"]')).toBeDisplayed();
+    await expect(tab.$('.//*[contains(text(), "###") or contains(text(), "[x]")]')).not.toBeExisting();
     await expect($('//section[@aria-label="Sessions on this task"]').$(sel.text("this session"))).toBeDisplayed();
     await $('//*[@role="tabpanel"]//button[normalize-space()="Unlink"]').click();
     await expect(bar).not.toBeExisting({ wait: 10_000 });
