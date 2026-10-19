@@ -454,6 +454,8 @@ body:not(.kbd-nav) button:focus {
 .chat-md table { border-collapse: collapse; display: block; overflow: auto; }
 .chat-md th, .chat-md td { border: 1px solid var(--color-border-strong); padding: 4px 10px; }
 .chat-md hr { border: 0; border-top: 1px solid var(--color-border); margin: 1em 0; }
+/* A task's description in the Task tab (X46): the panel's smaller text. */
+.task-md .chat-md { font-size: calc(12.5px * var(--ui-scale, 1)); }
 /* Code fences in messages and file contents in tool calls (X17, `.code-hl`). */
 :is(.chat-md, .code-hl) :is(.hljs-keyword, .hljs-selector-tag, .hljs-built_in) { color: #c49bff; }
 :is(.chat-md, .code-hl) :is(.hljs-string, .hljs-attr) { color: #8fd18e; }
