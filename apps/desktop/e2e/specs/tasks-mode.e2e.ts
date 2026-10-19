@@ -83,6 +83,17 @@ const wt18 = join(w.root, "wt-18-orphan-work");
 const tasksButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]');
 const sessionsButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[@aria-label="Sessions"]');
 const card = (key: string, column: string) => $(`//section[@aria-label=${JSON.stringify(column)}]//article[starts-with(@aria-label, ${JSON.stringify(key)})]`);
+/** #12's whole description inside `scope`, its Markdown rendered: the Task tab and the Tasks mode detail show it alike. */
+async function expectRenderedDescription(scope: string) {
+  const el = $(scope);
+  await expect(el.$('.//h3[normalize-space()="Steps"]')).toBeDisplayed({ wait: 10_000 });
+  await expect(el.$('.//li[normalize-space()="Press Checkout."]/strong[normalize-space()="Checkout"]')).toBeDisplayed();
+  // The last paragraph, past where four lines would cut it.
+  await expect(el.$('.//p[normalize-space()="Three customers reported it this week."]')).toBeDisplayed();
+  await expect(el.$('.//li[normalize-space()="Reproduced on Safari 18"]/*[@aria-label="Done"]')).toBeDisplayed();
+  await expect(el.$('.//a[@href="https://example.com/console.png"][normalize-space()="Image: Safari console"]')).toBeDisplayed();
+  await expect(el.$('.//*[contains(text(), "###") or contains(text(), "[x]")]')).not.toBeExisting();
+}
 let linkedId = "";
 
 describe("Tasks mode", () => {
@@ -442,13 +453,7 @@ describe("Tasks mode", () => {
 
   it("shows the whole description in the detail, its Markdown rendered", async () => {
     await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
-    const detail = $('//aside[@aria-label="Task detail"]');
-    await expect(detail.$('.//h3[normalize-space()="Steps"]')).toBeDisplayed({ wait: 10_000 });
-    await expect(detail.$('.//li[normalize-space()="Press Checkout."]/strong[normalize-space()="Checkout"]')).toBeDisplayed();
-    await expect(detail.$('.//li[normalize-space()="Reproduced on Safari 18"]/*[@aria-label="Done"]')).toBeDisplayed();
-    // The last paragraph, past where four lines would have cut it.
-    await expect(detail.$('.//p[normalize-space()="Three customers reported it this week."]')).toBeDisplayed();
-    await expect(detail.$('.//*[contains(text(), "###") or contains(text(), "[x]")]')).not.toBeExisting();
+    await expectRenderedDescription('//aside[@aria-label="Task detail"]');
   });
 
   it("shows each session's card in the detail, and ↵ opens the first", async () => {
@@ -522,13 +527,7 @@ describe("Tasks mode", () => {
     await expect(bar.$(sel.text("Fix checkout button"))).toBeDisplayed();
     await $('//button[@role="tab"][normalize-space()="Task"]').click();
     // The whole description, its Markdown rendered.
-    const tab = $('//*[@role="tabpanel"]');
-    await expect(tab.$('.//h3[normalize-space()="Steps"]')).toBeDisplayed();
-    await expect(tab.$('.//li[normalize-space()="Press Checkout."]/strong[normalize-space()="Checkout"]')).toBeDisplayed();
-    await expect(tab.$('.//p[normalize-space()="Three customers reported it this week."]')).toBeDisplayed();
-    await expect(tab.$('.//li[normalize-space()="Reproduced on Safari 18"]/*[@aria-label="Done"]')).toBeDisplayed();
-    await expect(tab.$('.//a[@href="https://example.com/console.png"][normalize-space()="Image: Safari console"]')).toBeDisplayed();
-    await expect(tab.$('.//*[contains(text(), "###") or contains(text(), "[x]")]')).not.toBeExisting();
+    await expectRenderedDescription('//*[@role="tabpanel"]');
     // The issue's state moves from the tab, as from the task bar and the detail.
     const state = '//*[@role="tabpanel"]//select[@aria-label="State of acme/storefront#12"]';
     await choose(state, "1");
