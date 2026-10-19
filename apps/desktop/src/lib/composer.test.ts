@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachments, branchRow, firstMessage, placeholder, sessionName } from "./composer";
+import { attachments, branchRow, firstMessage, pickerHint, placeholder, sessionName } from "./composer";
 
 const facts = { base: "main", task: null, taskBranch: null, from: null, worktree: null, pr: null, checkbox: false };
 const web = { key: "WEB-279" };
@@ -178,5 +178,20 @@ describe("sessionName (X54)", () => {
     expect(sessionName({ task: null, pr, issue })).toBe("Clean up the side nav before the Storefront release");
     expect(sessionName({ task: null, pr: null, issue })).toBe("Terminal flickers when resizing a split");
     expect(sessionName({ task: null, pr: null, issue: null })).toBe(null);
+  });
+});
+
+describe("pickerHint (X54)", () => {
+  it("says what a pick does, with a task and without", () => {
+    const task = { key: "WEB-279", branch: "web-279-remove-placeholder-side-nav-menu-items" };
+    expect(pickerHint("pr", task, "main")).toBe("Picking a PR starts the session on its branch, instead of creating web-279-… from main. The task link stays.");
+    expect(pickerHint("pr", null, "main")).toBe("Picking a PR starts the session on its branch, instead of a new branch from main.");
+    expect(pickerHint("issue", task, "main")).toBe("Adds the issue as a second attachment next to WEB-279’s description. It doesn’t replace the task.");
+    expect(pickerHint("issue", null, "main")).toBe("Adds the issue as an attachment, and names the session after it.");
+  });
+
+  it("names a short branch whole, and none before it is worked out", () => {
+    expect(pickerHint("pr", { key: "acme/web#7", branch: "7-gifts" }, "main")).toBe("Picking a PR starts the session on its branch, instead of creating 7-gifts from main. The task link stays.");
+    expect(pickerHint("pr", { key: "WEB-279", branch: null }, "main")).toBe("Picking a PR starts the session on its branch, instead of creating the task's branch from main. The task link stays.");
   });
 });
