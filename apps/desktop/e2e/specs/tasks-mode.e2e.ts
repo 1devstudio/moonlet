@@ -313,10 +313,12 @@ describe("Tasks mode", () => {
     // "Terminal only", so no agent starts (the composer reads this each time it opens).
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), projectId(w));
     await card("acme/storefront#15", "Open").$(sel.button("Start")).click();
-    await expect($(sel.text("For acme/storefront#15"))).toBeDisplayed();
+    // The task chip: the key and the title, no "For" (X54).
+    await expect($('//*[@aria-label="Task acme/storefront#15"][.//span[normalize-space()="acme/storefront#15"]][.//span[normalize-space()="Gift cards at checkout"]]')).toBeDisplayed();
     await expect($('//textarea[@placeholder="What do you want to work on?"]')).toHaveValue("acme/storefront#15 · Gift cards at checkout");
     // Keep in step: "session starts" is Automatically, so the issue is assigned (X46).
-    await expect($('//label[normalize-space()="Assign acme/storefront#15 to me"]/input')).toBeSelected();
+    // In the branch row, with a short label and the long one as its tooltip (X54).
+    await expect($('//label[normalize-space()="Assign to me"][@title="Assign acme/storefront#15 to me"]/input')).toBeSelected();
     // ⌘↵ at once, without waiting for the branch name to show: Create waits for it.
     await $('//textarea[@placeholder="What do you want to work on?"]').click();
     await browser.keys(["Meta", "Enter"]);
@@ -341,7 +343,7 @@ describe("Tasks mode", () => {
       const start = $('//aside[@aria-label="Task detail"]').$(`.${sel.button("Start session")}`);
       await start.waitForDisplayed({ timeout: 15_000 });
       await start.click();
-      await expect($(sel.text("12-orphan-fix · existing worktree"))).toBeDisplayed({ wait: 10_000 });
+      await expect($('//span[normalize-space()="12-orphan-fix"]/following-sibling::span[normalize-space()="existing worktree"]')).toBeDisplayed({ wait: 10_000 });
       // The worktree belongs to its project: the picker stays put.
       await expect($('//button[@title="This worktree belongs to this project"]')).toBeDisabled();
       await $(sel.button("Create")).click();
@@ -383,14 +385,14 @@ describe("Tasks mode", () => {
     await expect(detail.$(`.${sel.text("No sessions yet. Starting one names the branch after the issue.")}`)).toBeDisplayed();
     // + New session opens the composer for the task.
     await detail.$(`.${sel.button("+ New session")}`).click();
-    await expect($(sel.text("For acme/storefront#19"))).toBeDisplayed({ wait: 10_000 });
+    await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Escape");
     // So does Start a session for <key> in the list.
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
     const row = $('//div[@role="row"][starts-with(@aria-label, "acme/storefront#19")]');
     await row.$('button[aria-label="Expand acme/storefront#19"]').click();
     await row.$(`.${sel.button("Start a session for acme/storefront#19")}`).click();
-    await expect($(sel.text("For acme/storefront#19"))).toBeDisplayed({ wait: 10_000 });
+    await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Escape");
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });

@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, MoreHorizontal, X } from "lucide-react";
+import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { TaskStart } from "../lib/tasks";
 import { branchUser, leaveTasksMode, startedFromTask } from "../lib/tasksStore";
 import { composerOptions, composerPick, composerProjects, composerTarget } from "../lib/workspaces";
+import { branchRow } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
-import { AgentIcon, cx } from "./ui";
+import { AgentIcon, BoardTile, IconButton, cx } from "./ui";
 import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
@@ -66,16 +67,20 @@ function SourcePicker({ host, project, onIssue, onPr }: { host: string; project:
   const shown = (items ?? []).filter((i) => !q || `#${i.number} ${i.title}`.toLowerCase().includes(q.toLowerCase()));
   return (
     <div className="relative">
-      <button className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-fg hover:bg-hover" title="Start from a GitHub issue or pull request" onClick={() => setOpen(!open)}>
+      <button
+        className={cx("-my-1 flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-fg hover:bg-hover", open && "bg-hover")}
+        title="Start from a GitHub issue or pull request"
+        onClick={() => setOpen(!open)}
+      >
         <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-black">
-          <GitHubMark size={17} />
+          <GitHubMark size={16} />
         </span>
-        <ChevronDown size={16} className="text-muted" />
+        <ChevronDown size={14} className="text-muted" />
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-50 mt-1 w-[420px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] shadow-2xl">
+          <div className="absolute right-0 z-50 mt-2 w-[420px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] shadow-2xl">
             <div className="flex items-center gap-1 border-b border-border p-2">
               {(["issue", "pr"] as const).map((t) => (
                 <button key={t} className={cx("rounded-md px-2.5 py-1 ui-text-13", tab === t ? "bg-hover text-fg" : "text-muted hover:text-fg")} onClick={() => setTab(t)}>
@@ -385,6 +390,16 @@ export function Composer({
     }
   };
 
+  const row = branchRow({
+    base: current?.project.base_branch ?? "base",
+    task,
+    taskBranch,
+    from,
+    worktree: worktree ?? null,
+    pr,
+    checkbox: !!task?.assign,
+  });
+
   if (!options.length) {
     return (
       <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[14vh]" onMouseDown={close}>
@@ -402,13 +417,15 @@ export function Composer({
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[12vh]" onMouseDown={close}>
       <div
+        role="dialog"
+        aria-label="New session"
         className="w-[min(720px,90vw)] rounded-2xl border border-border-strong bg-[#1f1f1f] shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Escape") close();
         }}
       >
-        <div className="flex items-center gap-3 border-b border-border px-6 py-3.5">
+        <div role="group" aria-label="Project and task" className="flex items-center gap-2.5 border-b border-border py-3 pl-6 pr-4">
           <Menu
             items={projectItems}
             width={300}
@@ -416,7 +433,7 @@ export function Composer({
             trigger={(open) => (
               // An existing worktree belongs to its project: the picker stays put.
               <button
-                className="flex items-center gap-2 rounded-md px-1 py-1 ui-text-14 font-medium hover:bg-hover disabled:hover:bg-transparent"
+                className="-ml-1 flex shrink-0 items-center gap-2 rounded-md px-1 py-1 ui-text-14 font-medium hover:bg-hover disabled:hover:bg-transparent"
                 onClick={open}
                 disabled={!!worktree}
                 title={worktree ? "This worktree belongs to this project" : undefined}
@@ -427,67 +444,21 @@ export function Composer({
               </button>
             )}
           />
-          <Menu
-            items={moreItems}
-            width={280}
-            trigger={(open) => (
-              <button className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg" title="Branch options" onClick={open}>
-                <MoreHorizontal size={16} />
-              </button>
-            )}
-          />
-          {(from || pr || issue || task || worktree || addDirs.length > 0) && (
-            <div className="flex min-w-0 items-center gap-1.5">
-              {task && (
-                <span className="flex min-w-0 items-center gap-1.5 rounded-md bg-hover px-2 py-1 ui-text-12 text-muted" title={task.title}>
-                  <span className="shrink-0 font-mono">For {task.key}</span>
-                  <span className="truncate text-fg">{task.title}</span>
-                  <button title="Remove the task link" onClick={() => setTask(null)} className="hover:text-fg">
-                    <X size={11} />
-                  </button>
-                </span>
-              )}
-              {(worktree || (task && taskBranch)) && (
-                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted" title={worktree ? worktree.path : undefined}>
-                  <GitBranch size={12} /> {worktree ? `${worktree.branch} · existing worktree` : taskBranch}
-                </span>
-              )}
-              {from && (
-                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
-                  <GitBranch size={12} /> {from.existing ? from.ref : `from ${from.ref}`}
-                  <button onClick={() => setFrom(null)} className="hover:text-fg">
-                    <X size={11} />
-                  </button>
-                </span>
-              )}
-              {pr && (
-                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
-                  PR #{pr.number} · {pr.head_branch}
-                  <button onClick={() => setPr(null)} className="hover:text-fg">
-                    <X size={11} />
-                  </button>
-                </span>
-              )}
-              {addDirs.map((d) => (
-                <span key={d} className="flex min-w-0 items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted" title={d}>
-                  <FolderPlus size={12} className="shrink-0" /> <span className="truncate">{d.slice(d.lastIndexOf("/") + 1)}</span>
-                  <button title={`Remove ${d}`} onClick={() => setAddDirs((ds) => ds.filter((x) => x !== d))} className="hover:text-fg">
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-              {issue && (
-                <span className="flex items-center gap-1.5 rounded-md bg-hover px-2 py-1 font-mono ui-text-12 text-muted">
-                  #{issue.number}
-                  <button onClick={() => setIssue(null)} className="hover:text-fg">
-                    <X size={11} />
-                  </button>
-                </span>
-              )}
-            </div>
+          <span className="text-border-strong">|</span>
+          {task ? (
+            // The task chip takes the spare width (X54).
+            <span role="group" aria-label={`Task ${task.key}`} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={task.title}>
+              <BoardTile tracker={task.kind} />
+              <span className="shrink-0 font-mono ui-text-12 text-muted">{task.key}</span>
+              <span className="min-w-0 truncate">{task.title}</span>
+              <IconButton title="Remove the task link" className="shrink-0" onClick={() => setTask(null)}>
+                <X size={12} />
+              </IconButton>
+            </span>
+          ) : (
+            <span className="flex-1" />
           )}
-          <span className="ml-auto" />
-          {current && (
+          {current && !worktree && (
             <SourcePicker
               host={current.host}
               project={current.project}
@@ -504,39 +475,107 @@ export function Composer({
             />
           )}
         </div>
-        {task?.assign && (
-          <label className="flex items-center gap-2 border-b border-border px-6 py-2 ui-text-12.5 text-muted">
-            <input type="checkbox" checked={assign} onChange={(e) => setAssign(e.target.checked)} />
-            {task.assign.label}
-          </label>
-        )}
-        {editingFrom && (
-          <div className="flex items-center gap-2 border-b border-border px-6 py-2.5">
-            <GitBranch size={14} className="text-muted" />
-            <input
-              autoFocus
-              list="moonlet-composer-branches"
-              placeholder={editingFrom === "existing" ? "Existing branch, e.g. feature/login" : `Branch, tag or commit (default ${current?.project.base_branch ?? "base"})`}
-              className="flex-1 bg-transparent font-mono ui-text-13.5 outline-none placeholder:text-faint"
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                const v = (e.target as HTMLInputElement).value.trim();
-                if (e.key === "Enter") {
-                  if (v) setFrom({ ref: v, existing: editingFrom === "existing" });
-                  setPr(null);
-                  setEditingFrom(null);
-                  ta.current?.focus();
-                }
-                if (e.key === "Escape") setEditingFrom(null);
+        {/* The git things (X54): branch and base, chips, the checkbox and branch options. */}
+        <div
+          role="group"
+          aria-label="Branch"
+          className={cx("flex h-[38px] items-center gap-2 border-b border-border pl-6 pr-4 ui-text-12.5 text-muted", row.kind === "pr" ? "bg-done/5" : "bg-panel-2")}
+          title={row.kind === "pr" ? (row.title ?? undefined) : undefined}
+        >
+          {editingFrom ? (
+            <>
+              <GitBranch size={13} className="shrink-0" />
+              <input
+                autoFocus
+                list="moonlet-composer-branches"
+                placeholder={editingFrom === "existing" ? "Existing branch, e.g. feature/login" : `Branch, tag or commit (default ${current?.project.base_branch ?? "base"})`}
+                className="min-w-0 flex-1 bg-transparent font-mono text-fg outline-none placeholder:text-faint"
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  const v = (e.target as HTMLInputElement).value.trim();
+                  if (e.key === "Enter") {
+                    if (v) setFrom({ ref: v, existing: editingFrom === "existing" });
+                    setPr(null);
+                    setEditingFrom(null);
+                    ta.current?.focus();
+                  }
+                  if (e.key === "Escape") setEditingFrom(null);
+                }}
+              />
+              <datalist id="moonlet-composer-branches">
+                {branches.slice(0, 200).map((b) => (
+                  <option key={b} value={b} />
+                ))}
+              </datalist>
+            </>
+          ) : row.kind === "pr" ? (
+            <>
+              <GitPullRequest size={13} className="shrink-0 text-done" />
+              <span className="shrink-0 text-done">PR #{row.number}</span>
+              <span className="min-w-0 truncate font-mono text-fg">{row.name}</span>
+              {row.detail && <span className="shrink-0 text-faint">{row.detail}</span>}
+            </>
+          ) : (
+            <>
+              <GitBranch size={13} className="shrink-0" />
+              {row.name ? <span className="min-w-0 truncate font-mono text-fg">{row.name}</span> : <span className="shrink-0 text-fg">New branch</span>}
+              <span className="shrink-0 text-faint">{row.detail}</span>
+              {row.clear && (
+                <IconButton
+                  title={row.clear}
+                  className="h-5 w-5 shrink-0"
+                  onClick={() => {
+                    setFrom(null);
+                    // The × goes away: keep the focus in the composer, so esc still closes it.
+                    ta.current?.focus();
+                  }}
+                >
+                  <X size={11} />
+                </IconButton>
+              )}
+            </>
+          )}
+          {!editingFrom &&
+            addDirs.map((d) => (
+              <span key={d} className="flex min-w-0 max-w-[160px] shrink items-center gap-1.5 rounded-md bg-hover px-2 py-0.5 font-mono ui-text-12" title={d}>
+                <FolderPlus size={12} className="shrink-0" /> <span className="truncate">{d.slice(d.lastIndexOf("/") + 1)}</span>
+                <button title={`Remove ${d}`} onClick={() => setAddDirs((ds) => ds.filter((x) => x !== d))} className="hover:text-fg">
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          <span className="flex-1" />
+          {task?.assign && (
+            <label className="flex shrink-0 items-center gap-1.5" title={task.assign.title}>
+              <input type="checkbox" className="m-0 accent-accent" checked={assign} onChange={(e) => setAssign(e.target.checked)} />
+              {task.assign.label}
+            </label>
+          )}
+          {row.kind === "pr" ? (
+            <button
+              title={row.undo.title}
+              onClick={() => {
+                setPr(null);
+                ta.current?.focus();
               }}
-            />
-            <datalist id="moonlet-composer-branches">
-              {branches.slice(0, 200).map((b) => (
-                <option key={b} value={b} />
-              ))}
-            </datalist>
-          </div>
-        )}
+              className="flex h-6 shrink-0 items-center gap-[5px] rounded-md px-2 ui-text-12 text-muted hover:bg-hover hover:text-fg">
+              <X size={11} />
+              {row.undo.label}
+            </button>
+          ) : (
+            !worktree && (
+              <Menu
+                items={moreItems}
+                width={280}
+                trigger={(open) => (
+                  <IconButton title="Branch options" className="shrink-0" onClick={open}>
+                    <MoreHorizontal size={14} />
+                  </IconButton>
+                )}
+              />
+            )
+          )}
+        </div>
         <textarea
           ref={ta}
           value={prompt}
@@ -548,9 +587,9 @@ export function Composer({
             }
           }}
           placeholder="What do you want to work on?"
-          className="block h-[200px] w-full resize-none bg-transparent px-6 py-5 ui-text-14 leading-relaxed text-fg outline-none placeholder:text-faint"
+          className="block h-[168px] w-full resize-none bg-transparent px-6 pb-2 pt-4 ui-text-14 leading-[1.6] text-fg outline-none placeholder:text-faint"
         />
-        <div className="flex items-center gap-2 px-5 pb-4">
+        <div className="flex items-center gap-2.5 px-5 pb-4">
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
           {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 ui-text-14" iconSize={14} align="left" />}
           <span className="ml-auto" />

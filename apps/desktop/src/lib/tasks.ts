@@ -199,7 +199,7 @@ export interface TaskStart {
   /** A tracker issue's id and team/project/list, for moving it (X46). */
   tracker?: { id: string; source: string };
   /** The composer's "session starts" checkbox (Keep in step), when it does anything. */
-  assign?: { label: string; checked: boolean } | null;
+  assign?: { label: string; title: string; checked: boolean } | null;
   /** The connection's branch template and max length (X44); the tracker's default when absent. */
   template?: string;
   maxLen?: number;
