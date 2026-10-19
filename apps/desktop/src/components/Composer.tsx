@@ -4,9 +4,8 @@ import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileText, FolderPlus,
 import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
-import { linkChoices } from "../lib/taskLinking";
 import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
-import { attachments, branchRow, firstMessage, pickerHint, placeholder, sessionName, suggestedTask, type Attachment } from "../lib/composer";
+import { attachments, branchRow, firstMessage, linkMenu, pickerHint, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
@@ -487,15 +486,14 @@ export function Composer({
     setAssign(!!start.assign?.checked);
     setTaskQuery("");
   };
-  const canLink = !task && !worktree && !!target && !!taskData?.sources.length;
+  const canLink = !!target && showsLinkSlot({ task: !!task, worktree: !!worktree, sources: !!taskData?.sources.length });
   const suggestion = canLink ? suggestedTask({ pr, issue }, wsTasks) : null;
-  const choices = canLink ? linkChoices({ name: sessionName({ task: null, pr, issue }) ?? prompt.split("\n")[0], branch: pr?.head_branch ?? "" }, wsTasks, taskQuery) : { suggested: [], recent: [] };
-  const taskItem = (t: Task, hint?: string): MenuItem => ({ label: `${t.key} ${t.title}`, hint, onSelect: () => linkTo(t) });
-  const linkItems: MenuItem[] = [
-    ...(choices.suggested.length ? [{ kind: "label" as const, label: "Suggested" }, ...choices.suggested.map((c) => taskItem(c.task, c.reason))] : []),
-    ...(choices.recent.length ? [{ kind: "label" as const, label: "Recent" }, ...choices.recent.map((t) => taskItem(t))] : []),
-    ...(choices.suggested.length + choices.recent.length ? [] : [{ kind: "label" as const, label: "No tasks match" }]),
-  ];
+  const linkItems: MenuItem[] = canLink
+    ? linkMenu({ pr, issue }, prompt, wsTasks, taskQuery).flatMap((section) => [
+        { kind: "label" as const, label: section.label },
+        ...section.tasks.map(({ task: t, hint }) => ({ label: `${t.key} ${t.title}`, hint: hint ?? undefined, onSelect: () => linkTo(t) })),
+      ])
+    : [];
 
   const sent = attachments({ task, issue, pr: pr && prSend ? pr : null, prContext });
   const row = branchRow({
@@ -579,7 +577,7 @@ export function Composer({
                 <>
                   <span className="text-border-strong">·</span>
                   <span className="min-w-0 flex-1 truncate text-faint">
-                    {suggestion.reason.slice(0, -suggestion.task.key.length)}
+                    {suggestion.from} {suggestion.verb}{" "}
                     <span className="font-mono ui-text-12 text-fg">{suggestion.task.key}</span>
                   </span>
                   <button
