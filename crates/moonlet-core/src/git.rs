@@ -986,11 +986,18 @@ const PR_CONTEXT_MAX: usize = 8000;
 /// The most one review or comment adds to it.
 const PR_ITEM_MAX: usize = 1000;
 
+/// Whose words a PR's attachment sends: people with a role in the
+/// repository. A CONTRIBUTOR is anyone with one merged PR, so not them.
+const TRUSTED: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
+
 /// What a picked PR's attachment sends (X54): its description, then its
 /// reviews (author, state and body), its conversation comments and its
-/// comments on lines of code (author, `path:line` and body). `view` is
-/// `gh pr view <n> --json body,reviews,comments`, `lines` is
-/// `gh api repos/{owner}/{repo}/pulls/<n>/comments`.
+/// comments on lines of code (author, `path:line` and body). The text goes
+/// to the agent, so only the PR's author's and those of people with a role
+/// in the repository come, and minimised comments don't; a last line says
+/// how many were left out. `view` is `gh pr view <n> --json
+/// author,body,reviews,comments`, `lines` is `gh api
+/// repos/{owner}/{repo}/pulls/<n>/comments`.
 pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> String {
     let cut = |s: &str, max: usize| -> String {
         let s = s.trim();
@@ -1010,6 +1017,15 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
         }
     };
     let login = |v: &serde_json::Value| v.as_str().unwrap_or("someone").to_string();
+    let author = view["author"]["login"].as_str();
+    let left_out = std::cell::Cell::new(0);
+    let trusted = |who: &serde_json::Value, association: &serde_json::Value| {
+        let ok = (author.is_some() && who.as_str() == author) || TRUSTED.contains(&association.as_str().unwrap_or(""));
+        if !ok {
+            left_out.set(left_out.get() + 1);
+        }
+        ok
+    };
     let mut parts = vec![cut(view["body"].as_str().unwrap_or(""), PR_CONTEXT_MAX)];
 
     // A review in COMMENTED state with no body only holds line comments,
@@ -1027,6 +1043,9 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
                 _ if body.trim().is_empty() => return None,
                 _ => "commented",
             };
+            if !trusted(&r["author"]["login"], &r["authorAssociation"]) {
+                return None;
+            }
             Some(item(format!("@{}, {state}", login(&r["author"]["login"])), body))
         })
         .collect();
@@ -1037,7 +1056,7 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|c| !c["isMinimized"].as_bool().unwrap_or(false))
+        .filter(|c| !c["isMinimized"].as_bool().unwrap_or(false) && trusted(&c["author"]["login"], &c["authorAssociation"]))
         .map(|c| item(format!("@{}", login(&c["author"]["login"])), c["body"].as_str().unwrap_or("")))
         .collect();
     if !comments.is_empty() {
@@ -1049,6 +1068,7 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
         .as_array()
         .into_iter()
         .flatten()
+        .filter(|c| trusted(&c["user"]["login"], &c["author_association"]))
         .map(|c| {
             let line = c["line"].as_u64().or_else(|| c["original_line"].as_u64());
             let place = match line {
@@ -1062,6 +1082,11 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
     if !on_lines.is_empty() {
         parts.push(format!("Review comments:\n{}", on_lines.join("\n")));
     }
+    match left_out.get() {
+        0 => {}
+        1 => parts.push("1 review or comment by someone without a role in the repository is left out.".into()),
+        n => parts.push(format!("{n} reviews and comments by people without a role in the repository are left out.")),
+    }
     cut(&parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"), PR_CONTEXT_MAX)
 }
 
@@ -1069,7 +1094,7 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
 /// Without its line comments (an old `gh`, a fork) the rest still comes.
 pub async fn gh_pr_context(repo: &Path, number: u64) -> Result<String> {
     let n = number.to_string();
-    let view = gh(repo, &["pr", "view", &n, "--json", "body,reviews,comments"]).await?;
+    let view = gh(repo, &["pr", "view", &n, "--json", "author,body,reviews,comments"]).await?;
     let view: serde_json::Value = serde_json::from_slice(&view)?;
     let path = format!("repos/{{owner}}/{{repo}}/pulls/{n}/comments?per_page=100");
     let lines = match gh(repo, &["api", &path]).await {
@@ -1804,7 +1829,10 @@ pub(crate) mod tests {
 
     #[test]
     fn pr_context_holds_its_description_reviews_and_comments() {
-        // `gh pr view <n> --json body,reviews,comments` and `gh api
+        // Only the PR's author (sam-rivera) and people with a role in the
+        // repository (MEMBER) are sent: review-bot, alex-kim and lee-moreno
+        // are CONTRIBUTORs, whom anyone can become with one merged PR.
+        // `gh pr view <n> --json author,body,reviews,comments` and `gh api
         // repos/{owner}/{repo}/pulls/<n>/comments` on cli/cli, 2026-10-19,
         // sanitised (tests/fixtures/README.md).
         let view: serde_json::Value = serde_json::from_slice(include_bytes!("../tests/fixtures/gh-pr-view.json")).unwrap();
@@ -1813,15 +1841,13 @@ pub(crate) mod tests {
             pr_context_text(&view, &lines),
             "Drops A/B Testing and Security from the side nav.\n\nFixes #279.\n\n\
              Reviews:\n\
-             - @review-bot, commented: SideNav still imports the Security icon; drop the import too.\n\
-             - @jo-park, changes requested: Keep Security in the nav for admins.\n\
-             - @alex-kim, approved\n\n\
+             - @jo-park, changes requested: Keep Security in the nav for admins.\n\n\
              Comments:\n\
              - @jo-park: Does this also drop the A/B Testing route, or only its menu item?\n\
              - @sam-rivera: Only the item; the route goes in a follow-up.\n\n\
              Review comments:\n\
-             - @lee-moreno on src/nav/SideNav.tsx:121: `Security` is still linked from the footer; drop it there too.\n\
-             - @sam-rivera on src/nav/SideNav.tsx:121, replying: Done in the next commit."
+             - @sam-rivera on src/nav/SideNav.tsx:121, replying: Done in the next commit.\n\n\
+             3 reviews and comments by people without a role in the repository are left out."
         );
     }
 

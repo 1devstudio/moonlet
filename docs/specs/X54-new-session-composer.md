@@ -63,7 +63,8 @@ The composer now has three layers. The header keeps the project, the task chip (
 - [ ] Picking a PR turns the branch row into the PR row, tinted green: the PR mark and `PR #<n>` in the done colour, the PR's head branch, and `existing branch · checks out in a new worktree`. With the checkbox showing, that hint moves into the row's tooltip so the branch keeps its room. (`composer.test.ts` branchRow, `composer.e2e.ts`)
 - [ ] The PR row ends with `× Use task branch` (tooltip `Back to <task branch> from <base>`) when there is a task, `× New branch instead` (tooltip `Create a new branch from <base> instead`) when not. Either undoes the pick: the PR's attachment goes too. (`composer.test.ts` branchRow, `composer.e2e.ts`)
 - [ ] Picking a PR adds its attachment, `PR #<n> description and review comments · <title>`. Its × "Don’t send the PR description" removes the attachment and keeps the PR's branch. (`composer.test.ts` attachments, `composer.e2e.ts`)
-- [ ] The PR's attachment holds its description, its reviews and its comments, both the conversation's and those on lines of code, read through `gh.pr_context` when it is picked. Until they arrive, or if reading fails, it holds the description from the list. (`daemon.rs` a_pr_context_holds_its_reviews_and_comments, `git.rs` pr_context parsing)
+- [ ] The PR's attachment holds its description, its reviews and its comments, both the conversation's and those on lines of code, read through `gh.pr_context` when it is picked. Until they arrive, or if reading fails, it holds the description from the list. (`daemon.rs` a_pr_context_holds_its_reviews_and_comments, `git.rs` pr_context_holds_its_description_reviews_and_comments, `composer.e2e.ts`)
+- [ ] Only the reviews and comments of the PR's author and of people with a role in the repository (owner, member, collaborator) are sent; minimised comments are not. A last line says how many were left out: `3 reviews and comments by people without a role in the repository are left out.` (`git.rs` pr_context_holds_its_description_reviews_and_comments)
 - [ ] The session is created on the PR's branch and keeps the PR's number, and its task link when there is one (X46). (`composer.e2e.ts`)
 
 ### Link a task
@@ -99,7 +100,7 @@ The designs are "New session from a task", "Composer GitHub source picker open" 
 
 ## Protocol and RPCs
 
-- `gh.pr_context {path, number}` returns the text a PR's attachment sends: its body, then its reviews (author, state and body), its conversation comments and its review comments on lines (author, `path:line` and body), each cut so the whole stays under 8000 characters. It runs `gh pr view <n> --json body,reviews,comments` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`.
+- `gh.pr_context {path, number}` returns the text a PR's attachment sends: its body, then its reviews (author, state and body), its conversation comments and its review comments on lines (author, `path:line` and body), each cut so the whole stays under 8000 characters, by the PR's author and people whose `authorAssociation` is `OWNER`, `MEMBER` or `COLLABORATOR` only. It runs `gh pr view <n> --json author,body,reviews,comments` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`.
 - `session.create` is unchanged: `prompt` carries the attachments, `name` the task's, PR's or issue's title, `pr` the PR's number.
 
 ## Data and config
@@ -109,6 +110,7 @@ The designs are "New session from a task", "Composer GitHub source picker open" 
 ## Security considerations
 
 - Issue, PR and comment text is untrusted. Attachments render it as the Task tab does (sanitised Markdown, no raw HTML, `https` links only), and it reaches the agent only as the first message the user sends, after it was shown folded in the composer, as X46 requires for the task's description.
+- On a public repository anyone can comment on a PR, and the PR's attachment goes to the agent as instructions. So it carries only the words of the PR's author and of people with a role in the repository; a CONTRIBUTOR (anyone with one merged PR) and a bot without a role are left out, and minimised comments too. The attachment says how many were left out.
 
 ## Out of scope
 

@@ -13,8 +13,8 @@ const fakeGh = join(w.root, "bin", "gh");
 const PRS = JSON.stringify([
   { number: 214, title: "Clean up the side nav before the Catalyst release", body: "Drops A/B Testing and Security from the side nav.", url: "https://github.com/acme/storefront/pull/214", headRefName: "fix/side-nav-cleanup" },
 ]);
-// `gh pr view 214 --json body,reviews,comments`, trimmed.
-const PR_VIEW = JSON.stringify({ body: "Drops A/B Testing and Security from the side nav.", reviews: [{ author: { login: "jo-park" }, state: "CHANGES_REQUESTED", body: "Keep Security for admins." }], comments: [] });
+// `gh pr view 214 --json author,body,reviews,comments`, trimmed.
+const PR_VIEW = JSON.stringify({ author: { login: "sam-rivera" }, body: "Drops A/B Testing and Security from the side nav.", reviews: [{ author: { login: "jo-park" }, authorAssociation: "MEMBER", state: "CHANGES_REQUESTED", body: "Keep Security for admins." }], comments: [] });
 const ISSUES = JSON.stringify([{ number: 57, title: "Terminal flickers when resizing a split", body: "Resizing a split redraws the whole terminal.", url: "https://github.com/acme/storefront/issues/57" }]);
 
 // While this file exists, gh answers the issue list late (a slow network).
@@ -37,7 +37,7 @@ describe("new session composer (X54)", () => {
     earlierGh = existsSync(fakeGh) ? readFileSync(fakeGh, "utf8") : null;
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "pr list" ]; then cat <<'JSON'\n${PRS}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue list" ] && [ -e "${slowIssues}" ]; then sleep 2; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$*" = "pr view 214 --json body,reviews,comments" ]; then cat <<'JSON'\n${PR_VIEW}\nJSON\nexit 0; fi\nif [ "$1 $2 $3 $4 $5" = "pr view 214 --json headRefName" ]; then echo fix/side-nav-cleanup; exit 0; fi\nif [ "$1" = "api" ]; then echo '[]'; exit 0; fi\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "pr list" ]; then cat <<'JSON'\n${PRS}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue list" ] && [ -e "${slowIssues}" ]; then sleep 2; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$*" = "pr view 214 --json author,body,reviews,comments" ]; then cat <<'JSON'\n${PR_VIEW}\nJSON\nexit 0; fi\nif [ "$1 $2 $3 $4 $5" = "pr view 214 --json headRefName" ]; then echo fix/side-nav-cleanup; exit 0; fi\nif [ "$1" = "api" ]; then echo '[]'; exit 0; fi\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     execFileSync("git", ["init", "-q", "--bare", origin], { env: w.env, stdio: "pipe" });

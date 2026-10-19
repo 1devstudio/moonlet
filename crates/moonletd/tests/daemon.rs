@@ -1185,9 +1185,9 @@ async fn a_pr_context_holds_its_reviews_and_comments() {
     let (d, dirs) = fake_gh_daemon(
         "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n\
          case \"$1 $2\" in\n\
-         \"pr view\") cat <<'JSON'\n{\"body\":\"Fixes #279.\",\"reviews\":[{\"author\":{\"login\":\"jo-park\"},\"state\":\"CHANGES_REQUESTED\",\"body\":\"Keep Security for admins.\"}],\"comments\":[]}\nJSON\n;;\n\
+         \"pr view\") cat <<'JSON'\n{\"author\":{\"login\":\"sam-rivera\"},\"body\":\"Fixes #279.\",\"reviews\":[{\"author\":{\"login\":\"jo-park\"},\"authorAssociation\":\"MEMBER\",\"state\":\"CHANGES_REQUESTED\",\"body\":\"Keep Security for admins.\"}],\"comments\":[]}\nJSON\n;;\n\
          \"api repos/{owner}/{repo}/pulls/215/comments?per_page=100\") echo 'HTTP 404: Not Found' >&2; exit 1;;\n\
-         \"api \"*) cat <<'JSON'\n[{\"user\":{\"login\":\"lee-moreno\"},\"path\":\"src/nav/SideNav.tsx\",\"line\":12,\"original_line\":12,\"body\":\"Drop the footer link too.\"}]\nJSON\n;;\n\
+         \"api \"*) cat <<'JSON'\n[{\"user\":{\"login\":\"lee-moreno\"},\"author_association\":\"COLLABORATOR\",\"path\":\"src/nav/SideNav.tsx\",\"line\":12,\"original_line\":12,\"body\":\"Drop the footer link too.\"}]\nJSON\n;;\n\
          esac\n",
     )
     .await;
@@ -1199,7 +1199,7 @@ async fn a_pr_context_holds_its_reviews_and_comments() {
         "Fixes #279.\n\nReviews:\n- @jo-park, changes requested: Keep Security for admins.\n\nReview comments:\n- @lee-moreno on src/nav/SideNav.tsx:12: Drop the footer link too."
     );
     let asked = std::fs::read_to_string(dirs[0].path().join("gh.log")).unwrap();
-    assert!(asked.contains("pr view 214 --json body,reviews,comments\napi repos/{owner}/{repo}/pulls/214/comments?per_page=100\n"), "{asked}");
+    assert!(asked.contains("pr view 214 --json author,body,reviews,comments\napi repos/{owner}/{repo}/pulls/214/comments?per_page=100\n"), "{asked}");
     // Without its line comments, the rest still comes.
     let text: String = c.request(methods::GH_PR_CONTEXT, serde_json::json!({"path": repo, "number": 215})).await.unwrap();
     assert_eq!(text, "Fixes #279.\n\nReviews:\n- @jo-park, changes requested: Keep Security for admins.");
