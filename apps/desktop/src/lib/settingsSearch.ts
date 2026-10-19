@@ -5,6 +5,7 @@ import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "
 import { EDITOR_THEMES, resolveEditorTheme } from "./editorThemes";
 import type { GitSettings, ProjectConfig, WorkspaceColor } from "./protocol";
 import { routeKey, type SettingsRoute } from "./settingsPage";
+import { fetchLabel } from "./gitSettings";
 import { ACTIONS, effectiveKeys, keyLabel } from "./runActions";
 import { soundFor } from "./sounds";
 import { bannerOn } from "./alerts";
@@ -100,6 +101,8 @@ function gitEntries(g: GitSettings | null | undefined): [string, string, string,
     ["git-worktrees", "Worktrees folder", "", "git reveal finder"],
     ["git-stage-all", "Stage all changes before committing", onOff(g.stage_all), "commit"],
     ["git-draft-prs", "Open pull requests as drafts", onOff(g.draft_prs), "pull request PR"],
+    ["git-fetch", "Fetch from origin", fetchLabel(g.fetch_minutes), "git interval pull chip"],
+    ["git-fast-forward", "Fast-forward base branches automatically", onOff(g.fast_forward_base), "git pull main"],
   ];
 }
 

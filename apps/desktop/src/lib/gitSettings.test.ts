@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchPreview, defaultStartLabel, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "./gitSettings";
+import { branchPreview, defaultStartLabel, fetchLabel, fetchOptions, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "./gitSettings";
 import type { HostInfo } from "./protocol";
 
 const host = (id: string, label: string, remote: boolean, status: HostInfo["status"] = "connected"): HostInfo => ({
@@ -15,12 +15,12 @@ const host = (id: string, label: string, remote: boolean, status: HostInfo["stat
 
 describe("gitSettingsOf", () => {
   it("stages all and opens ready PRs on a host whose settings are not known", () => {
-    expect(gitSettingsOf({}, "local")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false });
-    expect(gitSettingsOf({ devbox: null }, "devbox")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false });
+    expect(gitSettingsOf({}, "local")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false, fetch_minutes: 5, fast_forward_base: false });
+    expect(gitSettingsOf({ devbox: null }, "devbox")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false, fetch_minutes: 5, fast_forward_base: false });
   });
 
   it("is what the host's daemon keeps", () => {
-    const devbox = { branch_prefix: "", start_from: "origin", stage_all: false, draft_prs: true } as const;
+    const devbox = { branch_prefix: "", start_from: "origin", stage_all: false, draft_prs: true, fetch_minutes: 0, fast_forward_base: true } as const;
     expect(gitSettingsOf({ devbox }, "devbox")).toEqual(devbox);
   });
 });
@@ -78,5 +78,21 @@ describe("new session branches", () => {
   it("shows the worktrees folder under the user's home as ~", () => {
     expect(worktreesText("/Users/alex/.moonlet/worktrees", "/Users/alex")).toBe("~/.moonlet/worktrees/‹project›/‹session›");
     expect(worktreesText("/srv/moonlet/worktrees", "/home/alex")).toBe("/srv/moonlet/worktrees/‹project›/‹session›");
+  });
+});
+
+describe("Fetch from origin (X55)", () => {
+  it("offers 5 min, 15 min and Manually", () => {
+    expect(fetchOptions(5)).toEqual([
+      { id: "5", label: "5 min" },
+      { id: "15", label: "15 min" },
+      { id: "0", label: "Manually" },
+    ]);
+  });
+
+  it("shows an interval set in git.toml by hand as it is", () => {
+    expect(fetchOptions(10).map((o) => o.label)).toEqual(["5 min", "10 min", "15 min", "Manually"]);
+    expect(fetchLabel(10)).toBe("10 min");
+    expect(fetchLabel(0)).toBe("Manually");
   });
 });

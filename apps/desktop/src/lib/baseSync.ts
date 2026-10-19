@@ -38,6 +38,19 @@ export function aheadText(st: BaseStatus): string {
   return `${commits(st.ahead)} that ${st.ahead === 1 ? "isn't" : "aren't"}`;
 }
 
+/** Whether a host's projects fetch now: `minutes` is its "Fetch from
+ *  origin" setting (0: manually), `last` the last timed fetch (X55). */
+export function fetchDue(last: number | undefined, minutes: number, now: number): boolean {
+  if (minutes <= 0) return false;
+  return last === undefined || now - last >= minutes * 60_000;
+}
+
+/** After a fetch: pull without a click, when the host fast-forwards base
+ *  branches automatically and the branch is only behind (X55). */
+export function autoPulls(st: BaseStatus | null | undefined, pulling: boolean, fastForward: boolean): boolean {
+  return fastForward && baseChip(st, pulling)?.kind === "behind";
+}
+
 export interface FetchInfo {
   /** Last successful fetch (ms). */
   fetchedAt: number | null;

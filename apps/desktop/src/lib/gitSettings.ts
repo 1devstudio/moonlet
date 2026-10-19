@@ -5,7 +5,7 @@
 import type { GitSettings, HostInfo } from "./protocol";
 import { tildePath } from "./profiles";
 
-export const DEFAULT_GIT_SETTINGS: GitSettings = { branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false };
+export const DEFAULT_GIT_SETTINGS: GitSettings = { branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false, fetch_minutes: 5, fast_forward_base: false };
 
 /** A host's Git settings: what its daemon keeps, else the defaults (not
  * loaded yet, or `null` for a daemon too old to know them). */
@@ -38,6 +38,17 @@ export const branchPreview = (prefix: string) => `${prefix}add-search-to-the-pro
 
 /** The composer's item for starting where the host's settings say. */
 export const defaultStartLabel = (base: string, from: GitSettings["start_from"]) => `Start from ${from === "origin" ? `origin/${base}` : base} (default)`;
+
+/** "Fetch from origin" as the page and search show it: minutes, or Manually for 0. */
+export const fetchLabel = (minutes: number) => (minutes > 0 ? `${minutes} min` : "Manually");
+
+/** The choices of "Fetch from origin": 5 min, 15 min and Manually, with an
+ * interval set in git.toml by hand in its place among them. */
+export function fetchOptions(current: number): { id: string; label: string }[] {
+  const minutes = [5, 15, 0];
+  if (!minutes.includes(current)) minutes.splice(current < 15 ? 1 : 2, 0, current);
+  return minutes.map((m) => ({ id: String(m), label: fetchLabel(m) }));
+}
 
 /** The host's worktrees folder, from `daemon.info`; a daemon from before
  * `data_dir` keeps them in `~/.moonlet`. */
