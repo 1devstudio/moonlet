@@ -105,4 +105,17 @@ describe("new session composer (X54)", () => {
       rmSync(slowIssues, { force: true });
     }
   });
+
+  it("adds a picked issue as an attachment whatever the prompt holds, and × removes it", async () => {
+    await open();
+    await fill(`${dialog}//textarea[@placeholder="What do you want to work on?"]`, "Check Safari too.");
+    await $(`${header}//button[@title="Start from a GitHub issue or pull request"]`).click();
+    await $('//button[.//span[normalize-space()="#57"]]').click();
+    const attachment = $(`${dialog}//div[@role="group"][@aria-label="#57 Terminal flickers when resizing a split · GitHub issue"]`);
+    await expect(attachment).toBeDisplayed();
+    // What the user typed stays theirs; the placeholder speaks of the issue (X54).
+    await expect($(`${dialog}//textarea[@placeholder="Anything to add? Leave empty to start from the issue."]`)).toHaveValue("Check Safari too.");
+    await attachment.$('.//button[@title="Remove #57"]').click();
+    await expect(attachment).not.toBeExisting();
+  });
 });
