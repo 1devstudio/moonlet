@@ -1,6 +1,7 @@
 // In-app confirmation modal (X23): every "are you sure?" goes through
 // askConfirm, which ConfirmHost renders in the app's own style.
 
+import { archiveFlags, type ArchivePlan } from "./gitSettings";
 import { useStore } from "./store";
 
 export type ConfirmVariant = "primary" | "danger";
@@ -56,13 +57,25 @@ export function answerConfirm(ok: boolean, checked: boolean) {
   pending.resolve(ok ? { checked } : null);
 }
 
-export function archivePrompt(name: string): ConfirmOptions {
+/** What happens to the branch, after what happens to the folder. */
+function branchLine(plan: ArchivePlan, deleted: boolean): string {
+  if (!deleted) return plan.why === "not-merged" ? " The branch is kept: its PR hasn't merged." : " The branch is kept.";
+  if (plan.remote) return " The branch is deleted, on origin too.";
+  return plan.why === "merged" ? " Its PR merged, so the branch is deleted." : " The branch is deleted too.";
+}
+
+/** The archive prompt (X23), saying what the host's Git settings will do
+ * (X55); only "Ask each time" shows "Also delete the branch". */
+export function archivePrompt(name: string, plan: ArchivePlan = ASK): ConfirmOptions {
+  const folder = plan.removeWorktree ? "Its terminals stop and the worktree folder is removed." : "Its terminals stop; the worktree folder stays on disk.";
+  const deleted = (checked: boolean) => archiveFlags(plan, checked).delete_branch;
   return {
     title: "Archive session",
-    message: (deleteBranch) =>
-      `Archive "${name}"? Its terminals stop and the worktree folder is removed.${deleteBranch ? " The branch is deleted too." : " The branch is kept."}`,
+    message: (checked) => `Archive "${name}"? ${folder}${branchLine(plan, deleted(checked))}`,
     action: "Archive",
-    variant: (deleteBranch) => (deleteBranch ? "danger" : "primary"),
-    checkbox: { label: "Also delete the branch" },
+    variant: (checked) => (deleted(checked) ? "danger" : "primary"),
+    ...(plan.branch === "ask" && { checkbox: { label: "Also delete the branch" } }),
   };
 }
+
+const ASK: ArchivePlan = { removeWorktree: true, branch: "ask", why: "policy", remote: false };

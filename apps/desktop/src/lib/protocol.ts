@@ -210,6 +210,12 @@ export interface DaemonInfo {
   data_dir?: string;
 }
 
+/** `session.archive`'s result (X55); older daemons answer `true`. */
+export interface SessionArchived {
+  /** Why origin refused to delete the branch, if it did. */
+  remote_error?: string | null;
+}
+
 /** A host's Git settings, kept by its daemon in `~/.moonlet/git.toml` (X55). */
 export interface GitSettings {
   /** Put before every branch a new session derives from its name; empty for none. */
@@ -220,6 +226,12 @@ export interface GitSettings {
   stage_all: boolean;
   /** How the Create pull request dialog's "Draft" starts. */
   draft_prs: boolean;
+  /** What archiving a session does with its worktree folder. */
+  archive_worktree: "remove" | "keep";
+  /** What archiving a session does with its local branch. */
+  archive_branch: "ask" | "keep" | "merged" | "always";
+  /** Also delete a merged PR's branch on origin. */
+  delete_remote_branch: boolean;
   /** How often projects fetch their base branch from origin; 0: manually. */
   fetch_minutes: number;
   /** Pull a base branch that is only behind origin without a click. */
@@ -726,6 +738,7 @@ export const EV = {
   workspacesChanged: "workspaces.changed",
   sectionsChanged: "sections.changed",
   profilesChanged: "profiles.changed",
+  gitSettingsChanged: "git.settings_changed",
   claudeUpdateOutput: "claude.update_output",
   claudeUpdateDone: "claude.update_done",
   fsChanged: "fs.changed",

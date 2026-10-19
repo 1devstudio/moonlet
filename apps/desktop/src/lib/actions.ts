@@ -3,7 +3,7 @@
 
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeFile, cycleFocus, openFile, splitLeaf, tabOf } from "./layout";
-import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
+import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived } from "./protocol";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
 import { arrange, hostSections, lastActive } from "./sidebar";
 import { isShown } from "./workspaces";
@@ -12,6 +12,7 @@ import { agentReadiness, isStructured, tabAgent } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 import { archivePrompt, askConfirm } from "./confirm";
+import { archiveFlags, archivePlan, gitSettingsOf } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
 import { toggleTasksMode } from "./tasksStore";
 
@@ -274,14 +275,18 @@ export async function runScript(script: "run" | "setup") {
   }
 }
 
-/** Archives `target`, or the selected session, once confirmed; the confirm
- * modal's checkbox decides whether the branch goes too (X23). */
+/** Archives `target`, or the selected session, once confirmed. The host's
+ * Git settings and the session's PR decide what happens to its folder and
+ * branch (X55), or the confirm modal's checkbox for "Ask each time" (X23). */
 export async function archiveSession(target?: { host: string; ws: Session }) {
   const c = target ?? current();
   if (!c) return;
-  const answer = await askConfirm(archivePrompt(c.ws.name));
+  const s = useStore.getState();
+  const base = s.projects[c.host]?.find((p) => p.id === c.ws.project_id)?.base_branch ?? c.ws.base;
+  const plan = archivePlan(gitSettingsOf(s.gitSettings, c.host), s.prs[sesKey(c.host, c.ws.id)]?.state, c.ws.branch, base);
+  const answer = await askConfirm(archivePrompt(c.ws.name, plan));
   if (!answer) return;
-  const deleteBranch = answer.checked;
+  const flags = archiveFlags(plan, answer.checked);
   // Close its views first: they would reload while the worktree is deleted.
   const sel = useStore.getState().selected;
   const wasSelected = sel?.host === c.host && sel.session === c.ws.id;
@@ -292,7 +297,8 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const started = Date.now();
   setArchiving(key, { loader, done: false, folding: false });
   try {
-    await rpc(c.host, M.sessionArchive, { id: c.ws.id, remove_worktree: true, delete_branch: deleteBranch });
+    const done = await rpc<SessionArchived | boolean>(c.host, M.sessionArchive, { id: c.ws.id, ...flags });
+    if (typeof done === "object" && done.remote_error) toast(`Couldn't delete ${c.ws.branch} on origin: ${done.remote_error}`, "error");
     setArchiving(key, { loader, done: true, folding: false });
     await sleep(ARCHIVE_MIN_MS - (Date.now() - started));
     setArchiving(key, { loader, done: true, folding: true });

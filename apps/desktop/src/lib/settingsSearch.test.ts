@@ -46,7 +46,7 @@ describe("searching settings (X43)", () => {
   });
 
   it("finds This Mac's Git settings with their values (X55)", () => {
-    const git = { ...ctx, git: { branch_prefix: "marcin/", start_from: "origin" as const, stage_all: true, draft_prs: true, fetch_minutes: 15, fast_forward_base: false } };
+    const git = { ...ctx, git: { branch_prefix: "marcin/", start_from: "origin" as const, archive_worktree: "remove" as const, archive_branch: "merged" as const, delete_remote_branch: false, stage_all: true, draft_prs: true, fetch_minutes: 15, fast_forward_base: false } };
     expect(searchSettings("draft", git).map((r) => [r.before + r.hit + r.after, r.path, r.value, r.route, r.setting])).toEqual([
       ["Open pull requests as drafts", "App › Git", "On", { page: "git" }, "git-draft-prs"],
     ]);
@@ -54,6 +54,10 @@ describe("searching settings (X43)", () => {
     expect(searchSettings("prefix", git).map((r) => [r.path, r.value, r.setting])).toEqual([
       ["App › Git", "marcin/", "git-branch-prefix"],
       ["Projects › storefront", "", "project-branch-prefix"],
+    ]);
+    expect(searchSettings("archiving", git).map((r) => [r.before + r.hit + r.after, r.value])).toEqual([
+      ["Worktree folder when archiving", "Remove"],
+      ["Local branch when archiving", "Delete when its PR merged"],
     ]);
     expect(searchSettings("fetch from origin", git)[0]).toMatchObject({ value: "15 min", setting: "git-fetch" });
     expect(searchSettings("start new branches", git)[0]).toMatchObject({ value: "origin/main", setting: "git-start-from" });
