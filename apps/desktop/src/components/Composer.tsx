@@ -321,8 +321,8 @@ export function Composer({
   // The picked PR's attachment, kept unless the user removes it (X54).
   const [prSend, setPrSend] = useState(true);
   const [prContext, setPrContext] = useState<string | null>(null);
-  /** The PR whose context is awaited: a later pick wins. */
-  const prPick = useRef<number | null>(null);
+  /** The pick whose context is awaited: a later pick, or another project, wins. */
+  const prPick = useRef<object | null>(null);
   // A picked issue's attachment is outlined for a moment (X54).
   const [flash, setFlash] = useState(false);
   const [addDirs, setAddDirs] = useState<string[]>([]);
@@ -335,6 +335,7 @@ export function Composer({
     void rpc<ProjectConfig>(current.host, M.projectConfig, { id: current.project.id }).then(setConfig).catch(() => setConfig(null));
     void rpc<string[]>(current.host, M.gitBranches, { path: current.project.path }).then(setBranches).catch(() => setBranches([]));
     setPr(null);
+    prPick.current = null;
     setFrom(null);
     setIssue(null);
     setAddDirs([]);
@@ -548,9 +549,10 @@ export function Composer({
                 setPrContext(null);
                 setFrom(null);
                 // Its reviews and comments, once read; the list's description until then (X54).
-                prPick.current = p.number;
+                const ask = {};
+                prPick.current = ask;
                 void rpc<string>(current.host, M.ghPrContext, { path: current.project.path, number: p.number })
-                  .then((text) => prPick.current === p.number && setPrContext(text))
+                  .then((text) => prPick.current === ask && setPrContext(text))
                   .catch(() => {});
                 ta.current?.focus();
               }}
