@@ -151,7 +151,7 @@ GitHub goes through the daemon, because `gh` runs on the project's host:
 - Tokens never leave the Mac running the app: not in `trackers.toml`, not in the daemon, not over SSH to remote hosts, not in logs. Errors are logged without request headers.
 - Ids from a tracker that go into a request path must be letters, digits, `-` and `_`. The Jira site is checked again on every request, since `trackers.toml` can be edited.
 - The OAuth callback listens only on 127.0.0.1, for at most 5 minutes, and checks `state`; a connection that says nothing is dropped after 2 s.
-- Tracker content (titles, descriptions, comments) is untrusted. It is shown as plain text, only `https` links are kept, and when it becomes an agent's first message (X46) it is shown in the composer for the user to send, never sent unseen.
+- Tracker content (titles, descriptions, comments) is untrusted. Titles and comments are shown as plain text, descriptions as sanitized Markdown (the Tasks mode detail, X45, and the Task tab, X46), only `https` links are kept, and when it becomes an agent's first message (X46) it is shown in the composer for the user to send, never sent unseen.
 - The webview's CSP stays closed to the network; all tracker requests go through Tauri commands.
 
 ## Out of scope
