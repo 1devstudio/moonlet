@@ -7,7 +7,7 @@ import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
 import { createIssue, setColumnShow } from "./tasksStore";
-import { activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -80,6 +80,12 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   requestPermission: () => Promise.resolve("granted"),
   sendNotification: (n: { title: string; body: string }) => shown.push(n),
 }));
+
+/** The shown board's columns of local/personal, each with its cards' keys, as Tasks mode draws them (X53). */
+function boardCards(config: TrackersConfig): [string, string[]][] {
+  const data = useTasks.getState().data["local/personal"];
+  return workspaceViews(config.boards ?? [], data, boardInput(useStore.getState(), "local", "personal", data, config))[0].views.map((v) => [v.name, v.cards.map((c) => c.task.key)]);
+}
 
 const ws = (id: string, section_ids: string[]): Workspace => ({ id, name: id, color: "clay", section_ids, created_at: 0 });
 const sec = (id: string, project_ids: string[]): Section => ({ id, name: id, project_ids, view: { group_by: "project", sort_by: "created", filter: [] }, created_at: 0 });
@@ -562,10 +568,7 @@ describe("boards (X50 Sync)", () => {
     useTasks.setState({ config, attention: {}, failures: {} });
     useStore.setState({ toasts: [] });
     await refreshTasks("local", "personal", 1_000);
-    const cardsIn = () => {
-      const data = useTasks.getState().data["local/personal"];
-      return workspaceViews(config.boards, data, boardInput(useStore.getState(), "local", "personal", data, config))[0].views.map((v) => [v.name, v.cards.map((c) => c.task.key)]);
-    };
+    const cardsIn = () => boardCards(config);
     expect(cardsIn()).toEqual([["Todo", ["MOON-1"]], ["Building", []]]);
     held.on = true;
     try {
@@ -594,6 +597,38 @@ describe("boards (X50 Sync)", () => {
     await refreshTasks("local", "personal", 3_000);
     expect(cardsIn()).toEqual([["Todo", ["MOON-1"]], ["Building", []]]);
     useTasks.setState({ config: null });
+  });
+
+  it("keeps a done move's card in its new column until a sync reads that task: not one that kept the board's last tasks, nor another workspace's (X53)", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    const columns = [
+      { name: "Todo", statuses: ["Todo"], category: "todo" as const },
+      { name: "Building", statuses: ["Doing"], category: "in_progress" as const },
+    ];
+    const config = { ...DEFAULT_CONFIG, boards: [board({ columns })] };
+    useTasks.setState({ config, attention: {}, failures: {} });
+    await refreshTasks("local", "personal", 1_000);
+    const cardsIn = () => boardCards(config);
+    // Linear took the move, then stopped accepting the token: the sync after it keeps the board's last tasks.
+    answers["tracker_tasks linear:acme"] = () => {
+      throw { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here." };
+    };
+    await moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_500, "Doing");
+    await vi.waitFor(() => expect(useTasks.getState().attention["linear:acme"]).toBeTruthy());
+    expect(cardsIn()).toEqual([["Todo", []], ["Building", ["MOON-1"]]]);
+    // Another workspace's sync reads none of this board's tasks.
+    await refreshTasks("local", "acme", 1_600);
+    expect(cardsIn()).toEqual([["Todo", []], ["Building", ["MOON-1"]]]);
+    // Reconnected, Linear's answer places it.
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Doing")];
+    useTasks.setState({ attention: {} });
+    await refreshTasks("local", "personal", 2_000);
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    await refreshTasks("local", "personal", 3_000);
+    expect(cardsIn()).toEqual([["Todo", ["MOON-1"]], ["Building", []]]);
+    useTasks.setState({ config: null, attention: {} });
   });
 
   it("previews a board not saved yet: everyone's issues, the user's own marked, and the tracker's columns (Add a board)", async () => {
@@ -913,10 +948,7 @@ describe("moving a GitHub repository's issue (X53)", () => {
     useTasks.setState({ config: null, attention: {} });
     await refreshTasks("local", "personal", 1_000);
     const config = trackersConfig(useTasks.getState());
-    const cardsIn = () => {
-      const data = useTasks.getState().data["local/personal"];
-      return workspaceViews(config.boards ?? [], data, boardInput(useStore.getState(), "local", "personal", data, config))[0].views.map((v) => [v.name, v.cards.map((c) => c.task.key)]);
-    };
+    const cardsIn = () => boardCards(config);
     expect(cardsIn()).toEqual([["Open", ["acme/web#12"]], ["Closed", []]]);
     const closing = moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "done", 2_000, "completed");
     await vi.waitFor(() => expect(cardsIn()).toEqual([["Open", []], ["Closed", ["acme/web#12"]]]));
@@ -1411,10 +1443,7 @@ describe("a GitHub Project's board (X50 Sync)", () => {
     const config = { ...DEFAULT_CONFIG, boards: [project] };
     useTasks.setState({ config, attention: {}, assignee: {} });
     await refreshTasks("local", "personal", 1_000);
-    const cardsIn = () => {
-      const data = useTasks.getState().data["local/personal"];
-      return workspaceViews(config.boards, data, boardInput(useStore.getState(), "local", "personal", data, config))[0].views.map((v) => [v.name, v.cards.map((c) => c.task.key)]);
-    };
+    const cardsIn = () => boardCards(config);
     const task = useTasks.getState().data["local/personal"].tasks[0];
     const toInProgress = moveTask("local", "personal", task, "in_progress", 2_000, "o2");
     await vi.waitFor(() => expect(cardsIn()).toEqual([["No Status", []], ["Todo", []], ["In Progress", ["acme/web#10"]]]));

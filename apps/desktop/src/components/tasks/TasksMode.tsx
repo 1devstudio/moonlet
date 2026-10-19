@@ -251,11 +251,13 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, onDrag 
       // Dragged onto another column, the card moves there (X53).
       draggable={!locked}
       onDragStart={(e) => {
+        // Only the card itself, not a link or image dragged out of it.
+        if (e.target !== e.currentTarget) return;
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", card.task.key);
         onDrag(card);
       }}
-      onDragEnd={() => onDrag(null)}
+      onDragEnd={(e) => e.target === e.currentTarget && onDrag(null)}
       className={cx(
         "flex flex-col gap-2 rounded-[10px] border px-3 py-2.5",
         selected ? "border-accent/60 bg-selected" : card.needsYou ? "border-blocked/35 bg-panel" : "border-border bg-panel",

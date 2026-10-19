@@ -404,8 +404,9 @@ const syncs = latestPerKey();
 export async function refreshTasks(host: string, workspaceId: string, now = Date.now()) {
   const key = wsKey(host, workspaceId);
   const isLatest = syncs.start(key);
-  // Moves the tracker took before this sync started: its answer places them (X53).
+  // Moves the tracker took before this sync started: its answer places those it reads (X53).
   const settled = Object.entries(useTasks.getState().moving).filter(([, m]) => m.done);
+  const readNow = new Set<string>();
   await loadTrackersConfig();
   const projects = workspaceProjects(useStore.getState(), host, workspaceId);
   let error: string | null = null;
@@ -451,6 +452,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     // Before a board's columns are known, a task keeps its tracker category.
     const placed = cols.length ? categorize(cols, r.tasks) : r.tasks;
     for (const t of placed) if (!tasks.has(taskId(t))) tasks.set(taskId(t), t);
+    for (const t of placed) readNow.add(taskId(t));
     boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint, ...(r.kind && { kind: r.kind }), ...(r.project && { project: r.project }) };
   }
   // A board whose columns changed in its tracker keeps them, matched to the
@@ -480,7 +482,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     error,
     boards: merged.boards ?? boardData,
   };
-  useTasks.setState((st) => ({ data: { ...st.data, [key]: next }, moving: error ? st.moving : withoutMoves(st.moving, settled) }));
+  useTasks.setState((st) => ({ data: { ...st.data, [key]: next }, moving: withoutMoves(st.moving, settled.filter(([id]) => readNow.has(id))) }));
   // Compared as the board shows them: with its columns as saved now.
   const mapped = { ...next, tasks: placedTasks(next) };
   if (!error && trackersConfig(useTasks.getState()).sync.notify) notifyOutsideMoves(host, workspaceId, prev ? placedTasks(prev) : null, mapped);
@@ -785,7 +787,7 @@ export function placedTasks(data: Pick<TasksData, "tasks" | "boards">, config: T
   return placeOnBoards(data.tasks, data.boards, config.boards);
 }
 
-/** `moving` less the `settled` moves, unless one moved again since. */
+/** `moving` less the `settled` moves, unless one moved again since. A task no board has any more is not read again either, so its move goes too. */
 function withoutMoves(moving: Record<string, Moving>, settled: [string, Moving][]): Record<string, Moving> {
   const left = { ...moving };
   for (const [id, m] of settled) if (left[id] === m) delete left[id];
@@ -1222,13 +1224,15 @@ export function recordActivity(task: Pick<Task, "connection" | "key">, text: str
  * new column at once, and goes back if the move is refused.
  */
 export async function moveTask(host: string, workspaceId: string, task: Task, column: Exclude<Column, "hidden"> | null, now = Date.now(), toStatus?: string) {
-  const id = `${task.connection} ${task.key}`;
+  const id = taskId(task);
   retries.set(id, () => moveTask(host, workspaceId, task, column, Date.now(), toStatus));
+  // The move under way, shown on the board at once (X53).
   let move: Moving | null = null;
-  const start = (status: string | undefined, name: string) => {
-    if (status === undefined) return;
-    move = { status, name, done: false };
-    useTasks.setState((t) => ({ moving: { ...t.moving, [id]: move! } }));
+  const start = (status: string | undefined, name: string): Moving | null => {
+    if (status === undefined) return null;
+    const m = { status, name, done: false };
+    useTasks.setState((t) => ({ moving: { ...t.moving, [id]: m } }));
+    return m;
   };
   try {
     if (task.github?.project) {
@@ -1237,7 +1241,7 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       const { status, name } = boardTarget(host, workspaceId, task, column, toStatus);
       if (status === undefined) throw new Error(`The Project has no ${name} column`);
       movedByMoonlet.set(id, column);
-      start(status, name);
+      move = start(status, name);
       await moveProjectItem(host, workspaceId, task, status);
       recordActivity(task, `moonlet moved it to ${name}`, now);
     } else if (task.github) {
@@ -1245,23 +1249,23 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       if (!path) throw new Error(`No project in this workspace has ${task.github.repo} as its origin`);
       const close = column === "done";
       movedByMoonlet.set(id, close ? "done" : "open");
-      start(close ? "completed" : "open", close ? "Closed" : "Open");
+      move = start(close ? "completed" : "open", close ? "Closed" : "Open");
       await rpc(host, M.ghTaskUpdate, close ? { path, number: task.github.number, close: true } : { path, number: task.github.number, reopen: true });
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
       movedByMoonlet.set(id, column);
       const { status, name } = boardTarget(host, workspaceId, task, column, toStatus);
-      start(status, name);
+      move = start(status, name);
       await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, ...(status && { status }) });
       recordActivity(task, `moonlet moved it to ${name}`, now);
     } else return;
-    // Taken: the next sync to start places the card (X53).
-    const taken = move as Moving | null;
+    // Taken: the next sync to read the task places its card (X53).
+    const taken = move;
     if (taken) useTasks.setState((t) => (t.moving[id] === taken ? { moving: { ...t.moving, [id]: { ...taken, done: true } } } : {}));
     setFailure(task, null);
     void refreshTasks(host, workspaceId);
   } catch (e) {
-    const refused = move as Moving | null;
+    const refused = move;
     if (refused)
       useTasks.setState((t) => {
         if (t.moving[id] !== refused) return {};
