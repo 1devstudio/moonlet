@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown } from "./markdown";
+import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown, renderTaskMarkdown } from "./markdown";
 
 describe("markdown preview", () => {
   it("renders tables, code and highlights", async () => {
@@ -133,3 +133,33 @@ describe("file links in chat (X30)", () => {
     );
   });
 });
+
+describe("a task's description (X46)", () => {
+  const parse = (html: string) => new DOMParser().parseFromString(html, "text/html").body;
+
+  it("shows checklist items as ticked or unticked boxes", () => {
+    // Jira's taskList as moonlet-trackers writes it.
+    const body = parse(renderTaskMarkdown("- [ ] Add Evolve endpoints\n- [x] Add the alerting endpoint"));
+    const items = [...body.querySelectorAll("li")].map((li) => [li.textContent?.trim(), li.querySelector("[aria-label]")?.getAttribute("aria-label")]);
+    expect(items).toEqual([
+      ["Add Evolve endpoints", "Not done"],
+      ["Add the alerting endpoint", "Done"],
+    ]);
+  });
+
+  it("shows an image as a link to it, named by its alt text", () => {
+    const body = parse(renderTaskMarkdown("Before:\n\n![Safari console](https://example.com/console.png)\n\n![](https://example.com/after.png)"));
+    expect(body.querySelector("img")).toBeNull();
+    expect([...body.querySelectorAll("a")].map((a) => [a.getAttribute("href"), a.textContent])).toEqual([
+      ["https://example.com/console.png", "Image: Safari console"],
+      ["https://example.com/after.png", "Image"],
+    ]);
+  });
+
+  it("leaves out HTML comments, as GitHub does, except in code", () => {
+    // An issue template's hints, as `gh issue view --json body` prints them.
+    const body = parse(renderTaskMarkdown("### Steps\n<!-- What did you do? -->\nPress Checkout.\n\n<!--\nScreenshots help.\n-->\n\n```html\n<!-- kept -->\n```"));
+    expect(body.textContent?.replace(/\s+/g, " ").trim()).toBe("Steps Press Checkout. <!-- kept -->");
+  });
+});
+

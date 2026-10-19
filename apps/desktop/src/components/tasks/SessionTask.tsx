@@ -81,8 +81,8 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
           {card.task.assignees.length > 0 && ` · ${card.task.assignees.join(", ")}`}
         </div>
         {card.task.description && (
-          <div className="task-md mt-2">
-            <Markdown text={card.task.description} />
+          <div className="mt-2">
+            <Markdown text={card.task.description} task />
           </div>
         )}
       </div>
