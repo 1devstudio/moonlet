@@ -13,13 +13,13 @@ use moonlet_proto::methods::{
     WorkspaceUpdate,
 };
 use moonlet_proto::types::{
-    ClaudeProfile, Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session,
+    ClaudeProfile, Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session, StartFrom,
     TerminalInfo, TerminalKind, Workspace, WorkspaceColor,
 };
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 
-use crate::git;
+use crate::{git, git_settings};
 use crate::paths::now_ms;
 use crate::pty::user_shell;
 use crate::terminal::{TerminalManager, expand_home};
@@ -1234,6 +1234,8 @@ impl SessionManager {
             None => None,
         };
         let existing_branches = git::branches(&repo_path).await.unwrap_or_default();
+        let config = read_config(&repo_path);
+        let settings = git_settings::load(&self.file.with_file_name("git.toml"));
         let branch = if let Some((_, branch)) = &adopted {
             branch.clone()
         } else if req.existing_branch {
@@ -1243,13 +1245,32 @@ impl SessionManager {
                 .context("existing_branch needs a branch name")?;
             b.strip_prefix("origin/").map(String::from).unwrap_or(b)
         } else {
+            let prefix = config
+                .branch_prefix
+                .as_deref()
+                .unwrap_or(&settings.branch_prefix);
             let wanted = req
                 .branch
                 .clone()
-                .unwrap_or_else(|| format!("moonlet/{slug}"));
+                .unwrap_or_else(|| format!("{prefix}{slug}"));
             unique(&wanted, |b| existing_branches.iter().any(|e| e == b))
         };
-        let from = req.from.clone().unwrap_or_else(|| repo.base_branch.clone());
+        let from = match req.from.clone() {
+            Some(from) => from,
+            None if settings.start_from == StartFrom::Origin
+                && !req.existing_branch
+                && adopted.is_none() =>
+            {
+                match git::fetch_branch(&repo_path, &repo.base_branch).await {
+                    Ok(()) => format!("origin/{}", repo.base_branch),
+                    Err(e) => {
+                        tracing::warn!("cannot fetch {}, starting from the local branch: {e:#}", repo.base_branch);
+                        repo.base_branch.clone()
+                    }
+                }
+            }
+            None => repo.base_branch.clone(),
+        };
         let dir = if let Some((dir, _)) = &adopted {
             dir.clone()
         } else {
@@ -1262,7 +1283,6 @@ impl SessionManager {
             std::fs::canonicalize(&dir).unwrap_or(dir)
         };
 
-        let config = read_config(&repo_path);
         // Absent means "the repo default"; "none" (or empty) means a plain shell.
         let agent = match req.agent.as_deref() {
             // An agent asking for a session wants an agent in it (X22): the

@@ -16,7 +16,7 @@ import { Button, IconButton, cx } from "../ui";
 import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, fieldCls } from "./controls";
 import { useUnsaved } from "./useUnsaved";
 
-const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], trackers: [] };
+const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [] };
 
 const input = (error?: string, width = "w-[300px]") => cx(fieldCls, "font-mono ui-text-12.5", width, !!error && "border-error focus:border-error");
 
@@ -342,6 +342,14 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
           <Card>
             <Row setting="project-base" label="Base branch" htmlFor="settings-p-base" hint="New sessions branch from here, and Changes compare against it.">
               <input id="settings-p-base" className={input()} spellCheck={false} value={form.base_branch} onChange={(e) => set({ base_branch: e.target.value })} placeholder={file ? `Default: ${file.default_branch}` : ""} />
+            </Row>
+            <Row
+              setting="project-branch-prefix"
+              label="Branch prefix"
+              htmlFor="settings-p-prefix"
+              hint={v.branchPrefix ? <span className="text-error">{v.branchPrefix}</span> : "Put before new session branches here, over Settings › Git."}
+            >
+              <input id="settings-p-prefix" className={input(v.branchPrefix)} aria-invalid={!!v.branchPrefix} spellCheck={false} value={form.branch_prefix} onChange={(e) => set({ branch_prefix: e.target.value })} placeholder="Settings › Git" />
             </Row>
           </Card>
         </Section>

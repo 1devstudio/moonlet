@@ -2,7 +2,7 @@
 // dialogs it names start the way it says.
 
 import { $, browser, expect } from "@wdio/globals";
-import { closeSettings, fill, openSettings, rpc, sel, SESSION, world } from "../fixtures";
+import { closeSettings, fill, openSettings, projectId, rpc, sel, SESSION, world } from "../fixtures";
 
 const w = world();
 const drafts = sel.settingsSwitch("Open pull requests as drafts");
@@ -20,7 +20,7 @@ async function press(key: string, code: string, mods: { metaKey?: boolean; shift
 
 describe("Git settings", () => {
   after(() => {
-    rpc(w, "git.set_settings", { draft_prs: false });
+    rpc(w, "git.set_settings", { draft_prs: false, branch_prefix: "moonlet/" });
   });
 
   it("is a page of the App group", async () => {
@@ -34,6 +34,25 @@ describe("Git settings", () => {
     await $(drafts).click();
     await expect($(drafts)).toHaveAttribute("aria-checked", "true");
     await browser.waitUntil(() => rpc<{ draft_prs: boolean }>(w, "git.settings", {}).draft_prs, { timeoutMsg: "the daemon never got draft_prs" });
+    await closeSettings();
+  });
+
+  it("refuses a branch prefix git would reject", async () => {
+    await openSettings("Git");
+    await fill(sel.settingsField("Branch prefix"), "my prefix/");
+    await expect($(sel.text("Branch names cannot hold spaces or ~ ^ : ? * [ \\"))).toBeDisplayed();
+    await browser.keys(["Enter"]);
+    expect(rpc<{ branch_prefix: string }>(w, "git.settings", {}).branch_prefix).toBe("moonlet/");
+  });
+
+  it("names new sessions' branches with the saved prefix", async () => {
+    await fill(sel.settingsField("Branch prefix"), "e2e/");
+    await expect($(sel.text("e2e/add-search-to-the-product-list"))).toBeDisplayed();
+    await browser.keys(["Enter"]);
+    await browser.waitUntil(() => rpc<{ branch_prefix: string }>(w, "git.settings", {}).branch_prefix === "e2e/", { timeoutMsg: "the prefix was never saved" });
+    const s = rpc<{ id: string; branch: string }>(w, "session.create", { project_id: projectId(w), name: "Prefixed", agent: "none" });
+    rpc(w, "session.archive", { id: s.id, delete_branch: true });
+    expect(s.branch).toBe("e2e/prefixed");
     await closeSettings();
   });
 
@@ -60,5 +79,13 @@ describe("Git settings", () => {
     await expect($(`${commit}//label[contains(normalize-space(), "Stage all changes first")]/input`)).not.toBeSelected();
     await $(`${commit}//button[normalize-space()="Cancel"]`).click();
     rpc(w, "git.set_settings", { stage_all: true });
+  });
+
+  it("saves a typed prefix when Settings closes", async () => {
+    await openSettings("Git");
+    await fill(sel.settingsField("Branch prefix"), "closed/");
+    await closeSettings();
+    await browser.waitUntil(() => rpc<{ branch_prefix: string }>(w, "git.settings", {}).branch_prefix === "closed/", { timeoutMsg: "the prefix was lost on close" });
+    rpc(w, "git.set_settings", { branch_prefix: "moonlet/" });
   });
 });

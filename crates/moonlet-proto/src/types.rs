@@ -111,6 +111,11 @@ pub struct Project {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GitSettings {
+    /// Put before the name of every branch a new session derives from its
+    /// name; empty for none. A project's `branch_prefix` wins.
+    pub branch_prefix: String,
+    /// Where a new session's branch starts when not given.
+    pub start_from: StartFrom,
     /// How the Commit dialog's "Stage all changes first" starts.
     pub stage_all: bool,
     /// How the Create pull request dialog's "Draft" starts.
@@ -120,10 +125,23 @@ pub struct GitSettings {
 impl Default for GitSettings {
     fn default() -> Self {
         Self {
+            branch_prefix: "moonlet/".into(),
+            start_from: StartFrom::Local,
             stage_all: true,
             draft_prs: false,
         }
     }
+}
+
+/// Where new session branches start (X55).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StartFrom {
+    /// The local base branch as it is.
+    #[default]
+    Local,
+    /// `origin/<base>`, fetched first; the local base when the fetch fails.
+    Origin,
 }
 
 /// Per-repo settings, read from `<repo>/.moonlet/config.toml`.
@@ -139,6 +157,9 @@ pub struct ProjectConfig {
     pub default_agent: Option<String>,
     #[serde(default)]
     pub base_branch: Option<String>,
+    /// Put before new session branches here, over the host's (X55).
+    #[serde(default)]
+    pub branch_prefix: Option<String>,
     /// Extra agents, name to shell command.
     #[serde(default)]
     pub agents: BTreeMap<String, String>,
@@ -642,6 +663,10 @@ pub struct DaemonInfo {
     pub pid: u32,
     pub host: String,
     pub home: String,
+    /// The daemon's data folder: `~/.moonlet`, or `$MOONLET_HOME` (X55
+    /// shows its worktrees folder).
+    #[serde(default)]
+    pub data_dir: String,
     pub started_at: u64,
     #[serde(alias = "sessions")]
     pub terminals: usize,
