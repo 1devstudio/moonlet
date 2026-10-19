@@ -1000,7 +1000,9 @@ function PriorityBars({ n }: { n: number }) {
  * tracker board, the board's columns by name, each moving to its first
  * status (X50); otherwise the four columns, or Open and Closed on GitHub.
  */
-export function StateMenu({ host, workspaceId, task }: { host: string; workspaceId: string; task: Task }) {
+export function StateMenu({ host, workspaceId, task, chip = false }: { host: string; workspaceId: string; task: Task; chip?: boolean }) {
+  // A chip sits in a row of text, the task bar's, and keeps a lock to its tooltip.
+  const chipCls = "chip-select shrink-0 rounded-full border border-border-strong bg-transparent pl-[7px] ui-text-11.5 text-muted outline-none hover:text-fg focus:border-accent";
   // The board's columns as saved, and the task's board after each sync.
   const boards = useTasks((t) => t.config?.boards);
   const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
@@ -1017,7 +1019,7 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
         aria-label={`State of ${task.key}`}
         disabled={locked}
         title={lock ?? undefined}
-        className={cx(inputCls, "menu-select field-height")}
+        className={chip ? chipCls : cx(inputCls, "menu-select field-height")}
         value={current}
         onChange={(e) => {
           const c = choices[Number(e.target.value)];
@@ -1032,7 +1034,7 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
         ))}
       </select>
     );
-    if (!locked) return select;
+    if (!locked || chip) return select;
     return (
       <span className="flex flex-col gap-1">
         {select}
@@ -1041,13 +1043,13 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
     );
   }
   // A Project's item before its board's columns are known: no Open/Closed to fall back on.
-  if (task.github?.project) return <span className="ui-text-12.5 text-muted">{task.github.project.status ?? NO_STATUS}</span>;
+  if (task.github?.project) return <span className={cx("ui-text-12.5 text-muted", chip && "shrink-0 whitespace-nowrap")}>{task.github.project.status ?? NO_STATUS}</span>;
   const options = stateOptions(task);
   const current = options.findIndex((o) => o.current);
   return (
     <select
       aria-label={`State of ${task.key}`}
-      className="rounded-md border border-border-strong bg-panel-2 px-1.5 py-0.5 ui-text-12.5 text-fg"
+      className={chip ? chipCls : "rounded-md border border-border-strong bg-panel-2 px-1.5 py-0.5 ui-text-12.5 text-fg"}
       value={current}
       onChange={(e) => void moveTask(host, workspaceId, task, options[Number(e.target.value)].column)}
     >

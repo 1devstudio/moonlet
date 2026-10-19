@@ -34,27 +34,30 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
   const at = card.rows.findIndex((r) => r.session.id === ws.id);
   const go = (d: number) => selectSession(host, card.rows[(at + d + card.rows.length) % card.rows.length].session.id);
   return (
-    <div role="region" aria-label="Task" className="flex h-[34px] shrink-0 items-center gap-2 border-b border-border bg-panel px-4 ui-text-12.5">
-      <button className="flex items-center gap-1.5 text-muted hover:text-fg" title="Show this task in Tasks mode" onClick={() => openInTasksMode(card.task)}>
+    <div role="region" aria-label="Task" className="flex min-h-[40px] shrink-0 items-center gap-2.5 border-b border-border bg-panel py-1.5 pr-3 pl-4 ui-text-12.5">
+      <button className="flex shrink-0 items-center gap-1.5 text-muted hover:text-fg" title="Show this task in Tasks mode" onClick={() => openInTasksMode(card.task)}>
         Tasks
       </button>
-      <span className="text-faint">/</span>
-      <TaskGlyph column={card.column} size={13} />
-      <span className="font-mono text-muted">{card.task.key}</span>
-      <span className="min-w-0 truncate text-fg">{card.task.title}</span>
-      {ws.workspace_id ? <StateMenu host={host} workspaceId={ws.workspace_id} task={card.task} /> : <span className="shrink-0 text-faint">{COLUMN_LABEL[card.column]}</span>}
+      <span className="shrink-0 text-faint">/</span>
+      <TaskGlyph column={card.column} size={14} />
+      <span className="shrink-0 whitespace-nowrap font-mono ui-text-12 text-muted">{card.task.key}</span>
+      <span className="min-w-0 truncate font-medium text-fg">{card.task.title}</span>
+      {ws.workspace_id ? <StateMenu host={host} workspaceId={ws.workspace_id} task={card.task} chip /> : <span className="shrink-0 whitespace-nowrap text-faint">{COLUMN_LABEL[card.column]}</span>}
+      <span className="flex-1" />
       {card.rows.length > 1 && (
-        <div role="group" aria-label="Sessions on this task" className="ml-2 flex items-center gap-0.5 text-muted">
+        <div role="group" aria-label="Sessions on this task" className="flex shrink-0 items-center gap-0.5 whitespace-nowrap ui-text-12 text-muted">
           <IconButton title="Previous session on this task" onClick={() => go(-1)}>
             <ChevronLeft size={14} />
           </IconButton>
-          Session {at + 1} of {card.rows.length}
+          <span>
+            Session <span className="text-fg">{at + 1}</span> of {card.rows.length}
+          </span>
           <IconButton title="Next session on this task" onClick={() => go(1)}>
             <ChevronRight size={14} />
           </IconButton>
         </div>
       )}
-      <a href={card.task.url} target="_blank" rel="noreferrer" className="ml-auto flex shrink-0 items-center gap-1 text-muted hover:text-fg">
+      <a href={card.task.url} target="_blank" rel="noreferrer" className="flex shrink-0 items-center gap-1 ui-text-12 text-accent-2 hover:text-accent">
         {trackerName(card.task.connection)} <ExternalLink size={12} />
       </a>
     </div>
