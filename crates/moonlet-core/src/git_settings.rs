@@ -6,6 +6,8 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use moonlet_proto::types::GitSettings;
+#[cfg(test)]
+use moonlet_proto::types::StartFrom;
 
 pub fn path() -> PathBuf {
     crate::paths::home().join("git.toml")
@@ -23,6 +25,22 @@ pub fn load(file: &Path) -> GitSettings {
     })
 }
 
+/// Why git would reject branches named `<prefix>…`, if it would.
+pub fn prefix_error(p: &str) -> Option<&'static str> {
+    if p.chars()
+        .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c))
+    {
+        return Some("Branch names cannot hold spaces or ~ ^ : ? * [ \\");
+    }
+    if p.contains("..") || p.contains("//") || p.contains("@{") {
+        return Some("Branch names cannot hold .., // or @{");
+    }
+    if p.starts_with(['/', '.', '-']) {
+        return Some("Start with a letter or digit.");
+    }
+    None
+}
+
 /// One update at a time, so two quick changes both land.
 static WRITE: Mutex<()> = Mutex::new(());
 
@@ -37,6 +55,9 @@ pub fn update(file: &Path, patch: serde_json::Value) -> Result<GitSettings> {
         anyhow::bail!("Git settings must be an object");
     }
     let settings: GitSettings = serde_json::from_value(merged).context("invalid Git settings")?;
+    if let Some(e) = prefix_error(&settings.branch_prefix) {
+        anyhow::bail!(e);
+    }
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -88,6 +109,47 @@ mod tests {
         assert_eq!(load(&file), s);
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.contains("draft_prs = true"), "{text}");
+    }
+
+    #[test]
+    fn new_branches_are_prefixed_moonlet_and_start_from_the_local_base() {
+        let s = GitSettings::default();
+        assert_eq!(s.branch_prefix, "moonlet/");
+        assert_eq!(s.start_from, StartFrom::Local);
+    }
+
+    #[test]
+    fn a_prefix_git_would_reject_says_why() {
+        for ok in ["", "moonlet/", "marcin/", "feat/", "a.b-c_d/"] {
+            assert_eq!(prefix_error(ok), None, "{ok}");
+        }
+        let chars = Some("Branch names cannot hold spaces or ~ ^ : ? * [ \\");
+        for bad in ["my prefix/", "a~", "a^", "a:", "a?", "a*", "a[", "a\\b"] {
+            assert_eq!(prefix_error(bad), chars, "{bad}");
+        }
+        let seqs = Some("Branch names cannot hold .., // or @{");
+        for bad in ["a..b/", "a//", "a@{"] {
+            assert_eq!(prefix_error(bad), seqs, "{bad}");
+        }
+        for bad in ["/a", ".a", "-a"] {
+            assert_eq!(
+                prefix_error(bad),
+                Some("Start with a letter or digit."),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_invalid_prefix_is_not_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("git.toml");
+        let e = update(&file, json!({"branch_prefix": "my prefix/"})).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "Branch names cannot hold spaces or ~ ^ : ? * [ \\"
+        );
+        assert!(!file.exists());
     }
 
     #[test]

@@ -830,8 +830,16 @@ pub async fn worktree_add(
     if existing {
         git(repo, &["worktree", "add", &dir_s, branch]).await?;
     } else {
-        git(repo, &["worktree", "add", "-b", branch, &dir_s, from]).await?;
+        // A branch started from `origin/<base>` (X55) must not track it:
+        // its upstream is set when it is first pushed.
+        git(repo, &["worktree", "add", "--no-track", "-b", branch, &dir_s, from]).await?;
     }
+    Ok(())
+}
+
+/// Fetches `branch` from origin, so `origin/<branch>` is current.
+pub async fn fetch_branch(repo: &Path, branch: &str) -> Result<()> {
+    git(repo, &["fetch", "--quiet", "--no-tags", "origin", branch]).await?;
     Ok(())
 }
 

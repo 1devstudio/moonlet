@@ -203,6 +203,10 @@ export interface Project {
 
 /** A host's Git settings, kept by its daemon in `~/.moonlet/git.toml` (X55). */
 export interface GitSettings {
+  /** Put before every branch a new session derives from its name; empty for none. */
+  branch_prefix: string;
+  /** Where new session branches start: the local base, or `origin/<base>` after a fetch. */
+  start_from: "local" | "origin";
   /** How the Commit dialog's "Stage all changes first" starts. */
   stage_all: boolean;
   /** How the Create pull request dialog's "Draft" starts. */
@@ -215,6 +219,8 @@ export interface ProjectConfig {
   archive?: string | null;
   default_agent?: string | null;
   base_branch?: string | null;
+  /** Put before new session branches here, over the host's (X55). */
+  branch_prefix?: string | null;
   agents: Record<string, string>;
   /** Tracker projects this project's sessions start from, `<connection>/<key>` (X44). */
   trackers?: string[];

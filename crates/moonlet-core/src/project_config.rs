@@ -13,7 +13,7 @@ use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 /// Agents moonlet knows without `[agents]`.
 const BUILTIN_AGENTS: [&str; 2] = ["claude", "codex"];
 /// Top-level string keys, in the order new ones are added.
-const SCRIPT_KEYS: [&str; 5] = ["setup", "run", "archive", "default_agent", "base_branch"];
+const SCRIPT_KEYS: [&str; 6] = ["setup", "run", "archive", "default_agent", "base_branch", "branch_prefix"];
 
 /// The message `save` fails with when the file changed since it was read.
 pub const STALE: &str = "config changed on disk";
@@ -176,6 +176,9 @@ pub fn validate(config: &ProjectConfig) -> Result<()> {
     {
         bail!("default agent `{a}` is not an agent in this project");
     }
+    if let Some(e) = config.branch_prefix.as_deref().and_then(crate::git_settings::prefix_error) {
+        bail!("branch prefix: {e}");
+    }
     for t in &config.trackers {
         let ok = t
             .split_once('/')
@@ -206,6 +209,7 @@ fn normalize(c: &ProjectConfig) -> ProjectConfig {
         archive: s(&c.archive),
         default_agent: s(&c.default_agent),
         base_branch: s(&c.base_branch),
+        branch_prefix: s(&c.branch_prefix),
         agents: c
             .agents
             .iter()
@@ -230,6 +234,7 @@ fn apply(doc: &mut DocumentMut, c: &ProjectConfig) {
         &c.archive,
         &c.default_agent,
         &c.base_branch,
+        &c.branch_prefix,
     ];
     for (key, v) in SCRIPT_KEYS.into_iter().zip(values) {
         if v.is_none() {
