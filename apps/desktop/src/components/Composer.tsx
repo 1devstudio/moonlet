@@ -61,9 +61,15 @@ function SourcePicker({ host, project, onIssue, onPr }: { host: string; project:
     if (!open) return;
     setItems(null);
     setError(null);
+    // A tab's list that arrives after a switch to the other tab is dropped:
+    // issues must not show, or be picked, as pull requests.
+    let current = true;
     void rpc<IssueRef[]>(host, tab === "issue" ? M.ghIssues : M.ghPrs, { path: project.path })
-      .then(setItems)
-      .catch((e) => setError(String(e?.message ?? e)));
+      .then((list) => current && setItems(list))
+      .catch((e) => current && setError(String(e?.message ?? e)));
+    return () => {
+      current = false;
+    };
   }, [open, tab, host, project.path]);
   const shown = (items ?? []).filter((i) => !q || `#${i.number} ${i.title}`.toLowerCase().includes(q.toLowerCase()));
   return (
