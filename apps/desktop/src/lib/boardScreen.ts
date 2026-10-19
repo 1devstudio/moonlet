@@ -61,6 +61,17 @@ export function stateChoices(columns: BoardColumn[], task: Task): { choices: { l
   return { choices: shown.map((c) => ({ label: c.name, category: c.category, status: c.statuses[0] })), current: shown.findIndex((c) => holds(c, task)) };
 }
 
+/**
+ * Where a card in column `from` dropped on column `to` moves (X53): to that
+ * column's first status, as the State menu's choice for it. Null for a
+ * column that takes no drop: the card's own, a hidden one, one with no
+ * statuses.
+ */
+export function dropTarget(columns: BoardColumn[], from: string, to: string): { category: Category; status: string } | null {
+  const c = from === to ? undefined : columns.find((x) => x.name === to && x.show !== "hide" && x.statuses.length);
+  return c ? { category: c.category, status: c.statuses[0] } : null;
+}
+
 /** A board's title (X50): its name, with the sprint or cycle it follows. */
 export const boardTitle = (board: BoardConfig, sprint: string | null | undefined) => (board.finished === "sprint" && sprint ? `${board.name} · ${sprint}` : board.name);
 

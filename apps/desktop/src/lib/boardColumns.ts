@@ -32,6 +32,19 @@ function statusKeys(task: Task): string[] {
   return [task.tracker?.statusId || task.tracker?.state || ""];
 }
 
+/**
+ * `task` as its tracker will have it once moved to `status`, of the column
+ * named `name` (X53): the key `statusKeys` reads, so a card shows in its new
+ * column before the tracker answers.
+ */
+export function withStatus(task: Task, status: string, name: string): Task {
+  const project = task.github?.project;
+  if (project) return { ...task, github: { ...task.github!, project: { ...project, ...(status ? { option: status, status: name } : { option: null, status: null }) } } };
+  if (task.github) return { ...task, column: status === "open" ? "open" : "done" };
+  if (!task.tracker) return task;
+  return { ...task, tracker: task.tracker.statusId ? { ...task.tracker, statusId: status, state: name } : { ...task.tracker, state: status } };
+}
+
 /** The entry of `index`, by status, that holds `task`, if any. */
 function indexOf<T>(index: Map<string, T>, task: Task): T | undefined {
   for (const key of statusKeys(task)) if (index.has(key)) return index.get(key);
