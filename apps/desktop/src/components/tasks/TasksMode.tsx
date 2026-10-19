@@ -8,7 +8,7 @@ import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { createLockOn, createsIn, createTarget } from "../../lib/newIssue";
-import { type Column, type Task, taskId, taskStart, trackerName, trackerOf } from "../../lib/tasks";
+import { type Column, type Task, type TaskStart, taskId, taskStart, trackerName, trackerOf } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
 import {
@@ -217,15 +217,24 @@ function openSession(host: string, sessionId: string) {
 }
 
 /** Opens the new-session composer for a task, or for one of its worktrees without a session (X46). */
-export function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
+/**
+ * What the composer starts with for `task` in a workspace (X46): the link,
+ * the first message, the "session starts" checkbox and the branch template.
+ * The composer's Link a task uses it too (X54).
+ */
+export function composerTask(host: string, workspaceId: string, task: Task): TaskStart {
   const data = useTasks.getState().data[wsKey(host, workspaceId)];
-  const settings = trackerSettings(trackersConfig(useTasks.getState()), card.task.connection);
-  const start = {
-    ...taskStart(card.task, data?.repos ?? {}, data?.sourceProjects ?? {}),
-    assign: startAction(card.task, rulesFor(trackersConfig(useTasks.getState()), card.task).session_starts),
+  const settings = trackerSettings(trackersConfig(useTasks.getState()), task.connection);
+  return {
+    ...taskStart(task, data?.repos ?? {}, data?.sourceProjects ?? {}),
+    assign: startAction(task, rulesFor(trackersConfig(useTasks.getState()), task).session_starts),
     template: settings.branch_template || undefined,
     maxLen: settings.max_length,
   };
+}
+
+export function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
+  const start = composerTask(host, workspaceId, card.task);
   useStore.setState({
     dialog: {
       kind: "new-session",
