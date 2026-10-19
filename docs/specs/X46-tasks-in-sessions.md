@@ -113,6 +113,7 @@ The designs are the "Session opened from a task" and "Link a session · Start fr
 
 - Moving issues and commenting are outward-facing. They only happen through rules the user can see and set per tracker, defaulting as in the table; Suggest and Off never write to the tracker.
 - The issue text becomes the first message only after the user sees it in the composer.
+- The Task tab renders the description's Markdown to sanitized HTML: raw HTML in it shows as text, images become links named by their alt text, and a link opens in the browser only for `http`, `https` or `mailto`.
 - Comments posted by moonlet contain only the PR's title and URL.
 
 ## Out of scope
