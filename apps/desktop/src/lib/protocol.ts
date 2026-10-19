@@ -216,6 +216,16 @@ export interface SessionArchived {
   remote_error?: string | null;
 }
 
+/** Work in a session that is only on its host (X55). */
+export interface UnpushedWork {
+  /** Uncommitted files with git's one-letter status (`M`, `A`, `D`, `R`, `?`). */
+  files: { status: string; path: string }[];
+  /** Commits not on origin. */
+  commits: number;
+  /** The branch's upstream, such as `origin/moonlet/fix`, if it has one. */
+  upstream: string | null;
+}
+
 /** A host's Git settings, kept by its daemon in `~/.moonlet/git.toml` (X55). */
 export interface GitSettings {
   /** Put before every branch a new session derives from its name; empty for none. */
@@ -232,6 +242,8 @@ export interface GitSettings {
   archive_branch: "ask" | "keep" | "merged" | "always";
   /** Also delete a merged PR's branch on origin. */
   delete_remote_branch: boolean;
+  /** Before archiving, list uncommitted files and commits not on origin. */
+  warn_unpushed: boolean;
   /** How often projects fetch their base branch from origin; 0: manually. */
   fetch_minutes: number;
   /** Pull a base branch that is only behind origin without a click. */
@@ -653,6 +665,8 @@ export const M = {
   gitOriginUrl: "git.origin_url",
   gitSettings: "git.settings",
   gitSetSettings: "git.set_settings",
+  gitUnpushed: "git.unpushed",
+  gitPush: "git.push",
   prCreate: "gh.pr_create",
   ghIssues: "gh.issues",
   shellHistory: "shell.history",
