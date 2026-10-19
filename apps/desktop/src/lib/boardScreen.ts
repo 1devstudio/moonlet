@@ -57,9 +57,12 @@ export function columnCounts(columns: BoardColumn[]): { shown: number; folded: n
  * (-1 when none does, as in a hidden column).
  */
 export function stateChoices(columns: BoardColumn[], task: Task): { choices: { label: string; category: Category; status: string }[]; current: number } {
-  const shown = columns.filter((c) => c.show !== "hide" && c.statuses.length);
+  const shown = movesTo(columns);
   return { choices: shown.map((c) => ({ label: c.name, category: c.category, status: c.statuses[0] })), current: shown.findIndex((c) => holds(c, task)) };
 }
+
+/** The columns a task can move to (X50 State menu, X53 drop): those drawn, shown or folded, with a status. */
+const movesTo = (columns: BoardColumn[]) => columns.filter((c) => c.show !== "hide" && c.statuses.length);
 
 /**
  * Where a card in column `from` dropped on column `to` moves (X53): to that
@@ -68,7 +71,7 @@ export function stateChoices(columns: BoardColumn[], task: Task): { choices: { l
  * statuses.
  */
 export function dropTarget(columns: BoardColumn[], from: string, to: string): { category: Category; status: string } | null {
-  const c = from === to ? undefined : columns.find((x) => x.name === to && x.show !== "hide" && x.statuses.length);
+  const c = from === to ? undefined : movesTo(columns).find((x) => x.name === to);
   return c ? { category: c.category, status: c.statuses[0] } : null;
 }
 
