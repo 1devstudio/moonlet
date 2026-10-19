@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { migrateSources } from "./boards";
+import { workspaceViews } from "./boardScreen";
 import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
 import { createIssue, setColumnShow } from "./tasksStore";
-import { activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -19,7 +20,12 @@ vi.mock("./daemon", () => ({
     trackersConfig: () =>
       new Promise((r) => setTimeout(r, configDelay.ms)).then(() => (configFails.length ? Promise.reject(configFails.shift()) : (file.config ?? { sync: { interval: 300, notify: true }, boards: [WEB_REPO] }))),
     trackersSave: (c: object) => new Promise<void>((r, no) => setTimeout(() => (saveFails.length ? no(saveFails.shift()) : (saved.push(c), r())), 5)),
-    trackerUpdate: (req: object) => (failNext.length ? Promise.reject(failNext.shift()) : (sent.push(req), Promise.resolve())),
+    trackerUpdate: (req: object) =>
+      held.on
+        ? new Promise<void>((r, no) => (held.settle = (error) => (error ? no(error) : (sent.push(req), r()))))
+        : failNext.length
+          ? Promise.reject(failNext.shift())
+          : (sent.push(req), Promise.resolve()),
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
     // A Linear team's or ClickUp list's board (X50): that source's issues
     // from the tracker_tasks answers, and its columns when a test gives them.
@@ -53,6 +59,8 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCo
 const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
 const sent = vi.hoisted(() => [] as object[]);
 const failNext = vi.hoisted(() => [] as object[]);
+/** While on, a tracker_update waits for the test to settle it, with the tracker's refusal or none. */
+const held = vi.hoisted(() => ({ on: false, settle: (_error?: object) => {} }));
 const configFails = vi.hoisted(() => [] as object[]);
 const configDelay = vi.hoisted(() => ({ ms: 0 }));
 /** What trackers.toml holds, when a test gives it; else the acme/web board the user added. */
@@ -72,6 +80,12 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   requestPermission: () => Promise.resolve("granted"),
   sendNotification: (n: { title: string; body: string }) => shown.push(n),
 }));
+
+/** The shown board's columns of local/personal, each with its cards' keys, as Tasks mode draws them (X53). */
+function boardCards(config: TrackersConfig): [string, string[]][] {
+  const data = useTasks.getState().data["local/personal"];
+  return workspaceViews(config.boards ?? [], data, boardInput(useStore.getState(), "local", "personal", data, config))[0].views.map((v) => [v.name, v.cards.map((c) => c.task.key)]);
+}
 
 const ws = (id: string, section_ids: string[]): Workspace => ({ id, name: id, color: "clay", section_ids, created_at: 0 });
 const sec = (id: string, project_ids: string[]): Section => ({ id, name: id, project_ids, view: { group_by: "project", sort_by: "created", filter: [] }, created_at: 0 });
@@ -542,6 +556,81 @@ describe("boards (X50 Sync)", () => {
     useTasks.setState({ config: null });
   });
 
+  it("shows a moved card in its new column at once, through a sync that lands meanwhile, back where it was when the tracker refuses, and placed by the tracker once done (X53)", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    const columns = [
+      { name: "Todo", statuses: ["Todo"], category: "todo" as const },
+      { name: "Building", statuses: ["Doing", "In Progress"], category: "in_progress" as const },
+    ];
+    const config = { ...DEFAULT_CONFIG, boards: [board({ columns })] };
+    useTasks.setState({ config, attention: {}, failures: {} });
+    useStore.setState({ toasts: [] });
+    await refreshTasks("local", "personal", 1_000);
+    const cardsIn = () => boardCards(config);
+    expect(cardsIn()).toEqual([["Todo", ["MOON-1"]], ["Building", []]]);
+    held.on = true;
+    try {
+      const refused = moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_500, "Doing");
+      expect(cardsIn()).toEqual([["Todo", []], ["Building", ["MOON-1"]]]);
+      // A sync from before the move still has it in Todo.
+      await refreshTasks("local", "personal", 1_600);
+      expect(cardsIn()).toEqual([["Todo", []], ["Building", ["MOON-1"]]]);
+      held.settle({ message: "Linear: no such state" });
+      await refused;
+      expect(cardsIn()).toEqual([["Todo", ["MOON-1"]], ["Building", []]]);
+      expect(useStore.getState().toasts.map((t) => t.text)).toEqual(["MOON-1: Linear: no such state"]);
+      expect(failureOf({ connection: "linear:acme", key: "MOON-1" })).toBe("Linear: no such state");
+
+      const moved = moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 2_000, "Doing");
+      answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Doing")];
+      held.settle();
+      await moved;
+      await vi.waitFor(() => expect(useTasks.getState().data["local/personal"].tasks[0].tracker?.state).toBe("Doing"));
+      expect(cardsIn()).toEqual([["Todo", []], ["Building", ["MOON-1"]]]);
+    } finally {
+      held.on = false;
+    }
+    // Moved back in Linear afterwards: the tracker's answer places it, not the move.
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    await refreshTasks("local", "personal", 3_000);
+    expect(cardsIn()).toEqual([["Todo", ["MOON-1"]], ["Building", []]]);
+    useTasks.setState({ config: null });
+  });
+
+  it("keeps a done move's card in its new column until a sync reads that task: not one that kept the board's last tasks, nor another workspace's (X53)", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    const columns = [
+      { name: "Todo", statuses: ["Todo"], category: "todo" as const },
+      { name: "Building", statuses: ["Doing"], category: "in_progress" as const },
+    ];
+    const config = { ...DEFAULT_CONFIG, boards: [board({ columns })] };
+    useTasks.setState({ config, attention: {}, failures: {} });
+    await refreshTasks("local", "personal", 1_000);
+    const cardsIn = () => boardCards(config);
+    // Linear took the move, then stopped accepting the token: the sync after it keeps the board's last tasks.
+    answers["tracker_tasks linear:acme"] = () => {
+      throw { auth: true, message: "Linear no longer accepts this token. Create a new one and paste it here." };
+    };
+    await moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "in_progress", 1_500, "Doing");
+    await vi.waitFor(() => expect(useTasks.getState().attention["linear:acme"]).toBeTruthy());
+    expect(cardsIn()).toEqual([["Todo", []], ["Building", ["MOON-1"]]]);
+    // Another workspace's sync reads none of this board's tasks.
+    await refreshTasks("local", "acme", 1_600);
+    expect(cardsIn()).toEqual([["Todo", []], ["Building", ["MOON-1"]]]);
+    // Reconnected, Linear's answer places it.
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Doing")];
+    useTasks.setState({ attention: {} });
+    await refreshTasks("local", "personal", 2_000);
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Todo")];
+    await refreshTasks("local", "personal", 3_000);
+    expect(cardsIn()).toEqual([["Todo", ["MOON-1"]], ["Building", []]]);
+    useTasks.setState({ config: null, attention: {} });
+  });
+
   it("previews a board not saved yet: everyone's issues, the user's own marked, and the tracker's columns (Add a board)", async () => {
     answers["git.origin_url"] = () => null;
     answers["tracker_tasks linear:acme all"] = () => [lt("MOON-1", "Todo"), lt("MOON-2", "Todo")];
@@ -846,6 +935,26 @@ describe("moving a task from its state menu, and its activity (X45, X46)", () =>
     await moveTask("local", "personal", closed, null, 6_000);
     expect(asked).toEqual([{ path: "/r/web", number: 7, reopen: true }]);
     expect(activityOf(closed)[0].text).toBe("moonlet reopened it");
+  });
+});
+
+describe("moving a GitHub repository's issue (X53)", () => {
+  it("shows it in Closed at once while gh closes it", async () => {
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = () => [issue];
+    let answer = () => {};
+    answers["gh.task_update"] = () => new Promise<boolean>((r) => (answer = () => r(true)));
+    useTasks.setState({ config: null, attention: {} });
+    await refreshTasks("local", "personal", 1_000);
+    const config = trackersConfig(useTasks.getState());
+    const cardsIn = () => boardCards(config);
+    expect(cardsIn()).toEqual([["Open", ["acme/web#12"]], ["Closed", []]]);
+    const closing = moveTask("local", "personal", useTasks.getState().data["local/personal"].tasks[0], "done", 2_000, "completed");
+    await vi.waitFor(() => expect(cardsIn()).toEqual([["Open", []], ["Closed", ["acme/web#12"]]]));
+    answer();
+    await closing;
+    expect(activityOf({ connection: "github:github.com", key: "acme/web#12" })[0].text).toBe("moonlet closed it");
   });
 });
 
@@ -1315,6 +1424,35 @@ describe("a GitHub Project's board (X50 Sync)", () => {
     const drift = { kind: "pr_open" as const, text: "#31 open", fix: "Move to In Progress", to: { column: "In Progress", category: "in_progress" as const, statuses: ["o2"] } };
     await fixDrift("local", "personal", { task, column: "todo", rows: [], needsYou: false, orphans: [], empty: null, drift });
     expect(moves).toEqual([{ project: "PVT_1", item: "PVTI_10", field: "F", option: "o2" }]);
+    useTasks.setState({ config: null });
+  });
+
+  it("shows a moved item in its new column at once, No Status too (X53)", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    const options = [{ id: "o1", name: "Todo" }, { id: "o2", name: "In Progress" }];
+    answers["gh.project_items"] = () => ({ id: "PVT_1", status_field: "F", options, items: [item(10, "Todo", ["sam-rivera"])] });
+    answers["gh.scopes"] = () => ["repo", "project"];
+    let answer = () => {};
+    answers["gh.project_move"] = () => new Promise<boolean>((r) => (answer = () => r(true)));
+    const project = { id: "web-project", name: "Website", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_project" as const, owner: "acme", number: 2 }, columns: [
+      { name: "No Status", statuses: [""], category: "todo" as const },
+      { name: "Todo", statuses: ["o1"], category: "todo" as const },
+      { name: "In Progress", statuses: ["o2"], category: "in_progress" as const },
+    ] };
+    const config = { ...DEFAULT_CONFIG, boards: [project] };
+    useTasks.setState({ config, attention: {}, assignee: {} });
+    await refreshTasks("local", "personal", 1_000);
+    const cardsIn = () => boardCards(config);
+    const task = useTasks.getState().data["local/personal"].tasks[0];
+    const toInProgress = moveTask("local", "personal", task, "in_progress", 2_000, "o2");
+    await vi.waitFor(() => expect(cardsIn()).toEqual([["No Status", []], ["Todo", []], ["In Progress", ["acme/web#10"]]]));
+    answer();
+    await toInProgress;
+    const toNoStatus = moveTask("local", "personal", task, "todo", 3_000, "");
+    await vi.waitFor(() => expect(cardsIn()).toEqual([["No Status", ["acme/web#10"]], ["Todo", []], ["In Progress", []]]));
+    answer();
+    await toNoStatus;
     useTasks.setState({ config: null });
   });
 

@@ -286,7 +286,7 @@ Daemon RPCs, since `gh` runs on the project's host:
 
 - An "Across boards" section (My tasks, In review, Out of sync, Sessions without a task over every board).
 - A Current cycle view across Linear teams; boards built from Linear projects or custom views.
-- Drag and drop between columns. Creating tasks (the `+` on a column) is [X52](X52-new-issue-from-a-column.md).
+- Drag and drop between columns is [X53](X53-drag-tasks-between-columns.md). Creating tasks (the `+` on a column) is [X52](X52-new-issue-from-a-column.md).
 - WIP limits for Linear, GitHub and ClickUp.
 - Writing anything back to the tracker's board: column order, folding and categories are moonlet-only.
 - An "Opens on" setting per workspace: Tasks mode opens on the board last shown.
