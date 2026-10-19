@@ -244,6 +244,9 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   wide = false,
+  width,
+  alt,
+  onAlt,
   children,
 }: {
   title: string;
@@ -258,6 +261,12 @@ export function ConfirmDialog({
   onCancel: () => void;
   /** 560 px instead of 440 px, for a preview of 80 columns (X31). */
   wide?: boolean;
+  /** Another width in px, such as 520 for the unpushed-work prompt (X55). */
+  width?: number;
+  /** A second way to confirm, shown before the action and focused instead
+   * of it; `disabled` is why it can't be used (X55). */
+  alt?: { label: string; disabled?: string };
+  onAlt?: () => void;
   /** Shown under the message, such as the text an agent would read. */
   children?: ReactNode;
 }) {
@@ -280,7 +289,8 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className={cx(wide ? "w-[560px]" : "w-[440px]", "overflow-hidden rounded-xl border border-border-strong bg-panel shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] outline-none")}
+        style={width ? { width } : undefined}
+        className={cx(!width && (wide ? "w-[560px]" : "w-[440px]"), "overflow-hidden rounded-xl border border-border-strong bg-panel shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] outline-none")}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           // Tab stays inside, so it never reaches a dialog underneath.
@@ -308,10 +318,17 @@ export function ConfirmDialog({
               {checkbox}
             </label>
           )}
-          <Button variant="ghost" className={ring} onClick={onCancel}>
+          {/* With a disabled alt (a danger action next to it), Enter must not
+              archive anyway: Cancel takes the focus. */}
+          <Button variant="ghost" className={ring} autoFocus={!!alt?.disabled} onClick={onCancel}>
             {cancel}
           </Button>
-          <Button variant={variant} className={ring} autoFocus onClick={onConfirm}>
+          {alt && (
+            <Button variant="primary" className={ring} autoFocus={!alt.disabled} disabled={!!alt.disabled} title={alt.disabled} onClick={onAlt}>
+              {alt.label}
+            </Button>
+          )}
+          <Button variant={variant} className={ring} autoFocus={!alt} onClick={onConfirm}>
             {action}
           </Button>
         </div>

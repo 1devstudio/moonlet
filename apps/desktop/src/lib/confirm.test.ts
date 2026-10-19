@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { answerConfirm, archivePrompt, askConfirm, confirmView } from "./confirm";
-import { archiveFlags, archivePlan, DEFAULT_GIT_SETTINGS } from "./gitSettings";
-import type { GitSettings } from "./protocol";
+import { answerConfirm, archivePrompt, askConfirm, confirmView, unpushedPrompt } from "./confirm";
+import { archiveFlags, archivePlan, DEFAULT_GIT_SETTINGS, unpushedView } from "./gitSettings";
+import type { GitSettings, UnpushedWork } from "./protocol";
 import { useStore } from "./store";
 
 const discard = { title: "Discard hunk", message: "Discard this hunk from the working tree?", action: "Discard" };
@@ -110,5 +110,72 @@ describe("archiving as the host's Git settings say (X55)", () => {
     const base = archivePlan(git({ archive_branch: "always" }), "merged", "main", "main");
     expect(archiveFlags(base, true)).toEqual({ remove_worktree: true, delete_branch: false, delete_remote: false });
     expect(archivePrompt(name, base).checkbox).toBeUndefined();
+  });
+});
+
+describe("warning before losing unpushed work (X55)", () => {
+  const plan = archivePlan(DEFAULT_GIT_SETTINGS, "open", "moonlet/add-search-to-the-product-list", "main");
+  const branch = "moonlet/add-search-to-the-product-list";
+  const work: UnpushedWork = {
+    files: [
+      { status: "M", path: "src/search/index.ts" },
+      { status: "M", path: "src/components/ProductList.tsx" },
+      { status: "?", path: "src/search/ranking.test.ts" },
+    ],
+    commits: 2,
+    upstream: null,
+  };
+
+  it("lists the files and the commits only on this machine", () => {
+    expect(unpushedView(work, plan, branch, "this Mac")).toEqual({
+      heading: "This work is only on this Mac",
+      files: work.files,
+      more: 0,
+      summary: "3 uncommitted files · 2 commits not pushed to origin/moonlet/add-search-to-the-product-list",
+      canPush: false,
+    });
+    expect(unpushedView({ files: [], commits: 1, upstream: "origin/moonlet/x" }, plan, "moonlet/x", "devbox")).toEqual({
+      heading: "This work is only on devbox",
+      files: [],
+      more: 0,
+      summary: "1 commit not pushed to origin/moonlet/x",
+      canPush: true,
+    });
+  });
+
+  it("shows at most 8 files and counts the rest", () => {
+    const many = { files: Array.from({ length: 11 }, (_, i) => ({ status: "M", path: `f${i}.ts` })), commits: 0, upstream: null };
+    const view = unpushedView(many, plan, branch, "this Mac")!;
+    expect(view.files.map((f) => f.path)).toEqual(["f0.ts", "f1.ts", "f2.ts", "f3.ts", "f4.ts", "f5.ts", "f6.ts", "f7.ts"]);
+    expect(view.more).toBe(3);
+    expect(view.summary).toBe("11 uncommitted files");
+  });
+
+  it("warns of nothing when nothing would go", () => {
+    expect(unpushedView({ files: [], commits: 0, upstream: null }, plan, branch, "this Mac")).toBeNull();
+    // A kept folder keeps its files and its branch.
+    const kept = archivePlan({ ...DEFAULT_GIT_SETTINGS, archive_worktree: "keep" }, "open", branch, "main");
+    expect(unpushedView(work, kept, branch, "this Mac")).toBeNull();
+  });
+
+  it("offers Push, then archive only when commits are all there is", () => {
+    const prompt = unpushedPrompt("Add search to the product list", plan, unpushedView(work, plan, branch, "this Mac")!);
+    expect(prompt.action).toBe("Archive anyway");
+    expect(confirmView(prompt, false).variant).toBe("danger");
+    expect(prompt.alt).toEqual({ label: "Push, then archive", disabled: "Commit the changes first" });
+    expect(confirmView(prompt, false).message).toBe(
+      'Archive "Add search to the product list"? Its terminals stop and the worktree folder is removed. The branch is kept: its PR hasn\'t merged.',
+    );
+    const commitsOnly = unpushedView({ files: [], commits: 2, upstream: null }, plan, branch, "this Mac")!;
+    expect(unpushedPrompt("Add search", plan, commitsOnly).alt).toEqual({ label: "Push, then archive" });
+  });
+
+  it("tells a push from Archive anyway", async () => {
+    const pushed = askConfirm(unpushedPrompt("s1", plan, unpushedView({ files: [], commits: 2, upstream: null }, plan, branch, "this Mac")!));
+    answerConfirm(true, false, true);
+    expect(await pushed).toEqual({ checked: false, alt: true });
+    const anyway = askConfirm(archivePrompt("s1"));
+    answerConfirm(true, false);
+    expect(await anyway).toEqual({ checked: false });
   });
 });

@@ -1,6 +1,6 @@
 # X55 — Git settings
 
-- **Status:** draft
+- **Status:** implemented (2026-10-19; checked with e2e and screenshots of the e2e app, remote hosts untried)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** X5 (sessions and branches), X13 (pull the base branch), X23 (archive confirm), X43 (settings page), D2 (commit), X2 (pull requests), R1 (remote hosts)
 - **Related ADRs:** none
@@ -50,13 +50,13 @@ Settings gains a **Git** page under App: how new sessions name and start their b
 - [x] "Local branch": Ask each time (the prompt's "Also delete the branch" checkbox, as today), Keep, Delete when its PR merged (default), Always delete. The hint under it explains the picked option. A kept folder keeps its branch (it is checked out there), and the project's base branch is never deleted.
 - [x] With "Delete when its PR merged", the branch is deleted when the session's PR is known to be merged, and kept otherwise. The prompt says which.
 - [x] "Also delete the branch on origin" (default off): when the session's PR merged and the local branch is deleted, `origin/<branch>` is deleted too. A failure to delete it on origin does not stop the archive; it shows as a toast.
-- [ ] "Warn before losing unpushed work" (default on): before archiving, moonlet reads the session's uncommitted files (when the folder will be removed) and its commits not on origin (when the branch will be deleted, or the folder removed while the branch has no upstream).
+- [x] "Warn before losing unpushed work" (default on): before archiving, moonlet reads the session's uncommitted files (shown when the folder will be removed) and its commits not on origin (shown when the folder is removed or the branch deleted). Commits not on origin are those ahead of the upstream, or, without one, on no other branch or remote.
 
 ### Archive prompt with unpushed work
 
-- [ ] When there is such work, the prompt shows an amber box "This work is only on this Mac" (or "…only on <host>") listing up to 8 uncommitted files with their status letter, and a line "<n> uncommitted files · <n> commits not pushed to origin/<branch>".
-- [ ] Its buttons are Cancel, "Push, then archive" and "Archive anyway" (danger). "Push, then archive" is disabled while there are uncommitted files, titled "Commit the changes first"; otherwise it runs `git push -u origin HEAD`, then archives. A failed push shows the error and archives nothing.
-- [ ] Without such work, or with the warning off, the prompt is the X23 archive prompt as today.
+- [x] When there is such work, the prompt shows an amber box "This work is only on this Mac" (or "…only on <host>") listing up to 8 uncommitted files with their status letter, and a line "<n> uncommitted files · <n> commits not pushed to origin/<branch>".
+- [x] Its buttons are Cancel, "Push, then archive" and "Archive anyway" (danger). "Push, then archive" is disabled while there are uncommitted files, titled "Commit the changes first"; otherwise it runs `git push -u origin HEAD`, then archives. A failed push shows the error and archives nothing.
+- [x] Without such work, or with the warning off, the prompt is the X23 archive prompt as today.
 
 ### Keeping base branches current
 
@@ -72,7 +72,7 @@ As the design (`Settings · Git` and `Archive prompt · unpushed work`): page he
 - `git.settings` `{}` → `GitSettings`.
 - `git.set_settings` `{ ...partial GitSettings }` → `GitSettings` (the whole, after the change). Refuses an invalid branch prefix.
 - Event `git.settings_changed`: the whole `GitSettings` after a change, to every client (a change made with the CLI reaches the app).
-- `git.unpushed` `{ path, branch, files: bool }` → `{ files: [{ status, path }], commits, upstream }`.
+- `git.unpushed` `{ path }` → `{ files: [{ status, path }], commits, upstream }`.
 - `git.push` `{ path }`: `git push -u origin HEAD`.
 - `session.archive` gains `delete_remote` (default false) and returns `{ remote_error }`: why origin refused the delete, if it did.
 - `session.create` reads the host's prefix and start point when `branch` and `from` are absent. New branches are created with `--no-track`.

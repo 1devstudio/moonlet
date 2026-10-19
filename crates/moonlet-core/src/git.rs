@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use moonlet_proto::types::{
     BasePull, BaseStatus, CheckRun, Commit, FileChange, FileVersions, GitStatus, PrStack,
-    PullRequest, StackPr,
+    PullRequest, StackPr, UnpushedFile, UnpushedWork,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -858,6 +858,55 @@ pub async fn worktree_remove(repo: &Path, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `git status --porcelain=v1 -z` as one letter per file: the index's
+/// change, else the work tree's; `?` for untracked (X55).
+pub fn parse_short_status(out: &str) -> Vec<UnpushedFile> {
+    let mut files = Vec::new();
+    let mut entries = out.split('\0').filter(|e| !e.is_empty());
+    while let Some(e) = entries.next() {
+        let (Some(xy), Some(path)) = (e.get(..2), e.get(3..)) else { continue };
+        let (x, y) = (&xy[..1], &xy[1..]);
+        let status = if xy == "??" { "?" } else if x != " " { x } else { y };
+        // A rename or copy is followed by the path it came from.
+        if matches!(x, "R" | "C") {
+            entries.next();
+        }
+        files.push(UnpushedFile { status: status.into(), path: path.into() });
+    }
+    files
+}
+
+/// What in `dir` is only on this machine (X55).
+pub async fn unpushed(dir: &Path) -> Result<UnpushedWork> {
+    let status = git_text(dir, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]).await?;
+    let upstream = git_text(dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+        .await
+        .ok()
+        .filter(|u| !u.is_empty());
+    let count = match &upstream {
+        Some(_) => git_text(dir, &["rev-list", "--count", "@{upstream}..HEAD"]).await?,
+        None => {
+            // On no other branch or remote: deleting this branch loses them.
+            // `--branches` takes the short name; on a detached HEAD there is none.
+            let own = current_branch(dir).await.unwrap_or_default();
+            let exclude = format!("--exclude={own}");
+            let mut args = vec!["rev-list", "--count", "HEAD", "--not"];
+            if !own.is_empty() {
+                args.push(&exclude);
+            }
+            args.extend(["--branches", "--remotes"]);
+            git_text(dir, &args).await?
+        }
+    };
+    Ok(UnpushedWork { files: parse_short_status(&status), commits: count.trim().parse().unwrap_or(0), upstream })
+}
+
+/// `git push -u origin HEAD`, as Create pull request does.
+pub async fn push(dir: &Path) -> Result<()> {
+    git(dir, &["push", "-u", "origin", "HEAD"]).await?;
+    Ok(())
+}
+
 /// Deletes `branch` on origin, as GitHub's "Delete branch" would (X55).
 pub async fn delete_remote_branch(repo: &Path, branch: &str) -> Result<()> {
     git(repo, &["push", "--quiet", "--delete", "--", "origin", branch]).await?;
@@ -1556,6 +1605,51 @@ pub(crate) mod tests {
         let branch = format!("--upload-pack=touch {};git-upload-pack", marker.display());
         assert!(fetch_branch(p, &branch).await.is_err());
         assert!(!marker.exists(), "the branch name ran a command");
+    }
+
+    #[test]
+    fn short_status_gives_a_letter_per_file() {
+        // `git status --porcelain=v1 -z --untracked-files=all`, captured.
+        let out = " M a.txt\0R  c.txt\0b.txt\0A  staged.ts\0?? src/new.ts\0";
+        let files: Vec<_> = parse_short_status(out).into_iter().map(|f| (f.status, f.path)).collect();
+        assert_eq!(
+            files,
+            [("M", "a.txt"), ("R", "c.txt"), ("A", "staged.ts"), ("?", "src/new.ts")].map(|(s, p)| (s.to_string(), p.to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn unpushed_work_counts_files_and_commits_ahead_of_the_upstream() {
+        let dir = repo().await;
+        let p = dir.path();
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare"]).await.unwrap();
+        git(p, &["remote", "add", "origin", origin.path().to_str().unwrap()]).await.unwrap();
+        git(p, &["checkout", "-q", "-b", "moonlet/fix"]).await.unwrap();
+        git(p, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
+        for n in ["one", "two"] {
+            git(p, &["commit", "-q", "--allow-empty", "-m", n]).await.unwrap();
+        }
+        std::fs::write(p.join("a.txt"), "changed\n").unwrap();
+        std::fs::write(p.join("new.ts"), "n\n").unwrap();
+        let w = unpushed(p).await.unwrap();
+        assert_eq!(w.commits, 2);
+        assert_eq!(w.upstream.as_deref(), Some("origin/moonlet/fix"));
+        let files: Vec<_> = w.files.iter().map(|f| (f.status.as_str(), f.path.as_str())).collect();
+        assert_eq!(files, [("M", "a.txt"), ("?", "new.ts")]);
+
+        push(p).await.unwrap();
+        assert_eq!(unpushed(p).await.unwrap().commits, 0);
+    }
+
+    #[tokio::test]
+    async fn without_an_upstream_commits_on_no_other_branch_are_unpushed() {
+        let dir = repo().await;
+        let p = dir.path();
+        git(p, &["checkout", "-q", "-b", "moonlet/new"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "mine"]).await.unwrap();
+        let w = unpushed(p).await.unwrap();
+        assert_eq!((w.commits, w.upstream, w.files.len()), (1, None, 0));
     }
 
     #[tokio::test]

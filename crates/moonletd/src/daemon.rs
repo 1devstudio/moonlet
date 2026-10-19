@@ -765,6 +765,15 @@ impl Daemon {
                     .await
                     .map_err(internal)?)
             }
+            m::GIT_UNPUSHED => {
+                let r: m::GitPath = params(p)?;
+                ok(git::unpushed(&path(&r.path)).await.map_err(internal)?)
+            }
+            m::GIT_PUSH => {
+                let r: m::GitPath = params(p)?;
+                git::push(&path(&r.path)).await.map_err(internal)?;
+                ok(true)
+            }
             m::GIT_SETTINGS => ok(git_settings::load(&git_settings::path())),
             m::GIT_SET_SETTINGS => {
                 let saved = git_settings::update(&git_settings::path(), p).map_err(internal)?;
