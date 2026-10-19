@@ -980,6 +980,108 @@ pub async fn gh_list(repo: &Path, kind: &str) -> Result<Vec<moonlet_proto::types
         .collect())
 }
 
+/// The most a PR's attachment sends (X54): its description, reviews and
+/// comments together.
+const PR_CONTEXT_MAX: usize = 8000;
+/// The most one review or comment adds to it.
+const PR_ITEM_MAX: usize = 1000;
+
+/// What a picked PR's attachment sends (X54): its description, then its
+/// reviews (author, state and body), its conversation comments and its
+/// comments on lines of code (author, `path:line` and body). `view` is
+/// `gh pr view <n> --json body,reviews,comments`, `lines` is
+/// `gh api repos/{owner}/{repo}/pulls/<n>/comments`.
+pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> String {
+    let cut = |s: &str, max: usize| -> String {
+        let s = s.trim();
+        if s.chars().count() <= max {
+            s.to_string()
+        } else {
+            format!("{}…", s.chars().take(max).collect::<String>().trim_end())
+        }
+    };
+    // One item per line, its body's own lines indented under it.
+    let item = |head: String, body: &str| -> String {
+        let body = cut(body, PR_ITEM_MAX);
+        if body.is_empty() {
+            format!("- {head}")
+        } else {
+            format!("- {head}: {}", body.replace('\n', "\n  "))
+        }
+    };
+    let login = |v: &serde_json::Value| v.as_str().unwrap_or("someone").to_string();
+    let mut parts = vec![cut(view["body"].as_str().unwrap_or(""), PR_CONTEXT_MAX)];
+
+    // A review in COMMENTED state with no body only holds line comments,
+    // which come below.
+    let reviews: Vec<String> = view["reviews"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let body = r["body"].as_str().unwrap_or("");
+            let state = match r["state"].as_str().unwrap_or("") {
+                "APPROVED" => "approved",
+                "CHANGES_REQUESTED" => "changes requested",
+                "DISMISSED" => "dismissed",
+                _ if body.trim().is_empty() => return None,
+                _ => "commented",
+            };
+            Some(item(format!("@{}, {state}", login(&r["author"]["login"])), body))
+        })
+        .collect();
+    if !reviews.is_empty() {
+        parts.push(format!("Reviews:\n{}", reviews.join("\n")));
+    }
+    let comments: Vec<String> = view["comments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| !c["isMinimized"].as_bool().unwrap_or(false))
+        .map(|c| item(format!("@{}", login(&c["author"]["login"])), c["body"].as_str().unwrap_or("")))
+        .collect();
+    if !comments.is_empty() {
+        parts.push(format!("Comments:\n{}", comments.join("\n")));
+    }
+    // An outdated comment has no `line` any more: its `original_line` says
+    // where it was.
+    let on_lines: Vec<String> = lines
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let line = c["line"].as_u64().or_else(|| c["original_line"].as_u64());
+            let place = match line {
+                Some(n) => format!("{}:{n}", c["path"].as_str().unwrap_or("")),
+                None => c["path"].as_str().unwrap_or("").to_string(),
+            };
+            let reply = if c["in_reply_to_id"].is_u64() { ", replying" } else { "" };
+            item(format!("@{} on {place}{reply}", login(&c["user"]["login"])), c["body"].as_str().unwrap_or(""))
+        })
+        .collect();
+    if !on_lines.is_empty() {
+        parts.push(format!("Review comments:\n{}", on_lines.join("\n")));
+    }
+    cut(&parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"), PR_CONTEXT_MAX)
+}
+
+/// A PR's description, reviews and comments for its attachment (X54).
+/// Without its line comments (an old `gh`, a fork) the rest still comes.
+pub async fn gh_pr_context(repo: &Path, number: u64) -> Result<String> {
+    let n = number.to_string();
+    let view = gh(repo, &["pr", "view", &n, "--json", "body,reviews,comments"]).await?;
+    let view: serde_json::Value = serde_json::from_slice(&view)?;
+    let path = format!("repos/{{owner}}/{{repo}}/pulls/{n}/comments?per_page=100");
+    let lines = match gh(repo, &["api", &path]).await {
+        Ok(out) => serde_json::from_slice(&out).unwrap_or(serde_json::Value::Null),
+        Err(e) => {
+            tracing::warn!("no line comments for PR #{number}: {e:#}");
+            serde_json::Value::Null
+        }
+    };
+    Ok(pr_context_text(&view, &lines))
+}
+
 /// An issue or PR body, at most 4000 characters.
 fn cut_body(body: &serde_json::Value) -> String {
     body.as_str().unwrap_or("").chars().take(4000).collect()
@@ -1698,6 +1800,35 @@ pub(crate) mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn pr_context_holds_its_description_reviews_and_comments() {
+        // `gh pr view <n> --json body,reviews,comments` and `gh api
+        // repos/{owner}/{repo}/pulls/<n>/comments` on cli/cli, 2026-10-19,
+        // sanitised (tests/fixtures/README.md).
+        let view: serde_json::Value = serde_json::from_slice(include_bytes!("../tests/fixtures/gh-pr-view.json")).unwrap();
+        let lines: serde_json::Value = serde_json::from_slice(include_bytes!("../tests/fixtures/gh-pr-review-comments.json")).unwrap();
+        assert_eq!(
+            pr_context_text(&view, &lines),
+            "Drops A/B Testing and Security from the side nav.\n\nFixes #279.\n\n\
+             Reviews:\n\
+             - @review-bot, commented: SideNav still imports the Security icon; drop the import too.\n\
+             - @jo-park, changes requested: Keep Security in the nav for admins.\n\
+             - @alex-kim, approved\n\n\
+             Comments:\n\
+             - @jo-park: Does this also drop the A/B Testing route, or only its menu item?\n\
+             - @sam-rivera: Only the item; the route goes in a follow-up.\n\n\
+             Review comments:\n\
+             - @lee-moreno on src/nav/SideNav.tsx:121: `Security` is still linked from the footer; drop it there too.\n\
+             - @sam-rivera on src/nav/SideNav.tsx:121, replying: Done in the next commit."
+        );
+    }
+
+    #[test]
+    fn pr_context_without_line_comments_or_reviews_is_its_description() {
+        let view = serde_json::json!({"body": "Fixes #279.", "reviews": [], "comments": []});
+        assert_eq!(pr_context_text(&view, &serde_json::Value::Null), "Fixes #279.");
     }
 
     #[test]
