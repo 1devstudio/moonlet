@@ -3,7 +3,7 @@
 
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeFile, cycleFocus, openFile, splitLeaf, tabOf } from "./layout";
-import { M, type ProjectConfig, type TerminalInfo, type Session } from "./protocol";
+import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived } from "./protocol";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
 import { arrange, hostSections, lastActive } from "./sidebar";
 import { isShown } from "./workspaces";
@@ -297,7 +297,7 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const started = Date.now();
   setArchiving(key, { loader, done: false, folding: false });
   try {
-    const done = await rpc<{ remote_error?: string | null } | boolean>(c.host, M.sessionArchive, { id: c.ws.id, ...flags });
+    const done = await rpc<SessionArchived | boolean>(c.host, M.sessionArchive, { id: c.ws.id, ...flags });
     if (typeof done === "object" && done.remote_error) toast(`Couldn't delete ${c.ws.branch} on origin: ${done.remote_error}`, "error");
     setArchiving(key, { loader, done: true, folding: false });
     await sleep(ARCHIVE_MIN_MS - (Date.now() - started));

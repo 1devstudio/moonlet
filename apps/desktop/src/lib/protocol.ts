@@ -210,6 +210,12 @@ export interface DaemonInfo {
   data_dir?: string;
 }
 
+/** `session.archive`'s result (X55); older daemons answer `true`. */
+export interface SessionArchived {
+  /** Why origin refused to delete the branch, if it did. */
+  remote_error?: string | null;
+}
+
 /** A host's Git settings, kept by its daemon in `~/.moonlet/git.toml` (X55). */
 export interface GitSettings {
   /** Put before every branch a new session derives from its name; empty for none. */
