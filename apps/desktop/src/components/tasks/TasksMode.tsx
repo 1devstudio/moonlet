@@ -999,7 +999,7 @@ function PriorityBars({ n }: { n: number }) {
 }
 
 /**
- * The task's state, as a menu that moves it (X45 detail, X46 task bar): on a
+ * The task's state, as a menu that moves it (X45 detail, X46 task bar and Task tab): on a
  * tracker board, the board's columns by name, each moving to its first
  * status (X50); otherwise the four columns, or Open and Closed on GitHub.
  */
