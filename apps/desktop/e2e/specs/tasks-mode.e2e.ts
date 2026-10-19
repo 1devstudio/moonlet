@@ -569,7 +569,8 @@ describe("Tasks mode", () => {
     await $(sel.sessionRow(SESSION)).click();
     const bar = $('//div[@role="region"][@aria-label="Task"]');
     await expect(bar.$(`.${sel.text("acme/storefront#12")}`)).toBeDisplayed({ wait: 10_000 });
-    await expect(bar.$('.//button[normalize-space()="Tasks"]')).toBeDisplayed();
+    // The key comes first: no `Tasks /` before it.
+    await expect(bar.$('.//button[normalize-space()="Tasks"]')).not.toBeExisting();
     await expect(bar.$('.//div[@aria-label="Sessions on this task"]')).toHaveText(/Session \d of 2/);
     await expect(bar.$('.//a[normalize-space()="GitHub"]')).toHaveAttribute("href", "https://github.com/acme/storefront/issues/12");
     rpc(w, "session.archive", { id: second });
