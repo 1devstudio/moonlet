@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { attachments, branchRow, firstMessage, pickerHint, placeholder, sessionName } from "./composer";
+import { attachments, branchRow, firstMessage, pickerHint, placeholder, sessionName, suggestedTask } from "./composer";
+import type { Task } from "./tasks";
 
 const facts = { base: "main", task: null, taskBranch: null, from: null, worktree: null, pr: null, checkbox: false };
 const web = { key: "WEB-279" };
@@ -193,5 +194,38 @@ describe("pickerHint (X54)", () => {
   it("names a short branch whole, and none before it is worked out", () => {
     expect(pickerHint("pr", { key: "acme/web#7", branch: "7-gifts" }, "main")).toBe("Picking a PR starts the session on its branch, instead of creating 7-gifts from main. The task link stays.");
     expect(pickerHint("pr", { key: "WEB-279", branch: null }, "main")).toBe("Picking a PR starts the session on its branch, instead of creating the task's branch from main. The task link stays.");
+  });
+});
+
+describe("suggestedTask (X54)", () => {
+  const task = (key: string, github?: Task["github"]): Task => ({
+    connection: github ? "github:github.com" : "jira:acme",
+    key,
+    title: key,
+    url: "",
+    column: "todo",
+    priority: 0,
+    assignees: [],
+    labels: [],
+    description: "",
+    updatedMs: 0,
+    github,
+  });
+  const web = task("WEB-279");
+  const pr = { number: 214, title: "Clean up the side nav before the Storefront release", body: "Drops A/B Testing.", url: "", head_branch: "fix/side-nav-cleanup" };
+
+  it("finds the task a picked PR's title, body or head branch mentions", () => {
+    expect(suggestedTask({ pr: { ...pr, title: "WEB-279: clean up the side nav" }, issue: null }, [task("WEB-12"), web])).toEqual({ task: web, reason: "PR #214 mentions WEB-279" });
+    expect(suggestedTask({ pr: { ...pr, body: "Part of web-279." }, issue: null }, [web])?.task).toBe(web);
+    expect(suggestedTask({ pr: { ...pr, head_branch: "web-279-side-nav" }, issue: null }, [web])?.task).toBe(web);
+    expect(suggestedTask({ pr, issue: null }, [web])).toBe(null);
+  });
+
+  it("finds the GitHub issue a picked PR closes, and the task a picked issue mentions", () => {
+    const gh = task("acme/web#279", { repo: "acme/web", number: 279, closingPrs: [214] });
+    expect(suggestedTask({ pr, issue: null }, [gh])).toEqual({ task: gh, reason: "PR #214 closes acme/web#279" });
+    const issue = { number: 57, title: "Flicker", body: "Seen while testing WEB-279.", url: "" };
+    expect(suggestedTask({ pr: null, issue }, [web])).toEqual({ task: web, reason: "#57 mentions WEB-279" });
+    expect(suggestedTask({ pr: null, issue: null }, [web])).toBe(null);
   });
 });

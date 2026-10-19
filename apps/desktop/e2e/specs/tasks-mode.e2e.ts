@@ -337,6 +337,25 @@ describe("Tasks mode", () => {
     await browser.waitUntil(() => asked().includes("issue edit 15 --add-assignee @me"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
   });
 
+  it("links a task from the composer's Link a task slot, as if started from it", async () => {
+    await sessionsButton().click();
+    await $('button[title="New session"]').click();
+    // The workspace has a task source: no task yet is a slot (X54).
+    const slot = $('//span[@role="group"][@aria-label="Link a task"]');
+    await expect(slot).toBeDisplayed({ wait: 10_000 });
+    await slot.$('.//button[normalize-space()="Link a task"]').click();
+    await fill('//input[@placeholder="Search tasks by key or title"]', "Saved");
+    await $('//button[starts-with(normalize-space(), "acme/storefront#19 Saved carts")]').click();
+    await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed();
+    await expect($('//div[@role="group"][@aria-label="acme/storefront#19 sent with your message · Saved carts"]')).toBeDisplayed();
+    await expect($('//label[normalize-space()="Assign to me"][@title="Assign acme/storefront#19 to me"]/input')).toBeSelected();
+    await expect(slot).not.toBeExisting();
+    // The composer's own prompt: a terminal behind it has a textarea too.
+    await $('//div[@role="dialog"][@aria-label="New session"]//textarea').click();
+    await browser.keys("Escape");
+    await $('//div[@role="dialog"][@aria-label="New session"]').waitForExist({ reverse: true });
+  });
+
   it("unfolds a task's description in the composer, its Markdown rendered", async () => {
     await tasksButton().click();
     await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
