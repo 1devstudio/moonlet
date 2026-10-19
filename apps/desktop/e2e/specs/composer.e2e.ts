@@ -101,6 +101,8 @@ describe("new session composer (X54)", () => {
     await attachment.$('.//button[@title="Don’t send the PR description"]').click();
     await expect(attachment).not.toBeExisting();
     await expect($(`${row}//span[normalize-space()="PR #214"]`)).toBeDisplayed();
+    // Nothing of the PR is attached any more: the placeholder says no more of its review comments.
+    await expect($(`${dialog}//textarea[@placeholder="What do you want to work on?"]`)).toBeDisplayed();
     await $(`${row}//button[normalize-space()="New branch instead"][@title="Create a new branch from main instead"]`).click();
     await expect($(`${row}//span[normalize-space()="New branch"]`)).toBeDisplayed();
     await expect($(`${row}//span[normalize-space()="PR #214"]`)).not.toBeExisting();
