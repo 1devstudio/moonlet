@@ -4,6 +4,7 @@ import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, sessionMenu, type Group } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
+import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
@@ -139,6 +140,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
   const popRef = useRef<HTMLDivElement>(null);
   const leaveTimer = useRef<number | undefined>(undefined);
   const chip = baseChip(sync?.status, !!sync?.pulling);
+  const fromOrigin = useStore((s) => gitSettingsOf(s.gitSettings, host).start_from === "origin");
   const openable = chip?.kind === "behind" || chip?.kind === "diverged";
   useEffect(() => () => window.clearTimeout(leaveTimer.current), []);
   useEffect(() => {
@@ -225,14 +227,20 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
                   Copy
                 </Button>
               </div>
-              <div className="mt-2 ui-text-11.5 text-faint">New sessions still branch from your local {st.branch}.</div>
+              <div className="mt-2 ui-text-11.5 text-faint">{fromOrigin ? `New sessions start from origin/${st.branch}.` : `New sessions still branch from your local ${st.branch}.`}</div>
             </div>
           ) : (
             <>
               <div className="shrink-0 px-3 pb-1.5 pt-2.5">
                 <div className="ui-text-13 font-medium text-fg">{behindHeadline(st)}</div>
                 <div className="mt-1 ui-text-12 text-muted [text-wrap:pretty]">
-                  New sessions branch from your local {mono(st.branch)}. Click the chip to pull the merged changes.
+                  {fromOrigin ? (
+                    <>
+                      New sessions start from {mono(`origin/${st.branch}`)}. Click the chip to pull the merged changes into your local {mono(st.branch)}.
+                    </>
+                  ) : (
+                    <>New sessions branch from your local {mono(st.branch)}. Click the chip to pull the merged changes.</>
+                  )}
                 </div>
               </div>
               <div className="flex min-h-0 max-h-[190px] flex-col overflow-y-auto px-1 py-1">

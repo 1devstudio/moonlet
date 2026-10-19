@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { agentOptions, closeRequest, configName, fromForm, hasRunCommand, isDirty, loadFailure, saveBarStatus, toForm, validate, type Form } from "./projectSettings";
 
-const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", agents: [], trackers: [], ...patch });
+const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [], ...patch });
 
 describe("toForm and fromForm", () => {
   it("round-trips a config", () => {
-    const c = { setup: "pnpm i", run: "pnpm dev", archive: null, default_agent: "yolo", base_branch: null, agents: { yolo: "claude --x" }, trackers: ["jira:acme.atlassian.net/ABC"] };
+    const c = { setup: "pnpm i", run: "pnpm dev", archive: null, default_agent: "yolo", base_branch: null, branch_prefix: "team/", agents: { yolo: "claude --x" }, trackers: ["jira:acme.atlassian.net/ABC"] };
     expect(fromForm(toForm(c))).toEqual(c);
   });
 
@@ -38,6 +38,11 @@ describe("isDirty", () => {
 });
 
 describe("validate", () => {
+  it("refuses a branch prefix git would reject (X55)", () => {
+    expect(validate(form({ branch_prefix: "my team/" }))).toMatchObject({ branchPrefix: "Branch names cannot hold spaces or ~ ^ : ? * [ \\", any: true, count: 1 });
+    expect(validate(form({ branch_prefix: "team/" }))).toMatchObject({ branchPrefix: "", any: false, count: 0 });
+  });
+
   it("accepts a valid form", () => {
     expect(validate(form({ default_agent: "my.agent_2-x", agents: [{ id: 1, name: "my.agent_2-x", cmd: "aider" }] })).any).toBe(false);
     expect(validate(form({ default_agent: "codex" })).any).toBe(false);

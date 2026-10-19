@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gitHosts, gitSettingsOf, tooOldText } from "./gitSettings";
+import { branchPreview, defaultStartLabel, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "./gitSettings";
 import type { HostInfo } from "./protocol";
 
 const host = (id: string, label: string, remote: boolean, status: HostInfo["status"] = "connected"): HostInfo => ({
@@ -15,12 +15,13 @@ const host = (id: string, label: string, remote: boolean, status: HostInfo["stat
 
 describe("gitSettingsOf", () => {
   it("stages all and opens ready PRs on a host whose settings are not known", () => {
-    expect(gitSettingsOf({}, "local")).toEqual({ stage_all: true, draft_prs: false });
-    expect(gitSettingsOf({ devbox: null }, "devbox")).toEqual({ stage_all: true, draft_prs: false });
+    expect(gitSettingsOf({}, "local")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false });
+    expect(gitSettingsOf({ devbox: null }, "devbox")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false });
   });
 
   it("is what the host's daemon keeps", () => {
-    expect(gitSettingsOf({ devbox: { stage_all: false, draft_prs: true } }, "devbox")).toEqual({ stage_all: false, draft_prs: true });
+    const devbox = { branch_prefix: "", start_from: "origin", stage_all: false, draft_prs: true } as const;
+    expect(gitSettingsOf({ devbox }, "devbox")).toEqual(devbox);
   });
 });
 
@@ -41,5 +42,41 @@ describe("gitHosts", () => {
 describe("tooOldText", () => {
   it("names the host whose daemon is too old", () => {
     expect(tooOldText("devbox")).toBe("devbox's moonletd is too old for Git settings. Reinstall the helper from Hosts.");
+  });
+});
+
+describe("prefixError", () => {
+  it("takes what git takes in a branch name, empty included", () => {
+    for (const ok of ["", "moonlet/", "marcin/", "feat/", "a.b-c_d/"]) expect(prefixError(ok)).toBe("");
+  });
+
+  it("says which characters git rejects", () => {
+    for (const bad of ["my prefix/", "a~", "a^", "a:", "a?", "a*", "a[", "a\\b"]) expect(prefixError(bad)).toBe("Branch names cannot hold spaces or ~ ^ : ? * [ \\");
+    for (const bad of ["a..b/", "a//", "a@{"]) expect(prefixError(bad)).toBe("Branch names cannot hold .., // or @{");
+    for (const bad of ["/a", ".a", "-a"]) expect(prefixError(bad)).toBe("Start with a letter or digit.");
+    for (const bad of ["team/.x/", "x.lock/", "a/b.lock/c"]) expect(prefixError(bad)).toBe("No part can start with . or end with .lock");
+    expect(prefixError("a\u0007b")).toBe("Branch names cannot hold spaces or ~ ^ : ? * [ \\");
+  });
+});
+
+describe("new session branches", () => {
+  it("previews the prefix before a session's name", () => {
+    expect(branchPreview("marcin/")).toBe("marcin/add-search-to-the-product-list");
+    expect(branchPreview("")).toBe("add-search-to-the-product-list");
+  });
+
+  it("names the default start point in the composer", () => {
+    expect(defaultStartLabel("main", "local")).toBe("Start from main (default)");
+    expect(defaultStartLabel("develop", "origin")).toBe("Start from origin/develop (default)");
+  });
+
+  it("finds the worktrees in the daemon's data folder, or ~/.moonlet for an older daemon", () => {
+    expect(worktreesFolder({ home: "/Users/alex", data_dir: "/srv/moonlet" })).toBe("/srv/moonlet/worktrees");
+    expect(worktreesFolder({ home: "/Users/alex" })).toBe("/Users/alex/.moonlet/worktrees");
+  });
+
+  it("shows the worktrees folder under the user's home as ~", () => {
+    expect(worktreesText("/Users/alex/.moonlet/worktrees", "/Users/alex")).toBe("~/.moonlet/worktrees/‹project›/‹session›");
+    expect(worktreesText("/srv/moonlet/worktrees", "/home/alex")).toBe("/srv/moonlet/worktrees/‹project›/‹session›");
   });
 });

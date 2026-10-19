@@ -2,6 +2,7 @@
 // editable fields, the same validation the daemon applies, and the way back.
 
 import type { ProjectConfig } from "./protocol";
+import { prefixError } from "./gitSettings";
 import type { StatusLine } from "./settingsPage";
 
 export const BUILTIN_AGENTS = ["claude", "codex"];
@@ -21,6 +22,8 @@ export interface Form {
   archive: string;
   default_agent: string;
   base_branch: string;
+  /** Put before new session branches, over the host's Git settings (X55). */
+  branch_prefix: string;
   agents: AgentRow[];
   /** Tracker projects, teams or lists it handles, `<connection>/<key>` (X44). */
   trackers: string[];
@@ -29,6 +32,7 @@ export interface Form {
 export interface Errors {
   agents: Record<number, { name?: string; cmd?: string }>;
   defaultAgent: string;
+  branchPrefix: string;
   any: boolean;
   /** How many messages there are to fix. */
   count: number;
@@ -70,6 +74,7 @@ export function toForm(c: ProjectConfig): Form {
     archive: c.archive ?? "",
     default_agent: c.default_agent ?? "",
     base_branch: c.base_branch ?? "",
+    branch_prefix: c.branch_prefix ?? "",
     agents: Object.entries(c.agents ?? {}).map(([name, cmd]) => ({ id: newRowId(), name, cmd })),
     trackers: c.trackers ?? [],
   };
@@ -84,6 +89,7 @@ export function fromForm(f: Form): ProjectConfig {
     archive: s(f.archive),
     default_agent: s(f.default_agent),
     base_branch: s(f.base_branch),
+    branch_prefix: s(f.branch_prefix),
     agents: Object.fromEntries(f.agents.map((a) => [a.name.trim(), a.cmd.trim()])),
     trackers: f.trackers,
   };
@@ -114,8 +120,9 @@ export function validate(f: Form): Errors {
   }
   const d = f.default_agent.trim();
   const defaultAgent = d && !BUILTIN_AGENTS.includes(d) && !f.agents.some((a) => a.name.trim() === d) ? `${d} is not an agent in this project.` : "";
-  const count = Object.values(agents).reduce((n, e) => n + (e.name ? 1 : 0) + (e.cmd ? 1 : 0), 0) + (defaultAgent ? 1 : 0);
-  return { agents, defaultAgent, any: Object.keys(agents).length > 0 || !!defaultAgent, count };
+  const branchPrefix = prefixError(f.branch_prefix.trim());
+  const count = Object.values(agents).reduce((n, e) => n + (e.name ? 1 : 0) + (e.cmd ? 1 : 0), 0) + (defaultAgent ? 1 : 0) + (branchPrefix ? 1 : 0);
+  return { agents, defaultAgent, branchPrefix, any: Object.keys(agents).length > 0 || !!defaultAgent || !!branchPrefix, count };
 }
 
 /** Default agent choices: none, the built-ins, the valid custom names, and

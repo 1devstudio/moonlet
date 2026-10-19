@@ -830,8 +830,19 @@ pub async fn worktree_add(
     if existing {
         git(repo, &["worktree", "add", &dir_s, branch]).await?;
     } else {
-        git(repo, &["worktree", "add", "-b", branch, &dir_s, from]).await?;
+        // A branch started from `origin/<base>` (X55) must not track it:
+        // its upstream is set when it is first pushed.
+        git(repo, &["worktree", "add", "--no-track", "-b", branch, &dir_s, from]).await?;
     }
+    Ok(())
+}
+
+/// Fetches `branch` from origin, so `origin/<branch>` is current.
+/// The name comes from the repo's config: it must be a branch name, never
+/// an option.
+pub async fn fetch_branch(repo: &Path, branch: &str) -> Result<()> {
+    check_branch(repo, branch).await?;
+    git(repo, &["fetch", "--quiet", "--no-tags", "--", "origin", branch]).await?;
     Ok(())
 }
 
@@ -1524,6 +1535,21 @@ pub(crate) mod tests {
         };
         assert!(untracked.contains("+hello"));
         assert!(diff(p, "../etc/passwd", None, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fetching_a_branch_named_like_an_option_runs_nothing() {
+        let dir = repo().await;
+        let p = dir.path();
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare"]).await.unwrap();
+        git(p, &["remote", "add", "origin", origin.path().to_str().unwrap()])
+            .await
+            .unwrap();
+        let marker = origin.path().join("ran");
+        let branch = format!("--upload-pack=touch {};git-upload-pack", marker.display());
+        assert!(fetch_branch(p, &branch).await.is_err());
+        assert!(!marker.exists(), "the branch name ran a command");
     }
 
     #[tokio::test]
