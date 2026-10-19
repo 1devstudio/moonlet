@@ -45,28 +45,32 @@ export function branchRow(f: BranchFacts): BranchRow {
   return { kind: "branch", name, detail: `from ${f.base}`, clear: null };
 }
 
-/** What the composer has to send besides the user's text. */
-export interface AttachFacts {
+/** What the composer started from or picked: the task, a GitHub issue, a pull request. */
+export interface Picks {
   task: { key: string; title: string; description: string } | null;
   issue: IssueRef | null;
-  /** A picked PR whose attachment the user kept. */
   pr: IssueRef | null;
+}
+
+/** What the composer has to send besides the user's text; `pr` only while its attachment is kept. */
+export interface AttachFacts extends Picks {
   /** The PR's description, reviews and comments (`gh.pr_context`), once read. */
   prContext: string | null;
 }
 
 /**
- * A folded attachment above the prompt: its line reads `mono`, `before` (muted),
- * `strong` (fg) and `after` (muted); `body` shows unfolded; `remove` is the ×'s
- * title, null when it has none; `message` is what Create sends.
+ * A folded attachment above the prompt. Its line reads `ref` (the issue's
+ * number), `lead` (what it is), `summary` (its first line or title) and
+ * `note`; `body` shows unfolded; `remove` is the ×'s title, null when it has
+ * none; `message` is what Create sends.
  */
 export interface Attachment {
   id: "task" | "issue" | "pr";
   icon: "file" | "pr";
-  mono: string | null;
-  before: string | null;
-  strong: string;
-  after: string | null;
+  ref: string | null;
+  lead: string | null;
+  summary: string;
+  note: string | null;
   body: string;
   remove: string | null;
   message: string;
@@ -89,10 +93,10 @@ export function attachments(f: AttachFacts): Attachment[] {
     out.push({
       id: "task",
       icon: "file",
-      mono: null,
-      before: description ? `${t.key} description sent with your message · ` : `${t.key} sent with your message · `,
-      strong: firstLine(description) || t.title,
-      after: null,
+      ref: null,
+      lead: description ? `${t.key} description sent with your message · ` : `${t.key} sent with your message · `,
+      summary: firstLine(description) || t.title,
+      note: null,
       body: description,
       remove: null,
       // `<key> · <title>` and the description, as X46 sends it.
@@ -104,10 +108,10 @@ export function attachments(f: AttachFacts): Attachment[] {
     out.push({
       id: "issue",
       icon: "file",
-      mono: `#${i.number}`,
-      before: null,
-      strong: i.title,
-      after: f.task ? " · GitHub issue, sent too" : " · GitHub issue",
+      ref: `#${i.number}`,
+      lead: null,
+      summary: i.title,
+      note: f.task ? " · GitHub issue, sent too" : " · GitHub issue",
       body: shown(i.body),
       remove: `Remove #${i.number}`,
       message: paragraphs(`#${i.number} · ${i.title}`, shown(i.body), i.url),
@@ -119,10 +123,10 @@ export function attachments(f: AttachFacts): Attachment[] {
     out.push({
       id: "pr",
       icon: "pr",
-      mono: null,
-      before: `PR #${p.number} description and review comments · `,
-      strong: p.title,
-      after: null,
+      ref: null,
+      lead: `PR #${p.number} description and review comments · `,
+      summary: p.title,
+      note: null,
       body,
       remove: "Don’t send the PR description",
       message: paragraphs(`PR #${p.number} · ${p.title}`, body, p.url),
@@ -153,6 +157,6 @@ export function placeholder(has: { task: boolean; issue: boolean; pr: boolean })
 }
 
 /** The session's name: the task's title, else the PR's, else the issue's; null names it after the prompt (X5). */
-export function sessionName(f: { task: { title: string } | null; pr: { title: string } | null; issue: { title: string } | null }): string | null {
+export function sessionName(f: Picks): string | null {
   return f.task?.title ?? f.pr?.title ?? f.issue?.title ?? null;
 }

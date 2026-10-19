@@ -123,15 +123,15 @@ function AttachmentRow({ a, flash, onRemove }: { a: Attachment; flash: boolean; 
   const [open, setOpen] = useState(false);
   const Icon = a.icon === "pr" ? GitPullRequest : FileText;
   return (
-    <div role="group" aria-label={`${a.mono ? `${a.mono} ` : ""}${a.before ?? ""}${a.strong}${a.after ?? ""}`} className={cx("rounded-[10px] border bg-panel-2 transition-colors duration-500", flash ? "border-accent/45" : "border-border")}>
+    <div role="group" aria-label={`${a.ref ? `${a.ref} ` : ""}${a.lead ?? ""}${a.summary}${a.note ?? ""}`} className={cx("rounded-[10px] border bg-panel-2 transition-colors duration-500", flash ? "border-accent/45" : "border-border")}>
       <div className="flex items-center gap-2 px-3 py-[9px] ui-text-12.5 text-muted">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open} title={open ? "Fold" : "Unfold"} onClick={() => setOpen(!open)}>
           <Icon size={13} className="shrink-0" />
-          {a.mono && <span className="shrink-0 font-mono ui-text-12">{a.mono}</span>}
+          {a.ref && <span className="shrink-0 font-mono ui-text-12">{a.ref}</span>}
           <span className="min-w-0 flex-1 truncate">
-            {a.before}
-            <span className="text-fg">{a.strong}</span>
-            {a.after}
+            {a.lead}
+            <span className="text-fg">{a.summary}</span>
+            {a.note}
           </span>
           <ChevronRight size={13} className={cx("shrink-0 transition-transform", open && "rotate-90")} />
         </button>

@@ -151,7 +151,6 @@ describe("taskStart (X46 starting a session from a task)", () => {
       key: "cli/cli#13876",
       title: "`gh skill install` can't find skills",
       number: 13876,
-      firstMessage: "cli/cli#13876 · `gh skill install` can't find skills\n### Describe the bug\nSkills are not found.",
       // The composer's folded attachment shows it (X54).
       description: "### Describe the bug\nSkills are not found.",
       projects: ["cli"],
@@ -168,7 +167,7 @@ describe("taskStart (X46 starting a session from a task)", () => {
 
   it("sends only the title line when the issue has no description, and names no project it can't place", () => {
     const s = taskStart({ ...hosts, description: "" }, { web: "acme/web" });
-    expect([s.kind, s.firstMessage, s.projects, s.number]).toEqual(["linear", "MOON-142 · Remote hosts sidebar", [], undefined]);
+    expect([s.kind, s.description, s.projects, s.number]).toEqual(["linear", "", [], undefined]);
   });
 });
 

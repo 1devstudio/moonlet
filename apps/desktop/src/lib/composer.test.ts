@@ -69,10 +69,10 @@ describe("attachments (X54)", () => {
       {
         id: "task",
         icon: "file",
-        mono: null,
-        before: "AIO-279 description sent with your message · ",
-        strong: "In Catalyst side nav menu, remove A/B Testing and Security items, which link nowhere.",
-        after: null,
+        ref: null,
+        lead: "AIO-279 description sent with your message · ",
+        summary: "In Catalyst side nav menu, remove A/B Testing and Security items, which link nowhere.",
+        note: null,
         body: "In Catalyst side nav menu, remove A/B Testing and Security items, which link nowhere.\n\n- [ ] A/B Testing gone",
         remove: null,
         message: "AIO-279 · Remove placeholder side nav menu items from Catalyst\nIn Catalyst side nav menu, remove A/B Testing and Security items, which link nowhere.\n\n- [ ] A/B Testing gone",
@@ -82,7 +82,7 @@ describe("attachments (X54)", () => {
 
   it("names a task without a description by its title", () => {
     const [a] = attachments({ ...none, task: { ...aioTask, description: "" } });
-    expect([a.before, a.strong, a.message]).toEqual(["AIO-279 sent with your message · ", "Remove placeholder side nav menu items from Catalyst", "AIO-279 · Remove placeholder side nav menu items from Catalyst"]);
+    expect([a.lead, a.summary, a.message]).toEqual(["AIO-279 sent with your message · ", "Remove placeholder side nav menu items from Catalyst", "AIO-279 · Remove placeholder side nav menu items from Catalyst"]);
   });
 
   const issue57 = { number: 57, title: "Terminal flickers when resizing a split", body: "Resizing a split redraws the whole terminal.", url: "https://github.com/acme/storefront/issues/57" };
@@ -91,16 +91,16 @@ describe("attachments (X54)", () => {
     expect(attachments({ ...none, task: aioTask, issue: issue57 })[1]).toEqual({
       id: "issue",
       icon: "file",
-      mono: "#57",
-      before: null,
-      strong: "Terminal flickers when resizing a split",
-      after: " · GitHub issue, sent too",
+      ref: "#57",
+      lead: null,
+      summary: "Terminal flickers when resizing a split",
+      note: " · GitHub issue, sent too",
       body: "Resizing a split redraws the whole terminal.",
       remove: "Remove #57",
       message: "#57 · Terminal flickers when resizing a split\n\nResizing a split redraws the whole terminal.\n\nhttps://github.com/acme/storefront/issues/57",
     });
     const alone = attachments({ ...none, issue: { ...issue57, body: "" } });
-    expect(alone.map((a) => [a.id, a.after, a.message])).toEqual([["issue", " · GitHub issue", "#57 · Terminal flickers when resizing a split\n\nhttps://github.com/acme/storefront/issues/57"]]);
+    expect(alone.map((a) => [a.id, a.note, a.message])).toEqual([["issue", " · GitHub issue", "#57 · Terminal flickers when resizing a split\n\nhttps://github.com/acme/storefront/issues/57"]]);
   });
 
   const pr214 = { number: 214, title: "Clean up the side nav before the Catalyst release", body: "Drops A/B Testing and Security.", url: "https://github.com/acme/storefront/pull/214", head_branch: "fix/side-nav-cleanup" };
@@ -109,10 +109,10 @@ describe("attachments (X54)", () => {
     expect(attachments({ ...none, task: aioTask, pr: pr214, prContext: "Drops A/B Testing and Security.\n\nReview by @sam-rivera (changes requested): Keep Security for admins." })[1]).toEqual({
       id: "pr",
       icon: "pr",
-      mono: null,
-      before: "PR #214 description and review comments · ",
-      strong: "Clean up the side nav before the Catalyst release",
-      after: null,
+      ref: null,
+      lead: "PR #214 description and review comments · ",
+      summary: "Clean up the side nav before the Catalyst release",
+      note: null,
       body: "Drops A/B Testing and Security.\n\nReview by @sam-rivera (changes requested): Keep Security for admins.",
       remove: "Don’t send the PR description",
       message: "PR #214 · Clean up the side nav before the Catalyst release\n\nDrops A/B Testing and Security.\n\nReview by @sam-rivera (changes requested): Keep Security for admins.\n\nhttps://github.com/acme/storefront/pull/214",
@@ -134,7 +134,7 @@ describe("attachments (X54)", () => {
       "#57 · Terminal flickers when resizing a split\n\nFlickers.\n\nhttps://github.com/acme/storefront/issues/57",
       "PR #214 · Clean up the side nav before the Catalyst release\n\nDrops A/B Testing.\n\nhttps://github.com/acme/storefront/pull/214",
     ]);
-    expect(sent[0].strong).toBe("Remove A/B Testing.");
+    expect(sent[0].summary).toBe("Remove A/B Testing.");
   });
 
   it("orders them as the composer shows them: the task, the issue, the PR", () => {
@@ -166,10 +166,9 @@ describe("placeholder (X54)", () => {
 
 describe("sessionName (X54)", () => {
   it("is the task's title, else the PR's, else the issue's, else the prompt's (null)", () => {
-    const t = { title: "Remove placeholder side nav menu items from Catalyst" };
-    const pr = { title: "Clean up the side nav before the Catalyst release" };
-    const issue = { title: "Terminal flickers when resizing a split" };
-    expect(sessionName({ task: t, pr, issue })).toBe("Remove placeholder side nav menu items from Catalyst");
+    const pr = { number: 214, title: "Clean up the side nav before the Catalyst release", body: "", url: "" };
+    const issue = { number: 57, title: "Terminal flickers when resizing a split", body: "", url: "" };
+    expect(sessionName({ task: aioTask, pr, issue })).toBe("Remove placeholder side nav menu items from Catalyst");
     expect(sessionName({ task: null, pr, issue })).toBe("Clean up the side nav before the Catalyst release");
     expect(sessionName({ task: null, pr: null, issue })).toBe("Terminal flickers when resizing a split");
     expect(sessionName({ task: null, pr: null, issue: null })).toBe(null);
