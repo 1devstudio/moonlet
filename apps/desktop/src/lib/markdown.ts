@@ -345,8 +345,11 @@ const chatSanitize = (html: string) =>
     ALLOW_UNKNOWN_PROTOCOLS: false,
   });
 
-/** `source` without HTML comments (issue templates' hints), except in code fences. */
-const withoutComments = (source: string) =>
+/**
+ * `source` without HTML comments (issue templates' hints), except in code
+ * fences. The composer's attachments send what they show through it (X54).
+ */
+export const withoutComments = (source: string) =>
   source
     .split(/(^```[^\n]*\n[\s\S]*?^```)/m)
     .map((part, i) => (i % 2 ? part : part.replace(/<!--[\s\S]*?-->/g, "")))

@@ -4,6 +4,7 @@
 - **Priority / phase:** P1 · phase 3
 - **Related:** [ADR 0005](../adr/0005-workspace-project-session-terminal.md), [glossary](../../CONTEXT.md). Replaces the "workspace = task" model of [A4](A4-new-workspace.md).
 - **References:** Conductor screenshots the user provided on 2026-10-03 (sidebar menu, new-session composer).
+- **Superseded in part by:** [X54](X54-new-session-composer.md) — the composer's layout, and what a picked issue or PR adds: an attachment sent with the first message instead of a filled prompt.
 
 ## Summary
 
@@ -27,6 +28,8 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 - **Session row:** a branch icon coloured by the branch's PR state (green when open, red when closed, muted with no PR), the title, and the diffstat (`+5.5k −41`, using k for thousands). A merged PR swaps the icon for a purple merge glyph and shows `merged` in place of the diffstat; `creating` and `needs input` still take priority. The agent state still shows as a dot when an agent is working, blocked, done or failed. Double-click renames; the context menu has Move to section and Archive. Rows can be dragged onto a section to file them, or back onto their own project (or a status/flat group) to unfile them. Drop targets highlight; Tauri's window file-drop is disabled so HTML drag and drop works.
 
 ## Composer (new session)
+
+The composer's layout and source picks are now X54's: a header with the project, the task and the source picker, a branch row, and attachments above the prompt. The rest of this section still holds.
 
 - Opened by `+` on a project, ⇧⌘N, or the palette. It is a large dialog:
   - **Header:** the project picker (`name ⌄`) and `⋯`, which holds "Start from branch…", "Use existing branch…" and "Base branch". On the right is a source picker (GitHub ⌄) to start from an issue or PR (`gh issue list` / `gh pr list`). An issue fills the prompt with its title and body and links it; a PR checks out its branch.
@@ -52,7 +55,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
   - `view` holds group/sort/filter and is persisted.
 - **Projects** (`project.*`): `add`, `list`, `remove`, `config`.
 - **Sessions** (`session.*`): `create`, `list`, `archive`, `unarchive`, `update {name?, section?, layout?}`, `run`.
-  - `session.create` takes `{project_id, prompt?, name?, agent?, model?, effort?, from?, branch?, existing_branch?, pr?, tui?, cols, rows}`. An issue from the picker only fills the prompt and the name. A `pr` session works on a local `pr/<number>` branch, fetched from the PR head.
+  - `session.create` takes `{project_id, prompt?, name?, agent?, model?, effort?, from?, branch?, existing_branch?, pr?, tui?, cols, rows}`. An issue or PR from the picker is an attachment sent in `prompt`, and names the session (X54). A `pr` session works on a local `moonlet/pr-<number>` branch, fetched from the PR head.
 - **Terminals** (`terminal.*`): the old PTY `session.*` methods, renamed.
 - **Migration:** see ADR 0005.
 
@@ -65,5 +68,5 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 - [x] Group, sort and filter work and are persisted in the workspace `view`. Tests: `sidebar.test.ts`.
 - [x] Sections: create one, move a session into it (context menu or drag), see it under that section in every group-by mode. Deleting a section returns its sessions to their project. Drag verified in the app with synthesized mouse events, both into a section and back out.
 - [x] The composer creates a session from a prompt: name and branch derived, agent started with the selected model and effort (`names_and_agent_flags`), the prompt delivered. Verified in the app with "Terminal only".
-- [x] Starting from a GitHub issue prefills the prompt. Starting from a PR fetches `pull/N/head` into its branch and uses it. These need `gh`; not exercised against a live repo here.
+- [x] Starting from a GitHub issue adds it as an attachment sent with the first message (X54). Starting from a PR fetches `pull/N/head` into its branch and uses it. These need `gh`; not exercised against a live repo here.
 - [x] No real agent is started by tests.

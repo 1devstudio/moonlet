@@ -312,7 +312,7 @@ describe("Linear tracker", () => {
     const projectId = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!.id;
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), projectId);
     await $('//section[@aria-label="Todo"]//article[starts-with(@aria-label, "ENG-124")]').$(sel.button("Start")).click();
-    await expect($('//label[normalize-space()="Move ENG-124 to In Progress and assign it to me"]/input')).toBeSelected();
+    await expect($('//label[normalize-space()="Move to In Progress"][@title="Move ENG-124 to In Progress and assign it to me"]/input')).toBeSelected();
     await expect($(sel.text("eng-124-add-dark-mode-to-settings-page"))).toBeDisplayed({ wait: 10_000 });
     // The project menu puts the project that links ENG first (X44).
     await $(`//button[normalize-space()=${JSON.stringify(PROJECT)}]`).click();

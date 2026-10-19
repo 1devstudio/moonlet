@@ -310,15 +310,20 @@ describe("Tasks mode", () => {
   });
 
   it("starts a session from a task with the issue as the first message, its branch and the link", async () => {
-    // "Terminal only", so no agent starts (the composer reads this each time it opens).
-    await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), projectId(w));
+    // The fake agent gets the first message as its last argument (the composer reads this each time it opens).
+    await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "fake", model: null, effort: null })), projectId(w));
     await card("acme/storefront#15", "Open").$(sel.button("Start")).click();
-    await expect($(sel.text("For acme/storefront#15"))).toBeDisplayed();
-    await expect($('//textarea[@placeholder="What do you want to work on?"]')).toHaveValue("acme/storefront#15 · Gift cards at checkout");
+    // The task chip: the key and the title, no "For" (X54).
+    await expect($('//*[@aria-label="Task acme/storefront#15"][.//span[normalize-space()="acme/storefront#15"]][.//span[normalize-space()="Gift cards at checkout"]]')).toBeDisplayed();
+    // The issue is a folded attachment above an empty prompt (X54).
+    await expect($('//div[@role="group"][@aria-label="acme/storefront#15 sent with your message · Gift cards at checkout"]')).toBeDisplayed();
+    const prompt = '//textarea[@placeholder="Anything to add? Leave empty to start from the issue."]';
+    await expect($(prompt)).toHaveValue("");
     // Keep in step: "session starts" is Automatically, so the issue is assigned (X46).
-    await expect($('//label[normalize-space()="Assign acme/storefront#15 to me"]/input')).toBeSelected();
+    // In the branch row, with a short label and the long one as its tooltip (X54).
+    await expect($('//label[normalize-space()="Assign to me"][@title="Assign acme/storefront#15 to me"]/input')).toBeSelected();
+    await fill(prompt, "Check Safari too.");
     // ⌘↵ at once, without waiting for the branch name to show: Create waits for it.
-    await $('//textarea[@placeholder="What do you want to work on?"]').click();
     await browser.keys(["Meta", "Enter"]);
 
     await expect($(sel.sessionRow("Gift cards at checkout"))).toBeDisplayed({ wait: 30_000 });
@@ -326,7 +331,47 @@ describe("Tasks mode", () => {
     const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Gift cards at checkout");
     expect(created?.branch).toBe("15-gift-cards-at-checkout");
     expect(created?.task).toEqual({ connection: "github:github.com", key: "acme/storefront#15", url: "https://github.com/acme/storefront/issues/15" });
+    // The issue, then what the user typed (X54).
+    const agent = rpc<{ session_id?: string; agent?: string; command: string[] }[]>(w, "terminal.list", {}).find((t) => t.session_id === created?.id && t.agent === "fake");
+    expect(agent?.command.join(" ")).toContain("'acme/storefront#15 · Gift cards at checkout\n\nCheck Safari too.'");
     await browser.waitUntil(() => asked().includes("issue edit 15 --add-assignee @me"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+  });
+
+  it("links a task from the composer's Link a task slot, as if started from it", async () => {
+    await sessionsButton().click();
+    await $('button[title="New session"]').click();
+    // The workspace has a task source: no task yet is a slot (X54).
+    const slot = $('//span[@role="group"][@aria-label="Link a task"]');
+    await expect(slot).toBeDisplayed({ wait: 10_000 });
+    await slot.$('.//button[normalize-space()="Link a task"]').click();
+    // The link dialog's lists (X46): the workspace's tasks under Recent.
+    await expect($('//div[normalize-space()="Recent"]')).toBeDisplayed();
+    await fill('//input[@placeholder="Search tasks by key or title"]', "Saved");
+    await $('//button[starts-with(normalize-space(), "acme/storefront#19 Saved carts")]').click();
+    await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed();
+    await expect($('//div[@role="group"][@aria-label="acme/storefront#19 sent with your message · Saved carts"]')).toBeDisplayed();
+    await expect($('//label[normalize-space()="Assign to me"][@title="Assign acme/storefront#19 to me"]/input')).toBeSelected();
+    await expect(slot).not.toBeExisting();
+    // Its branch, as if started from it, in the project already picked.
+    await expect($('//div[@role="group"][@aria-label="Branch"]//span[normalize-space()="19-saved-carts"]')).toBeDisplayed({ wait: 10_000 });
+    await expect($('//div[@role="group"][@aria-label="Project and task"]//button[starts-with(normalize-space(), "e2e-repo")]')).toBeDisplayed();
+    // The composer's own prompt: a terminal behind it has a textarea too.
+    await $('//div[@role="dialog"][@aria-label="New session"]//textarea').click();
+    await browser.keys("Escape");
+    await $('//div[@role="dialog"][@aria-label="New session"]').waitForExist({ reverse: true });
+  });
+
+  it("unfolds a task's description in the composer, its Markdown rendered", async () => {
+    await tasksButton().click();
+    await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
+    await $('//aside[@aria-label="Task detail"]').$(`.${sel.button("+ New session")}`).click();
+    const attachment = $('//div[@role="group"][@aria-label="acme/storefront#12 description sent with your message · Context"]');
+    await expect(attachment).toBeDisplayed({ wait: 10_000 });
+    await attachment.$('.//button[@aria-expanded="false"]').click();
+    await expect(attachment.$('.//h3[normalize-space()="Context"]')).toBeDisplayed();
+    await expect(attachment.$('.//*[normalize-space()="The checkout button does nothing on Safari."]')).toBeDisplayed();
+    await browser.keys("Escape");
+    await $('//button[@title="Close detail"]').click();
   });
 
   it("starts a session on a worktree made outside moonlet, keeping its project", async () => {
@@ -341,7 +386,7 @@ describe("Tasks mode", () => {
       const start = $('//aside[@aria-label="Task detail"]').$(`.${sel.button("Start session")}`);
       await start.waitForDisplayed({ timeout: 15_000 });
       await start.click();
-      await expect($(sel.text("12-orphan-fix · existing worktree"))).toBeDisplayed({ wait: 10_000 });
+      await expect($('//span[normalize-space()="12-orphan-fix"]/following-sibling::span[normalize-space()="existing worktree"]')).toBeDisplayed({ wait: 10_000 });
       // The worktree belongs to its project: the picker stays put.
       await expect($('//button[@title="This worktree belongs to this project"]')).toBeDisabled();
       await $(sel.button("Create")).click();
@@ -383,14 +428,14 @@ describe("Tasks mode", () => {
     await expect(detail.$(`.${sel.text("No sessions yet. Starting one names the branch after the issue.")}`)).toBeDisplayed();
     // + New session opens the composer for the task.
     await detail.$(`.${sel.button("+ New session")}`).click();
-    await expect($(sel.text("For acme/storefront#19"))).toBeDisplayed({ wait: 10_000 });
+    await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Escape");
     // So does Start a session for <key> in the list.
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
     const row = $('//div[@role="row"][starts-with(@aria-label, "acme/storefront#19")]');
     await row.$('button[aria-label="Expand acme/storefront#19"]').click();
     await row.$(`.${sel.button("Start a session for acme/storefront#19")}`).click();
-    await expect($(sel.text("For acme/storefront#19"))).toBeDisplayed({ wait: 10_000 });
+    await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Escape");
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
@@ -532,7 +577,8 @@ describe("Tasks mode", () => {
     await $(sel.sessionRow(SESSION)).click();
     const bar = $('//div[@role="region"][@aria-label="Task"]');
     await expect(bar.$(`.${sel.text("acme/storefront#12")}`)).toBeDisplayed({ wait: 10_000 });
-    await expect(bar.$('.//button[normalize-space()="Tasks"]')).toBeDisplayed();
+    // The key comes first: no `Tasks /` before it.
+    await expect(bar.$('.//button[normalize-space()="Tasks"]')).not.toBeExisting();
     await expect(bar.$('.//div[@aria-label="Sessions on this task"]')).toHaveText(/Session \d of 2/);
     await expect(bar.$('.//a[normalize-space()="GitHub"]')).toHaveAttribute("href", "https://github.com/acme/storefront/issues/12");
     rpc(w, "session.archive", { id: second });

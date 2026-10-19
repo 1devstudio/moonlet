@@ -1,0 +1,103 @@
+{
+  "author": {
+    "id": "U_e2e0002",
+    "is_bot": false,
+    "login": "sam-rivera",
+    "name": "Sam Rivera"
+  },
+  "body": "Drops A/B Testing and Security from the side nav.\n\nFixes #279.",
+  "comments": [
+    {
+      "id": "IC_e2e0001",
+      "author": {
+        "login": "jo-park"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Does this also drop the A/B Testing route, or only its menu item?",
+      "createdAt": "2026-10-02T19:08:19Z",
+      "includesCreatedEdit": true,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/acme/web/pull/214#issuecomment-1000",
+      "viewerDidAuthor": false
+    },
+    {
+      "id": "IC_e2e0002",
+      "author": {
+        "login": "sam-rivera"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Only the item; the route goes in a follow-up.",
+      "createdAt": "2026-10-06T19:12:00Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/acme/web/pull/214#issuecomment-1001",
+      "viewerDidAuthor": false
+    }
+  ],
+  "reviews": [
+    {
+      "id": "PRR_e2e0001",
+      "author": {
+        "login": "review-bot"
+      },
+      "authorAssociation": "CONTRIBUTOR",
+      "body": "SideNav still imports the Security icon; drop the import too.",
+      "submittedAt": "2026-10-14T11:51:19Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "COMMENTED",
+      "commit": {
+        "oid": "0000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "id": "PRR_e2e0004",
+      "author": {
+        "login": "jo-park"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Keep Security in the nav for admins.",
+      "submittedAt": "2026-10-14T12:21:20Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "CHANGES_REQUESTED",
+      "commit": {
+        "oid": "0000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "id": "PRR_e2e0002",
+      "author": {
+        "login": "sam-rivera"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-10-14T12:21:20Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "COMMENTED",
+      "commit": {
+        "oid": "0000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "id": "PRR_e2e0003",
+      "author": {
+        "login": "alex-kim"
+      },
+      "authorAssociation": "CONTRIBUTOR",
+      "body": "",
+      "submittedAt": "2026-10-14T12:24:56Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "APPROVED",
+      "commit": {
+        "oid": "0000000000000000000000000000000000000000"
+      }
+    }
+  ]
+}

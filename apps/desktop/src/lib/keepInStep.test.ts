@@ -118,8 +118,8 @@ describe("driftKey", () => {
 
 describe("startAction (the composer's checkbox)", () => {
   it("assigns a GitHub issue; moves and assigns a tracker issue from Todo; ticked when the rule is Automatically", () => {
-    expect(startAction(task("acme/web#7", "open", { repo: "acme/web", number: 7, closingPrs: [] }), "auto")).toEqual({ label: "Assign acme/web#7 to me", checked: true });
-    expect(startAction(task("MOON-151", "todo"), "suggest")).toEqual({ label: "Move MOON-151 to In Progress and assign it to me", checked: false });
+    expect(startAction(task("acme/web#7", "open", { repo: "acme/web", number: 7, closingPrs: [] }), "auto")).toEqual({ label: "Assign to me", title: "Assign acme/web#7 to me", checked: true });
+    expect(startAction(task("MOON-151", "todo"), "suggest")).toEqual({ label: "Move to In Progress", title: "Move MOON-151 to In Progress and assign it to me", checked: false });
     expect(startAction(task("MOON-151", "in_review"), "auto")).toBe(null);
     expect(startAction(task("MOON-151", "todo"), "off")).toBe(null);
   });
