@@ -11,6 +11,7 @@ import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
 import { ensureTasks, linkTask, lookUpPasted, openInTasksMode, placedTasks, setKeepInStep, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
+import { Markdown } from "../AgentView";
 import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
 
@@ -79,7 +80,11 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
           {card.task.cycle !== undefined && ` · Cycle ${card.task.cycle}`}
           {card.task.assignees.length > 0 && ` · ${card.task.assignees.join(", ")}`}
         </div>
-        {card.task.description && <p className="selectable mt-2 line-clamp-6 whitespace-pre-wrap ui-text-12.5 text-muted">{card.task.description}</p>}
+        {card.task.description && (
+          <div className="mt-2">
+            <Markdown text={card.task.description} task />
+          </div>
+        )}
       </div>
       {criteria.length > 0 && (
         <section aria-label="Acceptance criteria">
