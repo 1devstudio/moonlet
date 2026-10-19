@@ -347,7 +347,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
       <div className="px-4 py-3">
         <h2 className="ui-text-16 font-medium text-fg">{card.task.title}</h2>
         <dl className="mt-3 grid grid-cols-[80px_1fr] gap-y-1.5 ui-text-12.5">
-          <dt className="text-faint">State</dt>
+          <dt className="self-center text-faint">State</dt>
           <dd className="flex items-center gap-2">
             <TaskGlyph column={card.column} size={13} />
             <StateMenu host={host} workspaceId={workspaceId} task={card.task} />
