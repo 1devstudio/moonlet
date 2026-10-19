@@ -9,7 +9,7 @@ import { selectSession, useStore } from "../../lib/store";
 import { acceptanceCriteria, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
-import { ensureTasks, linkTask, lookUpPasted, openInTasksMode, placedTasks, setKeepInStep, useTasks } from "../../lib/tasksStore";
+import { ensureTasks, linkTask, lookUpPasted, placedTasks, setKeepInStep, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
 import { Markdown } from "../AgentView";
 import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
@@ -27,7 +27,7 @@ export function useSessionTask(host: string, ws: Session): Card | null {
   return useMemo(() => (board ? (Object.values(board).flat().find((c) => c.rows.some((r) => r.session.id === ws.id)) ?? null) : null), [board, ws.id]);
 }
 
-/** Above the conversation: the way back to Tasks, the task, its state and its other sessions. */
+/** Above the conversation: the task, its state and its other sessions. */
 export function TaskBar({ host, ws }: { host: string; ws: Session }) {
   const card = useSessionTask(host, ws);
   if (!card) return null;
@@ -35,10 +35,6 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
   const go = (d: number) => selectSession(host, card.rows[(at + d + card.rows.length) % card.rows.length].session.id);
   return (
     <div role="region" aria-label="Task" className="flex min-h-[40px] shrink-0 items-center gap-2.5 border-b border-border bg-panel py-1.5 pr-3 pl-4 ui-text-12.5">
-      <button className="flex shrink-0 items-center gap-1.5 text-muted hover:text-fg" title="Show this task in Tasks mode" onClick={() => openInTasksMode(card.task)}>
-        Tasks
-      </button>
-      <span className="shrink-0 text-faint">/</span>
       <TaskGlyph column={card.column} size={14} />
       <span className="shrink-0 whitespace-nowrap font-mono ui-text-12 text-muted">{card.task.key}</span>
       <span className="min-w-0 truncate font-medium text-fg">{card.task.title}</span>
