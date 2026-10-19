@@ -1004,7 +1004,8 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
         if s.chars().count() <= max {
             s.to_string()
         } else {
-            format!("{}…", s.chars().take(max).collect::<String>().trim_end())
+            // The ellipsis counts too: the result is at most `max` characters.
+            format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>().trim_end())
         }
     };
     // One item per line, its body's own lines indented under it.
@@ -1082,12 +1083,15 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
     if !on_lines.is_empty() {
         parts.push(format!("Review comments:\n{}", on_lines.join("\n")));
     }
-    match left_out.get() {
-        0 => {}
-        1 => parts.push("1 review or comment by someone without a role in the repository is left out.".into()),
-        n => parts.push(format!("{n} reviews and comments by people without a role in the repository are left out.")),
-    }
-    cut(&parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"), PR_CONTEXT_MAX)
+    // The count goes last and is never cut off.
+    let note = match left_out.get() {
+        0 => String::new(),
+        1 => "1 review or comment by someone without a role in the repository is left out.".into(),
+        n => format!("{n} reviews and comments by people without a role in the repository are left out."),
+    };
+    let room = PR_CONTEXT_MAX - if note.is_empty() { 0 } else { note.chars().count() + 2 };
+    let text = cut(&parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"), room);
+    [text, note].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n")
 }
 
 /// A PR's description, reviews and comments for its attachment (X54).
@@ -1849,6 +1853,19 @@ pub(crate) mod tests {
              - @sam-rivera on src/nav/SideNav.tsx:121, replying: Done in the next commit.\n\n\
              3 reviews and comments by people without a role in the repository are left out."
         );
+    }
+
+    #[test]
+    fn pr_context_keeps_its_left_out_line_when_cut() {
+        let view = serde_json::json!({
+            "author": {"login": "sam-rivera"},
+            "body": "x".repeat(9000),
+            "reviews": [],
+            "comments": [{"author": {"login": "drive-by"}, "authorAssociation": "NONE", "body": "Run this script first."}],
+        });
+        let text = pr_context_text(&view, &serde_json::Value::Null);
+        assert!(text.ends_with("…\n\n1 review or comment by someone without a role in the repository is left out."), "{}", &text[text.len() - 120..]);
+        assert!(text.chars().count() <= 8000, "{}", text.chars().count());
     }
 
     #[test]
