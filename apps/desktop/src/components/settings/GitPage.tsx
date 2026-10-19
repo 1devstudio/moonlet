@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Folder, GitBranch } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { branchPreview, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "../../lib/gitSettings";
+import { branchPreview, fetchOptions, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "../../lib/gitSettings";
 import { M, type DaemonInfo, type GitSettings } from "../../lib/protocol";
 import { errorToast, setGitSettings, useStore } from "../../lib/store";
 import { Button, cx } from "../ui";
@@ -148,12 +148,6 @@ function WorktreesRow({ host }: { host: string }) {
   );
 }
 
-const FETCH = [
-  { id: "5", label: "5 min" },
-  { id: "15", label: "15 min" },
-  { id: "0", label: "Manually" },
-] as const;
-
 export function GitPage() {
   const [picked, setPicked] = useState("local");
   const connected = useStore((s) => gitHosts(s.hosts).some((o) => o.id === picked));
@@ -164,7 +158,7 @@ export function GitPage() {
   const tooOld = stored === null;
   const set = (patch: Parameters<typeof setGitSettings>[1]) => void setGitSettings(host, patch);
   const fetchId = useId();
-  const fetchValue = FETCH.find((f) => Number(f.id) === g.fetch_minutes)?.id ?? "5";
+
   return (
     <>
       <PageHeading title="Git" aside={<HostSwitch host={host} onChange={setPicked} />}>
@@ -187,7 +181,7 @@ export function GitPage() {
       <Section title="Keeping base branches current">
         <Card>
           <Row setting="git-fetch" label="Fetch from origin" labelId={fetchId} hint="For the ↓ chip next to a project. Also after a session's PR merges.">
-            <Segmented value={fetchValue} options={FETCH} onChange={(v) => !tooOld && set({ fetch_minutes: Number(v) })} labelledBy={fetchId} />
+            <Segmented value={String(g.fetch_minutes)} options={fetchOptions(g.fetch_minutes)} onChange={(v) => !tooOld && set({ fetch_minutes: Number(v) })} labelledBy={fetchId} />
           </Row>
           <SwitchRow
             setting="git-fast-forward"
