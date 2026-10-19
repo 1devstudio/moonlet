@@ -261,6 +261,8 @@ describe("Tasks mode", () => {
       await $('//button[@title="Refresh tasks"]').click();
       await expect($(state)).toBeDisabled({ wait: 15_000 });
       await expect($('//span[normalize-space()="Moving needs gh\'s project scope: run gh auth refresh -s project"]')).toBeDisplayed();
+      // Nor can its card be dragged to another column (X53).
+      await expect($('//article[starts-with(@aria-label, "acme/web#10")]')).toHaveAttribute("draggable", "false");
       // Nor can a column's + add an issue to the Project (X52).
       await expect($('//section[@aria-label="In Progress"]//button[@title="Adding issues to a Project needs gh\'s project scope: run gh auth refresh -s project"]')).toHaveAttribute("aria-disabled", "true");
     } finally {
@@ -272,6 +274,23 @@ describe("Tasks mode", () => {
     await $('//div[@role="dialog"][@aria-label="Board settings"]//button[normalize-space()="Remove board"]').click();
     await $(sel.confirmButton("Remove")).click();
     await expect($('//button[starts-with(@aria-label, "Switch board, current: acme/storefront")]')).toBeDisplayed({ wait: 15_000 });
+  });
+
+  it("closes an issue dragged onto the folded Closed strip (X53)", async () => {
+    await expect(card("acme/storefront#19", "Open")).toBeDisplayed({ wait: 15_000 });
+    // WebKit's WebDriver can't drag: dispatch the drag's events, each in its own task as a real drag does.
+    await browser.execute(() => {
+      const data = new DataTransfer();
+      (window as unknown as { e2eDrag: DataTransfer }).e2eDrag = data;
+      document.querySelector<HTMLElement>('section[aria-label="Open"] article[aria-label^="acme/storefront#19 "]')!.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: data }));
+    });
+    await browser.execute(() => {
+      const data = (window as unknown as { e2eDrag: DataTransfer }).e2eDrag;
+      const strip = document.querySelector<HTMLElement>('button[aria-label^="Closed: "]')!;
+      strip.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data }));
+      strip.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
+    });
+    await browser.waitUntil(() => asked().includes("issue close 19"), { timeout: 10_000, timeoutMsg: asked() || "no gh log" });
   });
 
   it("opens a session from its card in Sessions mode", async () => {

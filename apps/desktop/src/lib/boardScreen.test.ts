@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
 import { isDimmed } from "./tasksBoard";
 import type { BoardSession } from "./tasksBoard";
 import { type BoardColumn, type BoardConfig, cardFields } from "./boards";
@@ -48,6 +48,31 @@ describe("columnCounts (X50 header)", () => {
   it("counts the shown and folded columns", () => {
     expect(columnCounts(OPS)).toEqual({ shown: 5, folded: 2 });
     expect(columnCounts(OPS.slice(1, 4))).toEqual({ shown: 3, folded: 0 });
+  });
+});
+
+describe("dropTarget (X53 dragging a card onto a column)", () => {
+  it("moves to the first status of a shown or folded column, and not onto the card's own column", () => {
+    expect(dropTarget(OPS, "QA", "In Progress")).toEqual({ category: "in_progress", status: "3" });
+    expect(dropTarget(OPS, "QA", "Done")).toEqual({ category: "done", status: "10002" });
+    expect(dropTarget(OPS, "QA", "QA")).toBeNull();
+  });
+
+  it("takes no drop on a hidden column, a column with no statuses, or a column the board lacks", () => {
+    const columns: BoardColumn[] = [...OPS, { name: "Empty", statuses: [], category: "todo" }];
+    expect(dropTarget(columns, "QA", "Backlog")).toBeNull();
+    expect(dropTarget(columns, "QA", "Empty")).toBeNull();
+    expect(dropTarget(columns, "QA", "Blocked")).toBeNull();
+  });
+
+  it("closes a GitHub repository's issue as completed on Closed, and reopens it on Open", () => {
+    const repo: BoardColumn[] = [
+      { name: "Open", statuses: ["open"], category: "todo" },
+      { name: "Closed", statuses: ["completed", "not_planned"], category: "done", show: "fold" },
+    ];
+    expect(dropTarget(repo, "Open", "Closed")).toEqual({ category: "done", status: "completed" });
+    expect(dropTarget(repo, "Open", "Open")).toBeNull();
+    expect(dropTarget(repo, "Closed", "Open")).toEqual({ category: "todo", status: "open" });
   });
 });
 

@@ -1,7 +1,7 @@
 // Tasks mode (X45, X50): the sidebar's boards and the shown board of the workspace's tasks.
 
 import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type DragEvent, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
@@ -52,7 +52,7 @@ import { useNow } from "../../lib/useNow";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
 import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
@@ -130,6 +130,8 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
   const notNow = useTasks((t) => t.notNow);
   const config = useTasks((t) => trackersConfig(t));
   const paused = useTasks((t) => t.paused);
+  // Moves under way show their cards in the new column (X53).
+  const moving = useTasks((t) => t.moving);
   const shownId = useTasks((t) => (ws ? (t.shownBoard[wsKey(ws.host, ws.id)] ?? null) : null));
   // What the board reads of the main store; other changes (terminal output) don't rebuild it.
   const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads]));
@@ -143,7 +145,7 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
     const shownBoard = shownBoardOf(config.boards, key, shownId);
     const shown = shownBoard ? { board: shownBoard, views: all.find((b) => b.board.id === shownBoard.id)?.views ?? [] } : null;
     return { ws, data, board: asBoard(all), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link), shown, all };
-  }, [ws, data, notNow, config, paused, shownId, ...deps]);
+  }, [ws, data, notNow, config, paused, moving, shownId, ...deps]);
 }
 
 /** The sidebar body in Tasks mode (X50): Find a task, the workspace's pinned boards, then the sync line. */
@@ -238,12 +240,24 @@ export function startSession(host: string, workspaceId: string, card: Card, work
   });
 }
 
-function TaskCard({ host, workspaceId, card, fields, estimate, selected }: { host: string; workspaceId: string; card: Card; fields: CardField[]; estimate: string | null; selected: boolean }) {
+function TaskCard({ host, workspaceId, card, fields, estimate, selected, onDrag }: { host: string; workspaceId: string; card: Card; fields: CardField[]; estimate: string | null; selected: boolean; onDrag: (card: Card | null) => void }) {
   const pick = () => useTasks.setState({ selected: `${card.task.connection} ${card.task.key}` });
   const face = cardFace(card.task, fields, estimate);
+  // A Project's item moves only with gh's project scope, as its State menu (X50, X53).
+  const locked = useTasks((t) => projectMoveLock(card.task, t.ghScopes[host]) !== null);
   return (
     <article
       aria-label={`${card.task.key} ${card.task.title}`}
+      // Dragged onto another column, the card moves there (X53).
+      draggable={!locked}
+      onDragStart={(e) => {
+        // Only the card itself, not a link or image dragged out of it.
+        if (e.target !== e.currentTarget) return;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", card.task.key);
+        onDrag(card);
+      }}
+      onDragEnd={(e) => e.target === e.currentTarget && onDrag(null)}
       className={cx(
         "flex flex-col gap-2 rounded-[10px] border px-3 py-2.5",
         selected ? "border-accent/60 bg-selected" : card.needsYou ? "border-blocked/35 bg-panel" : "border-border bg-panel",
@@ -447,6 +461,9 @@ export function TasksMode() {
   const ghScopes = useTasks((t) => t.ghScopes);
   // The column whose + opened New issue (X52).
   const [creating, setCreating] = useState<BoardColumn | null>(null);
+  // The card being dragged, and the column under it that takes it (X53).
+  const [dragging, setDragging] = useState<Card | null>(null);
+  const [over, setOver] = useState<string | null>(null);
   if (!ws) return null;
   if (!data) return <Empty title="Loading tasks…" />;
   if (!shown) {
@@ -522,6 +539,31 @@ export function TasksMode() {
     const column = savedColumns.find((c) => c.name === name);
     return column && createsIn(shown.board) && createTarget(shown.board, column) ? column : null;
   };
+  // A card dropped on a column moves to its first status, as the State menu does (X53).
+  const drag = (card: Card | null) => {
+    setDragging(card);
+    setOver(null);
+  };
+  const dropOn = (name: string) => {
+    const to = dragging?.columnName ? dropTarget(savedColumns, dragging.columnName, name) : null;
+    return {
+      onDragOver: (e: DragEvent) => {
+        if (!to) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setOver(name);
+      },
+      onDragLeave: (e: DragEvent) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver((o) => (o === name ? null : o));
+      },
+      onDrop: (e: DragEvent) => {
+        e.preventDefault();
+        const task = dragging?.task;
+        drag(null);
+        if (to && task) void moveTask(ws.host, ws.id, task, to.category, Date.now(), to.status);
+      },
+    };
+  };
   // A GitHub Project's estimate is named after its number field (X50).
   const estimate = data.boards?.[shown.board.id]?.project?.numberField ?? null;
   const stats = Object.fromEntries(all.map((b) => [b.board.id, boardStats(b.board, b.views, data.boards?.[b.board.id])]));
@@ -562,9 +604,9 @@ export function TasksMode() {
           <div className="flex min-h-0 flex-1 gap-2.5 overflow-x-auto px-4 py-3.5">
             {views.map((v) =>
               v.folded ? (
-                <FoldedColumn key={v.name} boardId={shown.board.id} view={v} />
+                <FoldedColumn key={v.name} boardId={shown.board.id} view={v} over={over === v.name} {...dropOn(v.name)} />
               ) : (
-                <section key={v.name} aria-label={v.name} className="group/column flex w-[228px] shrink-0 flex-col gap-2">
+                <section key={v.name} aria-label={v.name} {...dropOn(v.name)} className={cx("group/column flex w-[228px] shrink-0 flex-col gap-2 rounded-[10px]", over === v.name && "outline outline-2 outline-offset-2 outline-accent/60")}>
                   <div className="flex flex-col gap-[3px] px-1">
                     <div className="flex h-[22px] items-center gap-2 ui-text-12.5 font-semibold text-fg">
                       <span className="min-w-0 truncate">{v.name}</span>
@@ -613,7 +655,7 @@ export function TasksMode() {
                   <div aria-hidden="true" className={cx("h-[2px] shrink-0 rounded-[1px]", COLUMN_RULE[v.category])} />
                   <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                     {v.cards.map((c) => (
-                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} estimate={estimate} selected={taskId(c.task) === selected} />
+                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} estimate={estimate} selected={taskId(c.task) === selected} onDrag={drag} />
                     ))}
                   </div>
                 </section>
@@ -629,7 +671,7 @@ export function TasksMode() {
 }
 
 /** A folded column (X50): a narrow strip with its name written down, its count and its clean-ups; clicking unfolds it. */
-function FoldedColumn({ boardId, view }: { boardId: string; view: ColumnView }) {
+function FoldedColumn({ boardId, view, over, ...drop }: { boardId: string; view: ColumnView; over: boolean; onDragOver: (e: DragEvent) => void; onDragLeave: (e: DragEvent) => void; onDrop: (e: DragEvent) => void }) {
   const cleanUp = cleanUps(view.cards);
   const n = view.cards.length;
   return (
@@ -637,7 +679,9 @@ function FoldedColumn({ boardId, view }: { boardId: string; view: ColumnView }) 
       aria-label={`${view.name}: ${n} ${n === 1 ? "task" : "tasks"}${cleanUp ? `, ${cleanUp} needs clean-up` : ""}`}
       title={`Unfold ${view.name}`}
       onClick={() => setColumnShow(boardId, view.name, "show")}
-      className="flex w-[40px] shrink-0 flex-col items-center gap-2.5 self-stretch rounded-[10px] border border-border bg-panel py-2.5 text-muted hover:text-fg"
+      // A card dropped on the strip moves there, without unfolding it (X53).
+      {...drop}
+      className={cx("flex w-[40px] shrink-0 flex-col items-center gap-2.5 self-stretch rounded-[10px] border bg-panel py-2.5 text-muted hover:text-fg", over ? "border-accent/60" : "border-border")}
     >
       <TaskGlyph column={view.category} size={12} />
       <span className="whitespace-nowrap ui-text-12.5 font-semibold text-fg [writing-mode:vertical-rl]">{view.name}</span>

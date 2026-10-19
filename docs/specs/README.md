@@ -89,3 +89,5 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X49 | Queued messages, Send now and Ask aside | P1 | 3 | implemented (Claude's backgrounding Send now unseen) | [X49-queued-messages.md](X49-queued-messages.md) |
 | X50 | Boards (a tracker's own columns, filter and sprint; replace X44's sources) | P1 | 3 | draft | [X50-boards.md](X50-boards.md) |
 | X51 | Responsive chat input: two-line input, status line above it, footer tiers by width | P1 | 3 | implemented | [X51-responsive-chat-input.md](X51-responsive-chat-input.md) |
+| X52 | New issue from a column (the `+` on a board column, every tracker) | P1 | 3 | implemented | [X52-new-issue-from-a-column.md](X52-new-issue-from-a-column.md) |
+| X53 | Drag tasks between columns (a drop moves the issue in its tracker) | P1 | 3 | implemented | [X53-drag-tasks-between-columns.md](X53-drag-tasks-between-columns.md) |

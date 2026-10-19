@@ -109,7 +109,7 @@ Titles, descriptions and labels from trackers are untrusted and shown as plain t
 - A Current cycle view (Linear cycle, Jira active sprint): it needs each tracker's cycle or sprint dates, which moonlet does not read yet.
 - ⌘K searching tasks: ⌘K stays the Run action palette; "Find a task" in the Tasks sidebar filters the board, and the link dialog (X46) takes pasted keys and URLs.
 - A connect popover on the Tasks button; a `Connect…` row and key prefixes in the Trackers list; the tracker's mark and a "more" menu in the detail header.
-- Creating tasks ("New task in this column") and drag and drop between columns.
+- Creating tasks ("New task in this column", now [X52](X52-new-issue-from-a-column.md)) and drag and drop between columns (now [X53](X53-drag-tasks-between-columns.md)).
 - Activity from the tracker's own history and comments.
 - Grouping by assignee or label.
 
