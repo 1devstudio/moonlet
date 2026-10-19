@@ -10,7 +10,7 @@ describe("settings nav (X43)", () => {
     expect(settingsNav({ ...none, remoteHosts: 2, phones: 1, profilesNeedSignIn: true })).toEqual([
       {
         title: "App",
-        entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications"), app("trackers", "Task trackers"), app("shortcuts", "Keyboard shortcuts")],
+        entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("git", "Git"), app("notifications", "Notifications"), app("trackers", "Task trackers"), app("shortcuts", "Keyboard shortcuts")],
       },
       { title: "Claude Code", entries: [app("profiles", "Profiles", { dot: "a profile is not signed in" }), app("hooks", "Hooks")] },
       { title: "Machines", entries: [app("hosts", "Hosts", { count: 2 }), app("phones", "Phones", { count: 1 })] },
