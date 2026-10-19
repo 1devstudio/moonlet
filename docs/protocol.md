@@ -39,14 +39,15 @@ Every JSON message is an object with a `t` tag:
 
 Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`; result types are in `types.rs`. Groups:
 
-- `daemon.*`: info, shutdown, upgrade.
+- `daemon.*`: info (with `data_dir`, the daemon's data folder, X55), shutdown, upgrade.
 - `terminal.*`: create, list, attach, detach, resize, kill, write, search.
 - `agent.report`: state reports from agent hooks (`moonlet hook …`).
-- `workspace.*`, `section.*`, `project.*` and `session.*`: workspaces, their sections, projects, worktree sessions, scripts (X32).
+- `workspace.*`, `section.*`, `project.*` and `session.*`: workspaces, their sections, projects, worktree sessions, scripts (X32). `session.archive` takes `delete_remote` and returns `{ remote_error }` (X55; older daemons return `true`).
 - `profile.*`: Claude profiles, the config folders workspaces run Claude with (X33).
 - `claude.*`: version (the installed Claude Code, and whether an update runs) and update (runs `claude update`) (X36). Events: `claude.update_output` per line while it runs, `claude.update_done` when it ends.
 - `chat.*`: state, summaries (every chat's state without items, X40), send, send_now and unqueue (a queued message, X49), aside (a side question answered by a tool-less fork of the conversation, X49), permission, interrupt, settings (model, effort, permission mode) for structured agents (X6, X7). Events: `chat.item`, `chat.state`.
 - `git.*` and `gh.*`: status, diffs, staging, commit, log, PRs, issues.
+- `git.settings` and `git.set_settings`: the host's Git settings, kept in `~/.moonlet/git.toml` (X55). `git.unpushed` (uncommitted files and commits not on origin) and `git.push` (`push -u origin HEAD`) for the archive prompt. Event: `git.settings_changed`, the whole settings after a change.
 - `fs.*`: list, files, read, write, watch.
 - `shell.history`: the login shell's history for input suggestions.
 - `mobile.*`: status, set_enabled, pair_start, pair_cancel, revoke, hosts for phone access (X39). Only the desktop app may call them, except `mobile.hosts`, which phones use. Events: `mobile.changed`, `mobile.paired`, `mobile.pair_ended`.
