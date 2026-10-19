@@ -642,6 +642,10 @@ impl Daemon {
                         .map_err(internal)?,
                 )
             }
+            m::GH_PR_CONTEXT => {
+                let r: m::GhPrContext = params(p)?;
+                ok(git::gh_pr_context(&path(&r.path), r.number).await.map_err(internal)?)
+            }
             m::GH_ISSUES | m::GH_PRS => {
                 let r: m::GitPath = params(p)?;
                 let kind = if method == m::GH_PRS { "pr" } else { "issue" };
