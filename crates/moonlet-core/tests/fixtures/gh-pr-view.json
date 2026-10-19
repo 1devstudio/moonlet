@@ -1,4 +1,10 @@
 {
+  "author": {
+    "id": "U_e2e0002",
+    "is_bot": false,
+    "login": "sam-rivera",
+    "name": "Sam Rivera"
+  },
   "body": "Drops A/B Testing and Security from the side nav.\n\nFixes #279.",
   "comments": [
     {
