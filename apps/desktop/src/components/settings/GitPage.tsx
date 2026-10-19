@@ -8,7 +8,7 @@ import { rpc } from "../../lib/daemon";
 import { branchPreview, fetchOptions, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "../../lib/gitSettings";
 import { M, type DaemonInfo, type GitSettings } from "../../lib/protocol";
 import { errorToast, setGitSettings, useStore } from "../../lib/store";
-import { Button, cx } from "../ui";
+import { Button, cx, selectCls } from "../ui";
 import { Card, PageHeading, Row, Section, Segmented, SwitchRow, fieldCls, radioProps } from "./controls";
 
 function HostSwitch({ host, onChange }: { host: string; onChange: (host: string) => void }) {
@@ -148,6 +148,18 @@ function WorktreesRow({ host }: { host: string }) {
   );
 }
 
+const WORKTREE = [
+  { id: "remove", label: "Remove" },
+  { id: "keep", label: "Keep" },
+] as const;
+
+const BRANCH: { id: GitSettings["archive_branch"]; label: string; hint: string }[] = [
+  { id: "ask", label: "Ask each time", hint: "The archive prompt asks with a checkbox." },
+  { id: "keep", label: "Keep", hint: "The branch stays; unarchiving checks it out again." },
+  { id: "merged", label: "Delete when its PR merged", hint: "Deleted when its PR merged on GitHub, kept otherwise." },
+  { id: "always", label: "Always delete", hint: "Deleted with git branch -D, merged or not." },
+];
+
 export function GitPage() {
   const [picked, setPicked] = useState("local");
   const connected = useStore((s) => gitHosts(s.hosts).some((o) => o.id === picked));
@@ -158,7 +170,7 @@ export function GitPage() {
   const tooOld = stored === null;
   const set = (patch: Parameters<typeof setGitSettings>[1]) => void setGitSettings(host, patch);
   const fetchId = useId();
-
+  const worktreeId = useId();
   return (
     <>
       <PageHeading title="Git" aside={<HostSwitch host={host} onChange={setPicked} />}>
@@ -170,6 +182,30 @@ export function GitPage() {
           <PrefixRow value={g.branch_prefix} disabled={tooOld} onSave={(branch_prefix) => set({ branch_prefix })} />
           <StartRow value={g.start_from} disabled={tooOld} onChange={(start_from) => set({ start_from })} />
           <WorktreesRow host={host} />
+        </Card>
+      </Section>
+      <Section title="Archiving a session">
+        <Card>
+          <Row setting="git-archive-worktree" label="Worktree folder" labelId={worktreeId} hint="Kept folders stay on disk; unarchiving reuses them.">
+            <Segmented value={g.archive_worktree} options={WORKTREE} onChange={(v) => !tooOld && set({ archive_worktree: v })} labelledBy={worktreeId} />
+          </Row>
+          <Row setting="git-archive-branch" label="Local branch" htmlFor="git-archive-branch" hint={BRANCH.find((b) => b.id === g.archive_branch)?.hint}>
+            <select id="git-archive-branch" className={cx(selectCls, "w-[220px] shrink-0")} disabled={tooOld} value={g.archive_branch} onChange={(e) => set({ archive_branch: e.target.value as GitSettings["archive_branch"] })}>
+              {BRANCH.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <SwitchRow
+            setting="git-delete-remote"
+            label="Also delete the branch on origin"
+            hint="Only when its PR merged. Skip if GitHub already deletes head branches for the repository."
+            on={g.delete_remote_branch}
+            disabled={tooOld}
+            onChange={(on) => set({ delete_remote_branch: on })}
+          />
         </Card>
       </Section>
       <Section title="Commits and pull requests">

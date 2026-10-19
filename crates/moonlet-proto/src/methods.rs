@@ -203,6 +203,8 @@ pub const EV_SESSIONS_CHANGED: &str = "sessions.changed";
 pub const EV_WORKSPACES_CHANGED: &str = "workspaces.changed";
 pub const EV_SECTIONS_CHANGED: &str = "sections.changed";
 pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
+/// A host's Git settings after a change: the whole `GitSettings` (X55).
+pub const EV_GIT_SETTINGS_CHANGED: &str = "git.settings_changed";
 /// A line `claude update` printed (X36).
 pub const EV_CLAUDE_UPDATE_OUTPUT: &str = "claude.update_output";
 /// How a `claude update` ended, for every window (X36).
@@ -559,6 +561,10 @@ pub struct SessionArchive {
     pub remove_worktree: bool,
     #[serde(default)]
     pub delete_branch: bool,
+    /// With `delete_branch`, delete it on origin too (X55). A failure there
+    /// is reported, not fatal.
+    #[serde(default)]
+    pub delete_remote: bool,
 }
 
 fn yes() -> bool {

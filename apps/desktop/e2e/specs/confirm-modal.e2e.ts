@@ -21,7 +21,13 @@ async function openArchive() {
 describe("confirm modal", () => {
   let branch = "";
 
+  after(() => {
+    rpc(w, "git.set_settings", { archive_branch: "merged" });
+  });
+
   before(async () => {
+    // The checkbox is Settings › Git's "Ask each time" (X55).
+    rpc(w, "git.set_settings", { archive_branch: "ask" });
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     branch = rpc<{ branch: string }>(w, "session.create", { project_id: project.id, name: SESSION, agent: "none" }).branch;
     await $(sel.sessionRow(SESSION)).click();

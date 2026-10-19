@@ -13,7 +13,7 @@ use moonlet_proto::methods::{
     WorkspaceUpdate,
 };
 use moonlet_proto::types::{
-    ClaudeProfile, Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session, StartFrom,
+    ClaudeProfile, Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session, SessionArchived, StartFrom,
     TerminalInfo, TerminalKind, Workspace, WorkspaceColor,
 };
 use moonlet_proto::{Message, TerminalId};
@@ -1445,7 +1445,7 @@ impl SessionManager {
         )
     }
 
-    pub async fn archive(&self, req: SessionArchive) -> Result<()> {
+    pub async fn archive(&self, req: SessionArchive) -> Result<SessionArchived> {
         let ws = self.session(&req.id)?;
         let repo = self.project(&ws.project_id)?;
         let config = read_config(Path::new(&repo.path));
@@ -1467,8 +1467,14 @@ impl SessionManager {
         if req.remove_worktree {
             git::worktree_remove(Path::new(&repo.path), Path::new(&ws.path)).await?;
         }
+        let mut done = SessionArchived::default();
         if req.delete_branch {
             git::delete_branch(Path::new(&repo.path), &ws.branch).await?;
+            if req.delete_remote
+                && let Err(e) = git::delete_remote_branch(Path::new(&repo.path), &ws.branch).await
+            {
+                done.remote_error = Some(format!("{e:#}"));
+            }
         }
         self.mutate(|st| {
             if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
@@ -1479,7 +1485,7 @@ impl SessionManager {
             Ok(())
         })?;
         self.emit_sessions();
-        Ok(())
+        Ok(done)
     }
 
     /// Brings an archived workspace back (recreating the worktree if needed).
@@ -1882,7 +1888,7 @@ mod tests {
         // Archiving frees the worktree path; a new session with the same
         // name gets it, and the PR is the new session's only.
         again
-            .archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: true })
+            .archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: true, delete_remote: false })
             .await
             .unwrap();
         let next = again
@@ -2626,6 +2632,7 @@ mod tests {
             id: ws.id.clone(),
             remove_worktree: true,
             delete_branch: true,
+            delete_remote: false,
         })
         .await
         .unwrap();
@@ -3158,7 +3165,7 @@ mod tests {
     }
 
     async fn archive(mgr: &SessionManager, s: &Session) {
-        mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: false }).await.unwrap();
+        mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: false, delete_remote: false }).await.unwrap();
     }
 
     /// X5's rule per workspace: a project leaves a workspace's last section
