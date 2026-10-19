@@ -813,7 +813,7 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
 
   it("moves a tracker issue to In Progress and assigns it when a session starts from it", async () => {
     sent.length = 0;
-    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", projects: [], tracker: { id: "issue-2", source: "MOON" } }, { session: "Drag", assign: true });
+    await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", firstMessage: "", description: "", projects: [], tracker: { id: "issue-2", source: "MOON" } }, { session: "Drag", assign: true });
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
   });
 });
@@ -1212,7 +1212,7 @@ describe("automatic fixes and failures, second review round (X46)", () => {
 
   it("starting a session on a GitHub issue whose repository is in no project says so", async () => {
     useStore.setState({ toasts: [] });
-    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", projects: [], github: { repo: "else/where", number: 3 } }, { session: "x", assign: true });
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "else/where#3", url: "" }, kind: "github", key: "else/where#3", title: "x", firstMessage: "", description: "", projects: [], github: { repo: "else/where", number: 3 } }, { session: "x", assign: true });
     expect(useStore.getState().toasts.map((x) => x.text)).toEqual(["else/where#3: No project in this workspace has else/where as its origin"]);
   });
 });
@@ -1222,7 +1222,7 @@ describe("open spec lines: Activity, comments, drafts and toasts (X45, X46)", ()
   const pr = (o: object = {}) => ({ number: 131, url: "https://github.com/acme/app/pull/131", state: "open", title: "Hosts", checks: [], review_decision: null, ...o });
   const rowWith = (id: string, p: object) => ({ session: { id, name: id, branch: id, path: `/w/${id}`, archived: false, task: null, task_unlinked: false, state: "idle" as const, pr: pr(p), additions: 0, subagents: 0, originRepo: null }, meta: { text: "#131", tone: "open" as const } });
   const boardOf = (t: ReturnType<typeof lt>, rows: ReturnType<typeof rowWith>[]) => ({ todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows, needsYou: false, orphans: [], empty: null, drift: null }], done: [] });
-  const start = (key: string) => ({ ref: { connection: "linear:acme", key, url: "" }, kind: "linear" as const, key, title: key, firstMessage: "", projects: [], tracker: { id: `i-${key}`, source: "MOON" } });
+  const start = (key: string) => ({ ref: { connection: "linear:acme", key, url: "" }, kind: "linear" as const, key, title: key, firstMessage: "", description: "", projects: [], tracker: { id: `i-${key}`, source: "MOON" } });
 
   it("records that a session started from the task, and moves and assigns it only when asked", async () => {
     sent.length = 0;
@@ -1267,7 +1267,7 @@ describe("open spec lines: Activity, comments, drafts and toasts (X45, X46)", ()
     answers["gh.tasks"] = () => [issue];
     answers["gh.task_update"] = () => true;
     await refreshTasks("local", "personal", 1_000);
-    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "acme/web#12", url: "" }, kind: "github", key: "acme/web#12", title: "Fix", firstMessage: "", projects: [], github: { repo: "acme/web", number: 12 } }, { session: "Fix", assign: true }, 6_000);
+    await startedFromTask("local", "personal", { ref: { connection: "github:github.com", key: "acme/web#12", url: "" }, kind: "github", key: "acme/web#12", title: "Fix", firstMessage: "", description: "", projects: [], github: { repo: "acme/web", number: 12 } }, { session: "Fix", assign: true }, 6_000);
     expect(activityOf({ connection: "github:github.com", key: "acme/web#12" }).map((e) => e.text)).toContain("moonlet assigned it to you");
   });
 });

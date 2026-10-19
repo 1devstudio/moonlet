@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, CornerDownLeft, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { TaskStart } from "../lib/tasks";
 import { branchUser, leaveTasksMode, startedFromTask } from "../lib/tasksStore";
 import { composerOptions, composerPick, composerProjects, composerTarget } from "../lib/workspaces";
-import { branchRow } from "../lib/composer";
+import { attachments, branchRow, firstMessage, placeholder, sessionName, type Attachment } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
@@ -13,6 +13,7 @@ import { AgentIcon, BoardTile, IconButton, cx } from "./ui";
 import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
+import { Markdown } from "./AgentView";
 import { fileMention } from "../lib/plusMenu";
 import { fromOtherDialog } from "../lib/modal";
 
@@ -112,6 +113,38 @@ function SourcePicker({ host, project, onIssue, onPr }: { host: string; project:
             </div>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+/** A folded attachment (X54): its line, › to unfold its text, × to remove it. */
+function AttachmentRow({ a, flash, onRemove }: { a: Attachment; flash: boolean; onRemove: () => void }) {
+  const [open, setOpen] = useState(false);
+  const Icon = a.icon === "pr" ? GitPullRequest : FileText;
+  return (
+    <div role="group" aria-label={`${a.mono ? `${a.mono} ` : ""}${a.before ?? ""}${a.strong}${a.after ?? ""}`} className={cx("rounded-[10px] border bg-panel-2 transition-colors duration-500", flash ? "border-accent/45" : "border-border")}>
+      <div className="flex items-center gap-2 px-3 py-[9px] ui-text-12.5 text-muted">
+        <button className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open} title={open ? "Fold" : "Unfold"} onClick={() => setOpen(!open)}>
+          <Icon size={13} className="shrink-0" />
+          {a.mono && <span className="shrink-0 font-mono ui-text-12">{a.mono}</span>}
+          <span className="min-w-0 flex-1 truncate">
+            {a.before}
+            <span className="text-fg">{a.strong}</span>
+            {a.after}
+          </span>
+          <ChevronRight size={13} className={cx("shrink-0 transition-transform", open && "rotate-90")} />
+        </button>
+        {a.remove && (
+          <IconButton title={a.remove} className="h-5 w-5 shrink-0" onClick={onRemove}>
+            <X size={11} />
+          </IconButton>
+        )}
+      </div>
+      {open && (
+        <div className="max-h-[220px] overflow-y-auto border-t border-border px-3 py-2">
+          {a.body ? <Markdown text={a.body} task /> : <span className="ui-text-12.5 text-faint">No description.</span>}
+        </div>
       )}
     </div>
   );
@@ -253,7 +286,8 @@ export function Composer({
   const [pick, setPick] = useState(initial ? { host: initial.host, id: initial.project.id } : null);
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
 
-  const [prompt, setPrompt] = useState(presetTask?.firstMessage ?? "");
+  // The task's text is an attachment; what the user types goes after it (X54).
+  const [prompt, setPrompt] = useState("");
   const [task, setTask] = useState(presetTask ?? null);
   const [assign, setAssign] = useState(!!presetTask?.assign?.checked);
   const [taskBranch, setTaskBranch] = useState<string | null>(null);
@@ -267,6 +301,11 @@ export function Composer({
   const [branches, setBranches] = useState<string[]>([]);
   const [issue, setIssue] = useState<IssueRef | null>(null);
   const [pr, setPr] = useState<IssueRef | null>(null);
+  // The picked PR's attachment, kept unless the user removes it (X54).
+  const [prSend, setPrSend] = useState(true);
+  const [prContext, setPrContext] = useState<string | null>(null);
+  // A picked issue's attachment is outlined for a moment (X54).
+  const [flash, setFlash] = useState(false);
   const [addDirs, setAddDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
@@ -295,6 +334,13 @@ export function Composer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!issue) return;
+    setFlash(true);
+    const t = setTimeout(() => setFlash(false), 1500);
+    return () => clearTimeout(t);
+  }, [issue]);
 
   // The branch a task names (X44 template); an adopted worktree keeps its own.
   // Create waits for it, so a quick ⌘↵ still gets the task's branch.
@@ -371,8 +417,8 @@ export function Composer({
       const named = task && !worktree ? await taskBranchLoad.current : null;
       const s = await rpc<Session>(current.host, M.sessionCreate, {
         project_id: current.project.id,
-        prompt: prompt.trim() || null,
-        name: task ? task.title : issue && !prompt.trim() ? issue.title : null,
+        prompt: firstMessage(sent, prompt),
+        name: sessionName({ task, pr, issue }),
         task: task?.ref ?? null,
         worktree: worktree?.path ?? null,
         agent: choice.agent,
@@ -401,6 +447,7 @@ export function Composer({
     }
   };
 
+  const sent = attachments({ task, issue, pr: pr && prSend ? pr : null, prContext });
   const row = branchRow({
     base: current?.project.base_branch ?? "base",
     task,
@@ -473,11 +520,12 @@ export function Composer({
               project={current.project}
               onIssue={(i) => {
                 setIssue(i);
-                setPrompt((p) => p || `Resolve #${i.number}: ${i.title}\n\n${i.body.trim()}\n\n${i.url}`.trim());
                 ta.current?.focus();
               }}
               onPr={(p) => {
                 setPr(p);
+                setPrSend(true);
+                setPrContext(null);
                 setFrom(null);
                 ta.current?.focus();
               }}
@@ -586,19 +634,34 @@ export function Composer({
             )
           )}
         </div>
-        <textarea
-          ref={ta}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void create();
-            }
-          }}
-          placeholder="What do you want to work on?"
-          className="block h-[168px] w-full resize-none bg-transparent px-6 pb-2 pt-4 ui-text-14 leading-[1.6] text-fg outline-none placeholder:text-faint"
-        />
+        {/* The attachments above the prompt (X54); the prompt fills what is left. */}
+        <div className="flex min-h-[168px] flex-col gap-2 px-6 pb-2 pt-4">
+          {sent.map((a) => (
+            <AttachmentRow
+              key={a.id}
+              a={a}
+              flash={a.id === "issue" && flash}
+              onRemove={() => {
+                if (a.id === "issue") setIssue(null);
+                if (a.id === "pr") setPrSend(false);
+                ta.current?.focus();
+              }}
+            />
+          ))}
+          <textarea
+            ref={ta}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void create();
+              }
+            }}
+            placeholder={placeholder({ task: !!task, issue: !!issue, pr: !!pr })}
+            className={cx("block min-h-[52px] w-full flex-1 resize-none bg-transparent ui-text-14 leading-[1.6] text-fg outline-none placeholder:text-faint", sent.length > 0 && "pt-1")}
+          />
+        </div>
         <div className="flex items-center gap-2.5 px-5 pb-4">
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
           {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 ui-text-14" iconSize={14} align="left" />}

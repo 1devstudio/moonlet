@@ -310,17 +310,20 @@ describe("Tasks mode", () => {
   });
 
   it("starts a session from a task with the issue as the first message, its branch and the link", async () => {
-    // "Terminal only", so no agent starts (the composer reads this each time it opens).
-    await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "none", model: null, effort: null })), projectId(w));
+    // The fake agent gets the first message as its last argument (the composer reads this each time it opens).
+    await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "fake", model: null, effort: null })), projectId(w));
     await card("acme/storefront#15", "Open").$(sel.button("Start")).click();
     // The task chip: the key and the title, no "For" (X54).
     await expect($('//*[@aria-label="Task acme/storefront#15"][.//span[normalize-space()="acme/storefront#15"]][.//span[normalize-space()="Gift cards at checkout"]]')).toBeDisplayed();
-    await expect($('//textarea[@placeholder="What do you want to work on?"]')).toHaveValue("acme/storefront#15 · Gift cards at checkout");
+    // The issue is a folded attachment above an empty prompt (X54).
+    await expect($('//div[@role="group"][@aria-label="acme/storefront#15 sent with your message · Gift cards at checkout"]')).toBeDisplayed();
+    const prompt = '//textarea[@placeholder="Anything to add? Leave empty to start from the issue."]';
+    await expect($(prompt)).toHaveValue("");
     // Keep in step: "session starts" is Automatically, so the issue is assigned (X46).
     // In the branch row, with a short label and the long one as its tooltip (X54).
     await expect($('//label[normalize-space()="Assign to me"][@title="Assign acme/storefront#15 to me"]/input')).toBeSelected();
+    await fill(prompt, "Check Safari too.");
     // ⌘↵ at once, without waiting for the branch name to show: Create waits for it.
-    await $('//textarea[@placeholder="What do you want to work on?"]').click();
     await browser.keys(["Meta", "Enter"]);
 
     await expect($(sel.sessionRow("Gift cards at checkout"))).toBeDisplayed({ wait: 30_000 });
@@ -328,7 +331,23 @@ describe("Tasks mode", () => {
     const created = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === "Gift cards at checkout");
     expect(created?.branch).toBe("15-gift-cards-at-checkout");
     expect(created?.task).toEqual({ connection: "github:github.com", key: "acme/storefront#15", url: "https://github.com/acme/storefront/issues/15" });
+    // The issue, then what the user typed (X54).
+    const agent = rpc<{ session_id?: string; agent?: string; command: string[] }[]>(w, "terminal.list", {}).find((t) => t.session_id === created?.id && t.agent === "fake");
+    expect(agent?.command.join(" ")).toContain("'acme/storefront#15 · Gift cards at checkout\n\nCheck Safari too.'");
     await browser.waitUntil(() => asked().includes("issue edit 15 --add-assignee @me"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+  });
+
+  it("unfolds a task's description in the composer, its Markdown rendered", async () => {
+    await tasksButton().click();
+    await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
+    await $('//aside[@aria-label="Task detail"]').$(`.${sel.button("+ New session")}`).click();
+    const attachment = $('//div[@role="group"][@aria-label="acme/storefront#12 description sent with your message · Context"]');
+    await expect(attachment).toBeDisplayed({ wait: 10_000 });
+    await attachment.$('.//button[@aria-expanded="false"]').click();
+    await expect(attachment.$('.//h3[normalize-space()="Context"]')).toBeDisplayed();
+    await expect(attachment.$('.//*[normalize-space()="The checkout button does nothing on Safari."]')).toBeDisplayed();
+    await browser.keys("Escape");
+    await $('//button[@title="Close detail"]').click();
   });
 
   it("starts a session on a worktree made outside moonlet, keeping its project", async () => {
