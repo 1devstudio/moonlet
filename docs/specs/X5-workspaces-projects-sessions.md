@@ -4,6 +4,7 @@
 - **Priority / phase:** P1 · phase 3
 - **Related:** [ADR 0005](../adr/0005-workspace-project-session-terminal.md), [glossary](../../CONTEXT.md). Replaces the "workspace = task" model of [A4](A4-new-workspace.md).
 - **References:** Conductor screenshots the user provided on 2026-10-03 (sidebar menu, new-session composer).
+- **Superseded in part by:** [X54](X54-new-session-composer.md) — the composer's layout, and what a picked issue or PR adds: an attachment sent with the first message instead of a filled prompt.
 
 ## Summary
 
@@ -54,7 +55,7 @@ The composer's layout and source picks are now X54's: a header with the project,
   - `view` holds group/sort/filter and is persisted.
 - **Projects** (`project.*`): `add`, `list`, `remove`, `config`.
 - **Sessions** (`session.*`): `create`, `list`, `archive`, `unarchive`, `update {name?, section?, layout?}`, `run`.
-  - `session.create` takes `{project_id, prompt?, name?, agent?, model?, effort?, from?, branch?, existing_branch?, pr?, tui?, cols, rows}`. An issue from the picker only fills the prompt and the name. A `pr` session works on a local `pr/<number>` branch, fetched from the PR head.
+  - `session.create` takes `{project_id, prompt?, name?, agent?, model?, effort?, from?, branch?, existing_branch?, pr?, tui?, cols, rows}`. An issue or PR from the picker is an attachment sent in `prompt`, and names the session (X54). A `pr` session works on a local `moonlet/pr-<number>` branch, fetched from the PR head.
 - **Terminals** (`terminal.*`): the old PTY `session.*` methods, renamed.
 - **Migration:** see ADR 0005.
 
@@ -67,5 +68,5 @@ The composer's layout and source picks are now X54's: a header with the project,
 - [x] Group, sort and filter work and are persisted in the workspace `view`. Tests: `sidebar.test.ts`.
 - [x] Sections: create one, move a session into it (context menu or drag), see it under that section in every group-by mode. Deleting a section returns its sessions to their project. Drag verified in the app with synthesized mouse events, both into a section and back out.
 - [x] The composer creates a session from a prompt: name and branch derived, agent started with the selected model and effort (`names_and_agent_flags`), the prompt delivered. Verified in the app with "Terminal only".
-- [x] Starting from a GitHub issue prefills the prompt. Starting from a PR fetches `pull/N/head` into its branch and uses it. These need `gh`; not exercised against a live repo here.
+- [x] Starting from a GitHub issue adds it as an attachment sent with the first message (X54). Starting from a PR fetches `pull/N/head` into its branch and uses it. These need `gh`; not exercised against a live repo here.
 - [x] No real agent is started by tests.
