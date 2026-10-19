@@ -187,8 +187,6 @@ export interface TaskStart {
   title: string;
   /** GitHub's issue number, for the `{number}` branch template. */
   number?: number;
-  /** `<key> · <title>` and the description: what Create sends before the user's text (X54). */
-  firstMessage: string;
   /** The description, trimmed, for the composer's folded attachment (X54). */
   description: string;
   /**
@@ -228,7 +226,6 @@ export function taskStart(task: Task, repos: Record<string, string | null>, sour
     key: task.key,
     title: task.title,
     number: task.github?.number,
-    firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
     description,
     projects: repo ? Object.keys(repos).filter((id) => repos[id]?.toLowerCase() === repo).slice(0, 1) : task.tracker ? (sourceProjects[sourceKey(task.connection, task.tracker.source)] ?? []) : [],
     ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
