@@ -2,6 +2,7 @@ import { AddBoardDialog } from "./tasks/AddBoard";
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../lib/daemon";
+import { gitSettingsOf } from "../lib/gitSettings";
 import { M, type Commit, type PullRequest, type Project } from "../lib/protocol";
 import { errorToast, refreshGit, selectedSession, shownWorkspace, toast, useStore } from "../lib/store";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
@@ -161,7 +162,7 @@ export function CommitDialog() {
   const ws = selectedSession(s);
   const host = s.selected?.host ?? "local";
   const [message, setMessage] = useState("");
-  const [all, setAll] = useState(true);
+  const [all, setAll] = useState(() => gitSettingsOf(s.gitSettings, host).stage_all);
   const [busy, setBusy] = useState(false);
   if (!ws) return null;
   const commit = async () => {
@@ -213,7 +214,7 @@ export function CreatePrDialog() {
   const host = s.selected?.host ?? "local";
   const [title, setTitle] = useState(ws?.name ?? "");
   const [body, setBody] = useState("");
-  const [draft, setDraft] = useState(false);
+  const [draft, setDraft] = useState(() => gitSettingsOf(s.gitSettings, host).draft_prs);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!ws) return;

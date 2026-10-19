@@ -106,6 +106,26 @@ pub struct Project {
     pub base_branch: String,
 }
 
+/// A host's Git settings (X55), kept by its daemon in `~/.moonlet/git.toml`.
+/// Missing keys take their defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GitSettings {
+    /// How the Commit dialog's "Stage all changes first" starts.
+    pub stage_all: bool,
+    /// How the Create pull request dialog's "Draft" starts.
+    pub draft_prs: bool,
+}
+
+impl Default for GitSettings {
+    fn default() -> Self {
+        Self {
+            stage_all: true,
+            draft_prs: false,
+        }
+    }
+}
+
 /// Per-repo settings, read from `<repo>/.moonlet/config.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectConfig {

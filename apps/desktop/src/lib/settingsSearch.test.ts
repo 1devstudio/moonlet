@@ -45,6 +45,14 @@ describe("searching settings (X43)", () => {
     ]);
   });
 
+  it("finds This Mac's Git settings with their values (X55)", () => {
+    const git = { ...ctx, git: { stage_all: true, draft_prs: true } };
+    expect(searchSettings("draft", git).map((r) => [r.before + r.hit + r.after, r.path, r.value, r.route, r.setting])).toEqual([
+      ["Open pull requests as drafts", "App › Git", "On", { page: "git" }, "git-draft-prs"],
+    ]);
+    expect(searchSettings("stage all", git)[0]).toMatchObject({ path: "App › Git", value: "On", setting: "git-stage-all" });
+  });
+
   it("splits the name around the match, whatever its case", () => {
     const [mode] = searchSettings("CLAUDE S", ctx);
     expect(mode).toMatchObject({ before: "Default permission mode for new ", hit: "Claude s", after: "essions" });

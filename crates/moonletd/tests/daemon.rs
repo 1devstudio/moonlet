@@ -543,6 +543,29 @@ async fn pulled_base_branch_is_where_new_sessions_start() {
 }
 
 #[tokio::test]
+async fn git_settings_are_kept_by_the_daemon_in_git_toml() {
+    use moonlet_proto::types::GitSettings;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let s: GitSettings = c.request(methods::GIT_SETTINGS, serde_json::json!({})).await.unwrap();
+    assert!(s.stage_all);
+    assert!(!s.draft_prs);
+
+    let s: GitSettings = c
+        .request(methods::GIT_SET_SETTINGS, serde_json::json!({"draft_prs": true}))
+        .await
+        .unwrap();
+    assert!(s.draft_prs);
+    let text = std::fs::read_to_string(d.home.path().join("git.toml")).unwrap();
+    assert!(text.contains("draft_prs = true"), "{text}");
+
+    let mut other = d.client().await;
+    let s: GitSettings = other.request(methods::GIT_SETTINGS, serde_json::json!({})).await.unwrap();
+    assert!(s.draft_prs);
+    assert!(s.stage_all);
+}
+
+#[tokio::test]
 async fn origin_url_over_rpc() {
     let d = TestDaemon::start().await;
     let repo = d.home.path().join("repo");
