@@ -91,3 +91,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X51 | Responsive chat input: two-line input, status line above it, footer tiers by width | P1 | 3 | implemented | [X51-responsive-chat-input.md](X51-responsive-chat-input.md) |
 | X52 | New issue from a column (the `+` on a board column, every tracker) | P1 | 3 | implemented | [X52-new-issue-from-a-column.md](X52-new-issue-from-a-column.md) |
 | X53 | Drag tasks between columns (a drop moves the issue in its tracker) | P1 | 3 | implemented | [X53-drag-tasks-between-columns.md](X53-drag-tasks-between-columns.md) |
+| X54 | New session composer: a branch row, attachments and source picks | P1 | 3 | implemented (directory chips checked on a staged row) | [X54-new-session-composer.md](X54-new-session-composer.md) |

@@ -8,12 +8,13 @@ import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { createLockOn, createsIn, createTarget } from "../../lib/newIssue";
-import { type Column, type Task, taskId, taskStart, trackerName, trackerOf } from "../../lib/tasks";
+import { type Column, type Task, taskId, trackerName, trackerOf } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
 import {
   activityOf,
   boardInput,
+  composerTask,
   failureOf,
   fixDrift,
   forgetGhScopes,
@@ -41,11 +42,10 @@ import {
   toggleExpanded,
   toggleTasksMode,
   trackersConfig,
-  trackerSettings,
   useTasks,
 } from "../../lib/tasksStore";
 import { boardListGroups, cleanUps, listRow } from "../../lib/tasksList";
-import { removeWorktreeAsk, startAction, withoutPutOffCard, withRules } from "../../lib/keepInStep";
+import { removeWorktreeAsk, withoutPutOffCard, withRules } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
@@ -218,14 +218,7 @@ function openSession(host: string, sessionId: string) {
 
 /** Opens the new-session composer for a task, or for one of its worktrees without a session (X46). */
 export function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
-  const data = useTasks.getState().data[wsKey(host, workspaceId)];
-  const settings = trackerSettings(trackersConfig(useTasks.getState()), card.task.connection);
-  const start = {
-    ...taskStart(card.task, data?.repos ?? {}, data?.sourceProjects ?? {}),
-    assign: startAction(card.task, rulesFor(trackersConfig(useTasks.getState()), card.task).session_starts),
-    template: settings.branch_template || undefined,
-    maxLen: settings.max_length,
-  };
+  const start = composerTask(host, workspaceId, card.task);
   useStore.setState({
     dialog: {
       kind: "new-session",
@@ -991,6 +984,9 @@ function TasksList({ host, workspaceId, views, unlinked }: { host: string; works
 
 const PRIORITY = ["No priority", "Low", "Medium", "High"];
 
+/** The state menu as a chip in a row of text, the task bar's (X46). */
+const CHIP_SELECT = "chip-select shrink-0 rounded-full border border-border-strong bg-transparent pl-[7px] ui-text-11.5 text-muted outline-none hover:text-fg focus:border-accent";
+
 /** Priority as 0–3 bars (X44). */
 function PriorityBars({ n }: { n: number }) {
   return (
@@ -1007,7 +1003,7 @@ function PriorityBars({ n }: { n: number }) {
  * tracker board, the board's columns by name, each moving to its first
  * status (X50); otherwise the four columns, or Open and Closed on GitHub.
  */
-export function StateMenu({ host, workspaceId, task }: { host: string; workspaceId: string; task: Task }) {
+export function StateMenu({ host, workspaceId, task, chip = false }: { host: string; workspaceId: string; task: Task; chip?: boolean }) {
   // The board's columns as saved, and the task's board after each sync.
   const boards = useTasks((t) => t.config?.boards);
   const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
@@ -1024,7 +1020,7 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
         aria-label={`State of ${task.key}`}
         disabled={locked}
         title={lock ?? undefined}
-        className={cx(inputCls, "menu-select field-height")}
+        className={chip ? CHIP_SELECT : cx(inputCls, "menu-select field-height")}
         value={current}
         onChange={(e) => {
           const c = choices[Number(e.target.value)];
@@ -1048,13 +1044,13 @@ export function StateMenu({ host, workspaceId, task }: { host: string; workspace
     );
   }
   // A Project's item before its board's columns are known: no Open/Closed to fall back on.
-  if (task.github?.project) return <span className="ui-text-12.5 text-muted">{task.github.project.status ?? NO_STATUS}</span>;
+  if (task.github?.project) return <span className={cx("ui-text-12.5 text-muted", chip && "shrink-0 whitespace-nowrap")}>{task.github.project.status ?? NO_STATUS}</span>;
   const options = stateOptions(task);
   const current = options.findIndex((o) => o.current);
   return (
     <select
       aria-label={`State of ${task.key}`}
-      className="rounded-md border border-border-strong bg-panel-2 px-1.5 py-0.5 ui-text-12.5 text-fg"
+      className={chip ? CHIP_SELECT : "rounded-md border border-border-strong bg-panel-2 px-1.5 py-0.5 ui-text-12.5 text-fg"}
       value={current}
       onChange={(e) => void moveTask(host, workspaceId, task, options[Number(e.target.value)].column)}
     >

@@ -128,6 +128,16 @@ export interface LinkRules {
 
 export const DEFAULT_LINK: LinkRules = { branch: true, pr: true, title: true };
 
+/**
+ * Whether a PR points at `task` (X46): it closes the GitHub issue, in the
+ * issue's own repository (`repo`, the PR's `owner/repo`), or one of `texts`
+ * (its title, and more where wanted) carries the tracker issue's key.
+ */
+export function prPointsAt(task: Task, pr: { number: number; texts: string[] }, repo: string | null): boolean {
+  if (task.github) return !!repo && task.github.repo.toLowerCase() === repo.toLowerCase() && task.github.closingPrs.includes(pr.number);
+  return pr.texts.some((x) => mentionsKey(x, task.key));
+}
+
 export function taskForSession(
   s: SessionLinkFacts,
   pr: PullRequest | null | undefined,
@@ -142,9 +152,7 @@ export function taskForSession(
   const byBranch = rules.branch ? tasks.find((t) => (t.github ? sameRepo(t) && t.github.number === number : mentionsKey(s.branch, t.key))) : undefined;
   if (byBranch) return byBranch;
   if (!pr || !rules.pr) return null;
-  return (
-    tasks.find((t) => (t.github ? sameRepo(t) && t.github.closingPrs.includes(pr.number) : mentionsKey(pr.title, t.key))) ?? null
-  );
+  return tasks.find((t) => prPointsAt(t, { number: pr.number, texts: [pr.title] }, originRepo)) ?? null;
 }
 
 /** The `owner/repo` of an `origin` URL (https, ssh or scp-like) on github.com. */
@@ -187,8 +195,8 @@ export interface TaskStart {
   title: string;
   /** GitHub's issue number, for the `{number}` branch template. */
   number?: number;
-  /** `<key> · <title>` and the description, which the user can edit before sending. */
-  firstMessage: string;
+  /** The description, trimmed, for the composer's folded attachment (X54). */
+  description: string;
   /**
    * The projects to start in: the one whose GitHub repository the issue is
    * in, or those whose Project settings link the issue's tracker project (X44).
@@ -199,7 +207,7 @@ export interface TaskStart {
   /** A tracker issue's id and team/project/list, for moving it (X46). */
   tracker?: { id: string; source: string };
   /** The composer's "session starts" checkbox (Keep in step), when it does anything. */
-  assign?: { label: string; checked: boolean } | null;
+  assign?: { label: string; title: string; checked: boolean } | null;
   /** The connection's branch template and max length (X44); the tracker's default when absent. */
   template?: string;
   maxLen?: number;
@@ -226,7 +234,7 @@ export function taskStart(task: Task, repos: Record<string, string | null>, sour
     key: task.key,
     title: task.title,
     number: task.github?.number,
-    firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
+    description,
     projects: repo ? Object.keys(repos).filter((id) => repos[id]?.toLowerCase() === repo).slice(0, 1) : task.tracker ? (sourceProjects[sourceKey(task.connection, task.tracker.source)] ?? []) : [],
     ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
     ...(task.tracker && { tracker: { id: task.tracker.id, source: task.tracker.source } }),
