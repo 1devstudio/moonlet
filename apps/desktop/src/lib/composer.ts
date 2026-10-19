@@ -3,7 +3,8 @@
 
 import { withoutComments } from "./markdown";
 import type { IssueRef } from "./protocol";
-import { mentionsKey, type Task } from "./tasks";
+import { linkChoices } from "./taskLinking";
+import { githubRepo, mentionsKey, prPointsAt, type Task } from "./tasks";
 
 /** What the composer knows about where the session's branch comes from. */
 export interface BranchFacts {
@@ -180,23 +181,41 @@ export function pickerHint(tab: "issue" | "pr", task: { key: string; branch: str
 
 /**
  * The task a picked PR or issue points at, for the Link a task slot's
- * one-click Link: a key in the PR's title, body or head branch, or the
- * GitHub issue the PR closes; else a key in the issue's title or body.
+ * one-click Link: `<from> <verb> <task's key>`, as in `PR #214 mentions
+ * AIO-279`. A PR points at a task its title, body or head branch carries
+ * the key of, or at the GitHub issue it closes; an issue at a task its
+ * title or body carries the key of.
  */
-export function suggestedTask(picked: { pr: IssueRef | null; issue: IssueRef | null }, tasks: Task[]): { task: Task; reason: string } | null {
+export function suggestedTask(picked: Pick<Picks, "pr" | "issue">, tasks: Task[]): { task: Task; from: string; verb: "mentions" | "closes" } | null {
   const { pr, issue } = picked;
   if (pr) {
-    const text = [pr.title, pr.body, pr.head_branch ?? ""];
-    // PR numbers are per repository: a PR closes an issue of its own only.
-    const repo = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\//.exec(pr.url)?.[1]?.toLowerCase();
-    for (const t of tasks) {
-      if (t.github && t.github.repo.toLowerCase() === repo && t.github.closingPrs.includes(pr.number)) return { task: t, reason: `PR #${pr.number} closes ${t.key}` };
-      if (!t.github && text.some((x) => mentionsKey(x, t.key))) return { task: t, reason: `PR #${pr.number} mentions ${t.key}` };
-    }
+    const at = { number: pr.number, texts: [pr.title, pr.body, pr.head_branch ?? ""] };
+    const t = tasks.find((x) => prPointsAt(x, at, githubRepo(pr.url)));
+    if (t) return { task: t, from: `PR #${pr.number}`, verb: t.github ? "closes" : "mentions" };
   }
   if (issue) {
     const t = tasks.find((x) => !x.github && (mentionsKey(issue.title, x.key) || mentionsKey(issue.body, x.key)));
-    if (t) return { task: t, reason: `#${issue.number} mentions ${t.key}` };
+    if (t) return { task: t, from: `#${issue.number}`, verb: "mentions" };
   }
   return null;
+}
+
+/** Whether the header holds the Link a task slot: no task yet, a new worktree, and a workspace with a task source (X46's rule for "Link to task…"). */
+export function showsLinkSlot(f: { task: boolean; worktree: boolean; sources: boolean }): boolean {
+  return !f.task && !f.worktree && f.sources;
+}
+
+/**
+ * The Link a task menu's sections: the link dialog's Suggested and Recent
+ * lists (X46) for the session the picks and the prompt would make, named as
+ * Create would name it and on the PR's head branch, filtered by `query`.
+ */
+export function linkMenu(picks: Pick<Picks, "pr" | "issue">, prompt: string, tasks: Task[], query: string): { label: string; tasks: { task: Task; hint: string | null }[] }[] {
+  const session = { name: sessionName({ task: null, ...picks }) ?? prompt.split("\n")[0], branch: picks.pr?.head_branch ?? "" };
+  const { suggested, recent } = linkChoices(session, tasks, query);
+  const sections = [
+    { label: "Suggested", tasks: suggested.map((s) => ({ task: s.task, hint: s.reason })) },
+    { label: "Recent", tasks: recent.map((task) => ({ task, hint: null })) },
+  ].filter((s) => s.tasks.length);
+  return sections.length ? sections : [{ label: "No tasks match", tasks: [] }];
 }
