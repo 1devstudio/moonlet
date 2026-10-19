@@ -201,6 +201,15 @@ export interface Project {
   base_branch: string;
 }
 
+/** `daemon.info`, as the Git page reads it. */
+export interface DaemonInfo {
+  version: string;
+  /** The user's home folder on the host. */
+  home: string;
+  /** The daemon's data folder (`~/.moonlet` or `$MOONLET_HOME`); absent before X55. */
+  data_dir?: string;
+}
+
 /** A host's Git settings, kept by its daemon in `~/.moonlet/git.toml` (X55). */
 export interface GitSettings {
   /** Put before every branch a new session derives from its name; empty for none. */

@@ -38,6 +38,14 @@ pub fn prefix_error(p: &str) -> Option<&'static str> {
     if p.starts_with(['/', '.', '-']) {
         return Some("Start with a letter or digit.");
     }
+    // The last part goes on with the session's name.
+    let parts: Vec<&str> = p.split('/').collect();
+    let bad_part = |(i, part): (usize, &&str)| {
+        part.starts_with('.') || (i + 1 < parts.len() && part.ends_with(".lock"))
+    };
+    if parts.iter().enumerate().any(bad_part) {
+        return Some("No part can start with . or end with .lock");
+    }
     None
 }
 
@@ -131,6 +139,11 @@ mod tests {
         for bad in ["a..b/", "a//", "a@{"] {
             assert_eq!(prefix_error(bad), seqs, "{bad}");
         }
+        let parts = Some("No part can start with . or end with .lock");
+        for bad in ["team/.x/", "x.lock/", "a/b.lock/c"] {
+            assert_eq!(prefix_error(bad), parts, "{bad}");
+        }
+        assert_eq!(prefix_error("a\u{7}b"), chars);
         for bad in ["/a", ".a", "-a"] {
             assert_eq!(
                 prefix_error(bad),

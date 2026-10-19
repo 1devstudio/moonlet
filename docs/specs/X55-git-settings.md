@@ -39,7 +39,7 @@ Settings gains a **Git** page under App: how new sessions name and start their b
 - [x] "Branch prefix" (default `moonlet/`) is put before the name of every new session branch the daemon derives from the session name. Empty means none. A branch given explicitly (an existing branch, a task's branch template, a PR) is used as is.
 - [x] A project's `branch_prefix` in `.moonlet/config.toml` wins over the host's prefix. The project page's Git section edits it.
 - [x] Under the field, a preview shows `<prefix>add-search-to-the-product-list`.
-- [x] A prefix git would reject shows an error and is not saved: spaces or any of `~ ^ : ? * [ \` ("Branch names cannot hold spaces or ~ ^ : ? * [ \"), `..`, `//` or `@{` ("Branch names cannot hold .., // or @{"), or a first character of `/`, `.` or `-` ("Start with a letter or digit."). The daemon refuses the same prefixes.
+- [x] A prefix git would reject shows an error and is not saved: spaces or any of `~ ^ : ? * [ \` ("Branch names cannot hold spaces or ~ ^ : ? * [ \"), `..`, `//` or `@{` ("Branch names cannot hold .., // or @{"), a first character of `/`, `.` or `-` ("Start with a letter or digit."), or a part that starts with `.` or ends with `.lock` before a `/` ("No part can start with . or end with .lock"). Control characters are refused with the first message. The daemon refuses the same prefixes. A valid prefix is saved when the field is left, on Enter, or when the page closes.
 - [x] "Start new branches from" offers `main` (default: the local branch as it is) and `origin/main` (fetches the base branch first). With `origin/main`, a session started without an explicit start point begins at the fetched `origin/<base>`, and its branch does not track `origin/<base>`. When the fetch fails, it starts from the local base branch.
 - [x] The composer's default start item reads "Start from origin/main (default)" when the host starts from origin.
 - [x] "Worktrees folder" shows `~/.moonlet/worktrees/‹project›/‹session›`; Reveal in Finder opens it on This Mac and is absent for a remote host.
@@ -75,7 +75,7 @@ As the design (`Settings · Git` and `Archive prompt · unpushed work`): page he
 - `git.push` `{ path }`: `git push -u origin HEAD`.
 - `session.archive` gains `delete_remote` (default false).
 - `session.create` reads the host's prefix and start point when `branch` and `from` are absent. New branches are created with `--no-track`.
-- `daemon.info` gains `data`, the daemon's data folder (the page shows its `worktrees`).
+- `daemon.info` gains `data_dir`, the daemon's data folder (the page shows its `worktrees`).
 
 ## Data and config
 
