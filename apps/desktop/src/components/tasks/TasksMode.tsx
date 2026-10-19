@@ -8,12 +8,13 @@ import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { createLockOn, createsIn, createTarget } from "../../lib/newIssue";
-import { type Column, type Task, taskId, taskStart, trackerName, trackerOf } from "../../lib/tasks";
+import { type Column, type Task, taskId, trackerName, trackerOf } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
 import {
   activityOf,
   boardInput,
+  composerTask,
   failureOf,
   fixDrift,
   forgetGhScopes,
@@ -41,11 +42,10 @@ import {
   toggleExpanded,
   toggleTasksMode,
   trackersConfig,
-  trackerSettings,
   useTasks,
 } from "../../lib/tasksStore";
 import { boardListGroups, cleanUps, listRow } from "../../lib/tasksList";
-import { removeWorktreeAsk, startAction, withoutPutOffCard, withRules } from "../../lib/keepInStep";
+import { removeWorktreeAsk, withoutPutOffCard, withRules } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
@@ -218,14 +218,7 @@ function openSession(host: string, sessionId: string) {
 
 /** Opens the new-session composer for a task, or for one of its worktrees without a session (X46). */
 export function startSession(host: string, workspaceId: string, card: Card, worktree?: BoardWorktree) {
-  const data = useTasks.getState().data[wsKey(host, workspaceId)];
-  const settings = trackerSettings(trackersConfig(useTasks.getState()), card.task.connection);
-  const start = {
-    ...taskStart(card.task, data?.repos ?? {}, data?.sourceProjects ?? {}),
-    assign: startAction(card.task, rulesFor(trackersConfig(useTasks.getState()), card.task).session_starts),
-    template: settings.branch_template || undefined,
-    maxLen: settings.max_length,
-  };
+  const start = composerTask(host, workspaceId, card.task);
   useStore.setState({
     dialog: {
       kind: "new-session",

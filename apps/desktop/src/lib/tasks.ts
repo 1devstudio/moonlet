@@ -128,6 +128,16 @@ export interface LinkRules {
 
 export const DEFAULT_LINK: LinkRules = { branch: true, pr: true, title: true };
 
+/**
+ * Whether a PR points at `task` (X46): it closes the GitHub issue, in the
+ * issue's own repository (`repo`, the PR's `owner/repo`), or one of `texts`
+ * (its title, and more where wanted) carries the tracker issue's key.
+ */
+export function prPointsAt(task: Task, pr: { number: number; texts: string[] }, repo: string | null): boolean {
+  if (task.github) return !!repo && task.github.repo.toLowerCase() === repo.toLowerCase() && task.github.closingPrs.includes(pr.number);
+  return pr.texts.some((x) => mentionsKey(x, task.key));
+}
+
 export function taskForSession(
   s: SessionLinkFacts,
   pr: PullRequest | null | undefined,
@@ -142,9 +152,7 @@ export function taskForSession(
   const byBranch = rules.branch ? tasks.find((t) => (t.github ? sameRepo(t) && t.github.number === number : mentionsKey(s.branch, t.key))) : undefined;
   if (byBranch) return byBranch;
   if (!pr || !rules.pr) return null;
-  return (
-    tasks.find((t) => (t.github ? sameRepo(t) && t.github.closingPrs.includes(pr.number) : mentionsKey(pr.title, t.key))) ?? null
-  );
+  return tasks.find((t) => prPointsAt(t, { number: pr.number, texts: [pr.title] }, originRepo)) ?? null;
 }
 
 /** The `owner/repo` of an `origin` URL (https, ssh or scp-like) on github.com. */
