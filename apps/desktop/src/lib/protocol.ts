@@ -220,6 +220,10 @@ export interface GitSettings {
   stage_all: boolean;
   /** How the Create pull request dialog's "Draft" starts. */
   draft_prs: boolean;
+  /** How often projects fetch their base branch from origin; 0: manually. */
+  fetch_minutes: number;
+  /** Pull a base branch that is only behind origin without a click. */
+  fast_forward_base: boolean;
 }
 
 export interface ProjectConfig {

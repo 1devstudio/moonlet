@@ -5,7 +5,7 @@
 import type { GitSettings, HostInfo } from "./protocol";
 import { tildePath } from "./profiles";
 
-export const DEFAULT_GIT_SETTINGS: GitSettings = { branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false };
+export const DEFAULT_GIT_SETTINGS: GitSettings = { branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false, fetch_minutes: 5, fast_forward_base: false };
 
 /** A host's Git settings: what its daemon keeps, else the defaults (not
  * loaded yet, or `null` for a daemon too old to know them). */

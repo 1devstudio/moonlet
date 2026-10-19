@@ -56,6 +56,15 @@ describe("Git settings", () => {
     await closeSettings();
   });
 
+  it("keeps how often projects fetch from origin", async () => {
+    await openSettings("Git");
+    await $(sel.settingsOption("Fetch from origin", "Manually")).click();
+    await browser.waitUntil(() => rpc<{ fetch_minutes: number }>(w, "git.settings", {}).fetch_minutes === 0, { timeoutMsg: "Manually was never saved" });
+    await $(sel.settingsOption("Fetch from origin", "5 min")).click();
+    await browser.waitUntil(() => rpc<{ fetch_minutes: number }>(w, "git.settings", {}).fetch_minutes === 5, { timeoutMsg: "5 min was never saved" });
+    await closeSettings();
+  });
+
   it("starts Create pull request as a draft", async () => {
     await $(sel.sessionRow(SESSION)).click();
     await press("P", "KeyP", { metaKey: true, shiftKey: true });

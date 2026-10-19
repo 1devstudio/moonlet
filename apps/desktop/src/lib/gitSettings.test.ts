@@ -15,12 +15,12 @@ const host = (id: string, label: string, remote: boolean, status: HostInfo["stat
 
 describe("gitSettingsOf", () => {
   it("stages all and opens ready PRs on a host whose settings are not known", () => {
-    expect(gitSettingsOf({}, "local")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false });
-    expect(gitSettingsOf({ devbox: null }, "devbox")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false });
+    expect(gitSettingsOf({}, "local")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false, fetch_minutes: 5, fast_forward_base: false });
+    expect(gitSettingsOf({ devbox: null }, "devbox")).toEqual({ branch_prefix: "moonlet/", start_from: "local", stage_all: true, draft_prs: false, fetch_minutes: 5, fast_forward_base: false });
   });
 
   it("is what the host's daemon keeps", () => {
-    const devbox = { branch_prefix: "", start_from: "origin", stage_all: false, draft_prs: true } as const;
+    const devbox = { branch_prefix: "", start_from: "origin", stage_all: false, draft_prs: true, fetch_minutes: 0, fast_forward_base: true } as const;
     expect(gitSettingsOf({ devbox }, "devbox")).toEqual(devbox);
   });
 });
