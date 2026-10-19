@@ -9,7 +9,7 @@ import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
 
 /** The app-wide pages, in nav order. */
-export type AppPage = "general" | "appearance" | "terminal" | "agents" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
+export type AppPage = "general" | "appearance" | "terminal" | "agents" | "git" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
 
 export type SettingsRoute =
   /** `focus` is a row's `data-setting`, scrolled to and highlighted (X50 Manage › Boards). */
@@ -64,7 +64,7 @@ export function settingsNav(input: NavInput): NavGroup[] {
   const groups: NavGroup[] = [
     {
       title: "App",
-      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("notifications", "Notifications"), app("trackers", "Task trackers", trackerDot(input.trackersNeedAttention ?? 0)), app("shortcuts", "Keyboard shortcuts")],
+      entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("git", "Git"), app("notifications", "Notifications"), app("trackers", "Task trackers", trackerDot(input.trackersNeedAttention ?? 0)), app("shortcuts", "Keyboard shortcuts")],
     },
     {
       title: "Claude Code",

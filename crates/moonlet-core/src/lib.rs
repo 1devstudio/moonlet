@@ -10,6 +10,7 @@ pub mod fs;
 pub mod gh_issues;
 pub mod gh_projects;
 pub mod git;
+pub mod git_settings;
 pub mod history;
 pub mod hooks;
 pub mod node;

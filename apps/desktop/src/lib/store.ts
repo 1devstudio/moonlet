@@ -9,7 +9,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { afterCheck, afterDownloadEvent, checkError, scheduleUpdateChecks, type CheckOutcome, type UpdateState } from "./updater";
 import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
-import { hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
+import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
   type AgentState,
@@ -18,6 +18,7 @@ import {
   type BaseStatus,
   EV,
   type FsChanged,
+  type GitSettings,
   type GitStatus,
   type HostInfo,
   M,
@@ -200,6 +201,8 @@ interface State extends UiPersist {
   base: Record<string, BaseSync>;
   /** GitHub owner avatar per project (`projKey`), or null without a GitHub origin (X15). */
   avatars: Record<string, string | null>;
+  /** Git settings per host (X55); `null` when its daemon is too old for them. */
+  gitSettings: Record<string, GitSettings | null>;
   terminals: Record<string, Record<number, TerminalInfo>>;
   layouts: Record<string, Layout>;
   git: Record<string, GitStatus | undefined>;
@@ -287,6 +290,7 @@ function makeStore() {
   prs: {},
   base: {},
   avatars: {},
+  gitSettings: {},
   layouts: {},
   git: {},
   unread: {},
@@ -559,6 +563,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     void refreshAllGit(host).then(() => refreshPrs(host));
     void refreshAllBases(host, { fetch: true });
     void refreshAvatars(host);
+    void loadGitSettings(host);
     // Apart from the rest: a daemon from before X31 does not know these.
     void Promise.all([
       rpc<ReadRequest[]>(host, M.terminalReadRequests),
@@ -780,6 +785,29 @@ export async function refreshAvatars(host: string) {
   for (const p of get().projects[host] ?? []) {
     const url = await rpc<string | null>(host, M.gitOriginUrl, { path: p.path }).then(avatarUrl, () => null);
     set((s) => ({ avatars: { ...s.avatars, [projKey(host, p.id)]: url } }));
+  }
+}
+
+/** Reads the host's Git settings (X55); a daemon from before them has none. */
+export async function loadGitSettings(host: string) {
+  try {
+    const g = await rpc<GitSettings>(host, M.gitSettings);
+    set((s) => ({ gitSettings: { ...s.gitSettings, [host]: g } }));
+  } catch (e) {
+    if (e instanceof DaemonError && e.code === "unknown_method") set((s) => ({ gitSettings: { ...s.gitSettings, [host]: null } }));
+  }
+}
+
+/** Changes some of the host's Git settings; the page shows the change at once. */
+export async function setGitSettings(host: string, patch: Partial<GitSettings>) {
+  const prev = get().gitSettings[host];
+  if (prev) set((s) => ({ gitSettings: { ...s.gitSettings, [host]: { ...prev, ...patch } } }));
+  try {
+    const g = await rpc<GitSettings>(host, M.gitSetSettings, patch);
+    set((s) => ({ gitSettings: { ...s.gitSettings, [host]: g } }));
+  } catch (e) {
+    errorToast(e);
+    void loadGitSettings(host);
   }
 }
 

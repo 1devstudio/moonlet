@@ -23,6 +23,7 @@ export function useSearchContext(phones: number, searching: boolean): SearchCont
   const projects = useStore((s) => s.projects);
   const profiles = useStore((s) => s.profiles);
   const trackers = useTasks((t) => trackersConfig(t));
+  const git = useStore((s) => s.gitSettings.local);
   const [configs, setConfigs] = useState<Record<string, ProjectConfig | null>>({});
   useEffect(() => {
     if (!searching) return;
@@ -45,9 +46,10 @@ export function useSearchContext(phones: number, searching: boolean): SearchCont
       phones,
       workspaces: Object.entries(workspaces).flatMap(([host, list]) => list.map((w) => ({ host, id: w.id, name: w.name, color: w.color, profile: profileName(w, profiles[host] ?? []) }))),
       projects: Object.entries(projects).flatMap(([host, list]) => list.map((p) => ({ host, id: p.id, name: p.name, base_branch: p.base_branch, config: configs[`${host}/${p.id}`] }))),
+      git,
       trackers,
     }),
-    [settings, appVersion, claudeInstalled, hosts, workspaces, projects, profiles, phones, configs, trackers],
+    [settings, appVersion, claudeInstalled, hosts, workspaces, projects, profiles, phones, configs, git, trackers],
   );
 }
 

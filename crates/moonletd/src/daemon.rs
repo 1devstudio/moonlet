@@ -12,7 +12,7 @@ use moonlet_core::chat::runtime::{ChatCreate, ChatManager, chats_dir};
 use moonlet_core::session::SessionManager;
 use moonlet_core::terminal::TerminalManager;
 use moonlet_core::terminal_read::{self, TerminalReads};
-use moonlet_core::{fs, git};
+use moonlet_core::{fs, git, git_settings};
 use moonlet_proto::methods as m;
 use moonlet_proto::types::DaemonInfo;
 use moonlet_proto::{Message, PROTOCOL_VERSION, RpcError};
@@ -764,6 +764,8 @@ impl Daemon {
                     .await
                     .map_err(internal)?)
             }
+            m::GIT_SETTINGS => ok(git_settings::load(&git_settings::path())),
+            m::GIT_SET_SETTINGS => ok(git_settings::update(&git_settings::path(), p).map_err(internal)?),
             m::GIT_ORIGIN_URL => {
                 let r: m::GitPath = params(p)?;
                 ok(git::origin_url(&path(&r.path)).await)

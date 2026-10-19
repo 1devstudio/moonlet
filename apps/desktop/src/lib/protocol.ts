@@ -201,6 +201,14 @@ export interface Project {
   base_branch: string;
 }
 
+/** A host's Git settings, kept by its daemon in `~/.moonlet/git.toml` (X55). */
+export interface GitSettings {
+  /** How the Commit dialog's "Stage all changes first" starts. */
+  stage_all: boolean;
+  /** How the Create pull request dialog's "Draft" starts. */
+  draft_prs: boolean;
+}
+
 export interface ProjectConfig {
   setup?: string | null;
   run?: string | null;
@@ -612,6 +620,8 @@ export const M = {
   gitBaseStatus: "git.base_status",
   gitPullBase: "git.pull_base",
   gitOriginUrl: "git.origin_url",
+  gitSettings: "git.settings",
+  gitSetSettings: "git.set_settings",
   prCreate: "gh.pr_create",
   ghIssues: "gh.issues",
   shellHistory: "shell.history",
