@@ -14,6 +14,7 @@ import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { fileMention } from "../lib/plusMenu";
+import { fromOtherDialog } from "../lib/modal";
 
 
 interface Choice {
@@ -285,6 +286,18 @@ export function Composer({
 
   useEffect(() => ta.current?.focus(), []);
 
+  // Esc closes the composer wherever the focus is: a pick or an undo button
+  // that goes away leaves it on the page. Menus stop their own Esc before it
+  // bubbles here; a dialog on top handles its own.
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !fromOtherDialog(e, panel.current)) close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // The branch a task names (X44 template); an adopted worktree keeps its own.
   // Create waits for it, so a quick ⌘↵ still gets the task's branch.
   const taskBranchLoad = useRef<Promise<string | null>>(Promise.resolve(null));
@@ -420,10 +433,8 @@ export function Composer({
         role="dialog"
         aria-label="New session"
         className="w-[min(720px,90vw)] rounded-2xl border border-border-strong bg-[#1f1f1f] shadow-2xl"
+        ref={panel}
         onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") close();
-        }}
       >
         <div role="group" aria-label="Project and task" className="flex items-center gap-2.5 border-b border-border py-3 pl-6 pr-4">
           <Menu
