@@ -14,6 +14,8 @@ const PRS = JSON.stringify([
 ]);
 const ISSUES = JSON.stringify([{ number: 57, title: "Terminal flickers when resizing a split", body: "Resizing a split redraws the whole terminal.", url: "https://github.com/acme/storefront/issues/57" }]);
 
+// While this file exists, gh answers the issue list late (a slow network).
+const slowIssues = join(w.root, "gh-slow-issues");
 const dialog = '//div[@role="dialog"][@aria-label="New session"]';
 const header = `${dialog}//div[@role="group"][@aria-label="Project and task"]`;
 const row = `${dialog}//div[@role="group"][@aria-label="Branch"]`;
@@ -29,11 +31,12 @@ describe("new session composer (X54)", () => {
     earlierGh = existsSync(fakeGh) ? readFileSync(fakeGh, "utf8") : null;
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "pr list" ]; then cat <<'JSON'\n${PRS}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "pr list" ]; then cat <<'JSON'\n${PRS}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue list" ] && [ -e "${slowIssues}" ]; then sleep 2; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
   });
   after(async () => {
+    rmSync(slowIssues, { force: true });
     if (earlierGh === null) rmSync(fakeGh, { force: true });
     else writeFileSync(fakeGh, earlierGh);
     await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId(w));
@@ -52,6 +55,12 @@ describe("new session composer (X54)", () => {
     await expect($(`${row}//span[normalize-space()="New branch"]/following-sibling::span[normalize-space()="from main"]`)).toBeDisplayed();
     await expect($(`${row}//button[@title="Branch options"]`)).toBeDisplayed();
     await expect($(`${header}//button[@title="Branch options"]`)).not.toBeExisting();
+    // The header reads: the project, a separator, then the source picker at the right end.
+    const x = async (xpath: string) => (await $(xpath).getLocation()).x;
+    const project = await x(`${header}//button[starts-with(normalize-space(), "e2e-repo")]`);
+    const separator = await x(`${header}/span[normalize-space()="|"]`);
+    const picker = await x(`${header}//button[@title="Start from a GitHub issue or pull request"]`);
+    expect(project < separator && separator < picker).toBe(true);
   });
 
   it("asks for a ref inside the branch row, and × goes back to the base", async () => {
@@ -79,5 +88,21 @@ describe("new session composer (X54)", () => {
     // The undo button goes, the focus stays in the composer: esc closes it.
     await browser.keys("Escape");
     await expect($(dialog)).not.toBeExisting();
+  });
+
+  it("drops a list that arrives after a switch to the other tab: no issue shows as a pull request", async () => {
+    writeFileSync(slowIssues, "");
+    try {
+      await open();
+      // The picker opens on Issues, whose list comes 2 s late; Pull requests' comes at once.
+      await $(`${header}//button[@title="Start from a GitHub issue or pull request"]`).click();
+      await $('//button[normalize-space()="Pull requests"]').click();
+      await expect($('//button[.//span[normalize-space()="#214"]]')).toBeDisplayed();
+      await browser.pause(3000);
+      await expect($('//button[.//span[normalize-space()="#57"]]')).not.toBeExisting();
+      await expect($('//button[.//span[normalize-space()="#214"]]')).toBeDisplayed();
+    } finally {
+      rmSync(slowIssues, { force: true });
+    }
   });
 });
