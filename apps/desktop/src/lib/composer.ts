@@ -1,4 +1,7 @@
-// The new-session composer's decisions (X54): what its branch row says.
+// The new-session composer's decisions (X54): what its branch row says, and
+// the attachments it sends before the user's text.
+
+import type { IssueRef } from "./protocol";
 
 /** What the composer knows about where the session's branch comes from. */
 export interface BranchFacts {
@@ -39,4 +42,111 @@ export function branchRow(f: BranchFacts): BranchRow {
   const name = f.task ? (f.taskBranch ?? "…") : null;
   if (f.from) return { kind: "branch", name, detail: `from ${f.from.ref}`, clear: `Start from ${f.base} instead` };
   return { kind: "branch", name, detail: `from ${f.base}`, clear: null };
+}
+
+/** What the composer has to send besides the user's text. */
+export interface AttachFacts {
+  task: { key: string; title: string; description: string; firstMessage: string } | null;
+  issue: IssueRef | null;
+  /** A picked PR whose attachment the user kept. */
+  pr: IssueRef | null;
+  /** The PR's description, reviews and comments (`gh.pr_context`), once read. */
+  prContext: string | null;
+}
+
+/**
+ * A folded attachment above the prompt: its line reads `mono`, `before` (muted),
+ * `strong` (fg) and `after` (muted); `body` shows unfolded; `remove` is the ×'s
+ * title, null when it has none; `message` is what Create sends.
+ */
+export interface Attachment {
+  id: "task" | "issue" | "pr";
+  icon: "file" | "pr";
+  mono: string | null;
+  before: string | null;
+  strong: string;
+  after: string | null;
+  body: string;
+  remove: string | null;
+  message: string;
+}
+
+/** A description's first line of text, without its Markdown markers. */
+function firstLine(markdown: string): string {
+  const line = markdown.split("\n").find((l) => l.trim()) ?? "";
+  return line.replace(/^\s*(?:#+|>|[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "").trim();
+}
+
+export function attachments(f: AttachFacts): Attachment[] {
+  const out: Attachment[] = [];
+  if (f.task) {
+    const t = f.task;
+    out.push({
+      id: "task",
+      icon: "file",
+      mono: null,
+      before: t.description ? `${t.key} description sent with your message · ` : `${t.key} sent with your message · `,
+      strong: firstLine(t.description) || t.title,
+      after: null,
+      body: t.description,
+      remove: null,
+      message: t.firstMessage,
+    });
+  }
+  if (f.issue) {
+    const i = f.issue;
+    out.push({
+      id: "issue",
+      icon: "file",
+      mono: `#${i.number}`,
+      before: null,
+      strong: i.title,
+      after: f.task ? " · GitHub issue, sent too" : " · GitHub issue",
+      body: i.body.trim(),
+      remove: `Remove #${i.number}`,
+      message: paragraphs(`#${i.number} · ${i.title}`, i.body, i.url),
+    });
+  }
+  if (f.pr) {
+    const p = f.pr;
+    const body = (f.prContext ?? p.body).trim();
+    out.push({
+      id: "pr",
+      icon: "pr",
+      mono: null,
+      before: `PR #${p.number} description and review comments · `,
+      strong: p.title,
+      after: null,
+      body,
+      remove: "Don’t send the PR description",
+      message: paragraphs(`PR #${p.number} · ${p.title}`, body, p.url),
+    });
+  }
+  return out;
+}
+
+/** Non-empty parts, trimmed, a blank line apart. */
+const paragraphs = (...parts: string[]) =>
+  parts
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .join("\n\n");
+
+/** What Create sends first: the attachments, then the user's text; null for neither. */
+export function firstMessage(sent: Attachment[], typed: string): string | null {
+  return paragraphs(...sent.map((a) => a.message), typed) || null;
+}
+
+/** The prompt's placeholder, by what is attached. */
+export function placeholder(has: { task: boolean; issue: boolean; pr: boolean }): string {
+  if (has.task && has.pr) return "Anything to add? e.g. “Address the review comments”";
+  if (has.task && has.issue) return "Anything to add?";
+  if (has.task || has.issue) return "Anything to add? Leave empty to start from the issue.";
+  if (has.pr) return "What should the agent do on this PR? e.g. “Address the review comments”";
+  return "What do you want to work on?";
+}
+
+/** The session's name: the task's title, else the PR's, else the issue's; null names it after the prompt (X5). */
+export function sessionName(f: { task: { title: string } | null; pr: { title: string } | null; issue: { title: string } | null }): string | null {
+  return f.task?.title ?? f.pr?.title ?? f.issue?.title ?? null;
 }

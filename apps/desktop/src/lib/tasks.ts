@@ -187,8 +187,10 @@ export interface TaskStart {
   title: string;
   /** GitHub's issue number, for the `{number}` branch template. */
   number?: number;
-  /** `<key> · <title>` and the description, which the user can edit before sending. */
+  /** `<key> · <title>` and the description: what Create sends before the user's text (X54). */
   firstMessage: string;
+  /** The description, trimmed, for the composer's folded attachment (X54). */
+  description: string;
   /**
    * The projects to start in: the one whose GitHub repository the issue is
    * in, or those whose Project settings link the issue's tracker project (X44).
@@ -227,6 +229,7 @@ export function taskStart(task: Task, repos: Record<string, string | null>, sour
     title: task.title,
     number: task.github?.number,
     firstMessage: `${task.key} · ${task.title}${description ? `\n${description}` : ""}`,
+    description,
     projects: repo ? Object.keys(repos).filter((id) => repos[id]?.toLowerCase() === repo).slice(0, 1) : task.tracker ? (sourceProjects[sourceKey(task.connection, task.tracker.source)] ?? []) : [],
     ...(task.github && { github: { repo: task.github.repo, number: task.github.number } }),
     ...(task.tracker && { tracker: { id: task.tracker.id, source: task.tracker.source } }),

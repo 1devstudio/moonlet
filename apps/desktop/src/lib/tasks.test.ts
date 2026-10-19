@@ -152,6 +152,8 @@ describe("taskStart (X46 starting a session from a task)", () => {
       title: "`gh skill install` can't find skills",
       number: 13876,
       firstMessage: "cli/cli#13876 · `gh skill install` can't find skills\n### Describe the bug\nSkills are not found.",
+      // The composer's folded attachment shows it (X54).
+      description: "### Describe the bug\nSkills are not found.",
       projects: ["cli"],
       issueType: "bug",
       github: { repo: "cli/cli", number: 13876 },
