@@ -617,6 +617,7 @@ export const M = {
   shellHistory: "shell.history",
   shellCommands: "shell.commands",
   ghPrs: "gh.prs",
+  ghPrContext: "gh.pr_context",
   ghTasks: "gh.tasks",
   ghProjects: "gh.projects",
   ghProjectItems: "gh.project_items",

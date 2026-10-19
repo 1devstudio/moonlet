@@ -5,7 +5,7 @@ import { hostsApi, rpc } from "../lib/daemon";
 import type { TaskStart } from "../lib/tasks";
 import { branchUser, leaveTasksMode, startedFromTask } from "../lib/tasksStore";
 import { composerOptions, composerPick, composerProjects, composerTarget } from "../lib/workspaces";
-import { attachments, branchRow, firstMessage, placeholder, sessionName, type Attachment } from "../lib/composer";
+import { attachments, branchRow, firstMessage, pickerHint, placeholder, sessionName, type Attachment } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
@@ -44,7 +44,20 @@ function saveChoice(projectId: string, c: Choice) {
 }
 
 /** Issue / PR picker behind the pull request icon (X54). */
-function SourcePicker({ host, project, onIssue, onPr }: { host: string; project: Project; onIssue: (i: IssueRef) => void; onPr: (p: IssueRef) => void }) {
+function SourcePicker({
+  host,
+  project,
+  hint,
+  onIssue,
+  onPr,
+}: {
+  host: string;
+  project: Project;
+  /** What picking from a tab does (X54). */
+  hint: (tab: "issue" | "pr") => string;
+  onIssue: (i: IssueRef) => void;
+  onPr: (p: IssueRef) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"issue" | "pr">("issue");
   const [q, setQ] = useState("");
@@ -95,7 +108,7 @@ function SourcePicker({ host, project, onIssue, onPr }: { host: string; project:
               {shown.map((i) => (
                 <button
                   key={i.number}
-                  className="flex w-full items-start gap-2 rounded-md px-3 py-2 text-left hover:bg-hover"
+                  className="flex w-full items-start gap-2 rounded-md px-3 py-2 text-left hover:bg-[#2a2a2a]"
                   onClick={() => {
                     setOpen(false);
                     if (tab === "issue") onIssue(i);
@@ -110,6 +123,10 @@ function SourcePicker({ host, project, onIssue, onPr }: { host: string; project:
                 </button>
               ))}
               {items && shown.length === 0 && <div className="p-3 ui-text-13 text-faint">Nothing open.</div>}
+            </div>
+            <div className="flex items-start gap-2 border-t border-border px-3 py-[9px] ui-text-12 leading-[1.45] text-faint">
+              {tab === "pr" ? <GitBranch size={12} className="mt-0.5 shrink-0" /> : <FileText size={12} className="mt-0.5 shrink-0" />}
+              <span>{hint(tab)}</span>
             </div>
           </div>
         </>
@@ -304,6 +321,8 @@ export function Composer({
   // The picked PR's attachment, kept unless the user removes it (X54).
   const [prSend, setPrSend] = useState(true);
   const [prContext, setPrContext] = useState<string | null>(null);
+  /** The PR whose context is awaited: a later pick wins. */
+  const prPick = useRef<number | null>(null);
   // A picked issue's attachment is outlined for a moment (X54).
   const [flash, setFlash] = useState(false);
   const [addDirs, setAddDirs] = useState<string[]>([]);
@@ -518,6 +537,7 @@ export function Composer({
             <SourcePicker
               host={current.host}
               project={current.project}
+              hint={(tab) => pickerHint(tab, task && { key: task.key, branch: taskBranch }, current.project.base_branch)}
               onIssue={(i) => {
                 setIssue(i);
                 ta.current?.focus();
@@ -527,6 +547,11 @@ export function Composer({
                 setPrSend(true);
                 setPrContext(null);
                 setFrom(null);
+                // Its reviews and comments, once read; the list's description until then (X54).
+                prPick.current = p.number;
+                void rpc<string>(current.host, M.ghPrContext, { path: current.project.path, number: p.number })
+                  .then((text) => prPick.current === p.number && setPrContext(text))
+                  .catch(() => {});
                 ta.current?.focus();
               }}
             />
