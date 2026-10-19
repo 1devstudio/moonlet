@@ -116,6 +116,12 @@ pub struct GitSettings {
     pub branch_prefix: String,
     /// Where a new session's branch starts when not given.
     pub start_from: StartFrom,
+    /// What archiving a session does with its worktree folder.
+    pub archive_worktree: WorktreeOnArchive,
+    /// What archiving a session does with its local branch.
+    pub archive_branch: BranchOnArchive,
+    /// Also delete a merged PR's branch on origin when it is deleted here.
+    pub delete_remote_branch: bool,
     /// How the Commit dialog's "Stage all changes first" starts.
     pub stage_all: bool,
     /// How the Create pull request dialog's "Draft" starts.
@@ -132,6 +138,9 @@ impl Default for GitSettings {
         Self {
             branch_prefix: "moonlet/".into(),
             start_from: StartFrom::Local,
+            archive_worktree: WorktreeOnArchive::Remove,
+            archive_branch: BranchOnArchive::Merged,
+            delete_remote_branch: false,
             stage_all: true,
             draft_prs: false,
             fetch_minutes: 5,
@@ -149,6 +158,39 @@ pub enum StartFrom {
     Local,
     /// `origin/<base>`, fetched first; the local base when the fetch fails.
     Origin,
+}
+
+/// What archiving does with a session's worktree folder (X55).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorktreeOnArchive {
+    #[default]
+    Remove,
+    /// It stays on disk; unarchiving reuses it.
+    Keep,
+}
+
+/// What archiving does with a session's local branch (X55). The app
+/// decides from it and the session's PR, then asks `session.archive`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BranchOnArchive {
+    /// The archive prompt's "Also delete the branch".
+    Ask,
+    Keep,
+    /// Deleted when its PR merged, kept otherwise.
+    #[default]
+    Merged,
+    Always,
+}
+
+/// `session.archive`'s result (X55).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionArchived {
+    /// Why the branch could not be deleted on origin; the session is
+    /// archived anyway.
+    #[serde(default)]
+    pub remote_error: Option<String>,
 }
 
 /// Per-repo settings, read from `<repo>/.moonlet/config.toml`.

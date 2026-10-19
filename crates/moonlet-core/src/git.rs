@@ -858,6 +858,12 @@ pub async fn worktree_remove(repo: &Path, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Deletes `branch` on origin, as GitHub's "Delete branch" would (X55).
+pub async fn delete_remote_branch(repo: &Path, branch: &str) -> Result<()> {
+    git(repo, &["push", "--quiet", "--delete", "--", "origin", branch]).await?;
+    Ok(())
+}
+
 pub async fn delete_branch(repo: &Path, branch: &str) -> Result<()> {
     git(repo, &["branch", "-D", branch]).await?;
     Ok(())
