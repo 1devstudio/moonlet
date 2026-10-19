@@ -3,7 +3,7 @@
 
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeFile, cycleFocus, openFile, splitLeaf, tabOf } from "./layout";
-import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived } from "./protocol";
+import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type UnpushedWork } from "./protocol";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
 import { arrange, hostSections, lastActive } from "./sidebar";
 import { isShown } from "./workspaces";
@@ -11,8 +11,8 @@ import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured, tabAgent } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
-import { archivePrompt, askConfirm } from "./confirm";
-import { archiveFlags, archivePlan, gitSettingsOf } from "./gitSettings";
+import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
+import { archiveFlags, archivePlan, gitSettingsOf, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
 import { toggleTasksMode } from "./tasksStore";
 
@@ -283,10 +283,23 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   if (!c) return;
   const s = useStore.getState();
   const base = s.projects[c.host]?.find((p) => p.id === c.ws.project_id)?.base_branch ?? c.ws.base;
-  const plan = archivePlan(gitSettingsOf(s.gitSettings, c.host), s.prs[sesKey(c.host, c.ws.id)]?.state, c.ws.branch, base);
-  const answer = await askConfirm(archivePrompt(c.ws.name, plan));
+  const git = gitSettingsOf(s.gitSettings, c.host);
+  const plan = archivePlan(git, s.prs[sesKey(c.host, c.ws.id)]?.state, c.ws.branch, base);
+  // Work only on this machine that the archive would take (X55).
+  const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.host);
+  const work = git.warn_unpushed ? await rpc<UnpushedWork>(c.host, M.gitUnpushed, { path: c.ws.path }).catch(() => null) : null;
+  const view = work && unpushedView(work, plan, c.ws.branch, where);
+  const answer = await askConfirm(view ? unpushedPrompt(c.ws.name, plan, view) : archivePrompt(c.ws.name, plan));
   if (!answer) return;
   const flags = archiveFlags(plan, answer.checked);
+  if (answer.alt) {
+    try {
+      await rpc(c.host, M.gitPush, { path: c.ws.path });
+    } catch (e) {
+      errorToast(e);
+      return;
+    }
+  }
   // Close its views first: they would reload while the worktree is deleted.
   const sel = useStore.getState().selected;
   const wasSelected = sel?.host === c.host && sel.session === c.ws.id;

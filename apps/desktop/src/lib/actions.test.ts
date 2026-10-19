@@ -10,9 +10,9 @@ const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", () => ({ rpc: daemon.rpc, sendInput: vi.fn() }));
 
 // Answers the confirm modal as soon as it opens, like a click on its buttons.
-let reply = { ok: true, checked: false };
+let reply: { ok: boolean; checked: boolean; alt?: boolean } = { ok: true, checked: false };
 useStore.subscribe((s) => {
-  if (s.confirm) answerConfirm(reply.ok, reply.checked);
+  if (s.confirm) answerConfirm(reply.ok, reply.checked, reply.alt);
 });
 
 const ws: Session = {
@@ -29,9 +29,15 @@ const ws: Session = {
   layout: null,
 };
 
+/** The daemon: nothing unpushed, and `archive` for session.archive. */
+const answers = (archive: unknown, unpushed: unknown = { files: [], commits: 0, upstream: null }) =>
+  daemon.rpc.mockImplementation(async (_host: string, method: string) => (method === "git.unpushed" ? unpushed : method === "session.archive" ? archive : true));
+const archived = () => daemon.rpc.mock.calls.filter((c) => c[1] === "session.archive");
+
 describe("archiveSession", () => {
   beforeEach(() => {
     daemon.rpc.mockReset();
+    answers(undefined);
     useStore.setState({
       sessions: { local: [ws] },
       selected: { host: "local", session: "s1" },
@@ -46,7 +52,6 @@ describe("archiveSession", () => {
   afterEach(() => vi.useRealTimers());
 
   it("keeps the branch unless the modal's box is checked", async () => {
-    daemon.rpc.mockResolvedValue(undefined);
     const done = archiveSession();
     await vi.runAllTimersAsync();
     await done;
@@ -54,7 +59,6 @@ describe("archiveSession", () => {
   });
 
   it("deletes the branch too when the modal's box is checked", async () => {
-    daemon.rpc.mockResolvedValue(undefined);
     reply = { ok: true, checked: true };
     const done = archiveSession();
     await vi.runAllTimersAsync();
@@ -65,7 +69,7 @@ describe("archiveSession", () => {
   const merged: PullRequest = { number: 7, url: "", state: "merged", title: "s1", checks: [], review_decision: null };
 
   it("deletes a merged PR's branch without asking, by default (X55)", async () => {
-    daemon.rpc.mockResolvedValue({ remote_error: null });
+    answers({ remote_error: null });
     useStore.setState({ gitSettings: {}, prs: { "local/s1": merged } });
     const done = archiveSession();
     await vi.runAllTimersAsync();
@@ -74,7 +78,7 @@ describe("archiveSession", () => {
   });
 
   it("says when origin refused to delete the branch (X55)", async () => {
-    daemon.rpc.mockResolvedValue({ remote_error: "remote rejected" });
+    answers({ remote_error: "remote rejected" });
     useStore.setState({ gitSettings: { local: { ...DEFAULT_GIT_SETTINGS, delete_remote_branch: true } }, prs: { "local/s1": merged } });
     // Toasts go away on a timer; keep every one shown.
     const shown = new Set<string>();
@@ -87,10 +91,40 @@ describe("archiveSession", () => {
     expect([...shown]).toContain("Couldn't delete moonlet/s1 on origin: remote rejected");
   });
 
+  it("pushes first when asked to, then archives (X55)", async () => {
+    answers({ remote_error: null }, { files: [], commits: 2, upstream: null });
+    reply = { ok: true, checked: false, alt: true };
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["git.unpushed", "git.push", "session.archive"]);
+  });
+
+  it("archives nothing when the push fails (X55)", async () => {
+    daemon.rpc.mockImplementation(async (_h: string, method: string) => {
+      if (method === "git.unpushed") return { files: [], commits: 2, upstream: null };
+      if (method === "git.push") throw new Error("rejected");
+      return true;
+    });
+    reply = { ok: true, checked: false, alt: true };
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(archived()).toEqual([]);
+  });
+
+  it("doesn't look for unpushed work with the warning off (X55)", async () => {
+    useStore.setState({ gitSettings: { local: { ...DEFAULT_GIT_SETTINGS, archive_branch: "ask", warn_unpushed: false } } });
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["session.archive"]);
+  });
+
   it("does nothing when the modal is cancelled", async () => {
     reply = { ok: false, checked: true };
     await archiveSession();
-    expect(daemon.rpc).not.toHaveBeenCalled();
+    expect(archived()).toEqual([]);
     expect(useStore.getState().selected).toEqual({ host: "local", session: "s1" });
   });
 
@@ -125,7 +159,6 @@ describe("archiveSession", () => {
   });
 
   it("plays the scene for one full cycle, then folds the row away and confirms", async () => {
-    daemon.rpc.mockResolvedValue(undefined);
     const toasts = () => useStore.getState().toasts.map((t) => t.text);
     const done = archiveSession();
     await vi.advanceTimersByTimeAsync(5900);

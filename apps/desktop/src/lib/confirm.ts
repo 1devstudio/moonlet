@@ -1,7 +1,7 @@
 // In-app confirmation modal (X23): every "are you sure?" goes through
 // askConfirm, which ConfirmHost renders in the app's own style.
 
-import { archiveFlags, type ArchivePlan } from "./gitSettings";
+import { archiveFlags, type ArchivePlan, type UnpushedView } from "./gitSettings";
 import { useStore } from "./store";
 
 export type ConfirmVariant = "primary" | "danger";
@@ -16,10 +16,17 @@ export interface ConfirmOptions {
   variant?: ConfirmVariant | ((checked: boolean) => ConfirmVariant);
   /** An option shown at the footer's left, such as "Also delete the branch". */
   checkbox?: { label: string; checked?: boolean };
+  /** A second way to confirm, before the action, such as "Push, then
+   * archive"; `disabled` says why it can't be used. */
+  alt?: { label: string; disabled?: string };
+  /** Work only on this machine that the action would remove (X55). */
+  unpushed?: UnpushedView;
 }
 
 export interface ConfirmResult {
   checked: boolean;
+  /** Confirmed with `alt`. */
+  alt?: true;
 }
 
 export interface PendingConfirm {
@@ -50,11 +57,11 @@ export function askConfirm(options: ConfirmOptions): Promise<ConfirmResult | nul
 }
 
 /** Answers the open confirm: `ok` confirms, otherwise it is cancelled. */
-export function answerConfirm(ok: boolean, checked: boolean) {
+export function answerConfirm(ok: boolean, checked: boolean, alt = false) {
   const pending = useStore.getState().confirm;
   if (!pending) return;
   useStore.setState({ confirm: null });
-  pending.resolve(ok ? { checked } : null);
+  pending.resolve(ok ? (alt ? { checked, alt: true } : { checked }) : null);
 }
 
 /** What happens to the branch, after what happens to the folder. */
@@ -75,6 +82,18 @@ export function archivePrompt(name: string, plan: ArchivePlan = ASK): ConfirmOpt
     action: "Archive",
     variant: (checked) => (deleted(checked) ? "danger" : "primary"),
     ...(plan.branch === "ask" && { checkbox: { label: "Also delete the branch" } }),
+  };
+}
+
+/** The archive prompt with work that would be lost (X55): "Archive anyway",
+ * and "Push, then archive" when pushing saves it all. */
+export function unpushedPrompt(name: string, plan: ArchivePlan, view: UnpushedView): ConfirmOptions {
+  return {
+    ...archivePrompt(name, plan),
+    action: "Archive anyway",
+    variant: "danger",
+    alt: view.canPush ? { label: "Push, then archive" } : { label: "Push, then archive", disabled: "Commit the changes first" },
+    unpushed: view,
   };
 }
 

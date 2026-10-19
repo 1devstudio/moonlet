@@ -87,6 +87,7 @@ mod tests {
         assert!(s.stage_all);
         assert!(!s.draft_prs);
         assert_eq!(s.fetch_minutes, 5);
+        assert!(s.warn_unpushed);
         assert!(!s.fast_forward_base);
     }
 
