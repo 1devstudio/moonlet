@@ -36,7 +36,8 @@ import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
 import { DoneBursts, alertFor, type BannerSettings } from "./alerts";
 import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
-import { justMerged, pullToast, type FetchInfo } from "./baseSync";
+import { autoPulls, fetchDue, justMerged, pullToast, type FetchInfo } from "./baseSync";
+import { gitSettingsOf } from "./gitSettings";
 import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
@@ -561,6 +562,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     // Events may have been missed while disconnected: reload open chats.
     for (const t of terminals) if (t.chat) void loadChat(host, t.id).catch(() => {});
     void refreshAllGit(host).then(() => refreshPrs(host));
+    timedFetch[host] = Date.now();
     void refreshAllBases(host, { fetch: true });
     void refreshAvatars(host);
     void loadGitSettings(host);
@@ -775,6 +777,7 @@ export async function refreshBase(host: string, projectId: string, opts: { fetch
       ...(opts.fetch && { fetchError: status?.fetch_error ?? null }),
       ...(fetched && { fetchedAt: Date.now(), reason: opts.reason ?? null }),
     });
+    if (fetched && autoPulls(status, !!get().base[projKey(host, p.id)]?.pulling, gitSettingsOf(get().gitSettings, host).fast_forward_base)) void pullBase(host, p.id);
   } catch {
     /* the project folder is gone or the host disconnected */
   }
@@ -809,6 +812,16 @@ export async function setGitSettings(host: string, patch: Partial<GitSettings>) 
     errorToast(e);
     void loadGitSettings(host);
   }
+}
+
+/** When each host's projects last fetched on the timer (X55). */
+const timedFetch: Record<string, number> = {};
+
+/** Fetches the host's base branches if its "Fetch from origin" interval passed. */
+function fetchBasesIfDue(host: string, now: number) {
+  if (!fetchDue(timedFetch[host], gitSettingsOf(get().gitSettings, host).fetch_minutes, now)) return;
+  timedFetch[host] = now;
+  void refreshAllBases(host, { fetch: true });
 }
 
 export async function refreshAllBases(host: string, opts: { fetch?: boolean } = {}) {
@@ -1102,8 +1115,11 @@ export async function startStore() {
   });
   setInterval(() => {
     for (const h of Object.keys(get().sessions)) void refreshPrs(h);
-    for (const h of Object.keys(get().projects)) void refreshAllBases(h, { fetch: true });
   }, 300_000);
+  // Each host fetches at its own Git settings' interval (X55).
+  setInterval(() => {
+    for (const h of Object.keys(get().projects)) fetchBasesIfDue(h, Date.now());
+  }, 30_000);
   setInterval(() => {
     for (const h of Object.keys(get().sessions)) void refreshPrs(h, { openOnly: true });
   }, 60_000);

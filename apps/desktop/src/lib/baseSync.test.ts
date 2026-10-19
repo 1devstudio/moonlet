@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, justMerged, pullPopoverPlacement, pullToast, rebaseCommand } from "./baseSync";
+import { aheadText, autoPulls, baseChip, fetchDue, behindHeadline, chipClick, fetchedLabel, justMerged, pullPopoverPlacement, pullToast, rebaseCommand } from "./baseSync";
 import type { BaseStatus } from "./protocol";
 
 const status = (ahead: number, behind: number): BaseStatus => ({
@@ -117,5 +117,35 @@ describe("justMerged", () => {
     expect(justMerged(undefined, pr("merged"))).toBe(false);
     expect(justMerged(pr("open"), pr("closed"))).toBe(false);
     expect(justMerged(pr("open"), null)).toBe(false);
+  });
+});
+
+describe("fetching on a timer (X55)", () => {
+  const min = 60_000;
+  it("fetches a host the first time, then once its interval passed", () => {
+    expect(fetchDue(undefined, 5, 0)).toBe(true);
+    expect(fetchDue(0, 5, 4 * min)).toBe(false);
+    expect(fetchDue(0, 5, 5 * min)).toBe(true);
+    expect(fetchDue(0, 15, 10 * min)).toBe(false);
+    expect(fetchDue(0, 15, 15 * min)).toBe(true);
+  });
+
+  it("never fetches a host set to Manually", () => {
+    expect(fetchDue(undefined, 0, 0)).toBe(false);
+    expect(fetchDue(0, 0, 60 * min)).toBe(false);
+  });
+});
+
+describe("autoPulls (X55)", () => {
+  it("pulls a branch that is only behind, when the host fast-forwards automatically", () => {
+    expect(autoPulls(status(0, 3), false, true)).toBe(true);
+    expect(autoPulls(status(0, 3), false, false)).toBe(false);
+  });
+
+  it("leaves a diverged, current or pulling branch alone", () => {
+    expect(autoPulls(status(1, 3), false, true)).toBe(false);
+    expect(autoPulls(status(0, 0), false, true)).toBe(false);
+    expect(autoPulls(status(0, 3), true, true)).toBe(false);
+    expect(autoPulls(null, false, true)).toBe(false);
   });
 });

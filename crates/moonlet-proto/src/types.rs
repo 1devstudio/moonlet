@@ -120,6 +120,11 @@ pub struct GitSettings {
     pub stage_all: bool,
     /// How the Create pull request dialog's "Draft" starts.
     pub draft_prs: bool,
+    /// How often projects fetch their base branch from origin; 0: only
+    /// when asked.
+    pub fetch_minutes: u32,
+    /// Pull a base branch that is only behind origin without a click.
+    pub fast_forward_base: bool,
 }
 
 impl Default for GitSettings {
@@ -129,6 +134,8 @@ impl Default for GitSettings {
             start_from: StartFrom::Local,
             stage_all: true,
             draft_prs: false,
+            fetch_minutes: 5,
+            fast_forward_base: false,
         }
     }
 }

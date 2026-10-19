@@ -86,6 +86,8 @@ mod tests {
         let s = load(&dir.path().join("git.toml"));
         assert!(s.stage_all);
         assert!(!s.draft_prs);
+        assert_eq!(s.fetch_minutes, 5);
+        assert!(!s.fast_forward_base);
     }
 
     #[test]

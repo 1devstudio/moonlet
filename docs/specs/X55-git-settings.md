@@ -60,8 +60,8 @@ Settings gains a **Git** page under App: how new sessions name and start their b
 
 ### Keeping base branches current
 
-- [ ] "Fetch from origin": 5 min (default), 15 min, Manually. Projects on that host fetch their base branch at that interval; Manually never fetches on a timer (the chip's own refresh and a session's PR merging still fetch).
-- [ ] "Fast-forward base branches automatically" (default off): after a fetch finds the base branch only behind origin, moonlet pulls it as the ↓ chip would, and shows "Pulled <n> commits into main". A diverged branch keeps its chip.
+- [x] "Fetch from origin": 5 min (default), 15 min, Manually. Projects on that host fetch their base branch at that interval; Manually never fetches on a timer (connecting to the host and a session's PR merging still fetch).
+- [x] "Fast-forward base branches automatically" (default off): after a fetch finds the base branch only behind origin, moonlet pulls it as the ↓ chip would, with the chip's toast ("Pulled 3 commits into main. New sessions start from …"). A diverged branch keeps its chip.
 
 ## UI
 

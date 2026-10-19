@@ -5,11 +5,11 @@ import { useEffect, useId, useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Folder, GitBranch } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { branchPreview, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "../../lib/gitSettings";
+import { branchPreview, fetchOptions, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "../../lib/gitSettings";
 import { M, type DaemonInfo, type GitSettings } from "../../lib/protocol";
 import { errorToast, setGitSettings, useStore } from "../../lib/store";
 import { Button, cx } from "../ui";
-import { Card, PageHeading, Section, Segmented, SwitchRow, fieldCls, radioProps } from "./controls";
+import { Card, PageHeading, Row, Section, Segmented, SwitchRow, fieldCls, radioProps } from "./controls";
 
 function HostSwitch({ host, onChange }: { host: string; onChange: (host: string) => void }) {
   const hosts = useStore((s) => s.hosts);
@@ -157,6 +157,8 @@ export function GitPage() {
   const g = gitSettingsOf({ [host]: stored }, host);
   const tooOld = stored === null;
   const set = (patch: Parameters<typeof setGitSettings>[1]) => void setGitSettings(host, patch);
+  const fetchId = useId();
+
   return (
     <>
       <PageHeading title="Git" aside={<HostSwitch host={host} onChange={setPicked} />}>
@@ -174,6 +176,21 @@ export function GitPage() {
         <Card>
           <SwitchRow setting="git-stage-all" label="Stage all changes before committing" hint="The Commit dialog's checkbox starts this way." on={g.stage_all} disabled={tooOld} onChange={(on) => set({ stage_all: on })} />
           <SwitchRow setting="git-draft-prs" label="Open pull requests as drafts" hint="Create pull request's Draft checkbox starts this way." on={g.draft_prs} disabled={tooOld} onChange={(on) => set({ draft_prs: on })} />
+        </Card>
+      </Section>
+      <Section title="Keeping base branches current">
+        <Card>
+          <Row setting="git-fetch" label="Fetch from origin" labelId={fetchId} hint="For the ↓ chip next to a project. Also after a session's PR merges.">
+            <Segmented value={String(g.fetch_minutes)} options={fetchOptions(g.fetch_minutes)} onChange={(v) => !tooOld && set({ fetch_minutes: Number(v) })} labelledBy={fetchId} />
+          </Row>
+          <SwitchRow
+            setting="git-fast-forward"
+            label="Fast-forward base branches automatically"
+            hint={<>When {mono("main")} is only behind origin, pull it without a click. A diverged branch still waits for you.</>}
+            on={g.fast_forward_base}
+            disabled={tooOld}
+            onChange={(on) => set({ fast_forward_base: on })}
+          />
         </Card>
       </Section>
     </>
