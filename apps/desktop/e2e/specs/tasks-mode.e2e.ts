@@ -90,7 +90,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *addProjectV2ItemById*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-add.json")}'; exit 0;; *"/issues -X POST"*) echo "$@" >> "${ghLog}"; sed -e 's#issues/1"#issues/57"#g' -e 's/"number": 1,/"number": 57,/' -e 's#acme/web#acme/storefront#g' '${ghFixture("gh-issue-create.json")}'; exit 0;; "api user --jq .login") echo sam-rivera; exit 0;; *"/assignees?per_page=100") cat '${ghFixture("gh-assignees.json")}'; exit 0;; *"/labels?per_page=100") cat '${ghFixture("gh-labels.json")}'; exit 0;; "api repos/acme/storefront") cat '${ghFixture("gh-repo-permissions.json")}'; exit 0;; *clearProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-clear.json")}'; exit 0;; *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ] || [ "$1 $2" = "issue reopen" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *addProjectV2ItemById*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-add.json")}'; exit 0;; *"/issues -X POST"*) echo "$@" >> "${ghLog}"; sed -e 's#issues/1"#issues/57"#g' -e 's/"number": 1,/"number": 57,/' -e 's#acme/web#acme/storefront#g' '${ghFixture("gh-issue-create.json")}'; exit 0;; "api user --jq .login") echo sam-rivera; exit 0;; *"/assignees?per_page=100") cat '${ghFixture("gh-assignees.json")}'; exit 0;; *"/labels?per_page=100") cat '${ghFixture("gh-labels.json")}'; exit 0;; "api repos/acme/storefront") cat '${ghFixture("gh-repo-permissions.json")}'; exit 0;; *clearProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-clear.json")}'; exit 0;; *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -459,7 +459,7 @@ describe("Tasks mode", () => {
     await browser.keys(["Escape"]);
   });
 
-  it("shows a linked session's task above the conversation and in the Task tab, and unlinks it", async () => {
+  it("shows a linked session's task above the conversation and in the Task tab, moves its state from the tab, and unlinks it", async () => {
     await $(sel.sessionRow(LINKED)).click();
     const bar = $('//*[@role="region"][@aria-label="Task"]');
     await expect(bar.$(sel.text("acme/storefront#12"))).toBeDisplayed({ wait: 30_000 });
@@ -473,6 +473,12 @@ describe("Tasks mode", () => {
     await expect(tab.$('.//li[normalize-space()="Reproduced on Safari 18"]/*[@aria-label="Done"]')).toBeDisplayed();
     await expect(tab.$('.//a[@href="https://example.com/console.png"][normalize-space()="Image: Safari console"]')).toBeDisplayed();
     await expect(tab.$('.//*[contains(text(), "###") or contains(text(), "[x]")]')).not.toBeExisting();
+    // The issue's state moves from the tab, as from the task bar and the detail.
+    const state = '//*[@role="tabpanel"]//select[@aria-label="State of acme/storefront#12"]';
+    await choose(state, "1");
+    await browser.waitUntil(() => asked().includes("issue close 12 --reason completed"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+    await choose(state, "0");
+    await browser.waitUntil(() => asked().includes("issue reopen 12"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
     await expect($('//section[@aria-label="Sessions on this task"]').$(sel.text("this session"))).toBeDisplayed();
     await $('//*[@role="tabpanel"]//button[normalize-space()="Unlink"]').click();
     await expect(bar).not.toBeExisting({ wait: 10_000 });
