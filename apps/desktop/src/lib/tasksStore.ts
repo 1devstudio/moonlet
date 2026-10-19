@@ -1181,15 +1181,6 @@ export async function linkTask(host: string, sessionId: string, task: Task | nul
   }
 }
 
-/** Tasks mode with `task` open in the detail panel (the task bar's way back, X46). */
-export function openInTasksMode(task: Task) {
-  const s = useStore.getState();
-  const ws = shownWorkspace(s);
-  if (!ws) return;
-  useTasks.setState({ selected: `${task.connection} ${task.key}` });
-  useStore.setState({ tasksMode: { ...s.tasksMode, [wsKey(ws.host, ws.id)]: true }, showHistory: false });
-}
-
 const ACTIVITY_KEY = "tasks.activity";
 
 function readActivity(): Record<string, ActivityEntry[]> {
