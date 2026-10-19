@@ -147,8 +147,9 @@ export function firstMessage(sent: Attachment[], typed: string): string | null {
   return paragraphs(...sent.map((a) => a.message), typed) || null;
 }
 
-/** The prompt's placeholder, by what is attached. */
-export function placeholder(has: { task: boolean; issue: boolean; pr: boolean }): string {
+/** The prompt's placeholder, by what is attached (not by what is picked: a removed PR attachment says nothing). */
+export function placeholder(attached: Attachment["id"][]): string {
+  const has = { task: attached.includes("task"), issue: attached.includes("issue"), pr: attached.includes("pr") };
   if (has.task && has.pr) return "Anything to add? e.g. “Address the review comments”";
   if (has.task && has.issue) return "Anything to add?";
   if (has.task || has.issue) return "Anything to add? Leave empty to start from the issue.";
