@@ -80,4 +80,12 @@ describe("Git settings", () => {
     await $(`${commit}//button[normalize-space()="Cancel"]`).click();
     rpc(w, "git.set_settings", { stage_all: true });
   });
+
+  it("saves a typed prefix when Settings closes", async () => {
+    await openSettings("Git");
+    await fill(sel.settingsField("Branch prefix"), "closed/");
+    await closeSettings();
+    await browser.waitUntil(() => rpc<{ branch_prefix: string }>(w, "git.settings", {}).branch_prefix === "closed/", { timeoutMsg: "the prefix was lost on close" });
+    rpc(w, "git.set_settings", { branch_prefix: "moonlet/" });
+  });
 });
