@@ -1,6 +1,7 @@
 // The new-session composer's decisions (X54): what its branch row says, and
 // the attachments it sends before the user's text.
 
+import { withoutComments } from "./markdown";
 import type { IssueRef } from "./protocol";
 
 /** What the composer knows about where the session's branch comes from. */
@@ -46,7 +47,7 @@ export function branchRow(f: BranchFacts): BranchRow {
 
 /** What the composer has to send besides the user's text. */
 export interface AttachFacts {
-  task: { key: string; title: string; description: string; firstMessage: string } | null;
+  task: { key: string; title: string; description: string } | null;
   issue: IssueRef | null;
   /** A picked PR whose attachment the user kept. */
   pr: IssueRef | null;
@@ -79,18 +80,23 @@ function firstLine(markdown: string): string {
 
 export function attachments(f: AttachFacts): Attachment[] {
   const out: Attachment[] = [];
+  // Unfolded, an attachment hides HTML comments as the Task tab does; the
+  // agent gets the same text, so nothing it reads went unseen.
+  const shown = (text: string) => withoutComments(text).trim();
   if (f.task) {
     const t = f.task;
+    const description = shown(t.description);
     out.push({
       id: "task",
       icon: "file",
       mono: null,
-      before: t.description ? `${t.key} description sent with your message · ` : `${t.key} sent with your message · `,
-      strong: firstLine(t.description) || t.title,
+      before: description ? `${t.key} description sent with your message · ` : `${t.key} sent with your message · `,
+      strong: firstLine(description) || t.title,
       after: null,
-      body: t.description,
+      body: description,
       remove: null,
-      message: t.firstMessage,
+      // `<key> · <title>` and the description, as X46 sends it.
+      message: `${t.key} · ${t.title}${description ? `\n${description}` : ""}`,
     });
   }
   if (f.issue) {
@@ -102,14 +108,14 @@ export function attachments(f: AttachFacts): Attachment[] {
       before: null,
       strong: i.title,
       after: f.task ? " · GitHub issue, sent too" : " · GitHub issue",
-      body: i.body.trim(),
+      body: shown(i.body),
       remove: `Remove #${i.number}`,
-      message: paragraphs(`#${i.number} · ${i.title}`, i.body, i.url),
+      message: paragraphs(`#${i.number} · ${i.title}`, shown(i.body), i.url),
     });
   }
   if (f.pr) {
     const p = f.pr;
-    const body = (f.prContext ?? p.body).trim();
+    const body = shown(f.prContext ?? p.body);
     out.push({
       id: "pr",
       icon: "pr",
