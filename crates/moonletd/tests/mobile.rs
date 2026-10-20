@@ -479,6 +479,23 @@ async fn a_mac_pairs_and_connects_through_the_shared_tailnet_connector() {
 }
 
 #[tokio::test]
+async fn phones_route_only_to_ssh_hosts() {
+    let mac = Mac::start(None).await;
+    std::fs::write(
+        mac.home.path().join("app-hosts.json"),
+        json!({
+            "remotes": ["devbox"],
+            "tailnet": [{ "id": "studio-mini", "device_id": "d1", "addrs": ["100.101.102.103:47428"], "token": "tok" }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut app = mac.app().await;
+    let hosts: Value = app.request("mobile.hosts", json!({})).await.unwrap();
+    assert_eq!(hosts, json!([{ "id": "devbox", "label": "devbox" }]));
+}
+
+#[tokio::test]
 async fn bad_auth_is_refused_without_saying_why() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;
