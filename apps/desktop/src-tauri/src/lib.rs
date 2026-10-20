@@ -4,6 +4,7 @@
 
 mod attach;
 mod hosts;
+mod login_item;
 mod remote;
 mod secrets;
 mod shared;
