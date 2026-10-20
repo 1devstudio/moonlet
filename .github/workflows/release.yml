@@ -128,7 +128,8 @@ jobs:
           fi
           xcrun stapler staple "${dmgs[0]}"
 
-      # Every binary must carry the team's signature and the hardened runtime,
+      # The app must carry the daemon's login item agent (X56), and every
+      # binary must carry the team's signature and the hardened runtime,
       # and the app a user downloads, the DMG around it and the app inside the
       # update archive must be notarized. The notarization check asks codesign,
       # not spctl, because spctl accepts anything on a machine with Gatekeeper
@@ -139,6 +140,10 @@ jobs:
         run: |
           app=target/release/bundle/macos/moonlet.app
           codesign --verify --deep --strict --verbose=2 "$app"
+          if [ ! -f "$app/Contents/Library/LaunchAgents/dev.onedevstudio.moonlet.moonletd.plist" ]; then
+            echo "::error::the app does not carry the daemon's login item agent (X56)"
+            exit 1
+          fi
           for bin in "$app"/Contents/MacOS/*; do
             info=$(codesign -dv --verbose=2 "$bin" 2>&1 || true)
             if ! grep -q "TeamIdentifier=$TEAM_ID" <<<"$info"; then
