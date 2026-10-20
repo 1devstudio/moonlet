@@ -175,15 +175,15 @@ mod tests {
         stdin.flush().unwrap();
         // The WAL fills before the INSERT commits; the writer's answer to the
         // last statement means every row before it is in.
-        let mut stdout = std::io::BufReader::new(writer.stdout.take().unwrap());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            assert_ne!(stdout.read_line(&mut line).unwrap(), 0, "the writer quit");
-            if line == "ready\n" {
-                break;
-            }
-        }
+        let stdout = std::io::BufReader::new(writer.stdout.take().unwrap());
+        assert!(
+            stdout.lines().map(Result::unwrap).any(|l| l == "ready"),
+            "the writer quit"
+        );
+        assert!(
+            std::fs::metadata(store.join("localstorage.sqlite3-wal")).is_ok_and(|m| m.len() > 0),
+            "the row waits in the WAL"
+        );
 
         assert!(copy_if_missing(&old, &new).unwrap());
         drop(writer.stdin.take());
