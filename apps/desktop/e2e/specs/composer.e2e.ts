@@ -9,16 +9,15 @@ import { fill, projectId, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const fakeGh = join(w.root, "bin", "gh");
-// `gh pr list --json number,title,body,url,headRefName` and `gh issue list`, as gh prints them.
+// `gh pr list --json number,title,body,url,headRefName`, as gh prints it.
 const PRS = JSON.stringify([
   { number: 214, title: "Clean up the side nav before the Storefront release", body: "Drops A/B Testing and Security from the side nav.", url: "https://github.com/acme/storefront/pull/214", headRefName: "fix/side-nav-cleanup" },
 ]);
 // `gh pr view 214 --json author,body,reviews,comments`, trimmed.
 const PR_VIEW = JSON.stringify({ author: { login: "sam-rivera" }, body: "Drops A/B Testing and Security from the side nav.", reviews: [{ author: { login: "jo-park" }, authorAssociation: "MEMBER", state: "CHANGES_REQUESTED", body: "Keep Security for admins." }], comments: [] });
-const ISSUES = JSON.stringify([{ number: 57, title: "Terminal flickers when resizing a split", body: "Resizing a split redraws the whole terminal.", url: "https://github.com/acme/storefront/issues/57" }]);
 
-// While this file exists, gh answers the issue list late (a slow network).
-const slowIssues = join(w.root, "gh-slow-issues");
+// While this file exists, gh answers the PR list late (a slow network).
+const slowPrs = join(w.root, "gh-slow-prs");
 const git = (...args: string[]) => execFileSync("git", args, { cwd: w.repo, env: w.env, stdio: "pipe" });
 // The PR's head lives where `git fetch origin pull/214/head` finds it.
 const origin = join(w.root, "origin.git");
@@ -37,18 +36,25 @@ describe("new session composer (X54)", () => {
     earlierGh = existsSync(fakeGh) ? readFileSync(fakeGh, "utf8") : null;
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "pr list" ]; then cat <<'JSON'\n${PRS}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue list" ] && [ -e "${slowIssues}" ]; then sleep 2; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$*" = "pr view 214 --json author,body,reviews,comments" ]; then cat <<'JSON'\n${PR_VIEW}\nJSON\nexit 0; fi\nif [ "$1 $2 $3 $4 $5" = "pr view 214 --json headRefName" ]; then echo fix/side-nav-cleanup; exit 0; fi\nif [ "$1" = "api" ]; then echo '[]'; exit 0; fi\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "pr list" ] && [ -e "${slowPrs}" ]; then sleep 2; fi\nif [ "$1 $2" = "pr list" ]; then cat <<'JSON'\n${PRS}\nJSON\nexit 0; fi\nif [ "$*" = "pr view 214 --json author,body,reviews,comments" ]; then cat <<'JSON'\n${PR_VIEW}\nJSON\nexit 0; fi\nif [ "$1 $2 $3 $4 $5" = "pr view 214 --json headRefName" ]; then echo fix/side-nav-cleanup; exit 0; fi\nif [ "$1" = "api" ]; then echo '[]'; exit 0; fi\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     execFileSync("git", ["init", "-q", "--bare", origin], { env: w.env, stdio: "pipe" });
     git("remote", "add", "origin", `file://${origin}`);
     git("push", "-q", "origin", "main:refs/pull/214/head");
+    // A branch of the repository's own, for the Branches tab.
+    git("branch", "feature/saved-carts", "main");
   });
   after(async () => {
-    rmSync(slowIssues, { force: true });
+    rmSync(slowPrs, { force: true });
     git("remote", "remove", "origin");
     rmSync(origin, { recursive: true, force: true });
-    for (const s of rpc<{ id: string; pr?: number | null }[]>(w, "session.list", {})) if (s.pr === 214) rpc(w, "session.archive", { id: s.id });
+    for (const s of rpc<{ id: string; branch: string; pr?: number | null }[]>(w, "session.list", {})) if (s.pr === 214 || s.branch === "feature/saved-carts") rpc(w, "session.archive", { id: s.id });
+    try {
+      git("branch", "-D", "feature/saved-carts");
+    } catch {
+      // Archiving may have deleted it already.
+    }
     if (earlierGh === null) rmSync(fakeGh, { force: true });
     else writeFileSync(fakeGh, earlierGh);
     await browser.execute((id: string) => localStorage.removeItem(`moonlet.composer.${id}`), projectId(w));
@@ -71,7 +77,7 @@ describe("new session composer (X54)", () => {
     const x = async (xpath: string) => (await $(xpath).getLocation()).x;
     const project = await x(`${header}//button[starts-with(normalize-space(), "e2e-repo")]`);
     const separator = await x(`${header}/span[normalize-space()="|"]`);
-    const picker = await x(`${header}//button[@title="Start from a GitHub issue or pull request"]`);
+    const picker = await x(`${header}//button[@title="Start from a branch or pull request"]`);
     expect(project < separator && separator < picker).toBe(true);
   });
 
@@ -88,7 +94,7 @@ describe("new session composer (X54)", () => {
 
   it("turns the branch row into the PR row on a picked PR, and New branch instead undoes it", async () => {
     await open();
-    await $(`${header}//button[@title="Start from a GitHub issue or pull request"]`).click();
+    await $(`${header}//button[@title="Start from a branch or pull request"]`).click();
     await $('//button[normalize-space()="Pull requests"]').click();
     // The picker says what a pick does (X54).
     await expect($(sel.text("Picking a PR starts the session on its branch, instead of a new branch from main."))).toBeDisplayed();
@@ -111,39 +117,43 @@ describe("new session composer (X54)", () => {
     await expect($(dialog)).not.toBeExisting();
   });
 
-  it("drops a list that arrives after a switch to the other tab: no issue shows as a pull request", async () => {
-    writeFileSync(slowIssues, "");
+  it("drops a list that arrives after a switch to the other tab: no pull request shows as a branch", async () => {
+    writeFileSync(slowPrs, "");
     try {
       await open();
-      // The picker opens on Issues, whose list comes 2 s late; Pull requests' comes at once.
-      await $(`${header}//button[@title="Start from a GitHub issue or pull request"]`).click();
+      // Pull requests' list comes 2 s late; back on Branches, git's comes at once.
+      await $(`${header}//button[@title="Start from a branch or pull request"]`).click();
       await $('//button[normalize-space()="Pull requests"]').click();
-      await expect($('//button[.//span[normalize-space()="#214"]]')).toBeDisplayed();
+      await $('//button[normalize-space()="Branches"]').click();
+      await expect($('//button[.//span[normalize-space()="feature/saved-carts"]]')).toBeDisplayed();
       await browser.pause(3000);
-      await expect($('//button[.//span[normalize-space()="#57"]]')).not.toBeExisting();
-      await expect($('//button[.//span[normalize-space()="#214"]]')).toBeDisplayed();
+      await expect($('//button[.//span[normalize-space()="#214"]]')).not.toBeExisting();
+      await expect($('//button[.//span[normalize-space()="feature/saved-carts"]]')).toBeDisplayed();
     } finally {
-      rmSync(slowIssues, { force: true });
+      rmSync(slowPrs, { force: true });
     }
   });
 
-  it("adds a picked issue as an attachment whatever the prompt holds, and × removes it", async () => {
+  it("starts the session on a branch picked from the Branches tab", async () => {
+    await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "fake", model: null, effort: null })), projectId(w));
     await open();
-    await fill(`${dialog}//textarea[@placeholder="What do you want to work on?"]`, "Check Safari too.");
-    await $(`${header}//button[@title="Start from a GitHub issue or pull request"]`).click();
-    await $('//button[.//span[normalize-space()="#57"]]').click();
-    const attachment = $(`${dialog}//div[@role="group"][@aria-label="#57 Terminal flickers when resizing a split · GitHub issue"]`);
-    await expect(attachment).toBeDisplayed();
-    // What the user typed stays theirs; the placeholder speaks of the issue (X54).
-    await expect($(`${dialog}//textarea[@placeholder="Anything to add? Leave empty to start from the issue."]`)).toHaveValue("Check Safari too.");
-    await attachment.$('.//button[@title="Remove #57"]').click();
-    await expect(attachment).not.toBeExisting();
+    await $(`${header}//button[@title="Start from a branch or pull request"]`).click();
+    // The picker opens on Branches and says what a pick does (X54).
+    await expect($(sel.text("Picking a branch starts the session on it, instead of a new branch from main."))).toBeDisplayed();
+    await $('//button[.//span[normalize-space()="feature/saved-carts"]]').click();
+    await expect($(`${row}//span[normalize-space()="feature/saved-carts"]/following-sibling::span[normalize-space()="existing branch"]`)).toBeDisplayed();
+    await fill(`${dialog}//textarea`, "Saved carts for guests");
+    await $(`${dialog}${sel.button("Create")}`).click();
+
+    await expect($(sel.sessionRow("Saved carts for guests"))).toBeDisplayed({ wait: 30_000 });
+    const created = rpc<{ name: string; branch: string }[]>(w, "session.list", {}).find((s) => s.name === "Saved carts for guests");
+    expect(created?.branch).toBe("feature/saved-carts");
   });
 
   it("sends a picked PR's description and reviews first, and starts the session on its branch with its number", async () => {
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "fake", model: null, effort: null })), projectId(w));
     await open();
-    await $(`${header}//button[@title="Start from a GitHub issue or pull request"]`).click();
+    await $(`${header}//button[@title="Start from a branch or pull request"]`).click();
     await $('//button[normalize-space()="Pull requests"]').click();
     await $('//button[.//span[normalize-space()="#214"]]').click();
     const attachment = $(`${dialog}//div[@role="group"][@aria-label="PR #214 description and review comments · Clean up the side nav before the Storefront release"]`);
