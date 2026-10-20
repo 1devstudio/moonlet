@@ -1,6 +1,7 @@
 # ADR 0009: A central host owns sessions; workers hold live copies and run heavy commands
 
 - **Status:** proposed (2026-10-13)
+- **Transport changed by:** [ADR 0011](0011-machines-connect-over-the-tailnet.md) (2026-10-20). Workers and the apps reach the central host over its tailnet listener with a device token, not over `ssh <alias> moonletd proxy`. The "Workers dial out" bullet below describes the original plan.
 - **Builds on:** [ADR 0008](0008-phone-link-over-tailscale.md) (the phone app and `moonlet-link`), [R1](../specs/R1-ssh-hosts.md)–[R3](../specs/R3-remote-sessions-reconnect.md) (remote hosts over SSH), [S3](../specs/S3-live-upgrade.md) (live upgrade).
 
 Sessions should survive a closed laptop and be followed from a phone. So they live on one always-on **central host**, for example a Mac mini or a Linux server. Heavy commands (test suites, builds) should still use the laptop's CPU while the laptop is open, overflow to other machines when it is busy, and never stall when it closes. Today a host owns everything for its sessions (worktree, agents, git, files), and daemons never talk to each other. [ADR 0008](0008-phone-link-over-tailscale.md) already lets a phone reach a Mac's daemon over Tailscale. This ADR decides which Mac that is, and how other Macs share the work.
