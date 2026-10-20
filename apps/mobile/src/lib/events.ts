@@ -4,6 +4,7 @@
 
 import { EV, type ChatState, type GitSettings, type ReadRequest, type TerminalInfo } from "@desktop/lib/protocol";
 import { DaemonError } from "@desktop/lib/daemon";
+import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { ChatSummary, HostData } from "./app";
 
 /** One record set, or removed (null). */
@@ -11,7 +12,8 @@ export type Change =
   | { kind: "terminals"; id: number; value: TerminalInfo | null }
   | { kind: "chats"; id: number; value: ChatSummary | null }
   | { kind: "reads"; id: number; value: ReadRequest | null }
-  | { kind: "git"; value: GitSettings };
+  | { kind: "git"; value: GitSettings }
+  | { kind: "tasks"; workspace: string; value: TaskSnapshot | null };
 
 /** The changes `name` makes, or "reload" when only a fresh load tells. */
 export function eventChanges(name: string, data: unknown): Change[] | "reload" {
@@ -40,6 +42,10 @@ export function eventChanges(name: string, data: unknown): Change[] | "reload" {
       return [{ kind: "reads", id: (data as { request_id: number }).request_id, value: null }];
     case EV.gitSettingsChanged:
       return [{ kind: "git", value: data as GitSettings }];
+    case EV.tasksChanged: {
+      const { workspace, snapshot } = data as { workspace: string; snapshot: TaskSnapshot | null };
+      return [{ kind: "tasks", workspace, value: snapshot }];
+    }
     case EV.sessionsChanged:
     case EV.projectsChanged:
     case EV.workspacesChanged:
@@ -69,6 +75,12 @@ export function applyChanges(d: HostData, changes: readonly Change[]): HostData 
     if (c.kind === "terminals") out = { ...out, terminals: setRecord(out.terminals, c.id, c.value) };
     else if (c.kind === "chats") out = { ...out, chats: setRecord(out.chats, c.id, c.value) };
     else if (c.kind === "git") out = { ...out, git: c.value };
+    else if (c.kind === "tasks") {
+      const tasks = { ...out.tasks };
+      if (c.value) tasks[c.workspace] = c.value;
+      else delete tasks[c.workspace];
+      out = { ...out, tasks };
+    }
     else {
       const reads = out.reads.filter((r) => r.request_id !== c.id);
       out = { ...out, reads: c.value ? [...reads, c.value] : reads };

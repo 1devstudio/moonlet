@@ -20,6 +20,7 @@ import {
   type Workspace,
 } from "@desktop/lib/protocol";
 import { readStored, writeStored } from "@desktop/lib/storage";
+import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { HostSeen } from "./hosts";
 import { type Change, applyChanges, eventChanges, gitAfterError } from "./events";
 
@@ -44,11 +45,14 @@ export interface HostData {
   chats: Record<number, ChatSummary>;
   /** The host's Git settings (X55); null until loaded, or from a daemon too old to have them. */
   git: GitSettings | null;
+  /** Each workspace's boards, as the app on the Mac shared them (X57). */
+  tasks: Record<string, TaskSnapshot>;
 }
 
-export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null });
+export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null, tasks: {} });
 
-export type Tab = "inbox" | "sessions" | "new" | "hosts";
+/** The tab bar's tabs, and New session (opened from Sessions' + and a task, X57). */
+export type Tab = "inbox" | "sessions" | "tasks" | "new" | "hosts";
 export type SessionTab = "chat" | "terminal" | "changes" | "pr";
 
 /** A screen over the tabs. */
@@ -69,6 +73,10 @@ export interface Settings {
   notifyOff: NotifyKey[];
   /** Face ID before Allow and plan approvals. */
   faceId: boolean;
+  /** The board the Tasks tab shows, `host/workspace/board` (X57). */
+  board?: string | null;
+  /** The column shown on each board, by its key. */
+  columns?: Record<string, string>;
 }
 
 const SETTINGS = "mobile.settings";
@@ -162,7 +170,7 @@ export async function loadHost(host: string) {
 /** The host's data; `git` left out when its reply failed, so the settings already loaded stay. */
 async function fetchHostData(host: string): Promise<Omit<HostData, "git"> & { git?: HostData["git"] }> {
   const call = <T>(method: string, params: object = {}) => rpc<T>(host, method, params);
-  const [terminals, sessions, projects, workspaces, sections, reads, chats, git] = await Promise.all([
+  const [terminals, sessions, projects, workspaces, sections, reads, chats, git, tasks] = await Promise.all([
     call<TerminalInfo[]>(M.terminalList),
     call<Session[]>(M.sessionList),
     call<Project[]>(M.projectList),
@@ -171,6 +179,7 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git"> & { gi
     call<ReadRequest[]>(M.terminalReadRequests).catch(() => []),
     call<{ id: number; state: ChatSummary }[]>(M.chatSummaries).catch(() => []),
     call<GitSettings>(M.gitSettings).catch(gitAfterError),
+    call<{ workspace: string; snapshot: TaskSnapshot }[]>(M.tasksSnapshot).catch(() => []),
   ]);
   return {
     terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
@@ -181,6 +190,7 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git"> & { gi
     reads,
     chats: Object.fromEntries(chats.map((c) => [c.id, c.state])),
     ...(git !== "keep" && { git }),
+    tasks: Object.fromEntries(tasks.map((t) => [t.workspace, t.snapshot])),
   };
 }
 

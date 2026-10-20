@@ -2,11 +2,11 @@
 // project, with chips for what needs the user, what works and what waits.
 
 import { useState } from "react";
-import { Bot, GitBranch, GitPullRequest, Laptop, Search, Server, X } from "lucide-react";
+import { Bot, GitBranch, GitPullRequest, Laptop, Plus, Search, Server, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
-import { showScreen, useApp } from "../lib/app";
+import { showScreen, showTab, useApp } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
 import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, taskChip } from "../lib/sessionList";
 import { useBusy } from "../lib/busy";
@@ -115,6 +115,9 @@ export function SessionsScreen() {
               {query === null ? <Search size={20} /> : <X size={20} />}
             </button>
             <WorkspacePill />
+            <button type="button" aria-label="New session" onClick={() => showTab("new")} className="flex h-9 w-9 items-center justify-center rounded-full bg-raised text-fg">
+              <Plus size={19} />
+            </button>
           </>
         }
       >
