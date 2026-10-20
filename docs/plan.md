@@ -4,7 +4,7 @@
 
 Every P0 and P1 requirement has a spec in [`docs/specs/`](specs/README.md) and an implementation, except these open items:
 
-- **X3 distribution:** signing and notarization need an Apple Developer ID ([release.md](release.md)). The updater (X35) is in, untried until two releases are published.
+- **X3 distribution:** release builds are Developer ID signed and notarized ([release.md](release.md)). The updater (X35) is in, untried until two releases are published.
 - **R2 helpers:** Linux helpers need `cargo-zigbuild` to build (`scripts/build-remote.sh`). The code type-checks for both musl targets. Helper signing is pending.
 - **T1 ligatures:** depend on the font; there is no ligature addon in the WebGL renderer.
 - **T4 collapsing blocks:** blocks are decorations for now (answers the PRD's open question).
