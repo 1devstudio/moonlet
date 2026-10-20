@@ -51,11 +51,20 @@ pub enum Message {
         kind: Option<crate::methods::DeviceKind>,
     },
     /// The daemon's reply to a good `Auth`. `token` is set only when a
-    /// pairing just created the device: the phone keeps it.
+    /// pairing just created the device: the phone keeps it. The daemon's
+    /// `protocol`, `daemon_version` and `host` label come before `Hello`, so a
+    /// client learns them even when the protocols differ (X57). Daemons
+    /// before X57 leave them out.
     Authed {
         device_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protocol: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        daemon_version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
     },
 }
 

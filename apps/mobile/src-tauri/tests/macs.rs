@@ -38,10 +38,18 @@ async fn serve(mut s: TcpStream, seen: Seen) {
         Message::Auth { pair: Some(c), .. } if c == "c0de" => Message::Authed {
             device_id: "d1".into(),
             token: Some("tok".into()),
+            // A daemon from before X57.
+            protocol: None,
+            daemon_version: None,
+            host: None,
         },
         Message::Auth { token: Some(t), .. } if t == "tok" => Message::Authed {
             device_id: "d1".into(),
             token: None,
+            // A daemon from before X57.
+            protocol: None,
+            daemon_version: None,
+            host: None,
         },
         _ => Message::err(
             0,

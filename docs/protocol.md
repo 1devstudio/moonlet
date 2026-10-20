@@ -29,7 +29,7 @@ Every JSON message is an object with a `t` tag:
 - `hello` `{protocol, client}` is sent by the client first. The daemon answers `welcome` `{protocol, daemon_version, host, pid}`, or closes the connection if `protocol` differs from its own.
 - `request` `{id, method, params}` gets exactly one `response` `{id, result | error}`. `error` is `{code, message}`.
 - `event` `{name, data}` is a daemon broadcast to every connected client.
-- `auth` `{token?, pair?, device?, route?}` comes first on a phone connection, before `hello` (X39). The daemon answers `authed` `{device_id, token?}` (`token` only after a pairing) or one `response` with `id` 0 and error `unauthorized`, then closes. With `route`, everything after `authed` comes from `ssh <route> moonletd proxy`.
+- `auth` `{token?, pair?, device?, kind?, route?}` comes first on a phone connection, before `hello` (X39). `kind` (`phone` or `desktop`, X57) says what is pairing; it defaults to `phone`. The daemon answers `authed` `{device_id, token?, protocol, daemon_version, host}` (`token` only after a pairing; daemons before X57 leave out the last three) or one `response` with `id` 0 and error `unauthorized`, then closes. With `route`, everything after `authed` comes from `ssh <route> moonletd proxy`.
 
 ## Attach ordering
 
