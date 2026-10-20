@@ -14,7 +14,7 @@ import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../../lib
 import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
-import { appUpdateLine, claudeUpdateLine, daemonLine, daemonOn, offStopsDaemon, type DaemonService } from "../../lib/settingsPage";
+import { appUpdateLine, claudeUpdateLine, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, type DaemonService } from "../../lib/settingsPage";
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
 import { ThemeSample } from "./ThemeSample";
@@ -117,8 +117,9 @@ function Daemon() {
     }
     setBusy(true);
     try {
-      setStatus(await hostsApi.service(on ? "install" : "uninstall"));
-      toast(on ? "The moonlet daemon now starts at login" : "Login item removed");
+      const next = await hostsApi.service(on ? "install" : "uninstall");
+      setStatus(next);
+      toast(daemonToast(on, next));
     } catch (e) {
       errorToast(e);
     } finally {
@@ -131,14 +132,23 @@ function Daemon() {
         <SwitchRow
           setting="daemon"
           label="Start the moonlet daemon at login"
-          hint="Agents run in moonletd, not in this window. Under launchd it starts at login and restarts if it ever crashes."
+          hint={
+            status?.mechanism === "plist"
+              ? "Agents run in moonletd, not in this window. Under launchd it starts at login and restarts if it ever crashes."
+              : "Agents run in moonletd, not in this window. As a login item it starts at login and restarts if it ever crashes."
+          }
           on={!!status && daemonOn(status)}
           disabled={busy || !status}
           onChange={(on) => void toggle(on)}
         />
         {status && (
-          <div className="px-4 py-2.5">
+          <div className="flex items-center justify-between gap-3 px-4 py-2.5">
             <Status line={daemonLine(status, home)} />
+            {opensLoginItems(status) && (
+              <Button size="sm" onClick={() => void hostsApi.openLoginItems().catch(errorToast)}>
+                Open Login Items
+              </Button>
+            )}
           </div>
         )}
       </Card>

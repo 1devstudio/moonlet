@@ -29,6 +29,12 @@ const ctx: SearchContext = {
 const shown = (q: string) => searchSettings(q, ctx).map((r) => [r.before + r.hit + r.after, r.path, r.value]);
 
 describe("searching settings (X43)", () => {
+  it("finds the daemon's login item by the names macOS uses (X56)", () => {
+    for (const q of ["login items", "background items", "SMAppService"]) {
+      expect(shown(q)).toEqual([["Start the moonlet daemon at login", "App › General › Background daemon", ""]]);
+    }
+  });
+
   it("finds the session row style with the style chosen (X48)", () => {
     expect(shown("session rows")).toEqual([["Session rows", "App › Appearance", "A · Issue number column"]]);
     expect(searchSettings("session rows", { ...ctx, settings: { ...ctx.settings, sessionRows: "task" } })[0].value).toBe("B · Task as a sub-header");
