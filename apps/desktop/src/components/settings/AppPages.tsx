@@ -14,7 +14,7 @@ import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../../lib
 import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
-import { appUpdateLine, claudeUpdateLine, daemonLine } from "../../lib/settingsPage";
+import { appUpdateLine, claudeUpdateLine, daemonLine, daemonOn, offStopsDaemon, type DaemonService } from "../../lib/settingsPage";
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
 import { ThemeSample } from "./ThemeSample";
@@ -98,16 +98,16 @@ function Updates() {
   );
 }
 
-/** Start moonletd at login under launchd (S1b). */
+/** Start moonletd at login: the app's login item (X56), or the S1b plist in dev builds. */
 function Daemon() {
-  const [status, setStatus] = useState<{ installed: boolean; loaded: boolean; plist: string } | null>(null);
+  const [status, setStatus] = useState<DaemonService | null>(null);
   const [busy, setBusy] = useState(false);
   const home = useStore((s) => s.hosts.local?.home ?? null);
   useEffect(() => {
     void hostsApi.service("status").then(setStatus).catch(() => setStatus(null));
   }, []);
   const toggle = async (on: boolean) => {
-    if (!on && status?.loaded) {
+    if (!on && status && offStopsDaemon(status)) {
       const ok = await askConfirm({
         title: "Stop the background daemon",
         message: "Turning this off stops the daemon that launchd is running. Terminals and agents it holds may end. Turn it off?",
@@ -132,7 +132,7 @@ function Daemon() {
           setting="daemon"
           label="Start the moonlet daemon at login"
           hint="Agents run in moonletd, not in this window. Under launchd it starts at login and restarts if it ever crashes."
-          on={!!status?.installed}
+          on={!!status && daemonOn(status)}
           disabled={busy || !status}
           onChange={(on) => void toggle(on)}
         />

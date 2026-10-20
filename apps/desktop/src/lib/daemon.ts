@@ -41,7 +41,8 @@ export const hostsApi = {
   openTargets: () => invoke<{ id: string; label: string }[]>("open_targets"),
   openIn: (target: string, path: string, host?: string) => invoke("open_in", { target, path, host }),
   playSound: (name: string) => invoke("play_sound", { name }),
-  service: (action: "install" | "uninstall" | "status") => invoke<{ installed: boolean; loaded: boolean; plist: string }>("daemon_service", { action }),
+  service: (action: "install" | "uninstall" | "status") => invoke<import("./settingsPage").DaemonService>("daemon_service", { action }),
+  openLoginItems: () => invoke("open_login_items"),
   appInfo: () => invoke<{ version: string }>("app_info"),
   claudeLatest: () => invoke<string>("claude_latest_version"),
   /** Linear, Jira and ClickUp from the app (X44): sign in, sources, tasks, moves. */
