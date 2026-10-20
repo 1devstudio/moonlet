@@ -154,6 +154,9 @@ async fn serve_phone(daemon: Arc<Daemon>, mut stream: TcpStream) -> Result<()> {
         &Frame::Json(Message::Authed {
             device_id: authed.device_id.clone(),
             token: authed.token.clone(),
+            protocol: Some(moonlet_proto::PROTOCOL_VERSION),
+            daemon_version: Some(env!("CARGO_PKG_VERSION").into()),
+            host: Some(super::host_label()),
         }),
     )
     .await?;

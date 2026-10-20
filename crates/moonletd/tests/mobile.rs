@@ -283,6 +283,30 @@ async fn a_paired_phone_comes_back_with_its_token_and_uses_the_daemon() {
 }
 
 #[tokio::test]
+async fn authed_says_which_daemon_answered_before_hello() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let mut app = mac.app().await;
+    let info: DaemonInfo = app.request("daemon.info", json!({})).await.unwrap();
+    let st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
+
+    let (_, reply) = auth(&addr, json!({ "token": token })).await;
+    let Some(Message::Authed {
+        protocol,
+        daemon_version,
+        host,
+        ..
+    }) = reply
+    else {
+        panic!("{reply:?}")
+    };
+    assert_eq!(protocol, Some(info.protocol));
+    assert_eq!(daemon_version.as_deref(), Some(info.version.as_str()));
+    assert_eq!(host.as_deref(), Some(st.host.as_str()));
+}
+
+#[tokio::test]
 async fn a_mac_pairs_as_a_desktop() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;
