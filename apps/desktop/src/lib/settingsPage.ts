@@ -173,21 +173,71 @@ export function daemonLine(st: DaemonService, home: string | null): StatusLine {
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
+/** What the daemon says to a token it no longer accepts (X39). */
+const NOT_PAIRED = "this phone is not paired with this Mac";
+
+/** Is version `a` older than `b`? Compares `x.y.z` numerically. */
+function older(a: string, b: string): boolean {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d < 0;
+  }
+  return false;
+}
+
+/** A tailnet host and this Mac speak different protocols: which to update (X57). */
+function updateText(h: HostInfo, appVersion: string): string {
+  const theirs = h.daemon_version ?? "";
+  if (theirs && appVersion && older(appVersion, theirs)) return `Update moonlet on this Mac (${h.label} runs ${theirs})`;
+  if (theirs && appVersion) return `Update moonlet on ${h.label} (it runs ${theirs}, this Mac ${appVersion})`;
+  return `Update moonlet on ${h.label}`;
+}
+
+/** An error, in words that say what to do about it. */
+function errorText(h: HostInfo): string | null {
+  if (h.message === NOT_PAIRED) return `${h.label} no longer accepts this Mac. Pair it again.`;
+  return h.message;
+}
+
 /** A host's state on the Hosts page, with its open sessions. */
-export function hostLine(h: HostInfo, sessions: number): StatusLine {
+export function hostLine(h: HostInfo, sessions: number, appVersion = ""): StatusLine {
   switch (h.status) {
     case "connected":
       return { tone: "done", text: ["Connected", h.remote && h.daemon_version && `moonletd ${h.daemon_version}`, plural(sessions, "session")].filter(Boolean).join(" · ") };
     case "needs_install":
       return { tone: "error", text: "Needs install · no moonletd on the host" };
+    case "needs_update":
+      return { tone: "error", text: updateText(h, appVersion) };
     case "error":
-      return { tone: "error", text: h.message ?? "Can't connect" };
+      return { tone: "error", text: errorText(h) ?? "Can't connect" };
     case "reconnecting":
       return { tone: "blocked", text: "Reconnecting…" };
     default:
       return { tone: "blocked", text: "Connecting…" };
   }
 }
+
+/** What the sidebar says under a host that is not connected; null when it is. */
+export function hostNotice(h: HostInfo, appVersion: string): string | null {
+  switch (h.status) {
+    case "connected":
+      return null;
+    case "needs_install":
+      return `${h.label}: helper not installed`;
+    case "needs_update":
+      return updateText(h, appVersion);
+    case "error":
+      if (h.message === NOT_PAIRED) return errorText(h);
+      return `${h.label}: ${h.message ?? "connection failed"}`;
+    default:
+      return `${h.label}: reconnecting…`;
+  }
+}
+
+/** Whether a host must be paired again: it no longer accepts this Mac's token. */
+export const needsPairing = (h: HostInfo) => h.kind === "tailnet" && h.status === "error" && h.message === NOT_PAIRED;
 
 const andList = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
 
@@ -289,7 +339,7 @@ export function claudeUpdateLine(s: ClaudeUpdateState, v: ClaudeVersions, checki
   return { tone: claudeOffer(s, v) ? "accent" : "done", text };
 }
 
-/** The line under "Allow phones on my tailnet" (X39). */
+/** The line under "Allow connections from my tailnet" (X39, X57). */
 export function phoneAccessLine(st: MobileStatus): StatusLine {
   const text = mobileLine(st);
   if (st.enabled && !st.tailscale) return { tone: "blocked", text };

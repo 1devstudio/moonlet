@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countdown, deviceLine, mobileLine, pairEndedText } from "./mobile";
+import { countdown, deviceLine, devicesOfKind, mobileLine, pairEndedText } from "./mobile";
 import type { MobileDevice, MobileStatus } from "./protocol";
 
 const status = (patch: Partial<MobileStatus> = {}): MobileStatus => ({
@@ -81,5 +81,15 @@ describe("pairEndedText", () => {
     expect(pairEndedText("too_many_attempts")).toBe("Too many wrong attempts. Start again.");
     expect(pairEndedText("expired")).toBe("The code expired. Start again.");
     expect(pairEndedText("cancelled")).toBe("Pairing was cancelled.");
+  });
+});
+
+describe("devicesOfKind (X57)", () => {
+  it("splits the paired devices into phones and Macs", () => {
+    const st = status({
+      devices: [device({ id: "p1", name: "Alex's iPhone" }), device({ id: "m1", name: "Alex's MacBook Pro", kind: "desktop" })],
+    });
+    expect(devicesOfKind(st, "phone").map((d) => d.name)).toEqual(["Alex's iPhone"]);
+    expect(devicesOfKind(st, "desktop").map((d) => d.name)).toEqual(["Alex's MacBook Pro"]);
   });
 });

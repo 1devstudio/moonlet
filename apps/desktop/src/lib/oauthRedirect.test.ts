@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callbackForward, isWebPage, pagesToOpen } from "./oauthRedirect";
+import { callbackForward, isWebPage, pagesToOpen, signInUnavailable } from "./oauthRedirect";
 import type { McpServer } from "./protocol";
 
 // Sign-in pages captured from Claude Code 2.1.292 and codex-cli 0.160.0.
@@ -54,5 +54,19 @@ describe("which sign-in pages may open (X29)", () => {
     expect(isWebPage("file:///etc/passwd")).toBe(false);
     expect(isWebPage("javascript:alert(1)")).toBe(false);
     expect(isWebPage("vscode://open?x")).toBe(false);
+  });
+});
+
+describe("sign-in on a tailnet host (X57)", () => {
+  it("says a sign-in that returns to localhost is not available there yet", () => {
+    expect(signInUnavailable(CLAUDE_LINEAR, { label: "studio-mini", kind: "tailnet" }, "claude.ai Linear")).toBe(
+      "Signing in to claude.ai Linear isn't available for sessions on studio-mini yet.",
+    );
+  });
+
+  it("lets every other sign-in through", () => {
+    expect(signInUnavailable(CLAUDE_AI, { label: "studio-mini", kind: "tailnet" }, "claude.ai Linear")).toBeNull();
+    expect(signInUnavailable(CLAUDE_LINEAR, { label: "devbox", kind: "ssh" }, "claude.ai Linear")).toBeNull();
+    expect(signInUnavailable(CLAUDE_LINEAR, { label: "This Mac", kind: "local" }, "claude.ai Linear")).toBeNull();
   });
 });
