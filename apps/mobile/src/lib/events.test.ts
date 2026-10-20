@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ChatState, ReadRequest, TerminalInfo } from "@desktop/lib/protocol";
 import { type HostData, emptyData } from "./app";
-import { applyChanges, eventChanges } from "./events";
+import { DaemonError } from "@desktop/lib/daemon";
+import { applyChanges, eventChanges, gitAfterError } from "./events";
 
 const term = (id: number, agent_state: TerminalInfo["agent_state"]) => ({ id, agent_state }) as TerminalInfo;
 const read = (request_id: number) => ({ request_id }) as ReadRequest;
@@ -45,6 +46,24 @@ describe("events", () => {
     expect(eventChanges("fs.changed", {})).toEqual([]);
   });
 
+  it("keep the host's Git settings as the daemon reports them (X55)", () => {
+    expect(start().git).toBeNull();
+    const settings = {
+      branch_prefix: "mz/",
+      start_from: "origin",
+      archive_worktree: "keep",
+      archive_branch: "ask",
+      delete_remote_branch: true,
+      warn_unpushed: false,
+      stage_all: false,
+      draft_prs: true,
+      fetch_minutes: 15,
+      fast_forward_base: true,
+    };
+    const d = apply(start(), "git.settings_changed", settings) as HostData;
+    expect(d.git).toEqual(settings);
+  });
+
   it("win over a load that started before them", () => {
     // The load's replies left the daemon before these events did.
     const loaded: HostData = { ...emptyData(), terminals: { 1: term(1, "working") }, reads: [read(7), read(8)] };
@@ -52,5 +71,12 @@ describe("events", () => {
     const merged = applyChanges(loaded, during);
     expect(merged.terminals[1].agent_state).toBe("blocked");
     expect(merged.reads.map((r) => r.request_id)).toEqual([7]);
+  });
+});
+
+describe("gitAfterError (X55)", () => {
+  it("drops the settings only for a daemon too old to have them, and keeps them through a failed reply", () => {
+    expect(gitAfterError(new DaemonError({ code: "unknown_method", message: "unknown method git.settings" }))).toBeNull();
+    expect(gitAfterError(new DaemonError({ code: "failed", message: "connection reset" }))).toBe("keep");
   });
 });

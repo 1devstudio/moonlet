@@ -1,6 +1,7 @@
 // The PR tab (X40, X2, X11): a PR's checks, review and stack.
 
-import type { CheckRun, PrStack } from "@desktop/lib/protocol";
+import { DEFAULT_GIT_SETTINGS } from "@desktop/lib/gitSettings";
+import type { CheckRun, GitSettings, PrStack } from "@desktop/lib/protocol";
 
 export type CheckMark = "ok" | "error" | "running";
 
@@ -59,3 +60,6 @@ export function updatedAgo(at: number, now: number): string {
   if (s < 60) return `updated ${s}s ago`;
   return `updated ${Math.floor(s / 60)} min ago`;
 }
+
+/** Whether the Create PR form starts as a draft: the host's setting (X55). */
+export const startsDraft = (git: Pick<GitSettings, "draft_prs"> | null) => git?.draft_prs ?? DEFAULT_GIT_SETTINGS.draft_prs;

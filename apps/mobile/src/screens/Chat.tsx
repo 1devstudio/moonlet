@@ -2,24 +2,26 @@
 // composer, and the footer with context, cost, model and mode.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, ListChecks, MessageCircleQuestion, Plus, Square, SquareTerminal } from "lucide-react";
+import { ArrowUp, CornerDownLeft, ListChecks, Loader2, MessageCircleQuestion, MessageSquareDashed, Plus, Square, SquareTerminal } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { askQuestions, chatBlocks, chatDraft, chatKey, loadChat, questionAnswers, saveChatDraft, turnRunning, useChat } from "@desktop/lib/chat";
 import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
-import { type ChatState, M, type PermissionAsk, type Session } from "@desktop/lib/protocol";
-import { queuedHeader, waitingOn } from "@desktop/lib/queued";
+import { type AsideAnswer, type ChatState, M, type PermissionAsk, type QueuedMessage, type Session } from "@desktop/lib/protocol";
+import { type Aside, asideFooter, asideSettled, queuedHeader, waitingOn } from "@desktop/lib/queued";
+import { askerName } from "@desktop/lib/subagents";
 import { showScreen, useApp } from "../lib/app";
 import { answerAsk, answerQuestion } from "../lib/answers";
 import { STATE_COLOR } from "../lib/palette";
 import { ageText, askHeadline } from "../lib/cards";
-import { chatFooter, sessionChat } from "../lib/chatView";
+import { asideStep, blockKey, chatFooter, queuedActions, sessionChat } from "../lib/chatView";
 import { useBusy } from "../lib/busy";
-import { ChatBlockView } from "../components/chat";
+import { AgentDetail, AskerLine, ChatBlockView } from "../components/chat";
+import { Markdown } from "../components/Markdown";
 import { Sheet } from "../components/Sheet";
 import { Btn, cx } from "../components/ui";
-import { useNow } from "./Inbox";
+import { useNow } from "../lib/now";
 
-function DockedAsk({ host, terminal, ask }: { host: string; terminal: number; ask: PermissionAsk }) {
+function DockedAsk({ host, terminal, ask, asker }: { host: string; terminal: number; ask: PermissionAsk; asker: string | null }) {
   const now = useNow();
   const { busy, run } = useBusy();
   const [telling, setTelling] = useState(false);
@@ -27,6 +29,7 @@ function DockedAsk({ host, terminal, ask }: { host: string; terminal: number; as
   const answer = (d: "allow" | "always" | "deny", msg?: string) => run(() => answerAsk(host, terminal, ask.id, d, msg));
   return (
     <section aria-label="Waiting for your approval" className="flex flex-col gap-2.5 border-t border-[rgba(242,201,76,0.28)] bg-panel px-4 pt-3 pb-2">
+      {asker && <AskerLine name={asker} />}
       <div className="flex items-center gap-2 text-[14px] font-medium">
         <SquareTerminal size={16} className="text-blocked" />
         {askHeadline(ask.tool)}
@@ -108,20 +111,68 @@ function DockedQuestion({ host, terminal, ask }: { host: string; terminal: numbe
   );
 }
 
-function QueuedView({ st }: { st: ChatState }) {
-  const { line } = queuedHeader(st.queued, waitingOn(st.items), null);
+function QueuedView({ st, onSendNow, onAside, busy }: { st: ChatState; onSendNow: (params: { message?: string }) => void; onAside: (last: QueuedMessage) => void; busy: boolean }) {
+  const { line, tone } = queuedHeader(st.queued, waitingOn(st.items), null);
+  const actions = queuedActions(st.queued);
   return (
     <section aria-label="Queued messages" className="flex flex-col items-end gap-1.5">
-      <div className="text-[12px] text-faint">
-        {line.text} {line.command && <span className="font-mono text-[11.5px]">{line.command}</span>}
-        {line.tail}
+      <div className="flex items-center gap-1.5 text-[12px] text-faint">
+        {tone === "sending" && <Loader2 size={12} className="animate-spin text-accent" />}
+        <span>
+          {line.text} {line.command && <span className="font-mono text-[11.5px]">{line.command}</span>}
+          {line.tail}
+        </span>
       </div>
       {st.queued.map((q) => (
         <div key={q.id} className="selectable max-w-[85%] rounded-[14px] rounded-br-[4px] border border-dashed border-[#3a3a3a] px-3.5 py-2.5 text-[14.5px] leading-[1.45] whitespace-pre-wrap text-[#b8b8b8]">
           {q.text}
         </div>
       ))}
+      {actions && (
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={busy} onClick={() => onAside(actions.aside)} className="flex h-9 items-center gap-1.5 rounded-[8px] px-2.5 text-[13px] text-muted disabled:opacity-40">
+            <MessageSquareDashed size={14} /> Ask aside
+          </button>
+          <button type="button" disabled={busy} onClick={() => onSendNow(actions.params)} className="flex h-9 items-center gap-1.5 rounded-[8px] border border-border-strong bg-raised px-2.5 text-[13px] disabled:opacity-40">
+            <CornerDownLeft size={14} /> {actions.sendNow}
+          </button>
+        </div>
+      )}
     </section>
+  );
+}
+
+/** A side question and its answer (X49): not added to the session. */
+function AsideSheet({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () => void; onClose: () => void }) {
+  return (
+    <Sheet label="Aside" onClose={onClose}>
+      <div className="scroll flex flex-col gap-3 px-4 pb-2">
+        <div className="flex items-center gap-2 text-[13px]">
+          <MessageSquareDashed size={15} className="text-accent" />
+          <span className="font-medium">Aside</span>
+          <span className="text-muted">Not added to the session · can't run tools</span>
+        </div>
+        <div className="text-[14.5px]">{aside.question}</div>
+        {aside.answer ? (
+          <>
+            <Markdown text={aside.answer.text} />
+            <span className="font-mono text-[12px] text-faint">{asideFooter(aside.answer)}</span>
+          </>
+        ) : aside.error ? (
+          <span className="text-[13.5px] text-error">{aside.error}</span>
+        ) : (
+          <span className="flex items-center gap-2 text-[13.5px] text-muted">
+            <Loader2 size={14} className="animate-spin text-accent" /> Answering from the conversation
+          </span>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <Btn tone="ghost" onClick={onRequeue}>
+            Queue for Claude
+          </Btn>
+          <Btn onClick={onClose}>Close</Btn>
+        </div>
+      </div>
+    </Sheet>
   );
 }
 
@@ -171,6 +222,28 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   const terminal = d ? sessionChat(d, session.id) : null;
   const st = useChat((s) => (terminal === null ? undefined : s.chats[chatKey(host, terminal)]));
   const [picker, setPicker] = useState<"model" | "mode" | null>(null);
+  // The subagent whose sheet is open, by its key (X42).
+  const [agentOpen, setAgentOpen] = useState<string | null>(null);
+  // Ask aside (X49): the queued message Claude is asked to give back, then the aside.
+  const [unqueuing, setUnqueuing] = useState<QueuedMessage | null>(null);
+  const [aside, setAside] = useState<Aside | null>(null);
+  const [queueNote, setQueueNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!unqueuing || !st || terminal === null) return;
+    const step = asideStep(st, unqueuing);
+    if (step.kind === "wait") return;
+    setUnqueuing(null);
+    if (step.kind === "note") {
+      setQueueNote(step.text);
+      return;
+    }
+    const question = step.question;
+    setAside({ question });
+    rpc<AsideAnswer>(host, M.chatAside, { id: terminal, text: question }).then(
+      (answer) => setAside((cur) => asideSettled(cur, question, { answer })),
+      (e) => setAside((cur) => asideSettled(cur, question, { error: String(e?.message ?? e) })),
+    );
+  }, [st, unqueuing]); // eslint-disable-line react-hooks/exhaustive-deps
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (terminal !== null) void loadChat(host, terminal).catch(console.error);
@@ -185,6 +258,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   if (terminal === null) return <div className="p-6 text-[14px] text-muted">This session has no agent conversation. Its terminal is in the Terminal tab.</div>;
   if (!st) return <div className="p-6 text-[14px] text-muted">Loading the conversation…</div>;
   const ask = st.pending[0];
+  const agents = { id: terminal, st };
   const footer = chatFooter(st);
   const settings = (patch: object) => void rpc(host, M.chatSettings, { id: terminal, ...patch }).catch(console.error);
 
@@ -192,10 +266,25 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
     <div className="flex h-full flex-col">
       <main ref={scroller} className="scroll flex min-h-0 flex-1 flex-col gap-2 px-4 py-3">
         {blocks.map((b) => (
-          <ChatBlockView key={b.kind === "tools" ? b.id : b.item.id} block={b} cwd={session.path} />
+          <ChatBlockView key={blockKey(b)} block={b} cwd={session.path} agents={agents} onAgent={setAgentOpen} />
         ))}
         {/* Messages Claude has not read yet (X49). */}
-        {st.queued.length > 0 && <QueuedView st={st} />}
+        {st.queued.length > 0 && (
+          <QueuedView
+            st={st}
+            busy={!!unqueuing}
+            onSendNow={(params) => void rpc(host, M.chatSendNow, { id: terminal, ...params }).catch(console.error)}
+            onAside={(last) => {
+              setQueueNote(null);
+              setUnqueuing(last);
+              rpc(host, M.chatUnqueue, { id: terminal, message: last.id }).catch((e) => {
+                setUnqueuing(null);
+                setQueueNote(String(e?.message ?? e));
+              });
+            }}
+          />
+        )}
+        {queueNote && <div className="self-end text-[12.5px] text-muted">{queueNote}</div>}
         {st.status === "working" && !ask && <div className="text-[13px] text-muted italic">Working…</div>}
       </main>
       {ask &&
@@ -210,7 +299,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
         ) : ask.tool === "AskUserQuestion" ? (
           <DockedQuestion key={ask.id} host={host} terminal={terminal} ask={ask} />
         ) : (
-          <DockedAsk key={ask.id} host={host} terminal={terminal} ask={ask} />
+          <DockedAsk key={ask.id} host={host} terminal={terminal} ask={ask} asker={askerName(ask, st.subagents ?? [])} />
         ))}
       {!ask && <Composer host={host} terminal={terminal} running={turnRunning(st.status)} />}
       <footer className="flex items-center gap-2 px-3 py-1.5 text-[12.5px] text-muted" style={{ paddingBottom: "max(var(--safe-bottom), 8px)" }}>
@@ -229,6 +318,21 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
           {footer.mode}
         </button>
       </footer>
+      {aside && (
+        <AsideSheet
+          aside={aside}
+          onRequeue={() => {
+            void rpc(host, M.chatSend, { id: terminal, text: aside.question, images: [] }).catch(console.error);
+            setAside(null);
+          }}
+          onClose={() => setAside(null)}
+        />
+      )}
+      {agentOpen && (
+        <Sheet label="Agent" onClose={() => setAgentOpen(null)}>
+          <AgentDetail chat={agents} agent={agentOpen} onStop={(r) => void rpc(host, M.chatStopAgent, { id: terminal, agent: r.agent.id }).catch(console.error)} />
+        </Sheet>
+      )}
       {picker && (
         <Sheet label={picker === "model" ? "Model" : "Mode"} onClose={() => setPicker(null)}>
           <div className="scroll flex flex-col px-2 pb-2">

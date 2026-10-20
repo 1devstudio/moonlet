@@ -2,18 +2,18 @@
 // project, with chips for what needs the user, what works and what waits.
 
 import { useState } from "react";
-import { GitBranch, GitPullRequest, Laptop, Search, Server, X } from "lucide-react";
+import { Bot, GitBranch, GitPullRequest, Laptop, Search, Server, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
 import { showScreen, useApp } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
-import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups } from "../lib/sessionList";
+import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, taskChip } from "../lib/sessionList";
 import { useBusy } from "../lib/busy";
 import { STATE_COLOR } from "../lib/palette";
 import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
 import { WorkspacePill } from "../components/WorkspacePill";
-import { useNow } from "./Inbox";
+import { useNow } from "../lib/now";
 
 const AVATAR = ["#d97757", "#5aa9e6", "#a371f7", "#3ecf6e", "#f2c94c"];
 
@@ -39,6 +39,7 @@ function Row({ r }: { r: SessionRow }) {
   const [ref, seen] = useSeen();
   const [stat] = useGitStatus(r.host, seen ? r.session : undefined);
   const [pr] = usePr(r.host, seen ? r.session : undefined);
+  const task = taskChip(r.session);
   return (
     <button ref={ref} type="button" onClick={() => showScreen(rowTarget(r))} className={cx("flex items-start gap-2.5 px-4 py-2.5 text-left", r.state === "blocked" && "bg-[rgba(242,201,76,0.035)]")}>
       <span className="pt-[3px]">
@@ -52,8 +53,15 @@ function Row({ r }: { r: SessionRow }) {
           </span>
         </span>
         <span className="flex items-center gap-2 text-[12px] text-faint">
+          {task && <span className="flex-none font-mono text-muted">{task.label}</span>}
           <span className="truncate font-mono">{r.session.branch}</span>
           {stat && <DiffStat add={stat.additions} del={stat.deletions} />}
+          {r.agents && (
+            <span className="flex flex-none items-center gap-1">
+              <Bot size={12} />
+              {r.agents}
+            </span>
+          )}
           {pr && (
             <span className={cx("flex items-center gap-1", prTone(pr.state.toLowerCase()))}>
               <GitPullRequest size={12} />#{pr.number}

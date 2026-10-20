@@ -10,6 +10,7 @@ import {
   EV,
   M,
   type ChatState,
+  type GitSettings,
   type HostInfo,
   type Project,
   type ReadRequest,
@@ -20,7 +21,7 @@ import {
 } from "@desktop/lib/protocol";
 import { readStored, writeStored } from "@desktop/lib/storage";
 import type { HostSeen } from "./hosts";
-import { type Change, applyChanges, eventChanges } from "./events";
+import { type Change, applyChanges, eventChanges, gitAfterError } from "./events";
 
 /** A host as the phone's core lists it (`host_list`). */
 export interface HostEntry extends HostInfo {
@@ -41,9 +42,11 @@ export interface HostData {
   sections: Section[];
   reads: ReadRequest[];
   chats: Record<number, ChatSummary>;
+  /** The host's Git settings (X55); null until loaded, or from a daemon too old to have them. */
+  git: GitSettings | null;
 }
 
-export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {} });
+export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null });
 
 export type Tab = "inbox" | "sessions" | "new" | "hosts";
 export type SessionTab = "chat" | "terminal" | "changes" | "pr";
@@ -150,15 +153,16 @@ export async function loadHost(host: string) {
   try {
     const fetched = await fetchHostData(host);
     // What events changed meanwhile wins over the replies they overtook.
-    patchData(host, applyChanges(fetched, during));
+    patchData(host, (cur) => applyChanges({ ...fetched, git: fetched.git === undefined ? cur.git : fetched.git }, during));
   } finally {
     if (loads.get(host) === during) loads.delete(host);
   }
 }
 
-async function fetchHostData(host: string): Promise<HostData> {
+/** The host's data; `git` left out when its reply failed, so the settings already loaded stay. */
+async function fetchHostData(host: string): Promise<Omit<HostData, "git"> & { git?: HostData["git"] }> {
   const call = <T>(method: string, params: object = {}) => rpc<T>(host, method, params);
-  const [terminals, sessions, projects, workspaces, sections, reads, chats] = await Promise.all([
+  const [terminals, sessions, projects, workspaces, sections, reads, chats, git] = await Promise.all([
     call<TerminalInfo[]>(M.terminalList),
     call<Session[]>(M.sessionList),
     call<Project[]>(M.projectList),
@@ -166,6 +170,7 @@ async function fetchHostData(host: string): Promise<HostData> {
     call<Section[]>(M.sectionList),
     call<ReadRequest[]>(M.terminalReadRequests).catch(() => []),
     call<{ id: number; state: ChatSummary }[]>(M.chatSummaries).catch(() => []),
+    call<GitSettings>(M.gitSettings).catch(gitAfterError),
   ]);
   return {
     terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
@@ -175,6 +180,7 @@ async function fetchHostData(host: string): Promise<HostData> {
     sections,
     reads,
     chats: Object.fromEntries(chats.map((c) => [c.id, c.state])),
+    ...(git !== "keep" && { git }),
   };
 }
 

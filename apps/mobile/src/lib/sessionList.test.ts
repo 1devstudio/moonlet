@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Section } from "@desktop/lib/protocol";
-import { chips, filterGroups, rowTarget, sessionGroups } from "./sessionList";
+import { chips, filterGroups, rowTarget, sessionGroups, taskChip } from "./sessionList";
 import { MIN, NOW, ask, chat, data, project, session, terminal, workspace } from "./fixtures";
 
 const section = (id: string, name: string, project_ids: string[]): Section => ({
@@ -76,6 +76,23 @@ describe("sessionGroups", () => {
       ["Bump Node to 22", "idle", ""],
     ]);
   });
+
+  it("says how many subagents the session's chats are running (X42)", () => {
+    const w = world();
+    w.data.mac.terminals[3] = terminal(3, "dark", { agent_state: "working", last_output_at: NOW - 2 * MIN, subagents: 2 });
+    w.data.mac.terminals[7] = terminal(7, "dark", { last_output_at: NOW - 2 * MIN, subagents: 1 });
+    w.data.mac.terminals[2] = terminal(2, "checkout", { agent_state: "done", last_output_at: NOW - 30 * MIN, subagents: 0 });
+    w.data.mac.terminals[8] = terminal(8, "fix-login", { subagents: 1 });
+    const rows = sessionGroups(w.hosts, w.data, null, NOW).flatMap((g) => g.rows);
+    expect(rows.map((r) => [r.session.name, r.agents])).toEqual([
+      ["Add search to the product list", ""],
+      ["Dark mode for account pages", "3 agents"],
+      ["Fix checkout button on mobile", ""],
+      ["Fix login", "1 agent"],
+      ["Idempotent refund webhooks", ""],
+      ["Bump Node to 22", ""],
+    ]);
+  });
 });
 
 describe("chips and filters", () => {
@@ -112,5 +129,23 @@ describe("rowTarget", () => {
     expect(by("Idempotent refund webhooks")).toEqual({ kind: "plan", host: "mac/devbox", terminal: 5, ask: "p1" });
     expect(by("Fix checkout button on mobile")).toEqual({ kind: "session", host: "mac", id: "checkout", tab: "changes" });
     expect(by("Add search to the product list")).toEqual({ kind: "session", host: "mac", id: "add-search", tab: "chat" });
+  });
+});
+
+describe("taskChip (X46)", () => {
+  it("shows a linked session's issue: a tracker key whole, a GitHub issue by its number", () => {
+    expect(taskChip(session("s", "x", { task: { connection: "linear:acme", key: "MOON-142", url: "https://linear.app/acme/issue/MOON-142" } }))).toEqual({
+      label: "MOON-142",
+      url: "https://linear.app/acme/issue/MOON-142",
+    });
+    expect(taskChip(session("s", "x", { task: { connection: "github:github.com", key: "acme/web#12", url: "https://github.com/acme/web/issues/12" } }))).toEqual({
+      label: "#12",
+      url: "https://github.com/acme/web/issues/12",
+    });
+  });
+
+  it("shows nothing for a session without a stored link", () => {
+    expect(taskChip(session("s", "x"))).toBeNull();
+    expect(taskChip(session("s", "x", { task: null, task_unlinked: true }))).toBeNull();
   });
 });

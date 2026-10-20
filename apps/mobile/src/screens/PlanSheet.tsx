@@ -10,7 +10,7 @@ import { ageText } from "../lib/cards";
 import { useBusy } from "../lib/busy";
 import { Markdown } from "../components/Markdown";
 import { AgentIcon, Btn } from "../components/ui";
-import { useNow } from "./Inbox";
+import { useNow } from "../lib/now";
 
 export function PlanSheet({ host, terminal, ask: askId, from }: { host: string; terminal: number; ask: string; from?: Screen }) {
   const d = useApp((s) => s.data[host]);
