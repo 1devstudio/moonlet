@@ -1,14 +1,16 @@
 // A session (X40): its header and the Chat, Terminal, Changes and PR tabs.
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Archive, ChevronLeft, MoreHorizontal } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { M } from "@desktop/lib/protocol";
+import { M, type Session, type SessionArchived, type UnpushedWork } from "@desktop/lib/protocol";
 import { type SessionTab, showScreen, useApp } from "../lib/app";
 import { sessionState } from "../lib/inbox";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
+import { archiveSheet } from "../lib/archive";
+import { useBusy } from "../lib/busy";
 import { CHECK_COLOR } from "../lib/palette";
 import { Sheet } from "../components/Sheet";
 import { Btn, StateGlyph, cx } from "../components/ui";
@@ -24,6 +26,95 @@ const TABS: { id: SessionTab; label: string }[] = [
   { id: "pr", label: "PR" },
 ];
 
+/** Archiving, as the host's Git settings say (X55): what happens to the
+ * folder and branch, and work that is only on the host. */
+function ArchiveSheet({ host, session, prState, onClose }: { host: string; session: Session; prState: string | null | undefined; onClose: () => void }) {
+  const d = useApp((s) => s.data[host]);
+  const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
+  const git = d?.git ?? null;
+  const warn = git?.warn_unpushed ?? true;
+  // undefined while git.unpushed runs; null when not asked or it failed.
+  const [work, setWork] = useState<UnpushedWork | null | undefined>(warn ? undefined : null);
+  const [checked, setChecked] = useState(false);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
+  const { busy, error, run } = useBusy();
+  useEffect(() => {
+    if (!warn) return;
+    void rpc<UnpushedWork>(host, M.gitUnpushed, { path: session.path })
+      .then(setWork)
+      .catch(() => setWork(null));
+  }, [host, session.path, warn]);
+  const base = d?.projects.find((p) => p.id === session.project_id)?.base_branch ?? session.base;
+  const sheet = archiveSheet({ session, base, git, prState, work: work ?? null, hostLabel });
+  const archive = (push: boolean) =>
+    run(async () => {
+      if (push) await rpc(host, M.gitPush, { path: session.path });
+      const done = await rpc<SessionArchived | boolean>(host, M.sessionArchive, { id: session.id, ...sheet.flags(checked) });
+      if (typeof done === "object" && done.remote_error) setRemoteError(`Archived. Couldn't delete ${session.branch} on origin: ${done.remote_error}`);
+      else showScreen(null);
+    });
+  if (remoteError) {
+    return (
+      <Sheet label="Archive session" onClose={() => showScreen(null)}>
+        <div className="flex flex-col gap-3 px-4 pb-2">
+          <p className="text-[14px] text-error">{remoteError}</p>
+          <Btn onClick={() => showScreen(null)}>Done</Btn>
+        </div>
+      </Sheet>
+    );
+  }
+  return (
+    <Sheet label="Archive session" onClose={onClose}>
+      <div className="scroll flex flex-col gap-3 px-4 pb-2">
+        <span className="text-[16px] font-semibold">Archive session</span>
+        {work === undefined ? (
+          <p className="text-[14px] text-muted">Looking for work only on {hostLabel}…</p>
+        ) : (
+          <>
+            <p className="text-[14px] leading-[1.45] text-muted">{sheet.message(checked)}</p>
+            {sheet.unpushed && (
+              <div className="flex flex-col gap-1.5 rounded-[10px] border border-[rgba(239,95,95,0.3)] bg-raised px-3 py-2.5">
+                <span className="text-[13.5px] font-medium text-error">{sheet.unpushed.heading}</span>
+                {sheet.unpushed.files.map((f) => (
+                  <span key={f.path} className="truncate font-mono text-[12px] text-muted">
+                    {f.status} {f.path}
+                  </span>
+                ))}
+                {sheet.unpushed.more > 0 && <span className="text-[12px] text-faint">and {sheet.unpushed.more} more</span>}
+                <span className="text-[12.5px] text-muted">{sheet.unpushed.summary}</span>
+              </div>
+            )}
+            {sheet.checkbox && (
+              <label className="flex min-h-11 items-center gap-2.5 text-[14.5px]">
+                <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} className="h-5 w-5 accent-[var(--color-accent)]" />
+                {sheet.checkbox}
+              </label>
+            )}
+          </>
+        )}
+        {error && <span className="text-[12.5px] text-error">{error}</span>}
+        {sheet.push && (
+          <Btn disabled={busy || work === undefined || !!sheet.push.disabled} onClick={() => void archive(true)}>
+            {sheet.push.label}
+          </Btn>
+        )}
+        {sheet.push?.disabled && <span className="-mt-1 text-center text-[12px] text-faint">{sheet.push.disabled}</span>}
+        <Btn
+          tone={sheet.danger(checked) ? "secondary" : "primary"}
+          disabled={busy || work === undefined}
+          onClick={() => void archive(false)}
+          className={cx(sheet.danger(checked) && "border-[#5a2a2e] bg-[#2a1416] text-error")}
+        >
+          <Archive size={16} /> {sheet.action}
+        </Btn>
+        <Btn tone="ghost" onClick={onClose}>
+          Cancel
+        </Btn>
+      </div>
+    </Sheet>
+  );
+}
+
 export function SessionScreen({ host, id, tab }: { host: string; id: string; tab: SessionTab }) {
   const d = useApp((s) => s.data[host]);
   const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
@@ -32,6 +123,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const [pr] = usePr(host, session);
   const dot = pr ? checksDot(pr.checks) : null;
   const [menu, setMenu] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   if (!d || !session) {
     return (
       <div className="p-6 text-muted" style={{ paddingTop: "calc(var(--safe-top) + 20px)" }}>
@@ -86,10 +178,9 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
         <Sheet label="Session actions" onClose={() => setMenu(false)}>
           <div className="flex flex-col gap-2 px-4 pb-2">
             <Btn
-              onClick={async () => {
+              onClick={() => {
                 setMenu(false);
-                await rpc(host, M.sessionArchive, { id }).catch(console.error);
-                showScreen(null);
+                setArchiving(true);
               }}
             >
               <Archive size={16} /> Archive session
@@ -100,6 +191,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
           </div>
         </Sheet>
       )}
+      {archiving && <ArchiveSheet host={host} session={session} prState={pr?.state} onClose={() => setArchiving(false)} />}
     </div>
   );
 }

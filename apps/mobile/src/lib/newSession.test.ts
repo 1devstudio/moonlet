@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Section } from "@desktop/lib/protocol";
-import { MODES, branchPreview, modeHelp, nameFromPrompt, projectChoices, setupLine } from "./newSession";
+import { MODES, branchPrefix, branchPreview, modeHelp, nameFromPrompt, projectChoices, setupLine, startPoint } from "./newSession";
 import { NOW, data, project, workspace } from "./fixtures";
 
 describe("nameFromPrompt and branchPreview", () => {
@@ -13,11 +13,30 @@ describe("nameFromPrompt and branchPreview", () => {
   });
 
   it("previews the branch the daemon will create", () => {
-    expect(branchPreview("Fix the Login bug!")).toBe("moonlet/fix-the-login-bug");
-    expect(branchPreview("***")).toBe("moonlet/task");
+    expect(branchPreview("Fix the Login bug!", "moonlet/")).toBe("moonlet/fix-the-login-bug");
+    expect(branchPreview("***", "moonlet/")).toBe("moonlet/task");
     // Captured from a real daemon's session.create.
     expect(nameFromPrompt("Add a “recently viewed” rail to the product page.")).toBe("Add a “recently viewed” rail to the product…");
-    expect(branchPreview("Add a “recently viewed” rail to the product page.")).toBe("moonlet/add-a-recently-viewed-rail-to-the-product");
+    expect(branchPreview("Add a “recently viewed” rail to the product page.", "moonlet/")).toBe("moonlet/add-a-recently-viewed-rail-to-the-product");
+  });
+
+  it("takes the project's branch prefix, else the host's, as the daemon does (X55)", () => {
+    expect(branchPreview("Fix the Login bug!", "mz/")).toBe("mz/fix-the-login-bug");
+    expect(branchPreview("Fix the Login bug!", "")).toBe("fix-the-login-bug");
+    expect(branchPrefix({ branch_prefix: "feature/" }, { branch_prefix: "mz/" })).toBe("feature/");
+    expect(branchPrefix({ branch_prefix: "" }, { branch_prefix: "mz/" })).toBe("");
+    expect(branchPrefix({ branch_prefix: null }, { branch_prefix: "mz/" })).toBe("mz/");
+    expect(branchPrefix(null, null)).toBe("moonlet/");
+  });
+});
+
+describe("startPoint", () => {
+  it("is origin's base when the host starts from origin and the project's base is kept (X55)", () => {
+    expect(startPoint(null, "main", "origin")).toBe("origin/main");
+    expect(startPoint("main", "main", "origin")).toBe("origin/main");
+    expect(startPoint(null, "main", "local")).toBe("main");
+    // Another base is used as it is, as session.create's `from`.
+    expect(startPoint("release/2.1", "main", "origin")).toBe("release/2.1");
   });
 });
 
