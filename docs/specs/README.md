@@ -94,3 +94,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X54 | New session composer: a branch row, attachments and source picks | P1 | 3 | implemented (directory chips checked on a staged row) | [X54-new-session-composer.md](X54-new-session-composer.md) |
 | X55 | Git settings (per host: branch prefix, start point, archiving, unpushed-work warning, dialog defaults, fetching) | P1 | 3 | implemented (remote hosts untried) | [X55-git-settings.md](X55-git-settings.md) |
 | X56 | The daemon starts at login as moonlet's login item (SMAppService) | P1 | 3 | implemented (untried on a signed release) | [X56-login-item.md](X56-login-item.md) |
+| X57 | Add a remote host over the tailnet (pair once, no SSH) | P1 | 3 | draft | [X57-tailnet-hosts.md](X57-tailnet-hosts.md) |
