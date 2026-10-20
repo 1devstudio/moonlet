@@ -83,12 +83,43 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn random_hex(n: usize) -> String {
+fn random_bytes(n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut buf))
         .expect("read /dev/urandom");
-    hex(&buf)
+    buf
+}
+
+fn random_hex(n: usize) -> String {
+    hex(&random_bytes(n))
+}
+
+/// Crockford's base32: no I, L, O or U, so a code read aloud or copied by
+/// hand has nothing to confuse.
+const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// A pairing code (X57): 10 characters of [`CODE_ALPHABET`], 50 random bits.
+pub fn new_code() -> String {
+    random_bytes(10)
+        .into_iter()
+        // 256 is a multiple of 32, so every character is equally likely.
+        .map(|b| CODE_ALPHABET[(b & 31) as usize] as char)
+        .collect()
+}
+
+/// A code as the user typed it: uppercase, without spaces or dashes, with
+/// `O` read as `0` and `I` and `L` as `1`.
+pub fn normalize_code(typed: &str) -> String {
+    typed
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .map(|c| match c.to_ascii_uppercase() {
+            'O' => '0',
+            'I' | 'L' => '1',
+            c => c,
+        })
+        .collect()
 }
 
 /// A device name as the phone sent it: control characters removed, at most
@@ -208,7 +239,7 @@ impl Pairing {
         if now >= self.expires_at {
             return PairCheck::Expired;
         }
-        if code == self.code {
+        if normalize_code(code) == self.code {
             return PairCheck::Paired;
         }
         self.attempts += 1;
@@ -384,7 +415,7 @@ impl Mobile {
                 "Tailscale is not running on this Mac",
             ));
         }
-        let code = random_hex(16);
+        let code = new_code();
         let now = now_ms();
         let pairing = Pairing::new(code.clone(), now);
         let expires_at = pairing.expires_at;
@@ -666,10 +697,39 @@ mod tests {
     }
 
     #[test]
+    fn a_pairing_code_is_ten_crockford_characters() {
+        for _ in 0..50 {
+            let c = new_code();
+            assert_eq!(c.len(), 10, "{c}");
+            assert!(
+                c.chars()
+                    .all(|ch| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(ch)),
+                "{c}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_codes_are_read_the_way_people_type_them() {
+        for typed in ["7kq2m x9pda", "7KQ2M-X9PDA", "7KQ2MX9PDA"] {
+            assert_eq!(normalize_code(typed), "7KQ2MX9PDA", "{typed:?}");
+        }
+        assert_eq!(normalize_code("OIL"), "011");
+        let mut p = Pairing::new("7KQ2MX9PDA".into(), 0);
+        assert_eq!(p.check("7kq2m-x9pda", 1), PairCheck::Paired);
+    }
+
+    #[test]
     fn a_code_works_once_within_five_minutes() {
-        let mut p = Pairing::new("c0de".into(), 1_000);
-        assert_eq!(p.check("c0de", 1_000 + PAIR_TTL_MS), PairCheck::Expired);
-        assert_eq!(p.check("c0de", 1_000 + PAIR_TTL_MS - 1), PairCheck::Paired);
+        let mut p = Pairing::new("7KQ2MX9PDA".into(), 1_000);
+        assert_eq!(
+            p.check("7KQ2MX9PDA", 1_000 + PAIR_TTL_MS),
+            PairCheck::Expired
+        );
+        assert_eq!(
+            p.check("7KQ2MX9PDA", 1_000 + PAIR_TTL_MS - 1),
+            PairCheck::Paired
+        );
     }
 
     /// A Mobile whose file holds one phone with token "tok".
@@ -702,17 +762,17 @@ mod tests {
 
     #[test]
     fn a_code_pairs_one_phone_only() {
-        let mut slot = Some(Pairing::new("c0de".into(), 0));
+        let mut slot = Some(Pairing::new("7KQ2MX9PDA".into(), 0));
         assert_eq!(
-            claim(&mut slot, "c0de", 1).map(|c| c.0),
+            claim(&mut slot, "7KQ2MX9PDA", 1).map(|c| c.0),
             Some(PairCheck::Paired)
         );
         assert!(
             slot.is_none(),
             "the code is used up by the claim that paired"
         );
-        assert_eq!(claim(&mut slot, "c0de", 2).map(|c| c.0), None);
-        let mut slot = Some(Pairing::new("c0de".into(), 0));
+        assert_eq!(claim(&mut slot, "7KQ2MX9PDA", 2).map(|c| c.0), None);
+        let mut slot = Some(Pairing::new("7KQ2MX9PDA".into(), 0));
         assert_eq!(
             claim(&mut slot, "nope", 1).map(|c| c.0),
             Some(PairCheck::Wrong)
@@ -722,7 +782,7 @@ mod tests {
 
     #[test]
     fn five_wrong_codes_cancel_the_pairing() {
-        let mut p = Pairing::new("c0de".into(), 0);
+        let mut p = Pairing::new("7KQ2MX9PDA".into(), 0);
         for _ in 0..4 {
             assert_eq!(p.check("nope", 1), PairCheck::Wrong);
         }

@@ -6,7 +6,8 @@ export interface PairLink {
   host: string;
   /** `ip:port`s to try, in order. */
   addrs: string[];
-  /** The one-time pairing code, 32 hex digits. */
+  /** The one-time pairing code: 10 characters of Crockford's base32 (X57),
+   * or 32 hex digits from a daemon before X57. */
   code: string;
 }
 
@@ -25,6 +26,7 @@ export function parsePairLink(text: string): PairLink | null {
   if (q.get("v") !== "1") return null;
   const code = q.get("code") ?? "";
   const addrs = q.getAll("addr").filter(Boolean);
-  if (!/^[0-9a-f]{32}$/.test(code) || addrs.length === 0) return null;
+  const short = /^[0-9A-HJKMNP-TV-Z]{10}$/.test(code);
+  if (!(short || /^[0-9a-f]{32}$/.test(code)) || addrs.length === 0) return null;
   return { host: q.get("host") || "Mac", addrs, code };
 }

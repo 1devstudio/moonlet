@@ -225,9 +225,11 @@ async fn a_paired_phone_comes_back_with_its_token_and_uses_the_daemon() {
     assert!(p.url.starts_with("moonlet://pair?v=1&host="), "{}", p.url);
     assert!(p.url.ends_with(&format!("&code={}", p.code)), "{}", p.url);
     assert_eq!(p.addresses, vec![addr.clone()]);
-    assert_eq!(p.code.len(), 32);
+    assert_eq!(p.code.len(), 10);
 
-    let (_, reply) = auth(&addr, json!({ "pair": p.code, "device": "Alex's iPhone" })).await;
+    // Typed by hand, in lowercase with a space (X57).
+    let typed = format!("{} {}", &p.code[..5], &p.code[5..]).to_lowercase();
+    let (_, reply) = auth(&addr, json!({ "pair": typed, "device": "Alex's iPhone" })).await;
     let token = match reply {
         Some(Message::Authed { token: Some(t), .. }) => t,
         other => panic!("{other:?}"),
