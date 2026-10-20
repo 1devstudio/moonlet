@@ -38,11 +38,18 @@ if [ "$systemd" = 0 ]; then
   fake_uname "Linux x86_64"
 fi
 unset MOONLET_HOME MOONLET_SOCK
-# Tailnet access listens on loopback, as in the e2e tests (X39).
+# Tailnet access listens on loopback, as in the e2e tests (X39). A daemon
+# that systemd starts gets the user manager's environment, not ours.
 export MOONLET_MOBILE_ADDRS=127.0.0.1
+if [ "$systemd" = 1 ]; then
+  systemctl --user set-environment MOONLET_MOBILE_ADDRS=127.0.0.1
+fi
 bin="$HOME/.moonlet/bin"
 cleanup() {
   "$bin/moonletd" stop >/dev/null 2>&1 || true
+  if [ "$systemd" = 1 ]; then
+    systemctl --user unset-environment MOONLET_MOBILE_ADDRS || true
+  fi
   rm -rf "$work"
 }
 trap cleanup EXIT
