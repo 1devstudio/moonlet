@@ -116,7 +116,6 @@ fn log_js(level: String, message: String) {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// The branch of a session started from a task (X57), as the desktop's
 /// `task_branch_name` makes it.
 #[tauri::command]
@@ -142,6 +141,7 @@ fn task_branch_name(
     branch::task_branch(kind, template.as_deref(), &vars, max_len)
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
