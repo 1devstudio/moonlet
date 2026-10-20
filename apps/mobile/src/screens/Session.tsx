@@ -164,7 +164,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
                 <ExternalLink size={11} className="text-faint" />
               </button>
             )}
-            <span className="truncate">{sessionLine(session, project, hostLabel)}</span>
+            <span className="min-w-0 truncate">{sessionLine(session, project, hostLabel)}</span>
           </span>
         </div>
         <button type="button" aria-label="Session actions" onClick={() => setMenu(true)} className="flex h-10 w-10 items-center justify-center text-muted">
