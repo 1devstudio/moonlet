@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, profileLine, removeAsks, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsNav } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -197,6 +197,17 @@ describe("a tailnet host's line (X57)", () => {
     });
     // 0.1.9 is older than 0.1.10.
     expect(hostLine(host({ status: "needs_update", daemon_version: "0.1.9" }), 0, "0.1.10").text).toBe("Update moonlet on studio-mini (it runs 0.1.9, this Mac 0.1.10)");
+  });
+
+  it("says how to update a Linux host and a Mac (X58)", () => {
+    const linux = host({ id: "build-box", label: "build-box", status: "needs_update", daemon_version: "0.1.26", os: "linux" });
+    expect(hostLine(linux, 0, "0.1.30").text).toBe("Update moonlet on build-box (it runs 0.1.26, this Mac 0.1.30): run this there");
+    expect(updateCommand(linux, "0.1.30")).toBe("curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh");
+    const mac = host({ status: "needs_update", daemon_version: "0.1.26", os: "macos" });
+    expect(hostLine(mac, 0, "0.1.30").text).toBe("Update moonlet on studio-mini (it runs 0.1.26, this Mac 0.1.30) from its Settings › Updates");
+    expect(updateCommand(mac, "0.1.30")).toBeNull();
+    // This Mac is the older one: nothing to run on the host.
+    expect(updateCommand({ ...linux, daemon_version: "0.1.31" }, "0.1.30")).toBeNull();
   });
 
   it("says a host that removed this Mac needs pairing again", () => {

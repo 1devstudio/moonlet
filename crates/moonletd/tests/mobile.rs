@@ -297,6 +297,7 @@ async fn authed_says_which_daemon_answered_before_hello() {
         protocol,
         daemon_version,
         host,
+        os,
         ..
     }) = reply
     else {
@@ -305,6 +306,12 @@ async fn authed_says_which_daemon_answered_before_hello() {
     assert_eq!(protocol, Some(info.protocol));
     assert_eq!(daemon_version.as_deref(), Some(info.version.as_str()));
     assert_eq!(host.as_deref(), Some(st.host.as_str()));
+    let this_os = if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    assert_eq!(os.as_deref(), Some(this_os));
 }
 
 #[tokio::test]
