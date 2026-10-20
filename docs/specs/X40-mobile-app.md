@@ -127,6 +127,13 @@ Added 2026-10-20. Each host's daemon keeps its Git settings; the phone loads the
 - [x] The Create PR form's **Draft** starts as the host's "Draft pull requests" says. (`startsDraft` in `lib/checks.test.ts`)
 - The phone stages files one by one with their checkboxes, so "Stage all changes first" has no place there; fetching and fast-forwarding base branches is the desktop's.
 
+### Queued messages (X49)
+
+Added 2026-10-20; the phone showed the queue read-only before.
+
+- [x] Under the queued messages, **Send now** (`Send <n> now` for several, `chat.send_now`) and **Ask aside** on the last one; both go once Send now was asked, while the line reads `Stopping <command>…`. (`queuedActions` in `lib/chatView.test.ts`)
+- [x] Ask aside asks Claude to give the message back (`chat.unqueue`) and, once it is out of the queue, opens the Aside sheet: the question, `Answering from the conversation`, then the answer with its time and cost, **Queue for Claude** and **Close** (`chat.aside`). If Claude read the message first, the chat says "Claude read the message before it could be asked aside". (The outcome is the desktop's `unqueued`, tested in `queued.test.ts`)
+
 ## UI
 
 The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe areas respected, dark theme only.
