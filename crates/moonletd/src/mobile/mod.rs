@@ -392,7 +392,8 @@ impl Mobile {
             self.save(&data);
         }
         if !enabled {
-            self.pairing.lock().unwrap().take();
+            // A code on screen stops working: say so, as Cancel would.
+            self.pair_cancel();
             self.listening.lock().unwrap().stop();
             for c in self.conns.lock().unwrap().values() {
                 let _ = c.close.send(true);
@@ -503,7 +504,7 @@ impl Mobile {
         let before = data.devices.len();
         data.devices.retain(|d| d.id != id);
         if data.devices.len() == before {
-            return Err(RpcError::new("not_found", format!("no phone {id}")));
+            return Err(RpcError::new("not_found", format!("no paired device {id}")));
         }
         self.save(&data);
         Ok(())

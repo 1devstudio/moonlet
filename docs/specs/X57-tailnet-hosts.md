@@ -28,6 +28,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - [x] `mobile.status` lists every device with its `kind`. (`a_mac_pairs_as_a_desktop`)
 - [x] Every `authed` reply carries the daemon's `protocol`, `daemon_version` and `host` (the host label, as in `mobile.pair_start`). They are sent before `hello`, so a client learns the daemon's version even when their protocols differ. Phone apps that do not read these fields keep working. (`authed_says_which_daemon_answered_before_hello`; the phone's `tests/macs.rs` talks to a daemon from before X57)
 - [x] A paired desktop gets exactly what a paired phone gets: X39's rules apply to every tailnet connection, whatever its kind. In particular `mobile.*` methods other than `mobile.hosts` and `mobile.unpair` are refused with `forbidden: manage phones from the Mac`. (`a_paired_mac_can_remove_itself_but_manage_nothing_else`)
+- [x] Turning tailnet access off while a code is shown ends the pairing with `mobile.pair_ended {reason: "cancelled"}`, so no page keeps showing a code that no longer works. (`turning_access_off_ends_the_pairing`)
 - [x] `mobile.unpair` on a tailnet connection removes the calling device, as `mobile.revoke` would, and its connection closes. It is refused on the Unix socket with `invalid_params: not a paired device`. (`a_paired_mac_can_remove_itself_but_manage_nothing_else`)
 
 ### A shorter pairing code
