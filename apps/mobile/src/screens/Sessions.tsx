@@ -13,7 +13,7 @@ import { useBusy } from "../lib/busy";
 import { STATE_COLOR } from "../lib/palette";
 import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
 import { WorkspacePill } from "../components/WorkspacePill";
-import { useNow } from "./Inbox";
+import { useNow } from "../lib/now";
 
 const AVATAR = ["#d97757", "#5aa9e6", "#a371f7", "#3ecf6e", "#f2c94c"];
 

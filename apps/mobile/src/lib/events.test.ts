@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ChatState, ReadRequest, TerminalInfo } from "@desktop/lib/protocol";
 import { type HostData, emptyData } from "./app";
-import { applyChanges, eventChanges } from "./events";
+import { DaemonError } from "@desktop/lib/daemon";
+import { applyChanges, eventChanges, gitAfterError } from "./events";
 
 const term = (id: number, agent_state: TerminalInfo["agent_state"]) => ({ id, agent_state }) as TerminalInfo;
 const read = (request_id: number) => ({ request_id }) as ReadRequest;
@@ -70,5 +71,12 @@ describe("events", () => {
     const merged = applyChanges(loaded, during);
     expect(merged.terminals[1].agent_state).toBe("blocked");
     expect(merged.reads.map((r) => r.request_id)).toEqual([7]);
+  });
+});
+
+describe("gitAfterError (X55)", () => {
+  it("drops the settings only for a daemon too old to have them, and keeps them through a failed reply", () => {
+    expect(gitAfterError(new DaemonError({ code: "unknown_method", message: "unknown method git.settings" }))).toBeNull();
+    expect(gitAfterError(new DaemonError({ code: "failed", message: "connection reset" }))).toBe("keep");
   });
 });

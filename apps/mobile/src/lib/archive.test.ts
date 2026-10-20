@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GIT_SETTINGS } from "@desktop/lib/gitSettings";
-import { archiveSheet } from "./archive";
+import { archiveSheet, archivedNote } from "./archive";
 import { session } from "./fixtures";
 
 const checkout = session("checkout", "Fix checkout button on mobile");
@@ -55,5 +55,23 @@ describe("archiveSheet without the unpushed warning (X55)", () => {
     const sheet = archiveSheet({ session: checkout, base: "main", git: { ...DEFAULT_GIT_SETTINGS, warn_unpushed: false }, prState: null, work: { ...clean, commits: 3 }, hostLabel: "studio" });
     expect(sheet.action).toBe("Archive");
     expect(sheet.unpushed).toBeNull();
+  });
+});
+
+describe("archiveSheet when the host could not say (X55)", () => {
+  it("says the check failed and asks to archive anyway", () => {
+    const sheet = archiveSheet({ session: checkout, base: "main", git: null, prState: null, work: "failed", hostLabel: "studio" });
+    expect(sheet.checkFailed).toBe("Couldn't check for work only on studio. Archiving may remove uncommitted files or unpushed commits.");
+    expect(sheet.action).toBe("Archive anyway");
+    expect(sheet.danger(false)).toBe(true);
+    expect(sheet.push).toBeNull();
+  });
+});
+
+describe("archivedNote (X55)", () => {
+  it("reports a branch origin refused to delete; nothing otherwise, or from an older daemon", () => {
+    expect(archivedNote({ remote_error: "remote rejected: protected branch" }, "mz/search")).toBe("Archived. Couldn't delete mz/search on origin: remote rejected: protected branch");
+    expect(archivedNote({ remote_error: null }, "mz/search")).toBeNull();
+    expect(archivedNote(true, "mz/search")).toBeNull();
   });
 });
