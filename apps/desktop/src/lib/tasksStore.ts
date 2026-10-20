@@ -4,9 +4,9 @@
 import { NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor, withStatus } from "./boardColumns";
 import { create } from "zustand";
-import { hostsApi, rpc } from "./daemon";
+import { DaemonError, hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type Project, type ProjectConfig, type Worktree } from "./protocol";
+import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type Worktree } from "./protocol";
 import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules, startAction } from "./keepInStep";
@@ -20,6 +20,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
 import { parseWsKey, wsKey } from "./workspaces";
+import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
+import { snapshotsToShare } from "./taskSnapshot";
 
 /** GitHub Issues through `gh` on the project's host (X44). */
 export const GITHUB = "github:github.com";
@@ -1343,4 +1345,93 @@ export function setKeepInStep(task: Pick<Task, "connection" | "key">, on: boolea
     /* storage unavailable */
   }
   useTasks.setState({ paused });
+}
+
+/**
+ * A phone's request (X57): moves, creates and starts as this app's own
+ * Tasks mode does, then answers through the daemon.
+ */
+export async function answerTaskRequest(host: string, ev: TaskRequestEvent) {
+  const answer = (ok: boolean, result?: unknown, error?: string) => rpc(host, M.tasksAnswer, { request_id: ev.request_id, ok, ...(result !== undefined && { result }), ...(error && { error }) }).catch(() => {});
+  try {
+    const key = wsKey(host, ev.workspace);
+    // A workspace this app has not synced yet is read first.
+    if (!useTasks.getState().data[key]) await refreshTasks(host, ev.workspace);
+    const st = useTasks.getState();
+    const config = trackersConfig(st);
+    const data = st.data[key];
+    const r = resolveTaskRequest(ev.action, {
+      boards: (config.boards ?? []).filter((b) => b.workspace === key),
+      tasks: data ? placedTasks(data, config) : [],
+    });
+    if ("error" in r) return answer(false, undefined, r.error);
+    switch (r.kind) {
+      case "move": {
+        await moveTask(host, ev.workspace, r.task, r.category, Date.now(), r.status);
+        const why = useTasks.getState().failures[taskId(r.task)];
+        return why ? answer(false, undefined, why) : answer(true, { task: taskId(r.task) });
+      }
+      case "create_options":
+        return answer(true, await createOptions(host, r.board, r.place, r.issueType));
+      case "create": {
+        const created = await createIssue(host, ev.workspace, r.board, r.column, r.issue);
+        return answer(true, { task: taskId(created) });
+      }
+      case "started":
+        await startedFromTask(host, ev.workspace, taskStart(r.task, data?.repos ?? {}, data?.sourceProjects), { session: r.session, assign: r.assign });
+        return answer(true, {});
+    }
+  } catch (e) {
+    return answer(false, undefined, errorMessage(e));
+  }
+}
+
+/** What each workspace's daemon has of its boards, as JSON by `host/workspaceId` (X57). */
+const shared: Record<string, string> = {};
+
+/** Saves the workspaces' board snapshots that changed in their daemons (X57). */
+async function shareTasks() {
+  const t = useTasks.getState();
+  if (!t.config) return;
+  const from = useStore.getState().hosts.local?.hostname ?? "this Mac";
+  for (const s of snapshotsToShare({ config: t.config, data: t.data, moving: t.moving, activity: t.activity, attention: t.attention, shownBoard: t.shownBoard, from }, shared)) {
+    if (useStore.getState().hosts[s.host]?.status !== "connected") continue;
+    try {
+      await rpc(s.host, M.tasksSetSnapshot, { workspace: s.workspace, snapshot: s.snapshot });
+      shared[`${s.host}/${s.workspace}`] = s.json;
+    } catch (e) {
+      // A daemon from before X57 has no snapshots: not asked again until the boards change.
+      if (e instanceof DaemonError && e.code === "unknown_method") shared[`${s.host}/${s.workspace}`] = s.json;
+    }
+  }
+}
+
+/**
+ * Shares the boards with the phone (X57): each change is saved in its
+ * workspace's daemon a second later, and while a phone is paired, every
+ * workspace with a board syncs every 5 minutes, as the shown one does.
+ * Returns the stop.
+ */
+export function shareTasksWithPhones(): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const unsubscribe = useTasks.subscribe((now, prev) => {
+    if (now.data === prev.data && now.moving === prev.moving && now.activity === prev.activity && now.config === prev.config && now.attention === prev.attention && now.shownBoard === prev.shownBoard) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void shareTasks(), 1000);
+  });
+  const poll = async () => {
+    const status = await rpc<MobileStatus>("local", M.mobileStatus).catch(() => null);
+    if (!status?.devices.length) return;
+    for (const key of new Set((trackersConfig(useTasks.getState()).boards ?? []).map((b) => b.workspace))) {
+      const { host, id } = parseWsKey(key);
+      if (useStore.getState().hosts[host]?.status === "connected") ensureTasks(host, id);
+    }
+  };
+  void poll();
+  const every = setInterval(() => void poll(), 300_000);
+  return () => {
+    unsubscribe();
+    clearInterval(every);
+    if (timer) clearTimeout(timer);
+  };
 }
