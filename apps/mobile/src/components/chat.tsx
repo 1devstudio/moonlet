@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { type ChatBlock, diffStat, planOf, thinkingPreview, toolCommand, toolGroupLabel, toolGroupStatus } from "@desktop/lib/chat";
 import type { ChatItem, ToolCall } from "@desktop/lib/protocol";
-import { AGENT_STATE, type AgentRow, agentCount, isActive, launchedRows } from "@desktop/lib/subagents";
+import { AGENT_STATE, type AgentRow, agentCount, isActive, launchedRows, modelLabel } from "@desktop/lib/subagents";
 import { DIFF_LINE } from "../lib/palette";
 import { Markdown } from "./Markdown";
 import { Btn, StateGlyph, cx } from "./ui";
@@ -161,7 +161,7 @@ export function AskerLine({ name }: { name: string }) {
 function LaunchedCard({ tools, rows, onOpen }: { tools: ChatItem[]; rows: AgentRow[]; onOpen: (row: AgentRow) => void }) {
   const list = launchedRows(tools, rows);
   return (
-    <div className="overflow-hidden rounded-[12px] border border-border bg-panel">
+    <div className="flex-none overflow-hidden rounded-[12px] border border-border bg-panel">
       <div className="flex h-10 items-center border-b border-border px-3.5 text-[13.5px] font-medium">Launched {agentCount(list.length)}</div>
       {list.map((r) => {
         const row = rows.find((x) => x.agent.tool_use_id === r.key);
@@ -189,7 +189,7 @@ export function AgentDetail({ row, onStop }: { row: AgentRow; onStop: () => void
         <span className="font-mono text-[12.5px] text-faint tabular-nums">{row.elapsed}</span>
       </div>
       <div className={cx("text-[13px]", AGENT_STATE[row.state].text)}>
-        {[AGENT_STATE[row.state].label, a.kind, a.model].filter(Boolean).join(" · ")}
+        {[AGENT_STATE[row.state].label, a.kind, a.model && modelLabel(a.model)].filter(Boolean).join(" · ")}
       </div>
       {row.line && <div className={cx("text-[13.5px]", row.line.tone === "error" ? "text-error" : row.line.tone === "muted" ? "text-muted" : "text-fg")}>{row.line.text}</div>}
       <div className="eyebrow">Prompt</div>
