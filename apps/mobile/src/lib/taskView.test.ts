@@ -4,7 +4,7 @@ import { DEFAULT_RULES } from "@desktop/lib/keepInStep";
 import type { Task } from "@desktop/lib/tasks";
 import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import { phoneBoards } from "./board";
-import { activityTime, issueForm, pruneMoves, taskDetail } from "./taskView";
+import { activityTime, issueForm, pruneMoves, taskDetail, taskPreset } from "./taskView";
 import { MIN, NOW, data, project, session, terminal, workspace } from "./fixtures";
 
 const LINEAR = "linear:acme";
@@ -136,5 +136,16 @@ describe("issueForm (X57, as X52)", () => {
   it("needs only a title on a Linear board, and sends no labels where they can't be set", () => {
     const f = issueForm(MOONLET, snapshot, { ...draft, title: "Show host health", labels: ["ui"] }, { me: "u1", people: [], labels: [], canSet: true, fields: ["assignee"] });
     expect([f.places, f.askPlace, f.askType, f.ready, f.labels, f.draft.labels]).toEqual([[], false, false, true, false, []]);
+  });
+});
+
+describe("taskPreset (X57)", () => {
+  it("starts a session from a task as the Mac's composer does: its projects, Keep in step's checkbox and the tracker's branch template", () => {
+    const todo: Task = { ...MOON142, key: "MOON-151", title: "Drag sessions between sections", column: "todo", tracker: { id: "id-151", state: "s-todo", source: "MOON" } };
+    const snap: TaskSnapshot = { ...snapshot, sourceProjects: { [`${LINEAR} MOON`]: ["moonlet"] }, trackers: { ...snapshot.trackers, linear: { branch_template: "{key}-{title}", max_length: 40, rules: DEFAULT_RULES } } };
+    const [b] = phoneBoards(hosts, { mac: { ...mac(), tasks: { personal: snap } } }, null);
+    const p = taskPreset(b, todo);
+    expect([p.key, p.title, p.projects, p.template, p.maxLen, p.ref]).toEqual(["MOON-151", "Drag sessions between sections", ["moonlet"], "{key}-{title}", 40, { connection: LINEAR, key: "MOON-151", url: "https://linear.app/acme/issue/MOON-142" }]);
+    expect(p.assign).toEqual({ label: "Move to In Progress", title: "Move MOON-151 to In Progress and assign it to me", checked: true });
   });
 });

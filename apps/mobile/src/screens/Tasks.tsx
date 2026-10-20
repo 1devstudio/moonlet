@@ -2,10 +2,10 @@
 // a tab per column, and each card with its sessions live.
 
 import { useState } from "react";
-import { ArrowLeftRight, Check, ChevronDown, ChevronRight, Plus, Search, X } from "lucide-react";
+import { ArrowLeftRight, Check, ChevronDown, ChevronRight, Play, Plus, Search, X } from "lucide-react";
 import { type Category, syncedColumns } from "@desktop/lib/boards";
 import { createTarget, createsIn } from "@desktop/lib/newIssue";
-import { showScreen, updateSettings, useApp } from "../lib/app";
+import { showScreen, startFromTask, updateSettings, useApp } from "../lib/app";
 import { type CardView, type ColumnTab, type PhoneBoard, boardScreen, firstColumn, phoneBoards, switcher } from "../lib/board";
 import { useNow } from "../lib/now";
 import { useSessionsDetails } from "../lib/rowDetails";
@@ -84,7 +84,12 @@ function TaskCard({ c, b, project, failure }: { c: CardView; b: PhoneBoard; proj
           ))}
         </div>
       )}
-      {!c.rows.length && c.empty && <span className="text-[13px] text-faint">{c.empty}</span>}
+      {!c.rows.length && (
+        <button type="button" onClick={() => startFromTask({ board: b.key, task: c.id })} className="flex min-h-11 items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong text-[14px]">
+          <Play size={14} /> Start a session
+        </button>
+      )}
+      {!c.rows.length && c.card.orphans.length > 0 && <span className="text-[12.5px] text-faint">{c.empty}</span>}
       {c.drift && (
         <div className="flex min-h-11 items-center gap-2.5 rounded-[10px] border border-[rgba(217,119,87,0.35)] bg-[rgba(217,119,87,0.07)] px-3 text-[13.5px]">
           <ArrowLeftRight size={14} className="flex-none text-accent" />

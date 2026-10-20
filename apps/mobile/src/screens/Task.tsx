@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, GitBranch, MoreHorizontal, Play, ShieldAlert } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { syncedColumns } from "@desktop/lib/boards";
-import { showScreen, showTab, useApp } from "../lib/app";
+import { showScreen, startFromTask, useApp } from "../lib/app";
 import { phoneBoards } from "../lib/board";
 import { useBusy } from "../lib/busy";
 import { useNow } from "../lib/now";
@@ -131,6 +131,9 @@ export function TaskScreen({ board, task }: { board: string; task: string }) {
               <div key={w.path} className="flex items-center gap-2.5 rounded-[14px] border border-dashed border-border-strong p-3">
                 <GitBranch size={16} className="text-muted" />
                 <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{w.branch}</span>
+                <Btn className="h-9" onClick={() => startFromTask({ board, task, worktree: w })}>
+                  Start
+                </Btn>
               </div>
             ))}
           </section>
@@ -151,7 +154,7 @@ export function TaskScreen({ board, task }: { board: string; task: string }) {
         )}
       </main>
       <div className="flex-none border-t border-border px-4 pt-3" style={{ paddingBottom: "max(var(--safe-bottom), 12px)" }}>
-        <Btn tone="primary" className="w-full bg-accent text-[#1a1208]" onClick={() => showTab("new")}>
+        <Btn tone="primary" className="w-full bg-accent text-[#1a1208]" onClick={() => startFromTask({ board, task })}>
           <Play size={16} /> New session for {t.key}
         </Btn>
       </div>

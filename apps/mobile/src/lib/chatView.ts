@@ -4,6 +4,7 @@ import { CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS } from "@desktop/lib
 import { type ChatBlock, contextView } from "@desktop/lib/chat";
 import type { ChatState, Project, QueuedMessage, Session, TerminalInfo } from "@desktop/lib/protocol";
 import { sendNowLabel, sendNowParams, unqueued } from "@desktop/lib/queued";
+import { type AgentRowState, agentRows } from "@desktop/lib/subagents";
 import type { ChatSummary, HostData } from "./app";
 
 /** The session's conversation: its first chat terminal. */
@@ -59,4 +60,16 @@ export function asideStep(st: Pick<ChatState, "queued" | "items">, asked: Queued
   const outcome = unqueued(st, asked.id);
   if (outcome === "waiting") return { kind: "wait" };
   return outcome === "cancelled" ? { kind: "ask", question: asked.text } : { kind: "note", text: "Claude read the message before it could be asked aside" };
+}
+
+/** The session header's strip while subagents work (X57): a bar per agent
+ * in launch order, how many are done, and whether one needs the user. */
+export function agentStrip(st: Pick<ChatState, "subagents" | "pending">, now: number): { bars: AgentRowState[]; progress: string; word: string } | null {
+  const agents = st.subagents ?? [];
+  if (!agents.length) return null;
+  const stateOf = new Map(agentRows([{ id: 0, st }], now).map((r) => [r.agent.id, r.state]));
+  const bars = agents.map((a) => stateOf.get(a.id) ?? "done");
+  const needs = bars.filter((b) => b === "needs").length;
+  const active = bars.some((b) => b === "running" || b === "needs");
+  return { bars, progress: `${bars.filter((b) => b === "done").length}/${bars.length}`, word: needs ? `${needs} needs you` : active ? "all running" : "all done" };
 }

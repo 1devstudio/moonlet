@@ -27,6 +27,14 @@ pub struct BranchVars<'a> {
     pub issue_type: &'a str,
 }
 
+/// The branch of a session started from a task (X44, X46, X57): the
+/// tracker's template (its default when absent or empty) filled in and cut
+/// to `max_len` (48 when absent).
+pub fn task_branch(kind: crate::TrackerKind, template: Option<&str>, vars: &BranchVars, max_len: Option<usize>) -> String {
+    let template = template.filter(|t| !t.is_empty()).unwrap_or_else(|| default_template(kind));
+    branch_name(template, vars, max_len.unwrap_or(DEFAULT_MAX_LEN))
+}
+
 /// Fills `template` and makes it a branch name: lower case, words joined by
 /// `-`, at most `max_len` characters.
 pub fn branch_name(template: &str, vars: &BranchVars, max_len: usize) -> String {
@@ -147,6 +155,16 @@ mod tests {
             ["{key}-{title}"; 3]
         );
         assert_eq!(default_template(Github), "{number}-{title}");
+    }
+
+    #[test]
+    fn a_tasks_branch_takes_its_trackers_template_or_the_default() {
+        let vars = BranchVars { user: "", issue_type: "", ..moon_151() };
+        assert_eq!(task_branch(crate::TrackerKind::Linear, None, &vars, None), "moon-151-drag-sessions-between-sections");
+        assert_eq!(task_branch(crate::TrackerKind::Linear, Some(""), &vars, None), "moon-151-drag-sessions-between-sections");
+        assert_eq!(task_branch(crate::TrackerKind::Linear, Some("{title}"), &vars, Some(14)), "drag-sessions");
+        let issue = BranchVars { key: "acme/web#57", title: "Search ignores accents", number: Some(57), user: "", issue_type: "" };
+        assert_eq!(task_branch(crate::TrackerKind::Github, None, &issue, None), "57-search-ignores-accents");
     }
 
     #[test]

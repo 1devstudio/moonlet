@@ -2644,6 +2644,7 @@ dependencies = [
  "anyhow",
  "moonlet-link",
  "moonlet-proto",
+ "moonlet-trackers",
  "security-framework",
  "serde",
  "serde_json",
