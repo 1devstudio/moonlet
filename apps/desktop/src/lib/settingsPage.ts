@@ -143,6 +143,17 @@ export function offStopsDaemon(st: DaemonService): boolean {
   return st.state === "enabled" || st.state === "loaded";
 }
 
+/** Whether the line offers Open Login Items: only the user can allow the login item again there. */
+export function opensLoginItems(st: DaemonService): boolean {
+  return st.mechanism === "login_item" && st.state === "requires_approval";
+}
+
+/** The toast after the toggle changed, given the state it left. */
+export function daemonToast(on: boolean, st: DaemonService): string {
+  if (!on) return "Login item removed";
+  return opensLoginItems(st) ? "Allow moonlet in System Settings › Login Items" : "The moonlet daemon now starts at login";
+}
+
 /** The line under "Start the moonlet daemon at login". */
 export function daemonLine(st: DaemonService, home: string | null): StatusLine {
   if (st.mechanism === "login_item") {
