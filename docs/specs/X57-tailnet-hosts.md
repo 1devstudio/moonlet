@@ -57,7 +57,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
   - anything else is a code. After the normalization above it must be 10 characters of the alphabet, otherwise the dialog says "This is not a pairing link or code." For a code, the dialog also asks for "Name on your tailnet", such as `studio-mini` or `build-box:47500`.
 - [x] For a typed name, the app resolves it with the system resolver and keeps only the Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), with the given port or 47428. When it resolves to no Tailscale address, the code is not sent, and the dialog says "studio-mini is not on your tailnet (it resolves to 203.0.113.7)." or "studio-mini was not found. Is Tailscale running on this Mac?" (`moonlet-core` `tailnet` tests `a_name_on_the_tailnet_gives_its_listener_addresses`, `a_name_off_the_tailnet_gets_no_code`)
 - [x] Addresses from a pasted link must be Tailscale addresses, or loopback (a daemon on this Mac, as in the e2e tests). Otherwise nothing is sent, and the dialog says "The link points at 203.0.113.7:47428, which is not on your tailnet." A forged link could otherwise point the app at a machine off the tailnet, which would then run its sessions. (`moonlet-core` `tailnet` test `a_link_may_point_only_at_the_tailnet_or_this_machine`)
-- [ ] The host's id and label are its name. A name already used by another host is refused with "A host named studio-mini already exists."
+- [x] The host's id and label are its name. A name already used by another host is refused with "A host named studio-mini already exists." (`tailnet-host.e2e.ts`; `hosts.rs` test `a_tailnet_host_is_named_without_its_port`)
 - [x] The app pairs with `auth {pair, device: <this Mac's name>, kind: "desktop"}`. On `authed` it saves the host and connects. On failure the dialog shows the daemon's message, X39's `this phone is not paired with this Mac` reading "The code was not accepted. Start pairing again on studio-mini.", and nothing is saved. (`tailnet-host.e2e.ts`: the host lists a `desktop`; `hosts.rs` test `a_refused_code_says_to_start_again_on_the_host`)
 
 ### Connecting (app and `moonlet-link`)
@@ -68,13 +68,13 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - [x] The desktop shows `refused` as "studio-mini no longer accepts this Mac. Pair it again." (`settingsPage.test.ts`: "says a host that removed this Mac needs pairing again")
 - [ ] Any other failure (no address answers, the connection drops) reconnects with `moonlet-link`'s backoff, as SSH hosts do (R3).
 - [ ] After `authed` the connection is a normal host connection: R3's reconnect banner, R4's sidebar grouping, notifications that name the host, the palette and the approval inbox all work for tailnet hosts.
-- [x] **Remove** on a tailnet host calls `mobile.unpair` when the host is connected, then forgets the host and its token. When the host is not connected, it forgets them only, and the dialog says "studio-mini will still list this Mac until you remove it there." (`tailnet-host.e2e.ts` for a connected host; the offline confirm has no test)
+- [x] **Remove** on a tailnet host calls `mobile.unpair` when the host is connected, then forgets the host and its token. When the host is not connected, it forgets them only, and the dialog says "studio-mini will still list this Mac until you remove it there." (`tailnet-host.e2e.ts` for a connected host; `settingsPage.test.ts` "asks before removing a tailnet host it cannot tell")
 
 ### What differs from SSH hosts
 
 - [x] A tailnet host has no Install helper or Reinstall helper button. (`tailnet-host.e2e.ts`)
 - [x] "Open in" offers no editors for workspaces on a tailnet host, because VS Code's and Cursor's `ssh-remote+` needs SSH (ADR 0011). (`openIn.test.ts`)
-- [x] On a tailnet host, an MCP sign-in whose `redirect_uri` is a `localhost` port (X29) is not started. A toast says "Signing in to <server> isn't available for sessions on studio-mini yet." Sign-ins without a local callback work as before. (`oauthRedirect.test.ts`)
+- [x] On a tailnet host, an MCP sign-in whose `redirect_uri` is a `localhost` port (X29) is cancelled as soon as its sign-in page shows it, before the browser opens or the link is copied. A toast says "Signing in to <server> isn't available for sessions on studio-mini yet." Sign-ins without a local callback work as before. (`oauthRedirect.test.ts`)
 - [x] Phones keep routing only to SSH hosts: `mobile.hosts` lists only the SSH hosts in `app-hosts.json`. (`phones_route_only_to_ssh_hosts`)
 
 ## UI
@@ -91,7 +91,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
     - `Pairing…`
     - `Connected · moonletd <version> · <n> sessions`
     - `Update moonlet on studio-mini (it runs 0.1.26, this Mac 0.1.30)`, or `Update moonlet on this Mac (studio-mini runs 0.1.30)` when the host is newer
-    - the error, or **Pair again** for "no longer accepts this Mac", which forgets the host and opens Add host with its name
+    - the error with **Retry**, `needs_update` with **Retry** (after updating the host), or **Pair again** for `refused`, which forgets the host and opens Add host with its name
   - **Remove** works as described above.
 - **Sidebar:** a host that is not connected shows its line in the notice under its name (R4), the same words as Settings for `needs_update` and a host that no longer accepts this Mac.
 
@@ -172,7 +172,8 @@ Every criterion maps to a test. Expected values are literals from this spec.
 - **e2e, `apps/desktop/e2e/specs/tailnet-host.e2e.ts`:** a crucial feature (adding a host is how sessions start on it). The fixture starts a second scratch daemon with tailnet access on 127.0.0.1 and gets a pairing link from it with `mobile.pair_start`. The spec:
   - pastes the link into Add host;
   - sees "Connected · moonletd";
-  - sees the host in the sidebar and in the Add repository host picker;
+  - sees the host in the Add project dialog's Host list (the sidebar lists a host only once it has projects);
+  - is refused a second host with the same name;
   - removes it and sees the second daemon no longer list the device.
 - **Manual:** pair the MacBook with the real Mac mini over Tailscale by name and code, open a session there, close the lid, and reopen it.
 

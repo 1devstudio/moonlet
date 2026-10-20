@@ -173,9 +173,6 @@ export function daemonLine(st: DaemonService, home: string | null): StatusLine {
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-/** What the daemon says to a token it no longer accepts (X39). */
-const NOT_PAIRED = "this phone is not paired with this Mac";
-
 /** Is version `a` older than `b`? Compares `x.y.z` numerically. */
 function older(a: string, b: string): boolean {
   const pa = a.split(".").map(Number);
@@ -191,15 +188,12 @@ function older(a: string, b: string): boolean {
 function updateText(h: HostInfo, appVersion: string): string {
   const theirs = h.daemon_version ?? "";
   if (theirs && appVersion && older(appVersion, theirs)) return `Update moonlet on this Mac (${h.label} runs ${theirs})`;
-  if (theirs && appVersion) return `Update moonlet on ${h.label} (it runs ${theirs}, this Mac ${appVersion})`;
+  if (theirs && appVersion && older(theirs, appVersion)) return `Update moonlet on ${h.label} (it runs ${theirs}, this Mac ${appVersion})`;
   return `Update moonlet on ${h.label}`;
 }
 
-/** An error, in words that say what to do about it. */
-function errorText(h: HostInfo): string | null {
-  if (h.message === NOT_PAIRED) return `${h.label} no longer accepts this Mac. Pair it again.`;
-  return h.message;
-}
+/** A host that no longer accepts this Mac's token (X57). */
+const refusedText = (h: HostInfo) => `${h.label} no longer accepts this Mac. Pair it again.`;
 
 /** A host's state on the Hosts page, with its open sessions. */
 export function hostLine(h: HostInfo, sessions: number, appVersion = ""): StatusLine {
@@ -210,8 +204,10 @@ export function hostLine(h: HostInfo, sessions: number, appVersion = ""): Status
       return { tone: "error", text: "Needs install · no moonletd on the host" };
     case "needs_update":
       return { tone: "error", text: updateText(h, appVersion) };
+    case "refused":
+      return { tone: "error", text: refusedText(h) };
     case "error":
-      return { tone: "error", text: errorText(h) ?? "Can't connect" };
+      return { tone: "error", text: h.message ?? "Can't connect" };
     case "reconnecting":
       return { tone: "blocked", text: "Reconnecting…" };
     default:
@@ -228,16 +224,42 @@ export function hostNotice(h: HostInfo, appVersion: string): string | null {
       return `${h.label}: helper not installed`;
     case "needs_update":
       return updateText(h, appVersion);
+    case "refused":
+      return refusedText(h);
     case "error":
-      if (h.message === NOT_PAIRED) return errorText(h);
       return `${h.label}: ${h.message ?? "connection failed"}`;
     default:
       return `${h.label}: reconnecting…`;
   }
 }
 
-/** Whether a host must be paired again: it no longer accepts this Mac's token. */
-export const needsPairing = (h: HostInfo) => h.kind === "tailnet" && h.status === "error" && h.message === NOT_PAIRED;
+export type HostAction = "install" | "reinstall" | "pair-again" | "retry";
+
+/** The buttons on a remote host's row (R2, X57). A host that waits for the
+ * user (`needs_update`, an error) is retried by hand once they act. */
+export function hostActions(h: HostInfo): HostAction[] {
+  const ssh = h.kind !== "tailnet";
+  switch (h.status) {
+    case "needs_install":
+      return ssh ? ["install"] : [];
+    case "connected":
+      return ssh ? ["reinstall"] : [];
+    case "refused":
+      return ["pair-again"];
+    case "needs_update":
+    case "error":
+      return ["retry"];
+    default:
+      return [];
+  }
+}
+
+/** The question Remove asks first, or null. A tailnet host that is not
+ * connected cannot be told to forget this Mac (X57). */
+export function removeAsks(h: HostInfo): { title: string; message: string } | null {
+  if (h.kind !== "tailnet" || h.status === "connected") return null;
+  return { title: `Remove ${h.id}?`, message: `${h.id} will still list this Mac until you remove it there.` };
+}
 
 const andList = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
 

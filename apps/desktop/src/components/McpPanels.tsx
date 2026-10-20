@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowRight, ChevronRight, Copy, Lock } from "lucide-react";
 import type { McpServer } from "../lib/protocol";
 import { mcpCard, mcpErrorText, mcpSummary } from "../lib/plusMenu";
+import { errorToast } from "../lib/store";
 import { Button, StateGlyph, cx } from "./ui";
 
 export interface McpActions {
@@ -111,7 +112,7 @@ function McpCard({ server: s, onReconnect, onAuth, onCancel, onCopy }: { server:
             <Button variant="primary" size="sm" onClick={() => onAuth(s.name)}>
               Authenticate <ArrowRight size={11} />
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => void onCopy(s.name).then(() => setCopied(true))}>
+            <Button variant="ghost" size="sm" onClick={() => void onCopy(s.name).then(() => setCopied(true), errorToast)}>
               <Copy size={11} /> {copied ? "Copied" : "Copy link"}
             </Button>
           </div>

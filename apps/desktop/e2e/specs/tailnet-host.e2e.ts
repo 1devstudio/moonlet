@@ -98,6 +98,7 @@ describe("tailnet host", () => {
     await $(`${row}//*[starts-with(normalize-space(), "Connected · moonletd ")]`).waitForExist({ timeout: 20000 });
     await expect($(`${row}//*[normalize-space()="Tailnet"]`)).toBeDisplayed();
     await expect($(`${row}//button[starts-with(normalize-space(), "Install helper")]`)).not.toBeExisting();
+    await expect($(`${row}//button[starts-with(normalize-space(), "Reinstall helper")]`)).not.toBeExisting();
     await expect($(dialog)).not.toBeExisting();
     const devices = await remoteRpc<{ devices: { name: string; kind: string }[] }>("mobile.status");
     expect(devices.devices.map((d) => d.kind)).toEqual(["desktop"]);
@@ -115,8 +116,20 @@ describe("tailnet host", () => {
     await $('//div[@role="dialog"]//button[normalize-space()="Cancel"]').click();
   });
 
-  it("removes it, and the host forgets this Mac", async () => {
+  it("refuses a second host with the same name", async () => {
+    const again = startPairing();
+    pairing = again.proc;
+    const link = await again.link;
     await openSettings("Hosts");
+    await $(sel.settingsButton("Add host")).click();
+    await fill(`${dialog}//input`, link);
+    await $(`${dialog}//button[normalize-space()="Add"]`).click();
+    await expect($(`${dialog}//*[@role="alert"][normalize-space()=${JSON.stringify(`A host named ${name} already exists.`)}]`)).toBeDisplayed();
+    await $(`${dialog}//button[normalize-space()="Cancel"]`).click();
+    pairing.kill();
+  });
+
+  it("removes it, and the host forgets this Mac", async () => {
     await $(`button[title="Remove ${name}"]`).click();
     await expect($(`//*[@data-setting="host-${name}"]`)).not.toBeExisting();
     await browser.waitUntil(async () => (await remoteRpc<{ devices: unknown[] }>("mobile.status")).devices.length === 0, {
