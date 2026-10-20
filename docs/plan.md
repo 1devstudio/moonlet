@@ -12,7 +12,7 @@ Every P0 and P1 requirement has a spec in [`docs/specs/`](specs/README.md) and a
 Deviations from this plan:
 - Phase 0 spikes were folded into tests and ADRs ([ADR 0001](adr/0001-spikes-folded-into-build.md)).
 - vt100 won for terminal state ([ADR 0003](adr/0003-vt100-terminal-state.md)).
-- The launchd plist replaces SMAppService until builds are signed ([ADR 0004](adr/0004-launchagent-plist.md)).
+- The launchd plist replaced SMAppService until builds were signed ([ADR 0004](adr/0004-launchagent-plist.md)); bundled builds now register a login item ([X56](specs/X56-login-item.md)).
 
 Manual GUI checks and measured numbers are in [manual-checks.md](manual-checks.md).
 

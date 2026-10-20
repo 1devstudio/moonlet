@@ -1,6 +1,6 @@
 # ADR 0004: LaunchAgent plist and launchctl instead of SMAppService (for now)
 
-- **Status:** accepted (2026-10-02); revisit at the release-signing milestone
+- **Status:** superseded for bundled builds by [X56](../specs/X56-login-item.md) (2026-10-20): they register a login item with SMAppService. The plist stays for dev and e2e builds and for `moonletd service` on the command line.
 
 ## Context
 
