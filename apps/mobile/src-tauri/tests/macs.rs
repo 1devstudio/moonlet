@@ -144,7 +144,8 @@ async fn pairing_keeps_the_token_and_skips_a_dead_address() {
             pair: Some("c0de".into()),
             device: Some("Alex's iPhone".into()),
             route: None,
-            kind: None
+            // Says what pairs (X57).
+            kind: Some(moonlet_proto::methods::DeviceKind::Phone)
         }
     );
 }
