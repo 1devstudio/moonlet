@@ -141,12 +141,12 @@ Added 2026-10-20.
 - [x] A session linked to a task (its stored link, `Session.task`) shows the issue in its row before the branch and in its header before `<project> · <branch> · <host>`: a tracker's key whole (`MOON-142`), a GitHub issue by its number (`#12`). Tapping it in the header opens the issue. (`taskChip` in `lib/sessionList.test.ts`)
 - [ ] Links derived from the branch or the PR (X46 "Links"), and the task's title and state: these need the tracker's issues, which reach the phone with Tasks on the phone (to be specified).
 
-### Starting from a GitHub issue or PR (X54)
+### Starting from a branch or PR (X54)
 
-Added 2026-10-20.
+Added 2026-10-20. The sheet first had an Issues tab, as the desktop did; Branches replaced it the same day, as on the desktop.
 
-- [x] New session has a **GitHub** row that opens a sheet with **Issues** and **Pull requests** (`gh.issues`, `gh.prs`), a search by number and title, and the desktop's line on what a pick does.
-- [x] A picked issue shows as a folded attachment above the prompt, `#57 Search ignores accents · GitHub issue`, which unfolds to its description and has × to remove it. It is sent before what the user typed, names the session, and lets the session start with nothing typed. (`composer` in `lib/newSession.test.ts`)
+- [x] New session has a **Work on** row (`Branch or pull request`, optional) that opens a sheet with **Branches** and **Pull requests** (`git.branches`, as the desktop lists them, and `gh.prs`), a search by name, or by number and title, cleared on a tab switch, and the desktop's line on what a pick does. (`pickerBranches`, `pickerSearch` in the desktop's `lib/composer.test.ts`)
+- [x] A picked branch starts the session on it as it is (`session.create` with `branch` and `existing_branch`; the Base row goes, the branch line reads `<branch> · existing branch`), named after what was typed. (`composer` in `lib/newSession.test.ts`)
 - [x] A picked PR starts the session on its branch (`session.create` with `pr`; the Base row goes, the branch line reads `<head branch> · existing branch`), and its attachment sends the PR's description, reviews and comments (`gh.pr_context`, the list's description until they are read). Removing the attachment keeps the branch and sends only what was typed. (`composer` in `lib/newSession.test.ts`)
 - [ ] Starting from a task and the Link a task slot: these need the tracker's issues (Tasks on the phone, to be specified).
 
