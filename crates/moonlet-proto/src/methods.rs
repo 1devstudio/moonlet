@@ -181,6 +181,8 @@ pub const MOBILE_PAIR_CANCEL: &str = "mobile.pair_cancel";
 pub const MOBILE_REVOKE: &str = "mobile.revoke";
 /// The SSH hosts a phone can reach through this daemon: [`MobileHost`]s.
 pub const MOBILE_HOSTS: &str = "mobile.hosts";
+/// A paired device removes itself (X57); only on its own tailnet connection.
+pub const MOBILE_UNPAIR: &str = "mobile.unpair";
 pub const EV_MOBILE_CHANGED: &str = "mobile.changed";
 /// A phone paired with the current code: `{ device }`.
 pub const EV_MOBILE_PAIRED: &str = "mobile.paired";
