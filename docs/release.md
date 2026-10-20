@@ -21,7 +21,7 @@ The release stays a draft until every asset is uploaded, so `releases/latest` ne
 
 ## Code signing and notarization
 
-Release builds are signed with the Developer ID Application certificate of team `LE9Q47C92D`. Tauri signs the app and the nested `moonletd`/`moonlet` binaries with the hardened runtime, then notarizes and staples the app; the DMG around it is signed but not notarized. The workflow fails before building if a secret is missing. After building, its "App is signed with the Developer ID and notarized" step fails unless every binary carries the team and the hardened runtime, and both the app and the app inside the update archive are notarized.
+Release builds are signed with the Developer ID Application certificate of team `LE9Q47C92D`. Tauri signs the app and the nested `moonletd`/`moonlet` binaries with the hardened runtime, then notarizes and staples the app. The workflow then notarizes and staples the DMG too, so its first open passes Gatekeeper even offline, and replaces the DMG tauri-action uploaded. The workflow fails before building if a secret is missing. After building, its "App is signed with the Developer ID and notarized" step fails unless every binary carries the team and the hardened runtime, and the app, the DMG and the app inside the update archive are notarized.
 
 The secrets live in the `release` environment, which only `v*` tags may use. A workflow that names a missing environment creates it without that rule, so create it first:
 
@@ -59,6 +59,5 @@ spctl -a -vvv -t exec target/release/bundle/macos/moonlet.app
 
 ## Still open
 
-1. **DMG notarization.** Notarize and staple the `.dmg` too (`xcrun notarytool submit --wait`, `xcrun stapler staple`), so a first mount needs no online check. The app inside is already stapled, so this only matters offline.
-2. **Helper signing.** Sign the Linux helpers (for example with minisign) and verify the signature in `remote::install` next to the SHA-256 check ([R2](specs/R2-remote-helper-install.md)).
-3. **Launch at login.** Builds are signed now, so switch from the plist written by `moonletd service install` to `SMAppService` ([ADR 0004](adr/0004-launchagent-plist.md)).
+1. **Helper signing.** Sign the Linux helpers (for example with minisign) and verify the signature in `remote::install` next to the SHA-256 check ([R2](specs/R2-remote-helper-install.md)).
+2. **Launch at login.** Builds are signed now, so switch from the plist written by `moonletd service install` to `SMAppService` ([ADR 0004](adr/0004-launchagent-plist.md)).
