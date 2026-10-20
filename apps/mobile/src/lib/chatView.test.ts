@@ -102,5 +102,7 @@ describe("agentStrip (X57)", () => {
     expect(agentStrip({ ...st, pending: [] }, NOW)?.word).toBe("all running");
     expect(agentStrip({ subagents: [agent("a1", "done")], pending: [] }, NOW)).toEqual({ bars: ["done"], progress: "1/1", word: "all done" });
     expect(agentStrip({ subagents: [], pending: [] }, NOW)).toBeNull();
+    // Ended without all done: says which did not finish.
+    expect(agentStrip({ subagents: [agent("a1", "done"), agent("a2", "failed"), agent("a3", "stopped")], pending: [] }, NOW)?.word).toBe("1 failed · 1 stopped");
   });
 });

@@ -134,7 +134,8 @@ export function issueForm(board: BoardConfig, snapshot: Pick<TaskSnapshot, "task
     assignee: access.assignee,
     labels: access.labels,
     draft: access.draft,
-    ready: canSubmit(access.draft, { busy: false, needsPlace: needsPlace(board), needsType: needsType(board), missing: options?.missing }),
+    // Not before the Mac's lists: a field Jira requires shows only in them.
+    ready: options !== null && canSubmit(access.draft, { busy: false, needsPlace: needsPlace(board), needsType: needsType(board), missing: options.missing }),
   };
 }
 

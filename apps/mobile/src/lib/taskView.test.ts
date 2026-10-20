@@ -133,6 +133,10 @@ describe("issueForm (X57, as X52)", () => {
     expect(issueForm(OPS, jira, { ...draft, title: "Retry webhooks", place: "OPS", issueType: "10004" }, { me: "u1", people: [], labels: [], canSet: true }).ready).toBe(true);
   });
 
+  it("waits for the Mac's lists before Create, so a field Jira requires is not missed", () => {
+    expect(issueForm(MOONLET, snapshot, { ...draft, title: "Show host health" }, null).ready).toBe(false);
+  });
+
   it("needs only a title on a Linear board, and sends no labels where they can't be set", () => {
     const f = issueForm(MOONLET, snapshot, { ...draft, title: "Show host health", labels: ["ui"] }, { me: "u1", people: [], labels: [], canSet: true, fields: ["assignee"] });
     expect([f.places, f.askPlace, f.askType, f.ready, f.labels, f.draft.labels]).toEqual([[], false, false, true, false, []]);

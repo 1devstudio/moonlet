@@ -158,6 +158,7 @@ export function NewSessionScreen() {
   const preset = fromBoard && fromTask ? taskPreset(fromBoard, fromTask) : null;
   const [taskBranch, setTaskBranch] = useState<string | null>(null);
   const [assign, setAssign] = useState(false);
+  const [branchError, setBranchError] = useState<string | null>(null);
   const [agent, setAgent] = useState("claude");
   const [model, setModel] = useState("opus");
   const [effort, setEffort] = useState("high");
@@ -182,12 +183,18 @@ export function NewSessionScreen() {
     if (i >= 0) setPick(i);
     setAssign(!!preset.assign?.checked);
     setTaskBranch(null);
+    setBranchError(null);
     const host = fromBoard.host;
+    // A branch worked out for a task picked before this one is dropped.
+    let live = true;
     void (async () => {
       const user = preset.template?.includes("{user}") ? await rpc<string>(host, M.ghWhoami).catch(() => undefined) : undefined;
       const name = await hostsApi.taskBranch({ kind: preset.kind, key: preset.key, title: preset.title, number: preset.number, template: preset.template, maxLen: preset.maxLen, user, issueType: preset.issueType });
-      setTaskBranch(name);
-    })().catch(console.error);
+      if (live) setTaskBranch(name);
+    })().catch((e) => live && setBranchError(`Couldn't name the task's branch: ${e instanceof Error ? e.message : String(e)}`));
+    return () => {
+      live = false;
+    };
   }, [presetKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [latest] = useState(latestOnly);
 
@@ -341,7 +348,7 @@ export function NewSessionScreen() {
       {choice && (
         <div className="flex flex-col gap-2.5 border-t border-border px-4 pt-3 pb-3">
           <span className="text-[12.5px] text-muted">{setupLine(c.start, choice.hostLabel, config?.setup)}</span>
-          {error && <span className="text-[12.5px] text-error">{error}</span>}
+          {(error || branchError) && <span className="text-[12.5px] text-error">{error ?? branchError}</span>}
           {preset?.assign && (
             <div className="overflow-hidden rounded-[12px] border border-border bg-panel">
               <Switch on={assign} onChange={setAssign} label={preset.assign.label} />

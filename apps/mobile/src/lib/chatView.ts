@@ -71,5 +71,7 @@ export function agentStrip(st: Pick<ChatState, "subagents" | "pending">, now: nu
   const bars = agents.map((a) => stateOf.get(a.id) ?? "done");
   const needs = bars.filter((b) => b === "needs").length;
   const active = bars.some((b) => b === "running" || b === "needs");
-  return { bars, progress: `${bars.filter((b) => b === "done").length}/${bars.length}`, word: needs ? `${needs} needs you` : active ? "all running" : "all done" };
+  const ended = (["failed", "stopped"] as const).filter((x) => bars.includes(x)).map((x) => `${bars.filter((b) => b === x).length} ${x}`);
+  const word = needs ? `${needs} needs you` : active ? "all running" : ended.length ? ended.join(" · ") : "all done";
+  return { bars, progress: `${bars.filter((b) => b === "done").length}/${bars.length}`, word };
 }

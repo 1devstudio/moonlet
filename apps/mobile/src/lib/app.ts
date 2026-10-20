@@ -64,7 +64,7 @@ export type Screen =
   | { kind: "diff"; host: string; id: string; path: string; against: "base" | "head" }
   | { kind: "plan"; host: string; terminal: number; ask: string; from?: Screen }
   /** A task on a board (X57): the board's key (`host/workspace/board`) and the task's `connection key`. */
-  | { kind: "task"; board: string; task: string };
+  | { kind: "task"; board: string; task: string; created?: boolean };
 
 export type NotifyKey = "blocked" | "done" | "error" | "checks";
 

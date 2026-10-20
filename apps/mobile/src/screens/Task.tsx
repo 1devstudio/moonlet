@@ -17,7 +17,7 @@ import { Sheet } from "../components/Sheet";
 import { AgentIcon, Btn, DiffStat, StateGlyph, cx } from "../components/ui";
 import { CategoryGlyph, TrackerMark } from "./Tasks";
 
-export function TaskScreen({ board, task }: { board: string; task: string }) {
+export function TaskScreen({ board, task, created }: { board: string; task: string; created?: boolean }) {
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
   const moving = useTaskMoves();
@@ -39,7 +39,7 @@ export function TaskScreen({ board, task }: { board: string; task: string }) {
         <button type="button" onClick={back} className="mb-4 text-accent-2">
           Board
         </button>
-        <p>This task is not on the board any more, or its host is offline.</p>
+        <p>{created ? `Created ${task.slice(task.indexOf(" ") + 1)}. It shows here once moonlet on the Mac shares the board.` : "This task is not on the board any more, or its host is offline."}</p>
       </div>
     );
   }

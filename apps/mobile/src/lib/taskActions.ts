@@ -20,8 +20,15 @@ export const startedAction = (task: Task, session: string, assign: boolean): Tas
 export const askMac = <T = unknown>(b: Pick<PhoneBoard, "host" | "workspace">, action: TaskAction) => rpc<T>(b.host, M.tasksRequest, { workspace: b.workspace, action });
 
 type Move = { status: string; name: string; at: number };
+type MoveState = { moving: Record<string, Move>; failures: Record<string, string> };
 
-const useTaskStore = create<{ moving: Record<string, Move>; failures: Record<string, string> }>(() => ({ moving: {}, failures: {} }));
+/** The Mac refused `move` of task `id`: it goes back, and says why; a newer move of it is left alone. */
+export function moveRefused(s: MoveState, id: string, move: Move, why: string): MoveState {
+  if (s.moving[id] !== move) return s;
+  return { moving: without(s.moving, id), failures: { ...s.failures, [id]: why } };
+}
+
+const useTaskStore = create<MoveState>(() => ({ moving: {}, failures: {} }));
 
 /** Moves the phone asked for and the Mac has not shared yet. */
 export const useTaskMoves = (): Moving => useTaskStore((s) => s.moving);
@@ -38,7 +45,7 @@ export async function moveOnMac(b: PhoneBoard, task: Task, to: { label: string; 
     await askMac(b, moveAction(b.board, task, to));
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
-    useTaskStore.setState((s) => ({ moving: s.moving[id] === move ? without(s.moving, id) : s.moving, failures: { ...s.failures, [id]: why } }));
+    useTaskStore.setState((s) => moveRefused(s, id, move, why));
     throw e;
   }
 }
@@ -49,12 +56,15 @@ function without<T>(map: Record<string, T>, key: string): Record<string, T> {
   return out;
 }
 
-// A new snapshot settles the moves it shows done.
-useApp.subscribe((now, prev) => {
-  if (now.data === prev.data) return;
+/** Drops the moves the snapshots show done, and those that waited too long. */
+function settle() {
   const moving = useTaskStore.getState().moving;
   if (!Object.keys(moving).length) return;
-  const tasks = Object.values(now.data).flatMap((d) => Object.values(d.tasks).flatMap((s) => s.tasks));
+  const tasks = Object.values(useApp.getState().data).flatMap((d) => Object.values(d.tasks).flatMap((s) => s.tasks));
   const left = pruneMoves(moving, tasks, Date.now());
   if (Object.keys(left).length !== Object.keys(moving).length) useTaskStore.setState({ moving: left });
-});
+}
+
+// A new snapshot settles the moves it shows done; a move the Mac never shares goes after two minutes.
+useApp.subscribe((now, prev) => now.data !== prev.data && settle());
+setInterval(settle, 15_000);
