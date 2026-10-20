@@ -130,10 +130,12 @@ async fn serve_phone(daemon: Arc<Daemon>, mut stream: TcpStream) -> Result<()> {
             pair,
             device,
             route,
+            kind,
         })) => daemon.mobile.authenticate(
             token.as_deref(),
             pair.as_deref(),
             device.as_deref(),
+            kind,
             route.as_deref(),
         ),
         _ => None,

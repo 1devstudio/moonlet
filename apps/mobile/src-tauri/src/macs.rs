@@ -149,6 +149,7 @@ pub async fn pair(name: &str, addrs: Vec<String>, code: &str, device: &str) -> R
             pair: Some(code.into()),
             device: Some(device.into()),
             route: None,
+            kind: None,
         },
     )
     .await?;
@@ -183,6 +184,7 @@ impl Connector for MacConnector {
                     pair: None,
                     device: None,
                     route: self.route.clone(),
+                    kind: None,
                 },
             )
             .await?;

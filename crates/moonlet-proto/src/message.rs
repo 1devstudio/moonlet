@@ -35,8 +35,9 @@ pub enum Message {
         data: Value,
     },
     /// First message on a phone connection, before `Hello` (X39): a device
-    /// `token`, or a `pair` code with the `device` name to pair. `route`
-    /// asks the daemon to connect through to one of its SSH hosts.
+    /// `token`, or a `pair` code with the `device` name to pair, and with
+    /// `kind` what is pairing (X57, phone when absent). `route` asks the
+    /// daemon to connect through to one of its SSH hosts.
     Auth {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token: Option<String>,
@@ -46,6 +47,8 @@ pub enum Message {
         device: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         route: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<crate::methods::DeviceKind>,
     },
     /// The daemon's reply to a good `Auth`. `token` is set only when a
     /// pairing just created the device: the phone keeps it.
