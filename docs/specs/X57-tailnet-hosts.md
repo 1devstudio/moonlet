@@ -1,6 +1,6 @@
 # X57 — Add a remote host over the tailnet
 
-- **Status:** draft (the daemon's part implemented: pairing a desktop, the short code, `authed`'s fields and `mobile.unpair`)
+- **Status:** draft (implemented: the daemon's part, and `moonlet-link`'s tailnet connector with `needs_update`)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** R1 (remote hosts), journey J5
 - **Related ADRs:** [0011](../adr/0011-machines-connect-over-the-tailnet.md) (this is its first slice), [0008](../adr/0008-phone-link-over-tailscale.md) (the tailnet listener and `moonlet-link`)
@@ -62,9 +62,10 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 
 ### Connecting (app and `moonlet-link`)
 
-- [ ] `moonlet-link` gains a tailnet `Connector`, moved from the phone app's `MacConnector` so that the desktop, the phone and X41's worker share it. It tries each address in order, 5 s each, sends `auth {token}`, and waits up to 10 s for the answer.
-- [ ] An `authed` whose `protocol` differs from the client's puts the host in a new status, `needs_update`, carrying the daemon's version. Like `needs_install`, it waits for a retry and does not reconnect by itself.
-- [ ] An `unauthorized` answer puts the host in `error` with "studio-mini no longer accepts this Mac. Pair it again." It does not reconnect until the user retries.
+- [x] `moonlet-link` gains a tailnet `Connector`, moved from the phone app's `MacConnector` so that the desktop, the phone and X41's worker share it. It tries each address in order, 5 s each, sends `auth {token}`, and waits up to 10 s for the answer. (`moonlet-link` `tests/tailnet.rs`: `a_token_connects`, `pairing_returns_the_token_and_says_who_answered`; `tests/mobile.rs`: `a_mac_pairs_and_connects_through_the_shared_tailnet_connector`; the phone's `tests/macs.rs`)
+- [x] An `authed` whose `protocol` differs from the client's puts the host in a new status, `needs_update`, carrying the daemon's version in `daemon_version`. Like `needs_install`, it waits for a retry and does not reconnect by itself. (`a_daemon_with_another_protocol_needs_an_update_and_waits_for_a_retry`)
+- [x] An `unauthorized` answer puts the host in `error` with the daemon's message and does not reconnect until the user retries. This holds for phones too: a removed phone waits for its Retry instead of trying every 5 s. (`a_refused_token_stops_retrying_until_asked`, `a_mac_pairs_and_connects_through_the_shared_tailnet_connector`)
+- [ ] The desktop shows that `error` as "studio-mini no longer accepts this Mac. Pair it again."
 - [ ] Any other failure (no address answers, the connection drops) reconnects with `moonlet-link`'s backoff, as SSH hosts do (R3).
 - [ ] After `authed` the connection is a normal host connection: R3's reconnect banner, R4's sidebar grouping, notifications that name the host, the palette and the approval inbox all work for tailnet hosts.
 - [ ] **Remove** on a tailnet host calls `mobile.unpair` when the host is connected, then forgets the host and its token. When the host is not connected, it forgets them only, and the dialog says "studio-mini will still list this Mac until you remove it there."
@@ -149,10 +150,12 @@ Every criterion maps to a test. Expected values are literals from this spec.
   - `moonletd` mobile module: a device paired with `kind: "desktop"` is stored and listed as `desktop`; a `mobile.json` device without `kind` reads as `phone`.
   - The tailnet address filter on resolved names: `studio-mini` resolving to `[100.101.102.103]` gives `["100.101.102.103:47428"]`; `build-box:47500` gives port 47500; `[203.0.113.7]` gives the "not on your tailnet" error with that address; no result gives "was not found".
   - `app-hosts.json`: the round trip keeps `remotes` and `tailnet`, the file's mode is 0600, and `host_list` output contains no `token`.
-- **`crates/moonlet-link/tests/link.rs`** (against a `TestDaemon` listening on 127.0.0.1 through `MOONLET_MOBILE_ADDRS`):
-  - pairing with a code returns a token, and connecting with it reaches `connected`;
-  - a fake daemon whose `authed` says `protocol: 99, daemon_version: "9.9.9"` gives `needs_update` with `9.9.9`, and no reconnect follows until a retry;
-  - after `mobile.revoke`, the host goes to `error` with "studio-mini no longer accepts this Mac. Pair it again." and does not reconnect.
+- **`crates/moonlet-link/tests/tailnet.rs`** (a fake daemon on 127.0.0.1):
+  - pairing with a code returns the token and who answered, and sends `kind`;
+  - a token connects;
+  - an `authed` with `protocol: 99, daemon_version: "9.9.9"` gives `needs_update` with `9.9.9`, and no reconnect follows until a retry;
+  - an `unauthorized` answer gives `error` with the daemon's message, and no reconnect follows until a retry.
+- **`crates/moonletd/tests/mobile.rs`, through `moonlet-link`:** a Mac pairs with the real daemon, connects, and after `mobile.revoke` stops at `error` without trying again.
 - **`crates/moonletd/tests/mobile.rs`:**
   - `authed` carries `protocol`, `daemon_version` and `host`;
   - a desktop device is refused `mobile.pair_start`, `mobile.revoke` and `mobile.status` with `forbidden`;

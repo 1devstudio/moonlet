@@ -574,7 +574,7 @@ export interface SearchHit {
   text: string;
 }
 
-export type HostStatus = "connecting" | "connected" | "reconnecting" | "needs_install" | "error";
+export type HostStatus = "connecting" | "connected" | "reconnecting" | "needs_install" | "needs_update" | "error";
 
 export interface HostInfo {
   id: string;
