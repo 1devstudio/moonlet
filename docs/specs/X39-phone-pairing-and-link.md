@@ -13,7 +13,7 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 ## User journey
 
 1. On the Mac, the user opens Settings and scrolls to Mobile. It says "Off".
-2. The user turns on **Allow phones on my tailnet**. The page shows "Listening on 100.101.102.103:47428".
+2. The user turns on **Allow connections from my tailnet**. The page shows "Listening on 100.101.102.103:47428".
 3. The user clicks **Pair a phone**. The section shows a QR code, the same link as text with a Copy button, and "Expires in 5:00".
 4. On the iPhone, which is on the same tailnet, the user opens the moonlet app, taps **Pair a Mac**, and scans the code (or pastes the link). The app shows "Paired with studio-mac".
 5. On the Mac the QR code goes away, the section says "Paired with iPhone", and the list under "Paired phones" shows "iPhone" with "paired just now · connected".
@@ -58,7 +58,7 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 
 ### Desktop: the Mobile section of Settings
 
-- [x] Settings has a **Mobile** section, after Remote hosts: the box **Allow phones on my tailnet**, a line with the state (`Off`, `Tailscale is not running on this Mac`, `Starting…`, `Listening on <ip:port>`), the **Pair a phone** button (disabled until it listens), and under "Paired phones" each phone's name, `paired <when> · connected` (or `last seen <when>`, `not seen since`) and **Remove**. (`lib/mobile.test.ts` for the lines; `mobile-pairing.e2e.ts`)
+- [x] Settings has a **Mobile** section, after Remote hosts: the box **Allow connections from my tailnet**, a line with the state (`Off`, `Tailscale is not running on this Mac`, `Starting…`, `Listening on <ip:port>`), the **Pair a phone** button (disabled until it listens), and under "Paired phones" each phone's name, `paired <when> · connected` (or `last seen <when>`, `not seen since`) and **Remove**. (`lib/mobile.test.ts` for the lines; `mobile-pairing.e2e.ts`)
 - [x] **Pair a phone** shows, in the section, the QR code of `url`, the link as text with Copy, `Expires in m:ss` (rounded up), and Cancel. When `mobile.paired` arrives the code goes away and the section says `Paired with <device>`; on `mobile.pair_ended` it says why (`Too many wrong attempts. Start again.`, `The code expired. Start again.`, `Pairing was cancelled.`). Cancel, or closing Settings, calls `mobile.pair_cancel`. (`mobile.test.ts`; `mobile-pairing.e2e.ts` pairs a TCP "phone" with the code from the link)
 - [x] **Remove** asks first (X23 confirm): "Remove <device>?", "It will need to be paired again." (`mobile-pairing.e2e.ts`)
 
@@ -66,7 +66,7 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 
 New messages: `auth` (phone → daemon, first frame on a phone connection only) and `authed`.
 
-New methods: `mobile.status`, `mobile.set_enabled`, `mobile.pair_start`, `mobile.pair_cancel`, `mobile.revoke`, `mobile.hosts`.
+New methods: `mobile.status`, `mobile.set_enabled`, `mobile.pair_start`, `mobile.pair_cancel`, `mobile.revoke`, `mobile.hosts`. X57 adds `mobile.unpair`, with which a paired device removes itself, and renames the setting "Allow connections from my tailnet", since Macs use it too.
 
 New events: `mobile.changed`, `mobile.paired`, `mobile.pair_ended`.
 
