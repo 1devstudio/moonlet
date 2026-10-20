@@ -156,7 +156,7 @@ mod tests {
     /// database is copied as a consistent snapshot, without its WAL files.
     #[test]
     fn databases_open_in_jaunt_are_copied_as_snapshots() {
-        use std::io::Write;
+        use std::io::{BufRead, Write};
         let webkit = tempfile::tempdir().unwrap();
         let old = webkit.path().join("dev.onedevstudio.jaunt");
         let new = webkit.path().join("dev.onedevstudio.moonlet");
@@ -167,18 +167,22 @@ mod tests {
         let mut writer = std::process::Command::new("/usr/bin/sqlite3")
             .arg(&db)
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
         let stdin = writer.stdin.as_mut().unwrap();
-        writeln!(stdin, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE ItemTable (key TEXT, value BLOB); INSERT INTO ItemTable VALUES ('moonlet.settings', 'dark');").unwrap();
+        writeln!(stdin, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE ItemTable (key TEXT, value BLOB); INSERT INTO ItemTable VALUES ('moonlet.settings', 'dark'); SELECT 'ready';").unwrap();
         stdin.flush().unwrap();
-        let wal = store.join("localstorage.sqlite3-wal");
-        for _ in 0..100 {
-            if std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0) {
+        // The WAL fills before the INSERT commits; the writer's answer to the
+        // last statement means every row before it is in.
+        let mut stdout = std::io::BufReader::new(writer.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(stdout.read_line(&mut line).unwrap(), 0, "the writer quit");
+            if line == "ready\n" {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
         }
 
         assert!(copy_if_missing(&old, &new).unwrap());
