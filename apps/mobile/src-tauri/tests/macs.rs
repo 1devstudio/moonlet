@@ -135,7 +135,8 @@ async fn pairing_keeps_the_token_and_skips_a_dead_address() {
             token: None,
             pair: Some("c0de".into()),
             device: Some("Alex's iPhone".into()),
-            route: None
+            route: None,
+            kind: None
         }
     );
 }
@@ -202,13 +203,15 @@ async fn a_paired_mac_connects_with_its_token_and_brings_its_ssh_hosts() {
         token: Some("tok".into()),
         pair: None,
         device: None,
-        route: None
+        route: None,
+        kind: None
     }));
     assert!(auths.contains(&Message::Auth {
         token: Some("tok".into()),
         pair: None,
         device: None,
-        route: Some("devbox".into())
+        route: Some("devbox".into()),
+        kind: None
     }));
     assert!(
         statuses

@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use moonlet_core::paths::{hostname, now_ms};
-use moonlet_proto::methods::{self as m, MobileDevice, MobileHost, MobilePairing, MobileStatus};
+use moonlet_proto::methods::{
+    self as m, DeviceKind, MobileDevice, MobileHost, MobilePairing, MobileStatus,
+};
 use moonlet_proto::{Message, RpcError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -182,6 +184,8 @@ struct StoredDevice {
     created_at: u64,
     #[serde(default)]
     last_seen: Option<u64>,
+    #[serde(default)]
+    kind: DeviceKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -372,6 +376,7 @@ impl Mobile {
                 .map(|d| MobileDevice {
                     id: d.id.clone(),
                     name: d.name.clone(),
+                    kind: d.kind,
                     created_at: d.created_at,
                     last_seen: d.last_seen,
                     connected: connected.contains(&d.id),
@@ -507,6 +512,7 @@ impl Mobile {
         token: Option<&str>,
         pair: Option<&str>,
         device: Option<&str>,
+        kind: Option<DeviceKind>,
         route: Option<&str>,
     ) -> Option<Authed> {
         let route = route.map(str::to_string);
@@ -545,6 +551,7 @@ impl Mobile {
                             token_sha256: sha256_hex(token.as_bytes()),
                             created_at: now,
                             last_seen: Some(now),
+                            kind: kind.unwrap_or_default(),
                         };
                         let device_id = dev.id.clone();
                         {
@@ -745,17 +752,27 @@ mod tests {
     }
 
     #[test]
+    fn a_device_paired_before_x57_is_a_phone() {
+        let (_dir, mobile) = with_phone(true);
+        assert_eq!(mobile.status().devices[0].kind, DeviceKind::Phone);
+    }
+
+    #[test]
     fn a_token_works_only_while_phone_access_is_on() {
         let (_dir, mobile) = with_phone(false);
-        assert!(mobile.authenticate(Some("tok"), None, None, None).is_none());
+        assert!(
+            mobile
+                .authenticate(Some("tok"), None, None, None, None)
+                .is_none()
+        );
         mobile.set_enabled(true);
         let authed = mobile
-            .authenticate(Some("tok"), None, None, None)
+            .authenticate(Some("tok"), None, None, None, None)
             .expect("on again");
         assert_eq!(authed.device_id, "d1");
         assert!(
             mobile
-                .authenticate(Some("other"), None, None, None)
+                .authenticate(Some("other"), None, None, None, None)
                 .is_none()
         );
     }

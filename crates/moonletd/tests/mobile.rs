@@ -283,6 +283,40 @@ async fn a_paired_phone_comes_back_with_its_token_and_uses_the_daemon() {
 }
 
 #[tokio::test]
+async fn a_mac_pairs_as_a_desktop() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let mut app = mac.app().await;
+    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let (_, reply) = auth(
+        &addr,
+        json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" }),
+    )
+    .await;
+    assert!(
+        matches!(reply, Some(Message::Authed { token: Some(_), .. })),
+        "{reply:?}"
+    );
+    assert!(!token.is_empty());
+
+    let st: Value = app.request("mobile.status", json!({})).await.unwrap();
+    let kinds: Vec<(&str, &str)> = st["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["name"].as_str().unwrap(), d["kind"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("Alex's iPhone", "phone"),
+            ("Alex's MacBook Pro", "desktop")
+        ]
+    );
+}
+
+#[tokio::test]
 async fn bad_auth_is_refused_without_saying_why() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;

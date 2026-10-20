@@ -1044,11 +1044,23 @@ pub struct MobileSetEnabled {
     pub enabled: bool,
 }
 
-/// A paired phone (X39).
+/// What paired: a phone (X39) or another Mac's app (X57).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    #[default]
+    Phone,
+    Desktop,
+}
+
+/// A paired device (X39, X57).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MobileDevice {
     pub id: String,
     pub name: String,
+    /// Devices paired before X57 are phones.
+    #[serde(default)]
+    pub kind: DeviceKind,
     pub created_at: u64,
     pub last_seen: Option<u64>,
     pub connected: bool,
