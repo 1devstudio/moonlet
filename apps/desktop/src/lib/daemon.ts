@@ -34,6 +34,8 @@ export function sendInput(host: string, session: number, data: string) {
 export const hostsApi = {
   list: () => invoke<HostInfo[]>("host_list"),
   add: (id: string) => invoke<HostInfo>("host_add", { id }),
+  /** Pairs with a host over the tailnet (X57); `addrs` from a pasted link, or null to look up `name`. */
+  pair: (name: string, addrs: string[] | null, code: string) => invoke<HostInfo>("host_pair", { name, addrs, code }),
   remove: (id: string) => invoke("host_remove", { id }),
   reconnect: (id: string) => invoke("host_reconnect", { id }),
   sshHosts: () => invoke<string[]>("ssh_hosts"),

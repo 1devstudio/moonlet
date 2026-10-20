@@ -55,7 +55,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - [ ] The Add host dialog takes one input, "Pairing link or code":
   - a `moonlet://pair?…` link (parsed as the phone parses it) gives the name, addresses and code;
   - anything else is a code. After the normalization above it must be 10 characters of the alphabet, otherwise the dialog says "This is not a pairing link or code." For a code, the dialog also asks for "Name on your tailnet", such as `studio-mini` or `build-box:47500`.
-- [ ] For a typed name, the app resolves it with the system resolver and keeps only the Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), with the given port or 47428. When it resolves to no Tailscale address, the code is not sent, and the dialog says "studio-mini is not on your tailnet (it resolves to 203.0.113.7)." or "studio-mini was not found. Is Tailscale running on this Mac?"
+- [x] For a typed name, the app resolves it with the system resolver and keeps only the Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), with the given port or 47428. When it resolves to no Tailscale address, the code is not sent, and the dialog says "studio-mini is not on your tailnet (it resolves to 203.0.113.7)." or "studio-mini was not found. Is Tailscale running on this Mac?" (`moonlet-core` `tailnet` tests `a_name_on_the_tailnet_gives_its_listener_addresses`, `a_name_off_the_tailnet_gets_no_code`)
 - [ ] Addresses from a pasted link are used as given, because the host itself wrote them.
 - [ ] The host's id and label are its name. A name already used by another host is refused with "A host named studio-mini already exists."
 - [ ] The app pairs with `auth {pair, device: <this Mac's name>, kind: "desktop"}`. On `authed` it saves the host and connects. On failure the dialog shows the daemon's message, X39's `this phone is not paired with this Mac` reading "The code was not accepted. Start pairing again on studio-mini.", and nothing is saved.
@@ -75,7 +75,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - [ ] A tailnet host has no Install helper or Reinstall helper button.
 - [ ] "Open in" offers no editors for workspaces on a tailnet host, because VS Code's and Cursor's `ssh-remote+` needs SSH (ADR 0011).
 - [ ] On a tailnet host, an MCP sign-in whose `redirect_uri` is a `localhost` port (X29) is not started. The card says "Signing in to <server> isn't available for sessions on studio-mini yet." Sign-ins without a local callback work as before.
-- [ ] Phones keep routing only to SSH hosts: `mobile.hosts` lists only the SSH hosts in `app-hosts.json`.
+- [x] Phones keep routing only to SSH hosts: `mobile.hosts` lists only the SSH hosts in `app-hosts.json`. (`phones_route_only_to_ssh_hosts`)
 
 ## UI
 
@@ -164,7 +164,7 @@ Every criterion maps to a test. Expected values are literals from this spec.
 - **`crates/moonletd/tests/mobile.rs`, the code:** pairing with the lowercase, spaced form of the code works. The existing X39 tests run unchanged with the new code.
 - **`crates/moonletd/tests/cli.rs`** (new): `moonletd pair` against a test daemon prints a code matching `^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$` and a `moonlet://pair?v=1&` link, then exits 0 with "Paired with Test Mac" when a TCP client pairs with that code. It exits 1 with the "Tailnet access is off" line when access is off.
 - **Vitest, `apps/desktop/src/lib/`:**
-  - `pairLink.test.ts` moves here from the phone app, and the phone imports `parsePairLink` from `@desktop/lib/pairLink`. Its existing link with the 32 hex characters still parses, and a link with `code=7KQ2MX9PDA` parses too;
+  - `pairLink.test.ts` moves here from the phone app (done), and the phone imports `parsePairLink` from `@desktop/lib/pairLink`. Its existing link with the 32 hex characters still parses, and a link with `code=7KQ2MX9PDA` parses too;
   - the Add host input: a link, `7KQ2M-X9PDA`, `7kq2m x9pda`, and `hello`, which gives "This is not a pairing link or code.";
   - the status line for each tailnet state, including both `needs_update` directions with the literal lines above;
   - "Open in" offers nothing for a tailnet host and VS Code and Cursor for an SSH host;
