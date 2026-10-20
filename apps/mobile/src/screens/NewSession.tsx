@@ -2,12 +2,12 @@
 // alone; Start session creates the worktree and opens its chat.
 
 import { type ReactNode, useEffect, useState } from "react";
-import { ArrowRight, Check, ChevronDown, ChevronRight, FileText, GitPullRequest, Mic, Search, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, ChevronRight, FileText, GitBranch, GitPullRequest, Mic, Search, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { latestOnly } from "@desktop/lib/prStack";
 import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
 import { type IssueRef, M, type Project, type ProjectConfig, type Session } from "@desktop/lib/protocol";
-import { type Attachment, pickerHint } from "@desktop/lib/composer";
+import { type Attachment, type PickerList, type PickerTab, pickerBranches, pickerHint, pickerSearch } from "@desktop/lib/composer";
 import { loadHost, showScreen, showTab, useApp } from "../lib/app";
 import { MODES, branchPrefix, composer, modeHelp, projectChoices, setupLine } from "../lib/newSession";
 import { useBusy } from "../lib/busy";
@@ -52,50 +52,59 @@ function Choices<T extends string>({ items, current, onPick }: { items: { id: T;
   );
 }
 
-/** The GitHub issues and pull requests to start from (X54), searched by number and title. */
-function SourceSheet({ host, project, base, onIssue, onPr, onClose }: { host: string; project: Project; base: string; onIssue: (i: IssueRef) => void; onPr: (p: IssueRef) => void; onClose: () => void }) {
-  const [tab, setTab] = useState<"issue" | "pr">("issue");
+/** The branches and GitHub pull requests to start from (X54), searched by name, or by number and title. */
+function SourceSheet({ host, project, base, onBranch, onPr, onClose }: { host: string; project: Project; base: string; onBranch: (b: string) => void; onPr: (p: IssueRef) => void; onClose: () => void }) {
+  const [tab, setTab] = useState<PickerTab>("branch");
   const [q, setQ] = useState("");
-  const [items, setItems] = useState<IssueRef[] | null>(null);
+  const [items, setItems] = useState<PickerList | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setItems(null);
     setError(null);
     // A list that arrives after a switch to the other tab is dropped.
     let current = true;
-    void rpc<IssueRef[]>(host, tab === "issue" ? M.ghIssues : M.ghPrs, { path: project.path })
-      .then((list) => current && setItems(list))
-      .catch((e) => current && setError(String(e?.message ?? e)));
+    const load: Promise<PickerList> =
+      tab === "branch"
+        ? rpc<string[]>(host, M.gitBranches, { path: project.path }).then((list) => ({ tab, list: pickerBranches(list) }))
+        : rpc<IssueRef[]>(host, M.ghPrs, { path: project.path }).then((list) => ({ tab, list }));
+    void load.then((got) => current && setItems(got)).catch((e) => current && setError(String(e?.message ?? e)));
     return () => {
       current = false;
     };
   }, [tab, host, project.path]);
-  const shown = (items ?? []).filter((i) => !q || `#${i.number} ${i.title}`.toLowerCase().includes(q.toLowerCase()));
+  const found = items && pickerSearch(items, q);
   return (
-    <Sheet label="Start from GitHub" onClose={onClose}>
+    <Sheet label="Start from a branch or PR" onClose={onClose}>
       <div className="flex flex-col gap-2 px-4 pb-1">
         <div className="grid grid-cols-2 rounded-[10px] bg-raised p-[3px]">
-          {(["issue", "pr"] as const).map((t) => (
-            <button key={t} type="button" onClick={() => setTab(t)} className={cx("h-9 rounded-[8px] text-[13.5px]", tab === t ? "bg-border-strong font-semibold text-fg" : "text-muted")}>
-              {t === "issue" ? "Issues" : "Pull requests"}
+          {(["branch", "pr"] as const).map((t) => (
+            <button key={t} type="button" onClick={() => (setTab(t), setQ(""))} className={cx("h-9 rounded-[8px] text-[13.5px]", tab === t ? "bg-border-strong font-semibold text-fg" : "text-muted")}>
+              {t === "branch" ? "Branches" : "Pull requests"}
             </button>
           ))}
         </div>
         <label className="flex h-10 items-center gap-2 rounded-[10px] border border-border-strong bg-bg px-3">
           <Search size={15} className="text-faint" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by number or title" className="min-w-0 flex-1 bg-transparent text-[14.5px] outline-none" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tab === "branch" ? "Search by name" : "Search by number or title"} className="min-w-0 flex-1 bg-transparent text-[14.5px] outline-none" />
         </label>
       </div>
       <div className="scroll flex min-h-[200px] flex-col px-2">
         {error ? (
           <p className="px-3 py-2 text-[13.5px] text-error">{error}</p>
-        ) : items === null ? (
+        ) : !found ? (
           <p className="px-3 py-2 text-[13.5px] text-muted">Loading…</p>
-        ) : !shown.length ? (
-          <p className="px-3 py-2 text-[13.5px] text-muted">{q ? "Nothing matches." : tab === "issue" ? "No open issues." : "No open pull requests."}</p>
+        ) : !found.list.length ? (
+          <p className="px-3 py-2 text-[13.5px] text-muted">{q ? "Nothing matches." : found.tab === "branch" ? "No branches." : "No open pull requests."}</p>
+        ) : found.tab === "branch" ? (
+          found.list.map((b) => (
+            <button key={b} type="button" onClick={() => onBranch(b)} className="flex min-h-12 items-center gap-2.5 rounded-[10px] px-3 text-left">
+              <GitBranch size={15} className="flex-none text-faint" />
+              <span className="min-w-0 flex-1 truncate font-mono text-[14px]">{b}</span>
+            </button>
+          ))
         ) : (
-          shown.map((i) => (
-            <button key={i.number} type="button" onClick={() => (tab === "issue" ? onIssue(i) : onPr(i))} className="flex min-h-12 items-center gap-2.5 rounded-[10px] px-3 text-left">
+          found.list.map((i) => (
+            <button key={i.number} type="button" onClick={() => onPr(i)} className="flex min-h-12 items-center gap-2.5 rounded-[10px] px-3 text-left">
               <span className="w-12 flex-none font-mono text-[13px] text-faint">#{i.number}</span>
               <span className="min-w-0 flex-1 truncate text-[15px]">{i.title}</span>
             </button>
@@ -117,10 +126,8 @@ function AttachmentCard({ a, onRemove }: { a: Attachment; onRemove: () => void }
         <button type="button" onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13.5px]">
           <Icon size={14} className="flex-none text-muted" />
           <span className="min-w-0 flex-1 truncate">
-            {a.ref && <span className="font-mono text-muted">{a.ref} </span>}
-            {a.lead && <span className="text-muted">{a.lead}</span>}
+            <span className="text-muted">{a.lead}</span>
             {a.summary}
-            {a.note && <span className="text-faint">{a.note}</span>}
           </span>
           {open ? <ChevronDown size={14} className="flex-none text-faint" /> : <ChevronRight size={14} className="flex-none text-faint" />}
         </button>
@@ -154,8 +161,8 @@ export function NewSessionScreen() {
   const [branches, setBranches] = useState<string[]>([]);
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [picker, setPicker] = useState<Picker>(null);
-  // A GitHub issue or PR to start from (X54); a PR's reviews once read.
-  const [issue, setIssue] = useState<IssueRef | null>(null);
+  // A branch or GitHub PR to start from (X54); a PR's reviews once read.
+  const [picked, setPicked] = useState<string | null>(null);
   const [pr, setPr] = useState<IssueRef | null>(null);
   const [prContext, setPrContext] = useState<string | null>(null);
   const [prSend, setPrSend] = useState(true);
@@ -168,7 +175,7 @@ export function NewSessionScreen() {
     if (!choice) return;
     setBase(null);
     setConfig(null);
-    setIssue(null);
+    setPicked(null);
     setPr(null);
     setBranches([]);
     // A reply for a project picked before this one is dropped.
@@ -183,12 +190,13 @@ export function NewSessionScreen() {
 
   // The host's Git settings (X55) name the branch and say where it starts.
   const git = choice ? (data[choice.host]?.git ?? null) : null;
-  const c = composer({ typed: prompt, prefix: branchPrefix(config, git), issue, pr, prContext, prSend, base, projectBase: choice?.project.base_branch ?? "main", startFrom: git?.start_from ?? "local" });
+  const c = composer({ typed: prompt, prefix: branchPrefix(config, git), pickedBranch: picked, pr, prContext, prSend, base, projectBase: choice?.project.base_branch ?? "main", startFrom: git?.start_from ?? "local" });
   const pickPr = (p: IssueRef) => {
     setPr(p);
     setPrSend(true);
     setPrContext(null);
     setBase(null);
+    setPicked(null);
     setPicker(null);
     if (!choice) return;
     // Its reviews and comments; the list's description until they are read.
@@ -208,6 +216,8 @@ export function NewSessionScreen() {
         name: create.name,
         pr: create.pr,
         from: create.from,
+        branch: create.branch,
+        existing_branch: create.branch !== null,
         agent,
         model: agent === "claude" ? model : null,
         effort: agent === "claude" ? effort : null,
@@ -218,7 +228,7 @@ export function NewSessionScreen() {
       });
       await loadHost(choice.host).catch(() => {});
       setPrompt("");
-      setIssue(null);
+      setPicked(null);
       setPr(null);
       showScreen({ kind: "session", host: choice.host, id: s.id, tab: "chat" });
     });
@@ -247,7 +257,7 @@ export function NewSessionScreen() {
                 What do you want to work on?
               </label>
               {c.attachments.map((a) => (
-                <AttachmentCard key={a.id} a={a} onRemove={() => (a.id === "issue" ? setIssue(null) : setPrSend(false))} />
+                <AttachmentCard key={a.id} a={a} onRemove={() => setPrSend(false)} />
               ))}
               <div className="flex flex-col rounded-[14px] border border-border-strong bg-panel">
                 <textarea id="task" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={c.attachments.length ? c.placeholder : "Describe the task…"} className="resize-none bg-transparent p-3.5 text-[15px] leading-[1.45] outline-none" />
@@ -266,15 +276,16 @@ export function NewSessionScreen() {
             <div className="flex flex-col rounded-[14px] border border-border bg-panel">
               <RowButton label="Project" value={choice.project.name} onClick={() => setPicker("project")} />
               <RowButton
-                label="GitHub"
-                value={pr ? `PR #${pr.number}` : issue ? `Issue #${issue.number}` : "Issue or pull request"}
-                hint={pr || issue ? undefined : "optional"}
+                label="Work on"
+                value={pr ? `PR #${pr.number}` : (picked ?? "Branch or pull request")}
+                hint={pr || picked ? undefined : "optional"}
+                mono={!pr && !!picked}
                 onClick={() => setPicker("source")}
               />
               <RowButton label="Host" value={choice.hostLabel} hint={hosts[choice.host]?.status === "connected" ? "online" : "offline"} onClick={() => setPicker("project")} />
               <RowButton label="Agent" value={AGENTS.find((a) => a.id === agent)?.label ?? agent} icon={<AgentIcon agent={agent} size={14} />} onClick={() => setPicker("agent")} />
               {agent === "claude" && <RowButton label="Model" value={modelLabel} hint={`${effortLabel} effort`} onClick={() => setPicker("model")} />}
-              {!pr && <RowButton label="Base" value={baseName} mono onClick={() => setPicker("base")} />}
+              {!pr && !picked && <RowButton label="Base" value={baseName} mono onClick={() => setPicker("base")} />}
             </div>
             {agent === "claude" && (
               <div className="flex flex-col gap-2">
@@ -332,7 +343,7 @@ export function NewSessionScreen() {
           host={choice.host}
           project={choice.project}
           base={choice.project.base_branch}
-          onIssue={(i) => (setIssue(i), setPicker(null))}
+          onBranch={(b) => (setPicked(b), setPr(null), setBase(null), setPicker(null))}
           onPr={pickPr}
           onClose={() => setPicker(null)}
         />
