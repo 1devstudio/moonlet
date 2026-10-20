@@ -467,7 +467,7 @@ async fn a_mac_pairs_and_connects_through_the_shared_tailnet_connector() {
         .request("mobile.revoke", json!({ "id": paired.device_id }))
         .await
         .unwrap();
-    let refused = statuses.wait_for(HostStatus::Error).await;
+    let refused = statuses.wait_for(HostStatus::Refused).await;
     assert_eq!(
         refused.message.as_deref(),
         Some("this phone is not paired with this Mac")

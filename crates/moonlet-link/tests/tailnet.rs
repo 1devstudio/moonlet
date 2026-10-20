@@ -187,8 +187,8 @@ async fn a_daemon_with_another_protocol_needs_an_update_and_waits_for_a_retry() 
 async fn a_refused_token_stops_retrying_until_asked() {
     let (addr, auths) = fake_daemon(Answer::Unauthorized).await;
     let (host, seen) = connect(&addr);
-    eventually("error", || {
-        seen.last().is_some_and(|i| i.status == HostStatus::Error)
+    eventually("refused", || {
+        seen.last().is_some_and(|i| i.status == HostStatus::Refused)
     })
     .await;
     assert_eq!(

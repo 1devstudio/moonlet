@@ -64,8 +64,8 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 
 - [x] `moonlet-link` gains a tailnet `Connector`, moved from the phone app's `MacConnector` so that the desktop, the phone and X41's worker share it. It tries each address in order, 5 s each, sends `auth {token}`, and waits up to 10 s for the answer. (`moonlet-link` `tests/tailnet.rs`: `a_token_connects`, `pairing_returns_the_token_and_says_who_answered`; `tests/mobile.rs`: `a_mac_pairs_and_connects_through_the_shared_tailnet_connector`; the phone's `tests/macs.rs`)
 - [x] An `authed` whose `protocol` differs from the client's puts the host in a new status, `needs_update`, carrying the daemon's version in `daemon_version`. Like `needs_install`, it waits for a retry and does not reconnect by itself. (`a_daemon_with_another_protocol_needs_an_update_and_waits_for_a_retry`)
-- [x] An `unauthorized` answer puts the host in `error` with the daemon's message and does not reconnect until the user retries. This holds for phones too: a removed phone waits for its Retry instead of trying every 5 s. (`a_refused_token_stops_retrying_until_asked`, `a_mac_pairs_and_connects_through_the_shared_tailnet_connector`)
-- [ ] The desktop shows that `error` as "studio-mini no longer accepts this Mac. Pair it again."
+- [x] An `unauthorized` answer puts the host in a new status, `refused`, with the daemon's message, and it does not reconnect until the user retries. This holds for phones too: a removed phone waits for its Retry instead of trying every 5 s. (`a_refused_token_stops_retrying_until_asked`, `a_mac_pairs_and_connects_through_the_shared_tailnet_connector`)
+- [ ] The desktop shows `refused` as "studio-mini no longer accepts this Mac. Pair it again."
 - [ ] Any other failure (no address answers, the connection drops) reconnects with `moonlet-link`'s backoff, as SSH hosts do (R3).
 - [ ] After `authed` the connection is a normal host connection: R3's reconnect banner, R4's sidebar grouping, notifications that name the host, the palette and the approval inbox all work for tailnet hosts.
 - [ ] **Remove** on a tailnet host calls `mobile.unpair` when the host is connected, then forgets the host and its token. When the host is not connected, it forgets them only, and the dialog says "studio-mini will still list this Mac until you remove it there."
@@ -101,7 +101,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - **`authed`** gains `protocol: number`, `daemon_version: string` and `host: string`.
 - **`mobile.status`:** each device gains `kind`.
 - **New method:** `mobile.unpair` (tailnet connections only).
-- **`moonlet-link`:** `HostStatus` gains `needs_update`, and the crate gains the tailnet `Connector`.
+- **`moonlet-link`:** `HostStatus` gains `needs_update` and `refused`, and the crate gains the tailnet `Connector`.
 - **CLI:** `moonletd tailnet on|off|status` and `moonletd pair`. They connect as clients `moonletd-tailnet` and `moonletd-pair`, following `moonletd status` (`moonletd-status`). The daemon refuses `mobile.*` only to `moonlet-cli` (`daemon.rs:429`), so it serves these as it serves the app.
 - **Desktop (Tauri) commands:**
   - `host_pair {input, name?}` returns the new host or the dialog's error;

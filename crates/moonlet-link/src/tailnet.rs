@@ -10,7 +10,7 @@ use moonlet_proto::methods::DeviceKind;
 use moonlet_proto::{Frame, Message, PROTOCOL_VERSION, read_frame, write_frame};
 use tokio::net::TcpStream;
 
-use crate::{BoxFuture, Connector, NEEDS_UPDATE, REFUSED, Reader, Writer};
+use crate::{BoxFuture, Connector, NeedsUpdate, Reader, Refused, Writer};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -44,7 +44,7 @@ pub async fn dial(addrs: &[String]) -> Result<TcpStream> {
 }
 
 /// Sends an `auth` frame on `stream` and reads the daemon's answer. A
-/// refusal's error starts with [`REFUSED`].
+/// refusal is a [`Refused`] error.
 pub async fn authenticate(stream: &mut TcpStream, auth: Message) -> Result<Message> {
     write_frame(stream, &Frame::Json(auth)).await?;
     match tokio::time::timeout(AUTH_TIMEOUT, read_frame(stream))
@@ -53,7 +53,7 @@ pub async fn authenticate(stream: &mut TcpStream, auth: Message) -> Result<Messa
     {
         Some(Frame::Json(m @ Message::Authed { .. })) => Ok(m),
         Some(Frame::Json(Message::Response { error: Some(e), .. })) if e.code == "unauthorized" => {
-            bail!("{REFUSED}{}", e.message)
+            Err(Refused(e.message).into())
         }
         Some(Frame::Json(Message::Response { error: Some(e), .. })) => Err(anyhow!(e.message)),
         Some(other) => bail!("unexpected reply {other:?}"),
@@ -74,13 +74,7 @@ pub async fn pair(addrs: &[String], code: &str, device: &str, kind: DeviceKind) 
             kind: Some(kind),
         },
     )
-    .await
-    .map_err(|e| {
-        anyhow!(
-            "{}",
-            format!("{e:#}").trim_start_matches(REFUSED).to_string()
-        )
-    })?;
+    .await?;
     let Message::Authed {
         device_id,
         token: Some(token),
@@ -133,7 +127,10 @@ impl Connector for TailnetConnector {
                 } = &reply
                 && *p != PROTOCOL_VERSION
             {
-                bail!("{NEEDS_UPDATE}{}", daemon_version.as_deref().unwrap_or(""));
+                return Err(NeedsUpdate {
+                    daemon_version: daemon_version.clone().unwrap_or_default(),
+                }
+                .into());
             }
             let (r, w) = stream.into_split();
             Ok((Box::new(r) as Reader, Box::new(w) as Writer))
