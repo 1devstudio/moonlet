@@ -50,7 +50,8 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
     run(async () => {
       const made = await askMac<{ task: string }>(b, createAction(b.board, column, form.draft));
       onClose();
-      showScreen({ kind: "task", board: b.key, task: made.task });
+      // Shown once the Mac shares it; until then the detail says so.
+      showScreen({ kind: "task", board: b.key, task: made.task, created: true });
     });
   return (
     <Sheet label={`New issue in ${column}`} onClose={onClose}>
@@ -88,6 +89,7 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
         )}
         {options?.missing?.length ? <span className="text-[12.5px] text-error">Jira needs {options.missing.join(", ")}: create this issue in Jira.</span> : null}
         {(error || optionsError) && <span className="text-[12.5px] text-error">{error ?? optionsError}</span>}
+        {error === "moonlet on the Mac did not answer." && <span className="text-[12.5px] text-muted">The Mac may still create it: check the board before you try again.</span>}
         <Btn tone="primary" disabled={busy || !form.ready} onClick={() => void create()}>
           {busy ? "Creating…" : "Create"}
         </Btn>

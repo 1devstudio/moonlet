@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BoardColumn, BoardConfig } from "@desktop/lib/boards";
 import type { Task } from "@desktop/lib/tasks";
 import { resolveTaskRequest } from "@desktop/lib/tasksRelay";
-import { createAction, moveAction, startedAction } from "./taskActions";
+import { createAction, moveAction, moveRefused, startedAction } from "./taskActions";
 
 const LINEAR = "linear:acme";
 const COLUMNS: BoardColumn[] = [
@@ -20,5 +20,19 @@ describe("what the phone asks the Mac (X57)", () => {
     const issue = { title: "Show host health", description: "", assignee: "me", labels: [] };
     expect(resolveTaskRequest(createAction(board, "Todo", issue), mac)).toEqual({ kind: "create", board, column: COLUMNS[0], issue });
     expect(resolveTaskRequest(startedAction(task, "Drag sessions", true), mac)).toEqual({ kind: "started", task, session: "Drag sessions", assign: true });
+  });
+});
+
+describe("a move's outcome (X57)", () => {
+  const id = "linear:acme MOON-151";
+  const first = { status: "s-progress", name: "In Progress", at: 1 };
+  const second = { status: "s-done", name: "Done", at: 2 };
+
+  it("goes back where it was and says why when the Mac refuses", () => {
+    expect(moveRefused({ moving: { [id]: first }, failures: {} }, id, first, "Linear refused the move")).toEqual({ moving: {}, failures: { [id]: "Linear refused the move" } });
+  });
+
+  it("leaves a newer move alone when an older one is refused", () => {
+    expect(moveRefused({ moving: { [id]: second }, failures: {} }, id, first, "Linear refused the move")).toEqual({ moving: { [id]: second }, failures: {} });
   });
 });

@@ -57,6 +57,12 @@ export const forget = (prefix: string) => cache.forget(prefix);
 /** The PRs and diff stats of `sessions` on `host`, as each loads, for a board's rows (X57). */
 export function useSessionsDetails(host: string | null, sessions: Session[]): { prs: Record<string, PullRequest | null | undefined>; git: Record<string, GitStatus | undefined> } {
   const [, setTick] = useState(0);
+  // Read again once the cache lets them go (a minute), while the board shows.
+  const [round, setRound] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setRound((r) => r + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
   const ids = sessions.map((s) => s.id).join(",");
   useEffect(() => {
     if (!host) return;
@@ -71,7 +77,7 @@ export function useSessionsDetails(host: string | null, sessions: Session[]): { 
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host, ids]);
+  }, [host, ids, round]);
   if (!host) return { prs: {}, git: {} };
   return {
     prs: Object.fromEntries(sessions.map((s) => [s.id, cache.peek<PullRequest | null>(`pr:${host}:${s.id}`)])),

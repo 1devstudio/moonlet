@@ -27,7 +27,7 @@ export default function App() {
   if (screen?.kind === "paired") return <PairedScreen name={screen.name} />;
   if (!paired) return <PairScreen first />;
   if (screen?.kind === "pair") return <PairScreen first={false} />;
-  if (screen?.kind === "task") return <TaskScreen board={screen.board} task={screen.task} />;
+  if (screen?.kind === "task") return <TaskScreen board={screen.board} task={screen.task} created={screen.created} />;
   if (screen?.kind === "session") return <SessionScreen host={screen.host} id={screen.id} tab={screen.tab} />;
   if (screen?.kind === "diff") return <DiffScreen host={screen.host} id={screen.id} path={screen.path} against={screen.against} />;
   // A plan opened from a session's chat sits over that session.
