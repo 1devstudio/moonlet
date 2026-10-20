@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CheckRun, PrStack } from "@desktop/lib/protocol";
-import { checkMark, checkNote, checksDot, checksSummary, fixPrompt, reviewText, stackedOn, updatedAgo } from "./checks";
+import { checkMark, checkNote, checksDot, checksSummary, fixPrompt, reviewText, stackedOn, startsDraft, updatedAgo } from "./checks";
 
 // Shapes as `gh pr view --json statusCheckRollup` reports them.
 const run = (name: string, status: string, conclusion: string | null): CheckRun => ({ name, status, conclusion, url: `https://github.com/acme/storefront/actions/runs/1/${name}` });
@@ -67,5 +67,14 @@ describe("updatedAgo", () => {
     expect(updatedAgo(1_000, 21_000)).toBe("updated 20s ago");
     expect(updatedAgo(1_000, 1_500)).toBe("updated just now");
     expect(updatedAgo(0, 125_000)).toBe("updated 2 min ago");
+  });
+});
+
+describe("startsDraft", () => {
+  it("starts the Create PR form as the host's Draft pull requests setting says (X55)", () => {
+    expect(startsDraft({ draft_prs: true })).toBe(true);
+    expect(startsDraft({ draft_prs: false })).toBe(false);
+    // A daemon too old for Git settings: the default, not a draft.
+    expect(startsDraft(null)).toBe(false);
   });
 });

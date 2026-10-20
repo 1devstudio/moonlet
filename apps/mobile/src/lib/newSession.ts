@@ -2,7 +2,8 @@
 // the projects to start in, and the modes to start in.
 
 import { workspaceSections } from "@desktop/lib/sidebar";
-import type { Project } from "@desktop/lib/protocol";
+import { DEFAULT_GIT_SETTINGS } from "@desktop/lib/gitSettings";
+import type { GitSettings, Project, ProjectConfig } from "@desktop/lib/protocol";
 import type { HostData } from "./app";
 import type { InboxHost } from "./inbox";
 
@@ -30,12 +31,24 @@ function slug(name: string): string {
   return out || "task";
 }
 
+/** What new branches start with: the project's prefix, else the host's
+ * (X55), as the daemon decides; an empty prefix is kept. */
+export const branchPrefix = (config: Pick<ProjectConfig, "branch_prefix"> | null, git: Pick<GitSettings, "branch_prefix"> | null) =>
+  config?.branch_prefix ?? git?.branch_prefix ?? DEFAULT_GIT_SETTINGS.branch_prefix;
+
 /** The branch the daemon creates for `prompt` (before making it unique). */
-export const branchPreview = (prompt: string) => `moonlet/${slug(nameFromPrompt(prompt))}`;
+export const branchPreview = (prompt: string, prefix: string) => `${prefix}${slug(nameFromPrompt(prompt))}`;
+
+/** Where the worktree starts: the picked base, or the project's base on
+ * origin when the host starts from origin (X55) and no other base was picked. */
+export function startPoint(picked: string | null, projectBase: string, from: GitSettings["start_from"]): string {
+  const base = picked ?? projectBase;
+  return base === projectBase && from === "origin" ? `origin/${base}` : base;
+}
 
 /** The footer above Start session. */
-export function setupLine(base: string, host: string, setup: string | null | undefined): string {
-  return `Creates a worktree from ${base} on ${host}${setup ? ` and runs setup: ${setup}` : ""}`;
+export function setupLine(start: string, host: string, setup: string | null | undefined): string {
+  return `Creates a worktree from ${start} on ${host}${setup ? ` and runs setup: ${setup}` : ""}`;
 }
 
 /** Claude's permission modes (X7), as the design names them. */

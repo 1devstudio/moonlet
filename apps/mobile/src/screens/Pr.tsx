@@ -8,7 +8,7 @@ import { rpc } from "@desktop/lib/daemon";
 import { M, type PrStack, type PullRequest, type Session } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
 import { showScreen, useApp } from "../lib/app";
-import { checkMark, checkNote, checksSummary, fixPrompt, reviewText, stackedOn, updatedAgo } from "../lib/checks";
+import { checkMark, checkNote, checksSummary, fixPrompt, reviewText, stackedOn, startsDraft, updatedAgo } from "../lib/checks";
 import { sessionChat } from "../lib/chatView";
 import { forget, useGitStatus, usePr } from "../lib/rowDetails";
 import { useBusy } from "../lib/busy";
@@ -19,7 +19,8 @@ import { useNow } from "./Inbox";
 function CreatePr({ host, session, onCreated }: { host: string; session: Session; onCreated: () => void }) {
   const [title, setTitle] = useState(session.name);
   const [body, setBody] = useState("");
-  const [draft, setDraft] = useState(false);
+  const git = useApp((s) => s.data[host]?.git ?? null);
+  const [draft, setDraft] = useState(() => startsDraft(git));
   const { busy, error, run } = useBusy();
   const create = () =>
     run(async () => {

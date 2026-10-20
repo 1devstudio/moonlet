@@ -45,6 +45,24 @@ describe("events", () => {
     expect(eventChanges("fs.changed", {})).toEqual([]);
   });
 
+  it("keep the host's Git settings as the daemon reports them (X55)", () => {
+    expect(start().git).toBeNull();
+    const settings = {
+      branch_prefix: "mz/",
+      start_from: "origin",
+      archive_worktree: "keep",
+      archive_branch: "ask",
+      delete_remote_branch: true,
+      warn_unpushed: false,
+      stage_all: false,
+      draft_prs: true,
+      fetch_minutes: 15,
+      fast_forward_base: true,
+    };
+    const d = apply(start(), "git.settings_changed", settings) as HostData;
+    expect(d.git).toEqual(settings);
+  });
+
   it("win over a load that started before them", () => {
     // The load's replies left the daemon before these events did.
     const loaded: HostData = { ...emptyData(), terminals: { 1: term(1, "working") }, reads: [read(7), read(8)] };
