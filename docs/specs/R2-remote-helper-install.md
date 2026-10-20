@@ -21,7 +21,7 @@ A remote host needs the same `moonletd` (plus the `moonlet` CLI for hooks) in `~
 
 ## Limits
 
-- Code signing of the Linux helper is not in place (there is no Developer ID here). The checksum check protects transfer integrity, not provenance; signing is planned with release automation.
+- Code signing of the Linux helper is not in place (the Developer ID signs only the macOS binaries). The checksum check protects transfer integrity, not provenance; signing is planned with release automation.
 - Building Linux helpers needs `cargo-zigbuild`: `scripts/build-remote.sh`. The code is type-checked for both musl targets.
 
 ## Test plan
