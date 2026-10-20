@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openInChoices } from "./openIn";
+import { openInChoices, workspaceOpenTargets } from "./openIn";
 
 // What `open_targets` returns on a Mac with Cursor, Zed, Ghostty and Terminal installed.
 const targets = [
@@ -32,5 +32,20 @@ describe("openInChoices (X25)", () => {
     ];
     expect(openInChoices(withVsCode, { dir: false, remote: true })).toEqual(remote);
     expect(openInChoices(withVsCode, { dir: true, remote: true })).toEqual(remote);
+  });
+});
+
+describe("Open in for a tailnet host (X57)", () => {
+  // `ssh-remote+` needs SSH; a tailnet host has none.
+  const withVscode = [...targets, { id: "vscode", label: "VS Code" }];
+
+  it("offers nothing for an entry on a tailnet host", () => {
+    expect(openInChoices(withVscode, { dir: true, remote: true, tailnet: true })).toEqual([]);
+  });
+
+  it("offers VS Code and Cursor for a workspace on an SSH host, everything here, nothing on a tailnet host", () => {
+    expect(workspaceOpenTargets(withVscode, "ssh").map((t) => t.id)).toEqual(["cursor", "vscode"]);
+    expect(workspaceOpenTargets(withVscode, "local")).toEqual(withVscode);
+    expect(workspaceOpenTargets(withVscode, "tailnet")).toEqual([]);
   });
 });

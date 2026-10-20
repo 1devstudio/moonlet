@@ -35,3 +35,12 @@ export function pagesToOpen(servers: McpServer[], asked: Set<string>): { name: s
   }
   return out;
 }
+
+/**
+ * Why a sign-in cannot start on this host, or null. On a tailnet host there
+ * is no SSH connection to carry the browser's return to `localhost` (X57).
+ */
+export function signInUnavailable(url: string, host: { label: string; kind?: string }, server: string): string | null {
+  if (host.kind !== "tailnet" || !callbackForward(url)) return null;
+  return `Signing in to ${server} isn't available for sessions on ${host.label} yet.`;
+}

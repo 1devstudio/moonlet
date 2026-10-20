@@ -154,7 +154,8 @@ function index(c: SearchContext): Entry[] {
     app("profiles", "Claude Code › Profiles", undefined, "Claude profiles", n(c.profiles, "profile"), "sign in account"),
     app("hooks", "Claude Code › Hooks", undefined, "Claude Code hooks", "", "Codex skill install"),
     app("hosts", "Machines › Hosts", undefined, "Remote hosts", n(c.remoteHosts, "host"), "ssh helper"),
-    app("phones", "Machines › Phones", "phones", "Allow phones on my tailnet", "", "mobile pair Tailscale"),
+    app("hosts", "Machines › Hosts", "tailnet", "Allow connections from my tailnet", "", "pair Mac Tailscale"),
+    app("phones", "Machines › Phones", "phones", "Allow connections from my tailnet", "", "mobile phone pair Tailscale"),
     ...c.workspaces.flatMap((w): Entry[] => {
       const route: SettingsRoute = { page: "workspace", host: w.host, id: w.id };
       const path = `Workspaces › ${w.name}`;

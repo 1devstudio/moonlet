@@ -8,6 +8,7 @@ import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
+import { workspaceOpenTargets } from "../lib/openIn";
 import { chatKey, loadChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
 import { agentRows, agentsTabDot } from "../lib/subagents";
@@ -39,7 +40,8 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
   }, [open, targets.length]);
   const remote = host !== "local";
   const askAgain = useStore((s) => grantMenuLabel(s.readGrants, host, ws.id));
-  const usable = targets.filter((t) => !remote || t.id === "vscode" || t.id === "cursor");
+  const kind = useStore((s) => s.hosts[host]?.kind) ?? (remote ? "ssh" : "local");
+  const usable = workspaceOpenTargets(targets, kind);
   const item = (label: string, run: () => void, danger = false) => (
     <button
       key={label}

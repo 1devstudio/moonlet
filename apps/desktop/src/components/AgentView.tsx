@@ -75,7 +75,7 @@ import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskA
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
-import { callbackForward, isWebPage, pagesToOpen } from "../lib/oauthRedirect";
+import { callbackForward, isWebPage, pagesToOpen, signInUnavailable } from "../lib/oauthRedirect";
 import { invoke } from "@tauri-apps/api/core";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { signInFor } from "../lib/profiles";
@@ -1455,6 +1455,9 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const forwards = useRef(new Map<string, { bind: string; port: number }>());
   const openPage = async (name: string, url: string) => {
     if (!isWebPage(url)) throw new Error(`not a web page: ${url}`);
+    const info = useStore.getState().hosts[host];
+    const unavailable = info ? signInUnavailable(url, info, name) : null;
+    if (unavailable) throw new Error(unavailable);
     const fwd = host !== "local" ? callbackForward(url) : null;
     if (fwd && !forwards.current.has(name)) {
       await invoke("ssh_forward", { host, bind: fwd.bind, port: fwd.port, open: true });

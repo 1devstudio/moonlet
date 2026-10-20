@@ -6,7 +6,7 @@ import { connect } from "node:net";
 import { $, browser, expect } from "@wdio/globals";
 import { closeSettings, openSettings, sel } from "../fixtures";
 
-const allow = sel.settingsSwitch("Allow phones on my tailnet");
+const allow = sel.settingsSwitch("Allow connections from my tailnet");
 const allowed = async () => (await $(allow).getAttribute("aria-checked")) === "true";
 
 /** One `auth` frame, `[u32 len][u8 kind 1][json]`, and the daemon's first reply. */

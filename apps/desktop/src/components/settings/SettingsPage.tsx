@@ -22,6 +22,7 @@ import { TrackersPage } from "./TrackersPage";
 import { GitPage } from "./GitPage";
 import { HooksPage, ProfilesPage } from "./ClaudePages";
 import { HostsPage, PhonesPage, useMobileStatus } from "./MachinePages";
+import { devicesOfKind } from "../../lib/mobile";
 
 const ICONS: Record<AppPage, typeof Settings> = {
   general: Settings,
@@ -170,7 +171,7 @@ function AppPageBody({ route, mobile }: { route: { page: AppPage }; mobile: Retu
     case "hooks":
       return <HooksPage />;
     case "hosts":
-      return <HostsPage />;
+      return <HostsPage status={mobile} />;
     case "phones":
       return <PhonesPage status={mobile} />;
   }
@@ -322,7 +323,7 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
 
   return (
     <div ref={root} role="region" aria-label="Settings" data-settings-searching={searching || undefined} className="fixed inset-0 z-40 flex bg-bg text-fg">
-      <Nav route={route} phones={mobile?.devices.length ?? 0} search={search} />
+      <Nav route={route} phones={mobile ? devicesOfKind(mobile, "phone").length : 0} search={search} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 pl-12 pr-4 ui-text-12.5 text-faint">
           {crumbs.map((c, i) => (

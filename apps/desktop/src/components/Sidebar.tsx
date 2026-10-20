@@ -4,6 +4,7 @@ import { rpc } from "../lib/daemon";
 import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, sessionMenu, type Group } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
+import { hostNotice } from "../lib/settingsPage";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -794,13 +795,14 @@ function HistoryList() {
 }
 
 function HostNotice({ host }: { host: HostInfo }) {
-  if (host.status === "connected") return null;
-  const text = host.status === "needs_install" ? "helper not installed" : host.status === "error" ? (host.message ?? "connection failed") : "reconnecting…";
+  const appVersion = useStore((s) => s.appVersion);
+  const text = hostNotice(host, appVersion ?? "");
+  if (text === null) return null;
   return (
     <div className="mx-3 mb-2 flex items-center gap-2 rounded-md bg-panel-2 px-2.5 py-1.5 ui-text-12">
       <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", host.status === "reconnecting" || host.status === "connecting" ? "bg-blocked" : "bg-error")} />
-      <span className="truncate text-muted">
-        {host.label}: {text}
+      <span className="truncate text-muted" title={text}>
+        {text}
       </span>
     </div>
   );
