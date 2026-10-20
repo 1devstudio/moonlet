@@ -12,6 +12,9 @@ export interface PairLink {
   code: string;
 }
 
+/** A pairing code: 10 characters of Crockford's base32, as the daemon makes them (X57). */
+export const SHORT_CODE = /^[0-9A-HJKMNP-TV-Z]{10}$/;
+
 /** The link's parts, or null for anything that is not a version 1 pairing link. */
 export function parsePairLink(text: string): PairLink | null {
   let url: URL;
@@ -27,7 +30,7 @@ export function parsePairLink(text: string): PairLink | null {
   if (q.get("v") !== "1") return null;
   const code = q.get("code") ?? "";
   const addrs = q.getAll("addr").filter(Boolean);
-  const short = /^[0-9A-HJKMNP-TV-Z]{10}$/.test(code);
+  const short = SHORT_CODE.test(code);
   if (!(short || /^[0-9a-f]{32}$/.test(code)) || addrs.length === 0) return null;
   return { host: q.get("host") || "Mac", addrs, code };
 }

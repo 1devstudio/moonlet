@@ -177,3 +177,12 @@ describe("Task trackers in the search (X44)", () => {
     expect(hits("operations")).toEqual([["Operations", "Jira board 10", "board-jira:ops.atlassian.net/10@local/w"]]);
   });
 });
+
+describe("tailnet access in the search (X57)", () => {
+  it("finds the setting on Hosts and on Phones", () => {
+    expect(searchSettings("connections from my tailnet", ctx).map((r) => [r.path, r.route, r.setting])).toEqual([
+      ["Machines › Hosts", { page: "hosts" }, "tailnet"],
+      ["Machines › Phones", { page: "phones" }, "phones"],
+    ]);
+  });
+});

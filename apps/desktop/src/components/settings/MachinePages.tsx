@@ -7,10 +7,10 @@ import { Copy, Laptop, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi, onDaemonEvent, rpc } from "../../lib/daemon";
 import { countdown, deviceLine, devicesOfKind, pairEndedText } from "../../lib/mobile";
-import { readAddHostInput } from "../../lib/addHost";
+import { addHostReady, displayCode, readAddHostInput } from "../../lib/addHost";
 import { EV, M, type HostInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
-import { hostLine, needsPairing, phoneAccessLine } from "../../lib/settingsPage";
+import { hostActions, hostLine, phoneAccessLine, removeAsks } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
 import { Card, PageHeading, Section, Status, SwitchRow } from "./controls";
 
@@ -48,7 +48,7 @@ function AddHostDialog({ name: initialName, onClose }: { name: string; onClose: 
     if (ssh) void hostsApi.sshHosts().then(setSuggestions);
   }, [ssh]);
   const input = readAddHostInput(text);
-  const ready = ssh ? !!alias.trim() : input.kind === "link" || (input.kind === "code" && !!name.trim());
+  const ready = addHostReady(ssh ? { ssh, alias } : { text, name });
   const added = (info: HostInfo) => {
     useStore.setState((s) => ({ hosts: { ...s.hosts, [info.id]: info } }));
     onClose();
@@ -186,7 +186,9 @@ async function removeDevice(id: string, name: string) {
   }
 }
 
-function TailnetSwitch({ status, setting }: { status: MobileStatus | null; setting: string }) {
+/** Turning access off also hides a code on screen at once; the daemon says
+ * `mobile.pair_ended` too. */
+function TailnetSwitch({ status, setting, onOff }: { status: MobileStatus | null; setting: string; onOff: () => void }) {
   return (
     <SwitchRow
       setting={setting}
@@ -194,14 +196,17 @@ function TailnetSwitch({ status, setting }: { status: MobileStatus | null; setti
       hint={status && <Status line={phoneAccessLine(status)} />}
       on={!!status?.enabled}
       disabled={!status}
-      onChange={(on) => void setTailnetAccess(on)}
+      onChange={(on) => {
+        if (!on) onOff();
+        void setTailnetAccess(on);
+      }}
     />
   );
 }
 
 /** The code another Mac types, or the link it pastes. */
 function MacPairing({ pairing, host, now, onCancel }: { pairing: MobilePairing; host: string; now: number; onCancel: () => void }) {
-  const shown = pairing.code.length === 10 ? `${pairing.code.slice(0, 5)}-${pairing.code.slice(5)}` : pairing.code;
+  const shown = displayCode(pairing.code);
   return (
     <div role="group" aria-label="Pairing" className="flex flex-col gap-2 px-4 py-3.5 ui-text-12.5">
       <span>On the other Mac, open Settings › Machines › Hosts › Add host, and enter this code with this Mac's name, {host}:</span>
@@ -253,23 +258,22 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
       setBusy(null);
     }
   };
+  const forget = async (id: string) => {
+    await hostsApi.remove(id);
+    useStore.setState((s) => {
+      const hs = { ...s.hosts };
+      delete hs[id];
+      return { hosts: hs };
+    });
+  };
   const remove = async (h: HostInfo) => {
     // A connected tailnet host forgets this Mac too; one we cannot reach does not.
-    if (h.kind === "tailnet" && h.status !== "connected") {
-      const ok = await askConfirm({ title: `Remove ${h.id}?`, message: `${h.id} will still list this Mac until you remove it there.`, action: "Remove" });
-      if (!ok) return;
-    }
-    try {
-      await hostsApi.remove(h.id);
-      useStore.setState((s) => {
-        const hs = { ...s.hosts };
-        delete hs[h.id];
-        return { hosts: hs };
-      });
-    } catch (e) {
-      errorToast(e);
-    }
+    const ask = removeAsks(h);
+    if (ask && !(await askConfirm({ ...ask, action: "Remove" }))) return;
+    await forget(h.id).catch(errorToast);
   };
+  // The host no longer takes this Mac's token: forget it and pair afresh.
+  const pairAgain = (id: string) => void forget(id).then(() => setAdding({ name: id }), errorToast);
   return (
     <>
       <PageHeading title="Hosts">Machines that run moonletd. Add a host on your tailnet with a pairing code, or one from your SSH config. Sessions keep running there when the connection drops.</PageHeading>
@@ -281,7 +285,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
                 Background daemon
               </button>
             </HostRow>
-            <TailnetSwitch status={status} setting="tailnet" />
+            <TailnetSwitch status={status} setting="tailnet" onOff={cancel} />
             <div className="flex items-center gap-3 px-4 py-3">
               <Button size="sm" variant="primary" disabled={!canPair || !!pairing} onClick={() => void start()}>
                 <Laptop size={13} /> Let another Mac connect
@@ -316,15 +320,20 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
         <Card>
           {remotes.map((h) => (
             <HostRow key={h.id} host={h} sessions={open(h.id)}>
-              {h.kind !== "tailnet" && (h.status === "needs_install" || h.status === "connected") && (
-                <Button size="sm" variant={h.status === "connected" ? "ghost" : "primary"} disabled={busy === h.id} onClick={() => void install(h.id)}>
-                  {busy === h.id ? "Installing…" : h.status === "connected" ? "Reinstall helper" : "Install helper"}
-                </Button>
-              )}
-              {needsPairing(h) && (
-                <Button size="sm" variant="primary" onClick={() => void hostsApi.remove(h.id).then(() => setAdding({ name: h.id }), errorToast)}>
-                  Pair again
-                </Button>
+              {hostActions(h).map((a) =>
+                a === "install" || a === "reinstall" ? (
+                  <Button key={a} size="sm" variant={a === "reinstall" ? "ghost" : "primary"} disabled={busy === h.id} onClick={() => void install(h.id)}>
+                    {busy === h.id ? "Installing…" : a === "reinstall" ? "Reinstall helper" : "Install helper"}
+                  </Button>
+                ) : a === "pair-again" ? (
+                  <Button key={a} size="sm" variant="primary" onClick={() => pairAgain(h.id)}>
+                    Pair again
+                  </Button>
+                ) : (
+                  <Button key={a} size="sm" variant="ghost" onClick={() => void hostsApi.reconnect(h.id).catch(errorToast)}>
+                    Retry
+                  </Button>
+                ),
               )}
               <IconButton title={`Remove ${h.id}`} onClick={() => void remove(h)}>
                 <Trash2 size={13} />
@@ -381,7 +390,7 @@ export function PhonesPage({ status }: { status: MobileStatus | null }) {
       <PageHeading title="Phones">The moonlet phone app reaches this Mac over Tailscale: answer agents, review changes and watch checks away from the desk.</PageHeading>
       <Section title="Access">
         <Card>
-          <TailnetSwitch status={status} setting="phones" />
+          <TailnetSwitch status={status} setting="phones" onOff={cancel} />
           <div className="flex items-center gap-3 px-4 py-3">
             <Button size="sm" variant="primary" disabled={!canPair || !!pairing} onClick={() => void start()}>
               <Smartphone size={13} /> Pair a phone

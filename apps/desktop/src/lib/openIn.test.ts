@@ -12,7 +12,7 @@ const targets = [
 
 describe("openInChoices (X25)", () => {
   it("reveals a local file in Finder and offers the editors, not the terminals", () => {
-    expect(openInChoices(targets, { dir: false, remote: false })).toEqual([
+    expect(openInChoices(targets, { dir: false, kind: "local" })).toEqual([
       { id: "reveal", label: "Finder" },
       { id: "cursor", label: "Cursor" },
       { id: "zed", label: "Zed" },
@@ -21,7 +21,7 @@ describe("openInChoices (X25)", () => {
 
   it("reveals a local folder in Finder, and offers the editors and the terminals", () => {
     // `open` on a folder named Foo.app would launch it, so Finder reveals.
-    expect(openInChoices(targets, { dir: true, remote: false })).toEqual([{ id: "reveal", label: "Finder" }, ...targets.slice(1)]);
+    expect(openInChoices(targets, { dir: true, kind: "local" })).toEqual([{ id: "reveal", label: "Finder" }, ...targets.slice(1)]);
   });
 
   it("offers only VS Code and Cursor on a remote host", () => {
@@ -30,8 +30,8 @@ describe("openInChoices (X25)", () => {
       { id: "cursor", label: "Cursor" },
       { id: "vscode", label: "VS Code" },
     ];
-    expect(openInChoices(withVsCode, { dir: false, remote: true })).toEqual(remote);
-    expect(openInChoices(withVsCode, { dir: true, remote: true })).toEqual(remote);
+    expect(openInChoices(withVsCode, { dir: false, kind: "ssh" })).toEqual(remote);
+    expect(openInChoices(withVsCode, { dir: true, kind: "ssh" })).toEqual(remote);
   });
 });
 
@@ -40,7 +40,7 @@ describe("Open in for a tailnet host (X57)", () => {
   const withVscode = [...targets, { id: "vscode", label: "VS Code" }];
 
   it("offers nothing for an entry on a tailnet host", () => {
-    expect(openInChoices(withVscode, { dir: true, remote: true, tailnet: true })).toEqual([]);
+    expect(openInChoices(withVscode, { dir: true, kind: "tailnet" })).toEqual([]);
   });
 
   it("offers VS Code and Cursor for a workspace on an SSH host, everything here, nothing on a tailnet host", () => {
