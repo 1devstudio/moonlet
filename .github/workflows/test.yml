@@ -1,6 +1,6 @@
 # Typechecks and runs the Rust and Vitest suites on every pull request and
-# on main (`pnpm check`). The e2e suite needs a desktop session and stays
-# local (`pnpm e2e`).
+# on main (`pnpm check`), and tests the Linux install script on Ubuntu (X58).
+# The e2e suite needs a desktop session and stays local (`pnpm e2e`).
 name: test
 
 on:
@@ -40,3 +40,32 @@ jobs:
           git config --global user.email "ci@moonlet.invalid"
 
       - run: pnpm check
+
+  # The Linux install script (X58) on a real systemd: install, a damaged
+  # download, an update that keeps a session (the unit follows the new
+  # daemon), uninstall. Debug builds stand in for the release's static ones.
+  linux-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Build moonletd and moonlet
+        run: |
+          cargo build -p moonletd -p moonlet-cli
+          mkdir -p helpers
+          cp target/debug/moonletd helpers/moonletd-x86_64-unknown-linux-musl
+          cp target/debug/moonlet helpers/moonlet-x86_64-unknown-linux-musl
+      - run: scripts/package-linux.sh dist helpers
+      # A user manager for the runner, as lingering gives a server.
+      - name: systemd user instance
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+          for _ in $(seq 60); do
+            systemctl --user show-environment >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+          systemctl --user show-environment >/dev/null
+      - run: scripts/test-install.sh dist

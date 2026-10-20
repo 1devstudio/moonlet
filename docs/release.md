@@ -4,6 +4,7 @@
 
 - `pnpm --filter @moonlet/desktop bundle` builds `moonlet.app` with `moonletd` and `moonlet` as nested binaries (`externalBin`) and any Linux helpers from `src-tauri/remote/` as resources.
 - `scripts/build-remote.sh` builds the static musl helpers.
+- `scripts/package-linux.sh` packs them for a release ([X58](specs/X58-linux-install-script.md)): `moonlet-linux-x86_64.tar.gz`, `moonlet-linux-aarch64.tar.gz`, `SHA256SUMS`, and `install.sh` with the version written in. The release workflow uploads them before it publishes, so `curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh` installs the latest release on a Linux host. `scripts/test-install.sh` tests the script; CI's `linux-install` job runs it on Ubuntu with systemd.
 - In-app updates ([X35](specs/X35-in-app-update.md)). The public key is in `tauri.conf.json` under `plugins.updater`, and the private key is in `~/.tauri/moonlet.key`. Back it up: without it no installed app accepts another update.
 
 ## Publishing a release
