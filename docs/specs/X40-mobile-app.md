@@ -64,7 +64,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### New session
 
-- [x] New session has the prompt box "What do you want to work on?" (dictation comes from the keyboard's microphone), the branch the daemon will create (`moonlet/<slug of the name>`, the daemon's own rule, updated as the prompt changes), and rows for **Project** (the workspace's projects on connected hosts), **Host** (the project's host: tapping it opens the same project picker, since a project lives on one host), **Agent** (Claude Code, Codex), **Model** with effort (Claude only) and **Base** (the project's branches), each opening a picker. (`lib/newSession.test.ts`, with names captured from a real daemon)
+- [x] New session has the prompt box "What do you want to work on?" (dictation comes from the keyboard's microphone), the branch the daemon will create (`<prefix><slug of the name>`, the daemon's own rule, updated as the prompt changes; the prefix is the host's, see Git settings), and rows for **Project** (the workspace's projects on connected hosts), **Host** (the project's host: tapping it opens the same project picker, since a project lives on one host), **Agent** (Claude Code, Codex), **Model** with effort (Claude only) and **Base** (the project's branches), each opening a picker. (`lib/newSession.test.ts`, with names captured from a real daemon)
 - [x] **Mode** has Auto, Manual, Edits and Plan, with one help line each (from the design). Manual is the default. It shows for Claude Code only: Codex has no such modes.
 - [x] The footer says "Creates a worktree from <base> on <host> and runs setup: <setup command>" (no setup part without a setup command). **Start session** calls `session.create` in the chosen workspace and opens the new session's chat. (`lib/newSession.test.ts` for the branch name and the footer)
 
@@ -115,6 +115,17 @@ Added 2026-10-20 to keep the phone in step with the desktop.
 - [x] Tapping an agent opens a sheet with its state, kind and model, what it does now or why it failed, its prompt and its report, and **Stop agent** while it runs or waits (`chat.stop_agent`).
 - [x] A session row shows "<n> agents" while its chats run subagents. (`lib/sessionList.test.ts`)
 - [x] A permission a subagent asks for says which one, "Agent <description>", on its Inbox card and on the ask docked in the chat. (`lib/inbox.test.ts`)
+
+### Git settings (X55)
+
+Added 2026-10-20. Each host's daemon keeps its Git settings; the phone loads them with the host (`git.settings`) and follows `git.settings_changed`. A daemon too old for them gets the defaults. (`lib/events.test.ts`)
+
+- [x] New session's branch preview starts with the project's branch prefix, else the host's (`moonlet/` by default; empty for none), as the daemon names it. (`branchPrefix`, `branchPreview` in `lib/newSession.test.ts`)
+- [x] With the host set to start from origin, the footer says "Creates a worktree from origin/<base>" while the project's base is kept; another base is used as picked. (`startPoint` in `lib/newSession.test.ts`)
+- [x] **Archive session** opens a sheet with the desktop's archive prompt: whether the worktree folder is removed or stays, and whether the branch is kept or deleted (here, and on origin), from the host's settings and whether the session's PR merged; "Also delete the branch" under Ask each time. Archiving sends `session.archive` with those flags; a branch origin refused to delete is reported. (`lib/archive.test.ts`)
+- [x] With "Warn about unpushed work" on, the sheet first asks the host for work only there (`git.unpushed`): uncommitted files (the first 8) and commits not on origin, with **Archive anyway** and **Push, then archive** (`git.push` first), which needs the files committed first. (`lib/archive.test.ts`)
+- [x] The Create PR form's **Draft** starts as the host's "Draft pull requests" says. (`startsDraft` in `lib/checks.test.ts`)
+- The phone stages files one by one with their checkboxes, so "Stage all changes first" has no place there; fetching and fast-forwarding base branches is the desktop's.
 
 ## UI
 

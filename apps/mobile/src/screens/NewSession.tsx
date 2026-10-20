@@ -8,7 +8,7 @@ import { latestOnly } from "@desktop/lib/prStack";
 import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
 import { M, type ProjectConfig, type Session } from "@desktop/lib/protocol";
 import { loadHost, showScreen, showTab, useApp } from "../lib/app";
-import { MODES, branchPreview, modeHelp, projectChoices, setupLine } from "../lib/newSession";
+import { MODES, branchPrefix, branchPreview, modeHelp, projectChoices, setupLine, startPoint } from "../lib/newSession";
 import { useBusy } from "../lib/busy";
 import { AgentIcon, Btn, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
@@ -106,6 +106,8 @@ export function NewSessionScreen() {
   };
 
   const baseName = base ?? choice?.project.base_branch ?? "main";
+  // The host's Git settings (X55) name the branch and say where it starts.
+  const git = choice ? (data[choice.host]?.git ?? null) : null;
   const modelLabel = CLAUDE_MODELS.find((m) => m.id === model)?.label ?? model;
   const effortLabel = EFFORTS.find((e) => e.id === effort)?.label ?? effort;
 
@@ -134,7 +136,7 @@ export function NewSessionScreen() {
                     <Mic size={18} />
                   </button>
                   <span className="flex-1" />
-                  <span className="truncate pr-2 font-mono text-[12px] text-faint">{branchPreview(prompt)}</span>
+                  <span className="truncate pr-2 font-mono text-[12px] text-faint">{branchPreview(prompt, branchPrefix(config, git))}</span>
                 </div>
               </div>
             </div>
@@ -163,7 +165,7 @@ export function NewSessionScreen() {
       </div>
       {choice && (
         <div className="flex flex-col gap-2.5 border-t border-border px-4 pt-3 pb-3">
-          <span className="text-[12.5px] text-muted">{setupLine(baseName, choice.hostLabel, config?.setup)}</span>
+          <span className="text-[12.5px] text-muted">{setupLine(startPoint(base, choice.project.base_branch, git?.start_from ?? "local"), choice.hostLabel, config?.setup)}</span>
           {error && <span className="text-[12.5px] text-error">{error}</span>}
           <Btn tone="primary" disabled={busy || !prompt.trim()} onClick={() => void start()}>
             {busy ? "Starting…" : "Start session"} <ArrowRight size={16} />
