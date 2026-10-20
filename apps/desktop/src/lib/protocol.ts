@@ -590,6 +590,8 @@ export interface HostInfo {
   daemon_version: string | null;
   hostname: string | null;
   home: string | null;
+  /** `macos` or `linux`, known for a tailnet host that needs an update (X58). */
+  os?: string | null;
 }
 
 /** What paired: a phone (X39) or another Mac's app (X57). */

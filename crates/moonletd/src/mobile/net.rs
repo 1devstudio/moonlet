@@ -157,6 +157,7 @@ async fn serve_phone(daemon: Arc<Daemon>, mut stream: TcpStream) -> Result<()> {
             protocol: Some(moonlet_proto::PROTOCOL_VERSION),
             daemon_version: Some(env!("CARGO_PKG_VERSION").into()),
             host: Some(super::host_label()),
+            os: Some(std::env::consts::OS.into()),
         }),
     )
     .await?;

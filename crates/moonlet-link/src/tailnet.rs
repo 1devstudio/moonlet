@@ -81,6 +81,7 @@ pub async fn pair(addrs: &[String], code: &str, device: &str, kind: DeviceKind) 
         protocol,
         daemon_version,
         host,
+        ..
     } = reply
     else {
         bail!("the host did not hand out a token");
@@ -123,12 +124,14 @@ impl Connector for TailnetConnector {
                 && let Message::Authed {
                     protocol: Some(p),
                     daemon_version,
+                    os,
                     ..
                 } = &reply
                 && *p != PROTOCOL_VERSION
             {
                 return Err(NeedsUpdate {
                     daemon_version: daemon_version.clone().unwrap_or_default(),
+                    os: os.clone(),
                 }
                 .into());
             }
