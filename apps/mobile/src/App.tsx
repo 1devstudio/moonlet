@@ -6,6 +6,7 @@ import { HostsScreen } from "./screens/Hosts";
 import { InboxScreen, useInbox } from "./screens/Inbox";
 import { NewSessionScreen } from "./screens/NewSession";
 import { SessionsScreen } from "./screens/Sessions";
+import { TasksScreen } from "./screens/Tasks";
 import { PlanSheet } from "./screens/PlanSheet";
 import { SessionScreen } from "./screens/Session";
 import { DiffScreen } from "./screens/Diff";
@@ -41,6 +42,7 @@ export default function App() {
         {tab === "inbox" && <InboxScreen />}
         {tab === "hosts" && <HostsScreen />}
         {tab === "sessions" && <SessionsScreen />}
+        {tab === "tasks" && <TasksScreen />}
         {tab === "new" && <NewSessionScreen />}
       </main>
       <TabBar badge={inbox.needs.length} />

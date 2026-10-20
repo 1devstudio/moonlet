@@ -80,3 +80,14 @@ describe("gitAfterError (X55)", () => {
     expect(gitAfterError(new DaemonError({ code: "failed", message: "connection reset" }))).toBe("keep");
   });
 });
+
+describe("board snapshots (X57)", () => {
+  it("keep each workspace's snapshot as the app shares it, and drop one whose workspace went", () => {
+    const snap = { version: 1, boards: [], tasks: [] };
+    let d = apply(start(), "tasks.changed", { workspace: "personal", snapshot: snap }) as HostData;
+    expect(d.tasks).toEqual({ personal: snap });
+    d = apply(d, "tasks.changed", { workspace: "acme", snapshot: snap }) as HostData;
+    d = apply(d, "tasks.changed", { workspace: "personal", snapshot: null }) as HostData;
+    expect(Object.keys(d.tasks)).toEqual(["acme"]);
+  });
+});

@@ -1,11 +1,12 @@
-import { Inbox, Layers, MessageSquarePlus, Server } from "lucide-react";
+import { ListChecks, Server, ShieldAlert, SquareTerminal } from "lucide-react";
 import { showTab, type Tab, useApp } from "../lib/app";
 import { cx } from "./ui";
 
-const TABS: { id: Tab; label: string; Icon: typeof Inbox }[] = [
-  { id: "inbox", label: "Inbox", Icon: Inbox },
-  { id: "sessions", label: "Sessions", Icon: Layers },
-  { id: "new", label: "New", Icon: MessageSquarePlus },
+// The design's tab bar (X57): New session moved to Sessions' + and a task's button.
+const TABS: { id: Tab; label: string; Icon: typeof Server }[] = [
+  { id: "sessions", label: "Sessions", Icon: SquareTerminal },
+  { id: "tasks", label: "Tasks", Icon: ListChecks },
+  { id: "inbox", label: "Needs you", Icon: ShieldAlert },
   { id: "hosts", label: "Hosts", Icon: Server },
 ];
 

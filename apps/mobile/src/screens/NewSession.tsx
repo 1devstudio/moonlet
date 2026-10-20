@@ -231,7 +231,7 @@ export function NewSessionScreen() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center px-4 pb-2" style={{ paddingTop: "calc(var(--safe-top) + 10px)" }}>
-        <button type="button" onClick={() => showTab("inbox")} className="text-[15px] text-accent-2">
+        <button type="button" onClick={() => showTab("sessions")} className="text-[15px] text-accent-2">
           Cancel
         </button>
         <span className="flex-1 text-center text-[16px] font-semibold">New session</span>
