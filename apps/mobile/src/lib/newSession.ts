@@ -53,12 +53,13 @@ export function setupLine(start: string, host: string, setup: string | null | un
   return `Creates a worktree from ${start} on ${host}${setup ? ` and runs setup: ${setup}` : ""}`;
 }
 
-/** What New session shows and sends with a picked GitHub issue or PR (X54).
+/** What New session shows and sends with a picked branch or PR (X54).
  * A PR's attachment is sent while `prSend`; its branch is used either way. */
 export function composer(o: {
   typed: string;
   prefix: string;
-  issue: IssueRef | null;
+  /** A branch picked to work on as it is. */
+  pickedBranch: string | null;
   pr: IssueRef | null;
   prContext: string | null;
   prSend: boolean;
@@ -69,24 +70,30 @@ export function composer(o: {
 }): {
   attachments: Attachment[];
   placeholder: string;
-  /** The branch the session works on: a new one, or the PR's. */
+  /** The branch the session works on: a new one, the picked one, or the PR's. */
   branch: { name: string; existing: boolean };
   /** Where the worktree starts, for the footer. */
   start: string;
-  /** `session.create`'s prompt, name, PR and start; null with nothing to send. */
-  create: { prompt: string; name: string | null; pr: number | null; from: string | null } | null;
+  /** `session.create`'s prompt, name, PR, start and existing branch; null with nothing to send. */
+  create: { prompt: string; name: string | null; pr: number | null; from: string | null; branch: string | null } | null;
 } {
-  const sent = attachments({ task: null, issue: o.issue, pr: o.prSend ? o.pr : null, prContext: o.prContext });
+  const sent = attachments({ task: null, pr: o.prSend ? o.pr : null, prContext: o.prContext });
   const prompt = firstMessage(sent, o.typed);
   // The daemon names the session, and so its branch, after a given name whole.
-  const name = sessionName({ task: null, issue: o.issue, pr: o.pr });
+  const name = sessionName({ task: null, pr: o.pr });
+  const picked = o.pr ? null : o.pickedBranch;
+  const newBranch = !o.pr && !picked;
   return {
     attachments: sent,
     placeholder: placeholder(sent.map((a) => a.id)),
-    branch: o.pr ? { name: o.pr.head_branch ?? "", existing: true } : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
-    start: o.pr ? (o.pr.head_branch ?? `PR #${o.pr.number}`) : startPoint(o.base, o.projectBase, o.startFrom),
+    branch: o.pr
+      ? { name: o.pr.head_branch ?? "", existing: true }
+      : picked
+        ? { name: picked, existing: true }
+        : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
+    start: o.pr ? (o.pr.head_branch ?? `PR #${o.pr.number}`) : (picked ?? startPoint(o.base, o.projectBase, o.startFrom)),
     // The daemon starts from the project's base, or origin's, without a `from`.
-    create: prompt === null ? null : { prompt, name, pr: o.pr?.number ?? null, from: !o.pr && o.base && o.base !== o.projectBase ? o.base : null },
+    create: prompt === null ? null : { prompt, name, pr: o.pr?.number ?? null, from: newBranch && o.base && o.base !== o.projectBase ? o.base : null, branch: picked },
   };
 }
 

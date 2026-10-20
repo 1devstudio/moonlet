@@ -5,7 +5,7 @@ import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
-import { attachments, branchRow, firstMessage, linkMenu, pickerHint, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment } from "../lib/composer";
+import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
@@ -44,46 +44,58 @@ function saveChoice(projectId: string, c: Choice) {
   }
 }
 
-/** Issue / PR picker behind the pull request icon (X54). */
+/** Branch / PR picker behind the pull request icon (X54). */
 function SourcePicker({
   host,
   project,
   hint,
-  onIssue,
+  onBranch,
   onPr,
 }: {
   host: string;
   project: Project;
   /** What picking from a tab does (X54). */
-  hint: (tab: "issue" | "pr") => string;
-  onIssue: (i: IssueRef) => void;
+  hint: (tab: PickerTab) => string;
+  onBranch: (b: string) => void;
   onPr: (p: IssueRef) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<"issue" | "pr">("issue");
+  const [tab, setTab] = useState<PickerTab>("branch");
   const [q, setQ] = useState("");
-  const [items, setItems] = useState<IssueRef[] | null>(null);
+  const [items, setItems] = useState<PickerList | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
     setItems(null);
     setError(null);
     // A tab's list that arrives after a switch to the other tab is dropped:
-    // issues must not show, or be picked, as pull requests.
+    // pull requests must not show, or be picked, as branches.
     let current = true;
-    void rpc<IssueRef[]>(host, tab === "issue" ? M.ghIssues : M.ghPrs, { path: project.path })
-      .then((list) => current && setItems(list))
-      .catch((e) => current && setError(String(e?.message ?? e)));
+    const load: Promise<PickerList> =
+      tab === "branch"
+        ? rpc<string[]>(host, M.gitBranches, { path: project.path }).then((list) => ({ tab, list: pickerBranches(list) }))
+        : rpc<IssueRef[]>(host, M.ghPrs, { path: project.path }).then((list) => ({ tab, list }));
+    void load.then((got) => current && setItems(got)).catch((e) => current && setError(String(e?.message ?? e)));
     return () => {
       current = false;
     };
   }, [open, tab, host, project.path]);
-  const shown = (items ?? []).filter((i) => !q || `#${i.number} ${i.title}`.toLowerCase().includes(q.toLowerCase()));
+  const pick = (then: () => void) => () => {
+    setOpen(false);
+    then();
+  };
+  // Each row picks for the tab its list arrived for.
+  const found = items && pickerSearch(items, q);
+  const rows = !found
+    ? []
+    : found.tab === "branch"
+      ? found.list.map((b) => ({ key: b, number: null, title: b, branch: null, onPick: pick(() => onBranch(b)) }))
+      : found.list.map((i) => ({ key: String(i.number), number: i.number, title: i.title, branch: i.head_branch, onPick: pick(() => onPr(i)) }));
   return (
     <div className="relative">
       <button
         className={cx("-my-1 flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-fg hover:bg-hover", open && "bg-hover")}
-        title="Start from a GitHub issue or pull request"
+        title="Start from a branch or pull request"
         onClick={() => setOpen(!open)}
       >
         <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-black">
@@ -96,37 +108,33 @@ function SourcePicker({
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 z-50 mt-2 w-[420px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] shadow-2xl">
             <div className="flex items-center gap-1 border-b border-border p-2">
-              {(["issue", "pr"] as const).map((t) => (
-                <button key={t} className={cx("rounded-md px-2.5 py-1 ui-text-13", tab === t ? "bg-hover text-fg" : "text-muted hover:text-fg")} onClick={() => setTab(t)}>
-                  {t === "issue" ? "Issues" : "Pull requests"}
+              {(["branch", "pr"] as const).map((t) => (
+                <button key={t} className={cx("rounded-md px-2.5 py-1 ui-text-13", tab === t ? "bg-hover text-fg" : "text-muted hover:text-fg")} onClick={() => (setTab(t), setQ(""))}>
+                  {t === "branch" ? "Branches" : "Pull requests"}
                 </button>
               ))}
               <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="ml-auto w-40 rounded-md bg-panel-2 px-2 py-1 ui-text-13 outline-none placeholder:text-faint" />
             </div>
             <div className="max-h-[320px] overflow-y-auto p-1">
-              {error && <div className="p-3 ui-text-13 text-muted">GitHub unavailable: {error}</div>}
+              {error && <div className="p-3 ui-text-13 text-muted">{tab === "pr" ? "GitHub" : "Git"} unavailable: {error}</div>}
               {!error && items === null && <div className="p-3 ui-text-13 text-faint">Loading…</div>}
-              {shown.map((i) => (
-                <button
-                  key={i.number}
-                  className="flex w-full items-start gap-2 rounded-md px-3 py-2 text-left hover:bg-[#2a2a2a]"
-                  onClick={() => {
-                    setOpen(false);
-                    if (tab === "issue") onIssue(i);
-                    else onPr(i);
-                  }}
-                >
-                  <span className="shrink-0 font-mono ui-text-12.5 text-muted">#{i.number}</span>
+              {rows.map((r) => (
+                <button key={r.key} className="flex w-full items-start gap-2 rounded-md px-3 py-2 text-left hover:bg-[#2a2a2a]" onClick={r.onPick}>
+                  {r.number !== null ? (
+                    <span className="shrink-0 font-mono ui-text-12.5 text-muted">#{r.number}</span>
+                  ) : (
+                    <GitBranch size={13} className="mt-[3px] shrink-0 text-muted" />
+                  )}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate ui-text-13.5">{i.title}</span>
-                    {i.head_branch && <span className="block truncate font-mono ui-text-11.5 text-faint">{i.head_branch}</span>}
+                    <span className={cx("block truncate ui-text-13.5", r.number === null && "font-mono")}>{r.title}</span>
+                    {r.branch && <span className="block truncate font-mono ui-text-11.5 text-faint">{r.branch}</span>}
                   </span>
                 </button>
               ))}
-              {items && shown.length === 0 && <div className="p-3 ui-text-13 text-faint">Nothing open.</div>}
+              {items && rows.length === 0 && <div className="p-3 ui-text-13 text-faint">{items.tab === "pr" ? "Nothing open." : "No branch matches."}</div>}
             </div>
             <div className="flex items-start gap-2 border-t border-border px-3 py-[9px] ui-text-12 leading-[1.45] text-faint">
-              {tab === "pr" ? <GitBranch size={12} className="mt-0.5 shrink-0" /> : <FileText size={12} className="mt-0.5 shrink-0" />}
+              <GitBranch size={12} className="mt-0.5 shrink-0" />
               <span>{hint(tab)}</span>
             </div>
           </div>
@@ -137,19 +145,17 @@ function SourcePicker({
 }
 
 /** A folded attachment (X54): its line, › to unfold its text, × to remove it. */
-function AttachmentRow({ a, flash, onRemove }: { a: Attachment; flash: boolean; onRemove: () => void }) {
+function AttachmentRow({ a, onRemove }: { a: Attachment; onRemove: () => void }) {
   const [open, setOpen] = useState(false);
   const Icon = a.icon === "pr" ? GitPullRequest : FileText;
   return (
-    <div role="group" aria-label={`${a.ref ? `${a.ref} ` : ""}${a.lead ?? ""}${a.summary}${a.note ?? ""}`} className={cx("rounded-[10px] border bg-panel-2 transition-colors duration-500", flash ? "border-accent/45" : "border-border")}>
+    <div role="group" aria-label={`${a.lead}${a.summary}`} className="rounded-[10px] border border-border bg-panel-2">
       <div className="flex items-center gap-2 px-3 py-[9px] ui-text-12.5 text-muted">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open} title={open ? "Fold" : "Unfold"} onClick={() => setOpen(!open)}>
           <Icon size={13} className="shrink-0" />
-          {a.ref && <span className="shrink-0 font-mono ui-text-12">{a.ref}</span>}
           <span className="min-w-0 flex-1 truncate">
             {a.lead}
             <span className="text-fg">{a.summary}</span>
-            {a.note}
           </span>
           <ChevronRight size={13} className={cx("shrink-0 transition-transform", open && "rotate-90")} />
         </button>
@@ -317,15 +323,12 @@ export function Composer({
   const [from, setFrom] = useState<{ ref: string; existing: boolean } | null>(null);
   const [editingFrom, setEditingFrom] = useState<null | "from" | "existing">(null);
   const [branches, setBranches] = useState<string[]>([]);
-  const [issue, setIssue] = useState<IssueRef | null>(null);
   const [pr, setPr] = useState<IssueRef | null>(null);
   // The picked PR's attachment, kept unless the user removes it (X54).
   const [prSend, setPrSend] = useState(true);
   const [prContext, setPrContext] = useState<string | null>(null);
   /** The request for the picked PR's context still wanted: a later pick, or another project, replaces it. */
   const wantedContext = useRef<object | null>(null);
-  // A picked issue's attachment is outlined for a moment (X54).
-  const [flash, setFlash] = useState(false);
   const [addDirs, setAddDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   // Link a task (X54): the target workspace's tasks, when it has a task source.
@@ -346,7 +349,6 @@ export function Composer({
     setPr(null);
     wantedContext.current = null;
     setFrom(null);
-    setIssue(null);
     setAddDirs([]);
   }, [current?.host, current?.project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -363,13 +365,6 @@ export function Composer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!issue) return;
-    setFlash(true);
-    const t = setTimeout(() => setFlash(false), 1500);
-    return () => clearTimeout(t);
-  }, [issue]);
 
   // The branch a task names (X44 template); an adopted worktree keeps its own.
   // Create waits for it, so a quick ⌘↵ still gets the task's branch.
@@ -450,7 +445,7 @@ export function Composer({
       const s = await rpc<Session>(current.host, M.sessionCreate, {
         project_id: current.project.id,
         prompt: firstMessage(sent, prompt),
-        name: sessionName({ task, pr, issue }),
+        name: sessionName({ task, pr }),
         task: task?.ref ?? null,
         worktree: worktree?.path ?? null,
         agent: choice.agent,
@@ -489,15 +484,15 @@ export function Composer({
     setTaskQuery("");
   };
   const canLink = !!target && showsLinkSlot({ task: !!task, worktree: !!worktree, sources: !!taskData?.sources.length });
-  const suggestion = canLink ? suggestedTask({ pr, issue }, wsTasks) : null;
+  const suggestion = canLink ? suggestedTask({ pr }, wsTasks) : null;
   const linkItems: MenuItem[] = canLink
-    ? linkMenu({ pr, issue }, prompt, wsTasks, taskQuery).flatMap((section) => [
+    ? linkMenu({ pr }, prompt, wsTasks, taskQuery).flatMap((section) => [
         { kind: "label" as const, label: section.label },
         ...section.tasks.map(({ task: t, hint }) => ({ label: `${t.key} ${t.title}`, hint: hint ?? undefined, onSelect: () => linkTo(t) })),
       ])
     : [];
 
-  const sent = attachments({ task, issue, pr: pr && prSend ? pr : null, prContext });
+  const sent = attachments({ task, pr: pr && prSend ? pr : null, prContext });
   const row = branchRow({
     base: current?.project.base_branch ?? "base",
     task,
@@ -600,8 +595,10 @@ export function Composer({
               host={current.host}
               project={current.project}
               hint={(tab) => pickerHint(tab, task && { key: task.key, branch: taskBranch }, current.project.base_branch)}
-              onIssue={(i) => {
-                setIssue(i);
+              onBranch={(b) => {
+                setFrom({ ref: b, existing: true });
+                setPr(null);
+                setEditingFrom(null);
                 ta.current?.focus();
               }}
               onPr={(p) => {
@@ -728,9 +725,7 @@ export function Composer({
             <AttachmentRow
               key={a.id}
               a={a}
-              flash={a.id === "issue" && flash}
               onRemove={() => {
-                if (a.id === "issue") setIssue(null);
                 if (a.id === "pr") setPrSend(false);
                 ta.current?.focus();
               }}
