@@ -9,6 +9,7 @@
 mod daemon;
 mod launch;
 mod mobile;
+mod notify;
 mod server;
 mod service;
 mod tailnet_cli;
@@ -59,7 +60,7 @@ enum Cmd {
     },
     /// Replace the running daemon with this binary, keeping every session.
     Upgrade,
-    /// Manage the launchd LaunchAgent (macOS).
+    /// Start the daemon at login: a launchd LaunchAgent (macOS) or a systemd user unit (Linux).
     Service {
         #[command(subcommand)]
         action: ServiceAction,
@@ -161,6 +162,7 @@ fn run_daemon(
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
         libc::signal(libc::SIGHUP, libc::SIG_IGN);
     }
+    let fresh = handoff.is_none();
     rt.block_on(async move {
         let (listener, daemon) = match handoff {
             None => {
@@ -224,10 +226,12 @@ fn run_daemon(
             tracing::info!(restored, "restarted workspace sessions after daemon restart");
         }
         let d = daemon.clone();
+        // Registered before the daemon says it is ready, so an upgrade asked
+        // for right after finds the handler.
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate())?;
+        let mut usr2 = signal(SignalKind::user_defined2())?;
         tokio::spawn(async move {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut term = signal(SignalKind::terminate()).unwrap();
-            let mut usr2 = signal(SignalKind::user_defined2()).unwrap();
             loop {
                 tokio::select! {
                     _ = term.recv() => {
@@ -244,6 +248,10 @@ fn run_daemon(
         });
         // Phones over Tailscale, when the user allows them (X39).
         mobile::spawn(daemon.clone());
+        // A daemon that took over already told systemd (X58).
+        if fresh {
+            notify::ready();
+        }
         server::serve(daemon, listener, socket).await
     })?;
     tracing::info!("moonletd stopped");

@@ -325,6 +325,9 @@ pub fn adopt(incoming: Incoming, terminals: &Arc<TerminalManager>) -> Result<()>
         count = exported.len(),
         "adopted terminals from previous daemon"
     );
+    // Before the old daemon hears "adopted" and exits: under systemd, the
+    // unit then follows this process instead of stopping (X58).
+    crate::notify::took_over();
     (&stream).write_all(b"A")?;
     Ok(())
 }
