@@ -127,7 +127,7 @@ function index(c: SearchContext): Entry[] {
     app("general", "App › General › Updates", "updates", "moonlet version and updates", c.appVersion ?? "", "check now update"),
     app("general", "App › General › Updates", "claude-update", "Claude Code version", c.claudeInstalled ?? ""),
     app("general", "App › General › Updates", "auto-update", "Check for updates automatically", onOff(s.autoUpdateCheck)),
-    app("general", "App › General › Background daemon", "daemon", "Start the moonlet daemon at login", "", "launchd login item"),
+    app("general", "App › General › Background daemon", "daemon", "Start the moonlet daemon at login", "", "launchd login items background items SMAppService"),
     app("appearance", "App › Appearance", "font-size", "Font size", `${t.fontSize}px`, "text zoom scale"),
     app("appearance", "App › Appearance", "editor-theme", "Colour theme of files and diffs", labelOf(EDITOR_THEMES, resolveEditorTheme(s.editorTheme)), "color syntax editor"),
     app("appearance", "App › Appearance", "session-rows", "Session rows", labelOf(ROW_STYLES, rowStyle(s.sessionRows)), "sidebar task issue number"),

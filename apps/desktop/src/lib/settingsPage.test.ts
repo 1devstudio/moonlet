@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonLine, daemonOn, offStopsDaemon, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -125,6 +125,20 @@ describe("General's background daemon line (X43, X56)", () => {
     expect(daemonOn(viaPlist("loaded"))).toBe(true);
     expect(daemonOn(viaPlist("installed"))).toBe(true);
     expect(daemonOn(viaPlist("not_installed"))).toBe(false);
+  });
+
+  it("offers Open Login Items only when the login item was switched off there", () => {
+    expect(opensLoginItems(viaLoginItem("requires_approval"))).toBe(true);
+    expect(opensLoginItems(viaLoginItem("enabled"))).toBe(false);
+    expect(opensLoginItems(viaLoginItem("not_registered"))).toBe(false);
+    expect(opensLoginItems(viaPlist("installed"))).toBe(false);
+  });
+
+  it("says what turning the toggle did, or that macOS still needs the user", () => {
+    expect(daemonToast(true, viaLoginItem("enabled"))).toBe("The moonlet daemon now starts at login");
+    expect(daemonToast(true, viaLoginItem("requires_approval"))).toBe("Allow moonlet in System Settings › Login Items");
+    expect(daemonToast(true, viaPlist("loaded"))).toBe("The moonlet daemon now starts at login");
+    expect(daemonToast(false, viaLoginItem("not_registered"))).toBe("Login item removed");
   });
 
   it("asks before turning off only when that stops the daemon launchd runs", () => {
