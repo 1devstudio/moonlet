@@ -107,10 +107,32 @@ jobs:
           releaseDraft: true
           prerelease: false
 
+      # Tauri notarizes the app but only signs the DMG around it. A notarized,
+      # stapled DMG passes Gatekeeper on its first open even offline.
+      - name: Notarize the DMG
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          dmgs=(target/release/bundle/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ] || [ ! -f "${dmgs[0]}" ]; then
+            echo "::error::expected one DMG, found: ${dmgs[*]}"
+            exit 1
+          fi
+          out=$(xcrun notarytool submit "${dmgs[0]}" --wait \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" 2>&1)
+          echo "$out"
+          if ! grep -q "status: Accepted" <<<"$out"; then
+            echo "::error::Apple did not accept the DMG; see the submission id above and run notarytool log"
+            exit 1
+          fi
+          xcrun stapler staple "${dmgs[0]}"
+
       # Every binary must carry the team's signature and the hardened runtime,
-      # and both the app a user downloads and the app inside the update archive
-      # must be notarized. The notarization check asks codesign, not spctl,
-      # because spctl accepts anything on a machine with Gatekeeper turned off.
+      # and the app a user downloads, the DMG around it and the app inside the
+      # update archive must be notarized. The notarization check asks codesign,
+      # not spctl, because spctl accepts anything on a machine with Gatekeeper
+      # turned off.
       - name: App is signed with the Developer ID and notarized
         env:
           TEAM_ID: LE9Q47C92D
@@ -133,6 +155,23 @@ jobs:
           update=$(mktemp -d)
           tar -xzf target/release/bundle/macos/*.app.tar.gz -C "$update"
           codesign --verify --deep --strict --check-notarization -R="notarized" --verbose=2 "$update/moonlet.app"
+          for dmg in target/release/bundle/dmg/*.dmg; do
+            codesign --verify --check-notarization -R="notarized" --verbose=2 "$dmg"
+            xcrun stapler validate "$dmg"
+          done
+
+      # tauri-action uploaded the DMG before it was notarized; the stapled one
+      # replaces it under the same name.
+      - name: Upload the notarized DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" target/release/bundle/dmg/*.dmg --clobber
+          count=$(gh release view "$GITHUB_REF_NAME" --json assets -q '[.assets[].name | select(endswith(".dmg"))] | length')
+          if [ "$count" -ne 1 ]; then
+            echo "::error::the release has $count DMGs, expected one"
+            exit 1
+          fi
 
       - name: Publish
         env:
