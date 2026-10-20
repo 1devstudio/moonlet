@@ -1,6 +1,6 @@
 # X57 — Add a remote host over the tailnet
 
-- **Status:** draft (implemented: the daemon's part, and `moonlet-link`'s tailnet connector with `needs_update`)
+- **Status:** draft (implemented: the daemon's part, `moonlet-link`'s tailnet connector with `needs_update`, and `moonletd tailnet` and `moonletd pair`)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** R1 (remote hosts), journey J5
 - **Related ADRs:** [0011](../adr/0011-machines-connect-over-the-tailnet.md) (this is its first slice), [0008](../adr/0008-phone-link-over-tailscale.md) (the tailnet listener and `moonlet-link`)
@@ -40,15 +40,15 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 
 ### Pairing from a terminal
 
-- [ ] `moonletd tailnet on`, `moonletd tailnet off` and `moonletd tailnet status` call `mobile.set_enabled` and `mobile.status` on the running daemon. `status` prints the X39 status line, such as `Listening on 100.101.102.103:47428`.
-- [ ] `moonletd pair` calls `mobile.pair_start` and prints:
-  - the code, as `7KQ2M-X9PDA`,
+- [x] `moonletd tailnet on`, `moonletd tailnet off` and `moonletd tailnet status` call `mobile.set_enabled` and `mobile.status` on the running daemon. `status` prints the X39 status line, such as `Listening on 100.101.102.103:47428`. (`tests/cli.rs`: `tailnet_on_off_and_status_say_where_it_listens`; `tailnet_cli` unit test `the_status_line_says_where_it_listens`)
+- [x] `moonletd pair` calls `mobile.pair_start` and prints:
+  - the host's name and the code, as `Name: build-box` and `Code: 7KQ2M-X9PDA`,
   - the link,
   - "Expires in 5:00",
-  - a QR code of the link when stdout is a terminal.
+  - a QR code of the link when stdout is a terminal, drawn light-on-dark like `qrencode -t UTF8`.
 
-  It then waits. On `mobile.paired` it prints "Paired with <device>" and exits 0. On `mobile.pair_ended` it prints X39's reason and exits 1. Ctrl-C calls `mobile.pair_cancel`.
-- [ ] With tailnet access off, `moonletd pair` exits 1 with "Tailnet access is off. Run `moonletd tailnet on` first." Without a Tailscale address it exits 1 with "Tailscale is not running on this machine."
+  It then waits. On `mobile.paired` it prints "Paired with <device>" and exits 0. On `mobile.pair_ended` it prints X39's reason and exits 1. Ctrl-C calls `mobile.pair_cancel`. (`pair_prints_the_code_and_link_and_says_who_paired`, `ctrl_c_cancels_the_pairing`; unit tests `a_code_shows_in_two_groups_of_five`, `the_time_left_rounds_up_to_the_second`, `the_qr_code_is_square_with_a_quiet_zone`)
+- [x] With tailnet access off, `moonletd pair` exits 1 with "Tailnet access is off. Run `moonletd tailnet on` first." Without a Tailscale address it exits 1 with "Tailscale is not running on this machine." (`pair_needs_tailnet_access_and_tailscale`)
 
 ### Adding a host (app)
 
