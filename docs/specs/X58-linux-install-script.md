@@ -1,6 +1,6 @@
 # X58 — Install moonlet on a Linux host with one command
 
-- **Status:** draft (implemented: the systemd unit and notify messages, `authed`'s `os` and the app's update line)
+- **Status:** implemented (the release step untried until the next release; no real aarch64 host tried)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** R2 (remote helper), journey J5
 - **Related ADRs:** [0011](../adr/0011-machines-connect-over-the-tailnet.md) (this is its second slice), [0009](../adr/0009-central-host-workers-live-copies.md) (a Linux central host needs a systemd service)
@@ -33,11 +33,15 @@ Running it again updates moonlet without ending any session.
    ✓ Downloaded and checked moonletd and moonlet
    ✓ Installed in ~/.moonlet/bin
    ✓ moonletd runs as a systemd user service and starts at boot
-   ✓ Tailnet access is on: listening on 100.88.1.20:47428
+   ✓ Tailnet access is on: Listening on 100.88.1.20:47428
 
+   (a QR code of the link)
    Pair a Mac: in moonlet, Settings › Machines › Hosts › Add host, enter
      Name: build-box
-     Code: 7KQ2M-X9PDA      (expires in 5:00)
+     Code: 7KQ2M-X9PDA
+   Expires in 5:00
+   Or paste this link:
+   moonlet://pair?v=1&host=…
    ```
 
 3. The user types the name and code on the MacBook (X57). The script prints "Paired with Alex's MacBook Pro" and exits.
@@ -47,24 +51,24 @@ Running it again updates moonlet without ending any session.
 
 ### Release assets
 
-- [ ] Every release publishes, next to the DMG:
+- [x] Every release publishes, next to the DMG: (release workflow step "Upload the Linux install"; untried until the next release)
   - `moonlet-linux-x86_64.tar.gz` and `moonlet-linux-aarch64.tar.gz`, each holding `moonletd` and `moonlet` built by `scripts/build-remote.sh`;
   - `SHA256SUMS`, with one line per archive;
   - `install.sh`.
 
   They are uploaded while the release is still a draft, so `releases/latest` never points at a release without them (as for `latest.json`).
-- [ ] The `install.sh` published with release `vX.Y.Z` installs `X.Y.Z`. The workflow writes the version into the script. So `releases/latest/download/install.sh` installs the latest release, and `releases/download/v0.1.27/install.sh` installs 0.1.27.
-- [ ] The release workflow fails if any of these assets is missing, or if a `SHA256SUMS` line does not match its archive.
+- [x] The `install.sh` published with release `vX.Y.Z` installs `X.Y.Z`. The workflow writes the version into the script. So `releases/latest/download/install.sh` installs the latest release, and `releases/download/v0.1.27/install.sh` installs 0.1.27. (`scripts/package-linux.sh`)
+- [x] The release workflow fails if any of these assets is missing, or if a `SHA256SUMS` line does not match its archive. (the same step)
 
 ### The script
 
-- [ ] It runs with POSIX `sh`. It needs `curl` or `wget`, `tar`, and `sha256sum` or `shasum`. A missing tool stops it with "moonlet's installer needs curl or wget." (or the tool it lacks), and nothing is installed.
-- [ ] `uname -sm` picks the archive: `Linux x86_64` → x86_64; `Linux aarch64` or `Linux arm64` → aarch64. On macOS it stops with "On a Mac, install moonlet.app from https://github.com/1devstudio/moonlet/releases/latest." Any other system stops with "moonlet runs on Linux x86_64 and aarch64, not <uname -sm>."
-- [ ] It downloads the archive and `SHA256SUMS` from the same release into a fresh temporary directory, which it deletes at exit. If the archive's SHA-256 is not the one in `SHA256SUMS`, it stops with "The download of moonlet-linux-x86_64.tar.gz is damaged (checksum mismatch). Nothing was changed."
-- [ ] It installs each binary as R2 does: written to `~/.moonlet/bin/<name>.new` with `umask 077`, then moved into place. An SSH host's version check (R2) therefore sees the same binaries.
-- [ ] When `~/.moonlet/bin/moonletd --version` already prints the version being installed, it skips the download and says "moonlet 0.1.27 is already installed." `--force` installs anyway.
-- [ ] It never uses `sudo` and never writes outside `~/.moonlet`, `~/.config/systemd/user` (or `$XDG_CONFIG_HOME/systemd/user`) and the temporary directory.
-- [ ] Options:
+- [x] It runs with POSIX `sh`. It needs `curl` or `wget`, `tar`, and `sha256sum` or `shasum`. A missing tool stops it with "moonlet's installer needs curl or wget." (or the tool it lacks), and nothing is installed. (`dash -n`; CI runs it with Ubuntu's `sh`, which is dash)
+- [x] `uname -sm` picks the archive: `Linux x86_64` → x86_64; `Linux aarch64` or `Linux arm64` → aarch64. On macOS it stops with "On a Mac, install moonlet.app from https://github.com/1devstudio/moonlet/releases/latest." Any other system stops with "moonlet runs on Linux x86_64 and aarch64, not <uname -sm>." (`test-install.sh`: "names the systems it does not install on")
+- [x] It downloads the archive and `SHA256SUMS` from the same release into a fresh temporary directory, which it deletes at exit. If the archive's SHA-256 is not the one in `SHA256SUMS`, it stops with "The download of moonlet-linux-x86_64.tar.gz is damaged (checksum mismatch). Nothing was changed." (`test-install.sh`: "refuses a damaged download")
+- [x] It installs each binary as R2 does: written to `~/.moonlet/bin/<name>.new` with `umask 077`, then moved into place. An SSH host's version check (R2) therefore sees the same binaries. (`test-install.sh`)
+- [x] When `~/.moonlet/bin/moonletd --version` already prints the version being installed, it skips the download and says "moonlet 0.1.27 is already installed." `--force` installs anyway. (`test-install.sh`: "says when this version is already installed")
+- [x] It never uses `sudo` and never writes outside `~/.moonlet`, `~/.config/systemd/user` (or `$XDG_CONFIG_HOME/systemd/user`) and the temporary directory.
+- [x] Options: (`test-install.sh` uses `--from`, `--no-pair`, `--force` and `--uninstall`)
   - `--no-pair` skips pairing;
   - `--uninstall` stops and removes the service and the binaries, keeps `~/.moonlet`'s data, and says how to delete it;
   - `--from <dir>` takes the archives and `SHA256SUMS` from a folder instead of the release, for tests and offline machines.
@@ -92,15 +96,15 @@ Running it again updates moonlet without ending any session.
   (`service` unit tests `renders_the_systemd_user_unit`, `the_unit_lives_in_the_users_systemd_folder`.) A daemon already serving outside systemd keeps running: `install` then only enables the unit, which takes over at the next start.
 
 - [x] With `NOTIFY_SOCKET` set, the daemon sends `READY=1` once it serves: its socket bound, its pid file written and its upgrade signal handler in place. A daemon that takes over in a live upgrade (S3) sends `MAINPID=<its pid>` and `READY=1` before it answers the old daemon's handoff. systemd then follows the new daemon, and the sessions it adopted stay in the unit. Without `NOTIFY_SOCKET` nothing changes. (`tests/upgrade.rs`: `systemd_hears_ready_and_follows_the_upgrade`)
-- [ ] The script runs `moonletd service install`, then `loginctl enable-linger` so the service starts at boot without a login. If lingering cannot be turned on, it says: "moonletd will stop when you log out. To keep it running, ask an administrator to run: sudo loginctl enable-linger alex"
-- [ ] Without a systemd user instance (`systemctl --user` fails, for example in a container), the script starts the daemon with `moonletd start` and says "moonletd is running, but nothing will start it after a reboot."
-- [ ] When a daemon is already running, the script runs the new `moonletd upgrade` (S3) instead of starting another. Every session keeps its id and its processes, and `systemctl --user is-active moonletd` stays `active`.
+- [x] The script runs `moonletd service install`, then `loginctl enable-linger` so the service starts at boot without a login. If lingering cannot be turned on, it says: "moonletd will stop when you log out. To keep it running, ask an administrator to run: sudo loginctl enable-linger alex" (CI `linux-install`)
+- [x] Without a systemd user instance (`systemctl --user` fails, for example in a container), the script starts the daemon with `moonletd start` and says "moonletd is running, but nothing will start it after a reboot." (`test-install.sh` on a Mac)
+- [x] When a daemon is already running, the script runs the new `moonletd upgrade` (S3) instead of starting another. Every session keeps its id and its processes, and `systemctl --user is-active moonletd` stays `active`. (`test-install.sh`: "updates in place and keeps the session"; under systemd in CI)
 
 ### Tailnet access and pairing
 
-- [ ] The script runs `moonletd tailnet on` (X57) and prints its status line. Without a Tailscale address it prints "Tailscale is not running on this machine. Start it, then run: ~/.moonlet/bin/moonletd pair" and exits 0 without pairing, because the install itself worked.
-- [ ] Unless `--no-pair` is given, the script then runs `moonletd pair` with the machine's tailnet name as the name to type. That name is the first label of the MagicDNS name from `tailscale status --json` when the `tailscale` command exists, and the host name otherwise. When stdout is not a terminal, it skips pairing and prints the `moonletd pair` command instead.
-- [ ] The script is safe to pipe into `sh`. Its whole body is inside a function that is called on the last line, so a download cut off midway runs nothing.
+- [x] The script runs `moonletd tailnet on` (X57) and prints its status line. Without a Tailscale address it prints "Tailscale is not running on this machine. Start it, then run: ~/.moonlet/bin/moonletd pair" and exits 0 without pairing, because the install itself worked. (`test-install.sh`)
+- [x] Unless `--no-pair` is given, the script then runs `moonletd pair` with the machine's tailnet name as the name to type. That name is the first label of the MagicDNS name from `tailscale status --json` when the `tailscale` command exists, and the host name otherwise. When stdout is not a terminal, or with `--no-pair`, it skips pairing and prints "Pair a Mac: run ~/.moonlet/bin/moonletd pair". (`tests/cli.rs`: `pair_shows_the_name_it_is_given`; the name from `tailscale status` has no test)
+- [x] The script is safe to pipe into `sh`. Its whole body is inside a function that is called on the last line, so a download cut off midway runs nothing.
 
 ### Updating from the app
 

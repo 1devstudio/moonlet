@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Tests scripts/install.sh (X58) against a folder made by package-linux.sh:
+#
+#   scripts/package-linux.sh dist && scripts/test-install.sh dist
+#
+# On Linux with a systemd user instance it installs for the real user (CI's
+# throwaway runner) and checks the service too. Anywhere else, such as on a
+# Mac, it uses a scratch home and a `uname` that says Linux, and checks
+# everything but systemd.
+set -euo pipefail
+
+dist=$(cd "$1" && pwd)
+version=$(cat "$dist/VERSION")
+work=$(mktemp -d)
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+has() {
+  grep -qF -- "$2" <<<"$1" || fail "expected \"$2\" in:
+$1"
+}
+pass() { echo "ok - $*"; }
+
+systemd=0
+if [ "$(uname -s)" = Linux ] && systemctl --user show-environment >/dev/null 2>&1; then
+  systemd=1
+fi
+fake="$work/fake"
+mkdir -p "$fake"
+fake_uname() {
+  printf '#!/bin/sh\necho "%s"\n' "$1" >"$fake/uname"
+  chmod +x "$fake/uname"
+}
+if [ "$systemd" = 0 ]; then
+  export HOME="$work/home"
+  mkdir -p "$HOME"
+  fake_uname "Linux x86_64"
+fi
+unset MOONLET_HOME MOONLET_SOCK
+# Tailnet access listens on loopback, as in the e2e tests (X39).
+export MOONLET_MOBILE_ADDRS=127.0.0.1
+bin="$HOME/.moonlet/bin"
+cleanup() {
+  "$bin/moonletd" stop >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+run_install() {
+  PATH="$fake:$PATH" sh "$dist/install.sh" --from "$dist" --no-pair "$@" 2>&1
+}
+
+# A fresh install.
+out=$(run_install) || fail "install failed: $out"
+has "$out" "moonlet $version for Linux x86_64"
+has "$out" "✓ Downloaded and checked moonletd and moonlet"
+has "$out" "✓ Installed in ~/.moonlet/bin"
+has "$out" "✓ Tailnet access is on: Listening on 127.0.0.1:"
+has "$out" "Pair a Mac: run ~/.moonlet/bin/moonletd pair"
+[ "$("$bin/moonletd" --version)" = "moonletd $version" ] || fail "wrong moonletd: $("$bin/moonletd" --version)"
+if [ "$systemd" = 1 ]; then
+  has "$out" "✓ moonletd runs as a systemd user service and starts at boot"
+  unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/moonletd.service"
+  expected="[Unit]
+Description=moonlet daemon
+After=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=$(cd "$bin" && pwd -P)/moonletd daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target"
+  [ "$(cat "$unit")" = "$expected" ] || fail "unit: $(cat "$unit")"
+  [ "$(systemctl --user is-active moonletd)" = active ] || fail "the unit is not active"
+else
+  has "$out" "moonletd is running, but nothing will start it after a reboot."
+fi
+pass "installs, starts the daemon and turns on tailnet access"
+
+# A damaged download changes nothing.
+bad="$work/bad"
+cp -R "$dist" "$bad"
+printf 'x' | dd of="$bad/moonlet-linux-x86_64.tar.gz" bs=1 seek=100 conv=notrunc 2>/dev/null
+before=$(cksum <"$bin/moonletd")
+if out=$(PATH="$fake:$PATH" sh "$bad/install.sh" --from "$bad" --no-pair --force 2>&1); then
+  fail "a damaged archive installed: $out"
+fi
+has "$out" "The download of moonlet-linux-x86_64.tar.gz is damaged (checksum mismatch). Nothing was changed."
+[ "$(cksum <"$bin/moonletd")" = "$before" ] || fail "moonletd changed"
+pass "refuses a damaged download"
+
+# Running it again with the same version does nothing.
+out=$(run_install) || fail "second install failed: $out"
+has "$out" "moonlet $version is already installed."
+pass "says when this version is already installed"
+
+# An update keeps a running session.
+term=$("$bin/moonlet" rpc terminal.create "{\"cwd\":\"$work\",\"command\":[\"sleep\",\"600\"]}")
+id=$(sed -n 's/.*"id": *\([0-9]*\).*/\1/p' <<<"$term" | head -1)
+pid=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' <<<"$term" | head -1)
+old_daemon=$("$bin/moonletd" status | sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' | head -1)
+out=$(run_install --force) || fail "update failed: $out"
+list=$("$bin/moonlet" rpc terminal.list '{}')
+has "$(tr -d ' \n' <<<"$list")" "\"id\":$id,"
+has "$(tr -d ' \n' <<<"$list")" "\"pid\":$pid,"
+new_daemon=$("$bin/moonletd" status | sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' | head -1)
+[ "$new_daemon" != "$old_daemon" ] || fail "the daemon was not replaced"
+if [ "$systemd" = 1 ]; then
+  [ "$(systemctl --user is-active moonletd)" = active ] || fail "the unit stopped during the update"
+  [ "$(systemctl --user show -p MainPID --value moonletd)" = "$new_daemon" ] || fail "systemd does not follow the new daemon"
+fi
+pass "updates in place and keeps the session"
+
+# Uninstall keeps the data.
+out=$(run_install --uninstall) || fail "uninstall failed: $out"
+has "$out" "Removed moonlet. Your data is still in ~/.moonlet; delete it with: rm -rf ~/.moonlet"
+[ ! -e "$bin/moonletd" ] && [ ! -e "$bin/moonlet" ] || fail "binaries left behind"
+[ -e "$HOME/.moonlet/mobile.json" ] || fail "data removed"
+if [ "$systemd" = 1 ]; then
+  [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/moonletd.service" ] || fail "unit left behind"
+fi
+pass "uninstalls and keeps ~/.moonlet"
+
+# Other systems get a clear message.
+fake_uname "Darwin arm64"
+out=$(run_install) && fail "installed on macOS"
+has "$out" "On a Mac, install moonlet.app from https://github.com/1devstudio/moonlet/releases/latest."
+fake_uname "FreeBSD amd64"
+out=$(run_install) && fail "installed on FreeBSD"
+has "$out" "moonlet runs on Linux x86_64 and aarch64, not FreeBSD amd64."
+pass "names the systems it does not install on"

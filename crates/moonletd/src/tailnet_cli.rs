@@ -40,7 +40,7 @@ pub async fn tailnet(socket: &Path, enable: Option<bool>) -> Result<()> {
 
 /// `moonletd pair`: shows a pairing code and waits until a device uses it,
 /// it runs out, or Ctrl-C cancels it. Returns the exit status.
-pub async fn pair(socket: &Path) -> Result<i32> {
+pub async fn pair(socket: &Path, name: Option<String>) -> Result<i32> {
     // Registered before the code shows, so Ctrl-C always cancels it.
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut c = Client::connect(socket, "moonletd-pair").await?;
@@ -58,7 +58,7 @@ pub async fn pair(socket: &Path) -> Result<i32> {
         println!();
     }
     println!("Pair a Mac: in moonlet, Settings › Machines › Hosts › Add host, enter");
-    println!("  Name: {}", p.host);
+    println!("  Name: {}", name.as_deref().unwrap_or(&p.host));
     println!("  Code: {}", display_code(&p.code));
     println!(
         "{}",

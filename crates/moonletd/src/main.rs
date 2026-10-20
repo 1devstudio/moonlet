@@ -79,7 +79,12 @@ enum Cmd {
         action: TailnetAction,
     },
     /// Show a one-time code that pairs a Mac or a phone with this host.
-    Pair,
+    Pair {
+        /// The name to type on the other Mac, such as the host's MagicDNS
+        /// name (the install script passes it); the host name otherwise.
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -118,8 +123,8 @@ fn main() -> Result<()> {
                 TailnetAction::Status => None,
             },
         )),
-        Cmd::Pair => {
-            let code = rt.block_on(tailnet_cli::pair(&socket))?;
+        Cmd::Pair { name } => {
+            let code = rt.block_on(tailnet_cli::pair(&socket, name))?;
             std::process::exit(code)
         }
         Cmd::Stop => rt.block_on(async {
