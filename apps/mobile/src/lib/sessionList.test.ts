@@ -165,6 +165,13 @@ describe("sessionTask (X57)", () => {
     expect(sessionTask(host, s, null)).toEqual({ key: "MOON-142", state: "In Progress", category: "in_progress", project: "moonlet", url: "https://linear.app/acme/issue/MOON-142" });
   });
 
+  it("names a GitHub issue by its number, as rows show it", () => {
+    const gh = { ...moon142, connection: "github:github.com", key: "acme/web#12", url: "https://github.com/acme/web/issues/12", tracker: undefined, github: { repo: "acme/web", number: 12, closingPrs: [] } };
+    const s = session("fix", "Fix", { branch: "12-fix-login", project_id: "moonlet" });
+    const host = { ...data({ projects: [project("moonlet", "moonlet")], sessions: [s], tasks: { personal: { ...snap, tasks: [gh], repos: { moonlet: "acme/web" }, boardData: { moon: { keys: [] } } } } }) };
+    expect(sessionTask(host, s, null)?.key).toBe("#12");
+  });
+
   it("keeps to the stored link without the Mac's boards, and shows nothing once unlinked", () => {
     const stored = session("x", "x", { task: { connection: "github:github.com", key: "acme/web#12", url: "https://github.com/acme/web/issues/12" } });
     expect(sessionTask(data({ sessions: [stored] }), stored, null)).toEqual({ key: "#12", state: null, category: null, project: null, url: "https://github.com/acme/web/issues/12" });

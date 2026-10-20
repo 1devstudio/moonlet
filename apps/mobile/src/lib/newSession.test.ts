@@ -62,7 +62,7 @@ describe("modes", () => {
       ["Edits", "acceptEdits"],
       ["Plan", "plan"],
     ]);
-    expect(modeHelp("manual")).toBe("Claude asks before every edit and command. Approve from the Inbox.");
+    expect(modeHelp("manual")).toBe("Claude asks before every edit and command. Approve from Needs you.");
     expect(modeHelp("plan")).toBe("Claude explores and proposes a plan before touching anything.");
   });
 });

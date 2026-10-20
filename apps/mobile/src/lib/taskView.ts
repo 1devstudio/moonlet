@@ -21,7 +21,7 @@ export interface DetailSession {
   id: string;
   name: string;
   state: AgentState | null;
-  agent: string;
+  agent: string | null;
   /** `Claude · working 2:14 · 5 subagents`. */
   word: string;
   branch: string;
@@ -50,7 +50,8 @@ export function taskDetail(b: PhoneBoard, id: string, d: HostData, details: Deta
   const sprint = b.board.finished === "sprint" ? b.snapshot.boardData[b.board.id]?.sprint?.name : undefined;
   const sessions: DetailSession[] = (card?.card.rows ?? []).map(({ session: s }) => {
     const terminals = Object.values(d.terminals).filter((t) => t.session_id === s.id);
-    const agent = d.sessions.find((x) => x.id === s.id)?.agent ?? terminals.find((t) => t.agent)?.agent ?? "claude";
+    const own = d.sessions.find((x) => x.id === s.id)?.agent;
+    const agent = (own && own !== "none" ? own : null) ?? terminals.find((t) => t.agent)?.agent ?? null;
     const asks = terminals.flatMap((t) => d.chats[t.id]?.pending ?? []);
     const started = terminals.map((t) => d.chats[t.id]?.turn_started_at).find((x): x is number => typeof x === "number");
     const last = Math.max(0, ...terminals.map((t) => t.last_output_at ?? 0));
@@ -61,7 +62,7 @@ export function taskDetail(b: PhoneBoard, id: string, d: HostData, details: Deta
       name: s.name,
       state: s.state,
       agent,
-      word: [agentLabel(agent), state, s.subagents ? `${s.subagents} subagents` : ""].filter(Boolean).join(" · "),
+      word: [agent ? agentLabel(agent) : "No agent", state, s.subagents ? `${s.subagents} subagents` : ""].filter(Boolean).join(" · "),
       branch: s.branch,
       add: s.additions,
       del: s.deletions ?? 0,

@@ -88,6 +88,13 @@ describe("taskDetail (X57)", () => {
     ]);
   });
 
+  it("says a session has no agent instead of naming one", () => {
+    const d = mac();
+    d.sessions.push(session("plain", "Plain shell", { branch: "moon-142-plain", project_id: "moonlet", agent: null }));
+    const [b] = phoneBoards(hosts, { mac: d }, null);
+    expect(taskDetail(b, `${LINEAR} MOON-142`, d, details, {}, NOW)!.sessions.find((s) => s.id === "plain")?.word).toMatch(/^No agent · idle for /);
+  });
+
   it("offers its worktrees without a session, and its activity, newest first", () => {
     expect(detail().worktrees).toEqual([{ path: "/wt/ssh", branch: "moon-142-ssh-test" }]);
     expect(detail().activity).toEqual([{ when: activityTime(NOW - 20 * MIN, NOW), text: "Claude launched 5 subagents in Remote hosts sidebar" }]);
