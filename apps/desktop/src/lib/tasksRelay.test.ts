@@ -31,7 +31,8 @@ describe("resolveTaskRequest (X57)", () => {
 
   it("creates in a column, a GitHub repository's Open too, with a title", () => {
     const issue = { title: "Retry webhooks with backoff", description: "", assignee: "me", labels: [] };
-    expect(resolveTaskRequest({ kind: "create", board: "ops", column: "To Do", issue }, ctx)).toEqual({ kind: "create", board: ops, column: OPS[0], issue });
+    const jira = { ...issue, place: "OPS", issueType: "10004" };
+    expect(resolveTaskRequest({ kind: "create", board: "ops", column: "To Do", issue: jira }, { ...ctx, boardKeys: { ops: [`${JIRA} OPS-1`] } })).toEqual({ kind: "create", board: ops, column: OPS[0], issue: jira });
     expect(resolveTaskRequest({ kind: "create", board: "web", column: "Open", issue }, ctx)).toEqual({ kind: "create", board: repo, column: { name: "Open", statuses: ["open"], category: "todo" }, issue });
     expect(resolveTaskRequest({ kind: "create", board: "ops", column: "To Do", issue: { ...issue, title: "  " } }, ctx)).toEqual({ error: "A title is needed." });
   });
@@ -39,5 +40,24 @@ describe("resolveTaskRequest (X57)", () => {
   it("asks for the form's people and labels, and tells of a session started from a task", () => {
     expect(resolveTaskRequest({ kind: "create_options", board: "ops", place: "OPS", issue_type: "10004" }, ctx)).toEqual({ kind: "create_options", board: ops, place: "OPS", issueType: "10004" });
     expect(resolveTaskRequest({ kind: "started", task: `${JIRA} OPS-1`, session: "Retry webhooks", assign: true }, ctx)).toEqual({ kind: "started", task: ops1, session: "Retry webhooks", assign: true });
+  });
+});
+
+describe("resolveTaskRequest checks a create as the form does (X57, X52)", () => {
+  const jql: BoardConfig = { id: "q", name: "OPS + PLAT", connection: JIRA, workspace: "local/w", origin: { kind: "jql", query: "project in (OPS, PLAT)" }, columns: OPS };
+  const project: BoardConfig = { id: "p", name: "Roadmap", connection: "github:github.com", workspace: "local/w", origin: { kind: "github_project", owner: "acme", number: 4 }, columns: OPS };
+  const c = { boards: [jql, project], tasks: [ops1], repos: { web: "acme/web" }, boardKeys: { q: [`${JIRA} OPS-1`], p: [] } };
+  const issue = { title: "Retry webhooks", description: "", assignee: "me", labels: [] };
+
+  it("needs a Jira project of the board's and an issue type", () => {
+    expect(resolveTaskRequest({ kind: "create", board: "q", column: "To Do", issue }, c)).toEqual({ error: "Pick where the issue goes." });
+    expect(resolveTaskRequest({ kind: "create", board: "q", column: "To Do", issue: { ...issue, place: "SECRET", issueType: "1" } }, c)).toEqual({ error: "OPS + PLAT does not take issues in SECRET." });
+    expect(resolveTaskRequest({ kind: "create", board: "q", column: "To Do", issue: { ...issue, place: "OPS" } }, c)).toEqual({ error: "Pick an issue type." });
+    expect(resolveTaskRequest({ kind: "create", board: "q", column: "To Do", issue: { ...issue, place: "OPS", issueType: "10004" } }, c)).toMatchObject({ kind: "create" });
+  });
+
+  it("puts a GitHub Project's issue only in one of the workspace's repositories", () => {
+    expect(resolveTaskRequest({ kind: "create", board: "p", column: "To Do", issue: { ...issue, place: "evil/repo" } }, c)).toEqual({ error: "Roadmap does not take issues in evil/repo." });
+    expect(resolveTaskRequest({ kind: "create", board: "p", column: "To Do", issue: { ...issue, place: "acme/web" } }, c)).toMatchObject({ kind: "create" });
   });
 });

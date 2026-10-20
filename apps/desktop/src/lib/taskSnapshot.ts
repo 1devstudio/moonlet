@@ -52,7 +52,9 @@ export interface ShareInput {
 
 export function taskSnapshot(o: ShareInput & { wsKey: string; data: TasksData | undefined; shownBoard: string | null }): TaskSnapshot {
   const boards = workspaceBoards(o.config.boards, o.wsKey, o.shownBoard);
-  const moved = (o.data?.tasks ?? []).map((t) => {
+  // Only the tasks the shared boards show: not other boards', nor any board's.
+  const onBoards = new Set(boards.flatMap((b) => o.data?.boards?.[b.id]?.keys ?? []));
+  const moved = (o.data?.tasks ?? []).filter((t) => onBoards.has(taskId(t))).map((t) => {
     const m = o.moving[taskId(t)];
     return m ? withStatus(t, m.status, m.name) : t;
   });

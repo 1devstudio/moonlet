@@ -2,7 +2,7 @@
 // checked against the boards the app has. Pure; the Tasks store runs it.
 
 import { type BoardColumn, type BoardConfig, type Category, syncedColumns } from "./boards";
-import type { NewIssue } from "./newIssue";
+import { jiraProjects, type NewIssue, needsPlace, needsType, projectRepos } from "./newIssue";
 import { type Task, taskId } from "./tasks";
 
 /** A request a phone sends through the daemon (`tasks.request`'s `action`). */
@@ -28,7 +28,10 @@ export type Resolved =
   | { error: string };
 
 /** `action` against the workspace's boards and tasks. */
-export function resolveTaskRequest(action: { kind: string } & Record<string, unknown>, ctx: { boards: BoardConfig[]; tasks: Task[] }): Resolved {
+export function resolveTaskRequest(
+  action: { kind: string } & Record<string, unknown>,
+  ctx: { boards: BoardConfig[]; tasks: Task[]; repos?: Record<string, string | null>; boardKeys?: Record<string, string[]> },
+): Resolved {
   const a = action as TaskAction;
   const board = "board" in a ? ctx.boards.find((b) => b.id === a.board) : undefined;
   const task = "task" in a ? ctx.tasks.find((t) => taskId(t) === a.task) : undefined;
@@ -50,6 +53,14 @@ export function resolveTaskRequest(action: { kind: string } & Record<string, unk
       const column = syncedColumns(board, null).find((c) => c.name === a.column);
       if (!column) return { error: `${board.name} has no ${a.column} column.` };
       if (!a.issue?.title?.trim()) return { error: "A title is needed." };
+      // Only where the Mac's own form would put it (X52).
+      if (needsPlace(board)) {
+        const keys = ctx.boardKeys?.[board.id] ?? [];
+        const places = board.origin.kind === "github_project" ? projectRepos(ctx.repos, ctx.tasks, keys) : jiraProjects(ctx.tasks, keys);
+        if (!a.issue.place) return { error: "Pick where the issue goes." };
+        if (!places.some((p) => p.toLowerCase() === a.issue.place!.toLowerCase())) return { error: `${board.name} does not take issues in ${a.issue.place}.` };
+      }
+      if (needsType(board) && !a.issue.issueType) return { error: "Pick an issue type." };
       return { kind: "create", board, column, issue: a.issue };
     }
     case "started":

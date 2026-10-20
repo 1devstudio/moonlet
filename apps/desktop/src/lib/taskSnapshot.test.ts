@@ -35,14 +35,15 @@ const config: TrackersConfig = {
 };
 
 const data = {
-  tasks: [task("OPS-1", "10001", "To Do"), task("OPS-2", "3", "In Progress")],
+  tasks: [task("OPS-1", "10001", "To Do"), task("OPS-2", "3", "In Progress"), task("PLAT-7", "3", "In Progress"), task("OPS-99", "3", "In Progress")],
   worktrees: [{ path: "/wt/ops-9", branch: "ops-9-fix", originRepo: null }],
   sources: [],
   repos: { storefront: "acme/storefront" },
   sourceProjects: { [`${JIRA} OPS`]: ["storefront"] },
   syncedAt: 1_791_970_430_000,
   error: null,
-  boards: { ops: { keys: [`${JIRA} OPS-1`, `${JIRA} OPS-2`], sprint: { id: 42, name: "Sprint 42", startMs: 1, endMs: 2 } } },
+  // PLAT-7 is on the unpinned board, OPS-99 on none: neither is shared.
+  boards: { ops: { keys: [`${JIRA} OPS-1`, `${JIRA} OPS-2`], sprint: { id: 42, name: "Sprint 42", startMs: 1, endMs: 2 } }, plat: { keys: [`${JIRA} PLAT-7`] } },
 };
 
 describe("taskSnapshot (X57)", () => {
