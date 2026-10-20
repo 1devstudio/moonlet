@@ -157,5 +157,6 @@ export function sessionTask(d: HostData, s: Session, pr: PullRequest | null | un
   const id = taskId(task);
   const board = snap!.boards.find((b) => snap!.boardData[b.id]?.keys.includes(id));
   const column = board ? syncedColumns(board, null).find((c) => holds(c, task)) : undefined;
-  return { key: task.key, state: column?.name ?? null, category: column?.category ?? null, project: d.projects.find((p) => p.id === s.project_id)?.name ?? null, url: task.url };
+  const { prefix, number } = splitKey(task.key);
+  return { key: prefix.endsWith("#") ? `#${number}` : task.key, state: column?.name ?? null, category: column?.category ?? null, project: d.projects.find((p) => p.id === s.project_id)?.name ?? null, url: task.url };
 }

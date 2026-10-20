@@ -115,7 +115,7 @@ export function composer(o: {
 /** Claude's permission modes (X7), as the design names them. */
 export const MODES = [
   { id: "auto", label: "Auto", help: "Claude decides which tools are safe to run without asking." },
-  { id: "manual", label: "Manual", help: "Claude asks before every edit and command. Approve from the Inbox." },
+  { id: "manual", label: "Manual", help: "Claude asks before every edit and command. Approve from Needs you." },
   { id: "acceptEdits", label: "Edits", help: "File edits go through; commands still ask first." },
   { id: "plan", label: "Plan", help: "Claude explores and proposes a plan before touching anything." },
 ] as const;
