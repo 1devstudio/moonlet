@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit review settings for moonlet. The repository is public, so reviews
+# run on CodeRabbit's free open-source tier. That tier has an hourly review
+# allowance per repository, and while the repository has fewer than 10 stars
+# each review has to be requested with a `@coderabbitai review` comment.
+# Settings made here override the ones in the CodeRabbit web app.
+
+language: en-GB
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  in_progress_fortune: false
+  review_status: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # A push during a running review cancels it, and each re-review spends
+    # the hourly allowance. Ask for a new pass with `@coderabbitai review`.
+    auto_incremental_review: false
+
+  # Lockfiles, vendored and generated code, captured fixtures and binary
+  # assets are not reviewed. They also count towards the files-per-review cap.
+  path_filters:
+    - "!Cargo.lock"
+    - "!pnpm-lock.yaml"
+    - "!vendor/**"
+    - "!apps/mobile/src-tauri/gen/**"
+    - "!**/tests/fixtures/**"
+    - "!**/icons/**"
+    - "!.design-sync/fonts/**"
+
+  path_instructions:
+    - path: "docs/specs/**"
+      instructions: >-
+        Each acceptance criterion maps to at least one test. A test citation
+        names a real test word for word. A changed behaviour updates its spec
+        line in the same pull request.
+    - path: "apps/desktop/src/**/*.tsx"
+      instructions: >-
+        React components have no unit tests. Decision logic belongs in
+        apps/desktop/src/lib/, where a Vitest file beside it tests it.
+    - path: "**/*.test.ts"
+      instructions: >-
+        Tests assert public behaviour against an independent literal (from a
+        spec, a worked example or real captured output). Flag tests that
+        assert on private functions, call counts or internal state, and tests
+        that recompute the expected value with the implementation's logic.
+    - path: "crates/**/*.rs"
+      instructions: >-
+        Unit tests live in the file's #[cfg(test)] mod tests; daemon and CLI
+        end-to-end tests live in crates/<crate>/tests/. The same test rules
+        apply as for the desktop: public behaviour, independent literals.
+
+  pre_merge_checks:
+    # The code base does not use docstrings, and the check counts e2e test
+    # callbacks as undocumented functions.
+    docstrings:
+      mode: "off"
+    title:
+      mode: warning
+      requirements: >-
+        Conventional Commits: starts with feat, fix, docs, refactor, test,
+        chore or ci, then a colon and a lowercase description. A change that
+        implements a spec ends with its id in brackets, such as (X55).
+
+knowledge_base:
+  # AGENTS.md and CLAUDE.md are read by default.
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - CODING_STANDARDS.md
+      - CONTEXT.md
+
+chat:
+  auto_reply: true
