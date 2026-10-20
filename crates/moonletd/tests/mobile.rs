@@ -341,6 +341,65 @@ async fn a_mac_pairs_as_a_desktop() {
 }
 
 #[tokio::test]
+async fn a_paired_mac_can_remove_itself_but_manage_nothing_else() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let mut app = mac.app().await;
+    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let (_, reply) = auth(
+        &addr,
+        json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" }),
+    )
+    .await;
+    let Some(Message::Authed {
+        token: Some(token), ..
+    }) = reply
+    else {
+        panic!("{reply:?}")
+    };
+
+    let (mut desktop, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut desktop, "moonlet-app").await;
+    for (id, method) in [
+        (1, "mobile.pair_start"),
+        (2, "mobile.status"),
+        (3, "mobile.revoke"),
+    ] {
+        let Message::Response { error: Some(e), .. } = call(&mut desktop, id, method).await else {
+            panic!("{method} worked from a paired Mac")
+        };
+        assert_eq!(e.message, "manage phones from the Mac", "{method}");
+    }
+
+    let unpaired = call(&mut desktop, 4, "mobile.unpair").await;
+    assert!(
+        matches!(unpaired, Message::Response { error: None, .. }),
+        "{unpaired:?}"
+    );
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match read_frame(&mut desktop).await {
+                Ok(Some(_)) => {}
+                _ => return,
+            }
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "the Mac's connection stayed open");
+    let (_, r) = auth(&addr, json!({ "token": token })).await;
+    assert!(unauthorized(&r), "{r:?}");
+    let st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
+    assert!(st.devices.is_empty(), "{:?}", st.devices);
+
+    // The app on this Mac is not a paired device.
+    let e = app
+        .request::<_, bool>("mobile.unpair", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "invalid_params: not a paired device");
+}
+
+#[tokio::test]
 async fn bad_auth_is_refused_without_saying_why() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;

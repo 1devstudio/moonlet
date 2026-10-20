@@ -50,7 +50,7 @@ Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`;
 - `git.settings` and `git.set_settings`: the host's Git settings, kept in `~/.moonlet/git.toml` (X55). `git.unpushed` (uncommitted files and commits not on origin) and `git.push` (`push -u origin HEAD`) for the archive prompt. Event: `git.settings_changed`, the whole settings after a change.
 - `fs.*`: list, files, read, write, watch.
 - `shell.history`: the login shell's history for input suggestions.
-- `mobile.*`: status, set_enabled, pair_start, pair_cancel, revoke, hosts for phone access (X39). Only the desktop app may call them, except `mobile.hosts`, which phones use. Events: `mobile.changed`, `mobile.paired`, `mobile.pair_ended`.
+- `mobile.*`: status, set_enabled, pair_start, pair_cancel, revoke, hosts, unpair for tailnet access (X39, X57). Only the desktop app may call them, except `mobile.hosts`, which phones use, and `mobile.unpair`, with which a paired device removes itself from its own connection. Events: `mobile.changed`, `mobile.paired`, `mobile.pair_ended`.
 
 ## Versioning
 

@@ -476,22 +476,45 @@ impl Mobile {
     }
 
     pub fn revoke(&self, id: &str) -> Result<(), RpcError> {
-        {
-            let mut data = self.data.lock().unwrap();
-            let before = data.devices.len();
-            data.devices.retain(|d| d.id != id);
-            if data.devices.len() == before {
-                return Err(RpcError::new("not_found", format!("no phone {id}")));
+        self.forget(id)?;
+        self.close_device(id);
+        self.changed();
+        Ok(())
+    }
+
+    /// A paired device removes itself (X57). Its token stops working at once;
+    /// its connections close a moment later, once the reply has gone out.
+    pub fn unpair(self: &Arc<Self>, id: &str) -> Result<(), RpcError> {
+        self.forget(id)?;
+        self.changed();
+        let me = Arc::downgrade(self);
+        let id = id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            if let Some(me) = me.upgrade() {
+                me.close_device(&id);
             }
-            self.save(&data);
+        });
+        Ok(())
+    }
+
+    fn forget(&self, id: &str) -> Result<(), RpcError> {
+        let mut data = self.data.lock().unwrap();
+        let before = data.devices.len();
+        data.devices.retain(|d| d.id != id);
+        if data.devices.len() == before {
+            return Err(RpcError::new("not_found", format!("no phone {id}")));
         }
+        self.save(&data);
+        Ok(())
+    }
+
+    fn close_device(&self, id: &str) {
         for c in self.conns.lock().unwrap().values() {
             if c.device_id == id {
                 let _ = c.close.send(true);
             }
         }
-        self.changed();
-        Ok(())
     }
 
     pub fn hosts(&self) -> Vec<MobileHost> {
