@@ -1,11 +1,13 @@
 // A session (X40): its header and the Chat, Terminal, Changes and PR tabs.
 
 import { type ReactNode, useEffect, useState } from "react";
-import { Archive, ChevronLeft, MoreHorizontal } from "lucide-react";
+import { Archive, ChevronLeft, ExternalLink, MoreHorizontal } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Session, type SessionArchived, type UnpushedWork } from "@desktop/lib/protocol";
 import { type SessionTab, showScreen, useApp } from "../lib/app";
 import { sessionState } from "../lib/inbox";
+import { taskChip } from "../lib/sessionList";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
@@ -135,6 +137,8 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
     );
   }
   const project = d.projects.find((p) => p.id === session.project_id);
+  // The task the session is linked to (X46).
+  const task = taskChip(session);
   const badge: Partial<Record<SessionTab, ReactNode>> = {
     terminal: shellTerminals(d, id).length || null,
     changes: git?.files.length || null,
@@ -153,7 +157,15 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
             <StateGlyph state={sessionState(d, session)} />
             <span className="truncate text-[16px] font-semibold">{session.name}</span>
           </div>
-          <span className="truncate text-[12px] text-muted">{sessionLine(session, project, hostLabel)}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted">
+            {task && (
+              <button type="button" aria-label={`Open ${task.label}`} onClick={() => void openUrl(task.url).catch(console.error)} className="flex flex-none items-center gap-1 font-mono text-fg">
+                {task.label}
+                <ExternalLink size={11} className="text-faint" />
+              </button>
+            )}
+            <span className="truncate">{sessionLine(session, project, hostLabel)}</span>
+          </span>
         </div>
         <button type="button" aria-label="Session actions" onClick={() => setMenu(true)} className="flex h-10 w-10 items-center justify-center text-muted">
           <MoreHorizontal size={20} />

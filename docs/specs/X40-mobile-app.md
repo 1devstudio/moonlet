@@ -134,6 +134,13 @@ Added 2026-10-20; the phone showed the queue read-only before.
 - [x] Under the queued messages, **Send now** (`Send <n> now` for several, `chat.send_now`) and **Ask aside** on the last one; both go once Send now was asked, while the line reads `Stopping <command>…`. (`queuedActions` in `lib/chatView.test.ts`)
 - [x] Ask aside asks Claude to give the message back (`chat.unqueue`) and, once it is out of the queue, opens the Aside sheet: the question, `Answering from the conversation`, then the answer with its time and cost, **Queue for Claude** and **Close** (`chat.aside`). If Claude read the message first, the chat says "Claude read the message before it could be asked aside". (The outcome is the desktop's `unqueued`, tested in `queued.test.ts`)
 
+### A session's task (X46, X48)
+
+Added 2026-10-20.
+
+- [x] A session linked to a task (its stored link, `Session.task`) shows the issue in its row before the branch and in its header before `<project> · <branch> · <host>`: a tracker's key whole (`MOON-142`), a GitHub issue by its number (`#12`). Tapping it in the header opens the issue. (`taskChip` in `lib/sessionList.test.ts`)
+- [ ] Links derived from the branch or the PR (X46 "Links"), and the task's title and state: these need the tracker's issues, which reach the phone with Tasks on the phone (to be specified).
+
 ## UI
 
 The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe areas respected, dark theme only.
