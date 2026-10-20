@@ -2,13 +2,15 @@
 // a tab per column, and each card with its sessions live.
 
 import { useState } from "react";
-import { Check, ChevronDown, ChevronRight, Search, X } from "lucide-react";
-import type { Category } from "@desktop/lib/boards";
+import { ArrowLeftRight, Check, ChevronDown, ChevronRight, Plus, Search, X } from "lucide-react";
+import { type Category, syncedColumns } from "@desktop/lib/boards";
+import { createTarget, createsIn } from "@desktop/lib/newIssue";
 import { showScreen, updateSettings, useApp } from "../lib/app";
-import { type CardView, type ColumnTab, boardScreen, firstColumn, phoneBoards, switcher } from "../lib/board";
+import { type CardView, type ColumnTab, type PhoneBoard, boardScreen, firstColumn, phoneBoards, switcher } from "../lib/board";
 import { useNow } from "../lib/now";
 import { useSessionsDetails } from "../lib/rowDetails";
-import { useTaskMoves } from "../lib/taskActions";
+import { moveOnMac, useTaskFailures, useTaskMoves } from "../lib/taskActions";
+import { NewIssueSheet } from "./NewIssue";
 import { Sheet } from "../components/Sheet";
 import { StateGlyph, cx } from "../components/ui";
 
@@ -49,7 +51,14 @@ function PriorityBars({ priority }: { priority: number }) {
 
 const META_TONE = { blocked: "text-blocked", open: "text-done", merged: "text-merged", error: "text-error", muted: "text-muted", faint: "text-faint" } as const;
 
-function TaskCard({ c, host, project, onOpen }: { c: CardView; host: string; project: string | null; onOpen: () => void }) {
+function TaskCard({ c, b, project, failure }: { c: CardView; b: PhoneBoard; project: string | null; failure: string | null }) {
+  const host = b.host;
+  const onOpen = () => showScreen({ kind: "task", board: b.key, task: c.id });
+  // An out-of-sync fix moves the task to the column its fix names (X45, X50).
+  const fix = () => {
+    const to = syncedColumns(b.board, null).find((x) => x.name === c.drift?.to);
+    if (to?.statuses[0]) void moveOnMac(b, c.task, { label: to.name, status: to.statuses[0] }).catch(() => {});
+  };
   return (
     <article className={cx("flex flex-col gap-2.5 rounded-[14px] border bg-panel p-3.5", c.needsYou ? "border-[rgba(242,201,76,0.4)]" : "border-[#242424]")}>
       <div className="flex items-center gap-2">
@@ -78,10 +87,16 @@ function TaskCard({ c, host, project, onOpen }: { c: CardView; host: string; pro
       {!c.rows.length && c.empty && <span className="text-[13px] text-faint">{c.empty}</span>}
       {c.drift && (
         <div className="flex min-h-11 items-center gap-2.5 rounded-[10px] border border-[rgba(217,119,87,0.35)] bg-[rgba(217,119,87,0.07)] px-3 text-[13.5px]">
+          <ArrowLeftRight size={14} className="flex-none text-accent" />
           <span className="flex-1">{c.drift.text}</span>
-          <span className="text-[13.5px] font-medium text-[#e8956f]">{c.drift.fix}</span>
+          {c.drift.to && (
+            <button type="button" onClick={fix} className="h-8 rounded-[8px] px-2.5 text-[13.5px] font-medium text-[#e8956f]">
+              {c.drift.fix}
+            </button>
+          )}
         </div>
       )}
+      {failure && <span className="text-[12.5px] text-error">{failure}</span>}
     </article>
   );
 }
@@ -170,6 +185,8 @@ export function TasksScreen() {
   const savedColumns = useApp((s) => s.settings.columns);
   const now = useNow();
   const moving = useTaskMoves();
+  const failures = useTaskFailures();
+  const [creating, setCreating] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [query, setQuery] = useState<string | null>(null);
   const all = phoneBoards(hosts, data, workspace);
@@ -222,12 +239,22 @@ export function TasksScreen() {
             {line}
           </p>
         ))}
+        {(() => {
+          const col = syncedColumns(current.board, null).find((x) => x.name === shownColumn);
+          if (!col || !createsIn(current.board) || !createTarget(current.board, col)) return null;
+          return (
+            <button type="button" onClick={() => setCreating(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong text-[14px] text-muted">
+              <Plus size={15} /> New issue in {shownColumn}
+            </button>
+          );
+        })()}
         {!cards.length && <p className="m-0 py-6 text-center text-[14px] text-faint">{q ? "No task matches." : `Nothing in ${shownColumn ?? "this column"}.`}</p>}
         {cards.map((c) => (
-          <TaskCard key={c.id} c={c} host={current.host} project={projects.size > 1 ? (c.card.rows[0]?.session.project ?? null) : null} onOpen={() => {}} />
+          <TaskCard key={c.id} c={c} b={current} project={projects.size > 1 ? (c.card.rows[0]?.session.project ?? null) : null} failure={failures[c.id] ?? null} />
         ))}
       </main>
       {switching && <Switcher shown={current.key} onClose={() => setSwitching(false)} />}
+      {creating && shownColumn && <NewIssueSheet b={current} column={shownColumn} onClose={() => setCreating(false)} />}
     </div>
   );
 }
