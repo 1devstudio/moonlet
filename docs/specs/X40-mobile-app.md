@@ -107,6 +107,15 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 - [x] **Pair a Mac** opens the pairing screen for another Mac.
 - [x] "Notify me when" has switches for an agent needs input, finishes, fails, and PR checks fail (off by default); and "Require Face ID to allow" (on by default). The switches are kept on the phone; they take effect once push notifications exist (out of scope here).
 
+### Subagents (X42)
+
+Added 2026-10-20 to keep the phone in step with the desktop.
+
+- [x] A run of Agent calls in the chat shows as one card, "Launched <n> agents", with a row per agent: its state glyph, description, state word and clock, live as the agents work. Before this, a chat that launched a subagent did not render on the phone. (`blockKey` in `lib/chatView.test.ts`; the rows are the desktop's `launchedRows`, tested in `subagents.test.ts`)
+- [x] Tapping an agent opens a sheet with its state, kind and model, what it does now or why it failed, its prompt and its report, and **Stop agent** while it runs or waits (`chat.stop_agent`).
+- [x] A session row shows "<n> agents" while its chats run subagents. (`lib/sessionList.test.ts`)
+- [x] A permission a subagent asks for says which one, "Agent <description>", on its Inbox card and on the ask docked in the chat. (`lib/inbox.test.ts`)
+
 ## UI
 
 The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe areas respected, dark theme only.
@@ -128,7 +137,7 @@ On the phone: the paired Macs (id, name, addresses) in `macs.json` in the app's 
 
 - Push notifications and approving from a notification (needs APNs and a paid Apple Developer account).
 - iPad layouts, landscape, light theme.
-- Editing files, the file tree, MCP and subagent panels, the command palette.
+- Editing files, the file tree, the MCP panel, the command palette. The desktop's Agents panel and strip (X42): the chat's Launched card and its agent sheet stand in for them.
 
 ## Test plan
 

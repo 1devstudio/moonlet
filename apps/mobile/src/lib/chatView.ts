@@ -1,7 +1,7 @@
 // The session screen's header and Chat tab (X40).
 
 import { CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS } from "@desktop/lib/agents";
-import { contextView } from "@desktop/lib/chat";
+import { type ChatBlock, contextView } from "@desktop/lib/chat";
 import type { Project, Session, TerminalInfo } from "@desktop/lib/protocol";
 import type { ChatSummary, HostData } from "./app";
 
@@ -12,6 +12,9 @@ export function sessionChat(d: HostData, sessionId: string): number | null {
     .sort((a, b) => a.created_at - b.created_at);
   return chats[0]?.id ?? null;
 }
+
+/** A conversation row's React key: an item's id, a run's id (its first call). */
+export const blockKey = (b: ChatBlock) => (b.kind === "item" ? b.item.id : b.id);
 
 /** The session's shell, run and setup terminals, oldest first. */
 export function shellTerminals(d: HostData, sessionId: string): TerminalInfo[] {

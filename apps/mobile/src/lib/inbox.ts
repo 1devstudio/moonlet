@@ -3,6 +3,7 @@
 
 import { planOf } from "@desktop/lib/chat";
 import { lastActive } from "@desktop/lib/sidebar";
+import { askerName } from "@desktop/lib/subagents";
 import type { AgentState, HostStatus, PermissionAsk, ReadRequest, Session } from "@desktop/lib/protocol";
 import type { HostData } from "./app";
 
@@ -24,6 +25,8 @@ export interface InboxCard {
   agent: string | null;
   askedAt: number | null;
   ask?: PermissionAsk;
+  /** The subagent that asks (X42); null for the main agent. */
+  asker?: string | null;
   read?: ReadRequest;
 }
 
@@ -102,7 +105,7 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
       const s = sessionOf(d.terminals[t]?.session_id);
       if (!inWorkspace(d, s, workspace)) continue;
       for (const ask of st.pending) {
-        needs.push({ ...base(t, s), kind: kindOf(ask), key: `${h.id}:${t}:${ask.id}`, askedAt: ask.asked_at ?? null, ask });
+        needs.push({ ...base(t, s), kind: kindOf(ask), key: `${h.id}:${t}:${ask.id}`, askedAt: ask.asked_at ?? null, ask, asker: askerName(ask, st.subagents ?? []) });
       }
     }
     for (const r of d.reads) {

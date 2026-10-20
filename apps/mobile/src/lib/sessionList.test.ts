@@ -76,6 +76,23 @@ describe("sessionGroups", () => {
       ["Bump Node to 22", "idle", ""],
     ]);
   });
+
+  it("says how many subagents the session's chats are running (X42)", () => {
+    const w = world();
+    w.data.mac.terminals[3] = terminal(3, "dark", { agent_state: "working", last_output_at: NOW - 2 * MIN, subagents: 2 });
+    w.data.mac.terminals[7] = terminal(7, "dark", { last_output_at: NOW - 2 * MIN, subagents: 1 });
+    w.data.mac.terminals[2] = terminal(2, "checkout", { agent_state: "done", last_output_at: NOW - 30 * MIN, subagents: 0 });
+    w.data.mac.terminals[8] = terminal(8, "fix-login", { subagents: 1 });
+    const rows = sessionGroups(w.hosts, w.data, null, NOW).flatMap((g) => g.rows);
+    expect(rows.map((r) => [r.session.name, r.agents])).toEqual([
+      ["Add search to the product list", ""],
+      ["Dark mode for account pages", "3 agents"],
+      ["Fix checkout button on mobile", ""],
+      ["Fix login", "1 agent"],
+      ["Idempotent refund webhooks", ""],
+      ["Bump Node to 22", ""],
+    ]);
+  });
 });
 
 describe("chips and filters", () => {

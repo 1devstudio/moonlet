@@ -23,9 +23,10 @@ import {
 } from "lucide-react";
 import { type ChatBlock, diffStat, planOf, thinkingPreview, toolCommand, toolGroupLabel, toolGroupStatus } from "@desktop/lib/chat";
 import type { ChatItem, ToolCall } from "@desktop/lib/protocol";
+import { AGENT_STATE, type AgentRow, agentCount, isActive, launchedRows } from "@desktop/lib/subagents";
 import { DIFF_LINE } from "../lib/palette";
 import { Markdown } from "./Markdown";
-import { cx } from "./ui";
+import { Btn, StateGlyph, cx } from "./ui";
 
 function toolIcon(name: string) {
   const n = name.toLowerCase();
@@ -145,7 +146,71 @@ function Thinking({ item }: { item: ChatItem }) {
   );
 }
 
-export function ChatBlockView({ block, cwd }: { block: ChatBlock; cwd: string }) {
+/** "Agent <name>" over an ask a subagent makes (X42). */
+export function AskerLine({ name }: { name: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted">
+      <Bot size={13} className="shrink-0" />
+      <span className="shrink-0">Agent</span>
+      <span className="min-w-0 truncate text-fg">{name}</span>
+    </div>
+  );
+}
+
+/** "Launched 3 agents": a run of Agent calls, each with its live state (X42). */
+function LaunchedCard({ tools, rows, onOpen }: { tools: ChatItem[]; rows: AgentRow[]; onOpen: (row: AgentRow) => void }) {
+  const list = launchedRows(tools, rows);
+  return (
+    <div className="overflow-hidden rounded-[12px] border border-border bg-panel">
+      <div className="flex h-10 items-center border-b border-border px-3.5 text-[13.5px] font-medium">Launched {agentCount(list.length)}</div>
+      {list.map((r) => {
+        const row = rows.find((x) => x.agent.tool_use_id === r.key);
+        return (
+          <button key={r.key} type="button" disabled={!row} onClick={() => row && onOpen(row)} className="flex min-h-11 w-full items-center gap-2.5 px-3.5 text-left">
+            <StateGlyph state={r.state ? AGENT_STATE[r.state].glyph : "idle"} size={12} />
+            <span className="min-w-0 flex-1 truncate text-[14px]">{r.description}</span>
+            {r.state && <span className={cx("shrink-0 text-[12.5px]", AGENT_STATE[r.state].text)}>{r.label}</span>}
+            <span className="w-10 shrink-0 text-right font-mono text-[12px] text-faint tabular-nums">{r.elapsed}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** One subagent: what it was asked, what it does or reported, and Stop while it works (X42). */
+export function AgentDetail({ row, onStop }: { row: AgentRow; onStop: () => void }) {
+  const a = row.agent;
+  return (
+    <div className="scroll flex flex-col gap-3 px-4 pb-2">
+      <div className="flex items-center gap-2">
+        <StateGlyph state={AGENT_STATE[row.state].glyph} />
+        <span className="min-w-0 flex-1 text-[16px] font-medium">{a.description}</span>
+        <span className="font-mono text-[12.5px] text-faint tabular-nums">{row.elapsed}</span>
+      </div>
+      <div className={cx("text-[13px]", AGENT_STATE[row.state].text)}>
+        {[AGENT_STATE[row.state].label, a.kind, a.model].filter(Boolean).join(" · ")}
+      </div>
+      {row.line && <div className={cx("text-[13.5px]", row.line.tone === "error" ? "text-error" : row.line.tone === "muted" ? "text-muted" : "text-fg")}>{row.line.text}</div>}
+      <div className="eyebrow">Prompt</div>
+      <div className="selectable rounded-[10px] bg-raised px-3 py-2.5 text-[13.5px] leading-[1.45] whitespace-pre-wrap">{a.prompt}</div>
+      {a.report && (
+        <>
+          <div className="eyebrow">Report</div>
+          <Markdown text={a.report} />
+        </>
+      )}
+      {isActive(row.state) && (
+        <Btn tone="secondary" onClick={onStop}>
+          Stop agent
+        </Btn>
+      )}
+    </div>
+  );
+}
+
+export function ChatBlockView({ block, cwd, agents = [], onAgent = () => {} }: { block: ChatBlock; cwd: string; agents?: AgentRow[]; onAgent?: (row: AgentRow) => void }) {
+  if (block.kind === "agents") return <LaunchedCard tools={block.tools} rows={agents} onOpen={onAgent} />;
   if (block.kind === "tools") return <ToolGroup tools={block.tools} cwd={cwd} />;
   const it = block.item;
   switch (it.kind) {
