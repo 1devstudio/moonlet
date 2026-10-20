@@ -437,8 +437,8 @@ fn device_name() -> String {
 }
 
 /// Pairs with a host on the tailnet (X57) and connects to it. `addrs` come
-/// from a pasted link; without them the typed name is looked up, and only
-/// its Tailscale addresses are used.
+/// from a pasted link and must be on the tailnet (or loopback); without them
+/// the typed name is looked up, and only its Tailscale addresses are used.
 pub async fn pair_tailnet(
     mgr: &Arc<HostManager>,
     typed: &str,
@@ -451,7 +451,10 @@ pub async fn pair_tailnet(
         return Err(failed(format!("A host named {id} already exists.")));
     }
     let addrs = match addrs.filter(|a| !a.is_empty()) {
-        Some(a) => a,
+        Some(a) => {
+            moonlet_core::tailnet::link_addrs_allowed(&a).map_err(failed)?;
+            a
+        }
         None => {
             let (name, port) = moonlet_core::tailnet::name_and_port(typed.trim());
             let ips: Vec<std::net::IpAddr> = tokio::net::lookup_host((name, port))

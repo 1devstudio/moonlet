@@ -52,6 +52,23 @@ pub fn listener_addrs(typed: &str, resolved: &[IpAddr]) -> Result<Vec<String>, S
     }
 }
 
+/// Checks the addresses of a pasted pairing link: each must be on the
+/// tailnet, or this machine's loopback. A forged link could otherwise point
+/// the app at a machine off the tailnet, which would then run its sessions.
+pub fn link_addrs_allowed(addrs: &[String]) -> Result<(), String> {
+    for a in addrs {
+        let ok = a
+            .parse::<SocketAddr>()
+            .is_ok_and(|s| is_tailscale(s.ip()) || s.ip().is_loopback());
+        if !ok {
+            return Err(format!(
+                "The link points at {a}, which is not on your tailnet."
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +109,27 @@ mod tests {
         assert_eq!(
             listener_addrs("studio-mini", &[]),
             Err("studio-mini was not found. Is Tailscale running on this Mac?".to_string())
+        );
+    }
+
+    #[test]
+    fn a_link_may_point_only_at_the_tailnet_or_this_machine() {
+        assert_eq!(
+            link_addrs_allowed(&[
+                "100.101.102.103:47428".into(),
+                "[fd7a:115c:a1e0::1]:47428".into()
+            ]),
+            Ok(())
+        );
+        // The e2e tests pair with a daemon on this machine.
+        assert_eq!(link_addrs_allowed(&["127.0.0.1:50123".into()]), Ok(()));
+        assert_eq!(
+            link_addrs_allowed(&["100.101.102.103:47428".into(), "203.0.113.7:47428".into()]),
+            Err("The link points at 203.0.113.7:47428, which is not on your tailnet.".to_string())
+        );
+        assert_eq!(
+            link_addrs_allowed(&["studio-mini:47428".into()]),
+            Err("The link points at studio-mini:47428, which is not on your tailnet.".to_string())
         );
     }
 
