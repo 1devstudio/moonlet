@@ -8,7 +8,7 @@ import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
 import { showScreen, useApp } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
-import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups } from "../lib/sessionList";
+import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, taskChip } from "../lib/sessionList";
 import { useBusy } from "../lib/busy";
 import { STATE_COLOR } from "../lib/palette";
 import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
@@ -39,6 +39,7 @@ function Row({ r }: { r: SessionRow }) {
   const [ref, seen] = useSeen();
   const [stat] = useGitStatus(r.host, seen ? r.session : undefined);
   const [pr] = usePr(r.host, seen ? r.session : undefined);
+  const task = taskChip(r.session);
   return (
     <button ref={ref} type="button" onClick={() => showScreen(rowTarget(r))} className={cx("flex items-start gap-2.5 px-4 py-2.5 text-left", r.state === "blocked" && "bg-[rgba(242,201,76,0.035)]")}>
       <span className="pt-[3px]">
@@ -52,6 +53,7 @@ function Row({ r }: { r: SessionRow }) {
           </span>
         </span>
         <span className="flex items-center gap-2 text-[12px] text-faint">
+          {task && <span className="flex-none font-mono text-muted">{task.label}</span>}
           <span className="truncate font-mono">{r.session.branch}</span>
           {stat && <DiffStat add={stat.additions} del={stat.deletions} />}
           {r.agents && (

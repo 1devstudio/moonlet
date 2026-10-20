@@ -4,6 +4,7 @@
 import { planOf } from "@desktop/lib/chat";
 import { lastActive, workspaceSections } from "@desktop/lib/sidebar";
 import { agentCount } from "@desktop/lib/subagents";
+import { splitKey } from "@desktop/lib/sessionRows";
 import type { AgentState, Project, Session } from "@desktop/lib/protocol";
 import type { HostData, Screen } from "./app";
 import { type InboxHost, sessionState } from "./inbox";
@@ -126,4 +127,13 @@ export function filterGroups(groups: ProjectGroup[], chip: ChipId, query: string
 export function rowTarget(r: SessionRow): Screen {
   if (r.plan) return { kind: "plan", host: r.host, terminal: r.plan.terminal, ask: r.plan.ask };
   return { kind: "session", host: r.host, id: r.session.id, tab: r.state === "done" ? "changes" : "chat" };
+}
+
+/** A session's stored task link (X46): a tracker's key whole, a GitHub
+ * issue (`owner/repo#12`) by its number. Links derived from a branch or a
+ * PR need the tracker's issues, which the phone does not load. */
+export function taskChip(s: Session): { label: string; url: string } | null {
+  if (!s.task) return null;
+  const { prefix, number } = splitKey(s.task.key);
+  return { label: prefix.endsWith("#") ? `#${number}` : s.task.key, url: s.task.url };
 }
