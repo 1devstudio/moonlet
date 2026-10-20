@@ -25,8 +25,12 @@ die() {
   exit 1
 }
 
+has() {
+  command -v "$1" >/dev/null 2>&1
+}
+
 need() {
-  command -v "$1" >/dev/null 2>&1 || die "moonlet's installer needs $1."
+  has "$1" || die "moonlet's installer needs $1."
 }
 
 arch() {
@@ -101,8 +105,8 @@ main() {
     version=$(cat "$from/VERSION")
   fi
   need tar
-  command -v sha256sum >/dev/null 2>&1 || need shasum
-  [ -n "$from" ] || command -v curl >/dev/null 2>&1 || need wget
+  has sha256sum || has shasum || die "moonlet's installer needs sha256sum or shasum."
+  [ -n "$from" ] || has curl || has wget || die "moonlet's installer needs curl or wget."
   echo "moonlet $version for Linux $a"
 
   bin="$HOME/.moonlet/bin"
@@ -117,6 +121,7 @@ main() {
     installed=0
   else
     tmp=$(mktemp -d)
+    # On a failure; a finished install removes it below.
     trap 'rm -rf "$tmp"' EXIT
     if [ -n "$from" ]; then
       cp "$from/$archive" "$from/SHA256SUMS" "$tmp/"
@@ -142,6 +147,8 @@ main() {
       done
     )
     echo "✓ Installed in ~/.moonlet/bin"
+    rm -rf "$tmp"
+    trap - EXIT
     installed=1
   fi
 
@@ -163,18 +170,20 @@ main() {
 
   status=$("$bin/moonletd" tailnet on)
   case "$status" in
-    Listening*) echo "✓ Tailnet access is on: $status" ;;
-    *)
+    "Tailscale is not running"*)
       echo "Tailscale is not running on this machine. Start it, then run: ~/.moonlet/bin/moonletd pair"
       return 0
       ;;
+    *) echo "✓ Tailnet access is on: $status" ;;
   esac
 
+  name=$(tailnet_name)
   if [ "$pair" = 1 ] && [ -t 1 ]; then
     echo
-    exec "$bin/moonletd" pair --name "$(tailnet_name)"
+    "$bin/moonletd" pair --name "$name"
+    return
   fi
-  echo "Pair a Mac: run ~/.moonlet/bin/moonletd pair"
+  echo "Pair a Mac: run ~/.moonlet/bin/moonletd pair, and add the host $name on the Mac."
 }
 
 main "$@"

@@ -37,6 +37,15 @@ if [ "$systemd" = 0 ]; then
   mkdir -p "$HOME"
   fake_uname "Linux x86_64"
 fi
+# The release download, served from $dist: `curl -fsSL -o <file> <url>`.
+printf '#!/bin/sh\ncp "%s/$(basename "$4")" "$3"\n' "$dist" >"$fake/curl"
+# This machine on the tailnet, as `tailscale status --json` starts.
+printf '#!/bin/sh\necho "{"\necho "  \\"Self\\": {"\necho "    \\"HostName\\": \\"Build Box\\","\necho "    \\"DNSName\\": \\"build-box.tail1234.ts.net.\\","\n' >"$fake/tailscale"
+# Lingering cannot be turned on (no polkit, say).
+printf '#!/bin/sh\ncase "$1" in show-user) echo "Linger=no" ;; *) exit 1 ;; esac\n' >"$fake/loginctl"
+chmod +x "$fake/curl" "$fake/tailscale" "$fake/loginctl"
+export TMPDIR="$work/tmp"
+mkdir -p "$TMPDIR"
 unset MOONLET_HOME MOONLET_SOCK
 # Tailnet access listens on loopback, as in the e2e tests (X39). A daemon
 # that systemd starts gets the user manager's environment, not ours.
@@ -58,16 +67,18 @@ run_install() {
   PATH="$fake:$PATH" sh "$dist/install.sh" --from "$dist" --no-pair "$@" 2>&1
 }
 
-# A fresh install.
-out=$(run_install) || fail "install failed: $out"
+# A fresh install, as published: downloaded, not --from.
+out=$(PATH="$fake:$PATH" sh "$dist/install.sh" --no-pair 2>&1) || fail "install failed: $out"
 has "$out" "moonlet $version for Linux x86_64"
 has "$out" "✓ Downloaded and checked moonletd and moonlet"
 has "$out" "✓ Installed in ~/.moonlet/bin"
 has "$out" "✓ Tailnet access is on: Listening on 127.0.0.1:"
-has "$out" "Pair a Mac: run ~/.moonlet/bin/moonletd pair"
+has "$out" "Pair a Mac: run ~/.moonlet/bin/moonletd pair, and add the host build-box on the Mac."
+[ -z "$(ls -A "$TMPDIR")" ] || fail "left behind in TMPDIR: $(ls -A "$TMPDIR")"
 [ "$("$bin/moonletd" --version)" = "moonletd $version" ] || fail "wrong moonletd: $("$bin/moonletd" --version)"
 if [ "$systemd" = 1 ]; then
   has "$out" "✓ moonletd runs as a systemd user service and starts at boot"
+  has "$out" "moonletd will stop when you log out. To keep it running, ask an administrator to run: sudo loginctl enable-linger $(id -un)"
   unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/moonletd.service"
   expected="[Unit]
 Description=moonlet daemon
@@ -132,6 +143,26 @@ if [ "$systemd" = 1 ]; then
   [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/moonletd.service" ] || fail "unit left behind"
 fi
 pass "uninstalls and keeps ~/.moonlet"
+
+# Without Tailscale, the install still works and says how to pair later.
+if [ "$systemd" = 0 ]; then
+  out=$(HOME="$work/home2" MOONLET_MOBILE_ADDRS="" run_install) || fail "install without Tailscale failed: $out"
+  has "$out" "Tailscale is not running on this machine. Start it, then run: ~/.moonlet/bin/moonletd pair"
+  HOME="$work/home2" "$work/home2/.moonlet/bin/moonletd" stop >/dev/null 2>&1 || true
+  pass "installs without Tailscale and says how to pair later"
+fi
+
+# A machine without curl or wget is told which it needs.
+bare="$work/bare"
+mkdir -p "$bare"
+cp "$fake/uname" "$bare/"
+for tool in tar sha256sum shasum; do
+  p=$(command -v "$tool" || true)
+  if [ -n "$p" ]; then ln -s "$p" "$bare/$tool"; fi
+done
+out=$(PATH="$bare" /bin/sh "$dist/install.sh" --no-pair 2>&1) && fail "installed without curl or wget"
+has "$out" "moonlet's installer needs curl or wget."
+pass "names the download tool it needs"
 
 # Other systems get a clear message.
 fake_uname "Darwin arm64"
