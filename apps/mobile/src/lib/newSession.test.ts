@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Section } from "@desktop/lib/protocol";
-import { MODES, branchPrefix, branchPreview, modeHelp, nameFromPrompt, projectChoices, setupLine, startPoint } from "./newSession";
+import { MODES, branchPrefix, branchPreview, composer, modeHelp, nameFromPrompt, projectChoices, setupLine, startPoint } from "./newSession";
 import { NOW, data, project, workspace } from "./fixtures";
 
 describe("nameFromPrompt and branchPreview", () => {
@@ -89,5 +89,50 @@ describe("projectChoices", () => {
     ]);
     expect(projectChoices(hosts, d, "Work").map((c) => c.project.name)).toEqual(["storefront"]);
     expect(projectChoices(hosts, d, null).map((c) => c.project.name)).toEqual(["storefront", "changedeck", "payments-api"]);
+  });
+});
+
+describe("composer (X54)", () => {
+  // Shaped like `gh.issues` and `gh.prs` replies.
+  const issue = { number: 57, title: "Search ignores accents", body: "Searching *creme* misses **Crème brûlée**.", url: "https://github.com/acme/storefront/issues/57" };
+  const pr = { number: 214, title: "Product list search", body: "Adds search.", url: "https://github.com/acme/storefront/pull/214", head_branch: "mz/product-search" };
+  const none = { typed: "", prefix: "moonlet/", issue: null, pr: null, prContext: null, prSend: true };
+
+  it("starts from what the user typed alone, on a new branch named after it", () => {
+    const c = composer({ ...none, typed: "Fix the Login bug!" });
+    expect(c.attachments).toEqual([]);
+    expect(c.placeholder).toBe("What do you want to work on?");
+    expect(c.branch).toEqual({ name: "moonlet/fix-the-login-bug", existing: false });
+    expect(c.create).toEqual({ prompt: "Fix the Login bug!", name: null, pr: null });
+    expect(composer(none).create).toBeNull();
+  });
+
+  it("sends a picked issue first, names the session after it, and can start with nothing typed", () => {
+    const c = composer({ ...none, issue });
+    expect(c.attachments.map((a) => [a.ref, a.summary, a.note])).toEqual([["#57", "Search ignores accents", " · GitHub issue"]]);
+    expect(c.placeholder).toBe("Anything to add? Leave empty to start from the issue.");
+    expect(c.create).toEqual({
+      prompt: "#57 · Search ignores accents\n\nSearching *creme* misses **Crème brûlée**.\n\nhttps://github.com/acme/storefront/issues/57",
+      name: "Search ignores accents",
+      pr: null,
+    });
+    expect(composer({ ...none, issue, typed: "Keep it small" }).create?.prompt.endsWith("issues/57\n\nKeep it small")).toBe(true);
+  });
+
+  it("starts on a picked PR's branch and sends its reviews and comments once read", () => {
+    const c = composer({ ...none, pr, prContext: "Adds search.\n\n**sam-rivera** reviewed: Debounce the input." });
+    expect(c.branch).toEqual({ name: "mz/product-search", existing: true });
+    expect(c.placeholder).toBe("What should the agent do on this PR? e.g. “Address the review comments”");
+    expect(c.create).toEqual({
+      prompt: "PR #214 · Product list search\n\nAdds search.\n\n**sam-rivera** reviewed: Debounce the input.\n\nhttps://github.com/acme/storefront/pull/214",
+      name: "Product list search",
+      pr: 214,
+    });
+  });
+
+  it("still starts on the PR's branch once its attachment is removed, sending only what was typed", () => {
+    const c = composer({ ...none, pr, prSend: false, typed: "Rebase on main" });
+    expect(c.attachments).toEqual([]);
+    expect(c.create).toEqual({ prompt: "Rebase on main", name: "Product list search", pr: 214 });
   });
 });

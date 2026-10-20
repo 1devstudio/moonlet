@@ -2,23 +2,25 @@
 // alone; Start session creates the worktree and opens its chat.
 
 import { type ReactNode, useEffect, useState } from "react";
-import { ArrowRight, Check, ChevronRight, Mic } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, ChevronRight, FileText, GitPullRequest, Mic, Search, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { latestOnly } from "@desktop/lib/prStack";
 import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
-import { M, type ProjectConfig, type Session } from "@desktop/lib/protocol";
+import { type IssueRef, M, type Project, type ProjectConfig, type Session } from "@desktop/lib/protocol";
+import { type Attachment, pickerHint } from "@desktop/lib/composer";
 import { loadHost, showScreen, showTab, useApp } from "../lib/app";
-import { MODES, branchPrefix, branchPreview, modeHelp, projectChoices, setupLine, startPoint } from "../lib/newSession";
+import { MODES, branchPrefix, composer, modeHelp, projectChoices, setupLine, startPoint } from "../lib/newSession";
 import { useBusy } from "../lib/busy";
 import { AgentIcon, Btn, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
+import { Markdown } from "../components/Markdown";
 
 const AGENTS = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
 ];
 
-type Picker = "project" | "agent" | "model" | "base" | null;
+type Picker = "project" | "agent" | "model" | "base" | "source" | null;
 
 function RowButton({ label, value, hint, onClick, icon, mono }: { label: string; value: string; hint?: string; onClick: () => void; icon?: ReactNode; mono?: boolean }) {
   return (
@@ -50,6 +52,93 @@ function Choices<T extends string>({ items, current, onPick }: { items: { id: T;
   );
 }
 
+/** The GitHub issues and pull requests to start from (X54), searched by number and title. */
+function SourceSheet({ host, project, base, onIssue, onPr, onClose }: { host: string; project: Project; base: string; onIssue: (i: IssueRef) => void; onPr: (p: IssueRef) => void; onClose: () => void }) {
+  const [tab, setTab] = useState<"issue" | "pr">("issue");
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState<IssueRef[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setItems(null);
+    setError(null);
+    // A list that arrives after a switch to the other tab is dropped.
+    let current = true;
+    void rpc<IssueRef[]>(host, tab === "issue" ? M.ghIssues : M.ghPrs, { path: project.path })
+      .then((list) => current && setItems(list))
+      .catch((e) => current && setError(String(e?.message ?? e)));
+    return () => {
+      current = false;
+    };
+  }, [tab, host, project.path]);
+  const shown = (items ?? []).filter((i) => !q || `#${i.number} ${i.title}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <Sheet label="Start from GitHub" onClose={onClose}>
+      <div className="flex flex-col gap-2 px-4 pb-1">
+        <div className="grid grid-cols-2 rounded-[10px] bg-raised p-[3px]">
+          {(["issue", "pr"] as const).map((t) => (
+            <button key={t} type="button" onClick={() => setTab(t)} className={cx("h-9 rounded-[8px] text-[13.5px]", tab === t ? "bg-border-strong font-semibold text-fg" : "text-muted")}>
+              {t === "issue" ? "Issues" : "Pull requests"}
+            </button>
+          ))}
+        </div>
+        <label className="flex h-10 items-center gap-2 rounded-[10px] border border-border-strong bg-bg px-3">
+          <Search size={15} className="text-faint" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by number or title" className="min-w-0 flex-1 bg-transparent text-[14.5px] outline-none" />
+        </label>
+      </div>
+      <div className="scroll flex min-h-[200px] flex-col px-2">
+        {error ? (
+          <p className="px-3 py-2 text-[13.5px] text-error">{error}</p>
+        ) : items === null ? (
+          <p className="px-3 py-2 text-[13.5px] text-muted">Loading…</p>
+        ) : !shown.length ? (
+          <p className="px-3 py-2 text-[13.5px] text-muted">{q ? "Nothing matches." : tab === "issue" ? "No open issues." : "No open pull requests."}</p>
+        ) : (
+          shown.map((i) => (
+            <button key={i.number} type="button" onClick={() => (tab === "issue" ? onIssue(i) : onPr(i))} className="flex min-h-12 items-center gap-2.5 rounded-[10px] px-3 text-left">
+              <span className="w-12 flex-none font-mono text-[13px] text-faint">#{i.number}</span>
+              <span className="min-w-0 flex-1 truncate text-[15px]">{i.title}</span>
+            </button>
+          ))
+        )}
+      </div>
+      <p className="px-5 pt-1 text-[12px] leading-snug text-faint">{pickerHint(tab, null, base)}</p>
+    </Sheet>
+  );
+}
+
+/** A folded attachment above the prompt (X54); a tap shows what it sends. */
+function AttachmentCard({ a, onRemove }: { a: Attachment; onRemove: () => void }) {
+  const [open, setOpen] = useState(false);
+  const Icon = a.icon === "pr" ? GitPullRequest : FileText;
+  return (
+    <div className="flex flex-col rounded-[10px] border border-border bg-raised">
+      <div className="flex min-h-11 items-center gap-2 pr-1 pl-3">
+        <button type="button" onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13.5px]">
+          <Icon size={14} className="flex-none text-muted" />
+          <span className="min-w-0 flex-1 truncate">
+            {a.ref && <span className="font-mono text-muted">{a.ref} </span>}
+            {a.lead && <span className="text-muted">{a.lead}</span>}
+            {a.summary}
+            {a.note && <span className="text-faint">{a.note}</span>}
+          </span>
+          {open ? <ChevronDown size={14} className="flex-none text-faint" /> : <ChevronRight size={14} className="flex-none text-faint" />}
+        </button>
+        {a.remove && (
+          <button type="button" aria-label={a.remove} onClick={onRemove} className="flex h-9 w-9 flex-none items-center justify-center text-faint">
+            <X size={15} />
+          </button>
+        )}
+      </div>
+      {open && a.body && (
+        <div className="scroll max-h-56 border-t border-border px-3 py-2 text-[13px]">
+          <Markdown text={a.body} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function NewSessionScreen() {
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
@@ -65,6 +154,12 @@ export function NewSessionScreen() {
   const [branches, setBranches] = useState<string[]>([]);
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [picker, setPicker] = useState<Picker>(null);
+  // A GitHub issue or PR to start from (X54); a PR's reviews once read.
+  const [issue, setIssue] = useState<IssueRef | null>(null);
+  const [pr, setPr] = useState<IssueRef | null>(null);
+  const [prContext, setPrContext] = useState<string | null>(null);
+  const [prSend, setPrSend] = useState(true);
+  const [prLatest] = useState(latestOnly);
   const { busy, error, run } = useBusy();
   const choice = choices[Math.min(pick, choices.length - 1)];
   const [latest] = useState(latestOnly);
@@ -73,6 +168,8 @@ export function NewSessionScreen() {
     if (!choice) return;
     setBase(null);
     setConfig(null);
+    setIssue(null);
+    setPr(null);
     setBranches([]);
     // A reply for a project picked before this one is dropped.
     const isLatest = latest.start();
@@ -84,30 +181,50 @@ export function NewSessionScreen() {
       .catch(() => isLatest() && setBranches([]));
   }, [choice?.host, choice?.project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The host's Git settings (X55) name the branch and say where it starts.
+  const git = choice ? (data[choice.host]?.git ?? null) : null;
+  const c = composer({ typed: prompt, prefix: branchPrefix(config, git), issue, pr, prContext, prSend });
+  const pickPr = (p: IssueRef) => {
+    setPr(p);
+    setPrSend(true);
+    setPrContext(null);
+    setBase(null);
+    setPicker(null);
+    if (!choice) return;
+    // Its reviews and comments; the list's description until they are read.
+    const isLatest = prLatest.start();
+    void rpc<string>(choice.host, M.ghPrContext, { path: choice.project.path, number: p.number })
+      .then((text) => isLatest() && setPrContext(text))
+      .catch(() => {});
+  };
+
   const start = async () => {
-    if (!choice || busy || !prompt.trim()) return;
+    if (!choice || busy || !c.create) return;
+    const create = c.create;
     await run(async () => {
       const s = await rpc<Session>(choice.host, M.sessionCreate, {
         project_id: choice.project.id,
-        prompt: prompt.trim(),
+        prompt: create.prompt,
+        name: create.name,
+        pr: create.pr,
         agent,
         model: agent === "claude" ? model : null,
         effort: agent === "claude" ? effort : null,
         mode: agent === "claude" ? mode : null,
-        from: base && base !== choice.project.base_branch ? base : null,
+        from: !pr && base && base !== choice.project.base_branch ? base : null,
         workspace_id: choice.workspaceId,
         cols: 80,
         rows: 32,
       });
       await loadHost(choice.host).catch(() => {});
       setPrompt("");
+      setIssue(null);
+      setPr(null);
       showScreen({ kind: "session", host: choice.host, id: s.id, tab: "chat" });
     });
   };
 
   const baseName = base ?? choice?.project.base_branch ?? "main";
-  // The host's Git settings (X55) name the branch and say where it starts.
-  const git = choice ? (data[choice.host]?.git ?? null) : null;
   const modelLabel = CLAUDE_MODELS.find((m) => m.id === model)?.label ?? model;
   const effortLabel = EFFORTS.find((e) => e.id === effort)?.label ?? effort;
 
@@ -129,23 +246,35 @@ export function NewSessionScreen() {
               <label htmlFor="task" className="text-[13px] text-muted">
                 What do you want to work on?
               </label>
+              {c.attachments.map((a) => (
+                <AttachmentCard key={a.id} a={a} onRemove={() => (a.id === "issue" ? setIssue(null) : setPrSend(false))} />
+              ))}
               <div className="flex flex-col rounded-[14px] border border-border-strong bg-panel">
-                <textarea id="task" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the task…" className="resize-none bg-transparent p-3.5 text-[15px] leading-[1.45] outline-none" />
+                <textarea id="task" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={c.attachments.length ? c.placeholder : "Describe the task…"} className="resize-none bg-transparent p-3.5 text-[15px] leading-[1.45] outline-none" />
                 <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
                   <button type="button" aria-label="Dictate" onClick={() => document.getElementById("task")?.focus()} className="flex h-9 w-9 items-center justify-center text-muted">
                     <Mic size={18} />
                   </button>
                   <span className="flex-1" />
-                  <span className="truncate pr-2 font-mono text-[12px] text-faint">{branchPreview(prompt, branchPrefix(config, git))}</span>
+                  <span className="truncate pr-2 font-mono text-[12px] text-faint">
+                    {c.branch.name}
+                    {c.branch.existing && <span className="font-sans"> · existing branch</span>}
+                  </span>
                 </div>
               </div>
             </div>
             <div className="flex flex-col rounded-[14px] border border-border bg-panel">
               <RowButton label="Project" value={choice.project.name} onClick={() => setPicker("project")} />
+              <RowButton
+                label="GitHub"
+                value={pr ? `PR #${pr.number}` : issue ? `Issue #${issue.number}` : "Issue or pull request"}
+                hint={pr || issue ? undefined : "optional"}
+                onClick={() => setPicker("source")}
+              />
               <RowButton label="Host" value={choice.hostLabel} hint={hosts[choice.host]?.status === "connected" ? "online" : "offline"} onClick={() => setPicker("project")} />
               <RowButton label="Agent" value={AGENTS.find((a) => a.id === agent)?.label ?? agent} icon={<AgentIcon agent={agent} size={14} />} onClick={() => setPicker("agent")} />
               {agent === "claude" && <RowButton label="Model" value={modelLabel} hint={`${effortLabel} effort`} onClick={() => setPicker("model")} />}
-              <RowButton label="Base" value={baseName} mono onClick={() => setPicker("base")} />
+              {!pr && <RowButton label="Base" value={baseName} mono onClick={() => setPicker("base")} />}
             </div>
             {agent === "claude" && (
               <div className="flex flex-col gap-2">
@@ -165,9 +294,9 @@ export function NewSessionScreen() {
       </div>
       {choice && (
         <div className="flex flex-col gap-2.5 border-t border-border px-4 pt-3 pb-3">
-          <span className="text-[12.5px] text-muted">{setupLine(startPoint(base, choice.project.base_branch, git?.start_from ?? "local"), choice.hostLabel, config?.setup)}</span>
+          <span className="text-[12.5px] text-muted">{setupLine(pr ? (pr.head_branch ?? `PR #${pr.number}`) : startPoint(base, choice.project.base_branch, git?.start_from ?? "local"), choice.hostLabel, config?.setup)}</span>
           {error && <span className="text-[12.5px] text-error">{error}</span>}
-          <Btn tone="primary" disabled={busy || !prompt.trim()} onClick={() => void start()}>
+          <Btn tone="primary" disabled={busy || !c.create} onClick={() => void start()}>
             {busy ? "Starting…" : "Start session"} <ArrowRight size={16} />
           </Btn>
         </div>
@@ -197,6 +326,16 @@ export function NewSessionScreen() {
           <div className="eyebrow px-5">Effort</div>
           <Choices items={EFFORTS} current={effort} onPick={(e) => (setEffort(e), setPicker(null))} />
         </Sheet>
+      )}
+      {picker === "source" && choice && (
+        <SourceSheet
+          host={choice.host}
+          project={choice.project}
+          base={choice.project.base_branch}
+          onIssue={(i) => (setIssue(i), setPicker(null))}
+          onPr={pickPr}
+          onClose={() => setPicker(null)}
+        />
       )}
       {picker === "base" && choice && (
         <Sheet label="Base" onClose={() => setPicker(null)}>

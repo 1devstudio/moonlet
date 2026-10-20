@@ -3,7 +3,8 @@
 
 import { workspaceSections } from "@desktop/lib/sidebar";
 import { DEFAULT_GIT_SETTINGS } from "@desktop/lib/gitSettings";
-import type { GitSettings, Project, ProjectConfig } from "@desktop/lib/protocol";
+import { type Attachment, attachments, firstMessage, placeholder, sessionName } from "@desktop/lib/composer";
+import type { GitSettings, IssueRef, Project, ProjectConfig } from "@desktop/lib/protocol";
 import type { HostData } from "./app";
 import type { InboxHost } from "./inbox";
 
@@ -49,6 +50,26 @@ export function startPoint(picked: string | null, projectBase: string, from: Git
 /** The footer above Start session. */
 export function setupLine(start: string, host: string, setup: string | null | undefined): string {
   return `Creates a worktree from ${start} on ${host}${setup ? ` and runs setup: ${setup}` : ""}`;
+}
+
+/** What New session shows and sends with a picked GitHub issue or PR (X54).
+ * A PR's attachment is sent while `prSend`; its branch is used either way. */
+export function composer(o: { typed: string; prefix: string; issue: IssueRef | null; pr: IssueRef | null; prContext: string | null; prSend: boolean }): {
+  attachments: Attachment[];
+  placeholder: string;
+  /** The branch the session works on: a new one, or the PR's. */
+  branch: { name: string; existing: boolean };
+  /** `session.create`'s prompt, name and PR; null with nothing to send. */
+  create: { prompt: string; name: string | null; pr: number | null } | null;
+} {
+  const sent = attachments({ task: null, issue: o.issue, pr: o.prSend ? o.pr : null, prContext: o.prContext });
+  const prompt = firstMessage(sent, o.typed);
+  return {
+    attachments: sent,
+    placeholder: placeholder(sent.map((a) => a.id)),
+    branch: o.pr ? { name: o.pr.head_branch ?? "", existing: true } : { name: branchPreview(o.typed, o.prefix), existing: false },
+    create: prompt === null ? null : { prompt, name: sessionName({ task: null, issue: o.issue, pr: o.pr }), pr: o.pr?.number ?? null },
+  };
 }
 
 /** Claude's permission modes (X7), as the design names them. */
