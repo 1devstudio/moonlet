@@ -58,11 +58,10 @@ None in the daemon. The app adds `tauri-plugin-updater` (check, download, instal
 
 - The update archive is verified against the public key compiled into the app before anything is replaced. The private key lives only in the user's `~/.tauri/moonlet.key` and the repository secrets.
 - The endpoint is HTTPS; the updater enforces TLS in release builds.
-- The app is not yet Developer ID signed or notarized (X3). An update is downloaded by the app, not a browser, so macOS does not quarantine it.
+- The app is Developer ID signed and notarized (X3), and so is the app inside the update archive. An update is downloaded by the app, not a browser, so macOS does not quarantine it.
 
 ## Out of scope
 
-- Developer ID signing and notarization (X3).
 - Skipping a version, release channels (beta), release notes in the app.
 - Updating the remote Linux helpers on hosts (R2).
 - Intel or universal builds: releases are Apple Silicon only, like today's bundles.

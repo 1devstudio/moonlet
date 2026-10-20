@@ -37,7 +37,7 @@
 moonlet is in early development (version 0.1). Expect rough edges and breaking changes between releases.
 
 - Builds target **Apple Silicon** Macs running **macOS 14 or later**.
-- Builds are **not yet signed with an Apple Developer ID** or notarized, so the first launch needs a manual approval (see [Installation](#installation)).
+- Release builds are signed with an Apple Developer ID and notarized by Apple.
 - Feature status is tracked per feature in the [spec index](docs/specs/README.md), and open items are listed in the [plan](docs/plan.md).
 
 ## Installation
@@ -46,7 +46,7 @@ moonlet is in early development (version 0.1). Expect rough edges and breaking c
 
 1. Download the latest `.dmg` from [GitHub Releases](https://github.com/1devstudio/moonlet/releases).
 2. Open it and drag **moonlet** to Applications.
-3. Open moonlet. macOS blocks the first launch because the build is unsigned: open **System Settings › Privacy & Security** and click **Open Anyway**.
+3. Open moonlet.
 
 Installed apps update themselves from **Settings › Updates**.
 

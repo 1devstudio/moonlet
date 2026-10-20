@@ -40,7 +40,7 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | R3 | Remote sessions survive disconnects | P0 | 2 | implemented | [R3-remote-sessions-reconnect.md](R3-remote-sessions-reconnect.md) |
 | R4 | Local and remote hosts in one sidebar | P1 | 3 | implemented | [R4-unified-hosts-sidebar.md](R4-unified-hosts-sidebar.md) |
 | S1b | Run the daemon under launchd | P0 | 2 | implemented | [S1b-launchd.md](S1b-launchd.md) |
-| X3 | Signed, notarized app with auto-update | P1 | 3 | partial | [X3-distribution.md](X3-distribution.md) |
+| X3 | Signed, notarized app with auto-update | P1 | 3 | implemented (CI signing untried until the next tag) | [X3-distribution.md](X3-distribution.md) |
 | X4 | Visual design (Superset look and feel) | P1 | 3 | implemented | [X4-visual-design.md](X4-visual-design.md) |
 | X5 | Workspaces, projects and sessions (Conductor model) | P1 | 3 | implemented | [X5-workspaces-projects-sessions.md](X5-workspaces-projects-sessions.md) |
 | T6 | Input editor with suggestions | P1 | 3 | implemented | [T6-input-editor.md](T6-input-editor.md) |
