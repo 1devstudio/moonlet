@@ -224,11 +224,24 @@ fn open_in(target: String, path: String, host: Option<String>) -> Result<(), Rpc
     Ok(())
 }
 
-/// Runs the bundled `moonletd service install|uninstall|status` (S1b).
+/// Starts the daemon at login, or stops doing so: through the bundled login
+/// item (X56), or in builds without one through the bundled
+/// `moonletd service install|uninstall|status` (S1b).
 #[tauri::command]
 async fn daemon_service(action: String) -> Result<Value, RpcError> {
     if !["install", "uninstall", "status"].contains(&action.as_str()) {
         return Err(RpcError::new("invalid_params", "unknown action"));
+    }
+    if login_item::bundled() {
+        let service = tokio::task::spawn_blocking(move || match action.as_str() {
+            "install" => login_item::set(true),
+            "uninstall" => login_item::set(false),
+            _ => Ok(login_item::status()),
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+        return serde_json::to_value(service).map_err(err);
     }
     let moonletd = hosts::sibling_binary("moonletd").map_err(err)?;
     let out = tokio::process::Command::new(&moonletd)
@@ -253,7 +266,15 @@ async fn daemon_service(action: String) -> Result<Value, RpcError> {
             String::from_utf8_lossy(&status.stderr).trim().to_string(),
         ));
     }
-    serde_json::from_slice(&status.stdout).map_err(err)
+    let status: Value = serde_json::from_slice(&status.stdout).map_err(err)?;
+    serde_json::to_value(login_item::Service::from_moonletd(&status).map_err(err)?).map_err(err)
+}
+
+/// Opens System Settings › Login Items, where the user allows the login
+/// item again after switching it off there (X56).
+#[tauri::command]
+fn open_login_items() {
+    login_item::open_settings();
 }
 
 /// Webview warnings and errors, mirrored into the app log for diagnostics.
@@ -451,6 +472,9 @@ pub fn run() {
         .setup(|app| {
             let hosts = HostManager::new(app.handle().clone());
             app.manage(hosts);
+            if login_item::bundled() {
+                std::thread::spawn(login_item::launch);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -468,6 +492,7 @@ pub fn run() {
             open_targets,
             open_in,
             daemon_service,
+            open_login_items,
             log_js,
             play_sound,
             claude_latest_version,
