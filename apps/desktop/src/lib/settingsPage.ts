@@ -125,11 +125,39 @@ export interface StatusLine {
   path?: string;
 }
 
-/** The line under "Start the moonlet daemon at login" (S1b). */
-export function daemonLine(st: { installed: boolean; loaded: boolean; plist: string }, home: string | null): StatusLine {
-  if (!st.installed) return { tone: "muted", text: "Not installed: moonletd runs while moonlet is open" };
+/**
+ * What starts the daemon at login: the app's login item (X56), or in builds
+ * without one the plist that `moonletd service` writes (S1b).
+ */
+export type DaemonService =
+  | { mechanism: "login_item"; state: "enabled" | "requires_approval" | "not_registered" | "not_found" }
+  | { mechanism: "plist"; state: "loaded" | "installed" | "not_installed"; plist: string };
+
+/** Whether "Start the moonlet daemon at login" shows as on. */
+export function daemonOn(st: DaemonService): boolean {
+  return st.mechanism === "login_item" ? st.state === "enabled" : st.state !== "not_installed";
+}
+
+/** Whether turning it off stops the daemon that launchd runs, so the app asks first. */
+export function offStopsDaemon(st: DaemonService): boolean {
+  return st.state === "enabled" || st.state === "loaded";
+}
+
+/** The line under "Start the moonlet daemon at login". */
+export function daemonLine(st: DaemonService, home: string | null): StatusLine {
+  if (st.mechanism === "login_item") {
+    switch (st.state) {
+      case "enabled":
+        return { tone: "done", text: "Starts at login · moonlet in System Settings › Login Items" };
+      case "requires_approval":
+        return { tone: "blocked", text: "Turned off in System Settings › Login Items" };
+      default:
+        return { tone: "muted", text: "Not starting at login: moonletd runs while moonlet is open" };
+    }
+  }
+  if (st.state === "not_installed") return { tone: "muted", text: "Not installed: moonletd runs while moonlet is open" };
   const path = tildePath(st.plist, home);
-  return st.loaded ? { tone: "done", text: "Running under launchd", path } : { tone: "blocked", text: "Installed but not loaded", path };
+  return st.state === "loaded" ? { tone: "done", text: "Running under launchd", path } : { tone: "blocked", text: "Installed but not loaded", path };
 }
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
