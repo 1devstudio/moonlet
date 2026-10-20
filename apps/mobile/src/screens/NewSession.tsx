@@ -9,9 +9,14 @@ import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
 import { type IssueRef, M, type Project, type ProjectConfig, type Session } from "@desktop/lib/protocol";
 import { type Attachment, pickerHint } from "@desktop/lib/composer";
 import { loadHost, showScreen, showTab, useApp } from "../lib/app";
+import { hostsApi } from "@desktop/lib/daemon";
+import { taskId } from "@desktop/lib/tasks";
+import { phoneBoards } from "../lib/board";
+import { askMac, startedAction } from "../lib/taskActions";
+import { taskPreset } from "../lib/taskView";
 import { MODES, branchPrefix, composer, modeHelp, projectChoices, setupLine } from "../lib/newSession";
 import { useBusy } from "../lib/busy";
-import { AgentIcon, Btn, cx } from "../components/ui";
+import { AgentIcon, Btn, Switch, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
 import { Markdown } from "../components/Markdown";
 
@@ -146,6 +151,14 @@ export function NewSessionScreen() {
   const choices = projectChoices(hosts, data, workspace);
   const [prompt, setPrompt] = useState("");
   const [pick, setPick] = useState(0);
+  // Started from a task (X57): its board, the task and the Mac's preset for it.
+  const newFrom = useApp((s) => s.newFrom);
+  const fromBoard = newFrom ? (phoneBoards(hosts, data, null).find((b) => b.key === newFrom.board) ?? null) : null;
+  const fromTask = fromBoard?.snapshot.tasks.find((t) => taskId(t) === newFrom?.task) ?? null;
+  const preset = fromBoard && fromTask ? taskPreset(fromBoard, fromTask) : null;
+  const [taskBranch, setTaskBranch] = useState<string | null>(null);
+  const [assign, setAssign] = useState(false);
+  const [branchError, setBranchError] = useState<string | null>(null);
   const [agent, setAgent] = useState("claude");
   const [model, setModel] = useState("opus");
   const [effort, setEffort] = useState("high");
@@ -162,6 +175,27 @@ export function NewSessionScreen() {
   const [prLatest] = useState(latestOnly);
   const { busy, error, run } = useBusy();
   const choice = choices[Math.min(pick, choices.length - 1)];
+  // The task's project on its host is picked once, as the Mac's composer does.
+  const presetKey = preset ? `${fromBoard!.key} ${preset.key}` : null;
+  useEffect(() => {
+    if (!preset || !fromBoard) return;
+    const i = choices.findIndex((c) => c.host === fromBoard.host && preset.projects.includes(c.project.id));
+    if (i >= 0) setPick(i);
+    setAssign(!!preset.assign?.checked);
+    setTaskBranch(null);
+    setBranchError(null);
+    const host = fromBoard.host;
+    // A branch worked out for a task picked before this one is dropped.
+    let live = true;
+    void (async () => {
+      const user = preset.template?.includes("{user}") ? await rpc<string>(host, M.ghWhoami).catch(() => undefined) : undefined;
+      const name = await hostsApi.taskBranch({ kind: preset.kind, key: preset.key, title: preset.title, number: preset.number, template: preset.template, maxLen: preset.maxLen, user, issueType: preset.issueType });
+      if (live) setTaskBranch(name);
+    })().catch((e) => live && setBranchError(`Couldn't name the task's branch: ${e instanceof Error ? e.message : String(e)}`));
+    return () => {
+      live = false;
+    };
+  }, [presetKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [latest] = useState(latestOnly);
 
   useEffect(() => {
@@ -183,7 +217,20 @@ export function NewSessionScreen() {
 
   // The host's Git settings (X55) name the branch and say where it starts.
   const git = choice ? (data[choice.host]?.git ?? null) : null;
-  const c = composer({ typed: prompt, prefix: branchPrefix(config, git), issue, pr, prContext, prSend, base, projectBase: choice?.project.base_branch ?? "main", startFrom: git?.start_from ?? "local" });
+  const c = composer({
+    typed: prompt,
+    prefix: branchPrefix(config, git),
+    issue,
+    pr,
+    prContext,
+    prSend,
+    base,
+    projectBase: choice?.project.base_branch ?? "main",
+    startFrom: git?.start_from ?? "local",
+    task: preset,
+    taskBranch,
+    worktree: newFrom?.worktree ?? null,
+  });
   const pickPr = (p: IssueRef) => {
     setPr(p);
     setPrSend(true);
@@ -208,6 +255,9 @@ export function NewSessionScreen() {
         name: create.name,
         pr: create.pr,
         from: create.from,
+        task: create.task ?? null,
+        ...(create.branch && { branch: create.branch }),
+        worktree: create.worktree ?? null,
         agent,
         model: agent === "claude" ? model : null,
         effort: agent === "claude" ? effort : null,
@@ -217,6 +267,9 @@ export function NewSessionScreen() {
         rows: 32,
       });
       await loadHost(choice.host).catch(() => {});
+      // The Mac records it and runs Keep in step's "session starts" (X46).
+      if (fromBoard && fromTask) void askMac(fromBoard, startedAction(fromTask, s.name, assign && !!preset?.assign)).catch(() => {});
+      useApp.setState({ newFrom: null });
       setPrompt("");
       setIssue(null);
       setPr(null);
@@ -231,7 +284,7 @@ export function NewSessionScreen() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center px-4 pb-2" style={{ paddingTop: "calc(var(--safe-top) + 10px)" }}>
-        <button type="button" onClick={() => showTab("inbox")} className="text-[15px] text-accent-2">
+        <button type="button" onClick={() => showTab("sessions")} className="text-[15px] text-accent-2">
           Cancel
         </button>
         <span className="flex-1 text-center text-[16px] font-semibold">New session</span>
@@ -295,7 +348,12 @@ export function NewSessionScreen() {
       {choice && (
         <div className="flex flex-col gap-2.5 border-t border-border px-4 pt-3 pb-3">
           <span className="text-[12.5px] text-muted">{setupLine(c.start, choice.hostLabel, config?.setup)}</span>
-          {error && <span className="text-[12.5px] text-error">{error}</span>}
+          {(error || branchError) && <span className="text-[12.5px] text-error">{error ?? branchError}</span>}
+          {preset?.assign && (
+            <div className="overflow-hidden rounded-[12px] border border-border bg-panel">
+              <Switch on={assign} onChange={setAssign} label={preset.assign.label} />
+            </div>
+          )}
           <Btn tone="primary" disabled={busy || !c.create} onClick={() => void start()}>
             {busy ? "Starting…" : "Start session"} <ArrowRight size={16} />
           </Btn>

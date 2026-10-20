@@ -664,6 +664,10 @@ export const M = {
   gitPullBase: "git.pull_base",
   gitOriginUrl: "git.origin_url",
   gitSettings: "git.settings",
+  tasksSnapshot: "tasks.snapshot",
+  tasksSetSnapshot: "tasks.set_snapshot",
+  tasksRequest: "tasks.request",
+  tasksAnswer: "tasks.answer",
   gitSetSettings: "git.set_settings",
   gitUnpushed: "git.unpushed",
   gitPush: "git.push",
@@ -753,6 +757,10 @@ export const EV = {
   sectionsChanged: "sections.changed",
   profilesChanged: "profiles.changed",
   gitSettingsChanged: "git.settings_changed",
+  /** A workspace's board snapshot changed (X57). */
+  tasksChanged: "tasks.changed",
+  /** A phone asks the app to change tasks (X57). */
+  tasksRequest: "tasks.request",
   claudeUpdateOutput: "claude.update_output",
   claudeUpdateDone: "claude.update_done",
   fsChanged: "fs.changed",

@@ -379,9 +379,6 @@ fn task_branch_name(
     issue_type: Option<String>,
 ) -> String {
     use moonlet_trackers::branch;
-    let template = template
-        .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| branch::default_template(kind).into());
     let vars = branch::BranchVars {
         key: &key,
         title: &title,
@@ -389,7 +386,7 @@ fn task_branch_name(
         user: user.as_deref().unwrap_or(""),
         issue_type: issue_type.as_deref().unwrap_or(""),
     };
-    branch::branch_name(&template, &vars, max_len.unwrap_or(branch::DEFAULT_MAX_LEN))
+    branch::task_branch(kind, template.as_deref(), &vars, max_len)
 }
 
 fn trackers_path() -> std::path::PathBuf {

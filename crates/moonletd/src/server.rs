@@ -148,6 +148,7 @@ where
         phone,
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
+    daemon.on_connect(&conn);
 
     // Fan daemon events out to this client.
     let mut events = daemon.terminals.subscribe_events();

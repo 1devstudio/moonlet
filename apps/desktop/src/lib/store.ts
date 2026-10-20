@@ -42,6 +42,7 @@ import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
 import type { TaskStart } from "./tasks";
+import type { TaskRequestEvent } from "./tasksRelay";
 import { spawnedNotices } from "./spawned";
 import { currentWorkspace, isShown, sessionToRestore, switcherRows, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
@@ -1046,6 +1047,10 @@ function handleEvent(e: DaemonEvent) {
     }
     case EV.terminalReadRequest:
       void onReadRequest(host, data as ReadRequest);
+      break;
+    case EV.tasksRequest:
+      // A phone asks to move or create a task (X57).
+      void import("./tasksStore").then((t) => t.answerTaskRequest(host, data as TaskRequestEvent));
       break;
     case EV.terminalReadDone:
       onReadDone(host, (data as { request_id: number }).request_id);

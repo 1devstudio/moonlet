@@ -2,13 +2,13 @@
 // project, with chips for what needs the user, what works and what waits.
 
 import { useState } from "react";
-import { Bot, GitBranch, GitPullRequest, Laptop, Search, Server, X } from "lucide-react";
+import { Bot, GitBranch, GitPullRequest, Laptop, Plus, Search, Server, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
-import { showScreen, useApp } from "../lib/app";
+import { showScreen, showTab, useApp } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
-import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, taskChip } from "../lib/sessionList";
+import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, sessionTask } from "../lib/sessionList";
 import { useBusy } from "../lib/busy";
 import { STATE_COLOR } from "../lib/palette";
 import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
@@ -39,7 +39,9 @@ function Row({ r }: { r: SessionRow }) {
   const [ref, seen] = useSeen();
   const [stat] = useGitStatus(r.host, seen ? r.session : undefined);
   const [pr] = usePr(r.host, seen ? r.session : undefined);
-  const task = taskChip(r.session);
+  const d = useApp((s) => s.data[r.host]);
+  // The task the session works on: its link, or the one its branch or PR names (X46, X57).
+  const task = d ? sessionTask(d, r.session, pr) : null;
   return (
     <button ref={ref} type="button" onClick={() => showScreen(rowTarget(r))} className={cx("flex items-start gap-2.5 px-4 py-2.5 text-left", r.state === "blocked" && "bg-[rgba(242,201,76,0.035)]")}>
       <span className="pt-[3px]">
@@ -53,9 +55,13 @@ function Row({ r }: { r: SessionRow }) {
           </span>
         </span>
         <span className="flex items-center gap-2 text-[12px] text-faint">
-          {task && <span className="flex-none font-mono text-muted">{task.label}</span>}
-          <span className="truncate font-mono">{r.session.branch}</span>
-          {stat && <DiffStat add={stat.additions} del={stat.deletions} />}
+          {task && <span className="flex-none font-mono text-muted">{task.key}</span>}
+          <span className="min-w-0 truncate font-mono">{r.session.branch}</span>
+          {stat && (
+            <span className="flex-none whitespace-nowrap">
+              <DiffStat add={stat.additions} del={stat.deletions} />
+            </span>
+          )}
           {r.agents && (
             <span className="flex flex-none items-center gap-1">
               <Bot size={12} />
@@ -63,7 +69,7 @@ function Row({ r }: { r: SessionRow }) {
             </span>
           )}
           {pr && (
-            <span className={cx("flex items-center gap-1", prTone(pr.state.toLowerCase()))}>
+            <span className={cx("flex flex-none items-center gap-1 whitespace-nowrap", prTone(pr.state.toLowerCase()))}>
               <GitPullRequest size={12} />#{pr.number}
               {pr.state.toLowerCase() === "merged" ? " merged" : ""}
             </span>
@@ -111,10 +117,10 @@ export function SessionsScreen() {
       <Title
         right={
           <>
-            <button type="button" aria-label="Search sessions" onClick={() => setQuery(query === null ? "" : null)} className="flex h-9 w-9 items-center justify-center text-muted">
-              {query === null ? <Search size={20} /> : <X size={20} />}
-            </button>
             <WorkspacePill />
+            <button type="button" aria-label="New session" onClick={() => showTab("new")} className="flex h-9 w-9 items-center justify-center rounded-full bg-raised text-fg">
+              <Plus size={19} />
+            </button>
           </>
         }
       >
@@ -126,6 +132,15 @@ export function SessionsScreen() {
         </div>
       )}
       <div className="flex gap-2 overflow-x-auto px-4 pt-3 pb-1">
+        {/* Search sits with the filters: the title row holds the workspace and New session. */}
+        <button
+          type="button"
+          aria-label="Search sessions"
+          onClick={() => setQuery(query === null ? "" : null)}
+          className={cx("flex h-8 w-8 flex-none items-center justify-center rounded-full border", query === null ? "border-border-strong bg-panel text-muted" : "border-fg bg-fg text-bg")}
+        >
+          {query === null ? <Search size={15} /> : <X size={15} />}
+        </button>
         {chips(all).map((c) => (
           <button
             key={c.id}

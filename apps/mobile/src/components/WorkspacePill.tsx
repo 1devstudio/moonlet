@@ -18,7 +18,7 @@ export function WorkspacePill() {
   const current = choices.find((c) => c.name === shown);
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className="flex h-9 items-center gap-[7px] rounded-[18px] border border-border-strong bg-panel px-3 text-[13.5px]">
+      <button type="button" onClick={() => setOpen(true)} className="flex h-9 min-w-0 items-center gap-[7px] rounded-[18px] border border-border-strong bg-panel px-3 text-[13.5px] whitespace-nowrap">
         <span className="h-2 w-2 rounded-full" style={{ background: current ? colorHex(current.color) : "var(--color-muted)" }} />
         {current?.name ?? "All workspaces"}
         <ChevronDown size={14} className="text-muted" />

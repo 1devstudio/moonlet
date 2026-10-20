@@ -62,7 +62,7 @@ describe("modes", () => {
       ["Edits", "acceptEdits"],
       ["Plan", "plan"],
     ]);
-    expect(modeHelp("manual")).toBe("Claude asks before every edit and command. Approve from the Inbox.");
+    expect(modeHelp("manual")).toBe("Claude asks before every edit and command. Approve from Needs you.");
     expect(modeHelp("plan")).toBe("Claude explores and proposes a plan before touching anything.");
   });
 });
@@ -103,7 +103,7 @@ describe("composer (X54)", () => {
   // Shaped like `gh.issues` and `gh.prs` replies.
   const issue = { number: 57, title: "Search ignores accents", body: "Searching *creme* misses **Crème brûlée**.", url: "https://github.com/acme/storefront/issues/57" };
   const pr = { number: 214, title: "Product list search", body: "Adds search.", url: "https://github.com/acme/storefront/pull/214", head_branch: "mz/product-search" };
-  const none = { typed: "", prefix: "moonlet/", issue: null, pr: null, prContext: null, prSend: true, base: null, projectBase: "main", startFrom: "local" as const };
+  const none = { typed: "", prefix: "moonlet/", issue: null, pr: null, prContext: null, prSend: true, base: null, projectBase: "main", startFrom: "local" as const, task: null, taskBranch: null, worktree: null };
 
   it("starts from what the user typed alone, on a new branch named after it", () => {
     const c = composer({ ...none, typed: "Fix the Login bug!" });
@@ -154,6 +154,29 @@ describe("composer (X54)", () => {
     const onPr = composer({ ...none, pr, base: "release/2.1" });
     expect(onPr.create?.from).toBeNull();
     expect(onPr.start).toBe("mz/product-search");
+  });
+
+  it("starts from a task: its description sent first, named after it, on its tracker's branch, linked to it (X57)", () => {
+    const task = { ref: { connection: "linear:acme", key: "MOON-151", url: "https://linear.app/acme/issue/MOON-151" }, key: "MOON-151", title: "Drag sessions between sections", description: "Let sessions move between sections." };
+    const c = composer({ ...none, task, taskBranch: "moon-151-drag-sessions-between-sections" });
+    expect(c.attachments.map((a) => a.lead)).toEqual(["MOON-151 description sent with your message · "]);
+    expect(c.branch).toEqual({ name: "moon-151-drag-sessions-between-sections", existing: false });
+    expect(c.create).toEqual({
+      prompt: "MOON-151 · Drag sessions between sections\nLet sessions move between sections.",
+      name: "Drag sessions between sections",
+      pr: null,
+      from: null,
+      task: { connection: "linear:acme", key: "MOON-151", url: "https://linear.app/acme/issue/MOON-151" },
+      branch: "moon-151-drag-sessions-between-sections",
+    });
+    // Started on a worktree without a session: its own branch, adopted.
+    const adopted = composer({ ...none, task, taskBranch: null, worktree: { path: "/wt/ssh", branch: "moon-151-ssh-test" } });
+    expect(adopted.branch).toEqual({ name: "moon-151-ssh-test", existing: true });
+    expect(adopted.create).toMatchObject({ worktree: "/wt/ssh", task: task.ref });
+    expect(adopted.create?.branch).toBeUndefined();
+    // Until the branch is worked out, it shows quietly and Start waits.
+    const waiting = composer({ ...none, task, taskBranch: null });
+    expect([waiting.branch.name, waiting.create]).toEqual(["…", null]);
   });
 
   it("still starts on the PR's branch once its attachment is removed, sending only what was typed", () => {

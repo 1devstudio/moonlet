@@ -191,7 +191,7 @@ export function InboxScreen() {
   return (
     <div className="scroll h-full">
       <Title icon={<Moon size={28} />} right={<WorkspacePill />} below={<div className="text-[13px] text-muted">{summaryLine(inbox)}</div>}>
-        Inbox
+        Needs you
       </Title>
       <div className="flex flex-col gap-2.5 px-4 pt-[18px] pb-6">
         {inbox.needs.length > 0 ? (

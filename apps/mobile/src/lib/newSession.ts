@@ -4,7 +4,7 @@
 import { workspaceSections } from "@desktop/lib/sidebar";
 import { DEFAULT_GIT_SETTINGS } from "@desktop/lib/gitSettings";
 import { type Attachment, attachments, firstMessage, placeholder, sessionName } from "@desktop/lib/composer";
-import type { GitSettings, IssueRef, Project, ProjectConfig } from "@desktop/lib/protocol";
+import type { GitSettings, IssueRef, Project, ProjectConfig, TaskRef } from "@desktop/lib/protocol";
 import type { HostData } from "./app";
 import type { InboxHost } from "./inbox";
 
@@ -66,6 +66,11 @@ export function composer(o: {
   base: string | null;
   projectBase: string;
   startFrom: GitSettings["start_from"];
+  /** The task New session starts from (X57), and its branch once worked out. */
+  task: { ref: TaskRef; key: string; title: string; description: string } | null;
+  taskBranch: string | null;
+  /** A worktree without a session to start in (X46, X57). */
+  worktree: { path: string; branch: string } | null;
 }): {
   attachments: Attachment[];
   placeholder: string;
@@ -73,27 +78,44 @@ export function composer(o: {
   branch: { name: string; existing: boolean };
   /** Where the worktree starts, for the footer. */
   start: string;
-  /** `session.create`'s prompt, name, PR and start; null with nothing to send. */
-  create: { prompt: string; name: string | null; pr: number | null; from: string | null } | null;
+  /** `session.create`'s prompt, name, PR and start, and a task's link and branch; null with nothing to send. */
+  create: { prompt: string; name: string | null; pr: number | null; from: string | null; task?: TaskRef; branch?: string; worktree?: string } | null;
 } {
-  const sent = attachments({ task: null, issue: o.issue, pr: o.prSend ? o.pr : null, prContext: o.prContext });
+  const sent = attachments({ task: o.task, issue: o.issue, pr: o.prSend ? o.pr : null, prContext: o.prContext });
   const prompt = firstMessage(sent, o.typed);
   // The daemon names the session, and so its branch, after a given name whole.
-  const name = sessionName({ task: null, issue: o.issue, pr: o.pr });
+  const name = sessionName({ task: o.task, issue: o.issue, pr: o.pr });
   return {
     attachments: sent,
     placeholder: placeholder(sent.map((a) => a.id)),
-    branch: o.pr ? { name: o.pr.head_branch ?? "", existing: true } : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
+    branch: o.pr
+      ? { name: o.pr.head_branch ?? "", existing: true }
+      : o.worktree
+        ? { name: o.worktree.branch, existing: true }
+        : o.task
+        ? { name: o.taskBranch ?? "…", existing: false }
+        : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
     start: o.pr ? (o.pr.head_branch ?? `PR #${o.pr.number}`) : startPoint(o.base, o.projectBase, o.startFrom),
     // The daemon starts from the project's base, or origin's, without a `from`.
-    create: prompt === null ? null : { prompt, name, pr: o.pr?.number ?? null, from: !o.pr && o.base && o.base !== o.projectBase ? o.base : null },
+    create:
+      prompt === null || (o.task && !o.taskBranch && !o.worktree)
+        ? null
+        : {
+            prompt,
+            name,
+            pr: o.pr?.number ?? null,
+            from: !o.pr && !o.worktree && o.base && o.base !== o.projectBase ? o.base : null,
+            ...(o.task && { task: o.task.ref }),
+            ...(o.task && !o.pr && !o.worktree && { branch: o.taskBranch! }),
+            ...(o.worktree && { worktree: o.worktree.path }),
+          },
   };
 }
 
 /** Claude's permission modes (X7), as the design names them. */
 export const MODES = [
   { id: "auto", label: "Auto", help: "Claude decides which tools are safe to run without asking." },
-  { id: "manual", label: "Manual", help: "Claude asks before every edit and command. Approve from the Inbox." },
+  { id: "manual", label: "Manual", help: "Claude asks before every edit and command. Approve from Needs you." },
   { id: "acceptEdits", label: "Edits", help: "File edits go through; commands still ask first." },
   { id: "plan", label: "Plan", help: "Claude explores and proposes a plan before touching anything." },
 ] as const;
