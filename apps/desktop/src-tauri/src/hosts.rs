@@ -406,34 +406,54 @@ impl AsyncRead for ChildReader {
     }
 }
 
-/// What the daemon says, whatever is wrong, to a code it does not accept (X39).
-const NOT_PAIRED: &str = "this phone is not paired with this Mac";
+/// A host name the app may pass to `ssh` or use as a host's id: not empty,
+/// no leading `-` (it would read as an option), no spaces or control
+/// characters. SSH aliases (R1) and tailnet names (X57) share it.
+pub fn valid_host_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.chars().any(|c| c.is_whitespace() || c.is_control())
+}
 
 /// A tailnet host's id and label: the name typed, without a port.
 pub fn tailnet_host_id(typed: &str) -> Result<String, String> {
     let (name, _) = moonlet_core::tailnet::name_and_port(typed.trim());
-    if name.is_empty()
-        || name.starts_with('-')
-        || name.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
+    if !valid_host_name(name) {
         return Err("Enter the host's name on your tailnet, such as studio-mini.".into());
     }
     Ok(name.to_string())
 }
 
 /// What the Add host dialog says when pairing fails.
-pub fn pair_error_text(id: &str, error: &str) -> String {
-    if error == NOT_PAIRED {
+pub fn pair_error_text(id: &str, error: &anyhow::Error) -> String {
+    if error.downcast_ref::<moonlet_link::Refused>().is_some() {
         format!("The code was not accepted. Start pairing again on {id}.")
     } else {
-        format!("Cannot pair with {id}: {error}")
+        format!("Cannot pair with {id}: {error:#}")
+    }
+}
+
+/// This Mac's name, as Sharing settings show it (`scutil --get ComputerName`),
+/// or else its host name without `.local`.
+fn device_name_from(computer_name: Option<&str>, hostname: &str) -> String {
+    match computer_name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => n.to_string(),
+        None => hostname
+            .strip_suffix(".local")
+            .unwrap_or(hostname)
+            .to_string(),
     }
 }
 
 /// This Mac's name as a host lists it among its paired devices.
 fn device_name() -> String {
-    let h = moonlet_core::paths::hostname();
-    h.strip_suffix(".local").unwrap_or(&h).to_string()
+    let computer_name = std::process::Command::new("scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    device_name_from(computer_name.as_deref(), &moonlet_core::paths::hostname())
 }
 
 /// Pairs with a host on the tailnet (X57) and connects to it. `addrs` come
@@ -471,7 +491,7 @@ pub async fn pair_tailnet(
         moonlet_proto::methods::DeviceKind::Desktop,
     )
     .await
-    .map_err(|e| failed(pair_error_text(&id, &format!("{e:#}"))))?;
+    .map_err(|e| failed(pair_error_text(&id, &e)))?;
     Ok(mgr.add_tailnet(TailnetHost {
         id,
         device_id: paired.device_id,
@@ -505,16 +525,48 @@ mod tests {
 
     #[test]
     fn a_refused_code_says_to_start_again_on_the_host() {
+        let refused = anyhow::Error::new(moonlet_link::Refused(
+            "this phone is not paired with this Mac".into(),
+        ));
         assert_eq!(
-            pair_error_text("studio-mini", "this phone is not paired with this Mac"),
+            pair_error_text("studio-mini", &refused),
             "The code was not accepted. Start pairing again on studio-mini."
         );
+        let unreachable = anyhow::anyhow!("100.101.102.103:47428: Connection refused")
+            .context("cannot reach the host over Tailscale");
         assert_eq!(
-            pair_error_text(
-                "studio-mini",
-                "cannot reach the host over Tailscale: 100.101.102.103:47428: Connection refused"
-            ),
+            pair_error_text("studio-mini", &unreachable),
             "Cannot pair with studio-mini: cannot reach the host over Tailscale: 100.101.102.103:47428: Connection refused"
         );
+    }
+
+    #[test]
+    fn an_ssh_alias_and_a_tailnet_name_follow_one_rule() {
+        for ok in ["devbox", "studio-mini", "me@devbox"] {
+            assert!(valid_host_name(ok), "{ok:?}");
+        }
+        for bad in [
+            "",
+            "-oProxyCommand=x",
+            "two words",
+            "tab\there",
+            "esc\u{1b}[31m",
+        ] {
+            assert!(!valid_host_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn this_mac_is_named_as_in_sharing_settings() {
+        // `scutil --get ComputerName` output, with its newline.
+        assert_eq!(
+            device_name_from(Some("Alex's MacBook Pro\n"), "Alexs-MacBook-Pro.local"),
+            "Alex's MacBook Pro"
+        );
+        assert_eq!(
+            device_name_from(None, "Alexs-MacBook-Pro.local"),
+            "Alexs-MacBook-Pro"
+        );
+        assert_eq!(device_name_from(Some("  "), "build-box"), "build-box");
     }
 }
