@@ -2,7 +2,9 @@
 // the projects to start in, and the modes to start in.
 
 import { workspaceSections } from "@desktop/lib/sidebar";
-import type { Project } from "@desktop/lib/protocol";
+import { DEFAULT_GIT_SETTINGS } from "@desktop/lib/gitSettings";
+import { type Attachment, attachments, firstMessage, placeholder, sessionName } from "@desktop/lib/composer";
+import type { GitSettings, IssueRef, Project, ProjectConfig } from "@desktop/lib/protocol";
 import type { HostData } from "./app";
 import type { InboxHost } from "./inbox";
 
@@ -14,8 +16,9 @@ export function nameFromPrompt(prompt: string): string {
   const chars = [...line];
   if (chars.length <= 48) return line;
   let out = chars.slice(0, 48).join("");
+  // The daemon compares the space's byte offset in UTF-8.
   const space = out.lastIndexOf(" ");
-  if (space > 24) out = out.slice(0, space);
+  if (space >= 0 && new TextEncoder().encode(out.slice(0, space)).length > 24) out = out.slice(0, space);
   return `${out}…`;
 }
 
@@ -30,12 +33,61 @@ function slug(name: string): string {
   return out || "task";
 }
 
+/** What new branches start with: the project's prefix, else the host's
+ * (X55), as the daemon decides; an empty prefix is kept. */
+export const branchPrefix = (config: Pick<ProjectConfig, "branch_prefix"> | null, git: Pick<GitSettings, "branch_prefix"> | null) =>
+  config?.branch_prefix ?? git?.branch_prefix ?? DEFAULT_GIT_SETTINGS.branch_prefix;
+
 /** The branch the daemon creates for `prompt` (before making it unique). */
-export const branchPreview = (prompt: string) => `moonlet/${slug(nameFromPrompt(prompt))}`;
+export const branchPreview = (prompt: string, prefix: string) => `${prefix}${slug(nameFromPrompt(prompt))}`;
+
+/** Where the worktree starts: the picked base, or the project's base on
+ * origin when the host starts from origin (X55) and no other base was picked. */
+export function startPoint(picked: string | null, projectBase: string, from: GitSettings["start_from"]): string {
+  const base = picked ?? projectBase;
+  return base === projectBase && from === "origin" ? `origin/${base}` : base;
+}
 
 /** The footer above Start session. */
-export function setupLine(base: string, host: string, setup: string | null | undefined): string {
-  return `Creates a worktree from ${base} on ${host}${setup ? ` and runs setup: ${setup}` : ""}`;
+export function setupLine(start: string, host: string, setup: string | null | undefined): string {
+  return `Creates a worktree from ${start} on ${host}${setup ? ` and runs setup: ${setup}` : ""}`;
+}
+
+/** What New session shows and sends with a picked GitHub issue or PR (X54).
+ * A PR's attachment is sent while `prSend`; its branch is used either way. */
+export function composer(o: {
+  typed: string;
+  prefix: string;
+  issue: IssueRef | null;
+  pr: IssueRef | null;
+  prContext: string | null;
+  prSend: boolean;
+  /** The Base row's pick; null for the project's base. */
+  base: string | null;
+  projectBase: string;
+  startFrom: GitSettings["start_from"];
+}): {
+  attachments: Attachment[];
+  placeholder: string;
+  /** The branch the session works on: a new one, or the PR's. */
+  branch: { name: string; existing: boolean };
+  /** Where the worktree starts, for the footer. */
+  start: string;
+  /** `session.create`'s prompt, name, PR and start; null with nothing to send. */
+  create: { prompt: string; name: string | null; pr: number | null; from: string | null } | null;
+} {
+  const sent = attachments({ task: null, issue: o.issue, pr: o.prSend ? o.pr : null, prContext: o.prContext });
+  const prompt = firstMessage(sent, o.typed);
+  // The daemon names the session, and so its branch, after a given name whole.
+  const name = sessionName({ task: null, issue: o.issue, pr: o.pr });
+  return {
+    attachments: sent,
+    placeholder: placeholder(sent.map((a) => a.id)),
+    branch: o.pr ? { name: o.pr.head_branch ?? "", existing: true } : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
+    start: o.pr ? (o.pr.head_branch ?? `PR #${o.pr.number}`) : startPoint(o.base, o.projectBase, o.startFrom),
+    // The daemon starts from the project's base, or origin's, without a `from`.
+    create: prompt === null ? null : { prompt, name, pr: o.pr?.number ?? null, from: !o.pr && o.base && o.base !== o.projectBase ? o.base : null },
+  };
 }
 
 /** Claude's permission modes (X7), as the design names them. */

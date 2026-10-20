@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { chatFooter, sessionChat, sessionLine, shellTerminals } from "./chatView";
+import { chatBlocks } from "@desktop/lib/chat";
+import type { ChatItem } from "@desktop/lib/protocol";
+import { asideStep, blockKey, chatFooter, queuedActions, sessionChat, sessionLine, shellTerminals } from "./chatView";
 import { NOW, chat, data, project, session, terminal } from "./fixtures";
 
 describe("sessionChat", () => {
@@ -48,5 +50,46 @@ describe("chatFooter", () => {
   it("leaves out what the agent has not said yet", () => {
     expect(chatFooter(chat([]))).toEqual({ context: null, cost: null, model: "Default model", mode: "Manual" });
     expect(chatFooter({ ...chat([]), model: "claude-sonnet-5-5", mode: "acceptEdits" })).toEqual({ context: null, cost: null, model: "claude-sonnet-5-5", mode: "Accept edits" });
+  });
+});
+
+describe("blockKey", () => {
+  it("keys a run of tool calls and a run of subagent launches by their first call, an item by its id", () => {
+    const tool = (id: string, name: string): ChatItem => ({ id, kind: "tool", text: "", ts: NOW, tool: { name, summary: "", input: {}, status: "running" } });
+    const items: ChatItem[] = [
+      { id: "u1", kind: "user", text: "Look around", ts: NOW },
+      tool("toolu_read", "Read"),
+      tool("toolu_agent1", "Agent"),
+      tool("toolu_agent2", "Agent"),
+    ];
+    expect(chatBlocks(items, "collapsed").map(blockKey)).toEqual(["u1", "toolu_read", "toolu_agent1"]);
+  });
+});
+
+describe("queuedActions (X49)", () => {
+  const q = (id: string, text: string, sending = false) => ({ id, text, sending });
+
+  it("offers Send now for every queued message, and Ask aside on the last one", () => {
+    expect(queuedActions([q("m1", "also run the linter")])).toEqual({ sendNow: "Send now", params: { message: "m1" }, aside: q("m1", "also run the linter") });
+    expect(queuedActions([q("m1", "also run the linter"), q("m2", "why is search slow?")])).toEqual({ sendNow: "Send 2 now", params: {}, aside: q("m2", "why is search slow?") });
+  });
+
+  it("offers nothing after Send now, or with nothing queued", () => {
+    expect(queuedActions([q("m1", "also run the linter", true)])).toBeNull();
+    expect(queuedActions([])).toBeNull();
+  });
+});
+
+describe("asideStep (X49)", () => {
+  const asked = { id: "m2", text: "why is search slow?", sending: false };
+  const st = (queued: { id: string; text: string; sending: boolean }[], items: { id: string }[] = []) => ({ queued, items: items as never[] });
+
+  it("waits while Claude still has the message, then asks it aside once Claude gave it back", () => {
+    expect(asideStep(st([asked]), asked)).toEqual({ kind: "wait" });
+    expect(asideStep(st([]), asked)).toEqual({ kind: "ask", question: "why is search slow?" });
+  });
+
+  it("says so when Claude read the message first", () => {
+    expect(asideStep(st([], [{ id: "m2" }]), asked)).toEqual({ kind: "note", text: "Claude read the message before it could be asked aside" });
   });
 });

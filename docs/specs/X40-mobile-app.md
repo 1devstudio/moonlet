@@ -64,7 +64,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### New session
 
-- [x] New session has the prompt box "What do you want to work on?" (dictation comes from the keyboard's microphone), the branch the daemon will create (`moonlet/<slug of the name>`, the daemon's own rule, updated as the prompt changes), and rows for **Project** (the workspace's projects on connected hosts), **Host** (the project's host: tapping it opens the same project picker, since a project lives on one host), **Agent** (Claude Code, Codex), **Model** with effort (Claude only) and **Base** (the project's branches), each opening a picker. (`lib/newSession.test.ts`, with names captured from a real daemon)
+- [x] New session has the prompt box "What do you want to work on?" (dictation comes from the keyboard's microphone), the branch the daemon will create (`<prefix><slug of the name>`, the daemon's own rule, updated as the prompt changes; the prefix is the host's, see Git settings), and rows for **Project** (the workspace's projects on connected hosts), **Host** (the project's host: tapping it opens the same project picker, since a project lives on one host), **Agent** (Claude Code, Codex), **Model** with effort (Claude only) and **Base** (the project's branches), each opening a picker. (`lib/newSession.test.ts`, with names captured from a real daemon)
 - [x] **Mode** has Auto, Manual, Edits and Plan, with one help line each (from the design). Manual is the default. It shows for Claude Code only: Codex has no such modes.
 - [x] The footer says "Creates a worktree from <base> on <host> and runs setup: <setup command>" (no setup part without a setup command). **Start session** calls `session.create` in the chosen workspace and opens the new session's chat. (`lib/newSession.test.ts` for the branch name and the footer)
 
@@ -107,6 +107,49 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 - [x] **Pair a Mac** opens the pairing screen for another Mac.
 - [x] "Notify me when" has switches for an agent needs input, finishes, fails, and PR checks fail (off by default); and "Require Face ID to allow" (on by default). The switches are kept on the phone; they take effect once push notifications exist (out of scope here).
 
+### Subagents (X42)
+
+Added 2026-10-20 to keep the phone in step with the desktop.
+
+- [x] A run of Agent calls in the chat shows as one card, "Launched <n> agents", with a row per agent: its state glyph, description, state word and clock, live as the agents work. Before this, a chat that launched a subagent did not render on the phone. (`blockKey` in `lib/chatView.test.ts`; the rows are the desktop's `launchedRows`, tested in `subagents.test.ts`)
+- [x] Tapping an agent opens a sheet with its state, kind and model, what it does now or why it failed, its prompt and its report, and **Stop agent** while it runs or waits (`chat.stop_agent`).
+- [x] A session row shows "<n> agents" while its chats run subagents. (`lib/sessionList.test.ts`)
+- [x] A permission a subagent asks for says which one, "Agent <description>", on its Inbox card and on the ask docked in the chat. (`lib/inbox.test.ts`)
+
+### Git settings (X55)
+
+Added 2026-10-20. Each host's daemon keeps its Git settings; the phone loads them with the host (`git.settings`) and follows `git.settings_changed`. A daemon too old for them gets the defaults. (`lib/events.test.ts`)
+
+- [x] New session's branch preview starts with the project's branch prefix, else the host's (`moonlet/` by default; empty for none), as the daemon names it. (`branchPrefix`, `branchPreview` in `lib/newSession.test.ts`)
+- [x] With the host set to start from origin, the footer says "Creates a worktree from origin/<base>" while the project's base is kept; another base is used as picked. (`startPoint` in `lib/newSession.test.ts`)
+- [x] **Archive session** opens a sheet with the desktop's archive prompt: whether the worktree folder is removed or stays, and whether the branch is kept or deleted (here, and on origin), from the host's settings and whether the session's PR merged; "Also delete the branch" under Ask each time. Archiving sends `session.archive` with those flags; a branch origin refused to delete is reported. (`lib/archive.test.ts`)
+- [x] With "Warn about unpushed work" on, the sheet first asks the host for work only there (`git.unpushed`): uncommitted files (the first 8) and commits not on origin, with **Archive anyway** and **Push, then archive** (`git.push` first), which needs the files committed first. If the host cannot say, the sheet says so ("Couldn't check for work only on <host>…") and offers only **Archive anyway**. A failed `git.settings` reply keeps the settings already loaded; only a daemon without the method gets the defaults. (`lib/archive.test.ts`, `gitAfterError` in `lib/events.test.ts`)
+- [x] The Create PR form's **Draft** starts as the host's "Draft pull requests" says. (`startsDraft` in `lib/checks.test.ts`)
+- The phone stages files one by one with their checkboxes, so "Stage all changes first" has no place there; fetching and fast-forwarding base branches is the desktop's.
+
+### Queued messages (X49)
+
+Added 2026-10-20; the phone showed the queue read-only before.
+
+- [x] Under the queued messages, **Send now** (`Send <n> now` for several, `chat.send_now`) and **Ask aside** on the last one; both go once Send now was asked, while the line reads `Stopping <command>…`. (`queuedActions` in `lib/chatView.test.ts`)
+- [x] Ask aside asks Claude to give the message back (`chat.unqueue`) and, once it is out of the queue, opens the Aside sheet: the question, `Answering from the conversation`, then the answer with its time and cost, **Queue for Claude** and **Close** (`chat.aside`). If Claude read the message first, the chat says "Claude read the message before it could be asked aside". (The outcome is the desktop's `unqueued`, tested in `queued.test.ts`)
+
+### A session's task (X46, X48)
+
+Added 2026-10-20.
+
+- [x] A session linked to a task (its stored link, `Session.task`) shows the issue in its row before the branch and in its header before `<project> · <branch> · <host>`: a tracker's key whole (`MOON-142`), a GitHub issue by its number (`#12`). Tapping it in the header opens the issue. (`taskChip` in `lib/sessionList.test.ts`)
+- [ ] Links derived from the branch or the PR (X46 "Links"), and the task's title and state: these need the tracker's issues, which reach the phone with Tasks on the phone (to be specified).
+
+### Starting from a GitHub issue or PR (X54)
+
+Added 2026-10-20.
+
+- [x] New session has a **GitHub** row that opens a sheet with **Issues** and **Pull requests** (`gh.issues`, `gh.prs`), a search by number and title, and the desktop's line on what a pick does.
+- [x] A picked issue shows as a folded attachment above the prompt, `#57 Search ignores accents · GitHub issue`, which unfolds to its description and has × to remove it. It is sent before what the user typed, names the session, and lets the session start with nothing typed. (`composer` in `lib/newSession.test.ts`)
+- [x] A picked PR starts the session on its branch (`session.create` with `pr`; the Base row goes, the branch line reads `<head branch> · existing branch`), and its attachment sends the PR's description, reviews and comments (`gh.pr_context`, the list's description until they are read). Removing the attachment keeps the branch and sends only what was typed. (`composer` in `lib/newSession.test.ts`)
+- [ ] Starting from a task and the Link a task slot: these need the tracker's issues (Tasks on the phone, to be specified).
+
 ## UI
 
 The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe areas respected, dark theme only.
@@ -128,7 +171,7 @@ On the phone: the paired Macs (id, name, addresses) in `macs.json` in the app's 
 
 - Push notifications and approving from a notification (needs APNs and a paid Apple Developer account).
 - iPad layouts, landscape, light theme.
-- Editing files, the file tree, MCP and subagent panels, the command palette.
+- Editing files, the file tree, the MCP panel, the command palette. The desktop's Agents panel and strip (X42): the chat's Launched card and its agent sheet stand in for them.
 
 ## Test plan
 

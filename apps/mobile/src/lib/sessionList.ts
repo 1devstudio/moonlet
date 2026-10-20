@@ -3,6 +3,8 @@
 
 import { planOf } from "@desktop/lib/chat";
 import { lastActive, workspaceSections } from "@desktop/lib/sidebar";
+import { agentCount } from "@desktop/lib/subagents";
+import { splitKey } from "@desktop/lib/sessionRows";
 import type { AgentState, Project, Session } from "@desktop/lib/protocol";
 import type { HostData, Screen } from "./app";
 import { type InboxHost, sessionState } from "./inbox";
@@ -15,6 +17,8 @@ export interface SessionRow {
   word: string;
   /** The waiting plan's chat and ask, if any. */
   plan: { terminal: number; ask: string } | null;
+  /** `2 agents` while the session's chats run subagents (X42), else empty. */
+  agents: string;
 }
 
 export interface ProjectGroup {
@@ -52,7 +56,8 @@ function row(host: string, d: HostData, s: Session, now: number): SessionRow {
   const state = sessionState(d, s);
   const plan = state === "blocked" ? waitingPlan(d, s) : null;
   const word = plan ? "plan" : { blocked: "needs you", working: workingFor(d, s, now), done: "done", error: "failed", idle: "" }[state];
-  return { host, session: s, state, word, plan };
+  const running = Object.values(d.terminals).reduce((n, t) => n + (t.session_id === s.id ? (t.subagents ?? 0) : 0), 0);
+  return { host, session: s, state, word, plan, agents: running ? agentCount(running) : "" };
 }
 
 export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<string, HostData>, workspace: string | null, now: number): ProjectGroup[] {
@@ -122,4 +127,13 @@ export function filterGroups(groups: ProjectGroup[], chip: ChipId, query: string
 export function rowTarget(r: SessionRow): Screen {
   if (r.plan) return { kind: "plan", host: r.host, terminal: r.plan.terminal, ask: r.plan.ask };
   return { kind: "session", host: r.host, id: r.session.id, tab: r.state === "done" ? "changes" : "chat" };
+}
+
+/** A session's stored task link (X46): a tracker's key whole, a GitHub
+ * issue (`owner/repo#12`) by its number. Links derived from a branch or a
+ * PR need the tracker's issues, which the phone does not load. */
+export function taskChip(s: Session): { label: string; url: string } | null {
+  if (!s.task) return null;
+  const { prefix, number } = splitKey(s.task.key);
+  return { label: prefix.endsWith("#") ? `#${number}` : s.task.key, url: s.task.url };
 }
