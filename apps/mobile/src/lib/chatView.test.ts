@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chatBlocks } from "@desktop/lib/chat";
 import type { ChatItem } from "@desktop/lib/protocol";
-import { asideStep, blockKey, chatFooter, queuedActions, sessionChat, sessionLine, shellTerminals } from "./chatView";
+import { agentStrip, asideStep, blockKey, chatFooter, queuedActions, sessionChat, sessionLine, shellTerminals } from "./chatView";
 import { NOW, chat, data, project, session, terminal } from "./fixtures";
 
 describe("sessionChat", () => {
@@ -91,5 +91,16 @@ describe("asideStep (X49)", () => {
 
   it("says so when Claude read the message first", () => {
     expect(asideStep(st([], [{ id: "m2" }]), asked)).toEqual({ kind: "note", text: "Claude read the message before it could be asked aside" });
+  });
+});
+
+describe("agentStrip (X57)", () => {
+  const agent = (id: string, status: "running" | "done" | "failed" | "stopped") => ({ id, tool_use_id: `t-${id}`, description: id, prompt: "", status, started_at: NOW - 60_000, tokens: 0, tool_uses: 0, tools: [] });
+  it("shows a bar per subagent in its state, how many are done, and whether one needs the user", () => {
+    const st = { subagents: [agent("a1", "done"), agent("a2", "done"), agent("a3", "running"), agent("a4", "running"), agent("a5", "stopped")], pending: [{ id: "p", tool: "Bash", summary: "", input: {}, can_always: true, agent: "a4" }] };
+    expect(agentStrip(st, NOW)).toEqual({ bars: ["done", "done", "running", "needs", "stopped"], progress: "2/5", word: "1 needs you" });
+    expect(agentStrip({ ...st, pending: [] }, NOW)?.word).toBe("all running");
+    expect(agentStrip({ subagents: [agent("a1", "done")], pending: [] }, NOW)).toEqual({ bars: ["done"], progress: "1/1", word: "all done" });
+    expect(agentStrip({ subagents: [], pending: [] }, NOW)).toBeNull();
   });
 });

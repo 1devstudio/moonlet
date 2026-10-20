@@ -102,6 +102,8 @@ interface AppState {
   settings: Settings;
   /** False until `host_list` answered: tells "no Mac paired" from "not loaded". */
   ready: boolean;
+  /** The task, and maybe its worktree, New session starts from (X57). */
+  newFrom: { board: string; task: string; worktree?: { path: string; branch: string } } | null;
 }
 
 export const useApp = create<AppState>(() => ({
@@ -110,6 +112,7 @@ export const useApp = create<AppState>(() => ({
   data: {},
   tab: "inbox",
   screen: null,
+  newFrom: null,
   settings: loadJson<Settings>(SETTINGS, { workspace: null, notifyOff: ["checks"], faceId: true }),
   ready: false,
 }));
@@ -123,7 +126,10 @@ export function updateSettings(patch: Partial<Settings>) {
   writeStored(SETTINGS, JSON.stringify(settings));
 }
 
-export const showTab = (tab: Tab) => set({ tab, screen: null });
+export const showTab = (tab: Tab) => set({ tab, screen: null, ...(tab !== "new" && { newFrom: null }) });
+
+/** New session, started from a task on a board (X57), in its worktree without a session if given. */
+export const startFromTask = (from: NonNullable<AppState["newFrom"]>) => set({ tab: "new", screen: null, newFrom: from });
 export const showScreen = (screen: Screen | null) => set({ screen });
 
 function patchData(host: string, patch: Partial<HostData> | ((d: HostData) => Partial<HostData>)) {

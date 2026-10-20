@@ -10,7 +10,8 @@ import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import { withoutComments } from "@desktop/lib/markdown";
 import type { AgentState } from "@desktop/lib/protocol";
 import { clock } from "@desktop/lib/subagents";
-import { type Task, taskId, trackerName } from "@desktop/lib/tasks";
+import { type Task, type TaskStart, taskId, taskStart, trackerName, trackerOf } from "@desktop/lib/tasks";
+import { startAction } from "@desktop/lib/keepInStep";
 import type { HostData } from "./app";
 import { type Details, type Moving, type PhoneBoard, boardScreen } from "./board";
 
@@ -134,5 +135,17 @@ export function issueForm(board: BoardConfig, snapshot: Pick<TaskSnapshot, "task
     labels: access.labels,
     draft: access.draft,
     ready: canSubmit(access.draft, { busy: false, needsPlace: needsPlace(board), needsType: needsType(board), missing: options?.missing }),
+  };
+}
+
+/** New session's preset for `task` (X57), as the Mac's composer makes it (X46's `composerTask`). */
+export function taskPreset(b: PhoneBoard, task: Task): TaskStart {
+  const trackers = b.snapshot.trackers as Record<string, TaskSnapshot["trackers"]["github"] | undefined>;
+  const settings = trackers[trackerOf(task.connection) ?? "github"] ?? b.snapshot.trackers.github;
+  return {
+    ...taskStart(task, b.snapshot.repos, b.snapshot.sourceProjects),
+    assign: startAction(task, settings.rules.session_starts),
+    template: settings.branch_template || undefined,
+    maxLen: settings.max_length,
   };
 }
