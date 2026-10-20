@@ -39,7 +39,7 @@ The moonlet phone app (X40) needs to reach the daemon on the user's Mac while th
 
 ### Pairing
 
-- [x] `mobile.pair_start` returns `{ code, url, expires_at, addresses, host }`, where `code` is 16 random bytes in hex, valid for 5 minutes and for one pairing, and `url` is `moonlet://pair?v=1&host=<Mac name>&addr=<ip:port>[&addr=…]&code=<code>`, every value percent-encoded, and `addresses` are the listener's `ip:port`s. The Mac name is its host name without `.local`. A new `pair_start` replaces the previous code. Fails with `mobile_off` while phone access is off and `no_tailscale` while nothing listens. (`the_pairing_link_carries_the_host_every_address_and_the_code`, `a_paired_phone_comes_back_with_its_token_and_uses_the_daemon`)
+- [x] `mobile.pair_start` returns `{ code, url, expires_at, addresses, host }`, where `code` is 10 characters of Crockford's base32, 50 random bits (X57; 16 random bytes in hex before it), valid for 5 minutes and for one pairing, and `url` is `moonlet://pair?v=1&host=<Mac name>&addr=<ip:port>[&addr=…]&code=<code>`, every value percent-encoded, and `addresses` are the listener's `ip:port`s. The Mac name is its host name without `.local`. A new `pair_start` replaces the previous code. Fails with `mobile_off` while phone access is off and `no_tailscale` while nothing listens. (`the_pairing_link_carries_the_host_every_address_and_the_code`, `a_paired_phone_comes_back_with_its_token_and_uses_the_daemon`)
 - [x] `mobile.pair_cancel` cancels the current code.
 - [x] A successful pairing broadcasts `mobile.paired { device }`, and a cancelled or exhausted code broadcasts `mobile.pair_ended { reason }` with `reason` one of `expired`, `cancelled`, `too_many_attempts`.
 
