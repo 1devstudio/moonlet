@@ -213,7 +213,6 @@ function demoRpc(method: string): unknown {
       return { default_agent: "claude", agents: {} };
     case "git.branches":
       return ["main", "develop", "release/1.4"];
-    case "gh.issues":
     case "gh.prs":
       return [];
     case "fs.files":
