@@ -119,6 +119,10 @@ describe("composer (X54)", () => {
     expect(composer({ ...none, issue, typed: "Keep it small" }).create?.prompt.endsWith("issues/57\n\nKeep it small")).toBe(true);
   });
 
+  it("names the new branch after the issue, as the daemon names it after the session", () => {
+    expect(composer({ ...none, issue, typed: "Keep it small" }).branch).toEqual({ name: "moonlet/search-ignores-accents", existing: false });
+  });
+
   it("starts on a picked PR's branch and sends its reviews and comments once read", () => {
     const c = composer({ ...none, pr, prContext: "Adds search.\n\n**sam-rivera** reviewed: Debounce the input." });
     expect(c.branch).toEqual({ name: "mz/product-search", existing: true });

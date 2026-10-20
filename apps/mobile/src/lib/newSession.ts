@@ -64,11 +64,13 @@ export function composer(o: { typed: string; prefix: string; issue: IssueRef | n
 } {
   const sent = attachments({ task: null, issue: o.issue, pr: o.prSend ? o.pr : null, prContext: o.prContext });
   const prompt = firstMessage(sent, o.typed);
+  // The daemon names the session, and so its branch, after a given name whole.
+  const name = sessionName({ task: null, issue: o.issue, pr: o.pr });
   return {
     attachments: sent,
     placeholder: placeholder(sent.map((a) => a.id)),
-    branch: o.pr ? { name: o.pr.head_branch ?? "", existing: true } : { name: branchPreview(o.typed, o.prefix), existing: false },
-    create: prompt === null ? null : { prompt, name: sessionName({ task: null, issue: o.issue, pr: o.pr }), pr: o.pr?.number ?? null },
+    branch: o.pr ? { name: o.pr.head_branch ?? "", existing: true } : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
+    create: prompt === null ? null : { prompt, name, pr: o.pr?.number ?? null },
   };
 }
 
