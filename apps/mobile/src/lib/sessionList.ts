@@ -3,6 +3,7 @@
 
 import { planOf } from "@desktop/lib/chat";
 import { lastActive, workspaceSections } from "@desktop/lib/sidebar";
+import { agentCount } from "@desktop/lib/subagents";
 import type { AgentState, Project, Session } from "@desktop/lib/protocol";
 import type { HostData, Screen } from "./app";
 import { type InboxHost, sessionState } from "./inbox";
@@ -15,6 +16,8 @@ export interface SessionRow {
   word: string;
   /** The waiting plan's chat and ask, if any. */
   plan: { terminal: number; ask: string } | null;
+  /** `2 agents` while the session's chats run subagents (X42), else empty. */
+  agents: string;
 }
 
 export interface ProjectGroup {
@@ -52,7 +55,8 @@ function row(host: string, d: HostData, s: Session, now: number): SessionRow {
   const state = sessionState(d, s);
   const plan = state === "blocked" ? waitingPlan(d, s) : null;
   const word = plan ? "plan" : { blocked: "needs you", working: workingFor(d, s, now), done: "done", error: "failed", idle: "" }[state];
-  return { host, session: s, state, word, plan };
+  const running = Object.values(d.terminals).reduce((n, t) => n + (t.session_id === s.id ? (t.subagents ?? 0) : 0), 0);
+  return { host, session: s, state, word, plan, agents: running ? agentCount(running) : "" };
 }
 
 export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<string, HostData>, workspace: string | null, now: number): ProjectGroup[] {

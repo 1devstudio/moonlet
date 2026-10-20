@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { chatFooter, sessionChat, sessionLine, shellTerminals } from "./chatView";
+import { chatBlocks } from "@desktop/lib/chat";
+import type { ChatItem } from "@desktop/lib/protocol";
+import { blockKey, chatFooter, sessionChat, sessionLine, shellTerminals } from "./chatView";
 import { NOW, chat, data, project, session, terminal } from "./fixtures";
 
 describe("sessionChat", () => {
@@ -48,5 +50,18 @@ describe("chatFooter", () => {
   it("leaves out what the agent has not said yet", () => {
     expect(chatFooter(chat([]))).toEqual({ context: null, cost: null, model: "Default model", mode: "Manual" });
     expect(chatFooter({ ...chat([]), model: "claude-sonnet-5-5", mode: "acceptEdits" })).toEqual({ context: null, cost: null, model: "claude-sonnet-5-5", mode: "Accept edits" });
+  });
+});
+
+describe("blockKey", () => {
+  it("keys a run of tool calls and a run of subagent launches by their first call, an item by its id", () => {
+    const tool = (id: string, name: string): ChatItem => ({ id, kind: "tool", text: "", ts: NOW, tool: { name, summary: "", input: {}, status: "running" } });
+    const items: ChatItem[] = [
+      { id: "u1", kind: "user", text: "Look around", ts: NOW },
+      tool("toolu_read", "Read"),
+      tool("toolu_agent1", "Agent"),
+      tool("toolu_agent2", "Agent"),
+    ];
+    expect(chatBlocks(items, "collapsed").map(blockKey)).toEqual(["u1", "toolu_read", "toolu_agent1"]);
   });
 });

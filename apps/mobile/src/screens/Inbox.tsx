@@ -12,6 +12,7 @@ import { type InboxCard, buildInbox, summaryLine } from "../lib/inbox";
 import { useBusy } from "../lib/busy";
 import { AgentIcon, Btn, DiffStat, Moon, StateGlyph, Title } from "../components/ui";
 import { Sheet } from "../components/Sheet";
+import { AskerLine } from "../components/chat";
 import { WorkspacePill } from "../components/WorkspacePill";
 
 /** Re-renders every 30 s, for the ages. */
@@ -62,6 +63,7 @@ function PermissionCard({ card, now }: { card: InboxCard; now: number }) {
       </div>
       <Meta card={card} />
       <div className="flex flex-col gap-1.5 rounded-[10px] bg-raised px-3 py-2.5">
+        {card.asker && <AskerLine name={card.asker} />}
         <div className="flex items-center gap-[7px] text-[13px] font-medium">
           <SquareTerminal size={14} className="text-blocked" />
           {askHeadline(ask.tool)}

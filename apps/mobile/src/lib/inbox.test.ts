@@ -55,6 +55,30 @@ describe("buildInbox", () => {
     expect(buildInbox(w.hosts, w.data, "Work").needs.map((c) => c.title)).toEqual(["Idempotent refund webhooks"]);
   });
 
+  it("names the subagent that asks, and none for the main agent (X42)", () => {
+    const w = world();
+    const explore = {
+      id: "a98344134013d8227",
+      tool_use_id: "toolu_01QNjAbPMDQiZwKyCqkmv2VD",
+      description: "Run the search\ntests",
+      prompt: "Run them.",
+      status: "running" as const,
+      started_at: NOW - 3 * MIN,
+      tokens: 9721,
+      tool_uses: 1,
+      tools: [],
+    };
+    w.data.mac.chats[10] = {
+      ...chat([ask("a1", "Bash", { asked_at: NOW - 2 * MIN, agent: "a98344134013d8227" }), ask("a2", "Bash", { asked_at: NOW - MIN })]),
+      subagents: [explore],
+    };
+    const cards = buildInbox(w.hosts, w.data, null).needs.filter((c) => c.host === "mac" && c.kind === "permission");
+    expect(cards.map((c) => [c.ask?.id, c.asker])).toEqual([
+      ["a2", null],
+      ["a1", "Run the search tests"],
+    ]);
+  });
+
   it("leaves out hosts that are not connected", () => {
     const w = world();
     const hosts = { ...w.hosts, "mac/devbox": { ...w.hosts["mac/devbox"], status: "reconnecting" as const } };
