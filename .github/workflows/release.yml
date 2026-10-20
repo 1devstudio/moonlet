@@ -1,5 +1,9 @@
-# Builds moonlet for Apple Silicon, signs the update archive and publishes a
-# GitHub release with latest.json, which installed apps check for (X35).
+# Builds moonlet for Apple Silicon, signs it with the Developer ID, has Apple
+# notarize it (X3), signs the update archive and publishes a GitHub release
+# with latest.json, which installed apps check for (X35).
+#
+# The Apple secrets live in the `release` environment, which only `v*` tags
+# may use. Setting them up is in docs/release.md.
 #
 # Release: bump the version, merge, then push a tag that matches it:
 #   git tag v0.1.15 origin/main && git push origin v0.1.15
@@ -16,11 +20,13 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# Every action is pinned to a commit: the updater key below can ship code to
-# every installed app, so no action may change under a moved tag.
+# Every action is pinned to a commit: the updater key and the Developer ID
+# below can ship code to every installed app, so no action may change under a
+# moved tag.
 jobs:
   macos:
     runs-on: macos-14
+    environment: release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -50,27 +56,83 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Published only after every asset is uploaded, so releases/latest
-      # never points at a release without latest.json.
+      # A missing secret would otherwise ship a build that is not notarized.
+      - name: Apple signing secrets are set
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                      APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_P8; do
+            if [ -z "${!name}" ]; then
+              echo "::error::secret $name is not set in the release environment"
+              exit 1
+            fi
+          done
+
+      # notarytool reads the App Store Connect API key from a file.
+      - name: Notarization key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          umask 077
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+
+      # Tauri imports the certificate into a temporary keychain, signs the app
+      # and its nested binaries with the hardened runtime, then notarizes and
+      # staples it. Published only after every asset is uploaded, so
+      # releases/latest never points at a release without latest.json.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
           args: --config src-tauri/tauri.bundle.json --config src-tauri/tauri.release.json
           tagName: ${{ github.ref_name }}
           releaseName: moonlet __VERSION__
-          releaseBody: Apple Silicon build. It is not signed with a Developer ID yet, so a first install needs Open Anyway in System Settings › Privacy & Security. Installed apps update themselves from Settings › Updates.
+          releaseBody: Apple Silicon build, signed with a Developer ID and notarized by Apple. Installed apps update themselves from Settings › Updates.
           releaseDraft: true
           prerelease: false
 
-      # Without a sealed signature Gatekeeper reports a downloaded app as
-      # damaged instead of offering Open Anyway.
-      - name: App bundle signature is sealed
-        run: codesign --verify --deep --strict --verbose=2 target/release/bundle/macos/moonlet.app
+      # Every binary must carry the team's signature and the hardened runtime,
+      # and both the app a user downloads and the app inside the update archive
+      # must be notarized. The notarization check asks codesign, not spctl,
+      # because spctl accepts anything on a machine with Gatekeeper turned off.
+      - name: App is signed with the Developer ID and notarized
+        env:
+          TEAM_ID: LE9Q47C92D
+        run: |
+          app=target/release/bundle/macos/moonlet.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          for bin in "$app"/Contents/MacOS/*; do
+            info=$(codesign -dv --verbose=2 "$bin" 2>&1 || true)
+            if ! grep -q "TeamIdentifier=$TEAM_ID" <<<"$info"; then
+              echo "::error::$bin is not signed by team $TEAM_ID"
+              exit 1
+            fi
+            if ! grep -q "(runtime)" <<<"$info"; then
+              echo "::error::$bin is not signed with the hardened runtime"
+              exit 1
+            fi
+          done
+          codesign --verify --check-notarization -R="notarized" --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          update=$(mktemp -d)
+          tar -xzf target/release/bundle/macos/*.app.tar.gz -C "$update"
+          codesign --verify --deep --strict --check-notarization -R="notarized" --verbose=2 "$update/moonlet.app"
 
       - name: Publish
         env:
