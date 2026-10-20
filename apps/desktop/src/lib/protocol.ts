@@ -765,3 +765,12 @@ export const EV = {
   mobilePaired: "mobile.paired",
   mobilePairEnded: "mobile.pair_ended",
 } as const;
+
+/**
+ * What starts the daemon at login, from the `daemon_service` command: the
+ * app's login item (X56), or in builds without one the plist that
+ * `moonletd service` writes (S1b).
+ */
+export type DaemonService =
+  | { mechanism: "login_item"; state: "enabled" | "requires_approval" | "not_registered" | "not_found" }
+  | { mechanism: "plist"; state: "loaded" | "installed" | "not_installed"; plist: string };
