@@ -1,7 +1,7 @@
 // Inbox (X40): every ask waiting for the user across hosts, answerable in
 // place, and the sessions ready to review.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ChevronRight, ListChecks, MessageCircleQuestion, Server, SquareTerminal, Terminal } from "lucide-react";
 import { planOf } from "@desktop/lib/chat";
 import { showScreen, useApp } from "../lib/app";
@@ -10,20 +10,12 @@ import { answerAsk, answerPlan, answerRead } from "../lib/answers";
 import { ageText, askHeadline, planBlurb, readMessage } from "../lib/cards";
 import { type InboxCard, buildInbox, summaryLine } from "../lib/inbox";
 import { useBusy } from "../lib/busy";
+import { useNow } from "../lib/now";
 import { AgentIcon, Btn, DiffStat, Moon, StateGlyph, Title } from "../components/ui";
 import { Sheet } from "../components/Sheet";
 import { AskerLine } from "../components/chat";
 import { WorkspacePill } from "../components/WorkspacePill";
 
-/** Re-renders every 30 s, for the ages. */
-export function useNow(ms = 30_000) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(t);
-  }, [ms]);
-  return now;
-}
 
 export function useInbox() {
   const hosts = useApp((s) => s.hosts);

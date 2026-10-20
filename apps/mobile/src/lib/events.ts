@@ -3,6 +3,7 @@
 // way, to the load's result: an event can overtake a reply sent before it.
 
 import { EV, type ChatState, type GitSettings, type ReadRequest, type TerminalInfo } from "@desktop/lib/protocol";
+import { DaemonError } from "@desktop/lib/daemon";
 import type { ChatSummary, HostData } from "./app";
 
 /** One record set, or removed (null). */
@@ -47,6 +48,12 @@ export function eventChanges(name: string, data: unknown): Change[] | "reload" {
     default:
       return [];
   }
+}
+
+/** What a failed `git.settings` leaves (X55): no settings for a daemon too
+ * old to have them, else the ones already loaded. */
+export function gitAfterError(e: unknown): null | "keep" {
+  return e instanceof DaemonError && e.code === "unknown_method" ? null : "keep";
 }
 
 function setRecord<T>(base: Record<number, T>, id: number, value: T | null): Record<number, T> {
