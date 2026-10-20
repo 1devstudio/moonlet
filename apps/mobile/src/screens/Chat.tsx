@@ -8,18 +8,19 @@ import { askQuestions, chatBlocks, chatDraft, chatKey, loadChat, questionAnswers
 import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
 import { type ChatState, M, type PermissionAsk, type Session } from "@desktop/lib/protocol";
 import { queuedHeader, waitingOn } from "@desktop/lib/queued";
+import { type AgentRow, agentKey, agentRows, askerName } from "@desktop/lib/subagents";
 import { showScreen, useApp } from "../lib/app";
 import { answerAsk, answerQuestion } from "../lib/answers";
 import { STATE_COLOR } from "../lib/palette";
 import { ageText, askHeadline } from "../lib/cards";
-import { chatFooter, sessionChat } from "../lib/chatView";
+import { blockKey, chatFooter, sessionChat } from "../lib/chatView";
 import { useBusy } from "../lib/busy";
-import { ChatBlockView } from "../components/chat";
+import { AgentDetail, AskerLine, ChatBlockView } from "../components/chat";
 import { Sheet } from "../components/Sheet";
 import { Btn, cx } from "../components/ui";
 import { useNow } from "./Inbox";
 
-function DockedAsk({ host, terminal, ask }: { host: string; terminal: number; ask: PermissionAsk }) {
+function DockedAsk({ host, terminal, ask, asker }: { host: string; terminal: number; ask: PermissionAsk; asker: string | null }) {
   const now = useNow();
   const { busy, run } = useBusy();
   const [telling, setTelling] = useState(false);
@@ -27,6 +28,7 @@ function DockedAsk({ host, terminal, ask }: { host: string; terminal: number; as
   const answer = (d: "allow" | "always" | "deny", msg?: string) => run(() => answerAsk(host, terminal, ask.id, d, msg));
   return (
     <section aria-label="Waiting for your approval" className="flex flex-col gap-2.5 border-t border-[rgba(242,201,76,0.28)] bg-panel px-4 pt-3 pb-2">
+      {asker && <AskerLine name={asker} />}
       <div className="flex items-center gap-2 text-[14px] font-medium">
         <SquareTerminal size={16} className="text-blocked" />
         {askHeadline(ask.tool)}
@@ -171,6 +173,9 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   const terminal = d ? sessionChat(d, session.id) : null;
   const st = useChat((s) => (terminal === null ? undefined : s.chats[chatKey(host, terminal)]));
   const [picker, setPicker] = useState<"model" | "mode" | null>(null);
+  // The subagent whose sheet is open, by its key (X42).
+  const [agentOpen, setAgentOpen] = useState<string | null>(null);
+  const now = useNow(st?.subagents?.some((a) => a.status === "running") ? 1000 : 30_000);
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (terminal !== null) void loadChat(host, terminal).catch(console.error);
@@ -185,6 +190,8 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   if (terminal === null) return <div className="p-6 text-[14px] text-muted">This session has no agent conversation. Its terminal is in the Terminal tab.</div>;
   if (!st) return <div className="p-6 text-[14px] text-muted">Loading the conversation…</div>;
   const ask = st.pending[0];
+  const agents = agentRows([{ id: terminal, st }], now);
+  const openAgent = agents.find((r) => agentKey(r.chat, r.agent.id) === agentOpen);
   const footer = chatFooter(st);
   const settings = (patch: object) => void rpc(host, M.chatSettings, { id: terminal, ...patch }).catch(console.error);
 
@@ -192,7 +199,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
     <div className="flex h-full flex-col">
       <main ref={scroller} className="scroll flex min-h-0 flex-1 flex-col gap-2 px-4 py-3">
         {blocks.map((b) => (
-          <ChatBlockView key={b.kind === "tools" ? b.id : b.item.id} block={b} cwd={session.path} />
+          <ChatBlockView key={blockKey(b)} block={b} cwd={session.path} agents={agents} onAgent={(r: AgentRow) => setAgentOpen(agentKey(r.chat, r.agent.id))} />
         ))}
         {/* Messages Claude has not read yet (X49). */}
         {st.queued.length > 0 && <QueuedView st={st} />}
@@ -210,7 +217,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
         ) : ask.tool === "AskUserQuestion" ? (
           <DockedQuestion key={ask.id} host={host} terminal={terminal} ask={ask} />
         ) : (
-          <DockedAsk key={ask.id} host={host} terminal={terminal} ask={ask} />
+          <DockedAsk key={ask.id} host={host} terminal={terminal} ask={ask} asker={askerName(ask, st.subagents ?? [])} />
         ))}
       {!ask && <Composer host={host} terminal={terminal} running={turnRunning(st.status)} />}
       <footer className="flex items-center gap-2 px-3 py-1.5 text-[12.5px] text-muted" style={{ paddingBottom: "max(var(--safe-bottom), 8px)" }}>
@@ -229,6 +236,11 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
           {footer.mode}
         </button>
       </footer>
+      {openAgent && (
+        <Sheet label="Agent" onClose={() => setAgentOpen(null)}>
+          <AgentDetail row={openAgent} onStop={() => void rpc(host, M.chatStopAgent, { id: terminal, agent: openAgent.agent.id }).catch(console.error)} />
+        </Sheet>
+      )}
       {picker && (
         <Sheet label={picker === "model" ? "Model" : "Mode"} onClose={() => setPicker(null)}>
           <div className="scroll flex flex-col px-2 pb-2">

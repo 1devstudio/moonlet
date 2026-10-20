@@ -2,7 +2,7 @@
 // project, with chips for what needs the user, what works and what waits.
 
 import { useState } from "react";
-import { GitBranch, GitPullRequest, Laptop, Search, Server, X } from "lucide-react";
+import { Bot, GitBranch, GitPullRequest, Laptop, Search, Server, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
@@ -54,6 +54,12 @@ function Row({ r }: { r: SessionRow }) {
         <span className="flex items-center gap-2 text-[12px] text-faint">
           <span className="truncate font-mono">{r.session.branch}</span>
           {stat && <DiffStat add={stat.additions} del={stat.deletions} />}
+          {r.agents && (
+            <span className="flex flex-none items-center gap-1">
+              <Bot size={12} />
+              {r.agents}
+            </span>
+          )}
           {pr && (
             <span className={cx("flex items-center gap-1", prTone(pr.state.toLowerCase()))}>
               <GitPullRequest size={12} />#{pr.number}
