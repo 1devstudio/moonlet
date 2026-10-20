@@ -11,7 +11,7 @@ The new-session composer put everything in its header: the project, `⋯`, the t
 
 The composer now has three layers. The header keeps the project, the task chip (which takes the spare width) and the source picker. A 38 px branch row under it holds the git things: the branch and its base, the from-ref, PR and directory chips, branch options and the "session starts" checkbox. The body shows the task's description and a picked PR as folded **attachments** above an empty prompt; Create sends them with what the user typed.
 
-The source picker has two tabs, Branches and Pull requests. It first had an Issues tab, which attached a GitHub issue to the prompt; Branches replaced it (2026-10-20), since GitHub issues are tasks on a board (X50) and start a session from there.
+The source picker has two tabs, Branches and Pull requests. It first had an Issues tab, which attached a GitHub issue to the prompt; Branches replaced it (2026-10-20), on the desktop and on the phone (X40), since GitHub issues are tasks on a board (X50) and start a session from there.
 
 ## User journey
 
@@ -30,7 +30,7 @@ The source picker has two tabs, Branches and Pull requests. It first had an Issu
   - from a task: the task's branch (a quiet `…` until it is worked out), then `from <base>`;
   - with neither a task nor a pick: `New branch` and `from <base>`;
   - "Start from branch or commit…": `New branch` (or the task's branch) and `from <ref>`, with × to go back to the base;
-  - "Use an existing branch…": the branch and `existing branch`, with ×;
+  - "Use an existing branch…", or a branch picked from the Branches tab: the branch and `existing branch`, with × "Create a new branch from <base> instead", or "Back to <task branch> from <base>" when there is a task;
   - an adopted worktree (X46): the branch and `existing worktree`;
   - a picked PR: the PR row, below.
 - [x] Branch options (`⋯`) sits at the branch row's right end, except on the PR row. Picking "Start from branch or commit…" or "Use an existing branch…" puts the ref field in the branch row itself, and ↵ sets it. (`composer.e2e.ts` asks for a ref inside the branch row)
@@ -54,14 +54,15 @@ The source picker has two tabs, Branches and Pull requests. It first had an Issu
 
 ### Source picks
 
-- [x] The source picker (tooltip "Start from a branch or pull request") has two tabs, Branches and Pull requests, and opens on Branches. (`composer.e2e.ts` starts the session on a branch picked from the Branches tab)
+- [x] The source picker (tooltip "Start from a branch or pull request") has two tabs, Branches and Pull requests, and a new composer's picker opens on Branches. Switching tabs clears the search. (`composer.e2e.ts` starts the session on a branch picked from the Branches tab, in place of a picked PR)
 - [x] The source picker's popover ends with a hint for its tab (`composer.test.ts` pickerHint):
   - Branches, with a task: "Picking a branch starts the session on it, instead of creating <the task branch's first two parts>-… from <base>. The task link stays.";
   - Branches, without a task: "Picking a branch starts the session on it, instead of a new branch from <base>.";
   - Pull requests, with a task: "Picking a PR starts the session on its branch, instead of creating <the task branch's first two parts>-… from <base>. The task link stays.";
   - Pull requests, without a task: "Picking a PR starts the session on its branch, instead of a new branch from <base>."
-- [x] The Branches tab lists the project's branches from `git.branches`, most recently committed first, each once: an `origin/<name>` branch shows as `<name>`, and the bare `origin` that `origin/HEAD` lists as is left out. The search filters them by name. (`composer.test.ts` pickerBranches)
-- [x] Picking a branch is "Use an existing branch…" with that branch: the branch row reads the branch and `existing branch`, with ×, and the session checks it out in a new worktree (an origin branch as a local branch tracking it). A picked PR goes. (`composer.e2e.ts` starts the session on a branch picked from the Branches tab)
+- [x] The Branches tab lists the project's branches from `git.branches`, most recently committed first, each once: an `origin/<name>` branch shows as `<name>`, and the bare `origin` that `origin/HEAD` lists as is left out. (`composer.test.ts` pickerBranches)
+- [x] The search finds branches by name and pull requests by `#<n> <title>`, ignoring case. (`composer.test.ts` pickerSearch)
+- [x] Picking a branch is "Use an existing branch…" with that branch: the branch row reads the branch and `existing branch`, with ×, and the session checks it out in a new worktree (an origin branch as a local branch tracking it). A picked PR goes. (`composer.e2e.ts` starts the session on a branch picked from the Branches tab, in place of a picked PR)
 - [x] A list that arrives after a switch to the other tab is dropped, so pull requests never show, or get picked, as branches. (`composer.e2e.ts` drops a list that arrives after a switch to the other tab)
 - [x] Picking a PR turns the branch row into the PR row, tinted green: the PR mark and `PR #<n>` in the done colour, the PR's head branch, and `existing branch · checks out in a new worktree`. With the checkbox showing, that hint moves into the row's tooltip so the branch keeps its room. (`composer.test.ts` branchRow, `composer.e2e.ts`)
 - [x] The PR row ends with `× Use task branch` (tooltip `Back to <task branch> from <base>`) when there is a task, `× New branch instead` (tooltip `Create a new branch from <base> instead`) when not. Either undoes the pick: the PR's attachment goes too. (`composer.test.ts` branchRow, `composer.e2e.ts`)
@@ -79,7 +80,7 @@ The source picker has two tabs, Branches and Pull requests. It first had an Issu
 
 ## UI
 
-The designs are "New session from a task", "Composer GitHub source picker open" and "Composer after picking a PR or an issue, with and without a task". The Branches tab replaces the designs' Issues tab: a row is a 13 px branch icon and the branch's name in mono, where a PR row has its number, title and head branch.
+The designs are "New session from a task", "Composer GitHub source picker open" and "Composer after picking a PR or an issue, with and without a task". The Branches tab replaces the designs' Issues tab: a row is a 13 px branch icon and the branch's name in mono, where a PR row has its number, title and head branch (seen in the app with `e2e/snap.ts`).
 
 ```
 ╭──────────────────────────────────────────────────────────────────────╮
@@ -126,7 +127,7 @@ The designs are "New session from a task", "Composer GitHub source picker open" 
 
 ## Test plan
 
-- Vitest (`apps/desktop/src/lib/composer.test.ts`): the branch row for each case, the attachments and their labels, the first message, the placeholders, the session name, the picker hints, the Branches tab's list and the suggested task, with literals from the designs. `keepInStep.test.ts` for the short checkbox labels; `tasks.test.ts` for the description in the task's start.
+- Vitest (`apps/desktop/src/lib/composer.test.ts`): the branch row for each case, the attachments and their labels, the first message, the placeholders, the session name, the picker hints, the Branches tab's list, the picker's search and the suggested task, with literals from the designs. `keepInStep.test.ts` for the short checkbox labels; `tasks.test.ts` for the description in the task's start.
 - Rust: `gh.pr_context` output parsed from captured `gh` JSON (`git.rs`), and the RPC through a stub `gh` (`daemon.rs`).
 - e2e: start from a task with the description folded and sent, unfold it, and link a task from the slot (`tasks-mode.e2e.ts`); a from-ref, a branch and a PR picked, the PR's attachment removed, the pick undone, and sessions created on a picked branch and on a PR with its reviews sent (`composer.e2e.ts`).
 

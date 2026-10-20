@@ -668,7 +668,6 @@ export const M = {
   gitUnpushed: "git.unpushed",
   gitPush: "git.push",
   prCreate: "gh.pr_create",
-  ghIssues: "gh.issues",
   shellHistory: "shell.history",
   shellCommands: "shell.commands",
   ghPrs: "gh.prs",

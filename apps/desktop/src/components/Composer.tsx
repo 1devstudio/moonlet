@@ -5,7 +5,7 @@ import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
-import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment } from "../lib/composer";
+import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { Menu, type MenuItem } from "./Menu";
@@ -55,14 +55,14 @@ function SourcePicker({
   host: string;
   project: Project;
   /** What picking from a tab does (X54). */
-  hint: (tab: "branch" | "pr") => string;
+  hint: (tab: PickerTab) => string;
   onBranch: (b: string) => void;
   onPr: (p: IssueRef) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<"branch" | "pr">("branch");
+  const [tab, setTab] = useState<PickerTab>("branch");
   const [q, setQ] = useState("");
-  const [items, setItems] = useState<{ tab: "branch"; list: string[] } | { tab: "pr"; list: IssueRef[] } | null>(null);
+  const [items, setItems] = useState<PickerList | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -71,7 +71,7 @@ function SourcePicker({
     // A tab's list that arrives after a switch to the other tab is dropped:
     // pull requests must not show, or be picked, as branches.
     let current = true;
-    const load: Promise<NonNullable<typeof items>> =
+    const load: Promise<PickerList> =
       tab === "branch"
         ? rpc<string[]>(host, M.gitBranches, { path: project.path }).then((list) => ({ tab, list: pickerBranches(list) }))
         : rpc<IssueRef[]>(host, M.ghPrs, { path: project.path }).then((list) => ({ tab, list }));
@@ -80,15 +80,17 @@ function SourcePicker({
       current = false;
     };
   }, [open, tab, host, project.path]);
-  const query = q.toLowerCase();
   const pick = (then: () => void) => () => {
     setOpen(false);
     then();
   };
-  const rows =
-    items?.tab === "branch"
-      ? items.list.filter((b) => b.toLowerCase().includes(query)).map((b) => ({ key: b, number: null, title: b, branch: null, onPick: pick(() => onBranch(b)) }))
-      : (items?.list ?? []).filter((i) => `#${i.number} ${i.title}`.toLowerCase().includes(query)).map((i) => ({ key: String(i.number), number: i.number, title: i.title, branch: i.head_branch, onPick: pick(() => onPr(i)) }));
+  // Each row picks for the tab its list arrived for.
+  const found = items && pickerSearch(items, q);
+  const rows = !found
+    ? []
+    : found.tab === "branch"
+      ? found.list.map((b) => ({ key: b, number: null, title: b, branch: null, onPick: pick(() => onBranch(b)) }))
+      : found.list.map((i) => ({ key: String(i.number), number: i.number, title: i.title, branch: i.head_branch, onPick: pick(() => onPr(i)) }));
   return (
     <div className="relative">
       <button
@@ -107,7 +109,7 @@ function SourcePicker({
           <div className="absolute right-0 z-50 mt-2 w-[420px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] shadow-2xl">
             <div className="flex items-center gap-1 border-b border-border p-2">
               {(["branch", "pr"] as const).map((t) => (
-                <button key={t} className={cx("rounded-md px-2.5 py-1 ui-text-13", tab === t ? "bg-hover text-fg" : "text-muted hover:text-fg")} onClick={() => setTab(t)}>
+                <button key={t} className={cx("rounded-md px-2.5 py-1 ui-text-13", tab === t ? "bg-hover text-fg" : "text-muted hover:text-fg")} onClick={() => (setTab(t), setQ(""))}>
                   {t === "branch" ? "Branches" : "Pull requests"}
                 </button>
               ))}

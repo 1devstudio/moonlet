@@ -41,7 +41,10 @@ export function branchRow(f: BranchFacts): BranchRow {
     // The checkbox takes the hint's room, so the branch keeps its own.
     return f.checkbox ? { kind: "pr", number: f.pr.number, name, detail: null, title: `${name} · ${detail}`, undo } : { kind: "pr", number: f.pr.number, name, detail, title: null, undo };
   }
-  if (f.from?.existing) return { kind: "branch", name: f.from.ref, detail: "existing branch", clear: `Create a new branch from ${f.base} instead` };
+  if (f.from?.existing) {
+    const clear = f.task ? `Back to ${f.taskBranch ?? "the task's branch"} from ${f.base}` : `Create a new branch from ${f.base} instead`;
+    return { kind: "branch", name: f.from.ref, detail: "existing branch", clear };
+  }
   const name = f.task ? (f.taskBranch ?? "…") : null;
   if (f.from) return { kind: "branch", name, detail: `from ${f.from.ref}`, clear: `Start from ${f.base} instead` };
   return { kind: "branch", name, detail: `from ${f.base}`, clear: null };
@@ -147,6 +150,20 @@ function shortBranch(branch: string): string {
   return parts.length > 2 ? `${parts.slice(0, 2).join("-")}-…` : branch;
 }
 
+/** The source picker's tabs: Branches and Pull requests. */
+export type PickerTab = "branch" | "pr";
+
+/** A source picker tab's list, as it arrived for that tab. */
+export type PickerList = { tab: "branch"; list: string[] } | { tab: "pr"; list: IssueRef[] };
+
+/** A tab's list searched: branches by name, pull requests by `#<n> <title>`, ignoring case. */
+export function pickerSearch(items: PickerList, query: string): PickerList {
+  const q = query.toLowerCase();
+  return items.tab === "branch"
+    ? { tab: "branch", list: items.list.filter((b) => b.toLowerCase().includes(q)) }
+    : { tab: "pr", list: items.list.filter((p) => `#${p.number} ${p.title}`.toLowerCase().includes(q)) };
+}
+
 /**
  * The source picker's Branches tab, from `git.branches`: each branch once, in
  * its order, an origin branch by its name alone (the session checks it out
@@ -158,7 +175,7 @@ export function pickerBranches(branches: string[]): string[] {
 }
 
 /** The source picker's footer: what picking from its tab does. */
-export function pickerHint(tab: "branch" | "pr", task: { key: string; branch: string | null } | null, base: string): string {
+export function pickerHint(tab: PickerTab, task: { key: string; branch: string | null } | null, base: string): string {
   const starts = tab === "pr" ? "Picking a PR starts the session on its branch" : "Picking a branch starts the session on it";
   if (!task) return `${starts}, instead of a new branch from ${base}.`;
   return `${starts}, instead of creating ${task.branch ? shortBranch(task.branch) : "the task's branch"} from ${base}. The task link stays.`;

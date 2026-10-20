@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
+import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
 import type { Task } from "./tasks";
 
 const facts = { base: "main", task: null, taskBranch: null, from: null, worktree: null, pr: null, checkbox: false };
@@ -24,6 +24,11 @@ describe("branchRow (X54)", () => {
     expect(branchRow({ ...facts, from: { ref: "v2.1", existing: false } })).toEqual({ kind: "branch", name: null, detail: "from v2.1", clear: "Start from main instead" });
     expect(branchRow({ ...facts, task: aio, taskBranch: "aio-279-x", from: { ref: "v2.1", existing: false } })).toEqual({ kind: "branch", name: "aio-279-x", detail: "from v2.1", clear: "Start from main instead" });
     expect(branchRow({ ...facts, from: { ref: "feature/login", existing: true } })).toEqual({ kind: "branch", name: "feature/login", detail: "existing branch", clear: "Create a new branch from main instead" });
+  });
+
+  it("says × on an existing branch goes back to the task's branch when there is a task", () => {
+    expect(branchRow({ ...facts, task: aio, taskBranch: "aio-279-x", from: { ref: "feature/login", existing: true } })).toEqual({ kind: "branch", name: "feature/login", detail: "existing branch", clear: "Back to aio-279-x from main" });
+    expect(branchRow({ ...facts, task: aio, from: { ref: "feature/login", existing: true } })).toMatchObject({ clear: "Back to the task's branch from main" });
   });
 
   it("keeps an adopted worktree's branch, with no way out", () => {
@@ -175,6 +180,19 @@ describe("pickerBranches (X54)", () => {
     // returns it: refs/remotes/origin/HEAD comes through as a bare `origin`.
     const listed = ["main", "origin", "origin/main", "mobile/composer", "origin/mobile/composer", "feature/show-me-devices-in-my-network", "origin/moonlet/add-option-to-change-the-state-also-from-task"];
     expect(pickerBranches(listed)).toEqual(["main", "mobile/composer", "feature/show-me-devices-in-my-network", "moonlet/add-option-to-change-the-state-also-from-task"]);
+  });
+});
+
+describe("pickerSearch (X54)", () => {
+  it("finds branches by name, and pull requests by number and title, whatever the case", () => {
+    const branches = { tab: "branch" as const, list: ["main", "feature/saved-carts", "fix/Saved-search"] };
+    expect(pickerSearch(branches, "SAVED")).toEqual({ tab: "branch", list: ["feature/saved-carts", "fix/Saved-search"] });
+    expect(pickerSearch(branches, "")).toEqual(branches);
+    const pr214 = { number: 214, title: "Clean up the side nav", body: "", url: "", head_branch: "fix/side-nav-cleanup" };
+    const pr7 = { number: 7, title: "Saved carts for guests", body: "", url: "", head_branch: "feature/saved-carts" };
+    const prs = { tab: "pr" as const, list: [pr214, pr7] };
+    expect(pickerSearch(prs, "#214")).toEqual({ tab: "pr", list: [pr214] });
+    expect(pickerSearch(prs, "saved")).toEqual({ tab: "pr", list: [pr7] });
   });
 });
 

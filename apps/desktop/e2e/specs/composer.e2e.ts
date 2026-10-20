@@ -134,20 +134,27 @@ describe("new session composer (X54)", () => {
     }
   });
 
-  it("starts the session on a branch picked from the Branches tab", async () => {
+  it("starts the session on a branch picked from the Branches tab, in place of a picked PR", async () => {
     await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "fake", model: null, effort: null })), projectId(w));
     await open();
-    await $(`${header}//button[@title="Start from a branch or pull request"]`).click();
+    const picker = `${header}//button[@title="Start from a branch or pull request"]`;
+    await $(picker).click();
     // The picker opens on Branches and says what a pick does (X54).
     await expect($(sel.text("Picking a branch starts the session on it, instead of a new branch from main."))).toBeDisplayed();
+    await $('//button[normalize-space()="Pull requests"]').click();
+    await $('//button[.//span[normalize-space()="#214"]]').click();
+    await expect($(`${row}//span[normalize-space()="PR #214"]`)).toBeDisplayed();
+    await $(picker).click();
+    await $('//button[normalize-space()="Branches"]').click();
     await $('//button[.//span[normalize-space()="feature/saved-carts"]]').click();
     await expect($(`${row}//span[normalize-space()="feature/saved-carts"]/following-sibling::span[normalize-space()="existing branch"]`)).toBeDisplayed();
+    await expect($(`${row}//span[normalize-space()="PR #214"]`)).not.toBeExisting();
     await fill(`${dialog}//textarea`, "Saved carts for guests");
     await $(`${dialog}${sel.button("Create")}`).click();
 
     await expect($(sel.sessionRow("Saved carts for guests"))).toBeDisplayed({ wait: 30_000 });
-    const created = rpc<{ name: string; branch: string }[]>(w, "session.list", {}).find((s) => s.name === "Saved carts for guests");
-    expect(created?.branch).toBe("feature/saved-carts");
+    const created = rpc<{ name: string; branch: string; pr?: number | null }[]>(w, "session.list", {}).find((s) => s.name === "Saved carts for guests");
+    expect([created?.branch, created?.pr ?? null]).toEqual(["feature/saved-carts", null]);
   });
 
   it("sends a picked PR's description and reviews first, and starts the session on its branch with its number", async () => {
