@@ -56,7 +56,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
   - a `moonlet://pair?…` link (parsed as the phone parses it) gives the name, addresses and code;
   - anything else is a code. After the normalization above it must be 10 characters of the alphabet, otherwise the dialog says "This is not a pairing link or code." For a code, the dialog also asks for "Name on your tailnet", such as `studio-mini` or `build-box:47500`.
 - [x] For a typed name, the app resolves it with the system resolver and keeps only the Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), with the given port or 47428. When it resolves to no Tailscale address, the code is not sent, and the dialog says "studio-mini is not on your tailnet (it resolves to 203.0.113.7)." or "studio-mini was not found. Is Tailscale running on this Mac?" (`moonlet-core` `tailnet` tests `a_name_on_the_tailnet_gives_its_listener_addresses`, `a_name_off_the_tailnet_gets_no_code`)
-- [ ] Addresses from a pasted link are used as given, because the host itself wrote them.
+- [x] Addresses from a pasted link must be Tailscale addresses, or loopback (a daemon on this Mac, as in the e2e tests). Otherwise nothing is sent, and the dialog says "The link points at 203.0.113.7:47428, which is not on your tailnet." A forged link could otherwise point the app at a machine off the tailnet, which would then run its sessions. (`moonlet-core` `tailnet` test `a_link_may_point_only_at_the_tailnet_or_this_machine`)
 - [ ] The host's id and label are its name. A name already used by another host is refused with "A host named studio-mini already exists."
 - [ ] The app pairs with `auth {pair, device: <this Mac's name>, kind: "desktop"}`. On `authed` it saves the host and connects. On failure the dialog shows the daemon's message, X39's `this phone is not paired with this Mac` reading "The code was not accepted. Start pairing again on studio-mini.", and nothing is saved.
 
@@ -129,7 +129,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 
 ## Security considerations
 
-- A typed name sends the code only to a Tailscale address, so a typo that resolves to a public host cannot receive it. The tailnet encrypts the pairing, and X39's limits apply: one use, 5 minutes, 5 wrong attempts.
+- A typed name sends the code only to a Tailscale address, so a typo that resolves to a public host cannot receive it. A pasted link's addresses must be on the tailnet too (or loopback), so a forged link cannot point the app at a machine off the tailnet. The tailnet encrypts the pairing, and X39's limits apply: one use, 5 minutes, 5 wrong attempts.
 - A desktop token gives the same full access as a phone token (X39). It is stored in `app-hosts.json` with mode 0600 inside the private `~/.moonlet`, as X41 stores the worker's token in `link.json`. The webview never receives it, and `host_list` does not include it.
 - On the host, a paired desktop cannot pair, list or remove other devices. It can only remove itself.
 - `moonletd pair` runs on the host, so anyone who can run commands there, including an agent, can start a pairing. That is X39's accepted boundary for client names (ADR 0011). The code is still useless without a device on the tailnet.
