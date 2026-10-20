@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chatBlocks } from "@desktop/lib/chat";
 import type { ChatItem } from "@desktop/lib/protocol";
-import { blockKey, chatFooter, sessionChat, sessionLine, shellTerminals } from "./chatView";
+import { blockKey, chatFooter, queuedActions, sessionChat, sessionLine, shellTerminals } from "./chatView";
 import { NOW, chat, data, project, session, terminal } from "./fixtures";
 
 describe("sessionChat", () => {
@@ -63,5 +63,19 @@ describe("blockKey", () => {
       tool("toolu_agent2", "Agent"),
     ];
     expect(chatBlocks(items, "collapsed").map(blockKey)).toEqual(["u1", "toolu_read", "toolu_agent1"]);
+  });
+});
+
+describe("queuedActions (X49)", () => {
+  const q = (id: string, text: string, sending = false) => ({ id, text, sending });
+
+  it("offers Send now for every queued message, and Ask aside on the last one", () => {
+    expect(queuedActions([q("m1", "also run the linter")])).toEqual({ sendNow: "Send now", params: { message: "m1" }, aside: q("m1", "also run the linter") });
+    expect(queuedActions([q("m1", "also run the linter"), q("m2", "why is search slow?")])).toEqual({ sendNow: "Send 2 now", params: {}, aside: q("m2", "why is search slow?") });
+  });
+
+  it("offers nothing after Send now, or with nothing queued", () => {
+    expect(queuedActions([q("m1", "also run the linter", true)])).toBeNull();
+    expect(queuedActions([])).toBeNull();
   });
 });

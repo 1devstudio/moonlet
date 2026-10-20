@@ -44,7 +44,7 @@ A message sent while Claude is working waits in Claude Code's queue until the ru
 
 ### Phone
 
-- [x] The phone's chat shows queued messages as dashed bubbles under the same line as the desktop (`Queued · …`, or `Stopping …` after a Send now from the desktop), without Send now or Ask aside. (`queued.test.ts` is the queued line, the hover warning, or the stopping line after Send now; the phone's `QueuedView` has no test of its own, as React components have none)
+- [x] The phone's chat shows queued messages as dashed bubbles under the same line as the desktop (`Queued · …`, or `Stopping …` after a Send now). Since 2026-10-20 it also has Send now and Ask aside, with the aside in a sheet ([X40](X40-mobile-app.md), Queued messages). (`queued.test.ts` is the queued line, the hover warning, or the stopping line after Send now; `queuedActions` in the phone's `lib/chatView.test.ts`)
 
 ## UI
 
@@ -82,7 +82,6 @@ The aside runs the user's own Claude with no tools, so it cannot change files or
 
 - Codex asides.
 - Editing a queued message.
-- Send now and Ask aside on the phone: the design covers the desktop only, so the phone shows the queue read-only for now.
 
 ## Test plan
 

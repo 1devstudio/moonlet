@@ -2,7 +2,8 @@
 
 import { CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS } from "@desktop/lib/agents";
 import { type ChatBlock, contextView } from "@desktop/lib/chat";
-import type { Project, Session, TerminalInfo } from "@desktop/lib/protocol";
+import type { Project, QueuedMessage, Session, TerminalInfo } from "@desktop/lib/protocol";
+import { sendNowLabel, sendNowParams } from "@desktop/lib/queued";
 import type { ChatSummary, HostData } from "./app";
 
 /** The session's conversation: its first chat terminal. */
@@ -43,4 +44,11 @@ export function chatFooter(st: ChatSummary): ChatFooter {
     model: effort && st.model ? `${model} · ${effort}` : model,
     mode: CLAUDE_MODES.find((m) => m.id === (st.mode ?? DEFAULT_MODE))?.label ?? st.mode ?? "Manual",
   };
+}
+
+/** The buttons under the queued messages (X49): Send now for all of them,
+ * Ask aside for the last; none once Send now was asked. */
+export function queuedActions(queued: readonly QueuedMessage[]): { sendNow: string; params: { message?: string }; aside: QueuedMessage } | null {
+  if (!queued.length || queued.some((q) => q.sending)) return null;
+  return { sendNow: sendNowLabel(queued), params: sendNowParams(queued), aside: queued[queued.length - 1] };
 }
