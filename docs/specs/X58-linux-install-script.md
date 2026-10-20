@@ -157,4 +157,11 @@ Running it again updates moonlet without ending any session.
 
 ## Open questions
 
-- **Does systemd follow the handover?** systemd's documentation says `MAINPID=` changes the service's main process and that `NotifyAccess=all` accepts it from any process in the unit. It does not describe a handover from one daemon to another. The CI update test decides this. If systemd still stops the unit when the old daemon exits, the fallback is `ExitType=cgroup` (systemd 250 and later). It keeps the unit running while any of its processes runs, at the cost of no restart after a crash that leaves agents behind.
+None open. Decided on 2026-10-20 by a throwaway CI check: systemd 255 on GitHub's `ubuntu-latest`, with a stand-in daemon doing S3's handover (the old process starts the new one detached, the new one takes over, the old one exits).
+
+- **systemd follows the handover through `MAINPID=`.**
+  - With `Type=notify`, `NotifyAccess=all` and `MAINPID=` from the new daemon, the unit stayed `active`, `MainPID` named the new daemon, and the agent kept running.
+  - Without `MAINPID=`, systemd stopped the unit when the old daemon exited and killed the agent. So the check would have caught a broken handover.
+  - After the handover, killing the new daemon with `kill -9` restarted the unit (`NRestarts=1`). systemd logs "Supervising process … which is not our child. We'll most likely not notice when it exits." It noticed anyway.
+- **`ExitType=cgroup` is not used.** It also kept the unit and the agent through the handover. But after `kill -9` of the daemon it did not restart, because the agents kept the unit running.
+- The CI update test in the test plan keeps checking this against the real `moonletd`.
