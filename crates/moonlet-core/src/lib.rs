@@ -20,6 +20,7 @@ pub mod project_config;
 pub mod pty;
 pub mod session;
 pub mod shell;
+pub mod tasks;
 pub mod ssh;
 pub mod term;
 pub mod terminal;
