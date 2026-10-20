@@ -6,6 +6,11 @@
     ],
     "resources": {
       "remote/": "remote/"
+    },
+    "macOS": {
+      "files": {
+        "Library/LaunchAgents/dev.onedevstudio.moonlet.moonletd.plist": "launchd/dev.onedevstudio.moonlet.moonletd.plist"
+      }
     }
   }
 }

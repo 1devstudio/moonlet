@@ -21,7 +21,7 @@ Release builds are now signed with a Developer ID ([X3](X3-distribution.md)), so
 
 ### The bundled agent
 
-- [ ] `moonlet.app/Contents/Library/LaunchAgents/dev.onedevstudio.moonlet.moonletd.plist` is in the release bundle, and its signature is sealed with the app. Its keys:
+- [x] `moonlet.app/Contents/Library/LaunchAgents/dev.onedevstudio.moonlet.moonletd.plist` is in the release bundle, and its signature is sealed with the app. Its keys:
   - `Label` `dev.onedevstudio.moonlet.moonletd`. This is a new label: the S1b agent `dev.onedevstudio.moonlet.daemon` may still be loaded during migration, and two jobs cannot share a label.
   - `BundleProgram` `Contents/MacOS/moonletd`, `ProgramArguments` `moonletd daemon`;
   - `RunAtLoad`, `KeepAlive {SuccessfulExit: false}` and `ProcessType Interactive`, as in S1b;
@@ -31,7 +31,7 @@ Release builds are now signed with a Developer ID ([X3](X3-distribution.md)), so
 
 ### Which mechanism a build uses
 
-- [ ] The app uses the login item when it runs from a bundle that contains the agent plist; otherwise it uses `moonletd service` as in S1b. `pnpm tauri dev` and e2e builds therefore keep the plist.
+- [ ] The app uses the login item when it runs from a bundle that contains the agent plist; otherwise it uses `moonletd service` as in S1b. `pnpm tauri dev` and e2e builds (`--no-bundle`) therefore keep the plist; a local `pnpm bundle` build uses the login item.
 
 ### On by default
 
@@ -115,7 +115,11 @@ Dev and e2e builds show the S1b line and plist path as today.
   - switching moonlet off in Login Items shows the right line;
   - an upgrade from 0.1.24 with the S1b agent loaded keeps every session, and after logging out and in again the daemon runs under the new label only.
 
-## Open questions
+## Findings
 
-- Does `SMAppService.unregister()` stop an agent that is running, as `launchctl bootout` does? The confirmation text depends on it. Check it on a signed build before writing the dialog.
-- Does registration work for a locally built, ad-hoc signed bundle? If it does, local `pnpm bundle` builds can use the login item too. If not, the "Which mechanism" rule should also require a Developer ID signature.
+Checked on macOS with a throwaway bundle that registers an agent with `SMAppService` (2026-10-20):
+
+- An ad-hoc signed bundle registers its agent (`enabled`) and launchd runs it, so the mechanism rule needs no Developer ID check: a local `pnpm bundle` build uses the login item too.
+- `unregister()` stops a running agent, as `launchctl bootout` does. Turning the toggle off therefore keeps the S1b confirmation.
+- `register()` on an agent that is already registered and running keeps the same process.
+- An agent killed by a signal is restarted by launchd (`KeepAlive {SuccessfulExit: false}`).
