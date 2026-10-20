@@ -32,7 +32,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 The composer's layout and source picks are now X54's: a header with the project, the task and the source picker, a branch row, and attachments above the prompt. The rest of this section still holds.
 
 - Opened by `+` on a project, ⇧⌘N, or the palette. It is a large dialog:
-  - **Header:** the project picker (`name ⌄`) and `⋯`, which holds "Start from branch…", "Use existing branch…" and "Base branch". On the right is a source picker (GitHub ⌄) to start from an issue or PR (`gh issue list` / `gh pr list`). An issue fills the prompt with its title and body and links it; a PR checks out its branch.
+  - **Header:** the project picker (`name ⌄`) and `⋯`, which holds "Start from branch…", "Use existing branch…" and "Base branch". On the right is a source picker to start from a branch or PR (`git.branches` / `gh pr list`); either checks out that branch (X54).
   - **Body:** a textarea, "What do you want to work on?" (optional).
   - **Footer:** the agent/model picker on the left (`Sonnet 5.5 High ⌄`: agent, model alias, effort), and on the right `+` (attach files: adds paths to the prompt) and **Create ↵** (⌘↵, or ↵ in a single-line prompt).
 - **On Create:**

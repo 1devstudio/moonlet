@@ -9,12 +9,14 @@
 
 The new-session composer put everything in its header: the project, `⋯`, the task chip, the task's branch, a from-ref chip, a PR chip, directory chips and an issue number, all next to the GitHub picker. Started from a task, the header overflowed, and the task's description filled the prompt, so what the user typed got mixed into the issue text. Picking a GitHub issue only filled an empty prompt, so with a task it silently did nothing.
 
-The composer now has three layers. The header keeps the project, the task chip (which takes the spare width) and the source picker. A 38 px branch row under it holds the git things: the branch and its base, the from-ref, PR and directory chips, branch options and the "session starts" checkbox. The body shows the task's description, a picked issue and a picked PR as folded **attachments** above an empty prompt; Create sends them with what the user typed.
+The composer now has three layers. The header keeps the project, the task chip (which takes the spare width) and the source picker. A 38 px branch row under it holds the git things: the branch and its base, the from-ref, PR and directory chips, branch options and the "session starts" checkbox. The body shows the task's description and a picked PR as folded **attachments** above an empty prompt; Create sends them with what the user typed.
+
+The source picker has two tabs, Branches and Pull requests. It first had an Issues tab, which attached a GitHub issue to the prompt; Branches replaced it (2026-10-20), on the desktop and on the phone (X40), since GitHub issues are tasks on a board (X50) and start a session from there.
 
 ## User journey
 
 1. **From a task.** In Tasks mode the user clicks **Start** on `AIO-279 Remove placeholder side nav menu items from Catalyst`. The header reads `moonlet ⌄ | [J] AIO-279 Remove placeholder side nav menu items from Catalyst × | (GitHub) ⌄`. The branch row reads `⎇ aio-279-remove-placeholder-side-nav-menu-items from main`, then `☑ Move to In Progress` and `⋯`. The body shows one folded attachment, `AIO-279 description sent with your message · In Catalyst side nav menu, remove A/B Testing and Security…`, above an empty prompt reading "Anything to add? Leave empty to start from the issue." ⌘↵ starts the session with the issue as its first message.
-2. **Pick an issue too.** In the GitHub picker's Issues tab, a hint says "Adds the issue as a second attachment next to AIO-279’s description. It doesn’t replace the task." Picking #57 adds `#57 Terminal flickers when resizing a split · GitHub issue, sent too` under the description, outlined in the accent colour for a moment, with an ×. The branch stays the task's.
+2. **Pick a branch instead.** The source picker opens on its Branches tab, with a hint: "Picking a branch starts the session on it, instead of creating aio-279-… from main. The task link stays." Picking `feature/saved-carts` makes the branch row read `⎇ feature/saved-carts existing branch` with ×. The task's description stays attached.
 3. **Pick a PR.** In the Pull requests tab, a hint says "Picking a PR starts the session on its branch, instead of creating aio-279-… from main. The task link stays." Picking #214 turns the branch row green: `PR #214 fix/side-nav-cleanup`, `☑ Move to In Progress` and `× Use task branch`. A second attachment reads `PR #214 description and review comments · Clean up the side nav before the Catalyst release`, and the prompt asks "Anything to add? e.g. “Address the review comments”".
 4. **No task yet.** Opened from Sessions mode in a workspace with a task source, the task chip is a dashed `+ Link a task` slot. After picking PR #214, whose title carries `AIO-279`, the slot reads `+ Link a task · PR #214 mentions AIO-279 [Link]`. The branch row is the PR row, with `× New branch instead`; there is no checkbox until a task is linked. The session is named after the PR.
 
@@ -28,7 +30,7 @@ The composer now has three layers. The header keeps the project, the task chip (
   - from a task: the task's branch (a quiet `…` until it is worked out), then `from <base>`;
   - with neither a task nor a pick: `New branch` and `from <base>`;
   - "Start from branch or commit…": `New branch` (or the task's branch) and `from <ref>`, with × to go back to the base;
-  - "Use an existing branch…": the branch and `existing branch`, with ×;
+  - "Use an existing branch…", or a branch picked from the Branches tab: the branch and `existing branch`, with × "Create a new branch from <base> instead", or "Back to <task branch> from <base>" when there is a task;
   - an adopted worktree (X46): the branch and `existing worktree`;
   - a picked PR: the PR row, below.
 - [x] Branch options (`⋯`) sits at the branch row's right end, except on the PR row. Picking "Start from branch or commit…" or "Use an existing branch…" puts the ref field in the branch row itself, and ↵ sets it. (`composer.e2e.ts` asks for a ref inside the branch row)
@@ -41,26 +43,27 @@ The composer now has three layers. The header keeps the project, the task chip (
 - [x] An attachment unfolds to show its text, Markdown rendered as in the Task tab (X46). It cannot be edited; what the user wants changed goes in the prompt. (`tasks-mode.e2e.ts` unfolds a task's description in the composer)
 - [x] Create sends the attachments' texts, in the order shown, then what the user typed, separated by a blank line. With nothing attached and nothing typed, the agent starts with no first message, as before. (`composer.test.ts` firstMessage, `tasks-mode.e2e.ts` starts a session from a task, `composer.e2e.ts` sends a picked PR's description and reviews first) The texts:
   - the task: `<key> · <title>` and the description on the next lines, as before (X46);
-  - an issue: `#<n> · <title>`, a blank line, its body, a blank line, its URL;
   - a PR: `PR #<n> · <title>`, a blank line, its description and review comments, a blank line, its URL.
 - [x] An attachment sends the text it shows: HTML comments, which the unfolded attachment leaves out as the Task tab does, are not sent either, except inside code. (`composer.test.ts` sends no HTML comment, as it shows none)
-- [x] Picking an issue adds its attachment, `#<n> <title> · GitHub issue, sent too` with a task and `#<n> <title> · GitHub issue` without one, whatever the prompt holds. It is outlined in the accent colour for 1.5 s (seen in the app). × "Remove #<n>" removes it. (`composer.test.ts` attachments, `composer.e2e.ts` adds a picked issue as an attachment)
 - [x] The placeholder follows what is attached, not what is picked: a PR whose attachment was removed counts for nothing (`composer.test.ts` placeholder, `composer.e2e.ts` turns the branch row into the PR row):
   - a task and a PR: "Anything to add? e.g. “Address the review comments”";
-  - a task and an issue: "Anything to add?";
-  - a task alone, or an issue alone: "Anything to add? Leave empty to start from the issue.";
+  - a task alone: "Anything to add? Leave empty to start from the issue.";
   - a PR without a task: "What should the agent do on this PR? e.g. “Address the review comments”";
   - nothing: "What do you want to work on?"
-- [x] The session's name is the task's title; without a task, the PR's title; without either, the issue's title; else it comes from the prompt as before (X5). (`composer.test.ts` sessionName, `composer.e2e.ts`)
+- [x] The session's name is the task's title; without a task, the PR's title; else it comes from the prompt as before (X5). (`composer.test.ts` sessionName, `composer.e2e.ts`)
 
 ### Source picks
 
+- [x] The source picker (tooltip "Start from a branch or pull request") has two tabs, Branches and Pull requests, and a new composer's picker opens on Branches. Switching tabs clears the search. (`composer.e2e.ts` starts the session on a branch picked from the Branches tab, in place of a picked PR)
 - [x] The source picker's popover ends with a hint for its tab (`composer.test.ts` pickerHint):
+  - Branches, with a task: "Picking a branch starts the session on it, instead of creating <the task branch's first two parts>-… from <base>. The task link stays.";
+  - Branches, without a task: "Picking a branch starts the session on it, instead of a new branch from <base>.";
   - Pull requests, with a task: "Picking a PR starts the session on its branch, instead of creating <the task branch's first two parts>-… from <base>. The task link stays.";
-  - Pull requests, without a task: "Picking a PR starts the session on its branch, instead of a new branch from <base>.";
-  - Issues, with a task: "Adds the issue as a second attachment next to <key>’s description. It doesn’t replace the task.";
-  - Issues, without a task: "Adds the issue as an attachment, and names the session after it."
-- [x] A list that arrives after a switch to the other tab is dropped, so issues never show, or get picked, as pull requests. (`composer.e2e.ts` drops a list that arrives after a switch to the other tab)
+  - Pull requests, without a task: "Picking a PR starts the session on its branch, instead of a new branch from <base>."
+- [x] The Branches tab lists the project's branches from `git.branches`, most recently committed first, each once: an `origin/<name>` branch shows as `<name>`, and the bare `origin` that `origin/HEAD` lists as is left out. (`composer.test.ts` pickerBranches)
+- [x] The search finds branches by name and pull requests by `#<n> <title>`, ignoring case. (`composer.test.ts` pickerSearch)
+- [x] Picking a branch is "Use an existing branch…" with that branch: the branch row reads the branch and `existing branch`, with ×, and the session checks it out in a new worktree (an origin branch as a local branch tracking it). A picked PR goes. (`composer.e2e.ts` starts the session on a branch picked from the Branches tab, in place of a picked PR)
+- [x] A list that arrives after a switch to the other tab is dropped, so pull requests never show, or get picked, as branches. (`composer.e2e.ts` drops a list that arrives after a switch to the other tab)
 - [x] Picking a PR turns the branch row into the PR row, tinted green: the PR mark and `PR #<n>` in the done colour, the PR's head branch, and `existing branch · checks out in a new worktree`. With the checkbox showing, that hint moves into the row's tooltip so the branch keeps its room. (`composer.test.ts` branchRow, `composer.e2e.ts`)
 - [x] The PR row ends with `× Use task branch` (tooltip `Back to <task branch> from <base>`) when there is a task, `× New branch instead` (tooltip `Create a new branch from <base> instead`) when not. Either undoes the pick: the PR's attachment goes too. (`composer.test.ts` branchRow, `composer.e2e.ts`)
 - [x] Picking a PR adds its attachment, `PR #<n> description and review comments · <title>`. Its × "Don’t send the PR description" removes the attachment and keeps the PR's branch. (`composer.test.ts` attachments, `composer.e2e.ts`)
@@ -72,12 +75,12 @@ The composer now has three layers. The header keeps the project, the task chip (
 ### Link a task
 
 - [x] Without a task, in a workspace with a task source (the rule of "Link to task…", X46), the task chip's place holds a dashed `+ Link a task` slot. Clicking it opens a search over the workspace's tasks with the link dialog's Suggested and Recent lists, filtered by key or title (X46). Picking a task links it as if the composer had been started from it (its attachment, its branch and the "session starts" checkbox), without changing the project. (`composer.test.ts` Link a task, `tasks-mode.e2e.ts` links a task from the composer's Link a task slot)
-- [x] When a picked PR's title, body or head branch mentions a loaded task's key (X46 key matching), or the PR closes a loaded GitHub issue of its own repository, or a picked issue's title or body mentions a key, the slot reads `+ Link a task · PR #214 mentions AIO-279` (or `closes`) with a **Link** button that links it in one click. (`composer.test.ts` suggestedTask, finds the GitHub issue a picked PR closes, in the PR's own repository; seen in the app)
+- [x] When a picked PR's title, body or head branch mentions a loaded task's key (X46 key matching), or the PR closes a loaded GitHub issue of its own repository, the slot reads `+ Link a task · PR #214 mentions AIO-279` (or `closes`) with a **Link** button that links it in one click. (`composer.test.ts` suggestedTask, finds the GitHub issue a picked PR closes, in the PR's own repository; seen in the app)
 - [x] In a workspace without a task source, or in an adopted worktree, the header has no slot. (`composer.test.ts` shows the slot only without a task)
 
 ## UI
 
-The designs are "New session from a task", "Composer GitHub source picker open" and "Composer after picking a PR or an issue, with and without a task".
+The designs are "New session from a task", "Composer GitHub source picker open" and "Composer after picking a PR or an issue, with and without a task". The Branches tab replaces the designs' Issues tab: a row is a 13 px branch icon and the branch's name in mono, where a PR row has its number, title and head branch (seen in the app with `e2e/snap.ts`).
 
 ```
 ╭──────────────────────────────────────────────────────────────────────╮
@@ -103,7 +106,8 @@ The designs are "New session from a task", "Composer GitHub source picker open" 
 ## Protocol and RPCs
 
 - `gh.pr_context {path, number}` returns the text a PR's attachment sends: its body, then its reviews (author, state and body), its conversation comments and its review comments on lines (author, `path:line` and body), each cut so the whole stays under 8000 characters, by the PR's author and people whose `authorAssociation` is `OWNER`, `MEMBER` or `COLLABORATOR` only. Each review or comment is cut to 1000 characters, its lines indented under its `- @author` line. A line comment names its `path:line`, the `original_line` of an outdated one, and says `, replying` when it answers another. It runs `gh pr view <n> --json author,body,reviews,comments` and `gh api repos/{owner}/{repo}/pulls/<n>/comments?per_page=100` (the first 100 line comments).
-- `session.create` is unchanged: `prompt` carries the attachments, `name` the task's, PR's or issue's title, `pr` the PR's number.
+- `session.create` is unchanged: `prompt` carries the attachments, `name` the task's or PR's title, `pr` the PR's number; a picked branch is `branch` with `existing_branch`.
+- The Branches tab reads `git.branches {path}`, as "Use an existing branch…" already did.
 
 ## Data and config
 
@@ -111,20 +115,21 @@ The designs are "New session from a task", "Composer GitHub source picker open" 
 
 ## Security considerations
 
-- Issue, PR and comment text is untrusted. Attachments render it as the Task tab does (sanitised Markdown, no raw HTML or HTML comments, links as the chat renders them), send the same text they show, and it reaches the agent only as the first message the user sends, after it was shown folded in the composer, as X46 requires for the task's description.
-- On a public repository anyone can comment on a PR, and the PR's attachment goes to the agent as instructions. So it carries only the words of the PR's author and of people with a role in the repository; a CONTRIBUTOR (anyone with one merged PR) and a bot without a role are left out, and minimised comments too. The attachment says how many were left out. The PR's description is its author's, whom the user chose by picking the PR, as with an issue's description.
+- Task, PR and comment text is untrusted. Attachments render it as the Task tab does (sanitised Markdown, no raw HTML or HTML comments, links as the chat renders them), send the same text they show, and it reaches the agent only as the first message the user sends, after it was shown folded in the composer, as X46 requires for the task's description.
+- On a public repository anyone can comment on a PR, and the PR's attachment goes to the agent as instructions. So it carries only the words of the PR's author and of people with a role in the repository; a CONTRIBUTOR (anyone with one merged PR) and a bot without a role are left out, and minimised comments too. The attachment says how many were left out. The PR's description is its author's, whom the user chose by picking the PR.
 
 ## Out of scope
 
 - Editing an attachment's text in the composer.
-- More than one picked issue or PR.
+- More than one picked branch or PR.
+- Leaving out branches another worktree has checked out (the base, another session's): picking one fails with git's message.
 - Keyboard navigation in the source picker's list.
 
 ## Test plan
 
-- Vitest (`apps/desktop/src/lib/composer.test.ts`): the branch row for each case, the attachments and their labels, the first message, the placeholders, the session name, the picker hints and the suggested task, with literals from the designs. `keepInStep.test.ts` for the short checkbox labels; `tasks.test.ts` for the description in the task's start.
+- Vitest (`apps/desktop/src/lib/composer.test.ts`): the branch row for each case, the attachments and their labels, the first message, the placeholders, the session name, the picker hints, the Branches tab's list, the picker's search and the suggested task, with literals from the designs. `keepInStep.test.ts` for the short checkbox labels; `tasks.test.ts` for the description in the task's start.
 - Rust: `gh.pr_context` output parsed from captured `gh` JSON (`git.rs`), and the RPC through a stub `gh` (`daemon.rs`).
-- e2e: start from a task with the description folded and sent, unfold it, and link a task from the slot (`tasks-mode.e2e.ts`); a from-ref, an issue and a PR picked, the PR's attachment removed, the pick undone, and a session created on a PR with its reviews sent (`composer.e2e.ts`).
+- e2e: start from a task with the description folded and sent, unfold it, and link a task from the slot (`tasks-mode.e2e.ts`); a from-ref, a branch and a PR picked, the PR's attachment removed, the pick undone, and sessions created on a picked branch and on a PR with its reviews sent (`composer.e2e.ts`).
 
 ## Open questions
 
