@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Workspace } from "./protocol";
 import { migrateSources } from "./boards";
 import { workspaceViews } from "./boardScreen";
@@ -828,6 +828,7 @@ describe("a phone's requests (X57)", () => {
     answers["tasks.answer"] = (p) => (answered.push(p), true);
     useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [LINEAR_BOARD] }, data: { "local/personal": { tasks: [drag], worktrees: [], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
   });
+  afterEach(() => useTasks.setState({ config: null, data: {}, activity: {}, failures: {}, moving: {} }));
 
   it("tells of a session started from a task as the Mac's composer does, and answers", async () => {
     await answerTaskRequest("local", { request_id: 7, workspace: "personal", action: { kind: "started", task: "linear:acme MOON-151", session: "Drag", assign: true } });
