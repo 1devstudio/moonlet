@@ -666,3 +666,31 @@ async fn a_phones_task_request_is_answered_by_the_app() {
     let e = cli.request::<_, Value>("tasks.request", json!({ "workspace": "personal", "action": {} })).await.unwrap_err();
     assert_eq!(e.to_string(), "forbidden: agents cannot change tasks through moonlet");
 }
+
+#[tokio::test]
+async fn one_app_takes_a_task_request_and_agents_cannot_answer_one() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut first = mac.app().await;
+    let mut second = mac.app().await;
+    // A client that only says it is something else is not the app.
+    let mut other = Client::connect(&mac.socket, "moonletd-status").await.unwrap();
+
+    let asking = tokio::spawn(async move { call_with(&mut phone, 1, "tasks.request", json!({ "workspace": "personal", "action": { "kind": "started" } })).await });
+    let ev = app_event(&mut first, "tasks.request").await;
+    // Only one app does it: two would create two issues.
+    for c in [&mut second, &mut other] {
+        let none = tokio::time::timeout(Duration::from_millis(500), app_event(c, "tasks.request")).await;
+        assert!(none.is_err(), "another client got the request");
+    }
+    let mut cli = Client::connect(&mac.socket, "moonlet-cli").await.unwrap();
+    let e = cli.request::<_, bool>("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app answers task requests");
+    let e = other.request::<_, bool>("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app answers task requests");
+    let _: bool = first.request("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true, "result": {} })).await.unwrap();
+    let Message::Response { error: None, .. } = asking.await.unwrap() else { panic!("not answered") };
+}

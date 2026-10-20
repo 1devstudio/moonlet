@@ -1,6 +1,6 @@
 //! Daemon state and request dispatch.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,10 +41,10 @@ pub struct Daemon {
     /// Phone access over Tailscale (X39).
     pub mobile: Arc<crate::mobile::Mobile>,
     /// Board snapshots the app shares, and the phone's requests to it (X57).
-    task_snapshots: TaskSnapshots,
+    task_snapshots: Arc<TaskSnapshots>,
     task_relay: TaskRelay,
-    /// Connections of the moonlet app: not the CLI, not a phone (X57).
-    apps: Mutex<BTreeSet<u64>>,
+    /// Connections of the moonlet app, oldest first, to send a phone's task requests to (X57).
+    apps: Mutex<BTreeMap<u64, moonlet_core::terminal::ClientTx>>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -69,6 +69,9 @@ impl Drop for Flag<'_> {
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
 pub const CLI_CLIENT: &str = "moonlet-cli";
+
+/// The name the moonlet app gives in its hello.
+pub const APP_CLIENT: &str = "moonlet-app";
 
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
     serde_json::from_value(v).map_err(|e| RpcError::new("invalid_params", e.to_string()))
@@ -165,9 +168,9 @@ impl Daemon {
             accounts: Mutex::new(HashMap::new()),
             claude_updating: AtomicBool::new(false),
             mobile,
-            task_snapshots: TaskSnapshots::load(tasks::dir()),
+            task_snapshots: Arc::new(TaskSnapshots::load(tasks::dir())),
             task_relay: TaskRelay::new(tasks_timeout),
-            apps: Mutex::new(BTreeSet::new()),
+            apps: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -215,14 +218,15 @@ impl Daemon {
         self.handed_off.store(true, Ordering::SeqCst);
     }
 
-    /// Whether `conn` is the moonlet app: the one that answers for the user.
+    /// Whether `conn` is the moonlet app, which acts for the user. Like X31's
+    /// reads, this trusts the name the client gives in its hello.
     pub fn is_app(conn: &Conn) -> bool {
-        conn.phone.is_none() && conn.client != CLI_CLIENT
+        conn.phone.is_none() && conn.client == APP_CLIENT
     }
 
     pub fn on_connect(&self, conn: &Conn) {
         if Self::is_app(conn) {
-            self.apps.lock().unwrap().insert(conn.id);
+            self.apps.lock().unwrap().insert(conn.id, conn.tx.clone());
         }
     }
 
@@ -816,17 +820,28 @@ impl Daemon {
                 if !self.sessions.list_workspaces().iter().any(|ws| ws.id == r.workspace) {
                     return Err(RpcError::new("not_found", format!("no workspace {}", r.workspace)));
                 }
-                self.task_snapshots.set(&r.workspace, r.snapshot.clone()).map_err(internal)?;
+                let snapshot = r.snapshot.clone();
+                let workspace = r.workspace.clone();
+                let store = self.task_snapshots.clone();
+                // Up to 4 MB written and synced: off the async workers.
+                tokio::task::spawn_blocking(move || store.set(&workspace, snapshot))
+                    .await
+                    .map_err(internal)?
+                    .map_err(internal)?;
                 self.terminals.emit(Message::event(m::EV_TASKS_CHANGED, &r));
                 ok(true)
             }
             m::TASKS_REQUEST => {
                 let r: m::TasksRequest = params(p)?;
-                let apps = !self.apps.lock().unwrap().is_empty();
-                let emitter = self.terminals.clone();
+                // One app does it, the longest connected: two would create two issues.
+                let app = self.apps.lock().unwrap().values().next().cloned();
                 let result = self
                     .task_relay
-                    .request(r.workspace, r.action, apps, |ev| emitter.emit(Message::event(m::EV_TASKS_REQUEST, ev)))
+                    .request(r.workspace, r.action, app.is_some(), |ev| {
+                        if let Some(tx) = app {
+                            tx.send(moonlet_proto::Frame::Json(Message::event(m::EV_TASKS_REQUEST, ev)));
+                        }
+                    })
                     .await
                     .map_err(|e| RpcError::new("failed", e.to_string()))?;
                 ok(result)
