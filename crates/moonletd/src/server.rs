@@ -148,6 +148,7 @@ where
         phone,
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
+    daemon.on_connect(&conn);
 
     // Fan daemon events out to this client.
     let mut events = daemon.terminals.subscribe_events();
@@ -155,11 +156,15 @@ where
     // The text an agent asks to read is for the app alone, not for the
     // agent's own `moonlet` connections (X31).
     let is_cli = conn.client == crate::daemon::CLI_CLIENT;
+    // A phone's task request is for the app to answer (X57).
+    let is_app = crate::daemon::Daemon::is_app(&conn);
     let event_task = tokio::spawn(async move {
         loop {
             match events.recv().await {
                 Ok(Message::Event { name, .. })
                     if is_cli && name == moonlet_proto::methods::EV_TERMINAL_READ_REQUEST => {}
+                Ok(Message::Event { name, .. })
+                    if !is_app && name == moonlet_proto::methods::EV_TASKS_REQUEST => {}
                 Ok(m) => {
                     if !ev_tx.send(Frame::Json(m)) {
                         break;
