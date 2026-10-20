@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -84,7 +84,7 @@ describe("profiles that need a sign-in (X43)", () => {
 describe("General's background daemon line (X43, X56)", () => {
   const plist = "/Users/alex/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist";
   const viaPlist = (state: "loaded" | "installed" | "not_installed") => ({ mechanism: "plist" as const, state, plist });
-  const viaLoginItem = (state: "enabled" | "requires_approval" | "not_registered") => ({ mechanism: "login_item" as const, state });
+  const viaLoginItem = (state: "enabled" | "requires_approval" | "not_registered" | "not_found") => ({ mechanism: "login_item" as const, state });
 
   it("points at Login Items when the login item starts the daemon", () => {
     expect(daemonLine(viaLoginItem("enabled"), "/Users/alex")).toEqual({ tone: "done", text: "Starts at login · moonlet in System Settings › Login Items" });
@@ -96,6 +96,17 @@ describe("General's background daemon line (X43, X56)", () => {
 
   it("says the daemon only runs with the app when the login item is not registered", () => {
     expect(daemonLine(viaLoginItem("not_registered"), "/Users/alex")).toEqual({ tone: "muted", text: "Not starting at login: moonletd runs while moonlet is open" });
+  });
+
+  it("says when macOS cannot find the login item", () => {
+    expect(daemonLine(viaLoginItem("not_found"), "/Users/alex")).toEqual({ tone: "error", text: "macOS cannot find moonlet's login item. Reinstall moonlet." });
+    expect(daemonOn(viaLoginItem("not_found"))).toBe(false);
+  });
+
+  it("explains the toggle in the words of the mechanism", () => {
+    expect(daemonHint(viaLoginItem("enabled"))).toBe("Agents run in moonletd, not in this window. As a login item it starts at login and restarts if it ever crashes.");
+    expect(daemonHint(viaPlist("loaded"))).toBe("Agents run in moonletd, not in this window. Under launchd it starts at login and restarts if it ever crashes.");
+    expect(daemonHint(null)).toBe("Agents run in moonletd, not in this window. As a login item it starts at login and restarts if it ever crashes.");
   });
 
   it("names launchd and the plist when the daemon runs under it", () => {

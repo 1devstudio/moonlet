@@ -7,7 +7,7 @@
 
 ## Summary
 
-On macOS, `moonletd` can run as a per-user LaunchAgent. launchd starts it at login and restarts it if it crashes; after a crash, workspaces come back through [S4](S4-restore-after-restart.md). Without the agent, the app still starts the daemon on demand, detached.
+On macOS, `moonletd` can run as a per-user LaunchAgent. Bundled builds now register it as the app's login item instead ([X56](X56-login-item.md)); this spec still covers dev and e2e builds and `moonletd service` on the command line. launchd starts it at login and restarts it if it crashes; after a crash, workspaces come back through [S4](S4-restore-after-restart.md). Without the agent, the app still starts the daemon on demand, detached.
 
 ## Behaviour and acceptance criteria
 

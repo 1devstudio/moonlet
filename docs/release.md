@@ -60,4 +60,3 @@ spctl -a -vvv -t exec target/release/bundle/macos/moonlet.app
 ## Still open
 
 1. **Helper signing.** Sign the Linux helpers (for example with minisign) and verify the signature in `remote::install` next to the SHA-256 check ([R2](specs/R2-remote-helper-install.md)).
-2. **Launch at login.** Builds are signed now, so switch from the plist written by `moonletd service install` to `SMAppService` ([ADR 0004](adr/0004-launchagent-plist.md)).

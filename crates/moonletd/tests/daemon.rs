@@ -1541,3 +1541,33 @@ async fn a_worktree_without_a_session_can_be_removed() {
     let left: Vec<Worktree> = c.request(methods::PROJECT_WORKTREES, serde_json::json!({"id": p.id})).await.unwrap();
     assert_eq!(left.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(), [s.path.as_str()]);
 }
+
+/// A login item or launchd job that starts a second daemon while one is
+/// serving gets exit code 0, so launchd does not restart it (S1b, X56).
+#[tokio::test]
+async fn a_second_daemon_exits_with_0_while_one_is_listening() {
+    let d = TestDaemon::start().await;
+    let mut second = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("daemon")
+        .env("MOONLET_HOME", d.home.path())
+        .env("MOONLET_SOCK", &d.socket)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = second.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = second.kill();
+            panic!("the second daemon kept running");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(status.code(), Some(0));
+    // The first one still serves.
+    d.client().await;
+}
