@@ -22,8 +22,9 @@ import {
   X,
 } from "lucide-react";
 import { type ChatBlock, diffStat, planOf, thinkingPreview, toolCommand, toolGroupLabel, toolGroupStatus } from "@desktop/lib/chat";
-import type { ChatItem, ToolCall } from "@desktop/lib/protocol";
-import { AGENT_STATE, type AgentRow, agentCount, isActive, launchedRows, modelLabel } from "@desktop/lib/subagents";
+import type { ChatItem, ChatState, ToolCall } from "@desktop/lib/protocol";
+import { useNow } from "../lib/now";
+import { AGENT_STATE, type AgentRow, agentCount, agentKey, agentRows, isActive, launchedRows, modelLabel } from "@desktop/lib/subagents";
 import { DIFF_LINE } from "../lib/palette";
 import { Markdown } from "./Markdown";
 import { Btn, StateGlyph, cx } from "./ui";
@@ -157,8 +158,19 @@ export function AskerLine({ name }: { name: string }) {
   );
 }
 
+/** A chat's subagents and their asks, for the agents' rows. */
+export type AgentsOf = { id: number; st: Pick<ChatState, "subagents" | "pending"> };
+
+/** The chat's agent rows, their clocks ticking each second while one runs:
+ * only the views that show them re-render. */
+function useAgentRows(chat: AgentsOf): AgentRow[] {
+  const now = useNow(chat.st.subagents?.some((a) => a.status === "running") ? 1000 : 30_000);
+  return agentRows([chat], now);
+}
+
 /** "Launched 3 agents": a run of Agent calls, each with its live state (X42). */
-function LaunchedCard({ tools, rows, onOpen }: { tools: ChatItem[]; rows: AgentRow[]; onOpen: (row: AgentRow) => void }) {
+function LaunchedCard({ tools, chat, onOpen }: { tools: ChatItem[]; chat: AgentsOf; onOpen: (key: string) => void }) {
+  const rows = useAgentRows(chat);
   const list = launchedRows(tools, rows);
   return (
     <div className="flex-none overflow-hidden rounded-[12px] border border-border bg-panel">
@@ -166,7 +178,7 @@ function LaunchedCard({ tools, rows, onOpen }: { tools: ChatItem[]; rows: AgentR
       {list.map((r) => {
         const row = rows.find((x) => x.agent.tool_use_id === r.key);
         return (
-          <button key={r.key} type="button" disabled={!row} onClick={() => row && onOpen(row)} className="flex min-h-11 w-full items-center gap-2.5 px-3.5 text-left">
+          <button key={r.key} type="button" disabled={!row} onClick={() => row && onOpen(agentKey(row.chat, row.agent.id))} className="flex min-h-11 w-full items-center gap-2.5 px-3.5 text-left">
             <StateGlyph state={r.state ? AGENT_STATE[r.state].glyph : "idle"} size={12} />
             <span className="min-w-0 flex-1 truncate text-[14px]">{r.description}</span>
             {r.state && <span className={cx("shrink-0 text-[12.5px]", AGENT_STATE[r.state].text)}>{r.label}</span>}
@@ -179,7 +191,9 @@ function LaunchedCard({ tools, rows, onOpen }: { tools: ChatItem[]; rows: AgentR
 }
 
 /** One subagent: what it was asked, what it does or reported, and Stop while it works (X42). */
-export function AgentDetail({ row, onStop }: { row: AgentRow; onStop: () => void }) {
+export function AgentDetail({ chat, agent, onStop }: { chat: AgentsOf; agent: string; onStop: (row: AgentRow) => void }) {
+  const row = useAgentRows(chat).find((r) => agentKey(r.chat, r.agent.id) === agent);
+  if (!row) return null;
   const a = row.agent;
   return (
     <div className="scroll flex flex-col gap-3 px-4 pb-2">
@@ -201,7 +215,7 @@ export function AgentDetail({ row, onStop }: { row: AgentRow; onStop: () => void
         </>
       )}
       {isActive(row.state) && (
-        <Btn tone="secondary" onClick={onStop}>
+        <Btn tone="secondary" onClick={() => onStop(row)}>
           Stop agent
         </Btn>
       )}
@@ -209,8 +223,8 @@ export function AgentDetail({ row, onStop }: { row: AgentRow; onStop: () => void
   );
 }
 
-export function ChatBlockView({ block, cwd, agents = [], onAgent = () => {} }: { block: ChatBlock; cwd: string; agents?: AgentRow[]; onAgent?: (row: AgentRow) => void }) {
-  if (block.kind === "agents") return <LaunchedCard tools={block.tools} rows={agents} onOpen={onAgent} />;
+export function ChatBlockView({ block, cwd, agents, onAgent = () => {} }: { block: ChatBlock; cwd: string; agents?: AgentsOf; onAgent?: (key: string) => void }) {
+  if (block.kind === "agents") return agents ? <LaunchedCard tools={block.tools} chat={agents} onOpen={onAgent} /> : null;
   if (block.kind === "tools") return <ToolGroup tools={block.tools} cwd={cwd} />;
   const it = block.item;
   switch (it.kind) {

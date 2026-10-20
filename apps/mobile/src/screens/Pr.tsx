@@ -14,7 +14,7 @@ import { forget, useGitStatus, usePr } from "../lib/rowDetails";
 import { useBusy } from "../lib/busy";
 import { StatusMark } from "../components/chat";
 import { AgentIcon, Btn, DiffStat, cx } from "../components/ui";
-import { useNow } from "./Inbox";
+import { useNow } from "../lib/now";
 
 function CreatePr({ host, session, onCreated }: { host: string; session: Session; onCreated: () => void }) {
   const [title, setTitle] = useState(session.name);

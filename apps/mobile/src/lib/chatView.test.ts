@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chatBlocks } from "@desktop/lib/chat";
 import type { ChatItem } from "@desktop/lib/protocol";
-import { blockKey, chatFooter, queuedActions, sessionChat, sessionLine, shellTerminals } from "./chatView";
+import { asideStep, blockKey, chatFooter, queuedActions, sessionChat, sessionLine, shellTerminals } from "./chatView";
 import { NOW, chat, data, project, session, terminal } from "./fixtures";
 
 describe("sessionChat", () => {
@@ -77,5 +77,19 @@ describe("queuedActions (X49)", () => {
   it("offers nothing after Send now, or with nothing queued", () => {
     expect(queuedActions([q("m1", "also run the linter", true)])).toBeNull();
     expect(queuedActions([])).toBeNull();
+  });
+});
+
+describe("asideStep (X49)", () => {
+  const asked = { id: "m2", text: "why is search slow?", sending: false };
+  const st = (queued: { id: string; text: string; sending: boolean }[], items: { id: string }[] = []) => ({ queued, items: items as never[] });
+
+  it("waits while Claude still has the message, then asks it aside once Claude gave it back", () => {
+    expect(asideStep(st([asked]), asked)).toEqual({ kind: "wait" });
+    expect(asideStep(st([]), asked)).toEqual({ kind: "ask", question: "why is search slow?" });
+  });
+
+  it("says so when Claude read the message first", () => {
+    expect(asideStep(st([], [{ id: "m2" }]), asked)).toEqual({ kind: "note", text: "Claude read the message before it could be asked aside" });
   });
 });

@@ -11,7 +11,7 @@ import { taskChip } from "../lib/sessionList";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
-import { archiveSheet } from "../lib/archive";
+import { archiveSheet, archivedNote } from "../lib/archive";
 import { useBusy } from "../lib/busy";
 import { CHECK_COLOR } from "../lib/palette";
 import { Sheet } from "../components/Sheet";
@@ -35,8 +35,8 @@ function ArchiveSheet({ host, session, prState, onClose }: { host: string; sessi
   const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
   const git = d?.git ?? null;
   const warn = git?.warn_unpushed ?? true;
-  // undefined while git.unpushed runs; null when not asked or it failed.
-  const [work, setWork] = useState<UnpushedWork | null | undefined>(warn ? undefined : null);
+  // undefined while git.unpushed runs; null when not asked.
+  const [work, setWork] = useState<UnpushedWork | null | "failed" | undefined>(warn ? undefined : null);
   const [checked, setChecked] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const { busy, error, run } = useBusy();
@@ -44,7 +44,7 @@ function ArchiveSheet({ host, session, prState, onClose }: { host: string; sessi
     if (!warn) return;
     void rpc<UnpushedWork>(host, M.gitUnpushed, { path: session.path })
       .then(setWork)
-      .catch(() => setWork(null));
+      .catch(() => setWork("failed"));
   }, [host, session.path, warn]);
   const base = d?.projects.find((p) => p.id === session.project_id)?.base_branch ?? session.base;
   const sheet = archiveSheet({ session, base, git, prState, work: work ?? null, hostLabel });
@@ -52,7 +52,8 @@ function ArchiveSheet({ host, session, prState, onClose }: { host: string; sessi
     run(async () => {
       if (push) await rpc(host, M.gitPush, { path: session.path });
       const done = await rpc<SessionArchived | boolean>(host, M.sessionArchive, { id: session.id, ...sheet.flags(checked) });
-      if (typeof done === "object" && done.remote_error) setRemoteError(`Archived. Couldn't delete ${session.branch} on origin: ${done.remote_error}`);
+      const note = archivedNote(done, session.branch);
+      if (note) setRemoteError(note);
       else showScreen(null);
     });
   if (remoteError) {
@@ -86,6 +87,7 @@ function ArchiveSheet({ host, session, prState, onClose }: { host: string; sessi
                 <span className="text-[12.5px] text-muted">{sheet.unpushed.summary}</span>
               </div>
             )}
+            {sheet.checkFailed && <p className="rounded-[10px] border border-[rgba(239,95,95,0.3)] bg-raised px-3 py-2.5 text-[13px] text-error">{sheet.checkFailed}</p>}
             {sheet.checkbox && (
               <label className="flex min-h-11 items-center gap-2.5 text-[14.5px]">
                 <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} className="h-5 w-5 accent-[var(--color-accent)]" />

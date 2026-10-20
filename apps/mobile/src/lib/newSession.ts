@@ -16,8 +16,9 @@ export function nameFromPrompt(prompt: string): string {
   const chars = [...line];
   if (chars.length <= 48) return line;
   let out = chars.slice(0, 48).join("");
+  // The daemon compares the space's byte offset in UTF-8.
   const space = out.lastIndexOf(" ");
-  if (space > 24) out = out.slice(0, space);
+  if (space >= 0 && new TextEncoder().encode(out.slice(0, space)).length > 24) out = out.slice(0, space);
   return `${out}…`;
 }
 
@@ -54,13 +55,26 @@ export function setupLine(start: string, host: string, setup: string | null | un
 
 /** What New session shows and sends with a picked GitHub issue or PR (X54).
  * A PR's attachment is sent while `prSend`; its branch is used either way. */
-export function composer(o: { typed: string; prefix: string; issue: IssueRef | null; pr: IssueRef | null; prContext: string | null; prSend: boolean }): {
+export function composer(o: {
+  typed: string;
+  prefix: string;
+  issue: IssueRef | null;
+  pr: IssueRef | null;
+  prContext: string | null;
+  prSend: boolean;
+  /** The Base row's pick; null for the project's base. */
+  base: string | null;
+  projectBase: string;
+  startFrom: GitSettings["start_from"];
+}): {
   attachments: Attachment[];
   placeholder: string;
   /** The branch the session works on: a new one, or the PR's. */
   branch: { name: string; existing: boolean };
-  /** `session.create`'s prompt, name and PR; null with nothing to send. */
-  create: { prompt: string; name: string | null; pr: number | null } | null;
+  /** Where the worktree starts, for the footer. */
+  start: string;
+  /** `session.create`'s prompt, name, PR and start; null with nothing to send. */
+  create: { prompt: string; name: string | null; pr: number | null; from: string | null } | null;
 } {
   const sent = attachments({ task: null, issue: o.issue, pr: o.prSend ? o.pr : null, prContext: o.prContext });
   const prompt = firstMessage(sent, o.typed);
@@ -70,7 +84,9 @@ export function composer(o: { typed: string; prefix: string; issue: IssueRef | n
     attachments: sent,
     placeholder: placeholder(sent.map((a) => a.id)),
     branch: o.pr ? { name: o.pr.head_branch ?? "", existing: true } : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
-    create: prompt === null ? null : { prompt, name, pr: o.pr?.number ?? null },
+    start: o.pr ? (o.pr.head_branch ?? `PR #${o.pr.number}`) : startPoint(o.base, o.projectBase, o.startFrom),
+    // The daemon starts from the project's base, or origin's, without a `from`.
+    create: prompt === null ? null : { prompt, name, pr: o.pr?.number ?? null, from: !o.pr && o.base && o.base !== o.projectBase ? o.base : null },
   };
 }
 

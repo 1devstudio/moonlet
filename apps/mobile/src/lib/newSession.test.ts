@@ -12,6 +12,13 @@ describe("nameFromPrompt and branchPreview", () => {
     expect(n).toBe("Refactor the authentication flow so that…");
   });
 
+  it("cuts at a space past byte 24, as the daemon counts, not past character 24", () => {
+    // 20 two-byte letters: the space is character 20 but byte 40.
+    const prompt = `${"é".repeat(20)} ${"x".repeat(40)}`;
+    expect(nameFromPrompt(prompt)).toBe(`${"é".repeat(20)}…`);
+    expect(branchPreview(prompt, "moonlet/")).toBe("moonlet/task");
+  });
+
   it("previews the branch the daemon will create", () => {
     expect(branchPreview("Fix the Login bug!", "moonlet/")).toBe("moonlet/fix-the-login-bug");
     expect(branchPreview("***", "moonlet/")).toBe("moonlet/task");
@@ -96,14 +103,14 @@ describe("composer (X54)", () => {
   // Shaped like `gh.issues` and `gh.prs` replies.
   const issue = { number: 57, title: "Search ignores accents", body: "Searching *creme* misses **Crème brûlée**.", url: "https://github.com/acme/storefront/issues/57" };
   const pr = { number: 214, title: "Product list search", body: "Adds search.", url: "https://github.com/acme/storefront/pull/214", head_branch: "mz/product-search" };
-  const none = { typed: "", prefix: "moonlet/", issue: null, pr: null, prContext: null, prSend: true };
+  const none = { typed: "", prefix: "moonlet/", issue: null, pr: null, prContext: null, prSend: true, base: null, projectBase: "main", startFrom: "local" as const };
 
   it("starts from what the user typed alone, on a new branch named after it", () => {
     const c = composer({ ...none, typed: "Fix the Login bug!" });
     expect(c.attachments).toEqual([]);
     expect(c.placeholder).toBe("What do you want to work on?");
     expect(c.branch).toEqual({ name: "moonlet/fix-the-login-bug", existing: false });
-    expect(c.create).toEqual({ prompt: "Fix the Login bug!", name: null, pr: null });
+    expect(c.create).toEqual({ prompt: "Fix the Login bug!", name: null, pr: null, from: null });
     expect(composer(none).create).toBeNull();
   });
 
@@ -115,6 +122,7 @@ describe("composer (X54)", () => {
       prompt: "#57 · Search ignores accents\n\nSearching *creme* misses **Crème brûlée**.\n\nhttps://github.com/acme/storefront/issues/57",
       name: "Search ignores accents",
       pr: null,
+      from: null,
     });
     expect(composer({ ...none, issue, typed: "Keep it small" }).create?.prompt.endsWith("issues/57\n\nKeep it small")).toBe(true);
   });
@@ -131,12 +139,26 @@ describe("composer (X54)", () => {
       prompt: "PR #214 · Product list search\n\nAdds search.\n\n**sam-rivera** reviewed: Debounce the input.\n\nhttps://github.com/acme/storefront/pull/214",
       name: "Product list search",
       pr: 214,
+      from: null,
     });
+  });
+
+  it("starts from a picked base other than the project's, and says where the worktree starts", () => {
+    const other = composer({ ...none, typed: "Backport the fix", base: "release/2.1", startFrom: "origin" });
+    expect(other.create?.from).toBe("release/2.1");
+    expect(other.start).toBe("release/2.1");
+    const same = composer({ ...none, typed: "Backport the fix", base: "main", startFrom: "origin" });
+    expect(same.create?.from).toBeNull();
+    expect(same.start).toBe("origin/main");
+    // On a PR, its branch: the picked base is not used.
+    const onPr = composer({ ...none, pr, base: "release/2.1" });
+    expect(onPr.create?.from).toBeNull();
+    expect(onPr.start).toBe("mz/product-search");
   });
 
   it("still starts on the PR's branch once its attachment is removed, sending only what was typed", () => {
     const c = composer({ ...none, pr, prSend: false, typed: "Rebase on main" });
     expect(c.attachments).toEqual([]);
-    expect(c.create).toEqual({ prompt: "Rebase on main", name: "Product list search", pr: 214 });
+    expect(c.create).toEqual({ prompt: "Rebase on main", name: "Product list search", pr: 214, from: null });
   });
 });

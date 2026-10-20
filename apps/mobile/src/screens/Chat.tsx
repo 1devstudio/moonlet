@@ -7,19 +7,19 @@ import { rpc } from "@desktop/lib/daemon";
 import { askQuestions, chatBlocks, chatDraft, chatKey, loadChat, questionAnswers, saveChatDraft, turnRunning, useChat } from "@desktop/lib/chat";
 import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
 import { type AsideAnswer, type ChatState, M, type PermissionAsk, type QueuedMessage, type Session } from "@desktop/lib/protocol";
-import { type Aside, asideFooter, asideSettled, queuedHeader, unqueued, waitingOn } from "@desktop/lib/queued";
-import { type AgentRow, agentKey, agentRows, askerName } from "@desktop/lib/subagents";
+import { type Aside, asideFooter, asideSettled, queuedHeader, waitingOn } from "@desktop/lib/queued";
+import { askerName } from "@desktop/lib/subagents";
 import { showScreen, useApp } from "../lib/app";
 import { answerAsk, answerQuestion } from "../lib/answers";
 import { STATE_COLOR } from "../lib/palette";
 import { ageText, askHeadline } from "../lib/cards";
-import { blockKey, chatFooter, queuedActions, sessionChat } from "../lib/chatView";
+import { asideStep, blockKey, chatFooter, queuedActions, sessionChat } from "../lib/chatView";
 import { useBusy } from "../lib/busy";
 import { AgentDetail, AskerLine, ChatBlockView } from "../components/chat";
 import { Markdown } from "../components/Markdown";
 import { Sheet } from "../components/Sheet";
 import { Btn, cx } from "../components/ui";
-import { useNow } from "./Inbox";
+import { useNow } from "../lib/now";
 
 function DockedAsk({ host, terminal, ask, asker }: { host: string; terminal: number; ask: PermissionAsk; asker: string | null }) {
   const now = useNow();
@@ -224,21 +224,20 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   const [picker, setPicker] = useState<"model" | "mode" | null>(null);
   // The subagent whose sheet is open, by its key (X42).
   const [agentOpen, setAgentOpen] = useState<string | null>(null);
-  const now = useNow(st?.subagents?.some((a) => a.status === "running") ? 1000 : 30_000);
   // Ask aside (X49): the queued message Claude is asked to give back, then the aside.
   const [unqueuing, setUnqueuing] = useState<QueuedMessage | null>(null);
   const [aside, setAside] = useState<Aside | null>(null);
   const [queueNote, setQueueNote] = useState<string | null>(null);
   useEffect(() => {
     if (!unqueuing || !st || terminal === null) return;
-    const outcome = unqueued(st, unqueuing.id);
-    if (outcome === "waiting") return;
+    const step = asideStep(st, unqueuing);
+    if (step.kind === "wait") return;
     setUnqueuing(null);
-    if (outcome === "taken") {
-      setQueueNote("Claude read the message before it could be asked aside");
+    if (step.kind === "note") {
+      setQueueNote(step.text);
       return;
     }
-    const question = unqueuing.text;
+    const question = step.question;
     setAside({ question });
     rpc<AsideAnswer>(host, M.chatAside, { id: terminal, text: question }).then(
       (answer) => setAside((cur) => asideSettled(cur, question, { answer })),
@@ -259,8 +258,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   if (terminal === null) return <div className="p-6 text-[14px] text-muted">This session has no agent conversation. Its terminal is in the Terminal tab.</div>;
   if (!st) return <div className="p-6 text-[14px] text-muted">Loading the conversation…</div>;
   const ask = st.pending[0];
-  const agents = agentRows([{ id: terminal, st }], now);
-  const openAgent = agents.find((r) => agentKey(r.chat, r.agent.id) === agentOpen);
+  const agents = { id: terminal, st };
   const footer = chatFooter(st);
   const settings = (patch: object) => void rpc(host, M.chatSettings, { id: terminal, ...patch }).catch(console.error);
 
@@ -268,7 +266,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
     <div className="flex h-full flex-col">
       <main ref={scroller} className="scroll flex min-h-0 flex-1 flex-col gap-2 px-4 py-3">
         {blocks.map((b) => (
-          <ChatBlockView key={blockKey(b)} block={b} cwd={session.path} agents={agents} onAgent={(r: AgentRow) => setAgentOpen(agentKey(r.chat, r.agent.id))} />
+          <ChatBlockView key={blockKey(b)} block={b} cwd={session.path} agents={agents} onAgent={setAgentOpen} />
         ))}
         {/* Messages Claude has not read yet (X49). */}
         {st.queued.length > 0 && (
@@ -330,9 +328,9 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
           onClose={() => setAside(null)}
         />
       )}
-      {openAgent && (
+      {agentOpen && (
         <Sheet label="Agent" onClose={() => setAgentOpen(null)}>
-          <AgentDetail row={openAgent} onStop={() => void rpc(host, M.chatStopAgent, { id: terminal, agent: openAgent.agent.id }).catch(console.error)} />
+          <AgentDetail chat={agents} agent={agentOpen} onStop={(r) => void rpc(host, M.chatStopAgent, { id: terminal, agent: r.agent.id }).catch(console.error)} />
         </Sheet>
       )}
       {picker && (

@@ -9,7 +9,7 @@ import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
 import { type IssueRef, M, type Project, type ProjectConfig, type Session } from "@desktop/lib/protocol";
 import { type Attachment, pickerHint } from "@desktop/lib/composer";
 import { loadHost, showScreen, showTab, useApp } from "../lib/app";
-import { MODES, branchPrefix, composer, modeHelp, projectChoices, setupLine, startPoint } from "../lib/newSession";
+import { MODES, branchPrefix, composer, modeHelp, projectChoices, setupLine } from "../lib/newSession";
 import { useBusy } from "../lib/busy";
 import { AgentIcon, Btn, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
@@ -183,7 +183,7 @@ export function NewSessionScreen() {
 
   // The host's Git settings (X55) name the branch and say where it starts.
   const git = choice ? (data[choice.host]?.git ?? null) : null;
-  const c = composer({ typed: prompt, prefix: branchPrefix(config, git), issue, pr, prContext, prSend });
+  const c = composer({ typed: prompt, prefix: branchPrefix(config, git), issue, pr, prContext, prSend, base, projectBase: choice?.project.base_branch ?? "main", startFrom: git?.start_from ?? "local" });
   const pickPr = (p: IssueRef) => {
     setPr(p);
     setPrSend(true);
@@ -207,11 +207,11 @@ export function NewSessionScreen() {
         prompt: create.prompt,
         name: create.name,
         pr: create.pr,
+        from: create.from,
         agent,
         model: agent === "claude" ? model : null,
         effort: agent === "claude" ? effort : null,
         mode: agent === "claude" ? mode : null,
-        from: !pr && base && base !== choice.project.base_branch ? base : null,
         workspace_id: choice.workspaceId,
         cols: 80,
         rows: 32,
@@ -294,7 +294,7 @@ export function NewSessionScreen() {
       </div>
       {choice && (
         <div className="flex flex-col gap-2.5 border-t border-border px-4 pt-3 pb-3">
-          <span className="text-[12.5px] text-muted">{setupLine(pr ? (pr.head_branch ?? `PR #${pr.number}`) : startPoint(base, choice.project.base_branch, git?.start_from ?? "local"), choice.hostLabel, config?.setup)}</span>
+          <span className="text-[12.5px] text-muted">{setupLine(c.start, choice.hostLabel, config?.setup)}</span>
           {error && <span className="text-[12.5px] text-error">{error}</span>}
           <Btn tone="primary" disabled={busy || !c.create} onClick={() => void start()}>
             {busy ? "Starting…" : "Start session"} <ArrowRight size={16} />
