@@ -423,6 +423,32 @@ async fn bad_auth_is_refused_without_saying_why() {
 }
 
 #[tokio::test]
+async fn turning_access_off_ends_the_pairing() {
+    let mac = Mac::start(None).await;
+    mac.allow_phones().await;
+    let mut app = mac.app().await;
+    let _: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let _: MobileStatus = app
+        .request("mobile.set_enabled", json!({ "enabled": false }))
+        .await
+        .unwrap();
+    let reason = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match app.next_frame().await.unwrap() {
+                Some(Frame::Json(Message::Event { name, data })) if name == "mobile.pair_ended" => {
+                    return data["reason"].clone();
+                }
+                Some(_) => {}
+                None => panic!("app connection closed"),
+            }
+        }
+    })
+    .await
+    .expect("no mobile.pair_ended");
+    assert_eq!(reason, "cancelled");
+}
+
+#[tokio::test]
 async fn five_wrong_codes_end_the_pairing() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;
