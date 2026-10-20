@@ -1,6 +1,6 @@
 # ADR 0011: Machines reach each other over the tailnet, and the user installs moonlet on them
 
-- **Status:** proposed (2026-10-20)
+- **Status:** accepted (2026-10-20); built in [X57](../specs/X57-tailnet-hosts.md) and [X58](../specs/X58-linux-install-script.md)
 - **Changes:** [ADR 0009](0009-central-host-workers-live-copies.md)'s transport (workers no longer dial out over SSH), and the default way to add a remote host ([R1](../specs/R1-ssh-hosts.md)–[R3](../specs/R3-remote-sessions-reconnect.md)).
 - **Builds on:** [ADR 0008](0008-phone-link-over-tailscale.md) and [X39](../specs/X39-phone-pairing-and-link.md) (the daemon's tailnet listener and device tokens).
 
