@@ -104,8 +104,8 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - **`moonlet-link`:** `HostStatus` gains `needs_update` and `refused`, and the crate gains the tailnet `Connector`.
 - **CLI:** `moonletd tailnet on|off|status` and `moonletd pair`. They connect as clients `moonletd-tailnet` and `moonletd-pair`, following `moonletd status` (`moonletd-status`). The daemon refuses `mobile.*` only to `moonlet-cli` (`daemon.rs:429`), so it serves these as it serves the app.
 - **Desktop (Tauri) commands:**
-  - `host_pair {input, name?}` returns the new host or the dialog's error;
-  - `host_list` entries gain `kind: "ssh" | "tailnet"`.
+  - `host_pair {name, addrs?, code}` returns the new host or the dialog's error. The webview reads the input (`lib/addHost.ts`): a link gives `name`, `addrs` and `code`; a typed code gives `code`, with the name typed beside it and no `addrs`;
+  - `host_list` entries, and every `host-status` event, gain `kind: "local" | "ssh" | "tailnet"`.
 - `PROTOCOL_VERSION` stays. The Unix socket protocol is unchanged, and the new fields appear only on tailnet connections. `docs/protocol.md` gets the new fields and method.
 
 ## Data and config

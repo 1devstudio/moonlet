@@ -45,7 +45,7 @@ async fn host_pair(
 #[tauri::command]
 fn host_add(hosts: Hosts, id: String) -> Result<HostEntry, RpcError> {
     let id = id.trim().to_string();
-    if id.is_empty() || id.starts_with('-') || id.contains(char::is_whitespace) {
+    if !hosts::valid_host_name(&id) {
         return Err(RpcError::new(
             "invalid_params",
             "not a valid SSH host alias",
