@@ -1355,14 +1355,16 @@ export async function answerTaskRequest(host: string, ev: TaskRequestEvent) {
   const answer = (ok: boolean, result?: unknown, error?: string) => rpc(host, M.tasksAnswer, { request_id: ev.request_id, ok, ...(result !== undefined && { result }), ...(error && { error }) }).catch(() => {});
   try {
     const key = wsKey(host, ev.workspace);
-    // A workspace this app has not synced yet is read first.
-    if (!useTasks.getState().data[key]) await refreshTasks(host, ev.workspace);
+    // A workspace this app has not synced yet is read first, for at most 10 s: the phone waits 30.
+    if (!useTasks.getState().data[key]) await Promise.race([refreshTasks(host, ev.workspace), new Promise((r) => setTimeout(r, 10_000))]);
     const st = useTasks.getState();
     const config = trackersConfig(st);
     const data = st.data[key];
     const r = resolveTaskRequest(ev.action, {
       boards: (config.boards ?? []).filter((b) => b.workspace === key),
       tasks: data ? placedTasks(data, config) : [],
+      repos: data?.repos,
+      boardKeys: Object.fromEntries(Object.entries(data?.boards ?? {}).map(([id, b]) => [id, b.keys])),
     });
     if ("error" in r) return answer(false, undefined, r.error);
     switch (r.kind) {
@@ -1421,11 +1423,8 @@ export function shareTasksWithPhones(): () => void {
   });
   const poll = async () => {
     const status = await rpc<MobileStatus>("local", M.mobileStatus).catch(() => null);
-    if (!status?.devices.length) return;
-    for (const key of new Set((trackersConfig(useTasks.getState()).boards ?? []).map((b) => b.workspace))) {
-      const { host, id } = parseWsKey(key);
-      if (useStore.getState().hosts[host]?.status === "connected") ensureTasks(host, id);
-    }
+    const hosts = Object.fromEntries(Object.values(useStore.getState().hosts).map((h) => [h.id, h.status]));
+    for (const { host, id } of workspacesToPoll(trackersConfig(useTasks.getState()).boards ?? [], status?.devices.length ?? 0, hosts)) ensureTasks(host, id);
   };
   void poll();
   const every = setInterval(() => void poll(), 300_000);
@@ -1434,4 +1433,10 @@ export function shareTasksWithPhones(): () => void {
     clearInterval(every);
     if (timer) clearTimeout(timer);
   };
+}
+
+/** The workspaces the app keeps synced for a paired phone (X57): each with a board, on a connected host; none without a phone. */
+export function workspacesToPoll(boards: Pick<BoardConfig, "workspace">[], phones: number, hosts: Record<string, string>): { host: string; id: string }[] {
+  if (!phones) return [];
+  return [...new Set(boards.map((b) => b.workspace))].map(parseWsKey).filter((w) => hosts[w.host] === "connected");
 }

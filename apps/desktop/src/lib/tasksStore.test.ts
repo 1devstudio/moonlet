@@ -6,7 +6,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
-import { createIssue, setColumnShow } from "./tasksStore";
+import { answerTaskRequest, createIssue, setColumnShow, workspacesToPoll } from "./tasksStore";
 import { type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -815,6 +815,46 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
     sent.length = 0;
     await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", description: "", projects: [], tracker: { id: "issue-2", source: "MOON" } }, { session: "Drag", assign: true });
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
+  });
+});
+
+describe("a phone's requests (X57)", () => {
+  const LINEAR_BOARD = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" }, columns: [{ name: "Todo", statuses: ["s-todo"], category: "todo" as const }, { name: "In Progress", statuses: ["s-progress"], category: "in_progress" as const }] };
+  const drag = { connection: "linear:acme", key: "MOON-151", title: "Drag", url: "", column: "todo" as const, priority: 1, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "issue-2", state: "s-todo", source: "MOON" } };
+  const answered: object[] = [];
+  beforeEach(() => {
+    answered.length = 0;
+    sent.length = 0;
+    answers["tasks.answer"] = (p) => (answered.push(p), true);
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [LINEAR_BOARD] }, data: { "local/personal": { tasks: [drag], worktrees: [], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
+  });
+
+  it("tells of a session started from a task as the Mac's composer does, and answers", async () => {
+    await answerTaskRequest("local", { request_id: 7, workspace: "personal", action: { kind: "started", task: "linear:acme MOON-151", session: "Drag", assign: true } });
+    expect(answered).toEqual([{ request_id: 7, ok: true, result: {} }]);
+    // The board's In Progress status, as the Mac's own start moves it.
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", status: "s-progress", assign_me: true }]);
+    expect(activityOf(drag).map((e) => e.text)).toContain("Session “Drag” started from it");
+  });
+
+  it("moves a task the phone asks for, and says why the tracker refused", async () => {
+    await answerTaskRequest("local", { request_id: 8, workspace: "personal", action: { kind: "move", board: "moon", task: "linear:acme MOON-151", column: "In Progress" } });
+    expect(answered).toEqual([{ request_id: 8, ok: true, result: { task: "linear:acme MOON-151" } }]);
+    failNext.push(new Error("Linear refused the move"));
+    await answerTaskRequest("local", { request_id: 9, workspace: "personal", action: { kind: "move", board: "moon", task: "linear:acme MOON-151", column: "Todo" } });
+    expect(answered[1]).toEqual({ request_id: 9, ok: false, error: "Linear refused the move" });
+  });
+});
+
+describe("workspacesToPoll (X57)", () => {
+  it("keeps every workspace with a board synced while a phone is paired, on connected hosts", () => {
+    const boards = [{ workspace: "local/personal" }, { workspace: "local/personal" }, { workspace: "devbox/acme" }, { workspace: "gpu/ml" }];
+    const hosts = { local: "connected", devbox: "connected", gpu: "error" };
+    expect(workspacesToPoll(boards, 1, hosts)).toEqual([
+      { host: "local", id: "personal" },
+      { host: "devbox", id: "acme" },
+    ]);
+    expect(workspacesToPoll(boards, 0, hosts)).toEqual([]);
   });
 });
 
