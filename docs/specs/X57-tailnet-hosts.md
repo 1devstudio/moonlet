@@ -1,6 +1,6 @@
 # X57 — Add a remote host over the tailnet
 
-- **Status:** draft
+- **Status:** draft (the daemon's part implemented: pairing a desktop, the short code, `authed`'s fields and `mobile.unpair`)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** R1 (remote hosts), journey J5
 - **Related ADRs:** [0011](../adr/0011-machines-connect-over-the-tailnet.md) (this is its first slice), [0008](../adr/0008-phone-link-over-tailscale.md) (the tailnet listener and `moonlet-link`)
@@ -24,18 +24,18 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 
 ### Pairing a desktop (daemon)
 
-- [ ] The `auth` frame gains an optional `kind`, `"phone"` (the default) or `"desktop"`, read only together with `pair`. The new device is stored with that kind. Devices in `mobile.json` without a kind are phones.
-- [ ] `mobile.status` lists every device with its `kind`.
-- [ ] Every `authed` reply carries the daemon's `protocol`, `daemon_version` and `host` (the host label, as in `mobile.pair_start`). They are sent before `hello`, so a client learns the daemon's version even when their protocols differ. Phone apps that do not read these fields keep working.
-- [ ] A paired desktop gets exactly what a paired phone gets: X39's rules apply to every tailnet connection, whatever its kind. In particular `mobile.*` methods other than `mobile.hosts` and `mobile.unpair` are refused with `forbidden: manage phones from the Mac`.
-- [ ] `mobile.unpair` on a tailnet connection removes the calling device, as `mobile.revoke` would, and its connection closes. It is refused on the Unix socket with `invalid_params: not a paired device`.
+- [x] The `auth` frame gains an optional `kind`, `"phone"` (the default) or `"desktop"`, read only together with `pair`. The new device is stored with that kind. Devices in `mobile.json` without a kind are phones. (`a_mac_pairs_as_a_desktop`, `a_device_paired_before_x57_is_a_phone`)
+- [x] `mobile.status` lists every device with its `kind`. (`a_mac_pairs_as_a_desktop`)
+- [x] Every `authed` reply carries the daemon's `protocol`, `daemon_version` and `host` (the host label, as in `mobile.pair_start`). They are sent before `hello`, so a client learns the daemon's version even when their protocols differ. Phone apps that do not read these fields keep working. (`authed_says_which_daemon_answered_before_hello`; the phone's `tests/macs.rs` talks to a daemon from before X57)
+- [x] A paired desktop gets exactly what a paired phone gets: X39's rules apply to every tailnet connection, whatever its kind. In particular `mobile.*` methods other than `mobile.hosts` and `mobile.unpair` are refused with `forbidden: manage phones from the Mac`. (`a_paired_mac_can_remove_itself_but_manage_nothing_else`)
+- [x] `mobile.unpair` on a tailnet connection removes the calling device, as `mobile.revoke` would, and its connection closes. It is refused on the Unix socket with `invalid_params: not a paired device`. (`a_paired_mac_can_remove_itself_but_manage_nothing_else`)
 
 ### A shorter pairing code
 
-- [ ] `mobile.pair_start` makes a code of 10 characters from Crockford's base32 alphabet (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`), 50 random bits, shown as two groups of five: `7KQ2M-X9PDA`. The link carries it without the dash. This replaces X39's 32 hex characters for phones too. One use, 5 minutes, 5 wrong attempts and the 1 s delay after a wrong one stay as in X39.
-- [ ] The daemon compares codes after normalizing what the client sent: uppercase, spaces and dashes removed, `O` read as `0`, and `I` and `L` read as `1`. So `7kq2m x9pda` and `7KQ2MX9PDA` are both accepted.
-- [ ] The phone's link parser accepts the new code. It still accepts 32 hex characters, so a new phone can pair with a Mac that has not updated yet.
-- [ ] When this ships, X39's `mobile.pair_start` criterion is updated to the new code.
+- [x] `mobile.pair_start` makes a code of 10 characters from Crockford's base32 alphabet (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`), 50 random bits, shown as two groups of five: `7KQ2M-X9PDA`. The link carries it without the dash. This replaces X39's 32 hex characters for phones too. One use, 5 minutes, 5 wrong attempts and the 1 s delay after a wrong one stay as in X39. (`a_pairing_code_is_ten_crockford_characters`, `a_paired_phone_comes_back_with_its_token_and_uses_the_daemon`)
+- [x] The daemon compares codes after normalizing what the client sent: uppercase, spaces and dashes removed, `O` read as `0`, and `I` and `L` read as `1`. So `7kq2m x9pda` and `7KQ2MX9PDA` are both accepted. (`typed_codes_are_read_the_way_people_type_them`; the daemon test pairs with the code in lowercase with a space)
+- [x] The phone's link parser accepts the new code. It still accepts 32 hex characters, so a new phone can pair with a Mac that has not updated yet. (`pairLink.test.ts`)
+- [x] When this ships, X39's `mobile.pair_start` criterion is updated to the new code.
 
 ### Pairing from a terminal
 
