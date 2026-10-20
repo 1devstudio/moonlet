@@ -3,7 +3,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { HostInfo } from "./protocol";
+import type { DaemonService, HostInfo } from "./protocol";
 
 export interface RpcError {
   code: string;
@@ -41,7 +41,7 @@ export const hostsApi = {
   openTargets: () => invoke<{ id: string; label: string }[]>("open_targets"),
   openIn: (target: string, path: string, host?: string) => invoke("open_in", { target, path, host }),
   playSound: (name: string) => invoke("play_sound", { name }),
-  service: (action: "install" | "uninstall" | "status") => invoke<import("./settingsPage").DaemonService>("daemon_service", { action }),
+  service: (action: "install" | "uninstall" | "status") => invoke<DaemonService>("daemon_service", { action }),
   openLoginItems: () => invoke("open_login_items"),
   appInfo: () => invoke<{ version: string }>("app_info"),
   claudeLatest: () => invoke<string>("claude_latest_version"),

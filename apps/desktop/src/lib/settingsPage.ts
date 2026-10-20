@@ -3,7 +3,7 @@
 // components/settings/.
 
 import { accountLabel, accountState, tildePath } from "./profiles";
-import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
+import type { DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
@@ -125,13 +125,11 @@ export interface StatusLine {
   path?: string;
 }
 
-/**
- * What starts the daemon at login: the app's login item (X56), or in builds
- * without one the plist that `moonletd service` writes (S1b).
- */
-export type DaemonService =
-  | { mechanism: "login_item"; state: "enabled" | "requires_approval" | "not_registered" | "not_found" }
-  | { mechanism: "plist"; state: "loaded" | "installed" | "not_installed"; plist: string };
+/** The hint under "Start the moonlet daemon at login", in the words of the mechanism. */
+export function daemonHint(st: DaemonService | null): string {
+  const how = st?.mechanism === "plist" ? "Under launchd" : "As a login item";
+  return `Agents run in moonletd, not in this window. ${how} it starts at login and restarts if it ever crashes.`;
+}
 
 /** Whether "Start the moonlet daemon at login" shows as on. */
 export function daemonOn(st: DaemonService): boolean {
@@ -162,6 +160,8 @@ export function daemonLine(st: DaemonService, home: string | null): StatusLine {
         return { tone: "done", text: "Starts at login · moonlet in System Settings › Login Items" };
       case "requires_approval":
         return { tone: "blocked", text: "Turned off in System Settings › Login Items" };
+      case "not_found":
+        return { tone: "error", text: "macOS cannot find moonlet's login item. Reinstall moonlet." };
       default:
         return { tone: "muted", text: "Not starting at login: moonletd runs while moonlet is open" };
     }
