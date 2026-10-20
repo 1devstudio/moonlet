@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonLine, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonLine, daemonOn, offStopsDaemon, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -81,27 +81,57 @@ describe("profiles that need a sign-in (X43)", () => {
   });
 });
 
-describe("General's background daemon line (X43)", () => {
+describe("General's background daemon line (X43, X56)", () => {
   const plist = "/Users/alex/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist";
+  const viaPlist = (state: "loaded" | "installed" | "not_installed") => ({ mechanism: "plist" as const, state, plist });
+  const viaLoginItem = (state: "enabled" | "requires_approval" | "not_registered") => ({ mechanism: "login_item" as const, state });
+
+  it("points at Login Items when the login item starts the daemon", () => {
+    expect(daemonLine(viaLoginItem("enabled"), "/Users/alex")).toEqual({ tone: "done", text: "Starts at login · moonlet in System Settings › Login Items" });
+  });
+
+  it("says when the login item was switched off in System Settings", () => {
+    expect(daemonLine(viaLoginItem("requires_approval"), "/Users/alex")).toEqual({ tone: "blocked", text: "Turned off in System Settings › Login Items" });
+  });
+
+  it("says the daemon only runs with the app when the login item is not registered", () => {
+    expect(daemonLine(viaLoginItem("not_registered"), "/Users/alex")).toEqual({ tone: "muted", text: "Not starting at login: moonletd runs while moonlet is open" });
+  });
 
   it("names launchd and the plist when the daemon runs under it", () => {
-    expect(daemonLine({ installed: true, loaded: true, plist }, "/Users/alex")).toEqual({
+    expect(daemonLine(viaPlist("loaded"), "/Users/alex")).toEqual({
       tone: "done",
       text: "Running under launchd",
       path: "~/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist",
     });
   });
 
-  it("warns when the login item is installed but not loaded", () => {
-    expect(daemonLine({ installed: true, loaded: false, plist }, "/Users/alex")).toEqual({
+  it("warns when the plist is installed but not loaded", () => {
+    expect(daemonLine(viaPlist("installed"), "/Users/alex")).toEqual({
       tone: "blocked",
       text: "Installed but not loaded",
       path: "~/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist",
     });
   });
 
-  it("says the daemon only runs with the app when there is no login item", () => {
-    expect(daemonLine({ installed: false, loaded: false, plist }, "/Users/alex")).toEqual({ tone: "muted", text: "Not installed: moonletd runs while moonlet is open" });
+  it("says the daemon only runs with the app when there is no plist", () => {
+    expect(daemonLine(viaPlist("not_installed"), "/Users/alex")).toEqual({ tone: "muted", text: "Not installed: moonletd runs while moonlet is open" });
+  });
+
+  it("shows the toggle on only while something starts the daemon at login", () => {
+    expect(daemonOn(viaLoginItem("enabled"))).toBe(true);
+    expect(daemonOn(viaLoginItem("requires_approval"))).toBe(false);
+    expect(daemonOn(viaLoginItem("not_registered"))).toBe(false);
+    expect(daemonOn(viaPlist("loaded"))).toBe(true);
+    expect(daemonOn(viaPlist("installed"))).toBe(true);
+    expect(daemonOn(viaPlist("not_installed"))).toBe(false);
+  });
+
+  it("asks before turning off only when that stops the daemon launchd runs", () => {
+    expect(offStopsDaemon(viaLoginItem("enabled"))).toBe(true);
+    expect(offStopsDaemon(viaLoginItem("requires_approval"))).toBe(false);
+    expect(offStopsDaemon(viaPlist("loaded"))).toBe(true);
+    expect(offStopsDaemon(viaPlist("installed"))).toBe(false);
   });
 });
 
