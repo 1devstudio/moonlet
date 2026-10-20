@@ -14,7 +14,8 @@ import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../../lib
 import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
-import { appUpdateLine, claudeUpdateLine, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, type DaemonService } from "../../lib/settingsPage";
+import { appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems } from "../../lib/settingsPage";
+import type { DaemonService } from "../../lib/protocol";
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
 import { ThemeSample } from "./ThemeSample";
@@ -132,11 +133,7 @@ function Daemon() {
         <SwitchRow
           setting="daemon"
           label="Start the moonlet daemon at login"
-          hint={
-            status?.mechanism === "plist"
-              ? "Agents run in moonletd, not in this window. Under launchd it starts at login and restarts if it ever crashes."
-              : "Agents run in moonletd, not in this window. As a login item it starts at login and restarts if it ever crashes."
-          }
+          hint={daemonHint(status)}
           on={!!status && daemonOn(status)}
           disabled={busy || !status}
           onChange={(on) => void toggle(on)}
