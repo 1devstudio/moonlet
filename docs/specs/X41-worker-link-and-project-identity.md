@@ -34,7 +34,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - `addrs` are one or more `ip:port` addresses of the host's tailnet listener;
   - `token` is the device token this Mac got when it paired with the host.
 
-  When the user chooses **Central host**, the app fills these in from its own entry for the host. The Mac is one paired device, so the app and its daemon share the token, and removing the Mac on the central host cuts both.
+  When the user chooses **Central host**, the app's Rust side fills these in from its own entry for the host and calls `link.set` itself, so the token never reaches the webview (X57). The Mac is one paired device, so the app and its daemon share the token, and removing the Mac on the central host cuts both.
 - [ ] The first time the daemon reads `link.json`, it gives this machine a **worker id**. The id is a random UUID that never changes afterwards and that `link.set` cannot edit. Workers are told apart by id, never by name.
 - [ ] `name` is a label. It defaults to the Mac's computer name (the hostname on Linux) and `link.set` can change it.
 - [ ] An invalid `central` is rejected with an error, and nothing is stored: an empty `name` or one with control characters, no `addrs` or one that is not `ip:port`, or a `token` that is not 64 hex characters.
@@ -44,7 +44,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 ### The link
 
 - [ ] The link is a `moonlet-link` `Host` with the tailnet `Connector` from ADR 0011's pairing slice. It tries `central.addrs` in order, 5 s each, and sends `auth {token}` as its first frame. The link is its own TCP connection, separate from the app's.
-- [ ] After `authed`, the worker sends `Hello {client: "moonletd-worker"}` and then `worker.register`. The central host accepts that client name on a tailnet connection, and refuses `mobile.*` on it as it does for phones.
+- [ ] After `authed`, the worker sends `Hello {client: "moonletd-worker"}` and then `worker.register`. The central host accepts that client name on a tailnet connection and serves it as any paired device (X57): `mobile.*` other than `mobile.hosts` and `mobile.unpair` is refused. The worker never calls `mobile.unpair`, which would also remove this Mac's app.
 - [ ] A central host whose `authed` reply reports another protocol (the pairing slice adds `protocol` and `daemon_version` to it) puts the link in state `needs_update {daemon_version}`. An `unauthorized` reply to `auth` puts it in state `error` with "studio-mini no longer accepts this Mac". In both states the link does not retry until `link.set` or `link.retry` is called.
 - [ ] A dropped link reconnects with `moonlet-link`'s backoff: 300 ms, doubling, capped at 5 s, as for the apps' host links.
 - [ ] The link's state is `off`, or one of `moonlet-link`'s host statuses: `connecting`, `connected {since}`, `reconnecting`, `needs_update {daemon_version}` or `error {message}`. `link.get` reports it, and the event `link.changed` fires on every change.
