@@ -30,6 +30,19 @@ pub(crate) async fn run_raw(
     stdin: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<Output> {
+    run_raw_env(program, cwd, args, &[], stdin, timeout).await
+}
+
+/// [`run_raw`], with variables set after the inherited ones are cleared,
+/// such as a private `GIT_INDEX_FILE` (X60).
+pub(crate) async fn run_raw_env(
+    program: &str,
+    cwd: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Output> {
     let mut cmd = Command::new(program);
     // Repository-location variables inherited from whoever started the
     // daemon (a git hook, say) would point every call at another repo.
@@ -46,6 +59,7 @@ pub(crate) async fn run_raw(
     ] {
         cmd.env_remove(var);
     }
+    cmd.envs(env.iter().copied());
     cmd.args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")

@@ -1,0 +1,1031 @@
+//! Live copies of a session's worktree (X60): snapshots of a worktree as git
+//! trees, reconciling two sides against the base they last agreed on, and
+//! applying the result. Plain git plumbing; the daemons move the trees.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use anyhow::{Result, bail};
+
+use crate::git::run_raw_env;
+
+/// Files over this size stay on their own machine.
+pub const MAX_FILE: u64 = 100 * 1024 * 1024;
+
+/// A worktree's state under git's rules, as a tree in its repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub tree: String,
+    /// Paths left out for being over the size limit, sorted.
+    pub too_big: Vec<String>,
+}
+
+/// Runs git in `cwd` with `env`, failing on a non-zero exit.
+async fn git_env(
+    cwd: &Path,
+    env: &[(&str, &str)],
+    args: &[&str],
+    stdin: Option<&[u8]>,
+) -> Result<Vec<u8>> {
+    let out = run_raw_env("git", cwd, args, env, stdin, Duration::from_secs(300)).await?;
+    if out.status != 0 {
+        bail!("git {}: {}", args.join(" "), out.stderr);
+    }
+    Ok(out.stdout)
+}
+
+/// The private index a worktree's snapshots go through, beside its own
+/// index: the session's staging area is never touched.
+async fn private_index(worktree: &Path) -> Result<PathBuf> {
+    let dir = git_env(worktree, &[], &["rev-parse", "--absolute-git-dir"], None).await?;
+    Ok(PathBuf::from(String::from_utf8_lossy(&dir).trim()).join("moonlet-sync-index"))
+}
+
+/// Snapshots `worktree`: tracked files and the untracked ones that
+/// `.gitignore` and `.git/info/exclude` don't ignore. The user's global
+/// excludes are not applied, so two machines agree whatever theirs say.
+/// Files over `max_file` bytes are left out ([`MAX_FILE`] outside tests).
+pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
+    let index = private_index(worktree).await?;
+    let index_s = index.to_string_lossy().to_string();
+    let env = [("GIT_INDEX_FILE", index_s.as_str())];
+    let no_global = ["-c", "core.excludesFile=/dev/null"];
+    if !index.exists() {
+        // Start from HEAD, so tracked files that match an ignore rule stay
+        // in, as they do for git.
+        let has_head = git_env(
+            worktree,
+            &[],
+            &["rev-parse", "-q", "--verify", "HEAD"],
+            None,
+        )
+        .await
+        .is_ok();
+        let from = if has_head { "HEAD" } else { "--empty" };
+        git_env(worktree, &env, &["read-tree", from], None).await?;
+    }
+
+    // What `add` would hash: untracked files, and files changed since the
+    // last snapshot. Only those can have grown past the limit.
+    let mut candidates = Vec::new();
+    for listing in [
+        &["ls-files", "-z", "--others", "--exclude-standard"][..],
+        &["ls-files", "-z", "--modified"][..],
+    ] {
+        let args: Vec<&str> = no_global.iter().chain(listing).copied().collect();
+        let out = git_env(worktree, &env, &args, None).await?;
+        candidates.extend(split_z(&out));
+    }
+    let mut too_big: Vec<String> = candidates
+        .into_iter()
+        .filter(|p| {
+            std::fs::symlink_metadata(worktree.join(p))
+                .is_ok_and(|m| m.is_file() && m.len() > max_file)
+        })
+        .collect();
+    too_big.sort();
+    too_big.dedup();
+
+    let excluded: Vec<String> = too_big
+        .iter()
+        .map(|p| format!(":(exclude,literal){p}"))
+        .collect();
+    let mut add: Vec<&str> = no_global.iter().copied().collect();
+    add.extend(["add", "-A", "--", "."]);
+    add.extend(excluded.iter().map(String::as_str));
+    git_env(worktree, &env, &add, None).await?;
+
+    // `add` keeps what an earlier snapshot took in, even once it is
+    // ignored; git itself would drop an ignored file that HEAD lacks.
+    let ignored_args: Vec<&str> = no_global
+        .iter()
+        .chain(&[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--ignored",
+            "--exclude-standard",
+        ])
+        .copied()
+        .collect();
+    let ignored: Vec<String> =
+        split_z(&git_env(worktree, &env, &ignored_args, None).await?).collect();
+    let mut gone = too_big.clone();
+    if !ignored.is_empty() {
+        let head = git_env(
+            worktree,
+            &[],
+            &["ls-tree", "-r", "-z", "--name-only", "HEAD"],
+            None,
+        )
+        .await
+        .unwrap_or_default();
+        let tracked: std::collections::HashSet<String> = split_z(&head).collect();
+        gone.extend(ignored.into_iter().filter(|p| !tracked.contains(p)));
+    }
+    if !gone.is_empty() {
+        let mut rm = vec!["update-index", "--force-remove", "--"];
+        rm.extend(gone.iter().map(String::as_str));
+        git_env(worktree, &env, &rm, None).await?;
+    }
+    let tree = git_env(worktree, &env, &["write-tree"], None).await?;
+    Ok(Snapshot {
+        tree: String::from_utf8_lossy(&tree).trim().to_string(),
+        too_big,
+    })
+}
+
+/// A file in a tree: its mode (`100644`, `100755`, `120000` for a symlink,
+/// `160000` for a submodule) and object id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub mode: String,
+    pub oid: String,
+}
+
+/// Every file of a tree, by path.
+pub type Files = std::collections::BTreeMap<String, Entry>;
+
+/// What reconciling gives each side, and the new base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reconciled<T> {
+    pub base: T,
+    pub central: T,
+    pub worker: T,
+    /// Paths changed differently on the two sides, sorted. Each side keeps
+    /// its own version, and the base keeps the old one, so they go on
+    /// differing until the user picks one.
+    pub differs: Vec<String>,
+}
+
+/// Reconciles the central host's and a worker's files against their base,
+/// path by path (X60, "Keeping it in sync").
+pub fn reconcile(base: &Files, central: &Files, worker: &Files) -> Reconciled<Files> {
+    let paths: std::collections::BTreeSet<&String> = base
+        .keys()
+        .chain(central.keys())
+        .chain(worker.keys())
+        .collect();
+    let mut differs: std::collections::BTreeSet<String> = paths
+        .iter()
+        .filter(|p| {
+            let (b, c, w) = (base.get(**p), central.get(**p), worker.get(**p));
+            c != w && c != b && w != b
+        })
+        .map(|p| (*p).clone())
+        .collect();
+    // A file where the other side now has a folder of that name can't sit
+    // in one tree with it: both differ, until each side is a valid tree.
+    loop {
+        let r = merge(&paths, &differs, base, central, worker);
+        let clashes: Vec<String> = [&r.base, &r.central, &r.worker]
+            .into_iter()
+            .flat_map(folder_clashes)
+            .filter(|p| !differs.contains(p))
+            .collect();
+        if clashes.is_empty() {
+            return r;
+        }
+        differs.extend(clashes);
+    }
+}
+
+fn merge(
+    paths: &std::collections::BTreeSet<&String>,
+    differs: &std::collections::BTreeSet<String>,
+    base: &Files,
+    central: &Files,
+    worker: &Files,
+) -> Reconciled<Files> {
+    let mut r = Reconciled {
+        base: Files::new(),
+        central: Files::new(),
+        worker: Files::new(),
+        differs: differs.iter().cloned().collect(),
+    };
+    for p in paths {
+        let (b, c, w) = (base.get(*p), central.get(*p), worker.get(*p));
+        let (nb, nc, nw) = if differs.contains(*p) {
+            (b, c, w)
+        } else {
+            // The side that changed wins; unchanged on both, or changed
+            // alike, gives the same.
+            let x = if c == b { w } else { c };
+            (x, x, x)
+        };
+        for (out, e) in [(&mut r.base, nb), (&mut r.central, nc), (&mut r.worker, nw)] {
+            if let Some(e) = e {
+                out.insert((*p).clone(), e.clone());
+            }
+        }
+    }
+    r
+}
+
+/// Paths that are both a file and a folder's prefix in `files`: `a` and
+/// `a/x`, say. Both are returned.
+fn folder_clashes(files: &Files) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in files.keys() {
+        let prefix = format!("{p}/");
+        let under: Vec<&String> = files
+            .range(prefix.clone()..)
+            .take_while(|(k, _)| k.starts_with(&prefix))
+            .map(|(k, _)| k)
+            .collect();
+        if !under.is_empty() {
+            out.push(p.clone());
+            out.extend(under.into_iter().cloned());
+        }
+    }
+    out
+}
+
+/// The files of `tree` in `repo`.
+pub async fn read_files(repo: &Path, tree: &str) -> Result<Files> {
+    let out = git_env(
+        repo,
+        &[],
+        &["ls-tree", "-r", "-z", "--full-tree", tree],
+        None,
+    )
+    .await?;
+    let mut files = Files::new();
+    for line in split_z(&out) {
+        // `<mode> <type> <oid>\t<path>`
+        let Some((meta, path)) = line.split_once('\t') else {
+            bail!("unexpected ls-tree line {line:?}")
+        };
+        let mut meta = meta.split(' ');
+        let (Some(mode), Some(_), Some(oid)) = (meta.next(), meta.next(), meta.next()) else {
+            bail!("unexpected ls-tree line {line:?}")
+        };
+        files.insert(
+            path.to_string(),
+            Entry {
+                mode: mode.to_string(),
+                oid: oid.to_string(),
+            },
+        );
+    }
+    Ok(files)
+}
+
+/// Writes `files` as a tree in `repo` and returns its id. Every object must
+/// already be in the repository.
+pub async fn write_files(repo: &Path, files: &Files) -> Result<String> {
+    let dir = git_env(repo, &[], &["rev-parse", "--absolute-git-dir"], None).await?;
+    let index = PathBuf::from(String::from_utf8_lossy(&dir).trim())
+        .join(format!("moonlet-sync-tmp-{}", uuid::Uuid::new_v4()));
+    let index_s = index.to_string_lossy().to_string();
+    let env = [("GIT_INDEX_FILE", index_s.as_str())];
+    let mut info = Vec::new();
+    for (path, e) in files {
+        info.extend_from_slice(format!("{} {}\t{path}\0", e.mode, e.oid).as_bytes());
+    }
+    let written = async {
+        git_env(repo, &env, &["read-tree", "--empty"], None).await?;
+        git_env(
+            repo,
+            &env,
+            &["update-index", "-z", "--index-info"],
+            Some(&info),
+        )
+        .await?;
+        git_env(repo, &env, &["write-tree"], None).await
+    }
+    .await;
+    let _ = std::fs::remove_file(&index);
+    Ok(String::from_utf8_lossy(&written?).trim().to_string())
+}
+
+/// [`reconcile`] over trees in `repo`: the result's trees are written there.
+pub async fn reconcile_trees(
+    repo: &Path,
+    base: &str,
+    central: &str,
+    worker: &str,
+) -> Result<Reconciled<String>> {
+    let r = reconcile(
+        &read_files(repo, base).await?,
+        &read_files(repo, central).await?,
+        &read_files(repo, worker).await?,
+    );
+    Ok(Reconciled {
+        base: write_files(repo, &r.base).await?,
+        central: write_files(repo, &r.central).await?,
+        worker: write_files(repo, &r.worker).await?,
+        differs: r.differs,
+    })
+}
+
+/// Why [`apply`] did nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum ApplyError {
+    /// The worktree changed since the snapshot `apply` started from, where
+    /// the target changes it too. Snapshot again and reconcile.
+    #[error("the worktree changed: {0}")]
+    Changed(String),
+    /// The target would write outside the worktree.
+    #[error("a path outside the worktree: {0}")]
+    Unsafe(String),
+    #[error(transparent)]
+    Git(#[from] anyhow::Error),
+}
+
+/// The first path in `files` that would write outside the worktree: one
+/// with an empty, `.`, `..` or `.git` part, or one under a symlink of the
+/// same tree.
+pub fn unsafe_path(files: &Files) -> Option<String> {
+    files
+        .keys()
+        .find(|path| {
+            let parts: Vec<&str> = path.split('/').collect();
+            parts
+                .iter()
+                .any(|p| p.is_empty() || *p == "." || *p == ".." || p.eq_ignore_ascii_case(".git"))
+                || (1..parts.len()).any(|n| {
+                    files
+                        .get(&parts[..n].join("/"))
+                        .is_some_and(|e| e.mode == "120000")
+                })
+        })
+        .cloned()
+}
+
+/// Turns `worktree` from `from`, a fresh snapshot of it, into `to`. Only
+/// what differs between the two is written. Nothing is written when a
+/// file `to` changes was edited since the snapshot, or when an untracked
+/// file is in the way: [`ApplyError::Changed`].
+pub async fn apply(worktree: &Path, from: &str, to: &str) -> Result<(), ApplyError> {
+    if let Some(path) = unsafe_path(&read_files(worktree, to).await?) {
+        return Err(ApplyError::Unsafe(path));
+    }
+    let index = private_index(worktree).await?;
+    let index_s = index.to_string_lossy().to_string();
+    let env = [("GIT_INDEX_FILE", index_s.as_str())];
+    git_env(worktree, &env, &["read-tree", from], None).await?;
+    // Fresh stat data, so files unchanged since the snapshot count as such.
+    // It exits 1 when some did change; read-tree then refuses those.
+    run_raw_env(
+        "git",
+        worktree,
+        &["update-index", "-q", "--refresh"],
+        &env,
+        None,
+        Duration::from_secs(300),
+    )
+    .await?;
+    let out = run_raw_env(
+        "git",
+        worktree,
+        &["read-tree", "-m", "-u", from, to],
+        &env,
+        None,
+        Duration::from_secs(300),
+    )
+    .await?;
+    if out.status == 0 {
+        return Ok(());
+    }
+    // Leave the private index at `from`, as the worktree still is.
+    let _ = git_env(worktree, &env, &["read-tree", from], None).await;
+    if out.stderr.contains("not uptodate") || out.stderr.contains("would be overwritten") {
+        Err(ApplyError::Changed(out.stderr))
+    } else {
+        Err(ApplyError::Git(anyhow::anyhow!(
+            "git read-tree: {}",
+            out.stderr
+        )))
+    }
+}
+
+/// Keeps `oid` (a copy's base) and everything it reaches from `git gc`,
+/// under `refs/moonlet/sync/<copy>`.
+pub async fn set_base_ref(repo: &Path, copy: &str, oid: &str) -> Result<()> {
+    git_env(repo, &[], &["update-ref", &base_ref(copy)?, oid], None).await?;
+    Ok(())
+}
+
+fn base_ref(copy: &str) -> Result<String> {
+    if copy.is_empty() || !copy.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        bail!("invalid copy id {copy:?}");
+    }
+    Ok(format!("refs/moonlet/sync/{copy}"))
+}
+
+/// Removes the ref [`set_base_ref`] made, when the copy goes.
+pub async fn delete_base_ref(repo: &Path, copy: &str) -> Result<()> {
+    git_env(repo, &[], &["update-ref", "-d", &base_ref(copy)?], None).await?;
+    Ok(())
+}
+
+/// A git pack of the objects `new` (a tree or commit) reaches and none of
+/// `not` does: what the other side, which has `not`, lacks. Empty when it
+/// lacks nothing.
+pub async fn pack_objects(repo: &Path, new: &str, not: &[&str]) -> Result<Vec<u8>> {
+    let mut args = vec!["rev-list", "--objects", new, "--not"];
+    args.extend(not);
+    let objects = git_env(repo, &[], &args, None).await?;
+    if objects.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Vec::new());
+    }
+    // `<oid> <path>` lines: pack-objects uses the paths to pick deltas.
+    git_env(
+        repo,
+        &[],
+        &["pack-objects", "--stdout", "-q"],
+        Some(&objects),
+    )
+    .await
+}
+
+/// Stores the objects of a pack from [`pack_objects`] in `repo`.
+pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<()> {
+    if !pack.is_empty() {
+        git_env(
+            repo,
+            &[],
+            &["index-pack", "--stdin", "--fix-thin"],
+            Some(pack),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn split_z(out: &[u8]) -> impl Iterator<Item = String> + '_ {
+    out.split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::git;
+
+    /// A repository with the worked example's files (X60, "What syncs").
+    async fn worked_example() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.email", "t@example.com"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "commit.gpgsign", "false"],
+        ] {
+            git(p, &args).await.unwrap();
+        }
+        std::fs::write(p.join(".gitignore"), "node_modules/\n.env\nvendor/\n").unwrap();
+        std::fs::create_dir_all(p.join("src")).unwrap();
+        std::fs::write(p.join("src/cart.ts"), "export const cart = [];\n").unwrap();
+        std::fs::write(p.join("run.sh"), "#!/bin/sh\n").unwrap();
+        set_mode(&p.join("run.sh"), 0o755);
+        std::fs::create_dir_all(p.join("vendor")).unwrap();
+        std::fs::write(p.join("vendor/keep.js"), "kept\n").unwrap();
+        git(p, &["add", "-A"]).await.unwrap();
+        git(p, &["add", "-f", "vendor/keep.js"]).await.unwrap();
+        git(p, &["commit", "-q", "-m", "init"]).await.unwrap();
+
+        std::fs::write(p.join("src/cart.ts"), "export const cart = [1];\n").unwrap();
+        std::fs::write(p.join("src/new.ts"), "new\n").unwrap();
+        std::fs::create_dir_all(p.join("node_modules/left-pad")).unwrap();
+        std::fs::write(p.join("node_modules/left-pad/index.js"), "pad\n").unwrap();
+        std::fs::write(p.join(".env"), "SECRET=1\n").unwrap();
+        std::fs::write(p.join("scratch.txt"), "notes\n").unwrap();
+        std::os::unix::fs::symlink("src/cart.ts", p.join("link")).unwrap();
+        // The user's own excludes ignore scratch.txt. Set here rather than
+        // in a global config, which `-c` overrides the same way.
+        std::fs::write(p.join(".git/my-excludes"), "scratch.txt\n").unwrap();
+        let excludes = p.join(".git/my-excludes");
+        git(
+            p,
+            &["config", "core.excludesFile", excludes.to_str().unwrap()],
+        )
+        .await
+        .unwrap();
+        dir
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    async fn listing(repo: &Path, tree: &str) -> Vec<(String, String)> {
+        let out = git(repo, &["ls-tree", "-r", "--full-tree", tree])
+            .await
+            .unwrap();
+        String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let (meta, path) = l.split_once('\t').unwrap();
+                (
+                    path.to_string(),
+                    meta.split(' ').next().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+        rows.iter()
+            .map(|(p, m)| (p.to_string(), m.to_string()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_follows_gits_rules_without_global_excludes() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        assert_eq!(
+            listing(p, &snap.tree).await,
+            pairs(&[
+                (".gitignore", "100644"),
+                ("link", "120000"),
+                ("run.sh", "100755"),
+                ("scratch.txt", "100644"),
+                ("src/cart.ts", "100644"),
+                ("src/new.ts", "100644"),
+                ("vendor/keep.js", "100644"),
+            ])
+        );
+        assert!(snap.too_big.is_empty());
+        // The session's own staging area is untouched.
+        let staged = git(p, &["diff", "--cached", "--name-only"]).await.unwrap();
+        assert_eq!(String::from_utf8(staged).unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn a_file_ignored_after_a_snapshot_leaves_the_next_one() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        std::fs::create_dir_all(p.join("build")).unwrap();
+        std::fs::write(p.join("build/out.js"), "built\n").unwrap();
+        let first = snapshot(p, MAX_FILE).await.unwrap();
+        assert!(
+            listing(p, &first.tree)
+                .await
+                .contains(&("build/out.js".into(), "100644".into()))
+        );
+
+        std::fs::write(
+            p.join(".gitignore"),
+            "node_modules/\n.env\nvendor/\nbuild/\n",
+        )
+        .unwrap();
+        let second = snapshot(p, MAX_FILE).await.unwrap();
+        let paths: Vec<String> = listing(p, &second.tree)
+            .await
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                ".gitignore",
+                "link",
+                "run.sh",
+                "scratch.txt",
+                "src/cart.ts",
+                "src/new.ts",
+                "vendor/keep.js"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn files_over_the_limit_stay_out_even_once_they_grow() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        std::fs::write(p.join("big.bin"), vec![7u8; 2048]).unwrap();
+        std::fs::write(p.join("grows.bin"), vec![7u8; 10]).unwrap();
+        let first = snapshot(p, 1024).await.unwrap();
+        assert_eq!(first.too_big, ["big.bin"]);
+        let paths: Vec<String> = listing(p, &first.tree)
+            .await
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert!(
+            paths.contains(&"grows.bin".to_string()) && !paths.contains(&"big.bin".to_string())
+        );
+
+        std::fs::write(p.join("grows.bin"), vec![7u8; 2048]).unwrap();
+        let second = snapshot(p, 1024).await.unwrap();
+        assert_eq!(second.too_big, ["big.bin", "grows.bin"]);
+        let paths: Vec<String> = listing(p, &second.tree)
+            .await
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert!(!paths.contains(&"grows.bin".to_string()), "{paths:?}");
+    }
+
+    fn files(rows: &[(&str, &str, &str)]) -> Files {
+        rows.iter()
+            .map(|(p, mode, oid)| {
+                (
+                    p.to_string(),
+                    Entry {
+                        mode: mode.to_string(),
+                        oid: oid.to_string(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reconciling_follows_the_worked_examples() {
+        // One path per row of the spec's table: base, studio-mini, this Mac.
+        let base = files(&[
+            ("1", "100644", "a"),
+            ("2", "100644", "a"),
+            ("3", "100644", "a"),
+            ("4", "100644", "a"),
+            ("5", "100644", "a"),
+            ("6", "100644", "a"),
+            ("7", "100644", "a"),
+        ]);
+        let central = files(&[
+            ("1", "100644", "a"),
+            ("2", "100644", "b"),
+            ("3", "100644", "b"),
+            ("4", "100644", "b"),
+            // 5 and 6: deleted on studio-mini.
+            ("7", "100755", "a"),
+            ("8", "100644", "a"),
+            ("9", "100644", "a"),
+            ("10", "100644", "a"),
+        ]);
+        let worker = files(&[
+            ("1", "100644", "b"),
+            ("2", "100644", "a"),
+            ("3", "100644", "b"),
+            ("4", "100644", "c"),
+            ("5", "100644", "a"),
+            ("6", "100644", "b"),
+            ("7", "100644", "a"),
+            // 8: none on this Mac.
+            ("9", "100644", "a"),
+            ("10", "100644", "b"),
+        ]);
+        let r = reconcile(&base, &central, &worker);
+        assert_eq!(r.differs, ["10", "4", "6"]);
+        assert_eq!(
+            r.central,
+            files(&[
+                ("1", "100644", "b"),
+                ("10", "100644", "a"),
+                ("2", "100644", "b"),
+                ("3", "100644", "b"),
+                ("4", "100644", "b"),
+                ("7", "100755", "a"),
+                ("8", "100644", "a"),
+                ("9", "100644", "a"),
+            ])
+        );
+        assert_eq!(
+            r.worker,
+            files(&[
+                ("1", "100644", "b"),
+                ("10", "100644", "b"),
+                ("2", "100644", "b"),
+                ("3", "100644", "b"),
+                ("4", "100644", "c"),
+                ("6", "100644", "b"),
+                ("7", "100755", "a"),
+                ("8", "100644", "a"),
+                ("9", "100644", "a"),
+            ])
+        );
+        assert_eq!(
+            r.base,
+            files(&[
+                ("1", "100644", "b"),
+                ("2", "100644", "b"),
+                ("3", "100644", "b"),
+                ("4", "100644", "a"),
+                ("6", "100644", "a"),
+                ("7", "100755", "a"),
+                ("8", "100644", "a"),
+                ("9", "100644", "a"),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_path_stops_differing_once_both_sides_match() {
+        let base = files(&[("src/cart.ts", "100644", "a")]);
+        let central = files(&[("src/cart.ts", "100644", "b")]);
+        let worker = files(&[("src/cart.ts", "100644", "c")]);
+        assert_eq!(reconcile(&base, &central, &worker).differs, ["src/cart.ts"]);
+        // Kept this Mac's: both sides now have c, against the old base.
+        let r = reconcile(&base, &worker, &worker);
+        assert!(r.differs.is_empty());
+        assert_eq!(r.base, worker);
+    }
+
+    #[test]
+    fn a_file_against_a_folder_of_the_same_name_differs() {
+        let base = Files::new();
+        let central = files(&[("a", "100644", "f")]);
+        let worker = files(&[("a/x", "100644", "g"), ("b", "100644", "h")]);
+        let r = reconcile(&base, &central, &worker);
+        assert_eq!(r.differs, ["a", "a/x"]);
+        assert_eq!(
+            r.central,
+            files(&[("a", "100644", "f"), ("b", "100644", "h")])
+        );
+        assert_eq!(
+            r.worker,
+            files(&[("a/x", "100644", "g"), ("b", "100644", "h")])
+        );
+        assert_eq!(r.base, files(&[("b", "100644", "h")]));
+    }
+
+    async fn show(repo: &Path, tree: &str, path: &str) -> Option<String> {
+        git(repo, &["show", &format!("{tree}:{path}")])
+            .await
+            .ok()
+            .map(|b| String::from_utf8(b).unwrap())
+    }
+
+    #[tokio::test]
+    async fn reconciling_trees_writes_each_sides_tree() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let base = snapshot(p, MAX_FILE).await.unwrap().tree;
+        std::fs::write(p.join("src/cart.ts"), "studio-mini's cart\n").unwrap();
+        std::fs::write(p.join("src/new.ts"), "studio-mini's new\n").unwrap();
+        let central = snapshot(p, MAX_FILE).await.unwrap().tree;
+        std::fs::write(p.join("src/cart.ts"), "export const cart = [1];\n").unwrap();
+        std::fs::write(p.join("src/new.ts"), "this Mac's new\n").unwrap();
+        std::fs::remove_file(p.join("scratch.txt")).unwrap();
+        let worker = snapshot(p, MAX_FILE).await.unwrap().tree;
+
+        let r = reconcile_trees(p, &base, &central, &worker).await.unwrap();
+        assert_eq!(r.differs, ["src/new.ts"]);
+        for tree in [&r.central, &r.worker, &r.base] {
+            assert_eq!(
+                show(p, tree, "src/cart.ts").await.as_deref(),
+                Some("studio-mini's cart\n")
+            );
+            assert_eq!(show(p, tree, "scratch.txt").await, None);
+            assert_eq!(
+                show(p, tree, "run.sh").await.as_deref(),
+                Some("#!/bin/sh\n")
+            );
+        }
+        assert_eq!(
+            show(p, &r.central, "src/new.ts").await.as_deref(),
+            Some("studio-mini's new\n")
+        );
+        assert_eq!(
+            show(p, &r.worker, "src/new.ts").await.as_deref(),
+            Some("this Mac's new\n")
+        );
+        assert_eq!(
+            show(p, &r.base, "src/new.ts").await.as_deref(),
+            Some("new\n")
+        );
+        assert_eq!(
+            listing(p, &r.central)
+                .await
+                .iter()
+                .find(|(p, _)| p == "link")
+                .unwrap()
+                .1,
+            "120000"
+        );
+    }
+
+    fn read(p: &Path, path: &str) -> Option<String> {
+        std::fs::read_to_string(p.join(path)).ok()
+    }
+
+    #[tokio::test]
+    async fn applying_writes_what_differs() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let older = snapshot(p, MAX_FILE).await.unwrap().tree;
+        std::fs::write(p.join("src/cart.ts"), "studio-mini's cart\n").unwrap();
+        std::fs::remove_file(p.join("src/new.ts")).unwrap();
+        std::fs::write(p.join("src/added.ts"), "added\n").unwrap();
+        let newer = snapshot(p, MAX_FILE).await.unwrap().tree;
+
+        apply(p, &newer, &older).await.unwrap();
+        assert_eq!(
+            read(p, "src/cart.ts").as_deref(),
+            Some("export const cart = [1];\n")
+        );
+        assert_eq!(read(p, "src/new.ts").as_deref(), Some("new\n"));
+        assert_eq!(read(p, "src/added.ts"), None);
+        // Ignored files are not part of either tree, and stay.
+        assert_eq!(read(p, ".env").as_deref(), Some("SECRET=1\n"));
+        assert_eq!(snapshot(p, MAX_FILE).await.unwrap().tree, older);
+
+        apply(p, &older, &newer).await.unwrap();
+        assert_eq!(
+            read(p, "src/cart.ts").as_deref(),
+            Some("studio-mini's cart\n")
+        );
+        assert_eq!(snapshot(p, MAX_FILE).await.unwrap().tree, newer);
+    }
+
+    #[tokio::test]
+    async fn an_edit_since_the_snapshot_is_never_overwritten() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let older = snapshot(p, MAX_FILE).await.unwrap().tree;
+        std::fs::write(p.join("src/cart.ts"), "studio-mini's cart\n").unwrap();
+        std::fs::remove_file(p.join("src/new.ts")).unwrap();
+        let newer = snapshot(p, MAX_FILE).await.unwrap().tree;
+
+        // Edited after the snapshot, in a file the target changes.
+        std::fs::write(p.join("src/cart.ts"), "typed just now\n").unwrap();
+        let e = apply(p, &newer, &older).await.unwrap_err();
+        assert!(matches!(e, ApplyError::Changed(_)), "{e}");
+        assert_eq!(read(p, "src/cart.ts").as_deref(), Some("typed just now\n"));
+        assert_eq!(read(p, "src/new.ts"), None);
+
+        // An untracked file where the target puts one.
+        std::fs::write(p.join("src/cart.ts"), "studio-mini's cart\n").unwrap();
+        std::fs::write(p.join("src/new.ts"), "mine\n").unwrap();
+        let e = apply(p, &newer, &older).await.unwrap_err();
+        assert!(matches!(e, ApplyError::Changed(_)), "{e}");
+        assert_eq!(read(p, "src/new.ts").as_deref(), Some("mine\n"));
+    }
+
+    #[test]
+    fn paths_outside_the_worktree_are_found() {
+        let ok = files(&[
+            ("src/cart.ts", "100644", "a"),
+            ("link", "120000", "b"),
+            ("linked/x", "100644", "c"),
+        ]);
+        assert_eq!(unsafe_path(&ok), None);
+        for (bad, path) in [
+            (files(&[("../x", "100644", "a")]), "../x"),
+            (files(&[("src/../../x", "100644", "a")]), "src/../../x"),
+            (
+                files(&[(".git/hooks/post-checkout", "100755", "a")]),
+                ".git/hooks/post-checkout",
+            ),
+            (
+                files(&[("sub/.GIT/config", "100644", "a")]),
+                "sub/.GIT/config",
+            ),
+            (files(&[("/etc/passwd", "100644", "a")]), "/etc/passwd"),
+            (
+                files(&[("link", "120000", "a"), ("link/x", "100644", "b")]),
+                "link/x",
+            ),
+        ] {
+            assert_eq!(unsafe_path(&bad).as_deref(), Some(path));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tree_reaching_outside_is_not_applied() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let here = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let blob = String::from_utf8(
+            git(p, &["rev-parse", &format!("{here}:run.sh")])
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        // `write_files` goes through git, which refuses such a path; build
+        // the tree by hand as a hostile central host could.
+        let inner = git_mktree(p, &format!("100644 blob {}\t..\n", blob.trim())).await;
+        let e = apply(p, &here, &inner).await.unwrap_err();
+        assert!(
+            matches!(e, ApplyError::Unsafe(ref path) if path == ".."),
+            "{e}"
+        );
+        assert!(!p.parent().unwrap().join("escaped").exists());
+    }
+
+    async fn git_mktree(repo: &Path, listing: &str) -> String {
+        let out = git_env(repo, &[], &["mktree"], Some(listing.as_bytes()))
+            .await
+            .unwrap();
+        String::from_utf8(out).unwrap().trim().to_string()
+    }
+
+    async fn exists(repo: &Path, oid: &str) -> bool {
+        git(repo, &["cat-file", "-e", oid]).await.is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_copys_base_survives_gc_until_its_ref_goes() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let base = snapshot(p, MAX_FILE).await.unwrap().tree;
+        // src/new.ts is untracked: only the snapshot reaches its blob.
+        let blob = String::from_utf8(
+            git(p, &["rev-parse", &format!("{base}:src/new.ts")])
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let blob = blob.trim();
+        let copy = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
+        set_base_ref(p, copy, &base).await.unwrap();
+        // Nothing else may keep it: the private index is gone too.
+        std::fs::remove_file(p.join(".git/moonlet-sync-index")).unwrap();
+        git(p, &["-c", "gc.reflogExpire=now", "gc", "-q", "--prune=now"])
+            .await
+            .unwrap();
+        assert!(exists(p, blob).await);
+
+        delete_base_ref(p, copy).await.unwrap();
+        git(p, &["-c", "gc.reflogExpire=now", "gc", "-q", "--prune=now"])
+            .await
+            .unwrap();
+        assert!(!exists(p, blob).await);
+
+        assert!(set_base_ref(p, "../../HEAD", &base).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_pack_carries_what_the_other_side_lacks() {
+        let central = worked_example().await;
+        let c = central.path();
+        let copy = tempfile::tempdir().unwrap();
+        let w = copy.path().join("shop");
+        git(copy.path(), &["clone", "-q", c.to_str().unwrap(), "shop"])
+            .await
+            .unwrap();
+        let theirs = snapshot(c, MAX_FILE).await.unwrap().tree;
+        let mine = snapshot(&w, MAX_FILE).await.unwrap().tree;
+        assert!(!exists(&w, &theirs).await);
+
+        let pack = pack_objects(c, &theirs, &[&mine]).await.unwrap();
+        unpack(&w, &pack).await.unwrap();
+        apply(&w, &mine, &theirs).await.unwrap();
+        assert_eq!(
+            read(&w, "src/cart.ts").as_deref(),
+            Some("export const cart = [1];\n")
+        );
+        assert_eq!(read(&w, "src/new.ts").as_deref(), Some("new\n"));
+        assert_eq!(
+            std::fs::read_link(w.join("link")).unwrap(),
+            std::path::PathBuf::from("src/cart.ts")
+        );
+
+        // A commit, against the one both have.
+        let old = String::from_utf8(git(c, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
+        git(c, &["commit", "-qam", "cart"]).await.unwrap();
+        let new = String::from_utf8(git(c, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
+        let pack = pack_objects(c, new.trim(), &[old.trim()]).await.unwrap();
+        unpack(&w, &pack).await.unwrap();
+        assert!(exists(&w, new.trim()).await);
+
+        // Nothing new: nothing to send.
+        assert!(
+            pack_objects(c, new.trim(), &[new.trim()])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        unpack(&w, &[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_submodule_is_its_commit_not_its_files() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let sub = p.join("lib");
+        std::fs::create_dir_all(&sub).unwrap();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.email", "t@example.com"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "commit.gpgsign", "false"],
+        ] {
+            git(&sub, &args).await.unwrap();
+        }
+        std::fs::write(sub.join("inner.txt"), "inner\n").unwrap();
+        git(&sub, &["add", "-A"]).await.unwrap();
+        git(&sub, &["commit", "-q", "-m", "inner"]).await.unwrap();
+        let head = String::from_utf8(git(&sub, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
+
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let files = read_files(p, &snap.tree).await.unwrap();
+        assert_eq!(
+            files["lib"],
+            Entry {
+                mode: "160000".into(),
+                oid: head.trim().into()
+            }
+        );
+        assert!(!files.contains_key("lib/inner.txt"));
+    }
+}

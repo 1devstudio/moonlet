@@ -72,7 +72,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 ### What syncs
 
-- [ ] A side's **snapshot** is the git tree of its worktree under git's rules: tracked files and untracked files that `.gitignore` and `.git/info/exclude` don't ignore. The user's global excludes (`core.excludesFile`) are not applied, so two machines with different global ignores agree. Worked example, for a worktree with these files:
+- [x] A side's **snapshot** is the git tree of its worktree under git's rules: tracked files and untracked files that `.gitignore` and `.git/info/exclude` don't ignore. The user's global excludes (`core.excludesFile`) are not applied, so two machines with different global ignores agree. Worked example, for a worktree with these files:
 
   | file | git's view | in the snapshot |
   |---|---|---|
@@ -84,6 +84,8 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   | `run.sh` | tracked, mode 755 | yes, as 755 |
   | `link` | a symlink to `src/cart.ts` | yes, as a symlink |
 
+  A file that an earlier snapshot took in leaves the next one once it is ignored, as git would leave it untracked. (`a_snapshot_follows_gits_rules_without_global_excludes`, `a_file_ignored_after_a_snapshot_leaves_the_next_one`)
+
 - [ ] The staging area does not sync. When a side receives commits that move its branch, its index is reset to the new `HEAD` and its files are left alone (as `git reset --mixed`), so anything staged there is unstaged.
 - [ ] A file over 100 MiB stays on its own machine. The copy's popover lists it: "big.bin is over 100 MB and stays on each machine." The rest syncs.
 - [ ] Submodule entries sync as commit ids. Submodule contents don't.
@@ -92,7 +94,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 - [ ] Each side watches its worktree with the file watcher the Files tab already uses (F1). A change produces a new snapshot. When it differs from the last snapshot both sides agreed on (the **base**), the change is sent.
 - [ ] The central host decides. Both sides send their changes to it, it reconciles them with the base, applies the result to its worktree, and sends the result to every copy. Two daemons never reconcile at the same time.
-- [ ] Reconciling goes path by path. Worked examples, where `a`, `b` and `c` are contents:
+- [x] Reconciling goes path by path. Worked examples, where `a`, `b` and `c` are contents:
 
   | base | studio-mini | this Mac | result |
   |---|---|---|---|
@@ -106,6 +108,8 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   | none | `a` | none | `a` on both |
   | none | `a` | `a` | `a` on both |
   | none | `a` | `b` | **differs** |
+
+  A file on one side where the result would also have a folder of that name, such as `a` from studio-mini and `a/x` from this Mac, differs too: one tree can't hold both. (`reconciling_follows_the_worked_examples`, `a_file_against_a_folder_of_the_same_name_differs`, `reconciling_trees_writes_each_sides_tree`)
 
 - [ ] A path that differs stays different, and the other paths keep syncing. When one side's file later changes to match the other's, the path no longer differs.
 - [ ] When a path starts to differ, the app shows a desktop notification: "fix-cart: src/cart.ts changed on both studio-mini and this Mac. Pick a version." Several paths that start to differ in one reconcile give one notification: "fix-cart: 3 files changed on both studio-mini and this Mac. Pick a version for each." Clicking it opens the session with the mark's popover. A path that still differs is not notified again.
