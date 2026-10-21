@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostLine, profileLine, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, profileLine, removeAsks, profilesNeedSignIn, settingsNav } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -180,6 +180,66 @@ describe("a host's line on the Hosts page (X43)", () => {
     expect(hostLine(host({ status: "error", message: "ssh: Could not resolve hostname devbox" }), 0)).toEqual({ tone: "error", text: "ssh: Could not resolve hostname devbox" });
     expect(hostLine(host({ status: "reconnecting" }), 2)).toEqual({ tone: "blocked", text: "Reconnecting…" });
     expect(hostLine(host({ status: "connecting" }), 0)).toEqual({ tone: "blocked", text: "Connecting…" });
+  });
+});
+
+describe("a tailnet host's line (X57)", () => {
+  const host = (patch: Partial<HostInfo>): HostInfo => ({ id: "studio-mini", label: "studio-mini", remote: true, kind: "tailnet", status: "connected", message: null, daemon_version: "0.1.26", hostname: null, home: null, ...patch });
+
+  it("says which side to update when the protocols differ", () => {
+    expect(hostLine(host({ status: "needs_update", daemon_version: "0.1.26" }), 0, "0.1.30")).toEqual({
+      tone: "error",
+      text: "Update moonlet on studio-mini (it runs 0.1.26, this Mac 0.1.30)",
+    });
+    expect(hostLine(host({ status: "needs_update", daemon_version: "0.1.30" }), 0, "0.1.26")).toEqual({
+      tone: "error",
+      text: "Update moonlet on this Mac (studio-mini runs 0.1.30)",
+    });
+    // 0.1.9 is older than 0.1.10.
+    expect(hostLine(host({ status: "needs_update", daemon_version: "0.1.9" }), 0, "0.1.10").text).toBe("Update moonlet on studio-mini (it runs 0.1.9, this Mac 0.1.10)");
+  });
+
+  it("says a host that removed this Mac needs pairing again", () => {
+    expect(hostLine(host({ status: "refused", message: "this phone is not paired with this Mac" }), 0, "0.1.30")).toEqual({
+      tone: "error",
+      text: "studio-mini no longer accepts this Mac. Pair it again.",
+    });
+  });
+
+  it("says only which host to update when both run the same version", () => {
+    // Development builds can differ in protocol at the same version.
+    expect(hostLine(host({ status: "needs_update", daemon_version: "0.1.30" }), 0, "0.1.30").text).toBe("Update moonlet on studio-mini");
+  });
+
+  it("offers Retry where waiting is all the host does, and Pair again where it refused", () => {
+    expect(hostActions(host({ status: "needs_update" }))).toEqual(["retry"]);
+    expect(hostActions(host({ status: "refused" }))).toEqual(["pair-again"]);
+    expect(hostActions(host({ status: "connected" }))).toEqual([]);
+    expect(hostActions(host({ status: "error", message: "cannot reach the host over Tailscale" }))).toEqual(["retry"]);
+    expect(hostActions(host({ kind: "ssh", status: "needs_install" }))).toEqual(["install"]);
+    expect(hostActions(host({ kind: "ssh", status: "connected" }))).toEqual(["reinstall"]);
+    expect(hostActions(host({ kind: "ssh", status: "error", message: "ssh: Could not resolve hostname" }))).toEqual(["retry"]);
+  });
+
+  it("asks before removing a tailnet host it cannot tell", () => {
+    expect(removeAsks(host({ status: "connected" }))).toBeNull();
+    expect(removeAsks(host({ status: "reconnecting" }))).toEqual({
+      title: "Remove studio-mini?",
+      message: "studio-mini will still list this Mac until you remove it there.",
+    });
+    expect(removeAsks(host({ kind: "ssh", status: "error" }))).toBeNull();
+  });
+
+  it("puts the same words in the sidebar's notice", () => {
+    expect(hostNotice(host({}), "0.1.30")).toBeNull();
+    expect(hostNotice(host({ status: "needs_update", daemon_version: "0.1.26" }), "0.1.30")).toBe("Update moonlet on studio-mini (it runs 0.1.26, this Mac 0.1.30)");
+    expect(hostNotice(host({ status: "refused", message: "this phone is not paired with this Mac" }), "0.1.30")).toBe(
+      "studio-mini no longer accepts this Mac. Pair it again.",
+    );
+    expect(hostNotice(host({ kind: "ssh", status: "needs_install" }), "0.1.30")).toBe("studio-mini: helper not installed");
+    expect(hostNotice(host({ status: "error", message: null }), "0.1.30")).toBe("studio-mini: connection failed");
+    expect(hostNotice(host({ status: "error", message: "ssh: Could not resolve hostname" }), "0.1.30")).toBe("studio-mini: ssh: Could not resolve hostname");
+    expect(hostNotice(host({ status: "reconnecting" }), "0.1.30")).toBe("studio-mini: reconnecting…");
   });
 });
 

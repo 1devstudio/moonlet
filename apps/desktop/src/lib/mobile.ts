@@ -1,7 +1,7 @@
 // Settings › Phones (X39, X43): phone access over Tailscale, pairing and the
 // paired phones, as the section shows them.
 
-import type { MobileDevice, MobileStatus } from "./protocol";
+import type { DeviceKind, MobileDevice, MobileStatus } from "./protocol";
 
 /** The line under the switch. */
 export function mobileLine(st: MobileStatus): string {
@@ -43,4 +43,9 @@ export function pairEndedText(reason: string): string {
     default:
       return "Pairing was cancelled.";
   }
+}
+
+/** The paired devices of one kind (X57); a device from before X57 is a phone. */
+export function devicesOfKind(st: MobileStatus, kind: DeviceKind): MobileDevice[] {
+  return st.devices.filter((d) => (d.kind ?? "phone") === kind);
 }
