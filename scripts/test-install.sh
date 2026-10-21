@@ -155,7 +155,8 @@ fi
 # A machine without curl or wget is told which it needs.
 bare="$work/bare"
 mkdir -p "$bare"
-cp "$fake/uname" "$bare/"
+# The faked uname on a Mac; on Linux the real one.
+if [ -x "$fake/uname" ]; then cp "$fake/uname" "$bare/"; else ln -s "$(command -v uname)" "$bare/uname"; fi
 for tool in tar sha256sum shasum; do
   p=$(command -v "$tool" || true)
   if [ -n "$p" ]; then ln -s "$p" "$bare/$tool"; fi
