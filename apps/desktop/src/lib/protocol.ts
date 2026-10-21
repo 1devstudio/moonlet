@@ -201,6 +201,66 @@ export interface Project {
   base_branch: string;
 }
 
+/** gh on a host (X59). */
+export interface GhStatus {
+  installed: boolean;
+  login: string | null;
+}
+
+/** A repository's details for the Add project card (X59); found through git, only `repo` and `default_branch`. */
+export interface RepoInfo {
+  repo: string;
+  private: boolean | null;
+  description: string | null;
+  default_branch: string | null;
+  pushed_at: string | null;
+  /** gh's `diskUsage`, in KB. */
+  disk_kb: number | null;
+}
+
+/** One of the user's repositories (X59). */
+export interface RepoSummary {
+  repo: string;
+  description: string | null;
+  private: boolean;
+  pushed_at: string | null;
+  /** A project on the host already has it as `origin`. */
+  added: boolean;
+}
+
+/** The folder a clone would go to (X59). */
+export interface CloneTarget {
+  path: string;
+  exists: boolean;
+  same_repo: boolean;
+  branch: string | null;
+  free_name: string;
+}
+
+export interface CloneJob {
+  id: string;
+  repo: string;
+  path: string;
+}
+
+export type CloneStep = "counting" | "receiving" | "resolving";
+
+/** `repo.clone_progress` (X59). */
+export interface CloneProgress extends CloneJob {
+  step: CloneStep;
+  current: number;
+  total: number;
+  size: string | null;
+  speed: string | null;
+}
+
+/** `repo.clone_done` (X59). */
+export interface CloneDone extends CloneJob {
+  project: Project | null;
+  error: string | null;
+  cancelled: boolean;
+}
+
 /** `daemon.info`, as the Git page reads it. */
 export interface DaemonInfo {
   version: string;
@@ -712,6 +772,12 @@ export const M = {
   sectionMove: "section.move",
   sectionAddProject: "section.add_project",
   sectionRemoveProject: "section.remove_project",
+  repoGhStatus: "repo.gh_status",
+  repoLookup: "repo.lookup",
+  repoList: "repo.list",
+  repoCloneTarget: "repo.clone_target",
+  repoClone: "repo.clone",
+  repoCloneCancel: "repo.clone_cancel",
   prStatus: "gh.pr_status",
   prStack: "gh.pr_stack",
   fsList: "fs.list",
@@ -765,6 +831,8 @@ export const EV = {
   gitSettingsChanged: "git.settings_changed",
   claudeUpdateOutput: "claude.update_output",
   claudeUpdateDone: "claude.update_done",
+  repoCloneProgress: "repo.clone_progress",
+  repoCloneDone: "repo.clone_done",
   fsChanged: "fs.changed",
   chatItem: "chat.item",
   chatState: "chat.state",

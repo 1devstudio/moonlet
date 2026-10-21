@@ -558,7 +558,7 @@ fn dispatch(host: &Arc<Host>, frame: Frame) {
 fn request_timeout(method: &str) -> Duration {
     let secs = if method == moonlet_proto::methods::CLAUDE_UPDATE {
         660
-    } else if method.starts_with("gh.") || method.starts_with("workspace.") {
+    } else if method.starts_with("gh.") || method.starts_with("workspace.") || method.starts_with("repo.") {
         180
     } else {
         60
@@ -577,5 +577,7 @@ mod tests {
         assert_eq!(request_timeout("claude.update"), Duration::from_secs(660));
         assert_eq!(request_timeout("gh.prs"), Duration::from_secs(180));
         assert_eq!(request_timeout("claude.version"), Duration::from_secs(60));
+        // A lookup asks gh twice: `gh auth status`, then `gh repo view` (X59).
+        assert_eq!(request_timeout("repo.lookup"), Duration::from_secs(180));
     }
 }

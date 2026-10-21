@@ -6,6 +6,7 @@
 //!   first. Remote hosts are reached with `ssh host moonletd proxy`.
 //! * `moonletd stop` / `moonletd status`.
 
+mod clones;
 mod daemon;
 mod launch;
 mod mobile;

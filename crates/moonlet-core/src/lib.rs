@@ -16,6 +16,7 @@ pub mod hooks;
 pub mod node;
 pub mod paths;
 pub mod profiles;
+pub mod repo_clone;
 pub mod project_config;
 pub mod pty;
 pub mod session;
