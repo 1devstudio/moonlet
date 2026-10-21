@@ -76,6 +76,11 @@ struct Kept {
     base: Option<String>,
     #[serde(default)]
     base_head: Option<String>,
+    /// The last base the central host gave, so its objects stay out of a
+    /// pack. `base` differs from it for files edited during a round: those
+    /// keep the version the edit was made on.
+    #[serde(default)]
+    sent_base: Option<String>,
     /// The copy's files after the last round, so a change applied from the
     /// central host is not offered back.
     #[serde(default)]
@@ -597,6 +602,8 @@ impl LiveCopies {
             .map_err(|e| Stop::Paused(format!("{e:#}")))?;
         self.update_kept(&k.id, |kept| {
             kept.base = Some(base.clone());
+            // What the central host surely has: its own files.
+            kept.sent_base = Some(fetched.tree.clone());
             kept.base_head = Some(fetched.head.clone());
             kept.tree = Some(fetched.tree.clone());
             kept.too_big = fetched.too_big.clone();
@@ -750,6 +757,7 @@ impl LiveCopies {
             too_big.dedup();
             self.update_kept(&req.copy, |kept| {
                 kept.base = Some(req.tree.clone());
+                kept.sent_base = Some(req.tree.clone());
                 kept.base_head = Some(req.head.clone());
                 kept.tree = Some(req.tree.clone());
                 kept.differs.clear();
@@ -793,6 +801,7 @@ impl LiveCopies {
         }
         let (mut resolve, mut force) = (resolve, force);
         let mut last = k.tree.clone();
+        let mut sent_base = k.sent_base.clone().unwrap_or_else(|| base.clone());
         let mut differed = k.differs.clone();
         let repo = PathBuf::from(&k.repo);
         let path = PathBuf::from(&k.path);
@@ -812,9 +821,15 @@ impl LiveCopies {
                 self.set_state(id, CopyState::Syncing { files });
             }
             let head = git_sync::head(&path).await.map_err(internal)?;
-            let pack = git_sync::pack_objects(&repo, &[&local.tree, &head], &[&base, &base_head])
-                .await
-                .map_err(internal)?;
+            // A base of the copy's own, after a round with edits in it, goes
+            // along: the central host reconciles against it.
+            let pack = git_sync::pack_objects(
+                &repo,
+                &[&local.tree, &head, &base],
+                &[&sent_base, &base_head],
+            )
+            .await
+            .map_err(internal)?;
             let req = SyncOffer {
                 copy: id.to_string(),
                 base: base.clone(),
@@ -844,10 +859,10 @@ impl LiveCopies {
             }
             self.check_paths(&k, &repo, &r.tree).await?;
             // Edits made since the offer stay; the rest becomes the answer.
-            let now = self
-                .carry_over(&k, &repo, &path, &local.tree, &r.tree)
+            let (now, new_base) = self
+                .carry_over(&k, &repo, &path, &local.tree, &r.tree, &r.base)
                 .await?;
-            git_sync::set_base_ref(&repo, id, &r.base)
+            git_sync::set_base_ref(&repo, id, &new_base)
                 .await
                 .map_err(internal)?;
             let newly: Vec<String> = r
@@ -857,7 +872,8 @@ impl LiveCopies {
                 .cloned()
                 .collect();
             self.update_kept(id, |kept| {
-                kept.base = Some(r.base.clone());
+                kept.base = Some(new_base.clone());
+                kept.sent_base = Some(r.base.clone());
                 kept.base_head = Some(r.head.clone());
                 kept.tree = Some(r.tree.clone());
                 kept.differs = r.differs.clone();
@@ -874,7 +890,7 @@ impl LiveCopies {
             // Edited again meanwhile: the central host took the round, so
             // offer those edits against the new base, not the old one.
             self.changed_with(id, newly);
-            (base, base_head) = (r.base, r.head);
+            (base, base_head, sent_base) = (new_base, r.head, r.base);
             last = Some(r.tree);
             differed = r.differs;
             (resolve, force) = (None, false);
@@ -884,7 +900,10 @@ impl LiveCopies {
 
     /// Puts the central host's answer `answer` to the offer of `offered` in
     /// the copy, keeping each file edited since the offer as it is now.
-    /// Gives the tree the copy then holds.
+    /// Gives the tree the copy then holds, and its base: the answer's base
+    /// `answer_base`, except that a file kept keeps the version it was
+    /// edited from, so the central host's change to it and the copy's edit
+    /// both count.
     async fn carry_over(
         &self,
         k: &Kept,
@@ -892,11 +911,15 @@ impl LiveCopies {
         path: &Path,
         offered: &str,
         answer: &str,
-    ) -> Result<String, RpcError> {
+        answer_base: &str,
+    ) -> Result<(String, String), RpcError> {
         let offered = git_sync::read_files(repo, offered)
             .await
             .map_err(internal)?;
         let answer = git_sync::read_files(repo, answer).await.map_err(internal)?;
+        let based = git_sync::read_files(repo, answer_base)
+            .await
+            .map_err(internal)?;
         for _ in 0..APPLY_TRIES {
             let now = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
             let files = git_sync::read_files(repo, &now.tree)
@@ -905,11 +928,17 @@ impl LiveCopies {
             let target = git_sync::write_files(repo, &keep_edits(&offered, &files, &answer))
                 .await
                 .map_err(internal)?;
+            let base = base_of_edits(&offered, &files, &based);
+            let base = if base == based {
+                answer_base.to_string()
+            } else {
+                git_sync::write_files(repo, &base).await.map_err(internal)?
+            };
             if target == now.tree {
-                return Ok(target);
+                return Ok((target, base));
             }
             match git_sync::apply(path, &now.tree, &target).await {
-                Ok(()) => return Ok(target),
+                Ok(()) => return Ok((target, base)),
                 Err(ApplyError::Changed(_)) => continue,
                 Err(ApplyError::Unsafe(_)) => return Err(self.pause_outside(k)),
                 Err(ApplyError::Git(e)) => return Err(internal(format!("{e:#}"))),
@@ -1517,6 +1546,26 @@ fn keep_edits(
     out
 }
 
+/// The base after a round: `answer_base`, the central host's, except that
+/// each file edited since the offer of `offered` (as `now` shows) keeps the
+/// version it had in the offer, the one the edit was made on.
+fn base_of_edits(
+    offered: &git_sync::Files,
+    now: &git_sync::Files,
+    answer_base: &git_sync::Files,
+) -> git_sync::Files {
+    let mut out = answer_base.clone();
+    for path in offered.keys().chain(now.keys()) {
+        if offered.get(path) != now.get(path) {
+            match offered.get(path) {
+                Some(e) => out.insert(path.clone(), e.clone()),
+                None => out.remove(path),
+            };
+        }
+    }
+    out
+}
+
 fn outside(host: &str) -> String {
     format!("{host} sent a path outside the copy.")
 }
@@ -2041,6 +2090,29 @@ mod tests {
         );
         // Nothing edited since: the answer as it is.
         assert_eq!(keep_edits(&offered, &offered, &answer), answer);
+    }
+
+    #[test]
+    fn a_file_edited_during_a_round_keeps_the_base_it_was_edited_from() {
+        let e = |oid: &str| git_sync::Entry {
+            mode: "100644".into(),
+            oid: oid.into(),
+        };
+        let files = |list: &[(&str, &str)]| -> git_sync::Files {
+            list.iter().map(|(p, o)| (p.to_string(), e(o))).collect()
+        };
+        // Offered with cart at a. The central host had changed cart to g
+        // and the answer's base took g. Meanwhile this Mac edited cart to
+        // c, deleted old, and made new.
+        let offered = files(&[("cart", "a"), ("notes", "n"), ("old", "o")]);
+        let now = files(&[("cart", "c"), ("new", "x"), ("notes", "n")]);
+        let answer_base = files(&[("cart", "g"), ("notes", "n"), ("old", "o"), ("theirs", "t")]);
+        assert_eq!(
+            base_of_edits(&offered, &now, &answer_base),
+            files(&[("cart", "a"), ("notes", "n"), ("old", "o"), ("theirs", "t")])
+        );
+        // Nothing edited since: the answer's base as it is.
+        assert_eq!(base_of_edits(&offered, &offered, &answer_base), answer_base);
     }
 
     #[test]

@@ -585,6 +585,43 @@ async fn a_file_both_sides_change_differs_until_one_version_is_kept() {
     );
 }
 
+/// The copy offers an edit to one file while the central host's daemon is
+/// frozen; before the central host answers, both sides edit another file.
+/// The answer brings the central host's version of that file, which the
+/// copy's newer edit was not made on: both edits must count, and differ.
+#[tokio::test]
+async fn an_edit_kept_through_an_answer_still_differs_from_the_central_hosts() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    let pid = nix::unistd::Pid::from_raw(central.daemon.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    // The copy's offer of notes.md waits on the frozen central host.
+    write(&c.join("notes.md"), "notes\n");
+    copy_in(
+        &worker,
+        |s| matches!(s, CopyState::Syncing { .. }),
+        "offering",
+    )
+    .await;
+    write(&s.join("src/cart.ts"), "the agent's\n");
+    write(&c.join("src/cart.ts"), "mine\n");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+
+    reads(&s.join("notes.md"), "notes\n").await;
+    eventually("src/cart.ts differs", || async {
+        copies(&worker).await[0].differs == ["src/cart.ts"]
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(copies(&worker).await[0].differs, ["src/cart.ts"]);
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("mine\n"));
+    assert_eq!(
+        read(&s.join("src/cart.ts")).as_deref(),
+        Some("the agent's\n")
+    );
+}
+
 #[tokio::test]
 async fn while_the_link_is_down_the_copy_waits_and_then_catches_up() {
     let (mut central, worker, c) = synced().await;
@@ -1051,9 +1088,13 @@ async fn fake_central(
                     "identity": { "origin": "git.invalid/acme/shop", "root": root },
                     "origin_url": ORIGIN_URL,
                 })),
-                "sync.fetch" => Ok(json!({ "tree": tree, "head": head, "too_big": [], "pack": null })),
+                "sync.fetch" => {
+                    Ok(json!({ "tree": tree, "head": head, "too_big": [], "pack": null }))
+                }
                 "sync.offer" => match &update {
-                    Update::OffersBusy(left) if left.load(std::sync::atomic::Ordering::SeqCst) > 0 => {
+                    Update::OffersBusy(left)
+                        if left.load(std::sync::atomic::Ordering::SeqCst) > 0 =>
+                    {
                         left.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                         Err(busy())
                     }
@@ -1377,7 +1418,11 @@ async fn two_starts_at_once_make_one_copy() {
 async fn worker_turned_away(
     scratch: &Path,
     busy: usize,
-) -> (Daemon, Copy, std::sync::Arc<std::sync::Mutex<Option<Value>>>) {
+) -> (
+    Daemon,
+    Copy,
+    std::sync::Arc<std::sync::Mutex<Option<Value>>>,
+) {
     let origin = origin(scratch);
     git(
         scratch,
@@ -1507,7 +1552,12 @@ async fn resolving_says_why_it_could_not() {
     let id = copies(&worker).await[0].id.clone();
     let resolve = |path: &str| json!({ "copy": id, "path": path, "keep": "worker" });
     let code = |r: Result<Copy, anyhow::Error>| {
-        r.unwrap_err().to_string().split(':').next().unwrap().to_string()
+        r.unwrap_err()
+            .to_string()
+            .split(':')
+            .next()
+            .unwrap()
+            .to_string()
     };
 
     let mut app = worker.app().await;
