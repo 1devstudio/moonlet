@@ -9,7 +9,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use moonlet_core::paths::now_ms;
@@ -45,9 +45,18 @@ impl LinkStore {
     /// Reads `path`. The first time, this machine gets a worker id that
     /// never changes afterwards, and the name `computer_name`.
     pub fn load(path: PathBuf, computer_name: &str) -> LinkStore {
-        let read = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<LinkFile>(&s).ok());
+        let text = std::fs::read_to_string(&path).ok();
+        let read = text
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<LinkFile>(s).ok());
+        if text.is_some() && read.is_none() {
+            // Kept for the user rather than written over: it holds the id.
+            let bad = path.with_extension("json.bad");
+            match std::fs::rename(&path, &bad) {
+                Ok(()) => tracing::warn!("cannot read {}; kept it as {}", path.display(), bad.display()),
+                Err(e) => tracing::warn!("cannot read {} nor keep it aside: {e}", path.display()),
+            }
+        }
         let data = match read {
             Some(d) if !d.worker.id.is_empty() => d,
             other => {
@@ -59,7 +68,9 @@ impl LinkStore {
                         enabled: false,
                     },
                 };
-                save(&path, &d);
+                if let Err(e) = save(&path, &d) {
+                    tracing::warn!("cannot write {}: {e:#}", path.display());
+                }
                 d
             }
         };
@@ -101,7 +112,8 @@ impl LinkStore {
                 next.worker.name = name.trim().to_string();
             }
         }
-        save(&self.path, &next);
+        save(&self.path, &next)
+            .map_err(|e| RpcError::new("internal", format!("cannot write {}: {e:#}", self.path.display())))?;
         self.data = next;
         Ok(())
     }
@@ -137,10 +149,8 @@ fn check_central(c: &LinkCentral, own: &[IpAddr]) -> Result<(), RpcError> {
     Ok(())
 }
 
-fn save(path: &Path, data: &LinkFile) {
-    if let Err(e) = crate::mobile::write_private(path, &serde_json::to_vec_pretty(data).unwrap()) {
-        tracing::warn!("cannot write {}: {e:#}", path.display());
-    }
+fn save(path: &Path, data: &LinkFile) -> anyhow::Result<()> {
+    crate::mobile::write_private(path, &serde_json::to_vec_pretty(data)?)
 }
 
 /// Whether the link should be open: a central host is set, and either this
@@ -171,6 +181,8 @@ pub struct WorkerLink {
     host: Mutex<Option<Arc<Host>>>,
     /// Sessions this Mac keeps in sync (X60); the link stays open for them.
     synced: AtomicUsize,
+    /// Set while `link.set` applies a change, which says `link.changed` once.
+    quiet: AtomicBool,
     sessions: Arc<SessionManager>,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -186,6 +198,7 @@ impl WorkerLink {
             state: Mutex::new(LinkState::Off),
             host: Mutex::new(None),
             synced: AtomicUsize::new(0),
+            quiet: AtomicBool::new(false),
             sessions,
             emit: Box::new(emit),
         })
@@ -201,7 +214,9 @@ impl WorkerLink {
     }
 
     fn changed(&self) {
-        (self.emit)(Message::event(m::EV_LINK_CHANGED, self.info()));
+        if !self.quiet.load(Ordering::SeqCst) {
+            (self.emit)(Message::event(m::EV_LINK_CHANGED, self.info()));
+        }
     }
 
     fn set_state(&self, state: LinkState) {
@@ -219,6 +234,8 @@ impl WorkerLink {
     pub fn set(self: &Arc<Self>, req: LinkSet, own: &[IpAddr]) -> Result<LinkInfo, RpcError> {
         let moved = req.central.is_some();
         self.store.lock().unwrap().set(req, own)?;
+        // One link.changed for the whole change, at the end.
+        self.quiet.store(true, Ordering::SeqCst);
         if moved {
             // A new central host, or new addresses or token: link again.
             self.close();
@@ -228,6 +245,7 @@ impl WorkerLink {
         if !moved && self.waiting() {
             self.retry();
         }
+        self.quiet.store(false, Ordering::SeqCst);
         self.changed();
         Ok(self.info())
     }
@@ -455,6 +473,33 @@ mod tests {
             .id
             .clone();
         assert_eq!(again, first);
+    }
+
+    #[test]
+    fn a_link_json_that_cannot_be_read_is_kept_aside_not_written_over() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(file(&dir), "{ \"worker\": { \"id\": ").unwrap();
+        let store = LinkStore::load(file(&dir), "Alex's MacBook Pro");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("link.json.bad")).unwrap(),
+            "{ \"worker\": { \"id\": "
+        );
+        assert_eq!(store.worker().name, "Alex's MacBook Pro");
+    }
+
+    #[test]
+    fn link_set_fails_and_keeps_the_settings_when_link_json_cannot_be_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = LinkStore::load(file(&dir), "Alex's MacBook Pro");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let req: LinkSet = serde_json::from_value(serde_json::json!({
+            "worker": { "name": "Work laptop" }
+        }))
+        .unwrap();
+        let got = store.set(req, &[]);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(got.unwrap_err().code, "internal");
+        assert_eq!(store.worker().name, "Alex's MacBook Pro");
     }
 
     #[test]

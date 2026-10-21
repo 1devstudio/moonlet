@@ -661,3 +661,21 @@ async fn only_the_macs_app_sets_or_retries_the_link() {
     let info: Value = central.call("link.get", json!({})).await;
     assert_eq!(info["central"], Value::Null, "{info}");
 }
+
+#[tokio::test]
+async fn one_link_set_says_link_changed_once() {
+    let (central, addr) = central().await;
+    let worker = linked_worker(&central, &addr).await;
+    let mut events = worker.app().await;
+    let _: LinkInfo = worker.call("link.set", json!({ "central": null })).await;
+    let mut changes = Vec::new();
+    let quiet = tokio::time::Instant::now() + Duration::from_millis(700);
+    while let Ok(Ok(Some(frame))) = tokio::time::timeout_at(quiet, events.next_frame()).await {
+        if let Frame::Json(Message::Event { name, data }) = frame
+            && name == "link.changed"
+        {
+            changes.push(data["state"]["kind"].clone());
+        }
+    }
+    assert_eq!(changes, [json!("off")]);
+}
