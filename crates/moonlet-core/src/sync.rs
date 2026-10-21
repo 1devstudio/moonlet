@@ -894,6 +894,107 @@ pub async fn head(worktree: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
 
+/// The branch `worktree` is on, or `None` with a detached `HEAD`.
+pub async fn branch(worktree: &Path) -> Result<Option<String>> {
+    let out = run_raw_env(
+        "git",
+        worktree,
+        &["symbolic-ref", "-q", "--short", "HEAD"],
+        &[],
+        None,
+        Duration::from_secs(30),
+    )
+    .await?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((out.status == 0 && !name.is_empty()).then_some(name))
+}
+
+fn commit_id(oid: &str) -> Result<()> {
+    if matches!(oid.len(), 40 | 64) && oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        bail!("not a commit id: {oid}")
+    }
+}
+
+/// Whether commit `a` is `b` or in its history.
+pub async fn is_ancestor(repo: &Path, a: &str, b: &str) -> Result<bool> {
+    commit_id(a)?;
+    commit_id(b)?;
+    let out = run_raw_env(
+        "git",
+        repo,
+        &["merge-base", "--is-ancestor", "--end-of-options", a, b],
+        &[],
+        None,
+        Duration::from_secs(60),
+    )
+    .await?;
+    match out.status {
+        0 => Ok(true),
+        1 => Ok(false),
+        _ => bail!("git merge-base: {}", out.stderr),
+    }
+}
+
+/// How many commits `to` has that `from` lacks.
+pub async fn count(repo: &Path, from: &str, to: &str) -> Result<u32> {
+    commit_id(from)?;
+    commit_id(to)?;
+    let range = format!("{from}..{to}");
+    let out = git_env(
+        repo,
+        &[],
+        &["rev-list", "--count", "--end-of-options", &range],
+        None,
+    )
+    .await?;
+    Ok(String::from_utf8_lossy(&out).trim().parse()?)
+}
+
+/// Moves `branch`, checked out in `worktree`, from `from` up to `to`, and
+/// resets the staging area to it; the files stay as they are. Fails when
+/// the branch is no longer at `from`.
+pub async fn fast_forward(worktree: &Path, branch: &str, from: &str, to: &str) -> Result<()> {
+    commit_id(from)?;
+    commit_id(to)?;
+    let r = format!("refs/heads/{branch}");
+    git_env(worktree, &[], &["update-ref", &r, to, from], None).await?;
+    git_env(worktree, &[], &["reset", "-q"], None).await?;
+    Ok(())
+}
+
+/// Moves the branch checked out in `worktree` to `to`, whatever it was at,
+/// and resets the staging area to it; the files stay as they are.
+pub async fn reset_branch(worktree: &Path, to: &str) -> Result<()> {
+    commit_id(to)?;
+    git_env(worktree, &[], &["reset", "-q", "--mixed", to, "--"], None).await?;
+    Ok(())
+}
+
+/// Makes branch `name` at commit `at`; fails if it exists.
+pub async fn create_branch(repo: &Path, name: &str, at: &str) -> Result<()> {
+    commit_id(at)?;
+    let r = format!("refs/heads/{name}");
+    git_env(repo, &[], &["update-ref", &r, at, ""], None).await?;
+    Ok(())
+}
+
+/// Whether branch `name` exists in `repo`.
+pub async fn branch_exists(repo: &Path, name: &str) -> bool {
+    let r = format!("refs/heads/{name}");
+    run_raw_env(
+        "git",
+        repo,
+        &["show-ref", "--verify", "-q", &r],
+        &[],
+        None,
+        Duration::from_secs(30),
+    )
+    .await
+    .is_ok_and(|o| o.status == 0)
+}
+
 /// Clones `url` into `dir` with this machine's own credentials. The error
 /// is git's own message, such as `repository '…' not found`.
 pub async fn clone(url: &str, dir: &Path) -> std::result::Result<(), String> {

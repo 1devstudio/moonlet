@@ -1602,3 +1602,151 @@ async fn resolving_a_paused_copy_says_it_is_paused() {
         .unwrap_err();
     assert!(e.to_string().starts_with("paused:"), "{e}");
 }
+
+/// The commit `HEAD` is at in `dir`, and its subject.
+fn last_commit(dir: &Path) -> (String, String) {
+    (
+        git(dir, &["rev-parse", "HEAD"]),
+        git(dir, &["log", "-1", "--format=%s"]),
+    )
+}
+
+#[tokio::test]
+async fn a_commit_on_the_central_host_moves_the_copys_branch_and_unstages_it() {
+    let (central, _worker, c) = synced().await;
+    let s = central.session_path();
+    // Staged in the copy only; the file itself syncs, untracked there.
+    write(&c.join("staged.txt"), "staged\n");
+    git(&c, &["add", "staged.txt"]);
+    reads(&s.join("staged.txt"), "staged\n").await;
+
+    write(&s.join("src/cart.ts"), "committed\n");
+    git(&s, &["commit", "-qam", "cart from the agent"]);
+    let want = last_commit(&s);
+    eventually("the copy's branch moves to the agent's commit", || async {
+        last_commit(&c) == want
+    })
+    .await;
+    assert_eq!(want.1, "cart from the agent");
+    assert_eq!(
+        git(&c, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        git(&s, &["rev-parse", "--abbrev-ref", "HEAD"])
+    );
+    // The staging area follows HEAD: nothing staged, nothing modified once
+    // the files are there too.
+    reads(&c.join("src/cart.ts"), "committed\n").await;
+    eventually("the copy has nothing staged", || async {
+        git(&c, &["status", "--porcelain"]) == "?? staged.txt"
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_commit_in_the_copy_moves_the_sessions_branch() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    write(&c.join("src/cart.ts"), "from the mac\n");
+    git(&c, &["commit", "-qam", "cart from the mac"]);
+    let want = last_commit(&c);
+    eventually(
+        "the session's branch moves to the copy's commit",
+        || async { last_commit(&s) == want },
+    )
+    .await;
+    assert_eq!(want.1, "cart from the mac");
+    eventually("the session has nothing staged or changed", || async {
+        git(&s, &["status", "--porcelain"]).is_empty()
+    })
+    .await;
+    let copy = in_sync(&worker).await;
+    assert_eq!(copy.diverged, None);
+}
+
+#[tokio::test]
+async fn commits_on_both_sides_diverge_while_files_still_sync_until_the_central_branch_is_used() {
+    let (mut central, worker, c) = synced().await;
+    let s = central.session_path();
+    let branch = git(&s, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("mac.txt"), "mac\n");
+    git(&c, &["add", "mac.txt"]);
+    git(&c, &["commit", "-qm", "one on the mac"]);
+    let mac = last_commit(&c).0;
+    for n in ["1", "2"] {
+        write(&s.join(format!("mini{n}.txt")), "mini\n");
+        git(&s, &["add", "-A"]);
+        git(&s, &["commit", "-qm", &format!("{n} on the mini")]);
+    }
+    let mini = last_commit(&s).0;
+    central.daemon.restart().await;
+
+    eventually("the copy says it diverged", || async {
+        copies(&worker).await[0].diverged
+            == Some(moonlet_proto::methods::Diverged {
+                ahead: 1,
+                behind: 2,
+            })
+    })
+    .await;
+    // Each branch stays where it was; the files still sync both ways.
+    assert_eq!(last_commit(&c).0, mac);
+    assert_eq!(last_commit(&s).0, mini);
+    reads(&c.join("mini2.txt"), "mini\n").await;
+    reads(&s.join("mac.txt"), "mac\n").await;
+    write(&s.join("src/cart.ts"), "still syncing\n");
+    reads(&c.join("src/cart.ts"), "still syncing\n").await;
+
+    // Use studio-mini's branch: this Mac's commit stays on its own branch.
+    let id = copies(&worker).await[0].id.clone();
+    let copy: Copy = worker
+        .call("sync.use_central_branch", json!({ "copy": id }))
+        .await;
+    assert_eq!(copy.diverged, None);
+    assert_eq!(last_commit(&c).0, mini);
+    assert_eq!(git(&c, &["rev-parse", &format!("{branch}-this-mac")]), mac);
+    assert_eq!(git(&c, &["rev-parse", "--abbrev-ref", "HEAD"]), branch);
+    // The session keeps its commits and gets no new one.
+    assert_eq!(last_commit(&s).0, mini);
+    in_sync(&worker).await;
+    assert_eq!(copies(&worker).await[0].diverged, None);
+}
+
+#[tokio::test]
+async fn a_side_on_another_branch_pauses_the_copy_until_it_is_back() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    let branch = git(&s, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    git(&c, &["checkout", "-q", "-b", "other"]);
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&copy),
+        format!("the copy is on other, not {branch}.")
+    );
+    git(&c, &["checkout", "-q", &branch]);
+    in_sync(&worker).await;
+    write(&s.join("src/cart.ts"), "after the copy came back\n");
+    reads(&c.join("src/cart.ts"), "after the copy came back\n").await;
+
+    git(&c, &["checkout", "-q", "--detach"]);
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&copy),
+        format!("the copy is on a detached HEAD, not {branch}.")
+    );
+    git(&c, &["checkout", "-q", &branch]);
+    in_sync(&worker).await;
+
+    git(&s, &["checkout", "-q", "-b", "elsewhere"]);
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&copy),
+        format!("the session on studio-mini is on elsewhere, not {branch}.")
+    );
+    // Paused, the copy's edits wait.
+    write(&c.join("src/cart.ts"), "while the session was away\n");
+    git(&s, &["checkout", "-q", &branch]);
+    in_sync(&worker).await;
+    reads(&s.join("src/cart.ts"), "while the session was away\n").await;
+}

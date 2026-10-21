@@ -24,8 +24,8 @@ use moonlet_core::fs::Watchers;
 use moonlet_core::session::SessionManager;
 use moonlet_core::sync::{self as git_sync, ApplyError, Files, MAX_FILE, UnpackError};
 use moonlet_proto::methods::{
-    self as m, Copy, CopyChanged, CopyState, Keep, Resolution, SyncFetch, SyncFetched, SyncOffer,
-    SyncOffered, SyncOpen, SyncOpened, SyncResolve, SyncUpdate, SyncUpdated,
+    self as m, Copy, CopyChanged, CopyState, Diverged, Keep, Resolution, SyncFetch, SyncFetched,
+    SyncOffer, SyncOffered, SyncOpen, SyncOpened, SyncResolve, SyncUpdate, SyncUpdated,
 };
 use moonlet_proto::{Message, RpcError};
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,9 @@ const WATCH_CLIENT: u64 = u64::MAX;
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 /// Tries at applying before giving up until the next change.
 const APPLY_TRIES: usize = 5;
+/// How often a watched worktree's commit and branch are looked at: a
+/// commit in a linked worktree changes nothing the file watcher sees.
+const HEAD_POLL: Duration = Duration::from_millis(500);
 
 /// How long a copy that kept changing under an update waits before asking
 /// the central host again.
@@ -57,6 +60,8 @@ enum Round {
     Made,
     /// The link is down; the copy waits for it.
     Offline,
+    /// A side is off the session's branch; the copy waits for it.
+    Held,
 }
 
 /// What follows an offer the central host turned away.
@@ -136,6 +141,25 @@ struct Kept {
     /// finished: what the files were before anyone edited them there.
     #[serde(default)]
     made_from: Option<String>,
+    /// The session's branch, which the copy is on too.
+    #[serde(default)]
+    branch: String,
+    /// The copy's commit after the last round, so a commit is offered once.
+    #[serde(default)]
+    head: Option<String>,
+    #[serde(default)]
+    diverged: Option<Diverged>,
+    /// Set when the copy is paused because a side left the branch: it then
+    /// resumes by itself once that side is back on it.
+    #[serde(default)]
+    branch_pause: Option<Side>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Side {
+    Copy,
+    Session,
 }
 
 /// A copy the central host serves, as saved.
@@ -157,6 +181,13 @@ struct Served {
     central_tree: Option<String>,
     #[serde(default)]
     differs: Vec<String>,
+    /// The session's branch.
+    #[serde(default)]
+    branch: String,
+    /// The worker was told the session left its branch, and is told when it
+    /// is back.
+    #[serde(default)]
+    off_branch_sent: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -312,7 +343,7 @@ impl LiveCopies {
             setup: None,
             differs: k.differs.clone(),
             too_big: k.too_big.clone(),
-            diverged: None,
+            diverged: k.diverged.clone(),
         }
     }
 
@@ -364,6 +395,102 @@ impl LiveCopies {
         tracing::info!(copy = %id, "copy paused: {reason}");
         self.update_kept(id, |k| k.paused = Some(reason));
         self.changed(id);
+    }
+
+    /// Pauses copy `id` until `side` is back on the session's branch.
+    fn pause_branch(&self, id: &str, side: Side, reason: String) {
+        let Some(k) = self.kept(id) else { return };
+        if k.paused.as_deref() == Some(reason.as_str()) {
+            return;
+        }
+        tracing::info!(copy = %id, "copy paused: {reason}");
+        self.update_kept(id, |k| {
+            k.paused = Some(reason);
+            k.branch_pause = Some(side);
+        });
+        self.changed(id);
+    }
+
+    fn unpause(&self, id: &str) {
+        self.update_kept(id, |k| {
+            k.paused = None;
+            k.branch_pause = None;
+        });
+        self.changed(id);
+    }
+
+    /// Whether the copy at `path` is on its branch; pauses it if not.
+    async fn on_branch(&self, k: &Kept, path: &Path) -> Result<bool, RpcError> {
+        let now = git_sync::branch(path).await.map_err(internal)?;
+        if k.branch.is_empty() || now.as_deref() == Some(k.branch.as_str()) {
+            return Ok(true);
+        }
+        let reason = match now {
+            Some(b) => format!("the copy is on {b}, not {}.", k.branch),
+            None => format!("the copy is on a detached HEAD, not {}.", k.branch),
+        };
+        self.pause_branch(&k.id, Side::Copy, reason);
+        Ok(false)
+    }
+
+    /// Pauses copy `k` because the session is on `off` (empty: detached).
+    fn session_off_branch(&self, k: &Kept, off: &str) {
+        let reason = if off.is_empty() {
+            format!(
+                "the session on {} is on a detached HEAD, not {}.",
+                k.host, k.branch
+            )
+        } else {
+            format!("the session on {} is on {off}, not {}.", k.host, k.branch)
+        };
+        self.pause_branch(&k.id, Side::Session, reason);
+    }
+
+    /// The copy's branch follows the central host's commit `central`: moved
+    /// up when behind, left alone when ahead (the next offer brings it) or
+    /// diverged, which the copy then reports. Gives whether the copy is
+    /// ahead.
+    async fn follow_head(&self, id: &str, path: &Path, central: &str) -> Result<bool, RpcError> {
+        let Some(k) = self.kept(id) else {
+            return Ok(false);
+        };
+        let mut own = git_sync::head(path).await.map_err(internal)?;
+        let mut ahead = false;
+        let mut diverged = None;
+        if own != central {
+            if git_sync::is_ancestor(path, &own, central)
+                .await
+                .map_err(internal)?
+            {
+                git_sync::fast_forward(path, &k.branch, &own, central)
+                    .await
+                    .map_err(internal)?;
+                own = central.to_string();
+            } else if git_sync::is_ancestor(path, central, &own)
+                .await
+                .map_err(internal)?
+            {
+                ahead = true;
+            } else {
+                diverged = Some(Diverged {
+                    ahead: git_sync::count(path, central, &own)
+                        .await
+                        .map_err(internal)?,
+                    behind: git_sync::count(path, &own, central)
+                        .await
+                        .map_err(internal)?,
+                });
+            }
+        }
+        let was = k.diverged.clone();
+        self.update_kept(id, |kept| {
+            kept.head = Some(own);
+            kept.diverged = diverged.clone();
+        });
+        if was != diverged {
+            self.changed(id);
+        }
+        Ok(ahead)
     }
 
     /// `sync.start`: keeps `session` on the central host in sync here. A
@@ -646,6 +773,8 @@ impl LiveCopies {
             kept.sent_base = Some(fetched.tree.clone());
             kept.base_head = Some(fetched.head.clone());
             kept.tree = Some(fetched.tree.clone());
+            kept.head = Some(fetched.head.clone());
+            kept.branch = opened.branch.clone();
             kept.too_big = fetched.too_big.clone();
             kept.differs = differs.clone();
             kept.made_from = None;
@@ -744,8 +873,24 @@ impl LiveCopies {
         let k = self
             .kept(&req.copy)
             .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
+        let not_applied = SyncUpdated {
+            applied: false,
+            tree: None,
+        };
+        if let Some(off) = &req.off_branch {
+            self.session_off_branch(&k, off);
+            return Ok(not_applied);
+        }
         if let Some(reason) = &k.paused {
-            return Err(RpcError::new("paused", reason.clone()));
+            if k.branch_pause != Some(Side::Session) {
+                return Err(RpcError::new("paused", reason.clone()));
+            }
+            // The session is back on its branch.
+            self.unpause(&req.copy);
+        }
+        let path = PathBuf::from(&k.path);
+        if !self.on_branch(&k, &path).await? {
+            return Ok(not_applied);
         }
         // This Mac's base, even when the central host's differs: a reply it
         // never got leaves it at the one before.
@@ -754,7 +899,6 @@ impl LiveCopies {
             .clone()
             .ok_or_else(|| RpcError::new("copying", "the copy is not made yet"))?;
         let repo = PathBuf::from(&k.repo);
-        let path = PathBuf::from(&k.path);
         if let Some(pack) = pack {
             self.unpack_from_central(&k, &repo, &pack).await?;
         }
@@ -796,6 +940,10 @@ impl LiveCopies {
                 kept.differs.clear();
                 kept.too_big = too_big;
             });
+            if self.follow_head(&req.copy, &path, &req.head).await? {
+                // Commits here the central host lacks: an offer brings them.
+                self.offer_later(&req.copy);
+            }
             self.set_state(&req.copy, CopyState::InSync);
             self.changed(&req.copy);
             return Ok(SyncUpdated {
@@ -835,15 +983,24 @@ impl LiveCopies {
         let (mut resolve, mut force) = (resolve, force);
         let mut last = k.tree.clone();
         let mut sent_base = k.sent_base.clone().unwrap_or_else(|| base.clone());
+        let mut last_head = k.head.clone();
         let mut differed = k.differs.clone();
         let repo = PathBuf::from(&k.repo);
         let path = PathBuf::from(&k.path);
+        if !self.on_branch(&k, &path).await? {
+            return Ok(Round::Held);
+        }
         for _ in 0..APPLY_TRIES {
             let local = git_sync::snapshot(&path, MAX_FILE)
                 .await
                 .map_err(internal)?;
-            if !force && resolve.is_none() && last.as_deref() == Some(local.tree.as_str()) {
-                // Reverted to the last round's files: nothing is left to send.
+            let head = git_sync::head(&path).await.map_err(internal)?;
+            if !force
+                && resolve.is_none()
+                && last.as_deref() == Some(local.tree.as_str())
+                && last_head.as_deref() == Some(head.as_str())
+            {
+                // As the last round left them: nothing is left to send.
                 let syncing = matches!(
                     self.states.lock().unwrap().get(id),
                     Some(CopyState::Syncing { .. })
@@ -861,7 +1018,6 @@ impl LiveCopies {
             if files > 0 {
                 self.set_state(id, CopyState::Syncing { files });
             }
-            let head = git_sync::head(&path).await.map_err(internal)?;
             // A base of the copy's own, after a round with edits in it, goes
             // along: the central host reconciles against it.
             let pack = git_sync::pack_objects(
@@ -888,6 +1044,10 @@ impl LiveCopies {
                 Err(e) if e.code == "disconnected" => {
                     self.set_state(id, CopyState::Waiting);
                     return Ok(Round::Offline);
+                }
+                Err(e) if e.code == "wrong_branch" => {
+                    self.session_off_branch(&k, &e.message);
+                    return Ok(Round::Held);
                 }
                 Err(e) => return Err(e),
             };
@@ -925,6 +1085,7 @@ impl LiveCopies {
                 kept.differs = r.differs.clone();
                 kept.too_big = r.too_big.clone();
             });
+            self.follow_head(id, &path, &r.head).await?;
             if now == r.tree {
                 self.states
                     .lock()
@@ -938,6 +1099,7 @@ impl LiveCopies {
             self.changed_with(id, newly);
             (base, base_head, sent_base) = (new_base, r.head, r.base);
             last = Some(r.tree);
+            last_head = self.kept(id).and_then(|k| k.head);
             differed = r.differs;
             (resolve, force) = (None, false);
         }
@@ -1086,6 +1248,48 @@ impl LiveCopies {
         Ok(self.copy_of(&k))
     }
 
+    /// `sync.use_central_branch`: a diverged copy's branch moves to the
+    /// central host's commit, and this Mac's commits stay on a branch of
+    /// their own, `<branch>-this-mac`. The files stay as they are.
+    pub async fn use_central_branch(self: &Arc<Self>, id: &str) -> Result<Copy, RpcError> {
+        {
+            let lock = self.lock(id);
+            let _one = lock.lock().await;
+            let k = self
+                .kept(id)
+                .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
+            let Some(central) = k.base_head.clone().filter(|_| k.diverged.is_some()) else {
+                return Err(RpcError::new(
+                    "invalid_params",
+                    "the branch has not diverged",
+                ));
+            };
+            let path = PathBuf::from(&k.path);
+            let repo = PathBuf::from(&k.repo);
+            let own = git_sync::head(&path).await.map_err(internal)?;
+            let mut name = format!("{}-this-mac", k.branch);
+            let mut n = 1;
+            while git_sync::branch_exists(&repo, &name).await {
+                n += 1;
+                name = format!("{}-this-mac-{n}", k.branch);
+            }
+            git_sync::create_branch(&repo, &name, &own)
+                .await
+                .map_err(internal)?;
+            git_sync::reset_branch(&path, &central)
+                .await
+                .map_err(internal)?;
+            self.update_kept(id, |kept| {
+                kept.head = Some(central.clone());
+                kept.diverged = None;
+            });
+        }
+        self.changed(id);
+        // The files are as they were; the central host hears of the commit.
+        self.offer_later(id);
+        Ok(self.copy_of(&self.kept(id).unwrap()))
+    }
+
     /// Takes in a pack from the central host; one git refuses pauses the copy.
     async fn unpack_from_central(
         &self,
@@ -1188,6 +1392,8 @@ impl LiveCopies {
                 base_head: None,
                 central_tree: None,
                 differs: Vec::new(),
+                branch: session.branch.clone(),
+                off_branch_sent: false,
             });
         }
         self.save();
@@ -1288,6 +1494,11 @@ impl LiveCopies {
         let lock = self.lock(&format!("session:{}", served.path));
         let _one = lock.lock().await;
         let path = Path::new(&served.path);
+        if let Some(off) = off_branch(path, &served.branch).await.map_err(internal)? {
+            // The worker pauses; the session's return to its branch tells it.
+            self.update_served(&req.copy, |s| s.off_branch_sent = true);
+            return Err(RpcError::new("wrong_branch", off));
+        }
         if let Some(pack) = pack {
             git_sync::unpack(path, &pack)
                 .await
@@ -1358,7 +1569,18 @@ impl LiveCopies {
         let Some((central_tree, worker_tree, new_base, differs, mut too_big)) = done else {
             return Err(RpcError::new("busy", "the session kept changing"));
         };
-        let head = git_sync::head(path).await.map_err(internal)?;
+        // The session's branch moves up to the copy's commits.
+        let mut head = git_sync::head(path).await.map_err(internal)?;
+        if req.head != head
+            && git_sync::is_ancestor(path, &head, &req.head)
+                .await
+                .map_err(internal)?
+        {
+            git_sync::fast_forward(path, &served.branch, &head, &req.head)
+                .await
+                .map_err(internal)?;
+            head = req.head.clone();
+        }
         git_sync::set_base_ref(path, &req.copy, &new_base)
             .await
             .map_err(internal)?;
@@ -1461,6 +1683,26 @@ impl LiveCopies {
         base_head: &str,
         always: bool,
     ) -> anyhow::Result<()> {
+        if let Some(off) = off_branch(path, &served.branch).await? {
+            if !served.off_branch_sent {
+                let req = SyncUpdate {
+                    copy: served.id.clone(),
+                    base: base.to_string(),
+                    tree: base.to_string(),
+                    head: base_head.to_string(),
+                    too_big: Vec::new(),
+                    pack: None,
+                    off_branch: Some(off),
+                };
+                conn.request(m::SYNC_UPDATE, serde_json::to_value(req)?, UPDATE_TIMEOUT)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+                self.update_served(&served.id, |s| s.off_branch_sent = true);
+            }
+            return Ok(());
+        }
+        // Back on the branch: the paused worker hears so.
+        let always = always || served.off_branch_sent;
         let snap = git_sync::snapshot(path, MAX_FILE).await?;
         let head = git_sync::head(path).await?;
         if !always
@@ -1479,12 +1721,16 @@ impl LiveCopies {
             head: head.clone(),
             too_big: snap.too_big,
             pack,
+            off_branch: None,
         };
         let reply: SyncUpdated = serde_json::from_value(
             conn.request_after_queue(m::SYNC_UPDATE, serde_json::to_value(req)?, UPDATE_TIMEOUT)
                 .await
                 .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?,
         )?;
+        if served.off_branch_sent {
+            self.update_served(&served.id, |s| s.off_branch_sent = false);
+        }
         // Taken: both are at the session's files. Otherwise the worker
         // offers its own, and that round decides.
         if reply.applied {
@@ -1516,6 +1762,7 @@ impl LiveCopies {
         }
         let me = Arc::downgrade(self);
         tokio::spawn(async move {
+            let mut last: Option<(Option<String>, Option<String>)> = None;
             loop {
                 let Some(kick) = me
                     .upgrade()
@@ -1523,8 +1770,21 @@ impl LiveCopies {
                 else {
                     return;
                 };
-                kick.notified().await;
+                let kicked = tokio::time::timeout(HEAD_POLL, kick.notified())
+                    .await
+                    .is_ok();
+                // A commit or a checkout changes no file the watcher sees.
+                let now = (
+                    git_sync::head(&root).await.ok(),
+                    git_sync::branch(&root).await.ok().flatten(),
+                );
                 let Some(s) = me.upgrade() else { return };
+                // A side can leave its branch and come back between two
+                // looks; a copy waiting on a branch is looked at every time.
+                if !kicked && last.as_ref() == Some(&now) && !s.waits_on_branch(&root) {
+                    continue;
+                }
+                last = Some(now);
                 let at_root = |p: &str| Path::new(p).canonicalize().ok().as_deref() == Some(&root);
                 let (served, kept): (Vec<String>, Vec<String>) = {
                     let data = s.data.lock().unwrap();
@@ -1545,10 +1805,43 @@ impl LiveCopies {
                     s.push(&id, false).await;
                 }
                 for id in kept {
-                    s.offer_until_taken(&id, false).await;
+                    let force = s.resume_on_branch(&id, &root).await;
+                    s.offer_until_taken(&id, force).await;
                 }
             }
         });
+    }
+
+    /// Whether a copy at `root`, kept or served, waits for a side to be back
+    /// on the session's branch.
+    fn waits_on_branch(&self, root: &Path) -> bool {
+        let at_root = |p: &str| Path::new(p).canonicalize().ok().as_deref() == Some(root);
+        let data = self.data.lock().unwrap();
+        data.central
+            .iter()
+            .any(|c| c.off_branch_sent && at_root(&c.path))
+            || data
+                .worker
+                .iter()
+                .any(|k| k.branch_pause == Some(Side::Copy) && at_root(&k.path))
+    }
+
+    /// A copy paused because it left the session's branch resumes once it is
+    /// back on it; gives whether it did.
+    async fn resume_on_branch(&self, id: &str, path: &Path) -> bool {
+        let Some(k) = self.kept(id) else { return false };
+        if k.branch_pause != Some(Side::Copy) {
+            return false;
+        }
+        let back = git_sync::branch(path)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|b| b == k.branch);
+        if back {
+            self.unpause(id);
+        }
+        back
     }
 
     fn kick(&self, root: &Path) {
@@ -1629,6 +1922,17 @@ fn base_of_edits(
         }
     }
     out
+}
+
+/// The branch the session at `path` is on when it is not `branch` (empty
+/// for a detached `HEAD`), or `None` when it is.
+async fn off_branch(path: &Path, branch: &str) -> anyhow::Result<Option<String>> {
+    let now = git_sync::branch(path).await?;
+    Ok(match now {
+        Some(b) if branch.is_empty() || b == branch => None,
+        Some(b) => Some(b),
+        None => Some(String::new()),
+    })
 }
 
 fn outside(host: &str) -> String {
