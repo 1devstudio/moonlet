@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Check, ChevronLeft, ScanLine } from "lucide-react";
 import { pairMac, showScreen, showTab } from "../lib/app";
 import { deviceName, onPhone, scanQr, tap } from "../lib/native";
-import { parsePairLink } from "../lib/pairLink";
+import { parsePairLink } from "@desktop/lib/pairLink";
 import { useBusy } from "../lib/busy";
 import { Btn, Moon } from "../components/ui";
 

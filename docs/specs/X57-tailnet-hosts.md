@@ -55,8 +55,8 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - [ ] The Add host dialog takes one input, "Pairing link or code":
   - a `moonlet://pair?…` link (parsed as the phone parses it) gives the name, addresses and code;
   - anything else is a code. After the normalization above it must be 10 characters of the alphabet, otherwise the dialog says "This is not a pairing link or code." For a code, the dialog also asks for "Name on your tailnet", such as `studio-mini` or `build-box:47500`.
-- [ ] For a typed name, the app resolves it with the system resolver and keeps only the Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), with the given port or 47428. When it resolves to no Tailscale address, the code is not sent, and the dialog says "studio-mini is not on your tailnet (it resolves to 203.0.113.7)." or "studio-mini was not found. Is Tailscale running on this Mac?"
-- [ ] Addresses from a pasted link are used as given, because the host itself wrote them.
+- [x] For a typed name, the app resolves it with the system resolver and keeps only the Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), with the given port or 47428. When it resolves to no Tailscale address, the code is not sent, and the dialog says "studio-mini is not on your tailnet (it resolves to 203.0.113.7)." or "studio-mini was not found. Is Tailscale running on this Mac?" (`moonlet-core` `tailnet` tests `a_name_on_the_tailnet_gives_its_listener_addresses`, `a_name_off_the_tailnet_gets_no_code`)
+- [x] Addresses from a pasted link must be Tailscale addresses, or loopback (a daemon on this Mac, as in the e2e tests). Otherwise nothing is sent, and the dialog says "The link points at 203.0.113.7:47428, which is not on your tailnet." A forged link could otherwise point the app at a machine off the tailnet, which would then run its sessions. (`moonlet-core` `tailnet` test `a_link_may_point_only_at_the_tailnet_or_this_machine`)
 - [ ] The host's id and label are its name. A name already used by another host is refused with "A host named studio-mini already exists."
 - [ ] The app pairs with `auth {pair, device: <this Mac's name>, kind: "desktop"}`. On `authed` it saves the host and connects. On failure the dialog shows the daemon's message, X39's `this phone is not paired with this Mac` reading "The code was not accepted. Start pairing again on studio-mini.", and nothing is saved.
 
@@ -75,7 +75,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - [ ] A tailnet host has no Install helper or Reinstall helper button.
 - [ ] "Open in" offers no editors for workspaces on a tailnet host, because VS Code's and Cursor's `ssh-remote+` needs SSH (ADR 0011).
 - [ ] On a tailnet host, an MCP sign-in whose `redirect_uri` is a `localhost` port (X29) is not started. The card says "Signing in to <server> isn't available for sessions on studio-mini yet." Sign-ins without a local callback work as before.
-- [ ] Phones keep routing only to SSH hosts: `mobile.hosts` lists only the SSH hosts in `app-hosts.json`.
+- [x] Phones keep routing only to SSH hosts: `mobile.hosts` lists only the SSH hosts in `app-hosts.json`. (`phones_route_only_to_ssh_hosts`)
 
 ## UI
 
@@ -104,8 +104,8 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - **`moonlet-link`:** `HostStatus` gains `needs_update` and `refused`, and the crate gains the tailnet `Connector`.
 - **CLI:** `moonletd tailnet on|off|status` and `moonletd pair`. They connect as clients `moonletd-tailnet` and `moonletd-pair`, following `moonletd status` (`moonletd-status`). The daemon refuses `mobile.*` only to `moonlet-cli` (`daemon.rs:429`), so it serves these as it serves the app.
 - **Desktop (Tauri) commands:**
-  - `host_pair {input, name?}` returns the new host or the dialog's error;
-  - `host_list` entries gain `kind: "ssh" | "tailnet"`.
+  - `host_pair {name, addrs?, code}` returns the new host or the dialog's error. The webview reads the input (`lib/addHost.ts`): a link gives `name`, `addrs` and `code`; a typed code gives `code`, with the name typed beside it and no `addrs`;
+  - `host_list` entries, and every `host-status` event, gain `kind: "local" | "ssh" | "tailnet"`.
 - `PROTOCOL_VERSION` stays. The Unix socket protocol is unchanged, and the new fields appear only on tailnet connections. `docs/protocol.md` gets the new fields and method.
 
 ## Data and config
@@ -129,7 +129,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 
 ## Security considerations
 
-- A typed name sends the code only to a Tailscale address, so a typo that resolves to a public host cannot receive it. The tailnet encrypts the pairing, and X39's limits apply: one use, 5 minutes, 5 wrong attempts.
+- A typed name sends the code only to a Tailscale address, so a typo that resolves to a public host cannot receive it. A pasted link's addresses must be on the tailnet too (or loopback), so a forged link cannot point the app at a machine off the tailnet. The tailnet encrypts the pairing, and X39's limits apply: one use, 5 minutes, 5 wrong attempts.
 - A desktop token gives the same full access as a phone token (X39). It is stored in `app-hosts.json` with mode 0600 inside the private `~/.moonlet`, as X41 stores the worker's token in `link.json`. The webview never receives it, and `host_list` does not include it.
 - On the host, a paired desktop cannot pair, list or remove other devices. It can only remove itself.
 - `moonletd pair` runs on the host, so anyone who can run commands there, including an agent, can start a pairing. That is X39's accepted boundary for client names (ADR 0011). The code is still useless without a device on the tailnet.
@@ -164,7 +164,7 @@ Every criterion maps to a test. Expected values are literals from this spec.
 - **`crates/moonletd/tests/mobile.rs`, the code:** pairing with the lowercase, spaced form of the code works. The existing X39 tests run unchanged with the new code.
 - **`crates/moonletd/tests/cli.rs`** (new): `moonletd pair` against a test daemon prints a code matching `^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$` and a `moonlet://pair?v=1&` link, then exits 0 with "Paired with Test Mac" when a TCP client pairs with that code. It exits 1 with the "Tailnet access is off" line when access is off.
 - **Vitest, `apps/desktop/src/lib/`:**
-  - `pairLink.test.ts` moves here from the phone app, and the phone imports `parsePairLink` from `@desktop/lib/pairLink`. Its existing link with the 32 hex characters still parses, and a link with `code=7KQ2MX9PDA` parses too;
+  - `pairLink.test.ts` moves here from the phone app (done), and the phone imports `parsePairLink` from `@desktop/lib/pairLink`. Its existing link with the 32 hex characters still parses, and a link with `code=7KQ2MX9PDA` parses too;
   - the Add host input: a link, `7KQ2M-X9PDA`, `7kq2m x9pda`, and `hello`, which gives "This is not a pairing link or code.";
   - the status line for each tailnet state, including both `needs_update` directions with the literal lines above;
   - "Open in" offers nothing for a tailnet host and VS Code and Cursor for an SSH host;
