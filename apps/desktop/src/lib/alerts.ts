@@ -68,3 +68,10 @@ export class DoneBursts {
     this.last.delete(session);
   }
 }
+
+/** How files that start to differ between the central host and this Mac
+ * get the user's attention (X60): a desktop notification as for an agent,
+ * under its own switch, and a toast while moonlet is in front. */
+export function differsAlert(o: { focused: boolean; notifyWhenFocused: boolean; banner: boolean }): { banner: boolean; toast: boolean } {
+  return { banner: o.banner && (!o.focused || o.notifyWhenFocused), toast: o.banner && o.focused };
+}

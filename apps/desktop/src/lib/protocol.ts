@@ -706,6 +706,45 @@ export interface LinkInfo {
   state: LinkState;
 }
 
+/** Where a live copy is (X60). */
+export type CopyState =
+  | { kind: "copying" }
+  | { kind: "in_sync" }
+  | { kind: "syncing"; files: number }
+  | { kind: "waiting" }
+  | { kind: "paused"; reason: string };
+
+/** Where a copy's setup is (X60). */
+export type SetupState = { kind: "needs_approval" } | { kind: "running" } | { kind: "done" } | { kind: "failed"; exit: number } | { kind: "skipped" };
+
+/** A live copy on this Mac of a session on its central host, from this Mac's daemon (X60). */
+export interface Copy {
+  id: string;
+  /** The central host's name, which is its host id in the app. */
+  host: string;
+  /** The session's id on the central host. */
+  session: string;
+  /** Where the copy is on this Mac; empty until it is made. */
+  path: string;
+  state: CopyState;
+  setup: { state: SetupState; command: string } | null;
+  differs: string[];
+  too_big: string[];
+  diverged: { ahead: number; behind: number } | null;
+}
+
+/** What turning a copy off saved, relative to `folder` (X60). */
+export interface SyncStopped {
+  folder: string;
+  leftovers: string[];
+}
+
+/** `sync.changed`: a copy, the paths that just started to differ, and why it went. */
+export interface CopyChanged extends Copy {
+  newly_differing?: string[];
+  removed?: { reason: "stopped" | "archived" } & SyncStopped;
+}
+
 /** A one-time pairing code and the link its QR code holds (X39). */
 export interface MobilePairing {
   code: string;
@@ -844,6 +883,16 @@ export const M = {
   linkGet: "link.get",
   linkSet: "link.set",
   linkRetry: "link.retry",
+  syncStart: "sync.start",
+  syncList: "sync.list",
+  syncRetry: "sync.retry",
+  syncResolve: "sync.resolve",
+  syncUseCentralBranch: "sync.use_central_branch",
+  syncStop: "sync.stop",
+  syncRunSetup: "sync.run_setup",
+  syncSkipSetup: "sync.skip_setup",
+  syncProjectGet: "sync.project_get",
+  syncProjectSet: "sync.project_set",
 } as const;
 
 export const EV = {
@@ -873,6 +922,7 @@ export const EV = {
   mobilePaired: "mobile.paired",
   mobilePairEnded: "mobile.pair_ended",
   linkChanged: "link.changed",
+  syncChanged: "sync.changed",
 } as const;
 
 /**

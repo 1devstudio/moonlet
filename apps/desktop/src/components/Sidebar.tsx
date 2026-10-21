@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, ArrowLeftRight, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { M, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
+import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, sessionMenu, type Group } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { hostNotice } from "../lib/settingsPage";
@@ -11,6 +11,9 @@ import { archiveSession, openProjectSettings } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
 import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
 import { ArchiveLoader } from "./ArchiveLoader";
+import { SyncMark } from "./SyncPopover";
+import { syncChoice } from "../lib/sync";
+import { keepInSync, stopSync, useSync } from "../lib/syncStore";
 import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -407,7 +410,10 @@ function SessionRow({ host, s, onMenu, cell, nested }: { host: string; s: Sessio
             }}
           />
         ) : (
-          <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+          <>
+            <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+            <SyncMark host={host} s={s} />
+          </>
         )
       }
     />
@@ -701,7 +707,11 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   }, [onClose]);
   const { host, session: s, section: sec } = m;
   const { lines, sources } = useContext(TaskLines);
-  const items = s ? sessionItems(host, s, { linked: !!lines[s.id], sources }) : m.projectId ? projectItems(host, m.projectId, sec) : [];
+  const kind = useStore((st) => st.hosts[host]?.kind);
+  const central = useSync((st) => st.central);
+  const copy = useSync((st) => (s ? st.copies[sesKey(host, s.id)] : undefined));
+  const sync = s ? { offered: !!syncChoice(host, kind, central), copy } : { offered: false, copy: undefined };
+  const items = s ? sessionItems(host, s, { linked: !!lines[s.id], sources }, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
   return (
     <div
       className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
@@ -737,13 +747,22 @@ function projectItems(host: string, projectId: string, sec: Section): MenuItem[]
   ];
 }
 
-function sessionItems(host: string, s: Session, task: { linked: boolean; sources: boolean }): MenuItem[] {
-  return sessionMenu(task).flatMap((id): MenuItem[] => {
+function sessionItems(host: string, s: Session, task: { linked: boolean; sources: boolean }, sync: { offered: boolean; copy?: Copy }): MenuItem[] {
+  return sessionMenu({ ...task, sync: sync.offered }).flatMap((id): MenuItem[] => {
     switch (id) {
       case "open":
         return [{ label: "Open", onSelect: () => selectSession(host, s.id) }];
       case "link-task":
         return [{ label: "Link to task…", icon: <Link2 size={14} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "link-task", host, session: s.id } }) }];
+      case "keep-sync":
+        return [
+          {
+            label: "Keep in sync with this Mac",
+            icon: <ArrowLeftRight size={14} className="text-muted" />,
+            checked: !!sync.copy,
+            onSelect: () => void (sync.copy ? stopSync(sync.copy) : keepInSync(host, s.id)),
+          },
+        ];
       case "archive":
         return [
           { kind: "divider" },

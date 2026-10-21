@@ -40,6 +40,7 @@ function OpenConfirm({ pending }: { pending: PendingConfirm }) {
       onConfirm={() => answerConfirm(true, checked)}
       onCancel={() => answerConfirm(false, checked)}
     >
+      {o.code && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-[#1a1a1a] px-3 py-2 font-mono ui-text-12.5 text-fg">{o.code}</pre>}
       {o.unpushed && <UnpushedBox view={o.unpushed} />}
     </ConfirmDialog>
   );
