@@ -1341,8 +1341,13 @@ pub enum CopyState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CopySetup {
     pub state: SetupState,
-    /// The command, exactly as the copy's `.moonlet/config.toml` has it.
+    /// The command, exactly as the copy's `.moonlet/config.toml` has it
+    /// now; the one running while it runs.
     pub command: String,
+    /// Whether `command` was approved for this project on this central
+    /// host, so **Run setup again** asks first when it was not.
+    #[serde(default)]
+    pub approved: bool,
 }
 
 /// Where a copy's setup is.

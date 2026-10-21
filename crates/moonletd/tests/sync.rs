@@ -138,8 +138,6 @@ where
     panic!("{what} never happened");
 }
 
-/// The central host `studio-mini`, its project `shop` (a clone of the bare
-/// origin, whose origin URL is [`ORIGIN_URL`]) and a session `Fix cart`.
 /// The tests that time a sync run alone: the others share this gate, and
 /// a timing test holds it whole. Two daemons per test, all at once, can
 /// otherwise slow a busy machine past the one second they measure.
@@ -150,6 +148,8 @@ enum Gate {
     Alone(#[allow(dead_code)] tokio::sync::RwLockWriteGuard<'static, ()>),
 }
 
+/// The central host `studio-mini`, its project `shop` (a clone of the bare
+/// origin, whose origin URL is [`ORIGIN_URL`]) and a session `Fix cart`.
 struct Central {
     daemon: Daemon,
     addr: String,
@@ -2747,7 +2747,7 @@ async fn a_copy_runs_the_projects_setup_once_the_user_approves_the_command() {
         )
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app runs setup");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages setup");
 
     let _: Copy = worker
         .call(
@@ -2919,13 +2919,139 @@ async fn a_failed_setup_says_how_it_exited_and_keeps_its_output() {
     reads(&PathBuf::from(&failed.path).join("src/cart.ts"), "during\n").await;
 }
 
+/// A copy whose approved setup sleeps; gives the copy and the sleep's pid.
+async fn sleeping_setup(central: &Central, worker: &Daemon, scratch: &Path) -> (Copy, i32) {
+    let pid_file = scratch.join("pid");
+    let command = format!("sleep 317 & echo $! > '{}'; wait", pid_file.display());
+    give_setup(central, &command);
+    link(central, worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    setup_is(worker, json!({ "kind": "needs_approval" })).await;
+    let _: Copy = worker
+        .call(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": command }),
+        )
+        .await;
+    setup_is(worker, json!({ "kind": "running" })).await;
+    eventually("setup started its sleep", || async {
+        read(&pid_file).is_some_and(|p| p.trim().parse::<i32>().is_ok())
+    })
+    .await;
+    let pid: i32 = read(&pid_file).unwrap().trim().parse().unwrap();
+    assert!(alive(pid));
+    (copy, pid)
+}
+
+fn alive(pid: i32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+async fn ends(pid: i32, what: &str) {
+    let start = Instant::now();
+    while alive(pid) {
+        assert!(start.elapsed() < Duration::from_secs(10), "{what}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn turning_sync_off_stops_a_setup_still_running() {
     let central = central().await;
     let scratch = tempfile::tempdir().unwrap();
+    let worker = worker(&central.origin).await;
+    let (copy, pid) = sleeping_setup(&central, &worker, scratch.path()).await;
+
+    let _: Value = worker.call("sync.stop", json!({ "copy": copy.id })).await;
+    ends(pid, "the setup's sleep outlived the copy").await;
+}
+
+#[tokio::test]
+async fn archiving_the_session_stops_a_setup_still_running() {
+    let central = central().await;
+    let scratch = tempfile::tempdir().unwrap();
+    let worker = worker(&central.origin).await;
+    let (_, pid) = sleeping_setup(&central, &worker, scratch.path()).await;
+
+    let _: Value = central
+        .daemon
+        .call("session.archive", json!({ "id": central.session_id() }))
+        .await;
+    ends(pid, "the setup's sleep outlived the archived session").await;
+}
+
+#[tokio::test]
+async fn a_setup_running_when_this_macs_daemon_stops_ends_with_it() {
+    let central = central().await;
+    let scratch = tempfile::tempdir().unwrap();
+    let mut worker = worker(&central.origin).await;
+    let (_, pid) = sleeping_setup(&central, &worker, scratch.path()).await;
+
+    worker.restart().await;
+    ends(pid, "the setup's sleep outlived the daemon that ran it").await;
+    setup_is(&worker, json!({ "kind": "failed", "exit": -1 })).await;
+}
+
+#[tokio::test]
+async fn a_setup_stopped_as_soon_as_it_is_approved_ends() {
+    let central = central().await;
+    let scratch = tempfile::tempdir().unwrap();
     let pid_file = scratch.path().join("pid");
-    let command = format!("sleep 317 & echo $! > '{}'; wait", pid_file.display());
+    let command = format!("echo $$ > '{}'; exec sleep 317", pid_file.display());
     give_setup(&central, &command);
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    let mut app = worker.app().await;
+    let _: Copy = app
+        .request(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": command }),
+        )
+        .await
+        .unwrap();
+    let _: Value = app
+        .request("sync.stop", json!({ "copy": copy.id }))
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    if let Some(pid) = read(&pid_file).and_then(|p| p.trim().parse::<i32>().ok()) {
+        ends(pid, "a setup stopped right after it was approved kept running").await;
+    }
+}
+
+#[tokio::test]
+async fn a_copy_without_a_setup_has_none_to_run() {
+    let (_central, worker, c) = synced().await;
+    let copy = copies(&worker).await.remove(0);
+    assert!(copy.setup.is_none());
+
+    let mut app = worker.app().await;
+    let e = app
+        .request::<_, Value>("sync.run_setup", json!({ "copy": copy.id, "command": "" }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "no_setup: the copy has no setup script");
+    assert!(copies(&worker).await[0].setup.is_none());
+    let _ = c;
+}
+
+#[tokio::test]
+async fn the_setup_knows_the_sessions_name() {
+    let central = central().await;
+    let command = "printf %s \"$MOONLET_SESSION_NAME\" > ignored-by-setup";
+    give_setup(&central, command);
     let worker = worker(&central.origin).await;
     link(&central, &worker).await;
     let copy: Copy = worker
@@ -2938,29 +3064,109 @@ async fn turning_sync_off_stops_a_setup_still_running() {
             json!({ "copy": copy.id, "command": command }),
         )
         .await;
-    setup_is(&worker, json!({ "kind": "running" })).await;
-    eventually("setup started its sleep", || async {
-        read(&pid_file).is_some_and(|p| p.trim().parse::<i32>().is_ok())
-    })
-    .await;
-    let pid: i32 = read(&pid_file).unwrap().trim().parse().unwrap();
-    let alive = |pid: i32| {
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .unwrap()
-            .success()
-    };
-    assert!(alive(pid));
+    let done = setup_is(&worker, json!({ "kind": "done" })).await;
+    assert_eq!(
+        read(&PathBuf::from(&done.path).join("ignored-by-setup")).as_deref(),
+        Some("Fix cart")
+    );
+}
 
-    let _: Value = worker.call("sync.stop", json!({ "copy": copy.id })).await;
-    let start = Instant::now();
-    while alive(pid) {
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "the setup's sleep outlived the copy"
+/// A paired device's connection to `central` over its tailnet listener.
+async fn paired_device(central: &Central) -> tokio::net::TcpStream {
+    use moonlet_proto::{Frame, Message, read_frame, write_frame};
+    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({})).await;
+    let token = moonlet_link::tailnet::pair(
+        std::slice::from_ref(&central.addr),
+        &p.code,
+        "Alex's iPhone",
+        DeviceKind::Phone,
+    )
+    .await
+    .unwrap()
+    .token;
+    let mut s = tokio::net::TcpStream::connect(&central.addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(token),
+        pair: None,
+        device: None,
+        route: None,
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    let hello = Message::Hello {
+        protocol: moonlet_proto::PROTOCOL_VERSION,
+        client: "moonlet-mobile".into(),
+    };
+    write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    s
+}
+
+#[tokio::test]
+async fn a_paired_device_cannot_run_or_skip_a_setup() {
+    use moonlet_proto::{Frame, Message, read_frame, write_frame};
+    let central = central().await;
+    let mut phone = paired_device(&central).await;
+    for (id, method) in [(1, "sync.run_setup"), (2, "sync.skip_setup")] {
+        let req = Message::Request {
+            id,
+            method: method.into(),
+            params: json!({ "copy": "any", "command": "touch x" }),
+        };
+        write_frame(&mut phone, &Frame::Json(req)).await.unwrap();
+        let reply = loop {
+            match read_frame(&mut phone).await.unwrap() {
+                Some(Frame::Json(m @ Message::Response { .. })) => break m,
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        };
+        let Message::Response { error: Some(e), .. } = reply else {
+            panic!("{method} worked from a paired device")
+        };
+        assert_eq!(
+            (e.code.as_str(), e.message.as_str()),
+            ("forbidden", "manage setup from the Mac"),
+            "{method}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn the_setup_shown_is_the_current_command_and_says_whether_it_was_approved() {
+    let central = central().await;
+    give_setup(&central, "touch ignored-by-setup");
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let waiting = setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    assert!(!waiting.setup.unwrap().approved);
+    let _: Copy = worker
+        .call(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": "touch ignored-by-setup" }),
+        )
+        .await;
+    let done = setup_is(&worker, json!({ "kind": "done" })).await;
+    assert!(done.setup.unwrap().approved);
+
+    // The agent changes the setup in the session.
+    give_setup(&central, "touch other");
+    let mut last = None;
+    let start = Instant::now();
+    loop {
+        let setup = copies(&worker).await.remove(0).setup.unwrap();
+        if setup.command == "touch other" {
+            assert!(!setup.approved, "{setup:?}");
+            assert_eq!(serde_json::to_value(&setup.state).unwrap(), json!({ "kind": "done" }));
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(15), "never shown: {last:?}");
+        last = Some(setup);
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
