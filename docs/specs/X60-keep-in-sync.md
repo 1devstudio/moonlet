@@ -38,7 +38,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 - [x] The worker link (X41) is open while **Use this Mac for heavy commands** is on *or* at least one session is kept in sync. Keep in sync does not turn on heavy commands. This replaces X41's "with `enabled: false` … no link is opened". (`a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_taken`)
 - [ ] Turning it off asks: "Stop keeping fix-cart in sync? The copy on this Mac is removed." When files differ, the modal adds "2 files that differ are saved to ~/.moonlet/sync-leftovers/fix-cart first." The copy's worktree is then removed (`git worktree remove --force`). The branch stays in the Mac's repository.
 - [ ] A copy is kept in sync until it is turned off or its session is archived. It survives restarts of either daemon, live upgrades (S3) and the app being closed.
-- [ ] Several Macs may keep copies of one session. The central host serves them one change at a time.
+- [x] Several Macs may keep copies of one session. The central host serves them one change at a time. (`two_macs_keeping_one_session_in_sync_each_get_the_others_edits`)
 
 ### Keeping new sessions in sync
 
@@ -98,8 +98,8 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 ### Keeping it in sync
 
-- [ ] Each side watches its worktree with the file watcher the Files tab already uses (F1). A change produces a new snapshot. When it differs from the last snapshot both sides agreed on (the **base**), the change is sent.
-- [ ] The central host decides. Both sides send their changes to it, it reconciles them with the base, applies the result to its worktree, and sends the result to every copy. Two daemons never reconcile at the same time.
+- [x] Each side watches its worktree with the file watcher the Files tab already uses (F1). A change produces a new snapshot. When it differs from the last round's, the change is sent: the central host sends `sync.update`, and a copy offers its files with `sync.offer`. (`an_edit_on_the_central_host_shows_in_the_copy_within_a_second`, `an_edit_in_the_copy_reaches_the_central_host_within_a_second`)
+- [x] The central host decides. A copy takes an update only while its own files are still the base; otherwise it offers its files, and the central host reconciles them with its own against the copy's base, applies its part to the session, answers what the copy applies, and sends the change to the session's other copies. It takes one offer at a time per session, so two daemons never reconcile at the same time. An update that arrives while the copy's offer is under way gives way to it, and that offer, reconciled with the session as it is then, brings the update's changes. (`a_file_both_sides_change_differs_until_one_version_is_kept`, `two_macs_keeping_one_session_in_sync_each_get_the_others_edits`)
 - [x] Reconciling goes path by path. Worked examples, where `a`, `b` and `c` are contents:
 
   | base | studio-mini | this Mac | result |
@@ -121,13 +121,13 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
   A file on one side where the result would also have a folder of that name, such as `a` from studio-mini and `a/x` from this Mac, differs too: one tree can't hold both. So do new names that differ only in case, files or folders (`Readme.md` from studio-mini and `README.md` from this Mac, or `Docs/x.md` and `docs/y.md`): a Mac's disk would keep one and overwrite it with the other. Names that already sat side by side in the base are left alone. (`names_that_differ_only_in_case_differ_when_new`) (`reconciling_follows_the_worked_examples`, `a_file_against_a_folder_of_the_same_name_differs`, `reconciling_trees_writes_each_sides_tree`)
 
-- [ ] A path that differs stays different, and the other paths keep syncing. When one side's file later changes to match the other's, the path no longer differs.
-- [ ] When a path starts to differ, the app shows a desktop notification: "fix-cart: src/cart.ts changed on both studio-mini and this Mac. Pick a version." Several paths that start to differ in one reconcile give one notification: "fix-cart: 3 files changed on both studio-mini and this Mac. Pick a version for each." Clicking it opens the session with the mark's popover. A path that still differs is not notified again.
+- [x] A path that differs stays different, and the other paths keep syncing. When one side's file later changes to match the other's, the path no longer differs. (`a_file_both_sides_change_differs_until_one_version_is_kept`, `a_path_stops_differing_once_both_sides_match`)
+- [ ] When a path starts to differ, the app shows a desktop notification: "fix-cart: src/cart.ts changed on both studio-mini and this Mac. Pick a version." Several paths that start to differ in one reconcile give one notification: "fix-cart: 3 files changed on both studio-mini and this Mac. Pick a version for each." Clicking it opens the session with the mark's popover. A path that still differs is not notified again. The daemon names those paths in `sync.changed`'s `newly_differing`, once each, so the app needs no memory of what it notified.
 - [ ] The notification has its own switch in Settings › Notifications, "A file differs between machines", on by default and next to X47's per-event switches. With it off, the mark and the popover still show the differing files.
-- [ ] **Keep studio-mini's** and **Keep this Mac's** put that side's version on both sides. **Compare** opens the two versions side by side in a file tab (X26).
-- [ ] A file this Mac changes while a change to it from the central host is being applied is not overwritten. It is reconciled as a change on this Mac.
-- [ ] With both daemons on one machine, as in the tests, an edit on either side shows on the other within 1 s.
-- [ ] Applying a change from the other side does not send it back. Once the last edit has synced, both sides report the same snapshot and stay `in_sync`.
+- [ ] **Keep studio-mini's** and **Keep this Mac's** put that side's version on both sides. **Compare** opens the two versions side by side in a file tab (X26). The daemon side is `sync.resolve {copy, path, keep}` (`a_file_both_sides_change_differs_until_one_version_is_kept`); the buttons come with the desktop PR.
+- [x] A file this Mac changes while a change to it from the central host is being applied is not overwritten. It is reconciled as a change on this Mac. (`an_edit_since_the_snapshot_is_never_overwritten`)
+- [x] With both daemons on one machine, as in the tests, an edit on either side shows on the other within 1 s. (`an_edit_on_the_central_host_shows_in_the_copy_within_a_second`, `an_edit_in_the_copy_reaches_the_central_host_within_a_second`)
+- [x] Applying a change from the other side does not send it back. Once the last edit has synced, both sides stay `in_sync` with no further round. (`a_change_applied_on_one_side_is_not_sent_back`)
 
 ### Commits
 
@@ -138,8 +138,8 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 ### Disconnects and restarts
 
 - [ ] While the link is down, the copy reads "Waiting for studio-mini. Changes made on this Mac sync when it is back." Both sides keep working on their own.
-- [ ] When the link is back, both sides send what changed since the base, and the central host reconciles them as above. No edit made on either side while the link was down is lost.
-- [ ] The base, the copy list and each copy's differing paths are saved on both sides. After a restart of either daemon, syncing resumes from the saved base.
+- [x] When the link is back, both sides send what changed since the base, and the central host reconciles them as above. No edit made on either side while the link was down is lost. (`edits_on_both_sides_while_the_link_is_down_reach_both_sides`, `a_file_both_sides_change_differs_until_one_version_is_kept`)
+- [x] The base, the copy list and each copy's differing paths are saved on both sides. After a restart of either daemon, syncing resumes from the saved base. (`a_restarted_worker_resumes_its_copy`, `while_the_link_is_down_the_copy_waits_and_then_catches_up`, `a_live_upgrade_of_the_central_host_loses_no_edit`)
 - [ ] The objects of each side's base are kept from `git gc` by a ref, `refs/moonlet/sync/<copy id>`. Turning the copy off deletes the ref.
 
 ### When the session goes away
@@ -176,23 +176,23 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 - `sync.start {session}`, where `session` is the session's id on the central host. It returns the new `Copy`.
 - `sync.stop {copy}`;
 - `sync.list` returns every `Copy`;
-- `sync.resolve {copy, path, keep: "central" | "worker"}`;
+- `sync.resolve {copy, path, keep: "central" | "worker"}` returns the `Copy`. It is a `sync.offer` with that resolution, so it needs the link: while it is down, it fails with `disconnected`.
 - `sync.use_central_branch {copy}`;
 - `sync.retry {copy}`;
 - `sync.run_setup {copy, command}`. It runs only when `command` is the copy's current setup command, and it records the approval. A stale command is refused with `setup_changed` and the current command.
 - `sync.project_get {identity}` and `sync.project_set {identity, keep_new}`, for the project page and the composer;
-- the event `sync.changed {copy}`. A copy that needs approval for setup reports `setup: {state: "needs_approval", command}`, and the app shows the modal.
+- the event `sync.changed`: the `Copy`, plus `newly_differing`, the paths that started to differ with this change. A copy that needs approval for setup reports `setup: {state: "needs_approval", command}`, and the app shows the modal.
 
 **Over the worker link (X41), worker to central host:**
 
 - `sync.open {copy, session}` returns `{path, branch, head, name, project, identity, origin_url}`, or `not_found` for a session that is gone.
 - `sync.fetch {copy, have, again}` returns the session's files and commit now, `{tree, head, too_big, pack}`, as the copy's base. `have` lists the commits the worker's repository already has (its branches, remote-tracking branches and copy bases), which the pack leaves out. With `again`, a made copy asks for a `sync.update` instead, as after `sync.retry`.
-- `sync.offer {copy, base, tree, head, pack}` carries the worker's changes. The answer is the reconciled `{base, tree, head, pack, differs}`.
+- `sync.offer {copy, base, tree, head, too_big, pack, resolve?}` carries the worker's files against its own base. The central host reconciles them with the session's against that base (its own last base when it lacks the worker's), applies its part, and answers `{from, tree, base, head, differs, too_big, pack}`: the worker goes from `from`, the tree it offered, to `tree`, and both keep `base`. If the worker's files changed meanwhile, it applies nothing and offers again from its old base. With `resolve {path, keep}`, the kept side's version of `path` stands in the base as unchanged, so the other side's gives way to it.
 - `sync.close {copy}`.
 
 **Over the worker link, central host to worker:**
 
-- `sync.update {copy, base, tree, head, too_big, pack}`: the central host's new state, sent after its own changes and after reconciling another worker's offer. The answer is `{tree, base, differs, pack}`: the worker's files after applying it, and the new base both sides keep. The worker reconciles against its own base, which the central host adopts, so a reply the central host missed (a lid closed mid-update) cannot leave the two apart. Objects of the new base that the update lacked come in `pack`.
+- `sync.update {copy, base, tree, head, too_big, pack}`: the central host's new state, sent after its own changes and after another copy's offer changed the session. The answer is `{applied, tree}`. The worker takes the update only while its own files are its base, and then both keep `tree` as the base. Otherwise, or while its own offer is under way, it answers `applied: false` and offers its files, and that round decides. The worker's base wins in each round, so a reply the central host missed (a lid closed mid-update) cannot leave the two apart.
 - `sync.closing {copy, reason: "archived"}`.
 
 **Types:**

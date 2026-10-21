@@ -530,15 +530,28 @@ impl Daemon {
                 let r: m::CopyRef = params(p)?;
                 ok(self.sync.retry(&r.copy)?)
             }
-            m::SYNC_OPEN | m::SYNC_FETCH => {
+            m::SYNC_RESOLVE => {
+                let r: m::SyncResolve = params(p)?;
+                ok(self.sync.resolve(r).await?)
+            }
+            m::SYNC_OPEN | m::SYNC_FETCH | m::SYNC_OFFER => {
                 // Only a worker's daemon, over the tailnet (X60).
                 if conn.phone.is_none() || conn.client != crate::link::WORKER_CLIENT {
                     return Err(RpcError::new("forbidden", "only a worker keeps copies"));
                 }
-                if method == m::SYNC_OPEN {
-                    ok(self.sync.open(conn, params(p)?).await?)
-                } else {
-                    ok(self.sync.fetch(conn, params(p)?).await?)
+                match method {
+                    m::SYNC_OPEN => ok(self.sync.open(conn, params(p)?).await?),
+                    m::SYNC_FETCH => ok(self.sync.fetch(conn, params(p)?).await?),
+                    _ => {
+                        let r: m::SyncOffer = params(p)?;
+                        let pack = match r.pack {
+                            Some(t) => Some(conn.take_pack(t).ok_or_else(|| {
+                                RpcError::new("invalid_params", "the pack did not arrive")
+                            })?),
+                            None => None,
+                        };
+                        ok(self.sync.reconcile_offer(conn, r, pack).await?)
+                    }
                 }
             }
             _ => self.handle_project(conn, method, p).await,
