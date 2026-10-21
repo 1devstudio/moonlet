@@ -13,7 +13,7 @@ mod webview_data;
 
 use std::sync::Arc;
 
-use hosts::{HostInfo, HostManager};
+use hosts::{HostEntry, HostManager};
 use moonlet_proto::{RpcError, TerminalId};
 use serde_json::Value;
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -26,14 +26,26 @@ fn err(e: impl std::fmt::Display) -> RpcError {
 }
 
 #[tauri::command]
-fn host_list(hosts: Hosts) -> Vec<HostInfo> {
+fn host_list(hosts: Hosts) -> Vec<HostEntry> {
     hosts.list()
 }
 
+/// Pairs with a host over the tailnet (X57): `addrs` from a pasted link, or
+/// none to look up `name`.
 #[tauri::command]
-fn host_add(hosts: Hosts, id: String) -> Result<HostInfo, RpcError> {
+async fn host_pair(
+    hosts: Hosts<'_>,
+    name: String,
+    addrs: Option<Vec<String>>,
+    code: String,
+) -> Result<HostEntry, RpcError> {
+    hosts::pair_tailnet(&hosts, &name, addrs, &code).await
+}
+
+#[tauri::command]
+fn host_add(hosts: Hosts, id: String) -> Result<HostEntry, RpcError> {
     let id = id.trim().to_string();
-    if id.is_empty() || id.starts_with('-') || id.contains(char::is_whitespace) {
+    if !hosts::valid_host_name(&id) {
         return Err(RpcError::new(
             "invalid_params",
             "not a valid SSH host alias",
@@ -43,8 +55,9 @@ fn host_add(hosts: Hosts, id: String) -> Result<HostInfo, RpcError> {
 }
 
 #[tauri::command]
-fn host_remove(hosts: Hosts, id: String) {
-    hosts.remove(&id);
+async fn host_remove(hosts: Hosts<'_>, id: String) -> Result<(), RpcError> {
+    hosts.remove(&id).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -478,6 +491,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            host_pair,
             host_list,
             host_add,
             host_remove,

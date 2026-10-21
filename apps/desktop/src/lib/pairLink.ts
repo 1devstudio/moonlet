@@ -1,8 +1,9 @@
-// The `moonlet://pair` link a Mac shows in Settings › Phones (X39), as a QR
-// code or as text to paste.
+// The `moonlet://pair` link a host shows in Settings (X39, X57) or prints with
+// `moonletd pair`, as a QR code or as text to paste. The phone app imports it
+// from here.
 
 export interface PairLink {
-  /** The Mac's name. */
+  /** The host's name. */
   host: string;
   /** `ip:port`s to try, in order. */
   addrs: string[];

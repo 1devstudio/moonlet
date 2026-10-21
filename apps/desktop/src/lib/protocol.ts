@@ -576,10 +576,15 @@ export interface SearchHit {
 
 export type HostStatus = "connecting" | "connected" | "reconnecting" | "needs_install" | "needs_update" | "refused" | "error";
 
+/** How the desktop app reaches a host: its own daemon, SSH (R1) or the tailnet (X57). */
+export type HostKind = "local" | "ssh" | "tailnet";
+
 export interface HostInfo {
   id: string;
   label: string;
   remote: boolean;
+  /** Set by the desktop app; the phone app does not send it. */
+  kind?: HostKind;
   status: HostStatus;
   message: string | null;
   daemon_version: string | null;

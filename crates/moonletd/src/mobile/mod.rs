@@ -30,25 +30,13 @@ mod net;
 
 pub use net::spawn;
 
-pub const DEFAULT_PORT: u16 = 47428;
+pub const DEFAULT_PORT: u16 = moonlet_core::tailnet::DEFAULT_PORT;
 /// How long a pairing code works.
 pub const PAIR_TTL_MS: u64 = 5 * 60 * 1000;
 /// Wrong codes before the current one is cancelled.
 pub const PAIR_ATTEMPTS: u32 = 5;
 
-/// Tailscale's IPv4 range (`100.64.0.0/10`) and IPv6 prefix (`fd7a:115c:a1e0::/48`).
-pub fn is_tailscale(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            o[0] == 100 && (o[1] & 0xc0) == 64
-        }
-        IpAddr::V6(v6) => {
-            let s = v6.segments();
-            s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0
-        }
-    }
-}
+pub use moonlet_core::tailnet::is_tailscale;
 
 /// The machine's Tailscale addresses, IPv4 first. `MOONLET_MOBILE_ADDRS`
 /// (comma-separated) replaces them, for tests.
@@ -671,29 +659,6 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_tailscale_addresses_count() {
-        // Addresses as `ifconfig` lists them on a Mac with Tailscale.
-        for a in [
-            "100.101.102.103",
-            "100.64.0.1",
-            "100.127.255.254",
-            "fd7a:115c:a1e0::1234:5678",
-        ] {
-            assert!(is_tailscale(a.parse().unwrap()), "{a}");
-        }
-        for a in [
-            "192.168.1.23",
-            "100.63.255.255",
-            "100.128.0.1",
-            "127.0.0.1",
-            "fe80::1",
-            "fd7a:115c:a1e1::1",
-        ] {
-            assert!(!is_tailscale(a.parse().unwrap()), "{a}");
-        }
-    }
 
     #[test]
     fn the_pairing_link_carries_the_host_every_address_and_the_code() {
