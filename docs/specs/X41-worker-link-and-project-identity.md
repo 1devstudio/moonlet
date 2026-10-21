@@ -105,14 +105,14 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ## UI
 
-- **Settings › Hosts:** each host paired over the tailnet gets a **Central host** choice. SSH hosts do not (ADR 0011). At most one host is the central host; choosing another moves it, and choosing it again clears it. Removing the central host from this Mac's list clears it too. (`workerLink.test.ts` the central host choice, `worker-link.e2e.ts`)
+- **Settings › Hosts:** each host paired over the tailnet gets a **Central host** choice. SSH hosts do not (ADR 0011). At most one host is the central host; choosing another moves it, and choosing it again clears it. Removing the central host from this Mac's list clears it too. (`workerLink.test.ts` the central host choice, `worker-link.e2e.ts` "removing the central host from this Mac's list clears it")
 - **Settings › Machines › Hosts › This Mac:** a **Use this Mac for heavy commands** row with a switch and a status line, one per link state:
   - "Not linked"
   - "Linking to studio-mini…"
   - "Linked to studio-mini since 10:42"
   - "Reconnecting to studio-mini…"
-  - "Update moonlet on studio-mini"
-  - "studio-mini no longer accepts this Mac. Pair it again."
+  - "Update moonlet on studio-mini", with **Retry** for once it is updated
+  - "studio-mini no longer accepts this Mac. Pair it again." (the `refused` state)
   - any other connection error, with **Retry**
 
   (`workerLink.test.ts` the link's status line, `worker-link.e2e.ts`)
@@ -208,7 +208,7 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
 - **Vitest, `apps/desktop/src/lib/`:**
   - the status line text for each link state;
   - choosing a central host moves the choice, so at most one host has it, and choosing it again clears it.
-- **e2e, `apps/desktop/e2e/specs/worker-link.e2e.ts`:** the fixture starts a second scratch daemon as the central host, listening on 127.0.0.1, and the app pairs with it. Marking it **Central host** and turning on **Use this Mac for heavy commands** shows "Linked to …". Saving settings is a crucial feature (X12).
+- **e2e, `apps/desktop/e2e/specs/worker-link.e2e.ts`:** the fixture starts a second scratch daemon as the central host, listening on `::1`, and the app pairs with it. Not on 127.0.0.1: the app's own daemon in the tests counts that as one of its addresses, and a Mac never links to itself. Marking it **Central host** and turning on **Use this Mac for heavy commands** shows "Linked to …". Saving settings is a crucial feature (X12).
 
 ## Open questions
 
