@@ -8,6 +8,8 @@ import { composerOptions, composerPick, composerProjects, composerTarget, wsKey 
 import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
+import { composerSync } from "../lib/sync";
+import { keepInSync, projectKeepsNew, useSync } from "../lib/syncStore";
 import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, BoardTile, IconButton, cx } from "./ui";
 import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
@@ -314,6 +316,20 @@ export function Composer({
   const [prompt, setPrompt] = useState("");
   const [task, setTask] = useState(presetTask ?? null);
   const [assign, setAssign] = useState(!!presetTask?.assign?.checked);
+  // Keep in sync with this Mac (X60): for a project on the central host,
+  // ticked when the project keeps its new sessions in sync.
+  const central = useSync((s) => s.central);
+  const syncShown = !!current && composerSync(current.host, central, false).show;
+  const [keepSync, setKeepSync] = useState(false);
+  useEffect(() => {
+    setKeepSync(false);
+    if (!current || !syncShown) return;
+    let live = true;
+    void projectKeepsNew(current.project.identity).then((k) => live && setKeepSync(composerSync(current.host, central, k).checked));
+    return () => {
+      live = false;
+    };
+  }, [current?.host, current?.project.id, syncShown]); // eslint-disable-line react-hooks/exhaustive-deps
   const [taskBranch, setTaskBranch] = useState<string | null>(null);
   // Starts at the Settings default every time; not remembered per project (X7).
   const [mode, setMode] = useState(() => resolveMode(useStore.getState().settings.defaultMode));
@@ -462,6 +478,7 @@ export function Composer({
         rows: 32,
       });
       close();
+      if (syncShown && keepSync) void keepInSync(current.host, s.id);
       // Activity, and Keep in step's "session starts" rule (X46).
       if (task) void startedFromTask(current.host, s.workspace_id ?? workspaceFor(current.host) ?? "", task, { session: s.name, assign: !!task.assign && assign });
       // Started from Tasks mode: work on it in Sessions mode (X46).
@@ -688,6 +705,12 @@ export function Composer({
             </span>
           ))}
           <span className="flex-1" />
+          {syncShown && (
+            <label className="flex shrink-0 items-center gap-1.5" title="Keep a live copy of the session on this Mac">
+              <input type="checkbox" aria-label="Keep in sync with this Mac" className="m-0 accent-accent" checked={keepSync} onChange={(e) => setKeepSync(e.target.checked)} />
+              Keep in sync with this Mac
+            </label>
+          )}
           {task?.assign && (
             <label className="flex shrink-0 items-center gap-1.5" title={task.assign.title}>
               <input type="checkbox" className="m-0 accent-accent" checked={assign} onChange={(e) => setAssign(e.target.checked)} />

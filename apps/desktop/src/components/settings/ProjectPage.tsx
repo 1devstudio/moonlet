@@ -13,7 +13,9 @@ import { tildePath } from "../../lib/profiles";
 import { loadTrackersConfig, useTasks } from "../../lib/tasksStore";
 import { projectTrackers } from "../../lib/trackerSources";
 import { Button, IconButton, cx } from "../ui";
-import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, fieldCls } from "./controls";
+import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, SwitchRow, fieldCls } from "./controls";
+import { composerSync } from "../../lib/sync";
+import { projectKeepsNew, setProjectKeepsNew, useSync } from "../../lib/syncStore";
 import { useUnsaved } from "./useUnsaved";
 
 const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [] };
@@ -97,7 +99,27 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   const boards = useTasks((t) => t.config?.boards);
   useEffect(() => void loadTrackersConfig(), []);
   const trackers = projectTrackers(boards, form.trackers);
-  const dirty = !parseError && isDirty(form, orig);
+  // This Mac's choice for a project on its central host (X60), saved with
+  // the page to this Mac's daemon, not to the project's file.
+  const central = useSync((s) => s.central);
+  const keepShown = composerSync(host, central, false).show;
+  const [keepNew, setKeepNew] = useState(false);
+  const [origKeepNew, setOrigKeepNew] = useState(false);
+  useEffect(() => {
+    if (!keepShown) return;
+    let live = true;
+    void projectKeepsNew(project?.identity).then((k) => {
+      if (!live) return;
+      setKeepNew(k);
+      setOrigKeepNew(k);
+    });
+    return () => {
+      live = false;
+    };
+  }, [keepShown, project?.identity?.origin, project?.identity?.root]); // eslint-disable-line react-hooks/exhaustive-deps
+  const keepDirty = keepShown && keepNew !== origKeepNew;
+  const configDirty = !parseError && isDirty(form, orig);
+  const dirty = configDirty || keepDirty;
   const canSave = !loading && !parseError && dirty && !v.any && !saving;
   const path = file?.path ?? "";
   const name = configName(file?.path);
@@ -106,8 +128,13 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
     if (!canSave || !file) return;
     setSaving(true);
     try {
-      show(await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id, version: file.version, config: fromForm(form) }));
-      toast(`Saved ${name}`);
+      if (keepDirty && project?.identity) {
+        const r = await setProjectKeepsNew(project.identity, keepNew);
+        setKeepNew(r.keep_new);
+        setOrigKeepNew(r.keep_new);
+      }
+      if (configDirty) show(await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id, version: file.version, config: fromForm(form) }));
+      toast(configDirty ? `Saved ${name}` : "Saved");
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const stale = message.includes("config changed on disk");
@@ -214,7 +241,15 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
               </span>
             </div>
           )}
-          <SaveBar dirty={dirty} canSave={canSave} onDiscard={() => set({ ...orig })} onSave={() => void save()}>
+          <SaveBar
+            dirty={dirty}
+            canSave={canSave}
+            onDiscard={() => {
+              set({ ...orig });
+              setKeepNew(origKeepNew);
+            }}
+            onSave={() => void save()}
+          >
             <button type="button" title="Copy path" className="truncate text-left font-mono ui-text-11.5 text-faint hover:text-muted" onClick={() => copyPath(path)}>
               {tildePath(path, home)}
             </button>
@@ -353,6 +388,21 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
             </Row>
           </Card>
         </Section>
+
+        {keepShown && (
+          <Section title="This Mac">
+            <Card>
+              <SwitchRow
+                setting="project-keep-new"
+                label="Keep new sessions in sync with this Mac"
+                hint={project?.identity?.root ? `New sessions in ${project.name} on ${host} get a live copy on this Mac.` : `${project?.name ?? "This project"} has no commit yet to know it by on this Mac.`}
+                on={keepNew}
+                disabled={!project?.identity?.root}
+                onChange={setKeepNew}
+              />
+            </Card>
+          </Section>
+        )}
       </fieldset>
     </PageBody>
   );
