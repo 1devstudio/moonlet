@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use moonlet_core::fs::Watchers;
 use moonlet_core::session::SessionManager;
-use moonlet_core::sync::{self as git_sync, ApplyError, Files, MAX_FILE, UnpackError};
+use moonlet_core::sync::{self as git_sync, ApplyError, Files, HeadMove, MAX_FILE, UnpackError};
 use moonlet_proto::methods::{
     self as m, Copy, CopyChanged, CopyState, Diverged, Keep, Resolution, SyncFetch, SyncFetched,
     SyncOffer, SyncOffered, SyncOpen, SyncOpened, SyncResolve, SyncUpdate, SyncUpdated,
@@ -391,9 +391,15 @@ impl LiveCopies {
         }
     }
 
+    /// Pauses copy `id` until `sync.retry`. A pause for leaving the branch
+    /// ([`Self::pause_branch`]) is replaced, so no later update lifts this
+    /// one.
     fn pause(&self, id: &str, reason: String) {
         tracing::info!(copy = %id, "copy paused: {reason}");
-        self.update_kept(id, |k| k.paused = Some(reason));
+        self.update_kept(id, |k| {
+            k.paused = Some(reason);
+            k.branch_pause = None;
+        });
         self.changed(id);
     }
 
@@ -417,6 +423,20 @@ impl LiveCopies {
             k.branch_pause = None;
         });
         self.changed(id);
+    }
+
+    /// The session's branch for copy `k`. A copy saved before branches were
+    /// kept has none: it takes the branch the copy is on.
+    async fn branch_of(&self, k: &Kept, path: &Path) -> Result<String, RpcError> {
+        if !k.branch.is_empty() {
+            return Ok(k.branch.clone());
+        }
+        let now = git_sync::branch(path)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| RpcError::new("paused", "the copy is on a detached HEAD"))?;
+        self.update_kept(&k.id, |kept| kept.branch = now.clone());
+        Ok(now)
     }
 
     /// Whether the copy at `path` is on its branch; pauses it if not.
@@ -455,23 +475,31 @@ impl LiveCopies {
             return Ok(false);
         };
         let mut own = git_sync::head(path).await.map_err(internal)?;
+        let (own_in_central, central_in_own) = if own == central {
+            (true, true)
+        } else {
+            (
+                git_sync::is_ancestor(path, &own, central)
+                    .await
+                    .map_err(internal)?,
+                git_sync::is_ancestor(path, central, &own)
+                    .await
+                    .map_err(internal)?,
+            )
+        };
         let mut ahead = false;
         let mut diverged = None;
-        if own != central {
-            if git_sync::is_ancestor(path, &own, central)
-                .await
-                .map_err(internal)?
-            {
-                git_sync::fast_forward(path, &k.branch, &own, central)
+        match git_sync::head_move(&own, central, own_in_central, central_in_own) {
+            HeadMove::Same => {}
+            HeadMove::Up => {
+                let branch = self.branch_of(&k, path).await?;
+                git_sync::fast_forward(path, &branch, &own, central)
                     .await
                     .map_err(internal)?;
                 own = central.to_string();
-            } else if git_sync::is_ancestor(path, central, &own)
-                .await
-                .map_err(internal)?
-            {
-                ahead = true;
-            } else {
+            }
+            HeadMove::Ahead => ahead = true,
+            HeadMove::Diverged => {
                 diverged = Some(Diverged {
                     ahead: git_sync::count(path, central, &own)
                         .await
@@ -539,7 +567,10 @@ impl LiveCopies {
         let k = self
             .kept(id)
             .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
-        self.update_kept(id, |k| k.paused = None);
+        self.update_kept(id, |k| {
+            k.paused = None;
+            k.branch_pause = None;
+        });
         if k.base.is_none() {
             self.set_state(id, CopyState::Copying);
             tokio::spawn(self.clone().make(id.to_string()));
@@ -1276,7 +1307,7 @@ impl LiveCopies {
             git_sync::create_branch(&repo, &name, &own)
                 .await
                 .map_err(internal)?;
-            git_sync::reset_branch(&path, &central)
+            git_sync::reset_branch(&path, &own, &central)
                 .await
                 .map_err(internal)?;
             self.update_kept(id, |kept| {

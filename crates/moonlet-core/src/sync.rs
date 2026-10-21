@@ -905,8 +905,42 @@ pub async fn branch(worktree: &Path) -> Result<Option<String>> {
         Duration::from_secs(30),
     )
     .await?;
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok((out.status == 0 && !name.is_empty()).then_some(name))
+    Ok(parse_branch(out.status, &out.stdout))
+}
+
+/// The branch `git symbolic-ref -q --short HEAD` printed, given its exit
+/// status: `None` for a detached `HEAD`, which exits 1 printing nothing.
+pub fn parse_branch(status: i32, stdout: &[u8]) -> Option<String> {
+    let name = String::from_utf8_lossy(stdout).trim().to_string();
+    (status == 0 && !name.is_empty()).then_some(name)
+}
+
+/// How one side's branch follows the central host's commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeadMove {
+    /// Both are at the same commit.
+    Same,
+    /// The side's commit is in the central host's history: it moves up.
+    Up,
+    /// The central host's commit is in the side's history: the side's
+    /// next offer brings its commits.
+    Ahead,
+    /// Each has commits the other lacks.
+    Diverged,
+}
+
+/// Where `own` stands against `central`, from whether each is in the
+/// other's history.
+pub fn head_move(own: &str, central: &str, own_in_central: bool, central_in_own: bool) -> HeadMove {
+    if own == central {
+        HeadMove::Same
+    } else if own_in_central {
+        HeadMove::Up
+    } else if central_in_own {
+        HeadMove::Ahead
+    } else {
+        HeadMove::Diverged
+    }
 }
 
 fn commit_id(oid: &str) -> Result<()> {
@@ -952,23 +986,29 @@ pub async fn count(repo: &Path, from: &str, to: &str) -> Result<u32> {
     Ok(String::from_utf8_lossy(&out).trim().parse()?)
 }
 
-/// Moves `branch`, checked out in `worktree`, from `from` up to `to`, and
-/// resets the staging area to it; the files stay as they are. Fails when
-/// the branch is no longer at `from`.
+/// Moves `branch` from `from` up to `to`, and when `worktree` still has it
+/// checked out, resets the staging area to it; the files stay as they are.
+/// Fails, moving nothing, when the branch is no longer at `from`.
 pub async fn fast_forward(worktree: &Path, branch: &str, from: &str, to: &str) -> Result<()> {
     commit_id(from)?;
     commit_id(to)?;
     let r = format!("refs/heads/{branch}");
     git_env(worktree, &[], &["update-ref", &r, to, from], None).await?;
-    git_env(worktree, &[], &["reset", "-q"], None).await?;
+    if self::branch(worktree).await?.as_deref() == Some(branch) {
+        git_env(worktree, &[], &["reset", "-q"], None).await?;
+    }
     Ok(())
 }
 
-/// Moves the branch checked out in `worktree` to `to`, whatever it was at,
-/// and resets the staging area to it; the files stay as they are.
-pub async fn reset_branch(worktree: &Path, to: &str) -> Result<()> {
+/// Moves the branch checked out in `worktree` from `from` to `to`, and
+/// resets the staging area to it; the files stay as they are. Fails,
+/// moving nothing, when `HEAD` is no longer at `from`: a commit made since,
+/// or another branch checked out.
+pub async fn reset_branch(worktree: &Path, from: &str, to: &str) -> Result<()> {
+    commit_id(from)?;
     commit_id(to)?;
-    git_env(worktree, &[], &["reset", "-q", "--mixed", to, "--"], None).await?;
+    git_env(worktree, &[], &["update-ref", "HEAD", to, from], None).await?;
+    git_env(worktree, &[], &["reset", "-q"], None).await?;
     Ok(())
 }
 
@@ -2302,6 +2342,87 @@ mod tests {
         assert!(matches!(e, WorktreeError::Ahead), "{e:?}");
         assert_eq!(rev(p, "mine").await, mine);
         assert!(!other.path().join("mine").exists());
+    }
+
+    #[test]
+    fn a_branch_name_is_read_from_symbolic_ref() {
+        // Captured from git 2.54: `git symbolic-ref -q --short HEAD` on a
+        // branch, and with a detached HEAD (exit 1, nothing printed).
+        assert_eq!(
+            parse_branch(0, b"moonlet/fix-cart\n").as_deref(),
+            Some("moonlet/fix-cart")
+        );
+        assert_eq!(parse_branch(1, b""), None);
+    }
+
+    #[test]
+    fn a_head_moves_up_stays_ahead_or_diverges() {
+        let (own, central) = ("a".repeat(40), "b".repeat(40));
+        assert_eq!(head_move(&own, &own, true, true), HeadMove::Same);
+        // Own commit is in the central host's history: move up.
+        assert_eq!(head_move(&own, &central, true, false), HeadMove::Up);
+        // The central host's commit is in this side's history: ahead.
+        assert_eq!(head_move(&own, &central, false, true), HeadMove::Ahead);
+        assert_eq!(head_move(&own, &central, false, false), HeadMove::Diverged);
+    }
+
+    /// `worked_example` with two commits on `main`: the first and the last.
+    async fn two_commits() -> (tempfile::TempDir, String, String) {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let first = head(p).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "second"])
+            .await
+            .unwrap();
+        let second = head(p).await.unwrap();
+        (dir, first, second)
+    }
+
+    #[tokio::test]
+    async fn a_branch_moves_only_from_the_commit_it_was_read_at() {
+        let (dir, first, second) = two_commits().await;
+        let p = dir.path();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "third"])
+            .await
+            .unwrap();
+        let third = head(p).await.unwrap();
+        // Read at `second`, but a commit came in since: nothing moves.
+        assert!(fast_forward(p, "main", &second, &first).await.is_err());
+        assert!(reset_branch(p, &second, &first).await.is_err());
+        assert_eq!(rev(p, "main").await, third);
+        // From where it is, it moves.
+        reset_branch(p, &third, &first).await.unwrap();
+        assert_eq!(rev(p, "main").await, first);
+    }
+
+    #[tokio::test]
+    async fn a_branch_moved_from_elsewhere_leaves_the_checkouts_staging_alone() {
+        let (dir, first, second) = two_commits().await;
+        let p = dir.path();
+        git(p, &["branch", "behind", &first]).await.unwrap();
+        // `main` is checked out, with something staged.
+        std::fs::write(p.join("staged.txt"), "staged\n").unwrap();
+        git(p, &["add", "staged.txt"]).await.unwrap();
+        fast_forward(p, "behind", &first, &second).await.unwrap();
+        assert_eq!(rev(p, "behind").await, second);
+        let status = git(p, &["status", "--porcelain", "staged.txt"])
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8(status).unwrap(), "A  staged.txt\n");
+    }
+
+    #[tokio::test]
+    async fn branches_are_made_once_counted_and_found() {
+        let (dir, first, second) = two_commits().await;
+        let p = dir.path();
+        assert!(!branch_exists(p, "mine").await);
+        create_branch(p, "mine", &first).await.unwrap();
+        assert!(branch_exists(p, "mine").await);
+        assert!(create_branch(p, "mine", &second).await.is_err());
+        assert_eq!(rev(p, "mine").await, first);
+        assert_eq!(count(p, &first, &second).await.unwrap(), 1);
+        assert_eq!(count(p, &second, &first).await.unwrap(), 0);
+        assert_eq!(branch(p).await.unwrap().as_deref(), Some("main"));
     }
 
     async fn rev(p: &Path, name: &str) -> String {
