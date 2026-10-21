@@ -65,6 +65,9 @@ pub enum Message {
         daemon_version: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host: Option<String>,
+        /// `macos` or `linux`, so a client can say how to update the host (X58).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os: Option<String>,
     },
 }
 

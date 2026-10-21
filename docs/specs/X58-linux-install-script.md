@@ -1,6 +1,6 @@
 # X58 — Install moonlet on a Linux host with one command
 
-- **Status:** draft
+- **Status:** draft (implemented: the systemd unit and notify messages, `authed`'s `os` and the app's update line)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** R2 (remote helper), journey J5
 - **Related ADRs:** [0011](../adr/0011-machines-connect-over-the-tailnet.md) (this is its second slice), [0009](../adr/0009-central-host-workers-live-copies.md) (a Linux central host needs a systemd service)
@@ -71,7 +71,7 @@ Running it again updates moonlet without ending any session.
 
 ### The service
 
-- [ ] `moonletd service install`, `uninstall` and `status`, today macOS's LaunchAgent (ADR 0004), manage a systemd user unit on Linux, at `~/.config/systemd/user/moonletd.service` (or under `$XDG_CONFIG_HOME`). `install` writes the unit, then runs `systemctl --user daemon-reload` and `systemctl --user enable --now moonletd`. The unit, with the binary's absolute path:
+- [x] `moonletd service install`, `uninstall` and `status`, today macOS's LaunchAgent (ADR 0004), manage a systemd user unit on Linux, at `~/.config/systemd/user/moonletd.service` (or under `$XDG_CONFIG_HOME`). `install` writes the unit, then runs `systemctl --user daemon-reload` and `systemctl --user enable --now moonletd`. The unit, with the binary's absolute path:
 
   ```ini
   [Unit]
@@ -89,7 +89,9 @@ Running it again updates moonlet without ending any session.
   WantedBy=default.target
   ```
 
-- [ ] With `NOTIFY_SOCKET` set, the daemon sends `READY=1` once its socket is bound. A daemon that takes over in a live upgrade (S3) sends `MAINPID=<its pid>` and `READY=1` before it answers the old daemon's handoff. systemd then follows the new daemon, and the sessions it adopted stay in the unit. Without `NOTIFY_SOCKET` nothing changes.
+  (`service` unit tests `renders_the_systemd_user_unit`, `the_unit_lives_in_the_users_systemd_folder`.) A daemon already serving outside systemd keeps running: `install` then only enables the unit, which takes over at the next start.
+
+- [x] With `NOTIFY_SOCKET` set, the daemon sends `READY=1` once it serves: its socket bound, its pid file written and its upgrade signal handler in place. A daemon that takes over in a live upgrade (S3) sends `MAINPID=<its pid>` and `READY=1` before it answers the old daemon's handoff. systemd then follows the new daemon, and the sessions it adopted stay in the unit. Without `NOTIFY_SOCKET` nothing changes. (`tests/upgrade.rs`: `systemd_hears_ready_and_follows_the_upgrade`)
 - [ ] The script runs `moonletd service install`, then `loginctl enable-linger` so the service starts at boot without a login. If lingering cannot be turned on, it says: "moonletd will stop when you log out. To keep it running, ask an administrator to run: sudo loginctl enable-linger alex"
 - [ ] Without a systemd user instance (`systemctl --user` fails, for example in a container), the script starts the daemon with `moonletd start` and says "moonletd is running, but nothing will start it after a reboot."
 - [ ] When a daemon is already running, the script runs the new `moonletd upgrade` (S3) instead of starting another. Every session keeps its id and its processes, and `systemctl --user is-active moonletd` stays `active`.
@@ -102,8 +104,8 @@ Running it again updates moonlet without ending any session.
 
 ### Updating from the app
 
-- [ ] The `authed` reply (X57) also carries `os`: `macos` or `linux`.
-- [ ] A Linux host in `needs_update` because it is older shows "Update moonlet on build-box: run this there", with the install command and **Copy**. A Mac host shows "Update moonlet on studio-mini from its Settings › Updates."
+- [x] The `authed` reply (X57) also carries `os`: `macos` or `linux`. (`authed_says_which_daemon_answered_before_hello`; `moonlet-link` `a_daemon_with_another_protocol_needs_an_update_and_waits_for_a_retry` keeps it in the host's `os`)
+- [x] A Linux host in `needs_update` because it is older shows "Update moonlet on build-box (it runs 0.1.26, this Mac 0.1.30): run this there", with the install command and **Copy**. A Mac host shows "Update moonlet on studio-mini (it runs 0.1.26, this Mac 0.1.30) from its Settings › Updates". (`settingsPage.test.ts`: "says how to update a Linux host and a Mac (X58)")
 
 ## UI
 

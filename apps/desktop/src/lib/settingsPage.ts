@@ -184,12 +184,27 @@ function older(a: string, b: string): boolean {
   return false;
 }
 
-/** A tailnet host and this Mac speak different protocols: which to update (X57). */
+/** The command that installs or updates moonlet on a Linux host (X58). */
+export const INSTALL_COMMAND = "curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh";
+
+/** The host, not this Mac, is the one to update. */
+const hostIsOlder = (h: HostInfo, appVersion: string) => !!h.daemon_version && !!appVersion && older(h.daemon_version, appVersion);
+
+/** A tailnet host and this Mac speak different protocols: which to update,
+ * and how on the host (X57, X58). */
 function updateText(h: HostInfo, appVersion: string): string {
   const theirs = h.daemon_version ?? "";
   if (theirs && appVersion && older(appVersion, theirs)) return `Update moonlet on this Mac (${h.label} runs ${theirs})`;
-  if (theirs && appVersion && older(theirs, appVersion)) return `Update moonlet on ${h.label} (it runs ${theirs}, this Mac ${appVersion})`;
-  return `Update moonlet on ${h.label}`;
+  if (!hostIsOlder(h, appVersion)) return `Update moonlet on ${h.label}`;
+  const which = `Update moonlet on ${h.label} (it runs ${theirs}, this Mac ${appVersion})`;
+  if (h.os === "linux") return `${which}: run this there`;
+  if (h.os === "macos") return `${which} from its Settings › Updates`;
+  return which;
+}
+
+/** What to run on a Linux host that needs an update; null otherwise (X58). */
+export function updateCommand(h: HostInfo, appVersion: string): string | null {
+  return h.status === "needs_update" && h.os === "linux" && hostIsOlder(h, appVersion) ? INSTALL_COMMAND : null;
 }
 
 /** A host that no longer accepts this Mac's token (X57). */

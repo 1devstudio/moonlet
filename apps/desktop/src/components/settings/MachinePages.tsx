@@ -10,7 +10,7 @@ import { countdown, deviceLine, devicesOfKind, pairEndedText } from "../../lib/m
 import { addHostReady, displayCode, readAddHostInput } from "../../lib/addHost";
 import { EV, M, type HostInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
-import { hostActions, hostLine, phoneAccessLine, removeAsks } from "../../lib/settingsPage";
+import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
 import { Card, PageHeading, Section, Status, SwitchRow } from "./controls";
 
@@ -18,6 +18,7 @@ const iconBox = "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg
 
 function HostRow({ host, sessions, children }: { host: HostInfo; sessions: number; children?: React.ReactNode }) {
   const appVersion = useStore((s) => s.appVersion) ?? "";
+  const command = updateCommand(host, appVersion);
   return (
     <div data-setting={`host-${host.id}`} className="flex items-center gap-3.5 px-4 py-3.5">
       <span aria-hidden="true" className={iconBox}>
@@ -29,6 +30,16 @@ function HostRow({ host, sessions, children }: { host: HostInfo; sessions: numbe
           {host.kind === "tailnet" && <span className="rounded bg-raised px-1.5 py-px ui-text-11 font-normal text-muted">Tailnet</span>}
         </span>
         <Status line={hostLine(host, sessions, appVersion)} />
+        {command && (
+          <div className="flex items-center gap-1.5">
+            <code className="min-w-0 flex-1 truncate rounded bg-raised px-1.5 py-0.5 font-mono ui-text-11" title={command}>
+              {command}
+            </code>
+            <IconButton title="Copy command" onClick={() => void navigator.clipboard.writeText(command)}>
+              <Copy size={12} />
+            </IconButton>
+          </div>
+        )}
       </div>
       {children}
     </div>

@@ -45,6 +45,7 @@ async fn fake_daemon(answer: Answer) -> (String, Arc<Mutex<Vec<Message>>>) {
                         protocol: Some(protocol),
                         daemon_version: Some("9.9.9".into()),
                         host: Some("studio-mini".into()),
+                        os: Some("linux".into()),
                     },
                     Answer::Unauthorized => Message::err(
                         0,
@@ -173,6 +174,7 @@ async fn a_daemon_with_another_protocol_needs_an_update_and_waits_for_a_retry() 
         seen.last().unwrap().daemon_version.as_deref(),
         Some("9.9.9")
     );
+    assert_eq!(seen.last().unwrap().os.as_deref(), Some("linux"));
     // Backoff would have retried within 1.5 s.
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(auths.lock().unwrap().len(), 1);

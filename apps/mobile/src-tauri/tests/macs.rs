@@ -42,6 +42,7 @@ async fn serve(mut s: TcpStream, seen: Seen) {
             protocol: None,
             daemon_version: None,
             host: None,
+            os: None,
         },
         Message::Auth { token: Some(t), .. } if t == "tok" => Message::Authed {
             device_id: "d1".into(),
@@ -50,6 +51,7 @@ async fn serve(mut s: TcpStream, seen: Seen) {
             protocol: None,
             daemon_version: None,
             host: None,
+            os: None,
         },
         _ => Message::err(
             0,
