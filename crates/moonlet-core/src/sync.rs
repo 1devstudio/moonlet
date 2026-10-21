@@ -56,6 +56,23 @@ async fn git_dir(worktree: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(String::from_utf8_lossy(&dir).trim()))
 }
 
+/// Untracked files that never sync, whatever `.gitignore` says, since an
+/// agent on the other side can edit `.gitignore`: files that usually hold
+/// secrets. Both sides apply this list in place of the user's own global
+/// excludes, which differ between machines, so they still agree.
+pub const NEVER_SYNCED: &str = "\
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+.npmrc
+.netrc
+";
+
 /// The private index a worktree's snapshots go through, beside its own
 /// index: the session's staging area is never touched.
 async fn private_index(worktree: &Path) -> Result<PathBuf> {
@@ -74,8 +91,9 @@ fn pathspecs(specs: impl IntoIterator<Item = String>) -> Vec<u8> {
 }
 
 /// Snapshots `worktree`: tracked files and the untracked ones that
-/// `.gitignore` and `.git/info/exclude` don't ignore. The user's global
-/// excludes are not applied, so two machines agree whatever theirs say.
+/// `.gitignore`, `.git/info/exclude` and [`NEVER_SYNCED`] don't ignore. The
+/// user's global excludes are not applied, so two machines agree whatever
+/// theirs say.
 /// A file leaves the snapshot only once it is gone from disk. One that
 /// becomes ignored, and that HEAD doesn't track, stays at the version an
 /// earlier snapshot took: the other side never reads it as deleted, and
@@ -86,7 +104,12 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     let index = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
-    let no_global = ["-c", "core.excludesFile=/dev/null"];
+    let excludes = git_dir(worktree).await?.join("moonlet-sync-excludes");
+    if std::fs::read_to_string(&excludes).ok().as_deref() != Some(NEVER_SYNCED) {
+        std::fs::write(&excludes, NEVER_SYNCED)?;
+    }
+    let excludes_opt = format!("core.excludesFile={}", excludes.display());
+    let our_excludes = ["-c", excludes_opt.as_str()];
     let has_head = git_env(
         worktree,
         &[],
@@ -117,7 +140,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
 
     // Files an earlier snapshot took that the rules now ignore, and that
     // HEAD doesn't track: they stay as they were while they exist.
-    let mut ignored = no_global.to_vec();
+    let mut ignored = our_excludes.to_vec();
     ignored.extend([
         "ls-files",
         "-z",
@@ -156,7 +179,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
         &["ls-files", "-z", "--others", "--exclude-standard"][..],
         &["ls-files", "-z", "--modified"][..],
     ] {
-        let args: Vec<&str> = no_global.iter().chain(listing).copied().collect();
+        let args: Vec<&str> = our_excludes.iter().chain(listing).copied().collect();
         let out = git_env(worktree, &env, &args, None).await?;
         candidates.extend(split_z(&out));
     }
@@ -176,7 +199,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
         std::iter::once(".".to_string())
             .chain(too_big.iter().map(|p| format!(":(exclude,literal){p}"))),
     );
-    let mut add: Vec<&str> = no_global.iter().copied().collect();
+    let mut add: Vec<&str> = our_excludes.iter().copied().collect();
     add.extend(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]);
     git_env(worktree, &env, &add, Some(&specs)).await?;
     if !kept.is_empty() {
@@ -996,6 +1019,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn untracked_secrets_stay_out_even_when_no_gitignore_says_so() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        // Committed on purpose: a tracked file still syncs.
+        std::fs::create_dir_all(p.join("config")).unwrap();
+        std::fs::write(p.join("config/dev.key"), "dev only\n").unwrap();
+        git(p, &["add", "config/dev.key"]).await.unwrap();
+        git(p, &["commit", "-q", "-m", "dev key"]).await.unwrap();
+        for f in [
+            ".env.local",
+            ".env.production.local",
+            "deploy.pem",
+            "certs/server.key",
+            "id_ed25519",
+            "id_rsa.pub",
+            ".npmrc",
+            ".netrc",
+        ] {
+            let path = p.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "secret\n").unwrap();
+        }
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        assert_eq!(
+            listing(p, &snap.tree).await,
+            pairs(&[
+                (".gitignore", "100644"),
+                ("config/dev.key", "100644"),
+                ("link", "120000"),
+                ("run.sh", "100755"),
+                ("scratch.txt", "100644"),
+                ("src/cart.ts", "100644"),
+                ("src/new.ts", "100644"),
+                ("vendor/keep.js", "100644"),
+            ])
+        );
+    }
+
+    #[tokio::test]
     async fn a_file_ignored_after_a_snapshot_stays_at_its_last_version() {
         let dir = worked_example().await;
         let p = dir.path();
@@ -1786,7 +1848,7 @@ mod tests {
         for i in 0..60 {
             std::fs::write(c.join("src/cart.ts"), format!("edit {i}\n")).unwrap();
             let next = snapshot(c, MAX_FILE).await.unwrap().tree;
-            unpack(&w, &pack_objects(c, &next, &[&have]).await.unwrap())
+            unpack(&w, &pack_objects(c, &[&next], &[&have]).await.unwrap())
                 .await
                 .unwrap();
             have = next;
