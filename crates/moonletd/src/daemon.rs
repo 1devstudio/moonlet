@@ -70,6 +70,18 @@ impl Drop for Flag<'_> {
 /// through it.
 pub const CLI_CLIENT: &str = "moonlet-cli";
 
+/// Refuses what only the Mac's own app may do, such as managing `what`:
+/// never a paired device over the tailnet, nor an agent's `moonlet` CLI.
+pub(crate) fn app_only(conn: &Conn, what: &str) -> Result<(), RpcError> {
+    if conn.phone.is_some() {
+        return Err(RpcError::new("forbidden", format!("manage {what} from the Mac")));
+    }
+    if conn.client == CLI_CLIENT {
+        return Err(RpcError::new("forbidden", format!("only the moonlet app manages {what}")));
+    }
+    Ok(())
+}
+
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
     serde_json::from_value(v).map_err(|e| RpcError::new("invalid_params", e.to_string()))
 }
@@ -463,22 +475,17 @@ impl Daemon {
                 ok(true)
             }
             m::LINK_GET => ok(self.link.info()),
-            m::LINK_SET | m::LINK_RETRY => {
-                // Like phone access: a paired device or an agent's CLI could
-                // otherwise point this Mac's link at a host of its choosing.
-                if conn.phone.is_some() {
-                    return Err(RpcError::new("forbidden", "manage the link from the Mac"));
-                }
-                if conn.client == CLI_CLIENT {
-                    return Err(RpcError::new("forbidden", "only the moonlet app manages the link"));
-                }
-                if method == m::LINK_SET {
-                    let r: m::LinkSet = params(p)?;
-                    ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
-                } else {
-                    self.link.retry();
-                    ok(self.link.info())
-                }
+            // Like phone access: a paired device or an agent's CLI could
+            // otherwise point this Mac's link at a host of its choosing.
+            m::LINK_SET => {
+                app_only(conn, "the link")?;
+                let r: m::LinkSet = params(p)?;
+                ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
+            }
+            m::LINK_RETRY => {
+                app_only(conn, "the link")?;
+                self.link.retry();
+                ok(self.link.info())
             }
             m::WORKER_LIST => ok(self.workers.list()),
             m::WORKER_REGISTER => {
@@ -498,12 +505,7 @@ impl Daemon {
     /// Phone access (X39): managed from the Mac's app only, never from a
     /// phone or an agent's `moonlet` CLI.
     fn handle_mobile(self: &Arc<Self>, conn: &Conn, method: &str, p: Value) -> HandlerResult {
-        if conn.phone.is_some() {
-            return Err(RpcError::new("forbidden", "manage phones from the Mac"));
-        }
-        if conn.client == CLI_CLIENT {
-            return Err(RpcError::new("forbidden", "only the moonlet app manages phones"));
-        }
+        app_only(conn, "phones")?;
         match method {
             m::MOBILE_STATUS => ok(self.mobile.status()),
             m::MOBILE_SET_ENABLED => {
