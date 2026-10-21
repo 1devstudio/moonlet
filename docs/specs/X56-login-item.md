@@ -36,7 +36,7 @@ Release builds are now signed with a Developer ID ([X3](X3-distribution.md)), so
 
 ### On by default
 
-- [x] On launch, the app registers the login item unless the user has turned it off. The user's choice is kept in `~/.moonlet/app.toml` as `start_daemon_at_login`. When the key is missing, the default is on, so existing installs that never turned the S1b toggle on are registered once too. Tests: `a_first_launch_registers_the_login_item`, `a_launch_leaves_the_login_item_alone_when_the_user_turned_it_off`, `the_choice_is_kept_in_app_toml_and_missing_until_made`.
+- [x] On launch, the app registers the login item unless the user has turned it off. It registers it when macOS reports it not registered or not found: macOS reports an agent it has never registered as not found, so only `register()` can tell a missing plist apart (see Findings). The user's choice is kept in `~/.moonlet/app.toml` as `start_daemon_at_login`. When the key is missing, the default is on, so existing installs that never turned the S1b toggle on are registered once too. Tests: `a_first_launch_registers_the_login_item`, `a_launch_leaves_the_login_item_alone_when_the_user_turned_it_off`, `the_choice_is_kept_in_app_toml_and_missing_until_made`.
 - [x] Registering a login item that is already registered changes nothing and never stops the running daemon. Test: `a_launch_does_nothing_when_the_login_item_is_already_on`; the app does not even call `register()` then, and a second `register()` kept the same process in the findings below.
 - [x] A second daemon started by the login item while one is already listening exits with code 0 (S1b), so launchd does not restart it. Test: `a_second_daemon_exits_with_0_while_one_is_listening`.
 
@@ -46,15 +46,15 @@ Release builds are now signed with a Developer ID ([X3](X3-distribution.md)), so
   - registered and enabled: on, "Starts at login · moonlet in System Settings › Login Items";
   - turned off in Login Items (`requiresApproval`): off, "Turned off in System Settings › Login Items", with **Open Login Items**;
   - not registered: off, "Not starting at login: moonletd runs while moonlet is open";
-  - not found by macOS: off, "macOS cannot find moonlet's login item. Reinstall moonlet." (Vitest: "says when macOS cannot find the login item").
+  - not found by macOS, after registering failed: off, "macOS cannot find moonlet's login item. Reinstall moonlet." (Vitest: "says when macOS cannot find the login item").
 - [x] Turning it off asks for confirmation first when the daemon runs under launchd, as in S1b. It then unregisters the login item and, once that worked, saves `start_daemon_at_login = false`. Vitest: "asks before turning off only when that stops the daemon launchd runs"; the rest: M7.
-- [x] Turning it on saves `start_daemon_at_login = true` and registers the login item. If it was switched off in Login Items, the app opens System Settings › Login Items instead of registering, and says "Allow moonlet in System Settings › Login Items". Tests: `turning_the_toggle_on_registers_or_sends_the_user_to_login_items`, Vitest "says what turning the toggle did, or that macOS still needs the user"; the rest: M7.
+- [x] Turning it on saves `start_daemon_at_login = true` and registers the login item, also when macOS reports it not found; a plist that is really missing fails with macOS's reason. If it was switched off in Login Items, the app opens System Settings › Login Items instead of registering, and says "Allow moonlet in System Settings › Login Items". Tests: `turning_the_toggle_on_registers_or_sends_the_user_to_login_items`, Vitest "says what turning the toggle did, or that macOS still needs the user"; the rest: M7.
 - [x] A launch and a toggle never interleave: each holds one lock while it reads the state, acts and saves the choice, so a quick toggle-off is not undone by the launch. No automated test: it needs `SMAppService`.
 - [x] Search settings finds the toggle under "Login Items", "Background Items" and "SMAppService", as well as the existing terms. Vitest: "finds the daemon's login item by the names macOS uses (X56)".
 
 ### Moving from the S1b plist
 
-- [x] On launch, a login-item build that finds `~/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist` deletes the file without booting the agent out. The daemon it runs keeps serving every session until logout. If that daemon crashes before then, launchd still restarts it from the loaded job. The plist is deleted only once the login item is enabled; while it cannot take over (registering failed, switched off in Login Items, not found), the old plist stays. Tests: `the_old_plist_is_replaced_by_the_login_item_and_counts_as_on`, `the_old_plist_stays_while_no_login_item_can_take_over`; on a real upgrade: M11.
+- [x] On launch, a login-item build that finds `~/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist` deletes the file without booting the agent out. The daemon it runs keeps serving every session until logout. If that daemon crashes before then, launchd still restarts it from the loaded job. The plist is deleted only once the login item is enabled; while it cannot take over (registering failed, switched off in Login Items), the old plist stays. Tests: `the_old_plist_is_replaced_by_the_login_item_and_counts_as_on`, `the_old_plist_stays_while_no_login_item_can_take_over`; on a real upgrade: M11.
 - [x] An old plist that sets `MOONLET_HOME`, as dev agents do, is left alone and does not count as a choice: the login item would run the daemon on `~/.moonlet`. Tests: `an_old_plist_that_sets_moonlet_home_is_told_apart`, `an_old_plist_with_its_own_moonlet_home_is_left_alone`.
 - [x] If the old plist was there, the user's choice counts as on, whatever `app.toml` says. Test: `the_old_plist_is_replaced_by_the_login_item_and_counts_as_on`.
 - [x] A failed deletion is logged and retried on the next launch. It never blocks the app: the launch runs on its own thread. Manual: M11 (deleting a real file under `~/Library/LaunchAgents` has no automated test).
@@ -129,3 +129,7 @@ Checked on macOS with a throwaway bundle that registers an agent with `SMAppServ
 - `unregister()` stops a running agent, as `launchctl bootout` does. Turning the toggle off therefore keeps the S1b confirmation.
 - `register()` on an agent that is already registered and running keeps the same process.
 - An agent killed by a signal is restarted by launchd (`KeepAlive {SuccessfulExit: false}`).
+
+On the signed 0.1.27 release (2026-10-21, macOS 27.0.1): the app in `/Applications`, notarized and carrying the agent plist, read its login item as `notFound`. `sfltool dumpbtm` listed the app but no agent, so it had never been registered, and the app neither registered it at launch nor from the toggle. Both now call `register()` for `notFound` too.
+
+A throwaway ad-hoc signed bundle on the same Mac confirmed it: its never-registered agent read `notFound`, `register()` made it `enabled`, and `unregister()` left it `notRegistered`. With the plist removed from the bundle, `register()` failed with "Unable to read plist" (`SMAppServiceErrorDomain` 108) and the state stayed `notFound`.
