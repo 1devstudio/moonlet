@@ -87,29 +87,36 @@ fn free_port() -> u16 {
 }
 
 /// The central host `studio-mini`: tailnet access on, pinging every 200 ms.
+/// It keeps its port across restarts, so the port is fixed. Another test's
+/// daemon can take a free port first, so this waits for its own daemon to
+/// listen, and moves to another port if it never does.
 async fn central() -> (Daemon, String) {
-    let home = tempfile::tempdir().unwrap();
-    let port = free_port();
-    std::fs::write(
-        home.path().join("mobile.json"),
-        format!(r#"{{ "enabled": true, "port": {port} }}"#),
-    )
-    .unwrap();
-    let d = Daemon::start(
-        home,
-        &[
-            ("MOONLET_MOBILE_ADDRS", "127.0.0.1"),
-            ("MOONLET_WORKER_PING_MS", "200"),
-        ],
-    )
-    .await;
-    let addr = format!("127.0.0.1:{port}");
-    eventually("the central host listens", || {
-        let addr = addr.clone();
-        async move { std::net::TcpStream::connect(&addr).is_ok() }
-    })
-    .await;
-    (d, addr)
+    for _ in 0..5 {
+        let home = tempfile::tempdir().unwrap();
+        let port = free_port();
+        std::fs::write(
+            home.path().join("mobile.json"),
+            format!(r#"{{ "enabled": true, "port": {port} }}"#),
+        )
+        .unwrap();
+        let d = Daemon::start(
+            home,
+            &[
+                ("MOONLET_MOBILE_ADDRS", "127.0.0.1"),
+                ("MOONLET_WORKER_PING_MS", "200"),
+            ],
+        )
+        .await;
+        let addr = format!("127.0.0.1:{port}");
+        for _ in 0..40 {
+            let st: Value = d.call("mobile.status", json!({})).await;
+            if st["listening"].as_array().is_some_and(|l| l.contains(&json!(addr))) {
+                return (d, addr);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    panic!("the central host never listened");
 }
 
 /// A worker daemon with a fixed worker id. Its own "Tailscale address" is
@@ -609,4 +616,42 @@ async fn a_mac_cannot_link_to_itself() {
         e.to_string(),
         "invalid_params: this Mac is the central host"
     );
+}
+
+#[tokio::test]
+async fn only_the_macs_app_sets_or_retries_the_link() {
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let elsewhere = json!({
+        "central": { "name": "evil", "addrs": ["100.64.0.9:47428"], "token": "ab".repeat(32) },
+        "worker": { "enabled": true }
+    });
+
+    // A paired device over the tailnet, phone or desktop.
+    let mut device = raw(&addr, &token, "moonlet-app").await;
+    assert_eq!(
+        refused(&ask(&mut device, 1, "link.set", elsewhere.clone()).await).as_deref(),
+        Some("forbidden")
+    );
+    assert_eq!(
+        refused(&ask(&mut device, 2, "link.retry", json!({})).await).as_deref(),
+        Some("forbidden")
+    );
+
+    // An agent's `moonlet` CLI on the Mac itself.
+    let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
+    let e = cli
+        .request::<_, Value>("link.set", elsewhere)
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages the link");
+    let e = cli
+        .request::<_, Value>("link.retry", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages the link");
+
+    // Nothing changed.
+    let info: Value = central.call("link.get", json!({})).await;
+    assert_eq!(info["central"], Value::Null, "{info}");
 }

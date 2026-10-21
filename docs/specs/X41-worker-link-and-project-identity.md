@@ -40,6 +40,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 - [x] An invalid `central` is rejected with an error, and nothing is stored: an empty `name` or one with control characters, no `addrs` or one that is not `ip:port`, or a `token` that is not 64 hex characters. (`an_invalid_central_is_refused_and_nothing_is_stored`)
 - [x] With `enabled: false` or `central: null`, no link is opened, and an open link is closed within 1 s. [X60](X60-keep-in-sync.md) also opens the link while a session is kept in sync, whatever `enabled` says. (`the_link_is_open_while_heavy_commands_are_on_or_a_session_is_kept_in_sync`, `turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
 - [x] The central host never links to itself. When one of `central.addrs` is one of this machine's own Tailscale addresses, `link.set` is rejected with "this Mac is the central host". Later slices count the central host as a worker directly. (`the_central_host_never_links_to_itself`, `a_mac_cannot_link_to_itself`)
+- [x] Only the Mac's app sets or retries the link, as only it manages phone access (X39). `link.set` and `link.retry` from a paired device over the tailnet, from a phone routed through the Mac, or from the `moonlet` CLI are refused with `forbidden`. A paired device or an agent could otherwise point this Mac's link at a host of its choosing, which X60 would then let write into copies. (`only_the_macs_app_sets_or_retries_the_link`, `a_phone_reaches_an_ssh_host_through_the_mac`)
 
 ### The link
 

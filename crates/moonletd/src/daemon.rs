@@ -463,13 +463,22 @@ impl Daemon {
                 ok(true)
             }
             m::LINK_GET => ok(self.link.info()),
-            m::LINK_SET => {
-                let r: m::LinkSet = params(p)?;
-                ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
-            }
-            m::LINK_RETRY => {
-                self.link.retry();
-                ok(self.link.info())
+            m::LINK_SET | m::LINK_RETRY => {
+                // Like phone access: a paired device or an agent's CLI could
+                // otherwise point this Mac's link at a host of its choosing.
+                if conn.phone.is_some() {
+                    return Err(RpcError::new("forbidden", "manage the link from the Mac"));
+                }
+                if conn.client == CLI_CLIENT {
+                    return Err(RpcError::new("forbidden", "only the moonlet app manages the link"));
+                }
+                if method == m::LINK_SET {
+                    let r: m::LinkSet = params(p)?;
+                    ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
+                } else {
+                    self.link.retry();
+                    ok(self.link.info())
+                }
             }
             m::WORKER_LIST => ok(self.workers.list()),
             m::WORKER_REGISTER => {
