@@ -56,6 +56,19 @@ async fn git_dir(worktree: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(String::from_utf8_lossy(&dir).trim()))
 }
 
+/// The git dir every worktree of the repository shares, where its refs
+/// live; it outlasts a removed worktree.
+pub async fn common_dir(worktree: &Path) -> Result<PathBuf> {
+    let dir = git_env(
+        worktree,
+        &[],
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        None,
+    )
+    .await?;
+    Ok(PathBuf::from(String::from_utf8_lossy(&dir).trim()))
+}
+
 /// Untracked files that never sync, whatever `.gitignore` says, since an
 /// agent on the other side can edit `.gitignore`: files that usually hold
 /// secrets. Both sides apply this list in place of the user's own global
@@ -1048,6 +1061,42 @@ pub async fn branch_exists(repo: &Path, name: &str) -> bool {
     .is_ok_and(|o| o.status == 0)
 }
 
+/// Files on disk that the worktree's last [`snapshot`] does not carry as
+/// they are, so only this machine has them: untracked secrets
+/// ([`NEVER_SYNCED`]), and files kept at their last synced version because
+/// they became ignored or grew past the limit and changed since. Plain
+/// ignored files, such as build output, are not among them. Sorted.
+pub async fn local_only(worktree: &Path) -> Result<Vec<String>> {
+    let index = private_index(worktree).await?;
+    let file = IndexFile::new(&index);
+    let env = file.env();
+    // Files whose content matches the snapshot only lack fresh stat data.
+    let _ = git_env(worktree, &env, &["update-index", "-q", "--refresh"], None).await;
+    let changed = git_env(
+        worktree,
+        &env,
+        &["diff-files", "-z", "--name-only", "--ignore-submodules"],
+        None,
+    )
+    .await?;
+    let excludes = git_dir(worktree).await?.join("moonlet-sync-excludes");
+    let excludes_opt = format!("--exclude-from={}", excludes.display());
+    let secrets = git_env(
+        worktree,
+        &env,
+        &["ls-files", "-z", "--others", "--ignored", &excludes_opt],
+        None,
+    )
+    .await?;
+    let mut paths: Vec<String> = split_z(&changed)
+        .chain(split_z(&secrets).filter(|p| never_synced(p)))
+        .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 /// Removes worktree `dir` of `repo`, with whatever is in it; its branch
 /// stays.
 pub async fn remove_worktree(repo: &Path, dir: &Path) -> Result<()> {
@@ -1058,6 +1107,7 @@ pub async fn remove_worktree(repo: &Path, dir: &Path) -> Result<()> {
         &[
             "worktree",
             "remove",
+            // Twice: once for changed files, once for a locked worktree.
             "--force",
             "--force",
             "--end-of-options",
@@ -2382,6 +2432,46 @@ mod tests {
         assert!(matches!(e, WorktreeError::Ahead), "{e:?}");
         assert_eq!(rev(p, "mine").await, mine);
         assert!(!other.path().join("mine").exists());
+    }
+
+    #[tokio::test]
+    async fn files_only_this_machine_has_are_the_secrets_and_those_that_stopped_syncing() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        snapshot(p, MAX_FILE).await.unwrap();
+        // Stops syncing: ignored after it synced, then edited.
+        std::fs::write(p.join(".git/info/exclude"), "scratch.txt\nsrc/new.ts\n").unwrap();
+        std::fs::write(p.join("src/new.ts"), "edited here\n").unwrap();
+        std::fs::write(p.join("key.pem"), "-----BEGIN-----\n").unwrap();
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        assert_eq!(snap.too_big, Vec::<String>::new());
+        assert_eq!(
+            local_only(p).await.unwrap(),
+            [".env", "key.pem", "src/new.ts"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_removed_worktree_leaves_its_branch_and_a_pruned_one_frees_it() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        git(p, &["commit", "-q", "-a", "-m", "more"]).await.unwrap();
+        let commit = head(p).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let w = other.path().join("w");
+        add_worktree(p, &w, "feature", &commit).await.unwrap();
+        std::fs::write(w.join("untracked.txt"), "gone with it\n").unwrap();
+        remove_worktree(p, &w).await.unwrap();
+        assert!(!w.exists());
+        assert_eq!(rev(p, "feature").await, commit);
+
+        // A worktree whose folder was deleted holds its branch until pruned.
+        let gone = other.path().join("gone");
+        add_worktree(p, &gone, "other", &commit).await.unwrap();
+        std::fs::remove_dir_all(&gone).unwrap();
+        assert!(checked_out(p, "other").await.is_some());
+        prune_worktrees(p).await.unwrap();
+        assert_eq!(checked_out(p, "other").await, None);
     }
 
     #[test]

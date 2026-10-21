@@ -845,9 +845,11 @@ impl Daemon {
             m::SESSION_ARCHIVE => {
                 let r: m::SessionArchive = params(p)?;
                 let id = r.id.clone();
-                // Its live copies go first, while its worktree is there (X60).
-                self.sync.session_closing(&id).await;
+                // Its live copies go once it is archived, never holding the
+                // archive up; what they need is read first (X60).
+                let archiving = self.sync.archiving(&id).await;
                 let done = w.archive(r).await.map_err(internal)?;
+                self.sync.archived(archiving);
                 self.reads.clear_grant(&id);
                 ok(done)
             }

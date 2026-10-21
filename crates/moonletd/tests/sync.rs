@@ -2153,10 +2153,10 @@ async fn turning_sync_off_removes_the_copy_and_keeps_what_would_be_lost() {
 
     let id = copies(&worker).await[0].id.clone();
     let stopped: Value = worker.call("sync.stop", json!({ "copy": id })).await;
-    let folder = worker.home.path().join("sync-leftovers").join("fix-cart");
+    let folder = leftovers_folder(&worker, &stopped);
     assert_eq!(
-        stopped,
-        json!({ "folder": folder, "leftovers": ["docs/notes.md", "src/cart.ts"] })
+        stopped["leftovers"],
+        json!(["docs/notes.md", "src/cart.ts"])
     );
     assert_eq!(read(&folder.join("src/cart.ts")).as_deref(), Some("mine\n"));
     assert_eq!(
@@ -2197,7 +2197,6 @@ async fn archiving_the_session_removes_the_copy_and_keeps_what_would_be_lost() {
         .await;
     let took = start.elapsed();
     assert!(took < Duration::from_secs(10), "archiving took {took:?}");
-    let folder = worker.home.path().join("sync-leftovers").join("fix-cart");
     let removed = loop {
         let ev = next_change(&mut events, Duration::from_secs(30))
             .await
@@ -2206,10 +2205,9 @@ async fn archiving_the_session_removes_the_copy_and_keeps_what_would_be_lost() {
             break r.clone();
         }
     };
-    assert_eq!(
-        removed,
-        json!({ "reason": "archived", "folder": folder, "leftovers": ["src/cart.ts"] })
-    );
+    let folder = leftovers_folder(&worker, &removed);
+    assert_eq!(removed["reason"], json!("archived"));
+    assert_eq!(removed["leftovers"], json!(["src/cart.ts"]));
     assert_eq!(read(&folder.join("src/cart.ts")).as_deref(), Some("mine\n"));
     assert!(!c.exists(), "the copy is still there");
     assert!(copies(&worker).await.is_empty());
@@ -2229,9 +2227,10 @@ async fn a_session_archived_while_this_mac_was_away_takes_its_copy_when_it_is_ba
         copies(&worker).await.is_empty()
     })
     .await;
-    let folder = worker.home.path().join("sync-leftovers").join("fix-cart");
+    let folders = leftovers_folders(&worker);
+    assert_eq!(folders.len(), 1, "{folders:?}");
     assert_eq!(
-        read(&folder.join("docs/notes.md")).as_deref(),
+        read(&folders[0].join("docs/notes.md")).as_deref(),
         Some("while away\n")
     );
     assert!(!c.exists(), "the copy is still there");
@@ -2243,11 +2242,16 @@ async fn a_copy_whose_folder_was_deleted_pauses_until_it_is_made_again() {
     let s = central.session_path();
     std::fs::remove_dir_all(&c).unwrap();
     let copy = copy_in(&worker, paused, "paused").await;
-    let shown = match c.strip_prefix(dirs_home()) {
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => c.display().to_string(),
-    };
-    assert_eq!(reason(&copy), format!("the copy at {shown} is gone."));
+    // Scratch homes sit outside the user's home folder, so no `~`.
+    assert!(
+        c.starts_with("/var/folders") || c.starts_with("/tmp"),
+        "{}",
+        c.display()
+    );
+    assert_eq!(
+        reason(&copy),
+        format!("the copy at {} is gone.", c.display())
+    );
 
     let _: Copy = worker.call("sync.retry", json!({ "copy": copy.id })).await;
     let again = in_sync(&worker).await;
@@ -2257,6 +2261,218 @@ async fn a_copy_whose_folder_was_deleted_pauses_until_it_is_made_again() {
     reads(&c.join("src/cart.ts"), "after\n").await;
 }
 
-fn dirs_home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap())
+/// The leftovers folder a stop or a removal names: `sync-leftovers/` in
+/// the worker's home, then the copy's folder name and when it went, as
+/// `fix-cart-20261021-184500`.
+fn leftovers_folder(worker: &Daemon, saved: &Value) -> PathBuf {
+    let folder = PathBuf::from(saved["folder"].as_str().unwrap());
+    assert_eq!(
+        folder.parent(),
+        Some(worker.home.path().join("sync-leftovers").as_path())
+    );
+    let name = folder.file_name().unwrap().to_str().unwrap();
+    let stamp = name
+        .strip_prefix("fix-cart-")
+        .unwrap_or_else(|| panic!("{name}"));
+    let shape: Vec<usize> = stamp.split('-').map(str::len).collect();
+    assert!(
+        stamp.chars().all(|c| c.is_ascii_digit() || c == '-')
+            && (shape == [8, 6] || (shape.len() == 3 && shape[..2] == [8, 6])),
+        "{name}"
+    );
+    folder
+}
+
+/// Every folder under the worker's `sync-leftovers/`.
+fn leftovers_folders(worker: &Daemon) -> Vec<PathBuf> {
+    let Ok(dir) = std::fs::read_dir(worker.home.path().join("sync-leftovers")) else {
+        return Vec::new();
+    };
+    let mut all: Vec<PathBuf> = dir.flatten().map(|e| e.path()).collect();
+    all.sort();
+    all
+}
+
+#[tokio::test]
+async fn turning_sync_off_keeps_secrets_and_files_that_stopped_syncing_but_not_build_output() {
+    let (central, worker, c) = synced().await;
+    // An untracked file that synced, then stopped when it became ignored.
+    write(&c.join("docs/draft.md"), "synced\n");
+    reads(&central.session_path().join("docs/draft.md"), "synced\n").await;
+    let exclude = PathBuf::from(git(&c, &["rev-parse", "--git-path", "info/exclude"]));
+    let exclude = if exclude.is_absolute() {
+        exclude
+    } else {
+        c.join(exclude)
+    };
+    write(&exclude, "docs/draft.md\n");
+    write(&c.join("docs/draft.md"), "kept here\n");
+    // Only on this Mac too: secrets, one a link pointing out of the copy,
+    // and build output.
+    write(&c.join(".env"), "TOKEN=1\n");
+    std::os::unix::fs::symlink("/etc/hosts", c.join("docs/id_rsa")).unwrap();
+    write(&c.join("node_modules/left-pad/index.js"), "built\n");
+    eventually("the link reaches studio-mini", || async {
+        copies(&worker).await[0].state == CopyState::InSync
+    })
+    .await;
+
+    let id = copies(&worker).await[0].id.clone();
+    let stopped: Value = worker.call("sync.stop", json!({ "copy": id })).await;
+    let folder = leftovers_folder(&worker, &stopped);
+    assert_eq!(
+        stopped["leftovers"],
+        json!([".env", "docs/draft.md", "docs/id_rsa"])
+    );
+    assert_eq!(read(&folder.join(".env")).as_deref(), Some("TOKEN=1\n"));
+    assert_eq!(
+        read(&folder.join("docs/draft.md")).as_deref(),
+        Some("kept here\n")
+    );
+    assert_eq!(
+        read(&central.session_path().join("docs/draft.md")).as_deref(),
+        Some("synced\n")
+    );
+    let link = folder.join("docs/id_rsa");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        PathBuf::from("/etc/hosts")
+    );
+    assert!(!folder.join("node_modules").exists());
+    assert!(!c.exists());
+}
+
+#[tokio::test]
+async fn a_copy_whose_files_cannot_be_saved_is_kept_and_paused() {
+    let (mut central, worker, c) = synced().await;
+    // Not synced: studio-mini is away, and the edit waits.
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("docs/notes.md"), "unsynced\n");
+    // Nowhere to save it: `sync-leftovers` is a file.
+    write(&worker.home.path().join("sync-leftovers"), "");
+
+    let id = copies(&worker).await[0].id.clone();
+    let mut app = worker.app().await;
+    let e = app
+        .request::<_, Value>("sync.stop", json!({ "copy": id }))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.starts_with("not_saved: could not save docs/notes.md before removing the copy: "),
+        "{e}"
+    );
+    assert_eq!(
+        read(&c.join("docs/notes.md")).as_deref(),
+        Some("unsynced\n")
+    );
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert!(
+        reason(&copy).starts_with("could not save docs/notes.md before removing the copy: "),
+        "{}",
+        reason(&copy)
+    );
+}
+
+#[tokio::test]
+async fn stopping_the_same_session_twice_keeps_both_leftovers() {
+    let (central, worker, c) = synced().await;
+    let mut folders = Vec::new();
+    for text in ["first\n", "second\n"] {
+        // A secret never syncs, so stopping always saves it.
+        write(&c.join(".env"), text);
+        let id = copies(&worker).await[0].id.clone();
+        let stopped: Value = worker.call("sync.stop", json!({ "copy": id })).await;
+        let folder = leftovers_folder(&worker, &stopped);
+        assert_eq!(read(&folder.join(".env")).as_deref(), Some(text));
+        folders.push(folder);
+        let _: Copy = worker
+            .call("sync.start", json!({ "session": central.session_id() }))
+            .await;
+        assert_eq!(PathBuf::from(in_sync(&worker).await.path), c);
+    }
+    assert_ne!(folders[0], folders[1]);
+    assert_eq!(read(&folders[0].join(".env")).as_deref(), Some("first\n"));
+    assert_eq!(leftovers_folders(&worker), folders);
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_be_removed_is_kept_and_paused() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_central, worker, c) = synced().await;
+    let src = c.join("src");
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let id = copies(&worker).await[0].id.clone();
+    let mut app = worker.app().await;
+    let e = app
+        .request::<_, Value>("sync.stop", json!({ "copy": id }))
+        .await
+        .unwrap_err()
+        .to_string();
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(e.starts_with("failed: could not remove the copy: "), "{e}");
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert!(
+        reason(&copy).starts_with("could not remove the copy: "),
+        "{}",
+        reason(&copy)
+    );
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("a\n"));
+}
+
+#[tokio::test]
+async fn archiving_never_waits_for_a_mac_that_does_not_answer() {
+    let (central, worker, c) = synced().await;
+    let pid = worker.child.id().to_string();
+    let signal = |sig: &str| {
+        std::process::Command::new("kill")
+            .args([sig, &pid])
+            .status()
+            .unwrap()
+    };
+    signal("-STOP");
+    let start = Instant::now();
+    let _: Value = central
+        .daemon
+        .call("session.archive", json!({ "id": central.session_id() }))
+        .await;
+    let took = start.elapsed();
+    signal("-CONT");
+    assert!(took < Duration::from_secs(3), "archiving took {took:?}");
+    eventually("the copy goes", || async {
+        copies(&worker).await.is_empty()
+    })
+    .await;
+    assert!(!c.exists(), "the copy is still there");
+}
+
+#[tokio::test]
+async fn a_copy_never_made_whose_session_was_archived_goes() {
+    let (mut central, mut worker, _c) = synced().await;
+    let first = copies(&worker).await[0].id.clone();
+    let _: Value = worker.call("sync.stop", json!({ "copy": first })).await;
+    // Kept again while studio-mini is away: the copy waits to be made.
+    central.daemon.stop();
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    worker.stop();
+    central.daemon.restart().await;
+    let _: Value = central
+        .daemon
+        .call("session.archive", json!({ "id": central.session_id() }))
+        .await;
+    worker.restart().await;
+    eventually("the copy goes", || async {
+        copies(&worker).await.is_empty()
+    })
+    .await;
 }

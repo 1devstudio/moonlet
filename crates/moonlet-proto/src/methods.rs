@@ -1503,8 +1503,7 @@ pub struct CopyChanged {
 /// Why a copy went, and what of it was saved.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CopyRemoved {
-    /// `stopped` (`sync.stop`) or `archived` (the session went away).
-    pub reason: String,
+    pub reason: CloseReason,
     #[serde(flatten)]
     pub saved: SyncStopped,
 }
@@ -1517,9 +1516,18 @@ pub struct SyncStopped {
     pub leftovers: Vec<String>,
 }
 
-/// Why the central host's session is going away: `archived`.
+/// Why a copy went: `stopped` (`sync.stop`) or `archived` (its session
+/// went away).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CloseReason {
+    Stopped,
+    Archived,
+}
+
+/// The central host's session is going away.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncClosing {
     pub copy: String,
-    pub reason: String,
+    pub reason: CloseReason,
 }
