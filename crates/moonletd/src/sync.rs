@@ -1070,7 +1070,7 @@ impl LiveCopies {
         let path = PathBuf::from(&k.path);
         if !path.exists() {
             self.pause_gone();
-            return Ok(false);
+            return Err(RpcError::new("paused", "the copy's folder is gone"));
         }
         for _ in 0..APPLY_TRIES {
             // Each round: a checkout meanwhile must not move the session.
