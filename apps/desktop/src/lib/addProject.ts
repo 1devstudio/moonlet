@@ -10,6 +10,22 @@ export interface RepoRef {
   ssh?: string;
 }
 
+/** The owner and name of an `owner/repo`. */
+export function repoParts(repo: string): { owner: string; name: string } {
+  const [owner = "", name = ""] = repo.split("/");
+  return { owner, name };
+}
+
+/** The folder Clone into names, as typed: `~/code/storefront`. */
+export function clonePath(parent: string, name: string): string {
+  return `${parent.trim().replace(/\/+$/, "")}/${name.trim()}`;
+}
+
+/** The line under Clone into. */
+export function cloneIntoHint(local: boolean, host: string): string {
+  return local ? "The parent folder is remembered for the next clone." : `A path on ${host}. No Browse… for remote hosts.`;
+}
+
 /** The repository a URL, `owner/repo` or SSH address names; null for anything else. */
 export function repoRef(input: string): RepoRef | null {
   const text = input.trim();
@@ -57,7 +73,24 @@ export function matchingRepos<T extends { repo: string }>(repos: T[], query: str
 
 /** The owners the list shows, in order of first appearance: "acme, sam-rivera". */
 export function repoOwners(repos: { repo: string }[]): string {
-  return [...new Set(repos.map((r) => r.repo.split("/")[0]))].join(", ");
+  return [...new Set(repos.map((r) => repoParts(r.repo).owner))].join(", ");
+}
+
+/** The highlighted row after ↑ or ↓ in a list of `count`, wrapping around. */
+export function moveHighlight(current: number, key: "ArrowUp" | "ArrowDown", count: number): number {
+  return (current + (key === "ArrowDown" ? 1 : -1) + count) % count;
+}
+
+/** gh on a host, or "too-old" when its daemon predates X59. */
+export type GhOnHost = GhStatus | "too-old";
+
+/** What the Clone from GitHub tab shows and allows. */
+export function cloneTabState(s: { text: string; gh: GhOnHost | null; found: boolean; target: CloneTarget | null; cloning: boolean; busy: boolean }): { listing: boolean; canClone: boolean } {
+  const signedIn = !!s.gh && s.gh !== "too-old" && !!s.gh.login;
+  return {
+    listing: !repoRef(s.text) && signedIn && !s.cloning,
+    canClone: s.found && !!s.target && !s.target.exists && !s.busy && !s.cloning,
+  };
 }
 
 /** The parent folder Clone into starts with on `host`: the last one used there, else `~/moonlet`. */
@@ -129,23 +162,25 @@ export function clonePercent(steps: CloneSteps): number {
 export function cantSee(host: string, repo: string, gh: GhStatus): { title: string; body: string; signIn: boolean } {
   const title = `${host} can't see ${repo}`;
   if (gh.login) return { title, body: `It doesn't exist, or ${gh.login} has no access to it.`, signIn: false };
+  if (!gh.installed) return { title, body: `gh isn't installed on ${host}, so only public repositories can be cloned there. Install gh and sign in once on that host, then try again.`, signIn: true };
   return { title, body: `gh isn't signed in on ${host}, so only public repositories can be cloned there. Sign in once on that host, then try again.`, signIn: true };
 }
 
 /** The footer's gh line for the host. */
-export function ghLine(host: string, gh: GhStatus): { text: string; ok: boolean } {
+export function ghLine(host: string, gh: GhOnHost): { text: string; ok: boolean } {
+  if (gh === "too-old") return { text: `${host}'s moonletd is too old to clone from GitHub. Update moonlet there.`, ok: false };
   if (!gh.installed) return { text: `gh is not installed on ${host}`, ok: false };
   return gh.login ? { text: `gh signed in on ${host}`, ok: true } : { text: `gh not signed in on ${host}`, ok: false };
 }
 
 /** The amber box when Clone into names a folder that exists; null when it is free. */
-export function targetTaken(target: CloneTarget, repo: string, shownPath: string): { title: string; body: string; addExisting: boolean; useName: string } | null {
+export function targetTaken(target: CloneTarget, repo: string, shownPath: string): { path: string; body: string; addExisting: boolean; useName: string } | null {
   if (!target.exists) return null;
-  const title = `${shownPath} already exists`;
+  const path = shownPath;
   const useName = target.free_name;
-  if (!target.same_repo) return { title, body: `It isn't a clone of ${repo}. Pick another name to clone fresh.`, addExisting: false, useName };
+  if (!target.same_repo) return { path, body: `It isn't a clone of ${repo}. Pick another name to clone fresh.`, addExisting: false, useName };
   const on = target.branch ? `, on ${target.branch}` : "";
-  return { title, body: `It's already a clone of ${repo}${on}. Add that folder as the project, or pick another name to clone fresh.`, addExisting: true, useName };
+  return { path, body: `It's already a clone of ${repo}${on}. Add that folder as the project, or pick another name to clone fresh.`, addExisting: true, useName };
 }
 
 /** A clone the app knows of, keyed `<host>/<id>` in `CloneRuns`. */

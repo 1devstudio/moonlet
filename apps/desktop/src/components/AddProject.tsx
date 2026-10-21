@@ -3,24 +3,30 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowRight, Check, Copy, CornerDownLeft, Folder, FolderInput, GitBranch, Globe, Loader2, Lock, RotateCw, Search, ShieldAlert } from "lucide-react";
-import { rpc } from "../lib/daemon";
-import { M, type CloneJob, type CloneTarget, type GhStatus, type Project, type RepoInfo, type RepoSummary } from "../lib/protocol";
+import { DaemonError, rpc } from "../lib/daemon";
+import { M, type CloneTarget, type GhStatus, type Project, type RepoInfo, type RepoSummary } from "../lib/protocol";
 import { errorToast, toast, useStore } from "../lib/store";
 import { hostSections } from "../lib/sidebar";
 import {
   cantSee,
+  cloneIntoHint,
   cloneKey,
   cloneParent,
+  clonePath,
   clonePercent,
   cloneStepRows,
+  cloneTabState,
   diskSize,
   ghLine,
   matchingRepos,
+  moveHighlight,
   pushedAgo,
   repoOwners,
+  repoParts,
   repoRef,
   targetTaken,
   type CloneRun,
+  type GhOnHost,
 } from "../lib/addProject";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "./ui";
 import { radioProps } from "./settings/controls";
@@ -28,7 +34,10 @@ import { radioProps } from "./settings/controls";
 const close = () => useStore.setState({ dialog: null });
 
 type Tab = "folder" | "github";
-type Lookup = { repo: string; state: "looking" } | { repo: string; state: "found"; info: RepoInfo } | { repo: string; state: "missing" };
+type Lookup = { repo: string; state: "looking" } | { repo: string; state: "found"; info: RepoInfo } | { repo: string; state: "missing"; error: string };
+
+/** An id for a new clone, chosen here so its events are known before the daemon answers. */
+const newCloneId = () => `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const monoInputCls = cx(inputCls, "font-mono ui-text-12.5");
 
@@ -48,11 +57,13 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
   const [parent, setParent] = useState(() => cloneParent(presetHost ?? "local"));
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
-  const [gh, setGh] = useState<GhStatus | null>(null);
-  const [repos, setRepos] = useState<RepoSummary[] | null>(null);
+  // gh and the user's repositories, fetched once per dialog and host.
+  const [ghByHost, setGhByHost] = useState<Record<string, GhOnHost>>({});
+  const [reposByHost, setReposByHost] = useState<Record<string, RepoSummary[]>>({});
   const [lookup, setLookup] = useState<Lookup | null>(null);
   const [retry, setRetry] = useState(0);
   const [target, setTarget] = useState<CloneTarget | null>(null);
+  const [targetError, setTargetError] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(0);
 
   const connected = Object.values(hosts).filter((h) => h.status === "connected");
@@ -62,52 +73,52 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
   const folderRepo = repoRef(path);
   const cloning = !!run && !run.error;
   const shownTab: Tab = run ? "github" : tab;
+  const gh = ghByHost[host] ?? null;
+  const repos = reposByHost[host] ?? null;
+  const ghReady = !!gh && gh !== "too-old";
 
   useEffect(() => {
-    if (shownTab !== "github") return;
-    let live = true;
-    setGh(null);
-    setRepos(null);
+    if (shownTab !== "github" || ghByHost[host]) return;
+    const remember = (status: GhOnHost) => setGhByHost((m) => ({ ...m, [host]: status }));
     void rpc<GhStatus>(host, M.repoGhStatus)
       .then((status) => {
-        if (!live) return;
-        setGh(status);
-        if (status.login) void rpc<RepoSummary[]>(host, M.repoList).then((list) => live && setRepos(list), () => live && setRepos([]));
+        remember(status);
+        if (status.login) void rpc<RepoSummary[]>(host, M.repoList).then((list) => setReposByHost((m) => ({ ...m, [host]: list })), errorToast);
       })
-      .catch(() => live && setGh({ installed: false, login: null }));
-    return () => {
-      live = false;
-    };
-  }, [host, shownTab]);
+      .catch((e) => (e instanceof DaemonError && e.code === "unknown_method" ? remember("too-old") : errorToast(e)));
+  }, [host, shownTab, ghByHost]);
 
   // Look the repository up after 300 ms without typing.
   useEffect(() => {
-    if (shownTab !== "github" || !ref || cloning) return setLookup(null);
+    if (shownTab !== "github" || !ref || cloning || gh === "too-old") return setLookup(null);
     const repo = ref.repo;
     setLookup({ repo, state: "looking" });
-    if (!nameEdited) setName(repo.split("/")[1]);
+    if (!nameEdited) setName(repoParts(repo).name);
+    // Wait for gh, so a failure can say why.
+    if (!ghReady) return;
     let live = true;
     const timer = setTimeout(() => {
       rpc<RepoInfo>(host, M.repoLookup, { repo, ssh: ref.ssh }).then(
         (info) => live && setLookup({ repo, state: "found", info }),
-        () => live && setLookup({ repo, state: "missing" }),
+        (e) => live && setLookup({ repo, state: "missing", error: e instanceof Error ? e.message : String(e) }),
       );
     }, 300);
     return () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [host, shownTab, ref?.repo, ref?.ssh, retry, cloning]);
+  }, [host, shownTab, ref?.repo, ref?.ssh, retry, cloning, ghReady, gh === "too-old"]);
 
   const found = lookup?.state === "found" ? lookup.info : null;
   useEffect(() => {
     setTarget(null);
+    setTargetError(null);
     if (!found || !parent.trim() || !name.trim() || cloning) return;
     let live = true;
     const timer = setTimeout(() => {
       rpc<CloneTarget>(host, M.repoCloneTarget, { repo: found.repo, parent, name }).then(
         (t) => live && setTarget(t),
-        () => live && setTarget(null),
+        (e) => live && setTargetError(e instanceof Error ? e.message : String(e)),
       );
     }, 300);
     return () => {
@@ -136,28 +147,42 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
     }
   };
 
-  /** Forgets a failed clone the dialog shows, once the user edits the form. */
-  const clearFailure = () => {
-    if (!watching || !run?.error) return;
+  /** Forgets the clone the dialog shows; `keepDialog` stays on the dialog without it. */
+  const forgetRun = (keepDialog: boolean) => {
+    if (!watching) return;
     useStore.setState((s) => {
       const { [watching]: _, ...rest } = s.clones;
-      return { clones: rest, dialog: { kind: "add-project", host: presetHost, section: presetSection } };
+      return { clones: rest, dialog: keepDialog ? { kind: "add-project", host, section: secId || undefined } : s.dialog };
     });
+  };
+  /** Forgets a failed clone the dialog shows, once the user edits the form. */
+  const clearFailure = () => {
+    if (run?.error) forgetRun(true);
+  };
+  const closeDialog = () => {
+    if (run?.error) forgetRun(false);
+    close();
   };
 
   const startClone = async () => {
-    if (!found || !target || target.exists) return;
+    if (!found || !canClone) return;
     clearFailure();
     setBusy(true);
+    // The run is known before the daemon answers, so no event is missed.
+    const id = newCloneId();
+    const key = cloneKey(host, id);
+    const workspace = choices.find((x) => x.sec.id === secId)?.ws.id;
+    useStore.setState((s) => ({
+      clones: { ...s.clones, [key]: { host, job: { id, repo: found.repo, path: clonePath(parent, name) }, steps: {}, parent, workspace } },
+      dialog: { kind: "add-project", host, section: secId || undefined, clone: key },
+    }));
     try {
-      const job = await rpc<CloneJob>(host, M.repoClone, { repo: found.repo, ssh: ref?.ssh, parent, name, section_id: secId || undefined });
-      const key = cloneKey(host, job.id);
-      const workspace = choices.find((x) => x.sec.id === secId)?.ws.id;
-      useStore.setState((s) => ({
-        clones: { ...s.clones, [key]: { ...(s.clones[key] ?? { host, job, steps: {} }), parent, workspace } },
-        dialog: { kind: "add-project", host, section: secId || undefined, clone: key },
-      }));
+      await rpc(host, M.repoClone, { id, repo: found.repo, ssh: ref?.ssh, parent, name, section_id: secId || undefined });
     } catch (e) {
+      useStore.setState((s) => {
+        const { [key]: _, ...rest } = s.clones;
+        return { clones: rest, dialog: { kind: "add-project", host, section: secId || undefined } };
+      });
       errorToast(e);
     } finally {
       setBusy(false);
@@ -168,7 +193,8 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
     if (run) void rpc(run.host, M.repoCloneCancel, { id: run.job.id }).catch(errorToast);
   };
 
-  const listing = shownTab === "github" && !ref && !!gh?.login && !cloning;
+  const { listing, canClone: ready } = cloneTabState({ text: repoText, gh, found: !!found, target, cloning, busy });
+  const canClone = shownTab === "github" && ready;
   const shownRepos = listing ? matchingRepos(repos ?? [], repoText) : [];
   const pickable = shownRepos.filter((r) => !r.added);
   const pick = (repo: string) => {
@@ -176,14 +202,12 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
     setRepoText(repo);
     setNameEdited(false);
   };
-  const shownPath = `${parent.trim().replace(/\/+$/, "")}/${name.trim()}`;
-  const taken = found && target ? targetTaken(target, found.repo, shownPath) : null;
-  const canClone = !!found && !!target && !target.exists && !busy;
+  const taken = found && target ? targetTaken(target, found.repo, clonePath(parent, name)) : null;
 
   const footer =
     shownTab === "folder" ? (
       <>
-        <Button variant="ghost" onClick={close}>
+        <Button variant="ghost" onClick={closeDialog}>
           Cancel
         </Button>
         <Button variant="primary" disabled={!path || busy || !!folderRepo} onClick={() => void addFolder(path)}>
@@ -203,7 +227,7 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
     ) : (
       <>
         {gh && <GhLine {...ghLine(hostLabel, gh)} />}
-        <Button variant="ghost" onClick={close}>
+        <Button variant="ghost" onClick={closeDialog}>
           Cancel
         </Button>
         <Button variant="primary" disabled={!canClone} onClick={() => void startClone()}>
@@ -213,7 +237,7 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
     );
 
   return (
-    <Dialog title="Add project" width={560} onClose={close} footer={footer}>
+    <Dialog title="Add project" width={560} onClose={closeDialog} footer={footer}>
       <p className="mb-3 ui-text-12.5 text-muted">A project is a git repository folder. Each session you start in it gets its own worktree and branch.</p>
       <SourceSwitch
         value={shownTab}
@@ -291,8 +315,8 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
                 if (listing && pickable.length > 0) {
                   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                     e.preventDefault();
-                    const step = e.key === "ArrowDown" ? 1 : -1;
-                    setHighlight((h) => (h + step + pickable.length) % pickable.length);
+                    const key = e.key;
+                    setHighlight((h) => moveHighlight(h, key, pickable.length));
                   } else if (e.key === "Enter") {
                     e.preventDefault();
                     pick(pickable[Math.min(highlight, pickable.length - 1)].repo);
@@ -301,11 +325,21 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
               }}
             />
             {listing && repos && shownRepos.length > 0 && (
-              <RepoList repos={shownRepos} login={gh?.login ?? null} highlighted={pickable[Math.min(highlight, pickable.length - 1)]?.repo} onPick={pick} />
+              <RepoList repos={shownRepos} login={gh && gh !== "too-old" ? gh.login : null} highlighted={pickable[Math.min(highlight, pickable.length - 1)]?.repo} onPick={pick} />
             )}
-            {!ref && !cloning && <p className="-mt-1 mb-3 ui-text-11 text-faint">{listing ? "Not listed? Type " : "Type "}<span className="font-mono">owner/repo</span> or paste any URL you can access.</p>}
-            {ref && lookup?.state === "looking" && <p className="-mt-1 mb-3 ui-text-12 text-muted">Looking up {lookup.repo}…</p>}
-            {ref && lookup?.state === "missing" && gh && <CantSee {...cantSee(hostLabel, lookup.repo, gh)} onRetry={() => setRetry((n) => n + 1)} />}
+            {listing && (
+              <p className="-mt-1 mb-3 ui-text-11 text-faint">
+                Not listed? Type <span className="font-mono">owner/repo</span> or paste any URL you can access.
+              </p>
+            )}
+            {ref && lookup?.state === "looking" && (
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-panel-2 px-3 py-2.5 ui-text-12.5 text-muted">
+                <Loader2 size={13} className="animate-spin" /> Looking up {lookup.repo}…
+              </div>
+            )}
+            {ref && lookup?.state === "missing" && gh && gh !== "too-old" && (
+              <CantSee {...cantSee(hostLabel, lookup.repo, gh)} detail={lookup.error} onRetry={() => setRetry((n) => n + 1)} />
+            )}
             {found && !cloning && <RepoCard info={found} />}
             {(found || cloning) && (
               <CloneInto
@@ -326,6 +360,11 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
                 }}
                 onEnter={() => canClone && void startClone()}
               >
+                {targetError && (
+                  <span role="alert" className="ui-text-11.5 text-error">
+                    {targetError}
+                  </span>
+                )}
                 {taken && (
                   <TakenBox
                     {...taken}
@@ -426,7 +465,7 @@ function RepositoryField({
 }
 
 function OwnerTile({ repo, login, size }: { repo: string; login: string | null; size: number }) {
-  const owner = repo.split("/")[0];
+  const { owner } = repoParts(repo);
   const mine = !!login && owner.toLowerCase() === login.toLowerCase();
   return (
     <span
@@ -448,7 +487,7 @@ function RepoList({ repos, login, highlighted, onPick }: { repos: RepoSummary[];
         <span>from gh · {repoOwners(repos)}</span>
       </div>
       {repos.map((r) => {
-        const [owner, name] = r.repo.split("/");
+        const { owner, name } = repoParts(r.repo);
         const on = r.repo === highlighted;
         return (
           <button
@@ -515,13 +554,14 @@ function RepoCard({ info }: { info: RepoInfo }) {
   );
 }
 
-function CantSee({ title, body, signIn, onRetry }: { title: string; body: string; signIn: boolean; onRetry: () => void }) {
+function CantSee({ title, body, signIn, detail, onRetry }: { title: string; body: string; signIn: boolean; detail: string; onRetry: () => void }) {
   return (
     <div role="alert" className="-mt-1 mb-3 flex flex-col gap-2 rounded-lg border border-[#5a2a2a] bg-[#2a1616] px-3 py-2.5">
       <span className="flex items-center gap-2 ui-text-12.5 font-medium text-error">
         <ShieldAlert size={14} /> {title}
       </span>
       <span className="ui-text-12 leading-normal text-fg">{body}</span>
+      <span className="font-mono ui-text-11 text-muted">{detail}</span>
       <div className="flex items-center gap-1.5">
         {signIn && (
           <>
@@ -591,16 +631,16 @@ function CloneInto({
         )}
       </div>
       {children}
-      {!cloning && !children && <span className="ui-text-11 text-faint">{local ? "The parent folder is remembered for the next clone." : `A path on ${hostLabel}. No Browse… for remote hosts.`}</span>}
+      {!cloning && !children && <span className="ui-text-11 text-faint">{cloneIntoHint(local, hostLabel)}</span>}
     </div>
   );
 }
 
-function TakenBox({ title, body, addExisting, useName, onAddExisting, onUseName }: { title: string; body: string; addExisting: boolean; useName: string; onAddExisting: () => void; onUseName: () => void }) {
+function TakenBox({ path, body, addExisting, useName, onAddExisting, onUseName }: { path: string; body: string; addExisting: boolean; useName: string; onAddExisting: () => void; onUseName: () => void }) {
   return (
     <div role="alert" className="flex flex-col gap-2 rounded-lg border border-[#4a3b17] bg-[#2a2210] px-3 py-2.5">
       <span className="flex items-center gap-2 ui-text-12.5 font-medium text-blocked">
-        <ShieldAlert size={14} /> <span className="font-mono">{title.replace(/ already exists$/, "")}</span> already exists
+        <ShieldAlert size={14} /> <span className="font-mono">{path}</span> already exists
       </span>
       <span className="ui-text-12 leading-normal text-fg">{body}</span>
       <div className="flex gap-1.5">
@@ -628,7 +668,7 @@ function GhLine({ text, ok }: { text: string; ok: boolean }) {
 
 function CloneProgressCard({ run }: { run: CloneRun }) {
   const percent = clonePercent(run.steps);
-  const shownPath = run.parent ? `${run.parent.replace(/\/+$/, "")}/${run.job.path.split("/").pop()}` : run.job.path;
+  const shownPath = run.job.path;
   return (
     <div role="status" aria-live="polite" className="flex flex-col gap-2 rounded-lg border border-border bg-panel-2 p-3">
       <div className="flex items-center gap-2.5">

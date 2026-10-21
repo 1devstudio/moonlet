@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { beforeEach } from "vitest";
 import type { CloneDone, CloneProgress } from "./protocol";
-import { afterCloneDone, runsAfterProgress, afterCloneProgress, cantSee, ghLine, targetTaken, clonePercent, cloneStepRows, cloneParent, diskSize, matchingRepos, pushedAgo, rememberCloneParent, repoOwners, repoRef } from "./addProject";
+import { afterCloneDone, runsAfterProgress, afterCloneProgress, cantSee, ghLine, targetTaken, repoParts, clonePath, cloneTabState, cloneIntoHint, moveHighlight, clonePercent, cloneStepRows, cloneParent, diskSize, matchingRepos, pushedAgo, rememberCloneParent, repoOwners, repoRef } from "./addProject";
 
 describe("repoRef", () => {
   it("reads GitHub URLs and owner/repo as the repository", () => {
@@ -139,26 +139,32 @@ describe("dialog messages", () => {
       body: "gh isn't signed in on devbox, so only public repositories can be cloned there. Sign in once on that host, then try again.",
       signIn: true,
     });
-    expect(cantSee("devbox", "acme/infra-terraform", { installed: false, login: null }).signIn).toBe(true);
+    expect(cantSee("devbox", "acme/infra-terraform", { installed: false, login: null })).toEqual({
+      title: "devbox can't see acme/infra-terraform",
+      body: "gh isn't installed on devbox, so only public repositories can be cloned there. Install gh and sign in once on that host, then try again.",
+      signIn: true,
+    });
   });
 
   it("tells whether gh is signed in, signed out or missing on the host", () => {
     expect(ghLine("This Mac", signedIn)).toEqual({ text: "gh signed in on This Mac", ok: true });
     expect(ghLine("devbox", signedOut)).toEqual({ text: "gh not signed in on devbox", ok: false });
     expect(ghLine("devbox", { installed: false, login: null })).toEqual({ text: "gh is not installed on devbox", ok: false });
+    // A daemon from before X59 does not know repo.gh_status.
+    expect(ghLine("devbox", "too-old")).toEqual({ text: "devbox's moonletd is too old to clone from GitHub. Update moonlet there.", ok: false });
   });
 
   it("offers the existing clone or a free name when the folder is taken", () => {
     const free = { path: "/Users/alex/code/storefront", exists: false, same_repo: false, branch: null, free_name: "storefront" };
     expect(targetTaken(free, "acme/storefront", "~/code/storefront")).toBeNull();
     expect(targetTaken({ ...free, exists: true, same_repo: true, branch: "main", free_name: "storefront-2" }, "acme/storefront", "~/code/storefront")).toEqual({
-      title: "~/code/storefront already exists",
+      path: "~/code/storefront",
       body: "It's already a clone of acme/storefront, on main. Add that folder as the project, or pick another name to clone fresh.",
       addExisting: true,
       useName: "storefront-2",
     });
     expect(targetTaken({ ...free, exists: true, free_name: "storefront-3" }, "acme/storefront", "~/code/storefront")).toEqual({
-      title: "~/code/storefront already exists",
+      path: "~/code/storefront",
       body: "It isn't a clone of acme/storefront. Pick another name to clone fresh.",
       addExisting: false,
       useName: "storefront-3",
@@ -205,5 +211,52 @@ describe("clone runs", () => {
 
   it("forgets a cancelled clone quietly", () => {
     expect(afterCloneDone(started, "local", done({ cancelled: true }), "local/clone-1")).toEqual({ runs: {} });
+  });
+});
+
+describe("repository and folder strings", () => {
+  it("splits owner/repo in one place", () => {
+    expect(repoParts("acme/storefront")).toEqual({ owner: "acme", name: "storefront" });
+  });
+
+  it("joins Clone into's parent and name as typed", () => {
+    expect(clonePath("~/code", "storefront")).toBe("~/code/storefront");
+    expect(clonePath(" ~/code/ ", " storefront ")).toBe("~/code/storefront");
+  });
+
+  it("explains Clone into for This Mac and for a remote host", () => {
+    expect(cloneIntoHint(true, "This Mac")).toBe("The parent folder is remembered for the next clone.");
+    expect(cloneIntoHint(false, "devbox")).toBe("A path on devbox. No Browse… for remote hosts.");
+  });
+});
+
+describe("cloneTabState", () => {
+  const signedIn = { installed: true, login: "sam-rivera" };
+  const free = { path: "/Users/alex/moonlet/storefront", exists: false, same_repo: false, branch: null, free_name: "storefront" };
+  const base = { text: "", gh: signedIn, found: false, target: null, cloning: false, busy: false };
+
+  it("lists the user's repositories for text that is not a repository, only with gh signed in", () => {
+    expect(cloneTabState({ ...base, text: "store" }).listing).toBe(true);
+    expect(cloneTabState({ ...base, text: "" }).listing).toBe(true);
+    expect(cloneTabState({ ...base, text: "acme/storefront" }).listing).toBe(false);
+    expect(cloneTabState({ ...base, text: "store", gh: { installed: true, login: null } }).listing).toBe(false);
+    expect(cloneTabState({ ...base, text: "store", gh: null }).listing).toBe(false);
+    expect(cloneTabState({ ...base, text: "store", cloning: true }).listing).toBe(false);
+  });
+
+  it("can clone a found repository into a free folder, once", () => {
+    expect(cloneTabState({ ...base, text: "acme/storefront", found: true, target: free }).canClone).toBe(true);
+    expect(cloneTabState({ ...base, text: "acme/storefront", found: true, target: { ...free, exists: true } }).canClone).toBe(false);
+    expect(cloneTabState({ ...base, text: "acme/storefront", found: true, target: null }).canClone).toBe(false);
+    expect(cloneTabState({ ...base, text: "acme/storefront", found: false, target: free }).canClone).toBe(false);
+    expect(cloneTabState({ ...base, text: "acme/storefront", found: true, target: free, busy: true }).canClone).toBe(false);
+  });
+});
+
+describe("moveHighlight", () => {
+  it("moves with the arrow keys and wraps around", () => {
+    expect(moveHighlight(0, "ArrowDown", 3)).toBe(1);
+    expect(moveHighlight(2, "ArrowDown", 3)).toBe(0);
+    expect(moveHighlight(0, "ArrowUp", 3)).toBe(2);
   });
 });
