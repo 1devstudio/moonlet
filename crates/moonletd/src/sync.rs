@@ -450,7 +450,13 @@ impl LiveCopies {
             );
             git_sync::add_worktree(&repo, &path, &opened.branch, &fetched.head)
                 .await
-                .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+                .map_err(|e| match e {
+                    git_sync::WorktreeError::Ahead => Stop::Paused(format!(
+                        "{} on this Mac has commits {}'s doesn't.",
+                        opened.branch, k.host
+                    )),
+                    e => Stop::Paused(e.to_string()),
+                })?;
             self.update_kept(&k.id, |kept| kept.path = path.display().to_string());
             path
         };

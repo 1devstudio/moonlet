@@ -606,6 +606,71 @@ async fn a_branch_checked_out_on_this_mac_pauses_the_copy() {
     );
 }
 
+/// This Mac's own clone of `shop`, with the session's branch,
+/// `moonlet/fix-cart`, made by `setup` and not checked out.
+async fn own_clone(central: &Central, worker: &Daemon, setup: &[&[&str]]) -> PathBuf {
+    let repo = worker.home.path().join("src/shop");
+    std::fs::create_dir_all(repo.parent().unwrap()).unwrap();
+    git(
+        repo.parent().unwrap(),
+        &["clone", "-q", central.origin.to_str().unwrap(), "shop"],
+    );
+    git(&repo, &["remote", "set-url", "origin", ORIGIN_URL]);
+    for args in setup {
+        git(&repo, args);
+    }
+    let _: Value = worker.call("project.add", json!({ "path": repo })).await;
+    repo
+}
+
+#[tokio::test]
+async fn a_branch_on_this_mac_with_commits_of_its_own_pauses_the_copy_and_stays() {
+    let central = central().await;
+    let worker = worker_with(None).await;
+    let s = central.session_path();
+    write(&s.join("src/cart.ts"), "b\n");
+    git(&s, &["commit", "-qam", "cart"]);
+    let repo = own_clone(
+        &central,
+        &worker,
+        &[
+            &["checkout", "-q", "-b", "moonlet/fix-cart"],
+            &["commit", "-q", "--allow-empty", "-m", "mine"],
+            &["checkout", "-q", "main"],
+        ],
+    )
+    .await;
+    let mine = git(&repo, &["rev-parse", "moonlet/fix-cart"]);
+    link(&central, &worker).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&copy),
+        "moonlet/fix-cart on this Mac has commits studio-mini's doesn't."
+    );
+    assert_eq!(git(&repo, &["rev-parse", "moonlet/fix-cart"]), mine);
+}
+
+#[tokio::test]
+async fn a_branch_on_this_mac_behind_the_sessions_moves_up_to_it() {
+    let central = central().await;
+    let worker = worker_with(None).await;
+    let s = central.session_path();
+    write(&s.join("src/cart.ts"), "b\n");
+    git(&s, &["commit", "-qam", "cart"]);
+    let repo = own_clone(&central, &worker, &[&["branch", "moonlet/fix-cart", "main"]]).await;
+    link(&central, &worker).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let copy = in_sync(&worker).await;
+    let head = git(&s, &["rev-parse", "HEAD"]);
+    assert_eq!(git(&PathBuf::from(&copy.path), &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&repo, &["rev-parse", "moonlet/fix-cart"]), head);
+}
+
 fn mktree(repo: &Path, listing: &str) -> String {
     use std::io::Write;
     let mut child = Command::new("git")

@@ -559,10 +559,12 @@ pub fn unsafe_path(files: &Files) -> Option<String> {
 /// `git~1` (`gitmod~1`).
 fn reads_as(part: &str, dotname: &str) -> bool {
     // The code points HFS+ ignores in names, as git's `is_hfs_dot_generic`.
-    let ignored = |c: &char| {
-        matches!(*c as u32, 0x200c..=0x200f | 0x202a..=0x202e | 0x206a..=0x206f | 0xfeff)
-    };
-    let name: String = part.chars().filter(|c| !ignored(c)).collect::<String>().to_lowercase();
+    let ignored = |c: &char| matches!(*c as u32, 0x200c..=0x200f | 0x202a..=0x202e | 0x206a..=0x206f | 0xfeff);
+    let name: String = part
+        .chars()
+        .filter(|c| !ignored(c))
+        .collect::<String>()
+        .to_lowercase();
     let name = name.trim_end_matches(['.', ' ']);
     let short = match dotname {
         ".git" => "git~1",
@@ -751,7 +753,10 @@ pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<(), UnpackError> {
     } else if out.stderr.contains("fsck error") {
         Err(UnpackError::Refused(why))
     } else {
-        Err(UnpackError::Git(anyhow::anyhow!("git index-pack: {}", out.stderr)))
+        Err(UnpackError::Git(anyhow::anyhow!(
+            "git index-pack: {}",
+            out.stderr
+        )))
     }
 }
 
@@ -880,22 +885,125 @@ pub async fn checked_out(repo: &Path, branch: &str) -> Option<PathBuf> {
 }
 
 /// Adds a worktree of `repo` at `dir` on `branch`, set to `head` first.
-pub async fn add_worktree(repo: &Path, dir: &Path, branch: &str, head: &str) -> Result<()> {
-    if branch.starts_with('-') {
-        bail!("invalid branch name: {branch}");
+/// Why [`add_worktree`] made nothing.
+#[derive(Debug)]
+pub enum WorktreeError {
+    /// The branch name or commit id is not one git takes as it is.
+    Invalid(String),
+    /// The branch exists here with commits the given one lacks.
+    Ahead,
+    Git(anyhow::Error),
+}
+
+impl std::fmt::Display for WorktreeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorktreeError::Invalid(why) => f.write_str(why),
+            WorktreeError::Ahead => f.write_str("the branch has commits of its own"),
+            WorktreeError::Git(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+impl From<anyhow::Error> for WorktreeError {
+    fn from(e: anyhow::Error) -> Self {
+        WorktreeError::Git(e)
+    }
+}
+
+impl From<std::io::Error> for WorktreeError {
+    fn from(e: std::io::Error) -> Self {
+        WorktreeError::Git(e.into())
+    }
+}
+
+/// Makes worktree `dir` of `repo` on `branch` at commit `head`, both from
+/// the central host. A branch already here is used when it is at `head`,
+/// moved up to it when behind, and never moved back: with commits of its
+/// own it is left alone and nothing is made.
+pub async fn add_worktree(
+    repo: &Path,
+    dir: &Path,
+    branch: &str,
+    head: &str,
+) -> Result<(), WorktreeError> {
+    let valid_name = !branch.starts_with('-')
+        && run_raw_env(
+            "git",
+            repo,
+            &["check-ref-format", "--branch", branch],
+            &[],
+            None,
+            Duration::from_secs(30),
+        )
+        .await
+        .is_ok_and(|o| o.status == 0);
+    if !valid_name {
+        return Err(WorktreeError::Invalid(format!(
+            "invalid branch name: {branch}"
+        )));
+    }
+    if !matches!(head.len(), 40 | 64) || !head.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(WorktreeError::Invalid(format!("not a commit id: {head}")));
+    }
+    let r = format!("refs/heads/{branch}");
+    let here = git_env(
+        repo,
+        &[],
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            "--end-of-options",
+            &format!("{r}^{{commit}}"),
+        ],
+        None,
+    )
+    .await
+    .ok()
+    .map(|o| String::from_utf8_lossy(&o).trim().to_string());
+    match here {
+        // Made only if still missing.
+        None => {
+            git_env(repo, &[], &["update-ref", &r, head, ""], None).await?;
+        }
+        Some(here) if here == head => {}
+        Some(here) => {
+            let behind = run_raw_env(
+                "git",
+                repo,
+                &[
+                    "merge-base",
+                    "--is-ancestor",
+                    "--end-of-options",
+                    &here,
+                    head,
+                ],
+                &[],
+                None,
+                Duration::from_secs(60),
+            )
+            .await?
+            .status
+                == 0;
+            if !behind {
+                return Err(WorktreeError::Ahead);
+            }
+            // Moved only from where it was seen.
+            git_env(repo, &[], &["update-ref", &r, head, &here], None).await?;
+        }
     }
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let dir_s = dir.to_string_lossy().to_string();
     git_env(
         repo,
         &[],
-        &["branch", "-f", "--no-track", branch, head],
+        &["worktree", "add", "-q", "--end-of-options", &dir_s, branch],
         None,
     )
     .await?;
-    let dir_s = dir.to_string_lossy().to_string();
-    git_env(repo, &[], &["worktree", "add", "-q", &dir_s, branch], None).await?;
     Ok(())
 }
 
@@ -1729,6 +1837,77 @@ mod tests {
             Some(std::fs::canonicalize(&w).unwrap())
         );
         assert_eq!(checked_out(p, "nowhere").await, None);
+    }
+
+    #[tokio::test]
+    async fn a_worktree_needs_a_branch_name_git_accepts_and_a_full_commit_id() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let head = head(p).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+        for (branch, commit) in [
+            ("-f", head.as_str()),
+            ("fix..cart", head.as_str()),
+            ("fix-cart", "HEAD"),
+            ("fix-cart", &head[..12]),
+            ("fix-cart", "--orphan"),
+        ] {
+            let e = add_worktree(p, &other.path().join("w"), branch, commit)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(e, WorktreeError::Invalid(_)),
+                "{branch} {commit}: {e:?}"
+            );
+        }
+        assert!(!other.path().join("w").exists());
+        assert!(
+            git(p, &["rev-parse", "--verify", "-q", "refs/heads/fix-cart"])
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_branch_already_here_moves_only_forward() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let base = head(p).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "theirs"])
+            .await
+            .unwrap();
+        let theirs = head(p).await.unwrap();
+        git(p, &["reset", "-q", "--soft", &base]).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+
+        // Behind: it moves up to their commit.
+        git(p, &["branch", "behind", &base]).await.unwrap();
+        add_worktree(p, &other.path().join("behind"), "behind", &theirs)
+            .await
+            .unwrap();
+        assert_eq!(rev(p, "behind").await, theirs);
+
+        // Its own commits: left alone.
+        git(p, &["branch", "mine", &base]).await.unwrap();
+        git(p, &["checkout", "-q", "mine"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "mine"])
+            .await
+            .unwrap();
+        let mine = head(p).await.unwrap();
+        git(p, &["checkout", "-q", "main"]).await.unwrap();
+        let e = add_worktree(p, &other.path().join("mine"), "mine", &theirs)
+            .await
+            .unwrap_err();
+        assert!(matches!(e, WorktreeError::Ahead), "{e:?}");
+        assert_eq!(rev(p, "mine").await, mine);
+        assert!(!other.path().join("mine").exists());
+    }
+
+    async fn rev(p: &Path, name: &str) -> String {
+        String::from_utf8(git(p, &["rev-parse", name]).await.unwrap())
+            .unwrap()
+            .trim()
+            .to_string()
     }
 
     #[tokio::test]
