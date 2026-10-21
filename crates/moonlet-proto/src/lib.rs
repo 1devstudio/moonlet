@@ -69,27 +69,98 @@ pub fn pack_frames(transfer: u32, data: &[u8]) -> Vec<Frame> {
         .collect()
 }
 
+/// How much a connection's packs may hold, so a peer cannot fill the
+/// memory of the side it sends to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackLimits {
+    /// One pack.
+    pub max_pack: usize,
+    /// Every pack waiting on the connection, whole or in part, together.
+    pub max_buffered: usize,
+    /// Transfers waiting at once, whole or in part.
+    pub max_transfers: usize,
+    /// How long a whole pack waits for the request that takes it.
+    pub keep_done: std::time::Duration,
+}
+
+/// The largest pack a connection accepts.
+pub const MAX_PACK_LEN: usize = 1024 * 1024 * 1024;
+
+impl Default for PackLimits {
+    fn default() -> Self {
+        Self {
+            max_pack: MAX_PACK_LEN,
+            max_buffered: MAX_PACK_LEN,
+            max_transfers: 16,
+            keep_done: std::time::Duration::from_secs(60),
+        }
+    }
+}
+
+/// A pack chunk over one of the [`PackLimits`]. The connection that sent
+/// it is closed.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum PackError {
+    #[error("pack {0} is over {1} bytes")]
+    TooLarge(u32, usize),
+    #[error("packs waiting are over {0} bytes")]
+    TooMuch(usize),
+    #[error("more than {0} packs are waiting")]
+    TooMany(usize),
+}
+
 /// Puts packs back together from their [`Frame::Pack`] chunks, by
-/// transfer id.
+/// transfer id, within its [`PackLimits`].
 #[derive(Default)]
 pub struct PackAssembler {
+    limits: PackLimits,
     partial: std::collections::HashMap<u32, Vec<u8>>,
-    done: std::collections::HashMap<u32, Vec<u8>>,
+    done: std::collections::HashMap<u32, (Vec<u8>, std::time::Instant)>,
 }
 
 impl PackAssembler {
+    pub fn new(limits: PackLimits) -> Self {
+        Self {
+            limits,
+            ..Self::default()
+        }
+    }
+
     /// Adds a chunk; an empty one completes its transfer.
-    pub fn push(&mut self, transfer: u32, data: Vec<u8>) {
+    pub fn push(&mut self, transfer: u32, data: Vec<u8>) -> Result<(), PackError> {
+        self.drop_stale();
+        let l = self.limits;
+        let waiting = self.partial.contains_key(&transfer) || self.done.contains_key(&transfer);
+        if !waiting && self.partial.len() + self.done.len() >= l.max_transfers {
+            return Err(PackError::TooMany(l.max_transfers));
+        }
         if data.is_empty() {
             let pack = self.partial.remove(&transfer).unwrap_or_default();
-            self.done.insert(transfer, pack);
-        } else {
-            self.partial.entry(transfer).or_default().extend_from_slice(&data);
+            self.done.insert(transfer, (pack, std::time::Instant::now()));
+            return Ok(());
         }
+        let so_far = self.partial.get(&transfer).map_or(0, Vec::len);
+        if so_far + data.len() > l.max_pack {
+            return Err(PackError::TooLarge(transfer, l.max_pack));
+        }
+        let buffered: usize = self.partial.values().map(Vec::len).sum::<usize>()
+            + self.done.values().map(|(p, _)| p.len()).sum::<usize>();
+        if buffered + data.len() > l.max_buffered {
+            return Err(PackError::TooMuch(l.max_buffered));
+        }
+        self.partial.entry(transfer).or_default().extend_from_slice(&data);
+        Ok(())
     }
 
     /// A completed transfer's pack, once.
     pub fn take(&mut self, transfer: u32) -> Option<Vec<u8>> {
-        self.done.remove(&transfer)
+        self.drop_stale();
+        self.done.remove(&transfer).map(|(p, _)| p)
+    }
+
+    /// Drops whole packs no request took in time.
+    fn drop_stale(&mut self) {
+        let keep = self.limits.keep_done;
+        self.done.retain(|_, (_, at)| at.elapsed() < keep);
     }
 }

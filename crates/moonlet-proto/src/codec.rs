@@ -280,10 +280,85 @@ mod tests {
                 unreachable!()
             };
             assert_eq!(packs.take(4), None, "complete before its end");
-            packs.push(transfer, data);
+            packs.push(transfer, data).unwrap();
         }
         assert_eq!(packs.take(4).as_deref(), Some(&pack[..]));
         assert_eq!(packs.take(4), None, "taken once");
+    }
+
+    fn small() -> crate::PackLimits {
+        crate::PackLimits {
+            max_pack: 10,
+            max_buffered: 25,
+            max_transfers: 3,
+            keep_done: std::time::Duration::from_millis(100),
+        }
+    }
+
+    #[test]
+    fn the_real_limits_are_one_gibibyte_sixteen_transfers_and_a_minute() {
+        let l = crate::PackLimits::default();
+        assert_eq!(l.max_pack, 1_073_741_824);
+        assert_eq!(l.max_buffered, 1_073_741_824);
+        assert_eq!(l.max_transfers, 16);
+        assert_eq!(l.keep_done, std::time::Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_pack_over_its_limit_is_refused() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 6]).unwrap();
+        let e = packs.push(1, vec![0; 5]).unwrap_err();
+        assert_eq!(e.to_string(), "pack 1 is over 10 bytes");
+        // Exactly the limit is fine.
+        packs.push(2, vec![0; 10]).unwrap();
+        packs.push(2, vec![]).unwrap();
+        assert_eq!(packs.take(2).map(|p| p.len()), Some(10));
+    }
+
+    #[test]
+    fn packs_waiting_together_may_not_pass_the_buffer_limit() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 10]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        packs.push(2, vec![0; 10]).unwrap();
+        let e = packs.push(3, vec![0; 6]).unwrap_err();
+        assert_eq!(e.to_string(), "packs waiting are over 25 bytes");
+        // Taking one frees its room.
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 10]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        packs.push(2, vec![0; 10]).unwrap();
+        packs.take(1).unwrap();
+        packs.push(3, vec![0; 10]).unwrap();
+    }
+
+    #[test]
+    fn only_so_many_transfers_wait_at_once() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![1]).unwrap();
+        packs.push(2, vec![1]).unwrap();
+        packs.push(2, vec![]).unwrap();
+        packs.push(3, vec![1]).unwrap();
+        let e = packs.push(4, vec![1]).unwrap_err();
+        assert_eq!(e.to_string(), "more than 3 packs are waiting");
+        // More chunks of one already waiting are fine.
+        packs.push(3, vec![1]).unwrap();
+    }
+
+    #[test]
+    fn a_pack_nobody_takes_is_dropped_after_a_while() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 10]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        packs.push(2, vec![0; 10]).unwrap();
+        packs.push(2, vec![]).unwrap();
+        assert_eq!(packs.take(1), None);
+        assert_eq!(packs.take(2).map(|p| p.len()), Some(10));
+        // Its room is free again.
+        packs.push(3, vec![0; 10]).unwrap();
+        packs.push(4, vec![0; 10]).unwrap();
     }
 
     #[tokio::test]

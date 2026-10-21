@@ -782,3 +782,74 @@ async fn a_retry_leaves_a_working_link_alone() {
     assert_eq!(now.len(), 1);
     assert_eq!(now[0].connected_since, since, "the link was made again");
 }
+
+/// Reads until the daemon ends the connection; returns the error it gave.
+async fn ended(s: &mut tokio::net::TcpStream) -> Option<String> {
+    use moonlet_proto::read_frame;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut why = None;
+    while Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_secs(5), read_frame(s)).await {
+            Ok(Ok(Some(Frame::Json(Message::Response { id: 0, error: Some(e), .. })))) => {
+                why = Some(e.message)
+            }
+            Ok(Ok(Some(_))) => {}
+            Ok(Ok(None)) | Ok(Err(_)) => return why,
+            Err(_) => panic!("the connection stayed open"),
+        }
+    }
+    panic!("the connection stayed open");
+}
+
+#[tokio::test]
+async fn only_a_worker_sends_packs() {
+    use moonlet_proto::write_frame;
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let pack = Frame::Pack {
+        transfer: 1,
+        data: b"PACK".to_vec(),
+    };
+
+    // A paired device over the tailnet, as a phone or the app.
+    for client in ["moonlet-mobile", "moonlet-app"] {
+        let mut s = raw(&addr, &token, client).await;
+        write_frame(&mut s, &pack).await.unwrap();
+        assert_eq!(
+            ended(&mut s).await.as_deref(),
+            Some("only a worker sends packs"),
+            "{client}"
+        );
+    }
+
+    // The app and the CLI on the Mac itself.
+    for client in ["moonlet-app", "moonlet-cli"] {
+        let c = Client::connect(&central.socket, client).await.unwrap();
+        let mut s = c.into_stream();
+        write_frame(&mut s, &pack).await.unwrap();
+        let mut buf = Vec::new();
+        let n = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf),
+        )
+        .await
+        .expect("the connection stayed open");
+        assert!(n.is_ok(), "{client}");
+    }
+
+    // A worker may.
+    let mut w = raw(&addr, &token, "moonletd-worker").await;
+    write_frame(&mut w, &pack).await.unwrap();
+    assert_eq!(
+        refused(
+            &ask(
+                &mut w,
+                1,
+                "worker.register",
+                registration(WORKER_ID, "Alex's MacBook Pro")
+            )
+            .await
+        ),
+        None
+    );
+}

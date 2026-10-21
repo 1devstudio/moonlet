@@ -556,10 +556,12 @@ async fn run_link(
         }
     });
 
-    let result = loop {
+    let result = 'link: loop {
         // Frames already buffered alongside the handshake.
         while let Some(frame) = decoder.next_frame()? {
-            dispatch(host, frame);
+            if let Err(e) = dispatch(host, frame) {
+                break 'link Err(e.into());
+            }
         }
         tokio::select! {
             n = reader.read(&mut buf) => {
@@ -577,10 +579,11 @@ async fn run_link(
     result
 }
 
-fn dispatch(host: &Arc<Host>, frame: Frame) {
+/// Fails only on a pack over its limits, which ends the link.
+fn dispatch(host: &Arc<Host>, frame: Frame) -> Result<(), moonlet_proto::PackError> {
     match frame {
         Frame::Output { terminal, data } => host.push_output(terminal, &data),
-        Frame::Pack { transfer, data } => host.packs.lock().unwrap().push(transfer, data),
+        Frame::Pack { transfer, data } => host.packs.lock().unwrap().push(transfer, data)?,
         // An error no request asked for: the daemon says why it ends the link.
         Frame::Json(Message::Response {
             id: 0,
@@ -625,6 +628,7 @@ fn dispatch(host: &Arc<Host>, frame: Frame) {
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// Runs the handler for a daemon's request and sends its reply on the

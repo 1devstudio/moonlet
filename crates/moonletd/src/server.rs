@@ -267,8 +267,21 @@ where
                 Frame::Input { terminal, data } => {
                     let _ = daemon.terminals.write(terminal, data);
                 }
-                // Before the request that names it is read (X60).
-                Frame::Pack { transfer, data } => conn.packs.lock().unwrap().push(transfer, data),
+                // Before the request that names it is read (X60). Only a
+                // worker's daemon sends packs; from anyone else, or over the
+                // limits, they end the connection.
+                Frame::Pack { transfer, data } => {
+                    let refused = if conn.client != crate::link::WORKER_CLIENT {
+                        Some(RpcError::new("forbidden", "only a worker sends packs"))
+                    } else {
+                        let pushed = conn.packs.lock().unwrap().push(transfer, data);
+                        pushed.err().map(|e| RpcError::new("too_large", e.to_string()))
+                    };
+                    if let Some(e) = refused {
+                        let _ = conn.tx.send(Frame::Json(Message::err(0, e)));
+                        break;
+                    }
+                }
                 Frame::Json(Message::Request { id, method, params })
                     if method == moonlet_proto::methods::TERMINAL_ATTACH =>
                 {
