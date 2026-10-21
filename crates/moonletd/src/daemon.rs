@@ -540,7 +540,11 @@ impl Daemon {
                 let r: m::CopyRef = params(p)?;
                 ok(self.sync.use_central_branch(&r.copy).await?)
             }
-            m::SYNC_OPEN | m::SYNC_FETCH | m::SYNC_OFFER => {
+            m::SYNC_STOP => {
+                let r: m::CopyRef = params(p)?;
+                ok(self.sync.stop(&r.copy).await?)
+            }
+            m::SYNC_OPEN | m::SYNC_FETCH | m::SYNC_OFFER | m::SYNC_CLOSE => {
                 // Only a worker's daemon, over the tailnet (X60).
                 if conn.phone.is_none() || conn.client != crate::link::WORKER_CLIENT {
                     return Err(RpcError::new("forbidden", "only a worker keeps copies"));
@@ -548,6 +552,10 @@ impl Daemon {
                 match method {
                     m::SYNC_OPEN => ok(self.sync.open(conn, params(p)?).await?),
                     m::SYNC_FETCH => ok(self.sync.fetch(conn, params(p)?).await?),
+                    m::SYNC_CLOSE => {
+                        let r: m::CopyRef = params(p)?;
+                        ok(self.sync.close(conn, &r.copy).await?)
+                    }
                     _ => {
                         let r: m::SyncOffer = params(p)?;
                         let pack = match r.pack {
@@ -837,6 +845,8 @@ impl Daemon {
             m::SESSION_ARCHIVE => {
                 let r: m::SessionArchive = params(p)?;
                 let id = r.id.clone();
+                // Its live copies go first, while its worktree is there (X60).
+                self.sync.session_closing(&id).await;
                 let done = w.archive(r).await.map_err(internal)?;
                 self.reads.clear_grant(&id);
                 ok(done)

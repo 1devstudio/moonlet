@@ -243,6 +243,13 @@ pub const SYNC_RESOLVE: &str = "sync.resolve";
 /// commit, and this Mac's commits stay on `<branch>-this-mac`. Returns the
 /// [`Copy`].
 pub const SYNC_USE_CENTRAL_BRANCH: &str = "sync.use_central_branch";
+/// [`CopyRef`]: stops keeping a copy in sync and removes it from this Mac,
+/// saving what would be lost first. Returns [`SyncStopped`].
+pub const SYNC_STOP: &str = "sync.stop";
+/// [`CopyRef`], worker to central host: the worker no longer keeps the copy.
+pub const SYNC_CLOSE: &str = "sync.close";
+/// [`SyncClosing`], central host to worker: the session is going away.
+pub const SYNC_CLOSING: &str = "sync.closing";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
@@ -1488,4 +1495,31 @@ pub struct CopyChanged {
     pub copy: Copy,
     #[serde(default)]
     pub newly_differing: Vec<String>,
+    /// Set when the copy is gone from this Mac.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<CopyRemoved>,
+}
+
+/// Why a copy went, and what of it was saved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopyRemoved {
+    /// `stopped` (`sync.stop`) or `archived` (the session went away).
+    pub reason: String,
+    #[serde(flatten)]
+    pub saved: SyncStopped,
+}
+
+/// What `sync.stop` saved: files that differed or had not synced yet,
+/// relative to `folder`, sorted. Empty when nothing would have been lost.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SyncStopped {
+    pub folder: String,
+    pub leftovers: Vec<String>,
+}
+
+/// Why the central host's session is going away: `archived`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncClosing {
+    pub copy: String,
+    pub reason: String,
 }

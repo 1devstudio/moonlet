@@ -2113,3 +2113,150 @@ async fn a_pause_for_another_reason_outlasts_the_session_coming_back_to_its_bran
     let c = PathBuf::from(&copy.path);
     assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("a\n"));
 }
+
+/// The `refs/moonlet/sync/…` refs in the repository of worktree `dir`.
+fn sync_refs(dir: &Path) -> String {
+    git(
+        dir,
+        &["for-each-ref", "--format=%(refname)", "refs/moonlet/sync"],
+    )
+}
+
+/// Makes `src/cart.ts` differ: each side edits it while the link is down.
+async fn make_cart_differ(central: &mut Central, worker: &Daemon, c: &Path) {
+    let s = central.session_path();
+    central.daemon.stop();
+    copy_in(worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("src/cart.ts"), "mine\n");
+    write(&s.join("src/cart.ts"), "theirs\n");
+    central.daemon.restart().await;
+    eventually("src/cart.ts differs", || async {
+        copies(worker).await[0].differs == ["src/cart.ts"]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn turning_sync_off_removes_the_copy_and_keeps_what_would_be_lost() {
+    let (mut central, worker, c) = synced().await;
+    let s = central.session_path();
+    let repo = PathBuf::from(git(
+        &c,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ));
+    let branch = git(&c, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    make_cart_differ(&mut central, &worker, &c).await;
+    // An edit studio-mini never got: the link is down.
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("docs/notes.md"), "unsynced\n");
+
+    let id = copies(&worker).await[0].id.clone();
+    let stopped: Value = worker.call("sync.stop", json!({ "copy": id })).await;
+    let folder = worker.home.path().join("sync-leftovers").join("fix-cart");
+    assert_eq!(
+        stopped,
+        json!({ "folder": folder, "leftovers": ["docs/notes.md", "src/cart.ts"] })
+    );
+    assert_eq!(read(&folder.join("src/cart.ts")).as_deref(), Some("mine\n"));
+    assert_eq!(
+        read(&folder.join("docs/notes.md")).as_deref(),
+        Some("unsynced\n")
+    );
+    assert!(!c.exists(), "the copy is still there");
+    assert!(copies(&worker).await.is_empty());
+    // The branch stays in the Mac's repository; the base's ref goes.
+    assert_eq!(
+        git(
+            &repo,
+            &["branch", "--list", "--format=%(refname:short)", &branch]
+        ),
+        branch
+    );
+    assert_eq!(sync_refs(&repo), "");
+
+    // studio-mini lets the copy go once it hears of it.
+    central.daemon.restart().await;
+    eventually("studio-mini drops the copy's base", || async {
+        sync_refs(&s).is_empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn archiving_the_session_removes_the_copy_and_keeps_what_would_be_lost() {
+    let (mut central, worker, c) = synced().await;
+    make_cart_differ(&mut central, &worker, &c).await;
+    let mut events = worker.app().await;
+    let _: Value = events.request("daemon.info", json!({})).await.unwrap();
+
+    let start = Instant::now();
+    let _: Value = central
+        .daemon
+        .call("session.archive", json!({ "id": central.session_id() }))
+        .await;
+    let took = start.elapsed();
+    assert!(took < Duration::from_secs(10), "archiving took {took:?}");
+    let folder = worker.home.path().join("sync-leftovers").join("fix-cart");
+    let removed = loop {
+        let ev = next_change(&mut events, Duration::from_secs(30))
+            .await
+            .expect("no sync.changed");
+        if let Some(r) = ev.get("removed") {
+            break r.clone();
+        }
+    };
+    assert_eq!(
+        removed,
+        json!({ "reason": "archived", "folder": folder, "leftovers": ["src/cart.ts"] })
+    );
+    assert_eq!(read(&folder.join("src/cart.ts")).as_deref(), Some("mine\n"));
+    assert!(!c.exists(), "the copy is still there");
+    assert!(copies(&worker).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_session_archived_while_this_mac_was_away_takes_its_copy_when_it_is_back() {
+    let (central, mut worker, c) = synced().await;
+    worker.stop();
+    write(&c.join("docs/notes.md"), "while away\n");
+    let _: Value = central
+        .daemon
+        .call("session.archive", json!({ "id": central.session_id() }))
+        .await;
+    worker.restart().await;
+    eventually("the copy goes", || async {
+        copies(&worker).await.is_empty()
+    })
+    .await;
+    let folder = worker.home.path().join("sync-leftovers").join("fix-cart");
+    assert_eq!(
+        read(&folder.join("docs/notes.md")).as_deref(),
+        Some("while away\n")
+    );
+    assert!(!c.exists(), "the copy is still there");
+}
+
+#[tokio::test]
+async fn a_copy_whose_folder_was_deleted_pauses_until_it_is_made_again() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    std::fs::remove_dir_all(&c).unwrap();
+    let copy = copy_in(&worker, paused, "paused").await;
+    let shown = match c.strip_prefix(dirs_home()) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => c.display().to_string(),
+    };
+    assert_eq!(reason(&copy), format!("the copy at {shown} is gone."));
+
+    let _: Copy = worker.call("sync.retry", json!({ "copy": copy.id })).await;
+    let again = in_sync(&worker).await;
+    let c = PathBuf::from(again.path);
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("a\n"));
+    write(&s.join("src/cart.ts"), "after\n");
+    reads(&c.join("src/cart.ts"), "after\n").await;
+}
+
+fn dirs_home() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap())
+}

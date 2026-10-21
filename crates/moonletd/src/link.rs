@@ -524,6 +524,13 @@ impl Requests for WorkerRequests {
                     let done = sync.update(req, pack).await?;
                     Ok(serde_json::to_value(done).unwrap())
                 }
+                m::SYNC_CLOSING => {
+                    let req: m::SyncClosing = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
+                    Ok(serde_json::to_value(sync.closing(req).await?).unwrap())
+                }
                 _ => Err(RpcError::new(
                     "unknown_method",
                     format!("unknown method {method}"),

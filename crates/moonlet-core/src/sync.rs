@@ -1048,6 +1048,33 @@ pub async fn branch_exists(repo: &Path, name: &str) -> bool {
     .is_ok_and(|o| o.status == 0)
 }
 
+/// Removes worktree `dir` of `repo`, with whatever is in it; its branch
+/// stays.
+pub async fn remove_worktree(repo: &Path, dir: &Path) -> Result<()> {
+    let dir = dir.to_string_lossy().to_string();
+    git_env(
+        repo,
+        &[],
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            "--force",
+            "--end-of-options",
+            &dir,
+        ],
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Forgets `repo`'s worktrees whose folders are gone.
+pub async fn prune_worktrees(repo: &Path) -> Result<()> {
+    git_env(repo, &[], &["worktree", "prune"], None).await?;
+    Ok(())
+}
+
 /// Clones `url` into `dir` with this machine's own credentials. The error
 /// is git's own message, such as `repository '…' not found`.
 pub async fn clone(url: &str, dir: &Path) -> std::result::Result<(), String> {

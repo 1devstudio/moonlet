@@ -24,8 +24,9 @@ use moonlet_core::fs::Watchers;
 use moonlet_core::session::SessionManager;
 use moonlet_core::sync::{self as git_sync, ApplyError, Files, HeadMove, MAX_FILE, UnpackError};
 use moonlet_proto::methods::{
-    self as m, Copy, CopyChanged, CopyState, Diverged, Keep, Resolution, SyncFetch, SyncFetched,
-    SyncOffer, SyncOffered, SyncOpen, SyncOpened, SyncResolve, SyncUpdate, SyncUpdated,
+    self as m, Copy, CopyChanged, CopyRemoved, CopyState, Diverged, Keep, Resolution, SyncClosing,
+    SyncFetch, SyncFetched, SyncOffer, SyncOffered, SyncOpen, SyncOpened, SyncResolve, SyncStopped,
+    SyncUpdate, SyncUpdated,
 };
 use moonlet_proto::{Message, RpcError};
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,8 @@ use crate::workers::Workers;
 const WATCH_CLIENT: u64 = u64::MAX;
 /// How long the central host waits for a worker to apply an update.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long archiving a session waits for a worker to save its copy.
+const CLOSING_TIMEOUT: Duration = Duration::from_secs(30);
 /// Tries at applying before giving up until the next change.
 const APPLY_TRIES: usize = 5;
 /// How often a watched worktree's commit and branch are looked at: a
@@ -196,6 +199,10 @@ struct Data {
     worker: Vec<Kept>,
     #[serde(default)]
     central: Vec<Served>,
+    /// Copies this Mac stopped keeping that the central host has not heard
+    /// of yet; the link stays open until it has.
+    #[serde(default)]
+    closed: Vec<String>,
 }
 
 /// Why making or updating a copy stopped.
@@ -375,6 +382,7 @@ impl LiveCopies {
             let ev = CopyChanged {
                 copy: self.copy_of(&k),
                 newly_differing,
+                removed: None,
             };
             (self.emit)(Message::event(m::EV_SYNC_CHANGED, ev));
         }
@@ -565,7 +573,7 @@ impl LiveCopies {
             .lock()
             .unwrap()
             .insert(id.clone(), CopyState::Copying);
-        self.link.set_synced(self.data.lock().unwrap().worker.len());
+        self.link.set_synced(self.synced());
         self.changed(&id);
         tokio::spawn(self.clone().make(id.clone()));
         Ok(self.copy_of(&self.kept(&id).unwrap()))
@@ -580,7 +588,20 @@ impl LiveCopies {
             k.paused = None;
             k.branch_pause = None;
         });
-        if k.base.is_none() {
+        if k.base.is_some() && !Path::new(&k.path).exists() {
+            // Its folder was deleted here: made again from the session.
+            self.update_kept(id, |k| {
+                k.path.clear();
+                k.base = None;
+                k.base_head = None;
+                k.tree = None;
+                k.head = None;
+                k.diverged = None;
+                k.differs.clear();
+            });
+            self.set_state(id, CopyState::Copying);
+            tokio::spawn(self.clone().make(id.to_string()));
+        } else if k.base.is_none() {
             self.set_state(id, CopyState::Copying);
             tokio::spawn(self.clone().make(id.to_string()));
         } else {
@@ -593,18 +614,26 @@ impl LiveCopies {
         Ok(self.copy_of(&self.kept(id).unwrap()))
     }
 
-    async fn ask_again(&self, id: &str) {
+    /// Asks the central host for the session's state again. A copy it no
+    /// longer serves, because the session was archived meanwhile, goes.
+    async fn ask_again(self: &Arc<Self>, id: &str) {
         let Some(host) = self.link.host() else { return };
         let req = SyncFetch {
             copy: id.to_string(),
             have: Vec::new(),
             again: true,
         };
-        if let Err(e) = host
+        match host
             .request(m::SYNC_FETCH, serde_json::to_value(req).unwrap())
             .await
         {
-            tracing::debug!(copy = %id, "cannot ask for the session again: {}", e.message);
+            Ok(_) => {}
+            Err(e) if e.code == "not_found" => {
+                self.remove(id, "archived").await;
+            }
+            Err(e) => {
+                tracing::debug!(copy = %id, "cannot ask for the session again: {}", e.message);
+            }
         }
     }
 
@@ -612,12 +641,18 @@ impl LiveCopies {
     /// others wait for the central host's state, which it sends when this
     /// Mac registers.
     pub fn link_up(self: &Arc<Self>) {
+        let me = self.clone();
+        tokio::spawn(async move { me.send_closed().await });
         let kept = self.data.lock().unwrap().worker.clone();
         for k in kept {
             if k.paused.is_none() && k.base.is_none() {
                 tokio::spawn(self.clone().make(k.id));
             } else if k.base.is_some() && !k.path.is_empty() {
                 self.watch(Path::new(&k.path));
+                // Archived while the link was down: the central host has
+                // let it go.
+                let me = self.clone();
+                tokio::spawn(async move { me.ask_again(&k.id).await });
             }
         }
     }
@@ -709,6 +744,8 @@ impl LiveCopies {
         let path = if made {
             PathBuf::from(&k.path)
         } else {
+            // A copy whose folder was deleted still holds its branch.
+            let _ = git_sync::prune_worktrees(&repo).await;
             if let Some(there) = git_sync::checked_out(&repo, &opened.branch).await {
                 return Err(Stop::Paused(format!(
                     "{} is checked out in {} on this Mac.",
@@ -929,6 +966,10 @@ impl LiveCopies {
             self.unpause(&req.copy);
         }
         let path = PathBuf::from(&k.path);
+        if !path.exists() {
+            self.pause_gone();
+            return Ok(not_applied);
+        }
         if !self.on_branch(&k, &path).await? {
             return Ok(not_applied);
         }
@@ -1027,6 +1068,10 @@ impl LiveCopies {
         let mut differed = k.differs.clone();
         let repo = PathBuf::from(&k.repo);
         let path = PathBuf::from(&k.path);
+        if !path.exists() {
+            self.pause_gone();
+            return Ok(false);
+        }
         for _ in 0..APPLY_TRIES {
             // Each round: a checkout meanwhile must not move the session.
             if !self.on_branch(&k, &path).await? {
@@ -1290,6 +1335,183 @@ impl LiveCopies {
         Ok(self.copy_of(&k))
     }
 
+    /// `sync.stop`: stops keeping copy `id` in sync and removes it from this
+    /// Mac, after saving what would be lost.
+    pub async fn stop(self: &Arc<Self>, id: &str) -> Result<SyncStopped, RpcError> {
+        if self.kept(id).is_none() {
+            return Err(RpcError::new("not_found", "no such copy"));
+        }
+        self.data.lock().unwrap().closed.push(id.to_string());
+        let saved = self.remove(id, "stopped").await;
+        // The central host lets the copy go now, or once the link is back.
+        let me = self.clone();
+        tokio::spawn(async move { me.send_closed().await });
+        Ok(saved)
+    }
+
+    /// Tells the central host of the copies this Mac stopped keeping.
+    async fn send_closed(&self) {
+        let Some(host) = self.link.host() else { return };
+        let closed = self.data.lock().unwrap().closed.clone();
+        for id in closed {
+            let req = serde_json::json!({ "copy": id });
+            match host.request(m::SYNC_CLOSE, req).await {
+                Ok(_) => {}
+                Err(e) if e.code == "not_found" || e.code == "forbidden" => {}
+                Err(_) => return,
+            }
+            self.data.lock().unwrap().closed.retain(|c| *c != id);
+            self.save();
+        }
+        self.link.set_synced(self.synced());
+    }
+
+    /// What keeps the link open: copies, and closes not sent yet.
+    fn synced(&self) -> usize {
+        let data = self.data.lock().unwrap();
+        data.worker.len() + data.closed.len()
+    }
+
+    /// `sync.closing` from the central host: the session is going away.
+    pub async fn closing(self: &Arc<Self>, req: SyncClosing) -> Result<SyncStopped, RpcError> {
+        if self.kept(&req.copy).is_none() {
+            return Err(RpcError::new("not_found", "no such copy"));
+        }
+        Ok(self.remove(&req.copy, &req.reason).await)
+    }
+
+    /// Removes copy `id` from this Mac: saves what would be lost, removes
+    /// its worktree (its branch stays) and the base's ref, and forgets it.
+    /// `sync.changed` says so, with `reason`.
+    async fn remove(self: &Arc<Self>, id: &str, reason: &str) -> SyncStopped {
+        let lock = self.lock(id);
+        let _one = lock.lock().await;
+        let Some(k) = self.kept(id) else {
+            return SyncStopped::default();
+        };
+        let saved = self.save_leftovers(&k).await;
+        let path = PathBuf::from(&k.path);
+        let repo = PathBuf::from(&k.repo);
+        self.unwatch(&path);
+        if !k.path.is_empty() && path.exists() {
+            if let Err(e) = git_sync::remove_worktree(&repo, &path).await {
+                tracing::warn!(copy = %id, "cannot remove the copy: {e:#}");
+            }
+        } else if !k.repo.is_empty() {
+            let _ = git_sync::prune_worktrees(&repo).await;
+        }
+        if !k.repo.is_empty() {
+            let _ = git_sync::delete_base_ref(&repo, id).await;
+        }
+        let ev = CopyChanged {
+            copy: self.copy_of(&k),
+            newly_differing: Vec::new(),
+            removed: Some(CopyRemoved {
+                reason: reason.to_string(),
+                saved: saved.clone(),
+            }),
+        };
+        self.data.lock().unwrap().worker.retain(|w| w.id != id);
+        self.save();
+        self.states.lock().unwrap().remove(id);
+        // The last copy gone closes the link: a moment later, so the reply
+        // to the central host's `sync.closing` still goes out on it.
+        let me = Arc::downgrade(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if let Some(s) = me.upgrade() {
+                s.link.set_synced(s.synced());
+            }
+        });
+        (self.emit)(Message::event(m::EV_SYNC_CHANGED, ev));
+        saved
+    }
+
+    /// Saves the files of copy `k` that would be lost with it: those that
+    /// differ, and those changed here since the last round. They go under
+    /// `sync-leftovers/<session folder>`, at their own paths.
+    async fn save_leftovers(&self, k: &Kept) -> SyncStopped {
+        let path = PathBuf::from(&k.path);
+        let dir = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| k.session.clone());
+        let folder = self.home.join("sync-leftovers").join(segment(&dir));
+        let mut saved = SyncStopped {
+            folder: folder.display().to_string(),
+            leftovers: Vec::new(),
+        };
+        let Some(base) = &k.base else { return saved };
+        if !path.exists() {
+            return saved;
+        }
+        let repo = PathBuf::from(&k.repo);
+        let Ok(local) = git_sync::snapshot(&path, MAX_FILE).await else {
+            return saved;
+        };
+        let (Ok(here), Ok(base)) = (
+            git_sync::read_files(&repo, &local.tree).await,
+            git_sync::read_files(&repo, base).await,
+        ) else {
+            return saved;
+        };
+        // Only paths of this Mac's own snapshot, so nothing the central
+        // host named can reach outside the copy or the folder.
+        let lost: Vec<String> = here
+            .iter()
+            .filter(|(p, e)| base.get(*p) != Some(*e) || k.differs.contains(p))
+            .map(|(p, _)| p.clone())
+            .collect();
+        for p in lost {
+            let to = folder.join(&p);
+            let copied = to
+                .parent()
+                .is_some_and(|d| std::fs::create_dir_all(d).is_ok())
+                && std::fs::copy(path.join(&p), &to).is_ok();
+            if copied {
+                saved.leftovers.push(p);
+            } else {
+                tracing::warn!(copy = %k.id, "cannot save {p} to {}", folder.display());
+            }
+        }
+        saved.leftovers.sort();
+        saved
+    }
+
+    /// Stops watching a copy's folder.
+    fn unwatch(&self, path: &Path) {
+        let root = path.canonicalize().ok();
+        let mut kicks = self.kicks.lock().unwrap();
+        kicks.retain(|r, _| Some(r) != root.as_ref() && r.exists());
+        if let Some(root) = root {
+            self.watchers
+                .unwatch(&root.display().to_string(), WATCH_CLIENT);
+        }
+    }
+
+    /// Pauses the copies whose folders were deleted on this Mac; gives
+    /// whether any was.
+    fn pause_gone(&self) -> bool {
+        let gone: Vec<Kept> = self
+            .data
+            .lock()
+            .unwrap()
+            .worker
+            .iter()
+            .filter(|k| k.base.is_some() && !k.path.is_empty() && !Path::new(&k.path).exists())
+            .filter(|k| k.paused.is_none())
+            .cloned()
+            .collect();
+        for k in &gone {
+            self.pause(
+                &k.id,
+                format!("the copy at {} is gone.", tilde(Path::new(&k.path))),
+            );
+        }
+        self.kicks.lock().unwrap().retain(|r, _| r.exists());
+        !gone.is_empty()
+    }
+
     /// `sync.use_central_branch`: a diverged copy's branch moves to the
     /// central host's commit, and this Mac's commits stay on a branch of
     /// their own, `<branch>-this-mac`. The files stay as they are.
@@ -1504,6 +1726,61 @@ impl LiveCopies {
             too_big: snap.too_big,
             pack,
         })
+    }
+
+    /// `sync.close` from a worker: it no longer keeps the copy.
+    pub async fn close(&self, conn: &Conn, copy: &str) -> Result<bool, RpcError> {
+        self.owner(conn, copy)?;
+        self.forget(copy).await;
+        Ok(true)
+    }
+
+    /// Forgets served copy `id` and its base's ref.
+    async fn forget(&self, id: &str) {
+        let Some(served) = self.served(id) else {
+            return;
+        };
+        self.data.lock().unwrap().central.retain(|s| s.id != id);
+        self.save();
+        let _ = git_sync::delete_base_ref(Path::new(&served.path), id).await;
+    }
+
+    /// Session `session` is being archived: each linked worker removes its
+    /// copy, saving what would be lost; one that is offline hears so when
+    /// it links again. The session then serves no copies.
+    pub async fn session_closing(&self, session: &str) {
+        let served: Vec<Served> = self
+            .data
+            .lock()
+            .unwrap()
+            .central
+            .iter()
+            .filter(|s| s.session == session)
+            .cloned()
+            .collect();
+        let mut tell = tokio::task::JoinSet::new();
+        for s in &served {
+            let Some(conn) = self.workers.conn(&s.worker) else {
+                continue;
+            };
+            let req = SyncClosing {
+                copy: s.id.clone(),
+                reason: "archived".into(),
+            };
+            tell.spawn(async move {
+                let _ = conn
+                    .request(
+                        m::SYNC_CLOSING,
+                        serde_json::to_value(req).unwrap(),
+                        CLOSING_TIMEOUT,
+                    )
+                    .await;
+            });
+        }
+        tell.join_all().await;
+        for s in served {
+            self.forget(&s.id).await;
+        }
     }
 
     /// Copy `id` and the session agree on `tree` and `head`.
@@ -1726,6 +2003,12 @@ impl LiveCopies {
             .push_to(&conn, &served, path, &base, &base_head, always)
             .await
         {
+            if e.to_string().starts_with("not_found:") {
+                // The worker no longer keeps it.
+                drop(_one);
+                self.forget(id).await;
+                return;
+            }
             tracing::debug!(copy = %id, "update not sent: {e:#}");
         }
     }
@@ -1837,6 +2120,10 @@ impl LiveCopies {
                     git_sync::branch(&root).await.ok().flatten(),
                 );
                 let Some(s) = me.upgrade() else { return };
+                if !root.exists() {
+                    s.pause_gone();
+                    return;
+                }
                 // A side can leave its branch and come back between two
                 // looks; a copy waiting on a branch is looked at every time.
                 if !kicked && last.as_ref() == Some(&now) && !s.waits_on_branch(&root) {
@@ -2238,7 +2525,7 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
             .unwrap()
             .insert(k.id.clone(), CopyState::Waiting);
     }
-    sync.link.set_synced(kept.len());
+    sync.link.set_synced(sync.synced());
     for s in served {
         sync.watch(Path::new(&s.path));
     }
