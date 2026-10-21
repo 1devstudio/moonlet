@@ -398,7 +398,12 @@ async fn connection_loop(
         };
         let failure = host.failure.lock().unwrap().take();
         host.set_status(status, failure);
-        match connector.connect().await {
+        let connected = connector.connect().await;
+        // Stopped while connecting: whatever came of it is no news.
+        if *stop.borrow() {
+            return;
+        }
+        match connected {
             Ok((reader, writer)) => {
                 backoff.reset();
                 if let Err(e) = run_link(&host, &*connector, reader, writer, &mut stop).await {
@@ -593,7 +598,11 @@ fn dispatch(host: &Arc<Host>, frame: Frame) {
 /// link the request came on, if that link is still up.
 fn answer(host: &Arc<Host>, id: u64, method: String, params: Value) {
     let handler = host.requests.lock().unwrap().clone();
-    let host = host.clone();
+    // The link this request came on: a reply must not reach a newer one,
+    // whose daemon numbers its own requests from 1 again.
+    let Some(link) = host.link.lock().unwrap().as_ref().map(|l| l.tx.clone()) else {
+        return;
+    };
     host.rt.clone().spawn(async move {
         let result = match handler {
             Some(h) => h.request(method, params).await,
@@ -610,9 +619,7 @@ fn answer(host: &Arc<Host>, id: u64, method: String, params: Value) {
                 Err(_) => return,
             },
         };
-        if let Some(link) = host.link.lock().unwrap().as_ref() {
-            let _ = link.tx.send(bytes);
-        }
+        let _ = link.send(bytes);
     });
 }
 
