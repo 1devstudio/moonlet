@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountLabel, switchConfirm, accountState, defaultFolder, footerLabel, movingSessions, profileChangeConfirm, profileName, profileOptions, removeProfileConfirm, runningClaudeAgents, signInFor, tildePath } from "./profiles";
+import { accountLabel, authTerminal, switchConfirm, accountState, defaultFolder, footerLabel, movingSessions, profileChangeConfirm, profileName, profileOptions, removeProfileConfirm, runningClaudeAgents, signInFor, tildePath } from "./profiles";
 import type { ChatItem, Section, Session, TerminalInfo } from "./protocol";
 import type { ProfileInfo, Workspace } from "./protocol";
 
@@ -59,6 +59,27 @@ describe("account labels", () => {
     expect(accountState(null)).toBe("checking");
     expect(accountState({ logged_in: false, email: null, org_name: null })).toBe("signed-out");
     expect(accountState({ logged_in: true, email: "j@x", org_name: null })).toBe("signed-in");
+  });
+});
+
+describe("authTerminal", () => {
+  it("signs in to the default profile from the home folder, with no config dir", () => {
+    expect(authTerminal(null, "login")).toEqual({
+      cwd: "~",
+      command: ["claude", "auth", "login"],
+      env: {},
+      title: "claude auth login",
+    });
+  });
+
+  it("runs in a profile's folder and points Claude at it", () => {
+    const work = { id: "p1", name: "Work", path: "/Users/jane/.claude-work", created_at: 0 };
+    expect(authTerminal(work, "login-console")).toEqual({
+      cwd: "/Users/jane/.claude-work",
+      command: ["claude", "auth", "login", "--console"],
+      env: { CLAUDE_CONFIG_DIR: "/Users/jane/.claude-work" },
+      title: "claude auth login --console",
+    });
   });
 });
 
