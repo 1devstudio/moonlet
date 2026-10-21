@@ -149,12 +149,14 @@ pub async fn pair(name: &str, addrs: Vec<String>, code: &str, device: &str) -> R
             pair: Some(code.into()),
             device: Some(device.into()),
             route: None,
+            kind: None,
         },
     )
     .await?;
     let Message::Authed {
         device_id,
         token: Some(token),
+        ..
     } = reply
     else {
         bail!("the Mac did not hand out a token");
@@ -183,6 +185,7 @@ impl Connector for MacConnector {
                     pair: None,
                     device: None,
                     route: self.route.clone(),
+                    kind: None,
                 },
             )
             .await?;
