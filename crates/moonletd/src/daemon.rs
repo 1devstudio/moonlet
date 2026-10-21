@@ -435,7 +435,7 @@ impl Daemon {
             m::REPO_LIST => {
                 let folders: Vec<String> = self.sessions.list_projects().into_iter().map(|p| p.path).collect();
                 let added = moonlet_core::repo_clone::folder_repos(&folders).await;
-                ok(moonlet_core::repo_clone::list(&added).await.map_err(internal)?)
+                ok(moonlet_core::repo_clone::user_repos(&added).await.map_err(internal)?)
             }
             m::REPO_CLONE_TARGET => {
                 let r: m::RepoCloneTarget = params(p)?;
@@ -444,7 +444,7 @@ impl Daemon {
             m::REPO_CLONE => ok(self.clones.start(params(p)?).map_err(internal)?),
             m::REPO_CLONE_CANCEL => {
                 let r: m::IdRef = params(p)?;
-                self.clones.cancel(&r.id).await.map_err(internal)?;
+                self.clones.cancel(&r.id).map_err(internal)?;
                 ok(true)
             }
             _ => self.handle_project(conn, method, p).await,

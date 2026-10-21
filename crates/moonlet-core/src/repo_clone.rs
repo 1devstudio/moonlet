@@ -40,6 +40,20 @@ pub fn checked_ssh<'a>(ssh: &'a str, repo: &str) -> Result<&'a str> {
     }
 }
 
+/// Both checks, for a repository and the SSH address typed for it.
+pub fn checked_ref(repo: &str, ssh: Option<&str>) -> Result<()> {
+    checked_repo(repo)?;
+    if let Some(ssh) = ssh {
+        checked_ssh(ssh, repo)?;
+    }
+    Ok(())
+}
+
+/// A JSON string that is there and not empty.
+fn json_text(v: &Value) -> Option<String> {
+    v.as_str().filter(|s| !s.is_empty()).map(String::from)
+}
+
 /// The active github.com account in `gh auth status`'s output: the one
 /// marked active, or with older gh, which marks none, the first. `None`
 /// when no account is signed in.
@@ -69,13 +83,12 @@ pub const VIEW_FIELDS: &str =
 /// A repository's details from `gh repo view --json VIEW_FIELDS`.
 pub fn parse_repo_view(json: &[u8]) -> Result<RepoInfo> {
     let v: Value = serde_json::from_slice(json).context("gh repo view gave no JSON")?;
-    let text = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(String::from);
     Ok(RepoInfo {
-        repo: text(&v["nameWithOwner"]).context("gh repo view gave no nameWithOwner")?,
+        repo: json_text(&v["nameWithOwner"]).context("gh repo view gave no nameWithOwner")?,
         private: v["isPrivate"].as_bool(),
-        description: text(&v["description"]),
-        default_branch: text(&v["defaultBranchRef"]["name"]),
-        pushed_at: text(&v["pushedAt"]),
+        description: json_text(&v["description"]),
+        default_branch: json_text(&v["defaultBranchRef"]["name"]),
+        pushed_at: json_text(&v["pushedAt"]),
         disk_kb: v["diskUsage"].as_u64(),
     })
 }
@@ -108,17 +121,16 @@ pub const LIST_JQ: &str = "[.[] | {full_name, description, private, pushed_at}]"
 /// are the `owner/name`s of this host's projects, in any case.
 pub fn parse_repo_list(json: &[u8], added: &[String]) -> Result<Vec<RepoSummary>> {
     let v: Value = serde_json::from_slice(json).context("gh api gave no JSON")?;
-    let text = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(String::from);
     Ok(v.as_array()
         .into_iter()
         .flatten()
         .filter_map(|r| {
-            let repo = text(&r["full_name"])?;
+            let repo = json_text(&r["full_name"])?;
             Some(RepoSummary {
                 added: added.iter().any(|a| a.eq_ignore_ascii_case(&repo)),
-                description: text(&r["description"]),
+                description: json_text(&r["description"]),
                 private: r["private"].as_bool().unwrap_or(false),
-                pushed_at: text(&r["pushed_at"]),
+                pushed_at: json_text(&r["pushed_at"]),
                 repo,
             })
         })
@@ -252,7 +264,7 @@ fn same_folder(a: &Path, b: &Path) -> bool {
 
 /// What a failed clone or lookup says: git's last `fatal:` line without
 /// the prefix, else its last line.
-pub fn failure(stderr: &str) -> String {
+pub fn failure_reason(stderr: &str) -> String {
     let lines: Vec<&str> = stderr
         .lines()
         .map(str::trim)
@@ -291,41 +303,27 @@ fn https_url(repo: &str) -> String {
     format!("https://github.com/{repo}.git")
 }
 
+/// Runs `program` and gives its stdout, or fails with why it failed.
+async fn run_ok(program: &str, args: &[&str]) -> Result<Vec<u8>> {
+    let out = run_raw(program, Path::new("/"), args, None, Duration::from_secs(60)).await?;
+    if out.status != 0 {
+        bail!("{}", failure_reason(&out.stderr));
+    }
+    Ok(out.stdout)
+}
+
 /// `repo`'s details: from gh when it is signed in, else whether git can
 /// read it (a public repository, or one the SSH address reaches).
 pub async fn lookup(repo: &str, ssh: Option<&str>) -> Result<RepoInfo> {
-    checked_repo(repo)?;
-    if let Some(ssh) = ssh {
-        checked_ssh(ssh, repo)?;
-    }
-    let timeout = Duration::from_secs(60);
+    checked_ref(repo, ssh)?;
     if gh_status().await.login.is_some() {
-        let out = run_raw(
-            "gh",
-            Path::new("/"),
-            &["repo", "view", repo, "--json", VIEW_FIELDS],
-            None,
-            timeout,
-        )
-        .await?;
-        if out.status != 0 {
-            bail!("{}", failure(&out.stderr));
-        }
-        return parse_repo_view(&out.stdout);
+        return parse_repo_view(
+            &run_ok("gh", &["repo", "view", repo, "--json", VIEW_FIELDS]).await?,
+        );
     }
     let url = ssh.map_or_else(|| https_url(repo), String::from);
-    let out = run_raw(
-        "git",
-        Path::new("/"),
-        &["ls-remote", "--symref", &url, "HEAD"],
-        None,
-        timeout,
-    )
-    .await?;
-    if out.status != 0 {
-        bail!("{}", failure(&out.stderr));
-    }
-    Ok(parse_ls_remote(repo, &String::from_utf8_lossy(&out.stdout)))
+    let out = run_ok("git", &["ls-remote", "--symref", &url, "HEAD"]).await?;
+    Ok(parse_ls_remote(repo, &String::from_utf8_lossy(&out)))
 }
 
 /// The `owner/name` each folder's `origin` points at, for those on GitHub.
@@ -344,31 +342,43 @@ pub async fn folder_repos(folders: &[String]) -> Vec<String> {
 
 /// The signed-in user's repositories, most recently pushed first. `added`
 /// as in `parse_repo_list`.
-pub async fn list(added: &[String]) -> Result<Vec<RepoSummary>> {
-    let args = ["api", LIST_PATH, "--jq", LIST_JQ];
-    let out = run_raw("gh", Path::new("/"), &args, None, Duration::from_secs(60)).await?;
-    if out.status != 0 {
-        bail!("{}", failure(&out.stderr));
-    }
-    parse_repo_list(&out.stdout, added)
+pub async fn user_repos(added: &[String]) -> Result<Vec<RepoSummary>> {
+    parse_repo_list(
+        &run_ok("gh", &["api", LIST_PATH, "--jq", LIST_JQ]).await?,
+        added,
+    )
 }
 
 /// The program and arguments that clone `repo` into `dest`.
-pub fn clone_command(repo: &str, ssh: Option<&str>, gh_signed_in: bool, dest: &str) -> (&'static str, Vec<String>) {
+pub fn clone_command(
+    repo: &str,
+    ssh: Option<&str>,
+    gh_signed_in: bool,
+    dest: &str,
+) -> (&'static str, Vec<String>) {
     match ssh {
-        None if gh_signed_in => ("gh", ["repo", "clone", repo, dest, "--", "--progress"].map(String::from).to_vec()),
+        None if gh_signed_in => (
+            "gh",
+            ["repo", "clone", repo, dest, "--", "--progress"]
+                .map(String::from)
+                .to_vec(),
+        ),
         _ => {
             let url = ssh.map_or_else(|| https_url(repo), String::from);
-            ("git", vec!["clone".into(), "--progress".into(), url, dest.into()])
+            (
+                "git",
+                vec!["clone".into(), "--progress".into(), url, dest.into()],
+            )
         }
     }
 }
 
-/// Kills the clone's process group when dropped: gh runs git as its own
-/// child, which killing gh alone would leave writing into the folder.
-struct Group(Option<u32>);
+/// Kills the clone's process group when dropped before the clone exited:
+/// gh runs git as its own child, which killing gh alone would leave
+/// writing into the folder.
+struct KillGroupOnDrop(Option<u32>);
 
-impl Drop for Group {
+impl Drop for KillGroupOnDrop {
     fn drop(&mut self) {
         if let Some(pid) = self.0 {
             let _ = nix::sys::signal::killpg(
@@ -391,10 +401,7 @@ pub async fn clone(
     dest: &Path,
     mut on_progress: impl FnMut(Progress),
 ) -> Result<()> {
-    checked_repo(repo)?;
-    if let Some(ssh) = ssh {
-        checked_ssh(ssh, repo)?;
-    }
+    checked_ref(repo, ssh)?;
     if !dest.is_absolute() {
         bail!("{} is not a full path", dest.display());
     }
@@ -423,7 +430,7 @@ pub async fn clone(
         .process_group(0)
         .kill_on_drop(true);
     let mut child = cmd.spawn().context("cannot run the clone")?;
-    let _group = Group(child.id());
+    let mut group = KillGroupOnDrop(child.id());
     let mut stderr = child.stderr.take().context("no stderr")?;
     let mut text = String::new();
     let mut buf = [0u8; 4096];
@@ -449,8 +456,10 @@ pub async fn clone(
         }
     }
     let status = child.wait().await?;
+    // Exited: its group id may soon belong to another process.
+    group.0 = None;
     if !status.success() {
-        bail!("{}", failure(&text.replace('\r', "\n")));
+        bail!("{}", failure_reason(&text.replace('\r', "\n")));
     }
     Ok(())
 }
@@ -792,33 +801,60 @@ mod tests {
         // `git clone --progress` of a repository that does not exist.
         let missing = "Cloning into 'nf'...\nremote: Repository not found.\nfatal: repository 'https://github.com/acme/nope.git/' not found\n";
         assert_eq!(
-            failure(missing),
+            failure_reason(missing),
             "repository 'https://github.com/acme/nope.git/' not found"
         );
         // `gh repo view` of a repository that does not exist.
         let gh =
             "GraphQL: Could not resolve to a Repository with the name 'acme/nope'. (repository)\n";
         assert_eq!(
-            failure(gh),
+            failure_reason(gh),
             "GraphQL: Could not resolve to a Repository with the name 'acme/nope'. (repository)"
         );
-        assert_eq!(failure(""), "it ended without saying why");
+        assert_eq!(failure_reason(""), "it ended without saying why");
     }
 
     #[test]
     fn clones_with_gh_when_signed_in_else_with_git() {
         let dest = "/Users/alex/moonlet/storefront";
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(clone_command("acme/storefront", None, true, dest), ("gh", args(&["repo", "clone", "acme/storefront", dest, "--", "--progress"])));
+        assert_eq!(
+            clone_command("acme/storefront", None, true, dest),
+            (
+                "gh",
+                args(&["repo", "clone", "acme/storefront", dest, "--", "--progress"])
+            )
+        );
         assert_eq!(
             clone_command("acme/storefront", None, false, dest),
-            ("git", args(&["clone", "--progress", "https://github.com/acme/storefront.git", dest]))
+            (
+                "git",
+                args(&[
+                    "clone",
+                    "--progress",
+                    "https://github.com/acme/storefront.git",
+                    dest
+                ])
+            )
         );
         // A typed SSH address is used as it is, signed in or not.
         for signed_in in [true, false] {
             assert_eq!(
-                clone_command("acme/storefront", Some("git@github.com:acme/storefront.git"), signed_in, dest),
-                ("git", args(&["clone", "--progress", "git@github.com:acme/storefront.git", dest]))
+                clone_command(
+                    "acme/storefront",
+                    Some("git@github.com:acme/storefront.git"),
+                    signed_in,
+                    dest
+                ),
+                (
+                    "git",
+                    args(&[
+                        "clone",
+                        "--progress",
+                        "git@github.com:acme/storefront.git",
+                        dest
+                    ])
+                )
             );
         }
     }

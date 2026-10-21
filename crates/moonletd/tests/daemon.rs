@@ -1609,15 +1609,16 @@ async fn a_clone_from_github_becomes_a_project_and_reports_its_progress() {
     let mut watcher = d.client().await;
     let parent = dirs[1].path().join("moonlet");
     let job: serde_json::Value = c
-        .request(methods::REPO_CLONE, serde_json::json!({"repo": "acme/storefront", "parent": parent, "name": "storefront"}))
+        .request(methods::REPO_CLONE, serde_json::json!({"id": "c-7f3a", "repo": "acme/storefront", "parent": parent, "name": "storefront"}))
         .await
         .unwrap();
     let path = parent.join("storefront").display().to_string();
-    assert_eq!((job["repo"].as_str(), job["path"].as_str()), (Some("acme/storefront"), Some(path.as_str())));
+    // The app names the clone, so it knows the clone's events before the reply.
+    assert_eq!(job, serde_json::json!({"id": "c-7f3a", "repo": "acme/storefront", "path": path}));
 
     let (steps, done) = clone_events(&mut watcher).await;
     assert!(steps.contains(&"counting".to_string()), "{steps:?}");
-    assert_eq!(done["id"], job["id"]);
+    assert_eq!(done["id"], "c-7f3a");
     assert_eq!((done["error"].clone(), done["cancelled"].clone()), (serde_json::Value::Null, serde_json::json!(false)));
     // Projects keep the folder's real path (/private/var for /var on macOS).
     let real = std::fs::canonicalize(&path).unwrap().display().to_string();
@@ -1629,13 +1630,18 @@ async fn a_clone_from_github_becomes_a_project_and_reports_its_progress() {
 
     // The folder is there now: a second clone into it is refused.
     let again = c
-        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"repo": "acme/storefront", "parent": parent, "name": "storefront"}))
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"id": "c-2", "repo": "acme/storefront", "parent": parent, "name": "storefront"}))
         .await
         .unwrap_err();
     assert!(again.to_string().contains(&format!("{path} already exists")), "{again}");
+    let bad_id = c
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"id": "--x y", "repo": "acme/storefront", "parent": parent, "name": "other"}))
+        .await
+        .unwrap_err();
+    assert!(bad_id.to_string().contains("not a clone id: --x y"), "{bad_id}");
     // Only an owner/name repository reaches gh.
     let bad = c
-        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"repo": "--upload-pack=x/y", "parent": parent, "name": "y"}))
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"id": "c-3", "repo": "--upload-pack=x/y", "parent": parent, "name": "y"}))
         .await
         .unwrap_err();
     assert!(bad.to_string().contains("not a GitHub repository"), "{bad}");
@@ -1650,7 +1656,7 @@ async fn a_failed_clone_says_why_and_leaves_no_folder() {
     let mut c = d.client().await;
     let mut watcher = d.client().await;
     let parent = dirs[1].path().join("moonlet");
-    let _: serde_json::Value = c.request(methods::REPO_CLONE, serde_json::json!({"repo": "acme/nope", "parent": parent, "name": "nope"})).await.unwrap();
+    let _: serde_json::Value = c.request(methods::REPO_CLONE, serde_json::json!({"id": "c-1", "repo": "acme/nope", "parent": parent, "name": "nope"})).await.unwrap();
     let (_, done) = clone_events(&mut watcher).await;
     assert_eq!(done["error"], "repository 'https://github.com/acme/nope.git/' not found");
     assert_eq!(done["project"], serde_json::Value::Null);
@@ -1663,7 +1669,7 @@ async fn a_cancelled_clone_stops_and_leaves_no_folder() {
     let mut c = d.client().await;
     let mut watcher = d.client().await;
     let parent = dirs[1].path().join("moonlet");
-    let job: serde_json::Value = c.request(methods::REPO_CLONE, serde_json::json!({"repo": "acme/big", "parent": parent, "name": "big"})).await.unwrap();
+    let job: serde_json::Value = c.request(methods::REPO_CLONE, serde_json::json!({"id": "c-1", "repo": "acme/big", "parent": parent, "name": "big"})).await.unwrap();
     let folder = parent.join("big");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !folder.join("partial").exists() {
@@ -1672,7 +1678,7 @@ async fn a_cancelled_clone_stops_and_leaves_no_folder() {
     }
     // While it runs, a second clone into the same folder is refused.
     let twice = c
-        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"repo": "acme/big", "parent": parent, "name": "big"}))
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"id": "c-2", "repo": "acme/big", "parent": parent, "name": "big"}))
         .await
         .unwrap_err();
     assert!(twice.to_string().contains(&format!("{} is being cloned already", folder.display())), "{twice}");

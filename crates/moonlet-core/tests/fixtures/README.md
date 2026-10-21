@@ -1,6 +1,6 @@
 # moonlet-core fixtures
 
-Each file is gh's real output, captured from the maintainer's own GitHub account and sanitised before commit (titles, logins, repository names, URLs and node ids replaced; issue bodies emptied). Edits beyond sanitising are listed.
+Each file is the real output of gh (or of git, for the `git-*` files), captured from the maintainer's own GitHub account and sanitised before commit (titles, logins, repository names, URLs and node ids replaced; issue bodies emptied). Edits beyond sanitising are listed.
 
 | File | What | Notes |
 |---|---|---|

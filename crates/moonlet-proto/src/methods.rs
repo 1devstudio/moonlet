@@ -703,6 +703,8 @@ pub struct RepoCloneTarget {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoClone {
+    /// Chosen by the app, so it can tell the clone's events from the start.
+    pub id: String,
     pub repo: String,
     #[serde(default)]
     pub ssh: Option<String>,

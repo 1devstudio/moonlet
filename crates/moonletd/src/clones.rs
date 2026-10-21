@@ -3,8 +3,7 @@
 //! whether or not a window still waits for it.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,25 +14,37 @@ use moonlet_core::terminal::TerminalManager;
 use moonlet_proto::Message;
 use moonlet_proto::methods::{self as m, RepoClone};
 use moonlet_proto::types::{CloneDone, CloneJob, CloneProgress, Project};
-use tokio::task::JoinHandle;
+use tokio::sync::oneshot;
 
 pub struct Clones {
     running: Mutex<HashMap<String, Running>>,
-    next: AtomicU64,
     sessions: Arc<SessionManager>,
     terminals: Arc<TerminalManager>,
 }
 
 struct Running {
-    job: CloneJob,
-    task: JoinHandle<()>,
+    path: String,
+    /// Stops git; taken once git is done, when the clone can no longer be
+    /// cancelled.
+    cancel: Option<oneshot::Sender<()>>,
+}
+
+/// An id the app chose: letters, digits and `-`, up to 64.
+fn checked_id(id: &str) -> Result<&str> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        || id.starts_with('-')
+    {
+        bail!("not a clone id: {id}");
+    }
+    Ok(id)
 }
 
 impl Clones {
     pub fn new(sessions: Arc<SessionManager>, terminals: Arc<TerminalManager>) -> Arc<Self> {
         Arc::new(Self {
             running: Mutex::new(HashMap::new()),
-            next: AtomicU64::new(1),
             sessions,
             terminals,
         })
@@ -42,59 +53,61 @@ impl Clones {
     /// Starts cloning and answers at once; `repo.clone_progress` and
     /// `repo.clone_done` events follow.
     pub fn start(self: &Arc<Self>, r: RepoClone) -> Result<CloneJob> {
-        repo_clone::checked_repo(&r.repo)?;
-        if let Some(ssh) = &r.ssh {
-            repo_clone::checked_ssh(ssh, &r.repo)?;
-        }
+        checked_id(&r.id)?;
+        repo_clone::checked_ref(&r.repo, r.ssh.as_deref())?;
         let path = repo_clone::clone_dest(&r.parent, &r.name)?;
         let shown = path.display().to_string();
         let mut running = self.running.lock().unwrap();
-        if running.values().any(|c| c.job.path == shown) {
+        if running.contains_key(&r.id) {
+            bail!("a clone {} is running already", r.id);
+        }
+        if running.values().any(|c| c.path == shown) {
             bail!("{shown} is being cloned already");
         }
         if path.exists() {
             bail!("{shown} already exists");
         }
         let job = CloneJob {
-            id: format!("clone-{}", self.next.fetch_add(1, Ordering::SeqCst)),
+            id: r.id.clone(),
             repo: r.repo.clone(),
-            path: shown,
+            path: shown.clone(),
         };
-        let me = self.clone();
-        let task = tokio::spawn({
-            let job = job.clone();
-            async move {
-                let done = me.run(&job, r, path).await;
-                me.running.lock().unwrap().remove(&job.id);
-                me.terminals
-                    .emit(Message::event(m::EV_REPO_CLONE_DONE, done));
-            }
-        });
+        let (cancel, cancelled) = oneshot::channel();
         running.insert(
             job.id.clone(),
             Running {
-                job: job.clone(),
-                task,
+                path: shown,
+                cancel: Some(cancel),
             },
         );
+        let me = self.clone();
+        let task_job = job.clone();
+        tokio::spawn(async move {
+            let done = me.run(&task_job, r, path, cancelled).await;
+            me.running.lock().unwrap().remove(&task_job.id);
+            me.terminals
+                .emit(Message::event(m::EV_REPO_CLONE_DONE, done));
+        });
         Ok(job)
     }
 
-    async fn run(&self, job: &CloneJob, r: RepoClone, path: PathBuf) -> CloneDone {
-        let done = |project: Option<Project>, error: Option<String>| CloneDone {
-            id: job.id.clone(),
-            repo: job.repo.clone(),
-            path: job.path.clone(),
+    async fn run(
+        &self,
+        job: &CloneJob,
+        r: RepoClone,
+        path: PathBuf,
+        cancelled: oneshot::Receiver<()>,
+    ) -> CloneDone {
+        let done = |project: Option<Project>, error: Option<String>, cancelled: bool| CloneDone {
+            job: job.clone(),
             project,
             error,
-            cancelled: false,
+            cancelled,
         };
         let gh = r.ssh.is_none() && repo_clone::gh_status().await.login.is_some();
-        let cloned = repo_clone::clone(&r.repo, r.ssh.as_deref(), gh, &path, |p| {
+        let clone = repo_clone::clone(&r.repo, r.ssh.as_deref(), gh, &path, |p| {
             let progress = CloneProgress {
-                id: job.id.clone(),
-                repo: job.repo.clone(),
-                path: job.path.clone(),
+                job: job.clone(),
                 step: p.step,
                 current: p.current,
                 total: p.total,
@@ -103,51 +116,65 @@ impl Clones {
             };
             self.terminals
                 .emit(Message::event(m::EV_REPO_CLONE_PROGRESS, progress));
-        })
-        .await;
-        if let Err(e) = cloned {
-            remove(&path).await;
-            return done(None, Some(format!("{e:#}")));
+        });
+        // Cancelling drops the clone, which kills git.
+        let cloned = tokio::select! {
+            r = clone => Some(r),
+            Ok(()) = cancelled => None,
+        };
+        // From here on the clone cannot be cancelled.
+        if let Some(c) = self.running.lock().unwrap().get_mut(&job.id) {
+            c.cancel = None;
         }
-        // A clone that cannot be added stays on disk: it is the user's now.
+        match cloned {
+            None => {
+                remove_clone_folder(&path).await;
+                return done(None, None, true);
+            }
+            Some(Err(e)) => {
+                remove_clone_folder(&path).await;
+                return done(None, Some(format!("{e:#}")), false);
+            }
+            Some(Ok(())) => {}
+        }
         let added = match &r.section_id {
             Some(id) => self.sessions.section_add_project(id, &job.path).await,
             None => self.sessions.add_project(&job.path).await,
         };
         match added {
-            Ok(project) => done(Some(project), None),
-            Err(e) => done(None, Some(format!("{e:#}"))),
+            Ok(project) => done(Some(project), None, false),
+            // The clone stays on disk: it is the user's now.
+            Err(e) => done(
+                None,
+                Some(format!(
+                    "cloned into {}, but adding it as a project failed: {e:#}",
+                    job.path
+                )),
+                false,
+            ),
         }
     }
 
-    /// Stops a running clone and removes its folder.
-    pub async fn cancel(&self, id: &str) -> Result<()> {
-        let Some(c) = self.running.lock().unwrap().remove(id) else {
+    /// Stops a clone that is still running git; its `repo.clone_done`
+    /// follows once its folder is removed.
+    pub fn cancel(&self, id: &str) -> Result<()> {
+        let mut running = self.running.lock().unwrap();
+        let Some(c) = running.get_mut(id) else {
             bail!("no clone {id} is running");
         };
-        c.task.abort();
-        // A clone that ended meanwhile has reported itself and is kept.
-        if c.task.await.is_ok() {
-            return Ok(());
+        match c.cancel.take() {
+            Some(cancel) => {
+                let _ = cancel.send(());
+                Ok(())
+            }
+            None => bail!("the clone {id} is done and is being added"),
         }
-        remove(&PathBuf::from(&c.job.path)).await;
-        let done = CloneDone {
-            id: c.job.id,
-            repo: c.job.repo,
-            path: c.job.path,
-            project: None,
-            error: None,
-            cancelled: true,
-        };
-        self.terminals
-            .emit(Message::event(m::EV_REPO_CLONE_DONE, done));
-        Ok(())
     }
 }
 
-/// Removes a clone's folder. A killed git may still be writing for a
-/// moment, so a failed removal is tried again.
-async fn remove(path: &PathBuf) {
+/// Removes a stopped clone's folder. A killed git may still be writing for
+/// a moment, so a failed removal is tried again.
+async fn remove_clone_folder(path: &Path) {
     for _ in 0..5 {
         match std::fs::remove_dir_all(path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -156,5 +183,5 @@ async fn remove(path: &PathBuf) {
             _ => return,
         }
     }
-    tracing::warn!("cannot remove the cancelled clone at {}", path.display());
+    tracing::warn!("cannot remove the stopped clone at {}", path.display());
 }

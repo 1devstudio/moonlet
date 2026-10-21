@@ -428,9 +428,8 @@ pub enum CloneStep {
 /// How far a clone is (X59).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CloneProgress {
-    pub id: String,
-    pub repo: String,
-    pub path: String,
+    #[serde(flatten)]
+    pub job: CloneJob,
     pub step: CloneStep,
     pub current: u64,
     pub total: u64,
@@ -443,9 +442,8 @@ pub struct CloneProgress {
 /// How a clone ended (X59).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CloneDone {
-    pub id: String,
-    pub repo: String,
-    pub path: String,
+    #[serde(flatten)]
+    pub job: CloneJob,
     pub project: Option<Project>,
     pub error: Option<String>,
     pub cancelled: bool,
