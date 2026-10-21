@@ -28,7 +28,7 @@ function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
   // A session kept in sync opens its copy on this Mac (X60).
   const sessionId = useStore((s) => s.sessions[tree.host]?.find((w) => w.path === tree.root)?.id);
   const copyPath = useSync((s) => (sessionId ? s.copies[sesKey(tree.host, sessionId)]?.path || null : null));
-  const synced = syncedOpenIn(tree.targets, { dir: e.is_dir, kind }, copyPath, tree.root, e.path);
+  const synced = syncedOpenIn(tree.targets, e.is_dir, { copy: copyPath, session: tree.root }, e.path);
   const choices = synced?.choices ?? openInChoices(tree.targets, { dir: e.is_dir, kind });
   const open = (t: OpenTarget) => (synced ? hostsApi.openIn(t.id, synced.path) : hostsApi.openIn(t.id, e.path, tree.host));
   return (
