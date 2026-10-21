@@ -1,8 +1,9 @@
 // Claude profiles in the app (X33): labels for the profile select, the
-// sidebar footer and the confirm before a workspace switches accounts, and
-// which profile a chat's failed login offers to sign in to.
+// sidebar footer and the confirm before a workspace switches accounts,
+// which profile a chat's failed login offers to sign in to, and the
+// terminal that signs a profile in or out.
 
-import type { ChatItem, ProfileAccount, ProfileInfo, Section, Session, TerminalInfo, Workspace } from "./protocol";
+import type { ChatItem, ClaudeProfile, ProfileAccount, ProfileInfo, Section, Session, TerminalInfo, Workspace } from "./protocol";
 
 /** The profile select's value for the default profile (`~/.claude`). */
 export const DEFAULT_PROFILE = "";
@@ -12,6 +13,25 @@ export const NEW_PROFILE = "new";
 /** `/Users/jane/.claude-work` → `~/.claude-work`. */
 export function tildePath(path: string, home: string | null): string {
   return home && (path === home || path.startsWith(home + "/")) ? "~" + path.slice(home.length) : path;
+}
+
+export type AuthAction = "login" | "login-console" | "logout";
+
+const AUTH_ARGS: Record<AuthAction, string[]> = {
+  login: ["auth", "login"],
+  "login-console": ["auth", "login", "--console"],
+  logout: ["auth", "logout"],
+};
+
+/** The terminal that runs `claude auth …` for a profile (`null`: the
+ * default, which runs from the home folder). */
+export function authTerminal(profile: ClaudeProfile | null, action: AuthAction): { cwd: string; command: string[]; env: Record<string, string>; title: string } {
+  return {
+    cwd: profile?.path ?? "~",
+    command: ["claude", ...AUTH_ARGS[action]],
+    env: profile ? { CLAUDE_CONFIG_DIR: profile.path } : {},
+    title: `claude ${AUTH_ARGS[action].join(" ")}`,
+  };
 }
 
 export interface ProfileOption {
