@@ -1,6 +1,6 @@
 # moonlet
 
-**An agent-first terminal for macOS.** Run Claude Code, Codex and other coding agents side by side, each in its own git worktree, and review their work without leaving the app. Sessions keep running when you quit the app, close the lid or lose the network, on your Mac and on remote Linux hosts over SSH.
+**An agent-first terminal for macOS.** Run Claude Code, Codex and other coding agents side by side, each in its own git worktree, and review their work without leaving the app. Sessions keep running when you quit the app, close the lid or lose the network, on your Mac and on other Macs and Linux machines you reach over your tailnet or SSH.
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B%20(Apple%20Silicon)-lightgrey.svg)](#requirements)
@@ -28,7 +28,7 @@
 - **Knows what agents are doing.** Agent hooks report *working*, *needs input*, *done* and *failed*. You get a notification, a badge, and one place listing every blocked agent (⌘K).
 - **Review in place.** Changes against the base branch with hunk staging and comment-to-agent, a file tree, a code editor and Markdown preview with Mermaid. Create pull requests through `gh`.
 - **Sessions you cannot lose.** The `moonletd` daemon owns every PTY. Reattaching restores the screen and scrollback, and daemon upgrades hand live PTYs to the new binary.
-- **Remote hosts.** The same sessions on Linux machines over your existing SSH config, surviving disconnects.
+- **Remote hosts.** The same sessions on another Mac or a Linux machine, paired once over your tailnet or reached through your existing SSH config. They survive disconnects.
 - **Per-workspace Claude profiles.** Each workspace can use its own Claude Code login, so work and personal subscriptions never mix.
 - **Scriptable.** The `moonlet` CLI and a local socket API expose sessions, terminals and every daemon method.
 
@@ -89,15 +89,36 @@ App data lives in `~/.moonlet`. Set `MOONLET_HOME` to use another directory.
 
 ## Remote hosts
 
-**Settings › Remote hosts** lists the aliases in your `~/.ssh/config`. After you confirm, moonlet installs a checksum-verified `moonletd` built for the host's platform into `~/.moonlet/bin` on that host. The app checks the helper's version on every connection and offers to reinstall it on a mismatch.
+A remote host is another machine running `moonletd`: a Mac, or a Linux machine (x86_64 or aarch64). Its sessions keep running when your Mac sleeps or loses the connection, and the app reconnects when it can.
 
-Linux helpers are built with `scripts/build-remote.sh`, which needs [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild).
+### Over your tailnet
+
+The simplest way: both machines are on the same [Tailscale](https://tailscale.com) tailnet, and your Mac pairs with the host once. No SSH keys or `~/.ssh/config` entries are needed.
+
+1. Put moonlet on the host.
+   - **A Mac:** install moonlet.app. In **Settings › Machines › Hosts**, turn on **Allow connections from my tailnet**, then click **Let another Mac connect**.
+   - **A Linux machine:** run
+
+     ```sh
+     curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh
+     ```
+
+     The script checks the SHA-256 of `moonletd` and `moonlet`, installs them in `~/.moonlet/bin`, runs the daemon as a systemd user service, turns on tailnet access and shows a pairing code. It never uses `sudo`. Run it again to update: sessions keep running. Ending the command with `| sh -s -- --uninstall` instead removes moonlet and keeps your data in `~/.moonlet`.
+2. On your Mac, open **Settings › Machines › Hosts › Add host**. Enter the code (such as `7KQ2M-X9PDA`) and the host's name on your tailnet (such as `build-box`), or paste the pairing link.
+
+A code works once, for five minutes. To take access back, remove the Mac from the host's list, or the host from your Mac's. On a Linux host, `moonletd pair` shows a new code. When the host and your Mac speak different protocol versions, the host's row says which one to update.
+
+### Over SSH
+
+**Settings › Machines › Hosts › Add host › Add an SSH host** offers the aliases in your `~/.ssh/config`. moonlet connects with your own OpenSSH config, keys and agent. After you confirm, it installs a checksum-verified `moonletd` built for the host's platform into `~/.moonlet/bin` on that host. The app checks the helper's version on every connection and offers to reinstall it on a mismatch.
+
+To build the Linux helpers yourself, run `scripts/build-remote.sh`, which needs [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild).
 
 ## Command-line interface
 
 The app bundles two binaries:
 
-- `moonletd`, the session daemon. It owns every PTY and runs under launchd.
+- `moonletd`, the session daemon. It owns every PTY and runs under launchd on a Mac, or systemd on Linux.
 - `moonlet`, the command-line client for scripts and agents.
 
 ```sh
@@ -110,6 +131,8 @@ moonlet rpc repo.list            # call any daemon method, print JSON
 
 moonletd status                  # daemon info
 moonletd upgrade                 # hand live sessions to a newer daemon
+moonletd tailnet on              # let paired Macs and phones connect over Tailscale
+moonletd pair                    # show a one-time pairing code
 ```
 
 Run `moonlet --help` for the full list. The socket protocol is documented in [docs/protocol.md](docs/protocol.md).
@@ -122,7 +145,7 @@ Run `moonlet --help` for the full list. The socket protocol is documented in [do
 │  React, xterm.js,    │          bytes             │  PTYs, sessions, git │
 │  Monaco              │                            │  agent state, files  │
 └──────────────────────┘                            └──────────┬───────────┘
-          ▲                                                    │ SSH (proxy)
+          ▲                                                    │ tailnet or SSH
           │ moonlet CLI, agent hooks                           ▼
                                                     moonletd on remote hosts
 ```
@@ -131,7 +154,7 @@ Run `moonlet --help` for the full list. The socket protocol is documented in [do
 |---|---|
 | [`crates/moonlet-proto`](crates/moonlet-proto) | Wire protocol: framed JSON messages and raw PTY bytes |
 | [`crates/moonlet-core`](crates/moonlet-core) | PTYs, terminal state, sessions, agent state, git, files, workspaces, shell integration |
-| [`crates/moonletd`](crates/moonletd) | The daemon: socket server, SSH `proxy`, live upgrade, launchd service |
+| [`crates/moonletd`](crates/moonletd) | The daemon: socket server, tailnet listener and pairing, SSH `proxy`, live upgrade, launchd and systemd services |
 | [`crates/moonlet-cli`](crates/moonlet-cli) | The `moonlet` CLI: agent hooks, `notify`, `ls`, `session`, `rpc` |
 | [`apps/desktop`](apps/desktop) | Tauri 2 desktop app: React, xterm.js and Monaco |
 | [`vendor/vt100`](vendor/vt100) | Patched fork of the `vt100` crate (see its [PATCHES.md](vendor/vt100/PATCHES.md)) |
