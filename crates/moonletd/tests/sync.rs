@@ -2855,14 +2855,36 @@ async fn an_approved_setup_runs_unasked_until_its_command_changes() {
     assert_eq!(e.to_string(), "setup_changed: touch other");
     assert!(!PathBuf::from(&asks.path).join("ignored-by-setup").exists());
 
-    // Remembered on this Mac, per project and exact command.
+    // Remembered on this Mac, per central host, project and exact command.
     let projects: Value =
         serde_json::from_str(&read(&worker.home.path().join("sync/projects.json")).unwrap())
             .unwrap();
     assert_eq!(
         projects,
-        json!({ "git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe": { "approved_setup": ["touch ignored-by-setup"] } })
+        json!({ "studio-mini git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe": { "approved_setup": ["touch ignored-by-setup"] } })
     );
+}
+
+#[tokio::test]
+async fn an_approval_not_given_for_this_central_host_does_not_count() {
+    let central = central().await;
+    give_setup(&central, "touch ignored-by-setup");
+    let worker = worker(&central.origin).await;
+    // Approved for a project of the same identity on another central host,
+    // and for the identity alone: another host can claim any identity.
+    write(
+        &worker.home.path().join("sync/projects.json"),
+        &json!({
+            "build-box git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe": { "approved_setup": ["touch ignored-by-setup"] },
+            "git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe": { "approved_setup": ["touch ignored-by-setup"] }
+        }).to_string(),
+    );
+    link(&central, &worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let asks = copy_setup_is(&worker, &copy.id, json!({ "kind": "needs_approval" })).await;
+    assert!(!PathBuf::from(&asks.path).join("ignored-by-setup").exists());
 }
 
 #[tokio::test]

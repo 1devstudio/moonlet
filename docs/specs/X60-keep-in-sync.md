@@ -69,7 +69,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 ### Setup in the copy
 
 - [ ] Once the copy is made, when the copy's `.moonlet/config.toml` has a `setup` script (X1), the app asks in the confirm modal: "Run shop's setup in the copy on this Mac? `pnpm install` (from .moonlet/config.toml)", with **Run setup** and **Skip**. The modal shows the command exactly as the file has it.
-- [x] The approval is remembered for this project (by identity) and this exact command. A later copy with the same command runs it without asking. A copy whose command differs in any way, such as one an agent changed in the session, asks again and shows the new command. (`an_approved_setup_runs_unasked_until_its_command_changes`)
+- [x] The approval is remembered for this central host, this project (by identity) and this exact command. A later copy with the same command runs it without asking. A copy whose command differs in any way, such as one an agent changed in the session, asks again and shows the new command. (`an_approved_setup_runs_unasked_until_its_command_changes`, `an_approval_not_given_for_this_central_host_does_not_count`)
 - [x] Setup runs in the copy's folder the way X1 runs it (`$SHELL -lic`, with the session env vars of A4, the paths being the copy's). Files keep syncing while it runs. Ignored files it writes, such as `node_modules`, stay on this Mac. (`a_copy_runs_the_projects_setup_once_the_user_approves_the_command`, `a_failed_setup_says_how_it_exited_and_keeps_its_output`)
 - [ ] While setup runs, the copy reads "Running setup…". When it fails, the copy reads "Setup failed (exit 1)". Both states, and **Skip**, still sync files. The popover offers **Show output** and **Run setup again**. The output goes to `$MOONLET_HOME/sync/logs/<copy id>.log`, and only the last run is kept.
 - [ ] Setup runs once per copy. Later edits to the setup script don't run it again by themselves. **Run setup again** runs the current command, and asks first if that command hasn't been approved.
@@ -233,7 +233,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   - the paths that differ.
 
   On the central host, it also records each copy's worker id. No token is in it.
-- **On this Mac,** `$MOONLET_HOME/sync/projects.json` holds, per project identity:
+- **On this Mac,** `$MOONLET_HOME/sync/projects.json` holds, per central host and project identity (the key is `<host> <origin> <root>`):
   - `keep_new`, the project page's switch;
   - `approved_setup`, the setup commands the user approved, as exact strings.
 
@@ -241,7 +241,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
   ```json
   {
-    "github.com/acme/shop 4171b03ff0d2bd434751f17bc9d34da784f97e72": {
+    "studio-mini github.com/acme/shop 4171b03ff0d2bd434751f17bc9d34da784f97e72": {
       "keep_new": true,
       "approved_setup": ["pnpm install"]
     }
@@ -261,7 +261,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 ## Security considerations
 
 - **What a central host can write on this Mac.** Any file inside the copy's worktree and the copy's branch, nothing else. The session's path comes from the central host, so the copy takes it only inside this Mac's `~/.moonlet/worktrees`: a path such as `/Users/alex/.ssh`, one that backs out with `..`, or one through a symlink that leads elsewhere puts the copy under `copies/` instead, and no folder is made for it. The names of folders under `copies/` and `clones/` that come from the central host are plain names or hashes, never `..` or a path. The worker refuses a tree that would write outside the worktree, into `.git`, or through a symlink, the way `git checkout` refuses such paths. That includes the spellings macOS and Windows read as `.git` (`.g\u200cit`, `GIT~1`, `.git.`) and a symlinked `.gitmodules`. Packs are checked as git checks a fetch with `transfer.fsckObjects` (`index-pack --strict`): a broken object, or a tree with a `.git` or `..` entry, stores nothing and pauses the copy. A tree with `../x`, `.git/hooks/post-checkout` or `link/x` (where `link` is a symlink) pauses the copy with "Paused: studio-mini sent a path outside the copy." Hooks in `.git` never sync, because `.git` is outside the snapshot.
-- **The setup script runs code from the central host on this Mac.** The command comes from a synced file that the agent on the central host can edit. So this Mac never runs a setup command the user hasn't seen. Approval holds for one exact string, and any change to it asks again. The Mac usually holds more secrets than the central host, which is why a command approved there doesn't count here. The check happens in the daemon (`sync.run_setup` refuses a stale command), not only in the app.
+- **The setup script runs code from the central host on this Mac.** The command comes from a synced file that the agent on the central host can edit. So this Mac never runs a setup command the user hasn't seen. Approval holds for one exact string, and any change to it asks again. The Mac usually holds more secrets than the central host, which is why a command approved there doesn't count here. The check happens in the daemon (`sync.run_setup` refuses a stale command), not only in the app. An approval also holds only for the central host it was given for: a project's identity is something any host can claim, so an approval for `shop` on studio-mini doesn't run setup for a copy from another host that says it has `shop`.
 - **Files that run code when opened.** A prompt-injected agent on the central host can write `.vscode/tasks.json`, `.envrc` or a `package.json` script into the copy. Opening the copy in an editor or running commands in it carries the same risk as opening a branch the agent pushed. The popover says so on first use: "Files here come from the agent on studio-mini. Your editor's workspace trust applies."
 - **Secrets.** Ignored files never sync, so `.env` stays put. A file that was synced and is ignored afterwards keeps its last synced version on the other side; nothing written to it after that leaves this machine. Neither do untracked files on moonlet's own list of usual secret files (`.env.*.local`, `*.pem`, `*.key`, SSH keys, `.npmrc`, `.netrc`), which the repository cannot change: an agent on the central host could otherwise remove a line from `.gitignore` and have the Mac send it a secret. The list replaces the user's global excludes on both sides, so the two still agree on every snapshot. Any other untracked file that is *not* ignored does sync, and its contents enter both repositories' object stores. This is git's rule, and the first-use note mentions it.
 - **Credentials.** The origin URL the central host sends has its password or token removed. The Mac clones with its own credentials.

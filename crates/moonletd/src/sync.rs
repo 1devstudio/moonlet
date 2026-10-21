@@ -266,11 +266,13 @@ struct SetupRun {
     reaped: Arc<std::sync::atomic::AtomicBool>,
 }
 
-/// A project's key in `projects.json`: its origin and root commit. A
+/// A project's key in `projects.json`: the central host's name, then the
+/// project's origin and root commit. The identity alone is not enough:
+/// another central host could claim it and have an approved setup run. A
 /// project with no root commit has none, so nothing is remembered for it.
-fn project_key(id: &ProjectIdentity) -> Option<String> {
+fn project_key(host: &str, id: &ProjectIdentity) -> Option<String> {
     let root = id.root.as_deref()?;
-    Some(format!("{} {root}", id.origin.as_deref().unwrap_or("")))
+    Some(format!("{host} {} {root}", id.origin.as_deref().unwrap_or("")))
 }
 
 /// Why making or updating a copy stopped.
@@ -1762,7 +1764,7 @@ impl LiveCopies {
         let approved = k
             .identity
             .as_ref()
-            .and_then(project_key)
+            .and_then(|i| project_key(&k.host, i))
             .is_some_and(|key| {
                 self.load_projects()
                     .get(&key)
@@ -1794,7 +1796,7 @@ impl LiveCopies {
         if current != command {
             return Err(RpcError::new("setup_changed", current));
         }
-        if let Some(key) = k.identity.as_ref().and_then(project_key) {
+        if let Some(key) = k.identity.as_ref().and_then(|i| project_key(&k.host, i)) {
             self.update_projects(&key, |p| {
                 if !p.approved_setup.contains(&current) {
                     p.approved_setup.push(current.clone());
