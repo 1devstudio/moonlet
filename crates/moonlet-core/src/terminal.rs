@@ -542,21 +542,11 @@ impl TerminalManager {
         if let Some(sid) = session {
             // Keep escalating after the shell exits, until the session is empty.
             let weak = Arc::downgrade(&s);
-            tokio::spawn(async move {
-                for (delay, sig) in [
-                    (1500, nix::sys::signal::Signal::SIGTERM),
-                    (3000, nix::sys::signal::Signal::SIGKILL),
-                ] {
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    // The read loop records the exit after reaping the shell,
-                    // and only removes the terminal after that.
-                    let reaped = weak
-                        .upgrade()
-                        .is_none_or(|s| s.state.lock().unwrap().info.exit.is_some());
-                    if !crate::pty::signal_session(sid, sig, reaped) {
-                        return;
-                    }
-                }
+            // The read loop records the exit after reaping the shell, and
+            // only removes the terminal after that.
+            crate::pty::escalate_session(sid, move || {
+                weak.upgrade()
+                    .is_none_or(|s| s.state.lock().unwrap().info.exit.is_some())
             });
         } else if !exited {
             // Some programs (agents included) ignore SIGHUP: escalate.

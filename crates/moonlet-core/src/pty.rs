@@ -194,6 +194,20 @@ pub fn signal_session(sid: u32, signal: Signal, leader_reaped: bool) -> bool {
     any
 }
 
+/// After a SIGHUP to session `sid`: SIGTERM after 1.5 s, then SIGKILL after
+/// 3 s more, while any process is left in it. `reaped` says whether the
+/// session's leader was waited for (see [`signal_session`]).
+pub fn escalate_session(sid: u32, reaped: impl Fn() -> bool + Send + 'static) {
+    tokio::spawn(async move {
+        for (delay, sig) in [(1500, Signal::SIGTERM), (3000, Signal::SIGKILL)] {
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            if !signal_session(sid, sig, reaped()) {
+                return;
+            }
+        }
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn all_pids() -> Vec<i32> {
     // SAFETY: a null buffer asks for the count; the second call fills at most
