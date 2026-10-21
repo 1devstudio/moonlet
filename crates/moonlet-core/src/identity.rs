@@ -138,17 +138,21 @@ mod tests {
             pick_root(one).as_deref(),
             Some("4171b03ff0d2bd434751f17bc9d34da784f97e72")
         );
-        let two = "9c1e5a7d3b2f4e6a8c0d1e2f3a4b5c6d7e8f9a0b 1790970000\n\
-                   4171b03ff0d2bd434751f17bc9d34da784f97e72 1790968896\n";
+        // Captured from a scratch repository whose `main` (2026-10-01) merged
+        // an unrelated `docs` history (2026-10-02):
+        // `git log --max-parents=0 --format='%H %ct' HEAD`.
+        let two = "01d614ada9e863900d71c7e541ce267013860e99 1790935200\n\
+                   c8452e9128b48944c123f0e7b84cc63d39528faa 1790848800\n";
         assert_eq!(
             pick_root(two).as_deref(),
-            Some("4171b03ff0d2bd434751f17bc9d34da784f97e72")
+            Some("c8452e9128b48944c123f0e7b84cc63d39528faa")
         );
-        let tie = "9c1e5a7d3b2f4e6a8c0d1e2f3a4b5c6d7e8f9a0b 1790968896\n\
-                   4171b03ff0d2bd434751f17bc9d34da784f97e72 1790968896\n";
+        // Constructed: the same two roots at one time.
+        let tie = "01d614ada9e863900d71c7e541ce267013860e99 1790848800\n\
+                   c8452e9128b48944c123f0e7b84cc63d39528faa 1790848800\n";
         assert_eq!(
             pick_root(tie).as_deref(),
-            Some("4171b03ff0d2bd434751f17bc9d34da784f97e72")
+            Some("01d614ada9e863900d71c7e541ce267013860e99")
         );
         assert_eq!(pick_root(""), None);
     }
@@ -174,9 +178,38 @@ mod tests {
         crate::git::git(dir, args).await.unwrap();
     }
 
+    /// A repository whose one commit has a fixed hash, `d58b7092…`: the same
+    /// author, date and content always give the same commit.
+    fn fixed_repo() -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("shop.txt"), "a\n").unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["add", "shop.txt"],
+            &["commit", "-q", "-m", "shop"],
+        ] {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_AUTHOR_NAME", "Alex")
+                .env("GIT_AUTHOR_EMAIL", "alex@example.com")
+                .env("GIT_COMMITTER_NAME", "Alex")
+                .env("GIT_COMMITTER_EMAIL", "alex@example.com")
+                .env("GIT_AUTHOR_DATE", "2026-10-01T10:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2026-10-01T10:00:00Z")
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        }
+        repo
+    }
+
     #[tokio::test]
     async fn a_repository_has_its_origin_and_root_and_a_shallow_or_empty_one_no_root() {
-        let repo = crate::git::tests::repo().await;
+        let repo = fixed_repo();
         git(
             repo.path(),
             &[
@@ -187,12 +220,12 @@ mod tests {
             ],
         )
         .await;
-        let root = crate::git::git_text(repo.path(), &["rev-parse", "HEAD"])
-            .await
-            .unwrap();
         let got = identity(repo.path()).await;
         assert_eq!(got.origin.as_deref(), Some("github.com/acme/shop"));
-        assert_eq!(got.root, Some(root));
+        assert_eq!(
+            got.root.as_deref(),
+            Some("d58b7092fc34407c273d5e62e56187a91d04ff3e")
+        );
 
         git(repo.path(), &["commit", "-q", "--allow-empty", "-m", "two"]).await;
         let parent = tempfile::tempdir().unwrap();
