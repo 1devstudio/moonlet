@@ -1415,7 +1415,8 @@ pub struct SyncUpdate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncUpdated {
     pub applied: bool,
-    pub tree: String,
+    /// The worker's files, when it could look: not while it was busy.
+    pub tree: Option<String>,
 }
 
 /// Which side's version a differing path keeps.

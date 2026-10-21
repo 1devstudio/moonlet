@@ -45,6 +45,19 @@ const APPLY_TRIES: usize = 5;
 /// How long a copy that kept changing under an update waits before asking
 /// the central host again.
 const RETRY_AFTER: Duration = Duration::from_secs(1);
+/// The first wait before an offer the central host turned away is made
+/// again; it doubles up to [`OFFER_WAIT_MAX`].
+const OFFER_WAIT: Duration = Duration::from_millis(300);
+const OFFER_WAIT_MAX: Duration = Duration::from_secs(5);
+
+/// What an offer came to.
+#[derive(Debug, PartialEq)]
+enum Round {
+    /// The central host took it, or there was nothing to offer.
+    Made,
+    /// The link is down; the copy waits for it.
+    Offline,
+}
 
 /// A copy this Mac keeps, as saved.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -685,7 +698,7 @@ impl LiveCopies {
             self.offer_later(&req.copy);
             return Ok(SyncUpdated {
                 applied: false,
-                tree: String::new(),
+                tree: None,
             });
         };
         let k = self
@@ -715,7 +728,7 @@ impl LiveCopies {
                 self.offer_later(&req.copy);
                 return Ok(SyncUpdated {
                     applied: false,
-                    tree: local.tree,
+                    tree: Some(local.tree),
                 });
             }
             if req.tree != local.tree {
@@ -746,7 +759,7 @@ impl LiveCopies {
             self.changed(&req.copy);
             return Ok(SyncUpdated {
                 applied: true,
-                tree: req.tree,
+                tree: Some(req.tree),
             });
         }
         Err(RpcError::new("busy", "the copy kept changing"))
@@ -755,53 +768,60 @@ impl LiveCopies {
     /// Offers copy `id`'s files to the central host and applies what it
     /// decides; with `force`, also when they are as the last round left
     /// them, and with `resolve`, one differing path takes one side's
-    /// version. Gives whether a round was made: not while the link is down.
+    /// version. A paused copy, or one not made yet, says so.
     async fn offer_changes(
         &self,
         id: &str,
         force: bool,
         resolve: Option<Resolution>,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<Round, RpcError> {
         let lock = self.lock(id);
         let _one = lock.lock().await;
-        let Some(k) = self.kept(id) else {
-            return Ok(false);
-        };
-        let (Some(base), Some(base_head)) = (k.base.clone(), k.base_head.clone()) else {
-            return Ok(false);
-        };
-        if k.paused.is_some() {
-            return Ok(false);
+        let k = self
+            .kept(id)
+            .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
+        if let Some(reason) = &k.paused {
+            return Err(RpcError::new("paused", reason.clone()));
         }
+        let (Some(mut base), Some(mut base_head)) = (k.base.clone(), k.base_head.clone()) else {
+            return Err(RpcError::new("not_ready", "the copy is not made yet"));
+        };
+        if let Some(res) = &resolve
+            && !k.differs.contains(&res.path)
+        {
+            return Err(RpcError::new("invalid_params", "that path does not differ"));
+        }
+        let (mut resolve, mut force) = (resolve, force);
+        let mut last = k.tree.clone();
+        let mut differed = k.differs.clone();
         let repo = PathBuf::from(&k.repo);
         let path = PathBuf::from(&k.path);
         for _ in 0..APPLY_TRIES {
             let local = git_sync::snapshot(&path, MAX_FILE)
                 .await
                 .map_err(internal)?;
-            if !force && resolve.is_none() && k.tree.as_deref() == Some(local.tree.as_str()) {
-                return Ok(true);
+            if !force && resolve.is_none() && last.as_deref() == Some(local.tree.as_str()) {
+                return Ok(Round::Made);
             }
             let Some(host) = self.link.host() else {
                 self.set_state(id, CopyState::Waiting);
-                return Ok(false);
+                return Ok(Round::Offline);
             };
+            let files = changed_paths(&repo, &base, &local.tree).await;
+            if files > 0 {
+                self.set_state(id, CopyState::Syncing { files });
+            }
             let head = git_sync::head(&path).await.map_err(internal)?;
             let pack = git_sync::pack_objects(&repo, &[&local.tree, &head], &[&base, &base_head])
                 .await
                 .map_err(internal)?;
-            let pack = if pack.is_empty() {
-                None
-            } else {
-                Some(host.send_pack(&pack)?)
-            };
             let req = SyncOffer {
                 copy: id.to_string(),
                 base: base.clone(),
                 tree: local.tree.clone(),
                 head,
                 too_big: local.too_big.clone(),
-                pack,
+                pack: send_pack(&pack, |p| host.send_pack(p))?,
                 resolve: resolve.clone(),
             };
             let reply = match host
@@ -811,7 +831,7 @@ impl LiveCopies {
                 Ok(v) => v,
                 Err(e) if matches!(e.code.as_str(), "disconnected" | "timeout") => {
                     self.set_state(id, CopyState::Waiting);
-                    return Ok(false);
+                    return Ok(Round::Offline);
                 }
                 Err(e) => return Err(e),
             };
@@ -823,24 +843,17 @@ impl LiveCopies {
                 self.unpack_from_central(&k, &repo, &pack).await?;
             }
             self.check_paths(&k, &repo, &r.tree).await?;
-            if r.tree != local.tree {
-                let files = changed_paths(&repo, &local.tree, &r.tree).await;
-                self.set_state(id, CopyState::Syncing { files });
-                match git_sync::apply(&path, &local.tree, &r.tree).await {
-                    Ok(()) => {}
-                    // Edited again meanwhile: offer that, from this base.
-                    Err(ApplyError::Changed(_)) => continue,
-                    Err(ApplyError::Unsafe(_)) => return Err(self.pause_outside(&k)),
-                    Err(ApplyError::Git(e)) => return Err(internal(format!("{e:#}"))),
-                }
-            }
+            // Edits made since the offer stay; the rest becomes the answer.
+            let now = self
+                .carry_over(&k, &repo, &path, &local.tree, &r.tree)
+                .await?;
             git_sync::set_base_ref(&repo, id, &r.base)
                 .await
                 .map_err(internal)?;
             let newly: Vec<String> = r
                 .differs
                 .iter()
-                .filter(|p| !k.differs.contains(p))
+                .filter(|p| !differed.contains(p))
                 .cloned()
                 .collect();
             self.update_kept(id, |kept| {
@@ -850,16 +863,85 @@ impl LiveCopies {
                 kept.differs = r.differs.clone();
                 kept.too_big = r.too_big.clone();
             });
-            self.states
-                .lock()
-                .unwrap()
-                .insert(id.to_string(), CopyState::InSync);
+            if now == r.tree {
+                self.states
+                    .lock()
+                    .unwrap()
+                    .insert(id.to_string(), CopyState::InSync);
+                self.changed_with(id, newly);
+                return Ok(Round::Made);
+            }
+            // Edited again meanwhile: the central host took the round, so
+            // offer those edits against the new base, not the old one.
             self.changed_with(id, newly);
-            return Ok(true);
+            (base, base_head) = (r.base, r.head);
+            last = Some(r.tree);
+            differed = r.differs;
+            (resolve, force) = (None, false);
         }
-        // It kept changing; the watcher offers it again.
-        self.set_state(id, CopyState::InSync);
-        Ok(true)
+        Err(RpcError::new("busy", "the copy kept changing"))
+    }
+
+    /// Puts the central host's answer `answer` to the offer of `offered` in
+    /// the copy, keeping each file edited since the offer as it is now.
+    /// Gives the tree the copy then holds.
+    async fn carry_over(
+        &self,
+        k: &Kept,
+        repo: &Path,
+        path: &Path,
+        offered: &str,
+        answer: &str,
+    ) -> Result<String, RpcError> {
+        let offered = git_sync::read_files(repo, offered)
+            .await
+            .map_err(internal)?;
+        let answer = git_sync::read_files(repo, answer).await.map_err(internal)?;
+        for _ in 0..APPLY_TRIES {
+            let now = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
+            let files = git_sync::read_files(repo, &now.tree)
+                .await
+                .map_err(internal)?;
+            let target = git_sync::write_files(repo, &keep_edits(&offered, &files, &answer))
+                .await
+                .map_err(internal)?;
+            if target == now.tree {
+                return Ok(target);
+            }
+            match git_sync::apply(path, &now.tree, &target).await {
+                Ok(()) => return Ok(target),
+                Err(ApplyError::Changed(_)) => continue,
+                Err(ApplyError::Unsafe(_)) => return Err(self.pause_outside(k)),
+                Err(ApplyError::Git(e)) => return Err(internal(format!("{e:#}"))),
+            }
+        }
+        Err(RpcError::new("busy", "the copy kept changing"))
+    }
+
+    /// Offers copy `id` until the central host takes it or the link drops:
+    /// one turned away is made again after [`OFFER_WAIT`], doubling up to
+    /// [`OFFER_WAIT_MAX`]. The copy shows syncing meanwhile.
+    async fn offer_until_taken(&self, id: &str, force: bool) {
+        let mut wait = OFFER_WAIT;
+        loop {
+            match self.offer_changes(id, force, None).await {
+                Ok(_) => return,
+                Err(e)
+                    if matches!(
+                        e.code.as_str(),
+                        "paused" | "not_found" | "not_ready" | "forbidden" | "invalid_params"
+                    ) =>
+                {
+                    tracing::debug!(copy = %id, "offer not made: {}", e.message);
+                    return;
+                }
+                Err(e) => {
+                    tracing::debug!(copy = %id, "offer turned away, again in {wait:?}: {}", e.message);
+                    tokio::time::sleep(wait).await;
+                    wait = (wait * 2).min(OFFER_WAIT_MAX);
+                }
+            }
+        }
     }
 
     /// Offers copy `id` once the copy is free, whether or not it changed.
@@ -876,9 +958,7 @@ impl LiveCopies {
         let id = id.to_string();
         tokio::spawn(async move {
             loop {
-                if let Err(e) = me.offer_changes(&id, true, None).await {
-                    tracing::debug!(copy = %id, "offer not made: {}", e.message);
-                }
+                me.offer_until_taken(&id, true).await;
                 let mut offering = me.offering.lock().unwrap();
                 if offering.get(&id) == Some(&true) {
                     offering.insert(id.clone(), false);
@@ -890,28 +970,27 @@ impl LiveCopies {
         });
     }
 
-    /// `sync.resolve`: `path` takes `keep`'s version on both sides.
+    /// `sync.resolve`: `path` takes `keep`'s version on both sides. Fails
+    /// when it could not be done: `paused`, `not_ready`, `disconnected`
+    /// while the link is down, `busy` when the copy kept changing.
     pub async fn resolve(&self, req: SyncResolve) -> Result<Copy, RpcError> {
-        let k = self
-            .kept(&req.copy)
-            .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
-        if !k.differs.contains(&req.path) {
-            return Err(RpcError::new("invalid_params", "that path does not differ"));
-        }
         let resolution = Resolution {
             path: req.path,
             keep: req.keep,
         };
-        if !self
+        let round = self
             .offer_changes(&req.copy, true, Some(resolution))
-            .await?
-        {
+            .await?;
+        let k = self
+            .kept(&req.copy)
+            .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
+        if round == Round::Offline {
             return Err(RpcError::new(
                 "disconnected",
                 format!("{} is not reachable", k.host),
             ));
         }
-        Ok(self.copy_of(&self.kept(&req.copy).unwrap()))
+        Ok(self.copy_of(&k))
     }
 
     /// Takes in a pack from the central host; one git refuses pauses the copy.
@@ -1062,11 +1141,7 @@ impl LiveCopies {
         let pack = git_sync::pack_objects(path, &[&snap.tree, &head], &have)
             .await
             .map_err(internal)?;
-        let pack = if pack.is_empty() {
-            None
-        } else {
-            Some(conn.send_pack(&pack)?)
-        };
+        let pack = send_pack(&pack, |p| conn.send_pack(p))?;
         git_sync::set_base_ref(path, &req.copy, &snap.tree)
             .await
             .map_err(internal)?;
@@ -1206,11 +1281,7 @@ impl LiveCopies {
         let pack = git_sync::pack_objects(path, &[&worker_tree, &new_base, &head], &not)
             .await
             .map_err(internal)?;
-        let pack = if pack.is_empty() {
-            None
-        } else {
-            Some(conn.send_pack(&pack)?)
-        };
+        let pack = send_pack(&pack, |p| conn.send_pack(p))?;
         // The session's other copies get what this one brought.
         let others: Vec<String> = self
             .data
@@ -1305,14 +1376,8 @@ impl LiveCopies {
             return Ok(());
         }
         let pack = git_sync::pack_objects(path, &[&snap.tree, &head], &[base, base_head]).await?;
-        let pack = if pack.is_empty() {
-            None
-        } else {
-            Some(
-                conn.send_pack(&pack)
-                    .map_err(|e| anyhow::anyhow!(e.message))?,
-            )
-        };
+        let pack =
+            send_pack(&pack, |p| conn.send_pack(p)).map_err(|e| anyhow::anyhow!(e.message))?;
         let req = SyncUpdate {
             copy: served.id.clone(),
             base: base.to_string(),
@@ -1386,9 +1451,7 @@ impl LiveCopies {
                     s.push(&id, false).await;
                 }
                 for id in kept {
-                    if let Err(e) = s.offer_changes(&id, false, None).await {
-                        tracing::debug!(copy = %id, "offer not made: {}", e.message);
-                    }
+                    s.offer_until_taken(&id, false).await;
                 }
             }
         });
@@ -1421,6 +1484,37 @@ async fn apply_tries(path: &Path, target: &str, host: &str) -> Result<(), Stop> 
     Err(Stop::Paused(
         "the copy kept changing while it was made".into(),
     ))
+}
+
+/// Sends `pack` with `send` and gives its transfer id; none when empty.
+fn send_pack(
+    pack: &[u8],
+    send: impl FnOnce(&[u8]) -> Result<u32, RpcError>,
+) -> Result<Option<u32>, RpcError> {
+    if pack.is_empty() {
+        Ok(None)
+    } else {
+        send(pack).map(Some)
+    }
+}
+
+/// The central host's `answer` to an offer of `offered`, with each file
+/// edited since the offer (as it is `now`) kept as it is now.
+fn keep_edits(
+    offered: &git_sync::Files,
+    now: &git_sync::Files,
+    answer: &git_sync::Files,
+) -> git_sync::Files {
+    let mut out = answer.clone();
+    for path in offered.keys().chain(now.keys()) {
+        if offered.get(path) != now.get(path) {
+            match now.get(path) {
+                Some(e) => out.insert(path.clone(), e.clone()),
+                None => out.remove(path),
+            };
+        }
+    }
+    out
 }
 
 fn outside(host: &str) -> String {
@@ -1924,6 +2018,29 @@ mod tests {
                 .join("a".repeat(100))
                 .join("fix-cart")
         );
+    }
+
+    #[test]
+    fn an_answer_keeps_the_files_edited_since_the_offer() {
+        let e = |oid: &str| git_sync::Entry {
+            mode: "100644".into(),
+            oid: oid.into(),
+        };
+        let files = |list: &[(&str, &str)]| -> git_sync::Files {
+            list.iter().map(|(p, o)| (p.to_string(), e(o))).collect()
+        };
+        // Offered: cart a, notes n, old o. The central host answered with
+        // its own new.md and took the offer. Since the offer, this Mac
+        // edited cart to c and deleted old.
+        let offered = files(&[("cart", "a"), ("notes", "n"), ("old", "o")]);
+        let now = files(&[("cart", "c"), ("notes", "n")]);
+        let answer = files(&[("cart", "a"), ("new.md", "w"), ("notes", "n"), ("old", "o")]);
+        assert_eq!(
+            keep_edits(&offered, &now, &answer),
+            files(&[("cart", "c"), ("new.md", "w"), ("notes", "n")])
+        );
+        // Nothing edited since: the answer as it is.
+        assert_eq!(keep_edits(&offered, &offered, &answer), answer);
     }
 
     #[test]
