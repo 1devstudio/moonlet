@@ -70,6 +70,15 @@ pub const SECTION_DELETE: &str = "section.delete";
 pub const SECTION_ADD_PROJECT: &str = "section.add_project";
 pub const SECTION_REMOVE_PROJECT: &str = "section.remove_project";
 pub const SECTION_MOVE: &str = "section.move";
+/// Adding a project from GitHub (X59): gh on the host, a repository's
+/// details, the user's repositories, the folder a clone would go to, and
+/// the clone itself, which answers at once and reports through events.
+pub const REPO_GH_STATUS: &str = "repo.gh_status";
+pub const REPO_LOOKUP: &str = "repo.lookup";
+pub const REPO_LIST: &str = "repo.list";
+pub const REPO_CLONE_TARGET: &str = "repo.clone_target";
+pub const REPO_CLONE: &str = "repo.clone";
+pub const REPO_CLONE_CANCEL: &str = "repo.clone_cancel";
 pub const SESSION_CREATE: &str = "session.create";
 pub const SESSION_LIST: &str = "session.list";
 pub const SESSION_ARCHIVE: &str = "session.archive";
@@ -215,6 +224,10 @@ pub const EV_GIT_SETTINGS_CHANGED: &str = "git.settings_changed";
 pub const EV_CLAUDE_UPDATE_OUTPUT: &str = "claude.update_output";
 /// How a `claude update` ended, for every window (X36).
 pub const EV_CLAUDE_UPDATE_DONE: &str = "claude.update_done";
+/// How far a clone is: a `CloneProgress` (X59).
+pub const EV_REPO_CLONE_PROGRESS: &str = "repo.clone_progress";
+/// How a clone ended: a `CloneDone` (X59).
+pub const EV_REPO_CLONE_DONE: &str = "repo.clone_done";
 pub const EV_FS_CHANGED: &str = "fs.changed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -670,6 +683,34 @@ pub struct SectionUpdate {
 pub struct SectionAddProject {
     pub id: String,
     pub path: String,
+}
+
+/// A GitHub repository as `owner/name`, and the SSH address the user
+/// typed for it, if any (X59).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoRef {
+    pub repo: String,
+    #[serde(default)]
+    pub ssh: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoCloneTarget {
+    pub repo: String,
+    pub parent: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoClone {
+    pub repo: String,
+    #[serde(default)]
+    pub ssh: Option<String>,
+    pub parent: String,
+    pub name: String,
+    /// The section the new project joins; none: the default section.
+    #[serde(default)]
+    pub section_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

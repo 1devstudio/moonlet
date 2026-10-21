@@ -363,6 +363,94 @@ pub struct ClaudeUpdateResult {
     pub output: String,
 }
 
+/// gh on a host (X59): whether it is installed, and the signed-in
+/// github.com account.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhStatus {
+    pub installed: bool,
+    pub login: Option<String>,
+}
+
+/// A GitHub repository's details for the Add project card (X59). Found
+/// through git rather than gh, only `repo` and `default_branch` are known.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepoInfo {
+    pub repo: String,
+    pub private: Option<bool>,
+    pub description: Option<String>,
+    pub default_branch: Option<String>,
+    pub pushed_at: Option<String>,
+    /// gh's `diskUsage`, in KB.
+    pub disk_kb: Option<u64>,
+}
+
+/// One of the user's repositories (X59).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepoSummary {
+    pub repo: String,
+    pub description: Option<String>,
+    pub private: bool,
+    pub pushed_at: Option<String>,
+    /// A project on this host already has it as `origin`.
+    pub added: bool,
+}
+
+/// The folder a clone would go to (X59).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloneTarget {
+    pub path: String,
+    pub exists: bool,
+    /// The folder is a clone of the same repository.
+    pub same_repo: bool,
+    /// Its checked-out branch, when it is a git repository.
+    pub branch: Option<String>,
+    /// The first of `<name>`, `<name>-2`, `<name>-3`, … that does not exist.
+    pub free_name: String,
+}
+
+/// A clone the daemon started (X59).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloneJob {
+    pub id: String,
+    pub repo: String,
+    pub path: String,
+}
+
+/// A step of a clone, as git reports it (X59).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CloneStep {
+    Counting,
+    Receiving,
+    Resolving,
+}
+
+/// How far a clone is (X59).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloneProgress {
+    pub id: String,
+    pub repo: String,
+    pub path: String,
+    pub step: CloneStep,
+    pub current: u64,
+    pub total: u64,
+    /// Received so far, as git prints it: `21.40 MiB`.
+    pub size: Option<String>,
+    /// As git prints it: `6.20 MiB/s`.
+    pub speed: Option<String>,
+}
+
+/// How a clone ended (X59).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloneDone {
+    pub id: String,
+    pub repo: String,
+    pub path: String,
+    pub project: Option<Project>,
+    pub error: Option<String>,
+    pub cancelled: bool,
+}
+
 /// A line of `claude update`'s output, sent while it runs (X36).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaudeUpdateLine {
