@@ -1571,3 +1571,143 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
     // The first one still serves.
     d.client().await;
 }
+
+/// A fake gh signed in as sam-rivera, whose `repo clone` runs `clone`
+/// with the folder as `$4` (X59).
+fn fake_clone_gh(clone: &str) -> String {
+    format!(
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\ncase \"$1 $2\" in\n  \"auth status\") printf 'github.com\\n  ✓ Logged in to github.com account sam-rivera (keyring)\\n  - Active account: true\\n' ;;\n  \"repo clone\") {clone} ;;\nesac\n"
+    )
+}
+
+/// Events until `repo.clone_done`: the progress steps seen, and the done.
+async fn clone_events(c: &mut Client) -> (Vec<String>, serde_json::Value) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut steps = Vec::new();
+    loop {
+        let f = tokio::time::timeout_at(deadline, c.next_frame()).await.expect("timeout").unwrap().unwrap();
+        let Frame::Json(Message::Event { name, data }) = f else { continue };
+        if name == methods::EV_REPO_CLONE_PROGRESS {
+            steps.push(data["step"].as_str().unwrap().to_string());
+        } else if name == methods::EV_REPO_CLONE_DONE {
+            return (steps, data);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_clone_from_github_becomes_a_project_and_reports_its_progress() {
+    let origin = tempfile::tempdir().unwrap();
+    let src = origin.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    git_in(&src, &["init", "-q", "-b", "main"]).unwrap();
+    git_in(&src, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+    git_in(origin.path(), &["clone", "-q", "--bare", "src", "storefront.git"]).unwrap();
+    let bare = origin.path().join("storefront.git");
+    let (d, dirs) = fake_gh_daemon(&fake_clone_gh(&format!("exec git clone --progress \"file://{}\" \"$4\"", bare.display()))).await;
+    let mut c = d.client().await;
+    let mut watcher = d.client().await;
+    let parent = dirs[1].path().join("moonlet");
+    let job: serde_json::Value = c
+        .request(methods::REPO_CLONE, serde_json::json!({"id": "c-7f3a", "repo": "acme/storefront", "parent": parent, "name": "storefront"}))
+        .await
+        .unwrap();
+    let path = parent.join("storefront").display().to_string();
+    // The app names the clone, so it knows the clone's events before the reply.
+    assert_eq!(job, serde_json::json!({"id": "c-7f3a", "repo": "acme/storefront", "path": path}));
+
+    let (steps, done) = clone_events(&mut watcher).await;
+    assert!(steps.contains(&"counting".to_string()), "{steps:?}");
+    assert_eq!(done["id"], "c-7f3a");
+    assert_eq!((done["error"].clone(), done["cancelled"].clone()), (serde_json::Value::Null, serde_json::json!(false)));
+    // Projects keep the folder's real path (/private/var for /var on macOS).
+    let real = std::fs::canonicalize(&path).unwrap().display().to_string();
+    assert_eq!((done["project"]["name"].as_str(), done["project"]["path"].as_str()), (Some("storefront"), Some(real.as_str())));
+    let projects: Vec<moonlet_proto::types::Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
+    assert!(projects.iter().any(|p| p.path == real), "{projects:?}");
+    let asked = std::fs::read_to_string(dirs[0].path().join("gh.log")).unwrap();
+    assert!(asked.contains(&format!("repo clone acme/storefront {path} -- --progress")), "{asked}");
+
+    // The folder is there now: a second clone into it is refused.
+    let again = c
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"id": "c-2", "repo": "acme/storefront", "parent": parent, "name": "storefront"}))
+        .await
+        .unwrap_err();
+    assert!(again.to_string().contains(&format!("{path} already exists")), "{again}");
+    let bad_id = c
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"id": "--x y", "repo": "acme/storefront", "parent": parent, "name": "other"}))
+        .await
+        .unwrap_err();
+    assert!(bad_id.to_string().contains("not a clone id: --x y"), "{bad_id}");
+    // Only an owner/name repository reaches gh.
+    let bad = c
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"id": "c-3", "repo": "--upload-pack=x/y", "parent": parent, "name": "y"}))
+        .await
+        .unwrap_err();
+    assert!(bad.to_string().contains("not a GitHub repository"), "{bad}");
+}
+
+#[tokio::test]
+async fn a_failed_clone_says_why_and_leaves_no_folder() {
+    let (d, dirs) = fake_gh_daemon(&fake_clone_gh(
+        "mkdir \"$4\"; echo \"Cloning into '$4'...\" >&2; echo 'remote: Repository not found.' >&2; echo \"fatal: repository 'https://github.com/acme/nope.git/' not found\" >&2; exit 128",
+    ))
+    .await;
+    let mut c = d.client().await;
+    let mut watcher = d.client().await;
+    let parent = dirs[1].path().join("moonlet");
+    let _: serde_json::Value = c.request(methods::REPO_CLONE, serde_json::json!({"id": "c-1", "repo": "acme/nope", "parent": parent, "name": "nope"})).await.unwrap();
+    let (_, done) = clone_events(&mut watcher).await;
+    assert_eq!(done["error"], "repository 'https://github.com/acme/nope.git/' not found");
+    assert_eq!(done["project"], serde_json::Value::Null);
+    assert!(!parent.join("nope").exists());
+}
+
+#[tokio::test]
+async fn a_cancelled_clone_stops_and_leaves_no_folder() {
+    let (d, dirs) = fake_gh_daemon(&fake_clone_gh("mkdir \"$4\"; touch \"$4/partial\"; sleep 30")).await;
+    let mut c = d.client().await;
+    let mut watcher = d.client().await;
+    let parent = dirs[1].path().join("moonlet");
+    let job: serde_json::Value = c.request(methods::REPO_CLONE, serde_json::json!({"id": "c-1", "repo": "acme/big", "parent": parent, "name": "big"})).await.unwrap();
+    let folder = parent.join("big");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !folder.join("partial").exists() {
+        assert!(tokio::time::Instant::now() < deadline, "the clone never started");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // While it runs, a second clone into the same folder is refused.
+    let twice = c
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, serde_json::json!({"id": "c-2", "repo": "acme/big", "parent": parent, "name": "big"}))
+        .await
+        .unwrap_err();
+    assert!(twice.to_string().contains(&format!("{} is being cloned already", folder.display())), "{twice}");
+    let cancelled: bool = c.request(methods::REPO_CLONE_CANCEL, serde_json::json!({"id": job["id"]})).await.unwrap();
+    assert!(cancelled);
+    let (_, done) = clone_events(&mut watcher).await;
+    assert_eq!((done["cancelled"].clone(), done["error"].clone()), (serde_json::json!(true), serde_json::Value::Null));
+    assert!(!folder.exists());
+    let projects: Vec<moonlet_proto::types::Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
+    assert!(projects.is_empty(), "{projects:?}");
+}
+
+#[tokio::test]
+async fn looks_repositories_up_and_lists_them_through_gh() {
+    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/../moonlet-core/tests/fixtures");
+    let (d, _dirs) = fake_gh_daemon(&format!(
+        "#!/bin/sh\ncase \"$1 $2\" in\n  \"auth status\") cat '{fixtures}/gh-auth-status.txt' ;;\n  \"repo view\") cat '{fixtures}/gh-repo-view.json' ;;\n  \"api user/repos\"*) cat '{fixtures}/gh-user-repos.json' ;;\nesac\n"
+    ))
+    .await;
+    let mut c = d.client().await;
+    let status: serde_json::Value = c.request(methods::REPO_GH_STATUS, ()).await.unwrap();
+    assert_eq!(status, serde_json::json!({"installed": true, "login": "sam-rivera"}));
+    let info: serde_json::Value = c.request(methods::REPO_LOOKUP, serde_json::json!({"repo": "acme/storefront"})).await.unwrap();
+    assert_eq!((info["repo"].as_str(), info["default_branch"].as_str(), info["disk_kb"].as_u64()), (Some("acme/storefront"), Some("main"), Some(4911)));
+
+    // A project whose origin is acme/payments-api is already added.
+    let (repo, _) = project_with_repo(&d, &mut c).await;
+    git_in(&repo, &["remote", "add", "origin", "git@github.com:acme/payments-api.git"]).unwrap();
+    let list: Vec<serde_json::Value> = c.request(methods::REPO_LIST, ()).await.unwrap();
+    let added: Vec<(&str, bool)> = list.iter().map(|r| (r["repo"].as_str().unwrap(), r["added"].as_bool().unwrap())).collect();
+    assert_eq!(added, [("acme/storefront", false), ("acme/storefront-admin", false), ("acme/payments-api", true), ("sam-rivera/store-locator", false)]);
+}

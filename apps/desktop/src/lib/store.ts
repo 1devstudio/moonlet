@@ -8,6 +8,7 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { afterCheck, afterDownloadEvent, checkError, scheduleUpdateChecks, type CheckOutcome, type UpdateState } from "./updater";
+import { afterCloneDone, rememberCloneParent, runsAfterProgress, type CloneRuns } from "./addProject";
 import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
@@ -45,7 +46,7 @@ import type { TaskStart } from "./tasks";
 import { spawnedNotices } from "./spawned";
 import { currentWorkspace, isShown, sessionToRestore, switcherRows, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
-import type { ChatItem, ChatState, ReadRequest } from "./protocol";
+import type { ChatItem, ChatState, CloneDone, CloneProgress, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
 import type { Shortcuts } from "./runActions";
 import type { SettingsRoute } from "./settingsPage";
@@ -228,7 +229,8 @@ interface State extends UiPersist {
         /** Adopting a worktree without a session, with its branch (X46). */
         worktree?: { path: string; branch: string };
       }
-    | { kind: "add-project"; host?: string; section?: string }
+    /** `clone`: the `<host>/<id>` of the clone the dialog shows (X59). */
+    | { kind: "add-project"; host?: string; section?: string; clone?: string }
     | { kind: "new-section" }
     | { kind: "new-workspace" }
     | { kind: "create-pr" }
@@ -257,6 +259,8 @@ interface State extends UiPersist {
   appVersion: string | null;
   /** The sidebar banner about a newer Claude Code (X36). */
   claudeUpdate: ClaudeUpdateState;
+  /** Clones from Add project, by `<host>/<id>` (X59). */
+  clones: CloneRuns;
   /** The installed Claude Code and npm's newest, from the last check. */
   claudeVersions: ClaudeVersions;
   claudeChecking: boolean;
@@ -311,6 +315,7 @@ function makeStore() {
   updateError: null,
   appVersion: null,
   claudeUpdate: { phase: "idle" },
+  clones: {},
   claudeVersions: { installed: null, latest: null },
   claudeChecking: false,
   lastAttention: null,
@@ -1028,6 +1033,19 @@ function handleEvent(e: DaemonEvent) {
     case EV.claudeUpdateOutput:
       if (host === LOCAL) set((s) => ({ claudeUpdate: afterClaudeUpdateLine(s.claudeUpdate, (data as { line: string }).line) }));
       break;
+    case EV.repoCloneProgress:
+      set((s) => ({ clones: runsAfterProgress(s.clones, host, data as CloneProgress) }));
+      break;
+    case EV.repoCloneDone: {
+      const d = get().dialog;
+      const watching = d?.kind === "add-project" ? (d.clone ?? null) : null;
+      const end = afterCloneDone(get().clones, host, data as CloneDone, watching);
+      set({ clones: end.runs });
+      if (end.remember) rememberCloneParent(end.remember.host, end.remember.parent);
+      if (end.toast) toast(end.toast.text, end.toast.kind);
+      if (end.open) set({ dialog: { kind: "new-session", host: end.open.host, project: end.open.project.id, workspace: end.open.workspace } });
+      break;
+    }
     case EV.claudeUpdateDone:
       if (host === LOCAL) void finishClaudeUpdate(data as { ok: boolean; output: string });
       break;

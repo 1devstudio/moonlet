@@ -39,6 +39,8 @@ pub struct Daemon {
     claude_updating: AtomicBool,
     /// Phone access over Tailscale (X39).
     pub mobile: Arc<crate::mobile::Mobile>,
+    /// Clones started from Add project (X59).
+    clones: Arc<crate::clones::Clones>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -141,7 +143,9 @@ impl Daemon {
         let reads = TerminalReads::new(terminals.clone(), read_timeout);
         let emitter = terminals.clone();
         let mobile = Arc::new(crate::mobile::Mobile::load(crate::mobile::Mobile::default_file(), move |m| emitter.emit(m)));
+        let clones = crate::clones::Clones::new(sessions.clone(), terminals.clone());
         Arc::new(Self {
+            clones,
             terminals,
             chats,
             sessions,
@@ -423,6 +427,26 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
+            m::REPO_GH_STATUS => ok(moonlet_core::repo_clone::gh_status().await),
+            m::REPO_LOOKUP => {
+                let r: m::RepoRef = params(p)?;
+                ok(moonlet_core::repo_clone::lookup(&r.repo, r.ssh.as_deref()).await.map_err(internal)?)
+            }
+            m::REPO_LIST => {
+                let folders: Vec<String> = self.sessions.list_projects().into_iter().map(|p| p.path).collect();
+                let added = moonlet_core::repo_clone::folder_repos(&folders).await;
+                ok(moonlet_core::repo_clone::user_repos(&added).await.map_err(internal)?)
+            }
+            m::REPO_CLONE_TARGET => {
+                let r: m::RepoCloneTarget = params(p)?;
+                ok(moonlet_core::repo_clone::clone_target(&r.repo, &r.parent, &r.name).await.map_err(internal)?)
+            }
+            m::REPO_CLONE => ok(self.clones.start(params(p)?).map_err(internal)?),
+            m::REPO_CLONE_CANCEL => {
+                let r: m::IdRef = params(p)?;
+                self.clones.cancel(&r.id).map_err(internal)?;
+                ok(true)
+            }
             _ => self.handle_project(conn, method, p).await,
         }
     }

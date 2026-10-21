@@ -1,13 +1,12 @@
 import { AddBoardDialog } from "./tasks/AddBoard";
+import { AddProjectDialog } from "./AddProject";
 import { useEffect, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../lib/daemon";
 import { gitSettingsOf } from "../lib/gitSettings";
-import { M, type Commit, type PullRequest, type Project } from "../lib/protocol";
+import { M, type Commit, type PullRequest } from "../lib/protocol";
 import { errorToast, refreshGit, selectedSession, shownWorkspace, toast, useStore } from "../lib/store";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
-import { hostSections } from "../lib/sidebar";
 import { newSectionWorkspace, wsKey } from "../lib/workspaces";
 import { closesIssue, withCloses } from "../lib/keepInStep";
 import { githubRepo } from "../lib/tasks";
@@ -16,96 +15,6 @@ import { NewWorkspaceDialog } from "./WorkspaceDialogs";
 import { LinkTaskDialog } from "./tasks/SessionTask";
 
 const close = () => useStore.setState({ dialog: null });
-
-export function AddProjectDialog({ host: presetHost, section: presetSection }: { host?: string; section?: string }) {
-  const hosts = useStore((s) => s.hosts);
-  const workspaces = useStore((s) => s.workspaces);
-  const sections = useStore((s) => s.sections);
-  const sectionsOf = (h: string) => hostSections(workspaces[h] ?? [], sections[h] ?? []);
-  const [host, setHost] = useState(presetHost ?? "local");
-  const [secId, setSecId] = useState(presetSection ?? sectionsOf(presetHost ?? "local")[0]?.sec.id ?? "");
-  const [path, setPath] = useState("");
-  const [busy, setBusy] = useState(false);
-  const connected = Object.values(hosts).filter((h) => h.status === "connected");
-  const choices = sectionsOf(host);
-  const add = async () => {
-    setBusy(true);
-    try {
-      const project = secId
-        ? await rpc<Project>(host, M.sectionAddProject, { id: secId, path })
-        : await rpc<Project>(host, M.projectAdd, { path });
-      toast(`Added ${project.name}`);
-      const ws = choices.find((x) => x.sec.id === secId)?.ws.id;
-      useStore.setState({ dialog: { kind: "new-session", host, project: project.id, workspace: ws } });
-    } catch (e) {
-      errorToast(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog
-      title="Add project"
-      onClose={close}
-      footer={
-        <>
-          <Button variant="ghost" onClick={close}>
-            Cancel
-          </Button>
-          <Button variant="primary" disabled={!path || busy} onClick={() => void add()}>
-            Add project
-          </Button>
-        </>
-      }
-    >
-      <p className="mb-3 ui-text-12.5 text-muted">A project is a git repository folder. Each session you start in it gets its own worktree and branch.</p>
-      {connected.length > 1 && (
-        <Field label="Host">
-          <select
-            className={inputCls}
-            value={host}
-            onChange={(e) => {
-              setHost(e.target.value);
-              setSecId(sectionsOf(e.target.value)[0]?.sec.id ?? "");
-            }}
-          >
-            {connected.map((h) => (
-              <option key={h.id} value={h.id}>
-                {h.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
-      <Field label="Folder" hint={host === "local" ? "Any folder inside a git repository." : "Path on the remote host, e.g. ~/src/api"}>
-        <div className="flex gap-2">
-          <input autoFocus className={inputCls} value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/code/my-project" onKeyDown={(e) => e.key === "Enter" && path && void add()} />
-          {host === "local" && (
-            <Button
-              onClick={async () => {
-                const dir = await openDialog({ directory: true, multiple: false, title: "Choose a project folder" });
-                if (typeof dir === "string") setPath(dir);
-              }}
-            >
-              Browse…
-            </Button>
-          )}
-        </div>
-      </Field>
-      {choices.length > 0 && (
-        <Field label="Section">
-          <select className={inputCls} value={secId} onChange={(e) => setSecId(e.target.value)}>
-            {choices.map(({ sec, label }) => (
-              <option key={sec.id} value={sec.id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
-    </Dialog>
-  );
-}
 
 export function NewSectionDialog() {
   const hosts = useStore((s) => s.hosts);
@@ -283,7 +192,7 @@ export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
   switch (dialog?.kind) {
     case "add-project":
-      return <AddProjectDialog host={dialog.host} section={dialog.section} />;
+      return <AddProjectDialog host={dialog.host} section={dialog.section} clone={dialog.clone} />;
     case "new-section":
       return <NewSectionDialog />;
     case "new-workspace":
