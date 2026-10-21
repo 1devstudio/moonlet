@@ -448,7 +448,11 @@ impl LiveCopies {
                 .join(&k.host)
                 .join(&opened.project)
                 .join(dir);
-            let path = copy_path(Path::new(&opened.path), fallback);
+            let path = copy_path(
+                Path::new(&opened.path),
+                &self.home.join("worktrees"),
+                fallback,
+            );
             git_sync::add_worktree(&repo, &path, &opened.branch, &fetched.head)
                 .await
                 .map_err(|e| Stop::Paused(format!("{e:#}")))?;
@@ -1002,21 +1006,61 @@ async fn changed_paths(repo: &Path, a: &str, b: &str) -> u32 {
         .count() as u32
 }
 
-/// Where a copy goes: the session's own path when this Mac can make it and
-/// nothing is there yet, else `fallback`.
-fn copy_path(session: &Path, fallback: PathBuf) -> PathBuf {
-    let free = match std::fs::read_dir(session) {
-        Ok(mut entries) => entries.next().is_none(),
-        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
-    };
-    let makeable = session.is_absolute()
-        && session
-            .parent()
-            .is_some_and(|p| std::fs::create_dir_all(p).is_ok());
-    if free && makeable {
+/// Where a copy goes: the session's own path when it lies inside this Mac's
+/// `worktrees` folder and nothing is there yet, else `fallback`. The path
+/// comes from the central host, so it may never point elsewhere on this Mac,
+/// not by `..` nor through a symlink.
+fn copy_path(session: &Path, worktrees: &Path, fallback: PathBuf) -> PathBuf {
+    if inside(session, worktrees) && free(session) {
         session.to_path_buf()
     } else {
         fallback
+    }
+}
+
+/// Whether absolute `path` is below `root`, with symlinks resolved, making
+/// the parent folders it needs only once that holds.
+fn inside(path: &Path, root: &Path) -> bool {
+    use std::path::Component;
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| !matches!(c, Component::RootDir | Component::Normal(_)))
+    {
+        return false;
+    }
+    let Ok(rest) = path.strip_prefix(root) else {
+        return false;
+    };
+    if rest.as_os_str().is_empty() || std::fs::create_dir_all(root).is_err() {
+        return false;
+    }
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    // The deepest folder that exists, resolved; the rest is made below it.
+    let mut existing = path.to_path_buf();
+    while !existing.exists() {
+        if !existing.pop() {
+            return false;
+        }
+    }
+    let Ok(real) = existing.canonicalize() else {
+        return false;
+    };
+    let below = real.join(path.strip_prefix(&existing).unwrap_or(Path::new("")));
+    if !below.starts_with(&root) || below == root {
+        return false;
+    }
+    path.parent()
+        .is_some_and(|p| std::fs::create_dir_all(p).is_ok())
+}
+
+/// Nothing at `path`, or an empty folder.
+fn free(path: &Path) -> bool {
+    match std::fs::read_dir(path) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
     }
 }
 
@@ -1056,32 +1100,67 @@ mod tests {
 
     #[test]
     fn a_copy_takes_the_sessions_path_when_it_is_free() {
-        let home = tempfile::tempdir().unwrap();
-        let fallback = home.path().join("copies/studio-mini/shop/fix-cart");
-        let session = home
+        let root = tempfile::tempdir().unwrap();
+        let worktrees = root.path().join("Users/alex/.moonlet/worktrees");
+        let fallback = root
+            .path()
+            .join("Users/alex/.moonlet/copies/studio-mini/shop/fix-cart");
+        let session = root
             .path()
             .join("Users/alex/.moonlet/worktrees/shop/fix-cart");
-        assert_eq!(copy_path(&session, fallback.clone()), session);
+        assert_eq!(copy_path(&session, &worktrees, fallback.clone()), session);
 
         // An empty folder there is free too.
         std::fs::create_dir_all(&session).unwrap();
-        assert_eq!(copy_path(&session, fallback.clone()), session);
+        assert_eq!(copy_path(&session, &worktrees, fallback.clone()), session);
 
         // Something there: the copy goes under copies/.
         std::fs::write(session.join("README.md"), "hi").unwrap();
-        assert_eq!(copy_path(&session, fallback.clone()), fallback);
+        assert_eq!(copy_path(&session, &worktrees, fallback.clone()), fallback);
 
-        // A path this Mac cannot make.
-        let blocked = home.path().join("file");
-        std::fs::write(&blocked, "").unwrap();
+        // A relative path.
         assert_eq!(
-            copy_path(&blocked.join("shop/fix-cart"), fallback.clone()),
+            copy_path(
+                Path::new("worktrees/fix-cart"),
+                &worktrees,
+                fallback.clone()
+            ),
             fallback
         );
+    }
+
+    #[test]
+    fn a_copy_takes_the_sessions_path_only_inside_this_macs_worktrees() {
+        let root = tempfile::tempdir().unwrap();
+        let worktrees = root.path().join("Users/alex/.moonlet/worktrees");
+        std::fs::create_dir_all(&worktrees).unwrap();
+        let fallback = root
+            .path()
+            .join("Users/alex/.moonlet/copies/studio-mini/shop/fix-cart");
+
+        // Elsewhere in the home folder.
+        let ssh = root.path().join("Users/alex/.ssh");
+        assert_eq!(copy_path(&ssh, &worktrees, fallback.clone()), fallback);
+        // Back out of the worktrees with `..`.
+        let back = root.path().join("Users/alex/.moonlet/worktrees/../.ssh");
+        assert_eq!(copy_path(&back, &worktrees, fallback.clone()), fallback);
+        // The worktrees folder itself.
         assert_eq!(
-            copy_path(Path::new("worktrees/fix-cart"), fallback.clone()),
+            copy_path(&worktrees, &worktrees, fallback.clone()),
             fallback
         );
+        // Through a symlink in the worktrees that points outside them.
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, worktrees.join("shop")).unwrap();
+        let through = root
+            .path()
+            .join("Users/alex/.moonlet/worktrees/shop/fix-cart");
+        assert_eq!(copy_path(&through, &worktrees, fallback.clone()), fallback);
+
+        // Nothing was made for the refused paths.
+        assert!(!ssh.exists());
+        assert!(!root.path().join("Users/alex/.moonlet/.ssh").exists());
     }
 
     #[test]
