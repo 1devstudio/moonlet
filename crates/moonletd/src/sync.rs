@@ -145,6 +145,9 @@ pub struct LiveCopies {
     watchers: Arc<Watchers>,
     /// Wakes the loop that sends a session's changes, by its folder.
     kicks: Mutex<HashMap<PathBuf, Arc<Notify>>>,
+    /// Copies with an offer under way, and whether another should follow
+    /// it: updates turned away meanwhile ask for one more, not one each.
+    offering: Mutex<HashMap<String, bool>>,
 }
 
 impl LiveCopies {
@@ -182,6 +185,7 @@ impl LiveCopies {
                 locks: Mutex::new(HashMap::new()),
                 watchers,
                 kicks: Mutex::new(HashMap::new()),
+                offering: Mutex::new(HashMap::new()),
             }
         })
     }
@@ -860,11 +864,28 @@ impl LiveCopies {
 
     /// Offers copy `id` once the copy is free, whether or not it changed.
     fn offer_later(self: &Arc<Self>, id: &str) {
+        {
+            let mut offering = self.offering.lock().unwrap();
+            if let Some(again) = offering.get_mut(id) {
+                *again = true;
+                return;
+            }
+            offering.insert(id.to_string(), false);
+        }
         let me = self.clone();
         let id = id.to_string();
         tokio::spawn(async move {
-            if let Err(e) = me.offer_changes(&id, true, None).await {
-                tracing::debug!(copy = %id, "offer not made: {}", e.message);
+            loop {
+                if let Err(e) = me.offer_changes(&id, true, None).await {
+                    tracing::debug!(copy = %id, "offer not made: {}", e.message);
+                }
+                let mut offering = me.offering.lock().unwrap();
+                if offering.get(&id) == Some(&true) {
+                    offering.insert(id.clone(), false);
+                } else {
+                    offering.remove(&id);
+                    break;
+                }
             }
         });
     }
