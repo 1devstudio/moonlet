@@ -1511,18 +1511,7 @@ impl LiveCopies {
             .collect();
         lost.extend(only_here);
         lost.extend(local.too_big);
-        for p in lost {
-            let from = path.join(&p);
-            let Ok(meta) = std::fs::symlink_metadata(&from) else {
-                continue;
-            };
-            if meta.is_dir() {
-                continue;
-            }
-            save_one(&from, &folder.join(&p), meta.file_type().is_symlink())
-                .map_err(|e| Unsaved::new(&p, e))?;
-            saved.leftovers.push(p);
-        }
+        saved.leftovers = save_lost(&path, &folder, lost)?;
         Ok(saved)
     }
 
@@ -2595,6 +2584,7 @@ pub struct Archiving {
 }
 
 /// A file that could not be saved before a copy went, and why.
+#[derive(Debug)]
 struct Unsaved {
     path: String,
     error: String,
@@ -2641,12 +2631,63 @@ fn local_stamp() -> String {
     )
 }
 
-/// Copies `from` to `to`, making `to`'s folders; a link is copied as the
-/// link, never as what it points at.
-fn save_one(from: &Path, to: &Path, link: bool) -> std::io::Result<()> {
-    if let Some(dir) = to.parent() {
-        std::fs::create_dir_all(dir)?;
+/// Saves `lost`, paths in copy `root`, under `folder` at the same paths;
+/// gives those saved.
+fn save_lost(
+    root: &Path,
+    folder: &Path,
+    lost: impl IntoIterator<Item = String>,
+) -> Result<Vec<String>, Unsaved> {
+    let mut saved = Vec::new();
+    for p in lost {
+        // A path below a link names what the link points at, not the copy.
+        if below_link(root, Path::new(&p)) {
+            continue;
+        }
+        let from = root.join(&p);
+        let Ok(meta) = std::fs::symlink_metadata(&from) else {
+            continue;
+        };
+        if meta.is_dir() {
+            continue;
+        }
+        save_one(&from, folder, Path::new(&p), meta.file_type().is_symlink())
+            .map_err(|e| Unsaved::new(&p, e))?;
+        saved.push(p);
     }
+    Ok(saved)
+}
+
+/// Whether a folder on the way from `root` to `rel` is a link.
+fn below_link(root: &Path, rel: &Path) -> bool {
+    rel.ancestors()
+        .skip(1)
+        .filter(|a| !a.as_os_str().is_empty())
+        .any(|a| {
+            std::fs::symlink_metadata(root.join(a)).is_ok_and(|m| m.file_type().is_symlink())
+        })
+}
+
+/// Copies `from` to `rel` under `folder`, making the folders on the way and
+/// refusing one that is a link; a link is copied as the link, never as what
+/// it points at.
+fn save_one(from: &Path, folder: &Path, rel: &Path, link: bool) -> std::io::Result<()> {
+    let mut dir = folder.to_path_buf();
+    std::fs::create_dir_all(&dir)?;
+    for part in rel.parent().into_iter().flat_map(Path::components) {
+        dir.push(part);
+        match std::fs::symlink_metadata(&dir) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => {
+                return Err(std::io::Error::other(format!(
+                    "{} is not a folder",
+                    dir.display()
+                )));
+            }
+            Err(_) => std::fs::create_dir(&dir)?,
+        }
+    }
+    let to = folder.join(rel);
     if link {
         std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
     } else {
@@ -2722,6 +2763,53 @@ mod tests {
             let e = object_ids(&[id, bad]).unwrap_err();
             assert_eq!(e.code, "invalid_params", "{bad}");
         }
+    }
+
+    #[test]
+    fn leftovers_never_follow_a_link_out_of_the_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let copy = root.path().join("copy");
+        let outside = root.path().join("outside-dir");
+        std::fs::create_dir_all(&copy).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret"), "not the copy's").unwrap();
+        std::fs::write(copy.join("a.txt"), "mine").unwrap();
+        std::os::unix::fs::symlink(&outside, copy.join("link")).unwrap();
+        let folder = root.path().join("leftovers");
+
+        let saved = save_lost(
+            &copy,
+            &folder,
+            ["a.txt", "link", "link/secret"].map(String::from),
+        )
+        .unwrap();
+
+        assert_eq!(saved, ["a.txt", "link"]);
+        assert_eq!(std::fs::read_to_string(folder.join("a.txt")).unwrap(), "mine");
+        assert_eq!(std::fs::read_link(folder.join("link")).unwrap(), outside);
+        let listing: Vec<_> = std::fs::read_dir(&outside)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(listing, ["secret"]);
+    }
+
+    #[test]
+    fn leftovers_are_never_written_through_a_link_in_the_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let copy = root.path().join("copy");
+        let outside = root.path().join("outside-dir");
+        std::fs::create_dir_all(copy.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(copy.join("sub/b.txt"), "mine").unwrap();
+        let folder = root.path().join("leftovers");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::os::unix::fs::symlink(&outside, folder.join("sub")).unwrap();
+
+        let e = save_lost(&copy, &folder, ["sub/b.txt".to_string()]).unwrap_err();
+
+        assert_eq!(e.path, "sub/b.txt");
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
     }
 
     #[test]
