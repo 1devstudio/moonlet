@@ -552,7 +552,7 @@ async fn a_pack_the_host_sends_arrives_whole_under_its_transfer_id() {
     let id = transfer.unwrap();
     loop {
         if let Frame::Pack { transfer, data } = daemon.next().await {
-            got.push(transfer, data);
+            got.push(transfer, data).unwrap();
             if let Some(p) = got.take(id) {
                 assert_eq!(p, pack);
                 break;
