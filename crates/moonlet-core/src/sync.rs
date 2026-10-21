@@ -593,11 +593,13 @@ pub async fn delete_base_ref(repo: &Path, copy: &str) -> Result<()> {
     Ok(())
 }
 
-/// A git pack of the objects `new` (a tree or commit) reaches and none of
+/// A git pack of the objects `new` (trees or commits) reach and none of
 /// `not` does: what the other side, which has `not`, lacks. Empty when it
 /// lacks nothing.
-pub async fn pack_objects(repo: &Path, new: &str, not: &[&str]) -> Result<Vec<u8>> {
-    let mut args = vec!["rev-list", "--objects", new, "--not"];
+pub async fn pack_objects(repo: &Path, new: &[&str], not: &[&str]) -> Result<Vec<u8>> {
+    let mut args = vec!["rev-list", "--objects"];
+    args.extend(new);
+    args.push("--not");
     args.extend(not);
     let objects = git_env(repo, &[], &args, None).await?;
     if objects.iter().all(u8::is_ascii_whitespace) {
@@ -611,6 +613,36 @@ pub async fn pack_objects(repo: &Path, new: &str, not: &[&str]) -> Result<Vec<u8
         Some(&objects),
     )
     .await
+}
+
+/// Which of `oids` are objects in `repo`, in their order: what another
+/// side says it has can only be left out of a pack if this side has it too.
+pub async fn present(repo: &Path, oids: &[String]) -> Result<Vec<String>> {
+    let ids: Vec<&String> = oids
+        .iter()
+        .filter(|o| o.len() >= 40 && o.chars().all(|c| c.is_ascii_hexdigit()))
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let input: String = ids.iter().map(|o| format!("{o}\n")).collect();
+    let out = git_env(
+        repo,
+        &[],
+        &["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        Some(input.as_bytes()),
+    )
+    .await?;
+    let found: std::collections::HashSet<String> = String::from_utf8_lossy(&out)
+        .lines()
+        .filter(|l| !l.ends_with(" missing"))
+        .filter_map(|l| l.split(' ').next().map(String::from))
+        .collect();
+    Ok(ids
+        .into_iter()
+        .filter(|o| found.contains(*o))
+        .cloned()
+        .collect())
 }
 
 /// Stores the objects of a pack from [`pack_objects`] in `repo`.
@@ -630,6 +662,150 @@ pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<()> {
             let _ = git_env(&repo, &[], &["gc", "--auto", "--quiet"], None).await;
         });
     }
+    Ok(())
+}
+
+/// `url` without a password or token, for another machine to clone from
+/// with its own credentials. An `http(s)` URL loses its whole user part,
+/// which is often a token itself; other schemes keep the user name, and
+/// `git@host:path` stays as it is.
+pub fn scrub_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(i) => rest.split_at(i),
+        None => (rest, ""),
+    };
+    let Some((user, host)) = authority.rsplit_once('@') else {
+        return url.to_string();
+    };
+    let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    let user = match user.split_once(':') {
+        _ if web => None,
+        Some((name, _)) => Some(name),
+        None => Some(user),
+    };
+    match user {
+        Some(u) if !u.is_empty() => format!("{scheme}://{u}@{host}{path}"),
+        _ => format!("{scheme}://{host}{path}"),
+    }
+}
+
+/// The commit `HEAD` is at in `worktree`.
+pub async fn head(worktree: &Path) -> Result<String> {
+    let out = git_env(worktree, &[], &["rev-parse", "HEAD"], None).await?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// Clones `url` into `dir` with this machine's own credentials. The error
+/// is git's own message, such as `repository '…' not found`.
+pub async fn clone(url: &str, dir: &Path) -> std::result::Result<(), String> {
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let dir_s = dir.to_string_lossy().to_string();
+    let cwd = dir.parent().unwrap_or(Path::new("/"));
+    let out = run_raw_env(
+        "git",
+        cwd,
+        &["clone", "-q", "--", url, &dir_s],
+        &[],
+        None,
+        Duration::from_secs(1800),
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))?;
+    if out.status == 0 {
+        return Ok(());
+    }
+    let _ = std::fs::remove_dir_all(dir);
+    Err(clone_error(&out.stderr))
+}
+
+/// The line of a failed clone's output that says why: the server's own
+/// (`remote: Repository not found.`), else git's first `fatal:` one.
+fn clone_error(stderr: &str) -> String {
+    let lines = || stderr.lines().map(str::trim);
+    lines()
+        .find_map(|l| l.strip_prefix("remote: "))
+        .or_else(|| lines().find_map(|l| l.strip_prefix("fatal: ")))
+        .or_else(|| lines().rfind(|l| !l.is_empty()))
+        .unwrap_or("git clone failed")
+        .to_string()
+}
+
+/// Fetches origin, so only what it lacks needs to come from the central
+/// host. A failed fetch only means more comes from there.
+pub async fn fetch_origin(repo: &Path) {
+    let _ = run_raw_env(
+        "git",
+        repo,
+        &["fetch", "-q", "--no-tags", "origin"],
+        &[],
+        None,
+        Duration::from_secs(600),
+    )
+    .await;
+}
+
+/// The commits `repo`'s branches, remote-tracking branches and copy bases
+/// point at: what a pack sent to it can leave out.
+pub async fn have(repo: &Path) -> Vec<String> {
+    let out = git_env(
+        repo,
+        &[],
+        &[
+            "for-each-ref",
+            "--format=%(objectname)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/moonlet",
+        ],
+        None,
+    )
+    .await
+    .unwrap_or_default();
+    let mut ids: Vec<String> = String::from_utf8_lossy(&out)
+        .lines()
+        .map(String::from)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// The worktree of `repo`, the main one included, that has `branch`
+/// checked out.
+pub async fn checked_out(repo: &Path, branch: &str) -> Option<PathBuf> {
+    let out = git_env(repo, &[], &["worktree", "list", "--porcelain"], None)
+        .await
+        .ok()?;
+    let want = format!("branch refs/heads/{branch}");
+    String::from_utf8_lossy(&out)
+        .split("\n\n")
+        .find(|entry| entry.lines().any(|l| l == want))
+        .and_then(|entry| entry.lines().find_map(|l| l.strip_prefix("worktree ")))
+        .map(PathBuf::from)
+}
+
+/// Adds a worktree of `repo` at `dir` on `branch`, set to `head` first.
+pub async fn add_worktree(repo: &Path, dir: &Path, branch: &str, head: &str) -> Result<()> {
+    if branch.starts_with('-') {
+        bail!("invalid branch name: {branch}");
+    }
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    git_env(
+        repo,
+        &[],
+        &["branch", "-f", "--no-track", branch, head],
+        None,
+    )
+    .await?;
+    let dir_s = dir.to_string_lossy().to_string();
+    git_env(repo, &[], &["worktree", "add", "-q", &dir_s, branch], None).await?;
     Ok(())
 }
 
@@ -1267,7 +1443,7 @@ mod tests {
         let mine = snapshot(&w, MAX_FILE).await.unwrap().tree;
         assert!(!exists(&w, &theirs).await);
 
-        let pack = pack_objects(c, &theirs, &[&mine]).await.unwrap();
+        let pack = pack_objects(c, &[&theirs], &[&mine]).await.unwrap();
         unpack(&w, &pack).await.unwrap();
         apply(&w, &mine, &theirs).await.unwrap();
         assert_eq!(
@@ -1284,18 +1460,102 @@ mod tests {
         let old = String::from_utf8(git(c, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
         git(c, &["commit", "-qam", "cart"]).await.unwrap();
         let new = String::from_utf8(git(c, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
-        let pack = pack_objects(c, new.trim(), &[old.trim()]).await.unwrap();
+        let pack = pack_objects(c, &[new.trim()], &[old.trim()]).await.unwrap();
         unpack(&w, &pack).await.unwrap();
         assert!(exists(&w, new.trim()).await);
 
         // Nothing new: nothing to send.
         assert!(
-            pack_objects(c, new.trim(), &[new.trim()])
+            pack_objects(c, &[new.trim()], &[new.trim()])
                 .await
                 .unwrap()
                 .is_empty()
         );
         unpack(&w, &[]).await.unwrap();
+    }
+
+    #[test]
+    fn a_url_loses_its_password_or_token_but_keeps_its_scheme_and_user() {
+        for (url, want) in [
+            (
+                "git@github.com:acme/shop.git",
+                "git@github.com:acme/shop.git",
+            ),
+            (
+                "https://alex:ghp_x@github.com/acme/shop.git",
+                "https://github.com/acme/shop.git",
+            ),
+            (
+                "ssh://git@github.com/acme/shop.git",
+                "ssh://git@github.com/acme/shop.git",
+            ),
+            (
+                "https://ghp_x@github.com/acme/shop.git",
+                "https://github.com/acme/shop.git",
+            ),
+            (
+                "ssh://git:secret@github.com:22/acme/shop.git",
+                "ssh://git@github.com:22/acme/shop.git",
+            ),
+            (
+                "https://github.com/acme/shop.git",
+                "https://github.com/acme/shop.git",
+            ),
+        ] {
+            assert_eq!(scrub_url(url), want, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_failed_clone_says_why_in_one_line() {
+        // Captured from git 2.54 against github.com and a local path.
+        let github = "remote: Repository not found.\nfatal: repository 'https://github.com/1devstudio/no-such-repo-x60-check.git/' not found";
+        assert_eq!(clone_error(github), "Repository not found.");
+        let local = "fatal: '/tmp/missing.git' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+        assert_eq!(
+            clone_error(local),
+            "'/tmp/missing.git' does not appear to be a git repository"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_branch_checked_out_anywhere_is_found_the_main_checkout_too() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        assert_eq!(
+            checked_out(p, "main")
+                .await
+                .map(|d| std::fs::canonicalize(d).unwrap()),
+            Some(std::fs::canonicalize(p).unwrap())
+        );
+        let head = head(p).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let w = other.path().join("fix-cart");
+        add_worktree(p, &w, "fix-cart", &head).await.unwrap();
+        assert_eq!(
+            checked_out(p, "fix-cart")
+                .await
+                .map(|d| std::fs::canonicalize(d).unwrap()),
+            Some(std::fs::canonicalize(&w).unwrap())
+        );
+        assert_eq!(checked_out(p, "nowhere").await, None);
+    }
+
+    #[tokio::test]
+    async fn only_the_objects_a_repository_has_are_present() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let head = String::from_utf8(git(p, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
+        let head = head.trim().to_string();
+        let missing = "0123456789abcdef0123456789abcdef01234567".to_string();
+        assert_eq!(
+            present(p, &[missing.clone(), head.clone(), "not-an-id".into()])
+                .await
+                .unwrap(),
+            vec![head]
+        );
+        assert!(present(p, &[missing]).await.unwrap().is_empty());
+        assert!(present(p, &[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]

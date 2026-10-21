@@ -129,6 +129,21 @@ impl Workers {
         }
     }
 
+    /// The connection of the linked worker `id` (X60).
+    pub fn conn(&self, id: &str) -> Option<Arc<Conn>> {
+        self.list.lock().unwrap().get(id).map(|e| e.conn.clone())
+    }
+
+    /// The id of the worker linked on connection `conn` (X60).
+    pub fn worker_on(&self, conn: u64) -> Option<String> {
+        self.list
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, e)| e.conn.id == conn)
+            .map(|(id, _)| id.clone())
+    }
+
     /// Whether `id` is still listed on `conn`.
     fn current(&self, id: &str, conn: u64) -> bool {
         self.list

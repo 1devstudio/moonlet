@@ -203,6 +203,8 @@ pub struct WorkerLink {
     synced: AtomicUsize,
     /// Set while `link.set` applies a change, which says `link.changed` once.
     quiet: AtomicBool,
+    /// The copies this Mac keeps, which the link serves (X60).
+    sync: std::sync::OnceLock<Weak<crate::sync::LiveCopies>>,
     sessions: Arc<SessionManager>,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -220,6 +222,7 @@ impl WorkerLink {
             generation: AtomicU64::new(0),
             synced: AtomicUsize::new(0),
             quiet: AtomicBool::new(false),
+            sync: std::sync::OnceLock::new(),
             sessions,
             emit: Box::new(emit),
         })
@@ -302,8 +305,27 @@ impl WorkerLink {
         }
     }
 
+    /// Where the central host's `sync.*` requests and the link's ups and
+    /// downs go (X60).
+    pub fn set_sync(&self, sync: Weak<crate::sync::LiveCopies>) {
+        let _ = self.sync.set(sync);
+    }
+
+    fn sync(&self) -> Option<Arc<crate::sync::LiveCopies>> {
+        self.sync.get().and_then(Weak::upgrade)
+    }
+
+    /// The central host's name, when one is set.
+    pub fn central_name(&self) -> Option<String> {
+        self.store.lock().unwrap().central().map(|c| c.name.clone())
+    }
+
+    /// The link's connection while it is open (X60).
+    pub fn host(&self) -> Option<Arc<Host>> {
+        self.host.lock().unwrap().clone()
+    }
+
     /// How many sessions this Mac keeps in sync (X60).
-    #[allow(dead_code)]
     pub fn set_synced(self: &Arc<Self>, copies: usize) {
         self.synced.store(copies, Ordering::SeqCst);
         self.apply();
@@ -345,7 +367,7 @@ impl WorkerLink {
                     Arc::new(LinkEvents(Arc::downgrade(self), generation)),
                     tokio::runtime::Handle::current(),
                 );
-                h.set_requests(Arc::new(WorkerRequests));
+                h.set_requests(Arc::new(WorkerRequests(Arc::downgrade(self))));
                 *host = Some(h);
             }
             _ => {
@@ -386,12 +408,20 @@ impl WorkerLink {
             projects,
         };
         let params = serde_json::to_value(reg).unwrap();
-        if let Err(e) = host.request(m::WORKER_REGISTER, params).await {
-            tracing::warn!("cannot register with the central host: {}", e.message);
-            // Linked but not listed: say so, and wait for a retry.
-            let current = self.host.lock().unwrap().as_ref().is_some_and(|h| Arc::ptr_eq(h, &host));
-            if current {
-                self.set_state(LinkState::Error { message: e.message });
+        match host.request(m::WORKER_REGISTER, params).await {
+            // The central host serves copies to registered workers only.
+            Ok(_) => {
+                if let Some(sync) = self.sync() {
+                    sync.link_up();
+                }
+            }
+            Err(e) => {
+                tracing::warn!("cannot register with the central host: {}", e.message);
+                // Linked but not listed: say so, and wait for a retry.
+                let current = self.host.lock().unwrap().as_ref().is_some_and(|h| Arc::ptr_eq(h, &host));
+                if current {
+                    self.set_state(LinkState::Error { message: e.message });
+                }
             }
         }
     }
@@ -428,7 +458,12 @@ impl WorkerLink {
                     .unwrap_or_else(|| format!("cannot reach {name}")),
             },
         };
+        let up = matches!(state, LinkState::Connected { .. });
         self.set_state(state);
+        // Up counts once this Mac is registered (see `register`).
+        if !up && let Some(sync) = self.sync() {
+            sync.link_down();
+        }
     }
 }
 
@@ -461,17 +496,30 @@ impl Events for LinkEvents {
 }
 
 /// What a worker answers its central host.
-struct WorkerRequests;
+struct WorkerRequests(Weak<WorkerLink>);
 
 impl Requests for WorkerRequests {
     fn request(
         &self,
         method: String,
-        _params: Value,
+        params: Value,
     ) -> BoxFuture<'static, Result<Value, RpcError>> {
+        let link = self.0.upgrade();
         Box::pin(async move {
             match method.as_str() {
                 m::WORKER_PING => Ok(serde_json::json!({})),
+                m::SYNC_UPDATE => {
+                    let req: m::SyncUpdate = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
+                    let pack = req.pack.and_then(|t| link.host().and_then(|h| h.take_pack(t)));
+                    if req.pack.is_some() && pack.is_none() {
+                        return Err(RpcError::new("invalid_params", "the pack did not arrive"));
+                    }
+                    let done = sync.update(req, pack).await?;
+                    Ok(serde_json::to_value(done).unwrap())
+                }
                 _ => Err(RpcError::new(
                     "unknown_method",
                     format!("unknown method {method}"),

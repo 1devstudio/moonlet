@@ -35,7 +35,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 - [ ] **Keep in sync with this Mac** is in the right-click menu of a session on this Mac's central host, as a checked item. Sessions on other hosts, SSH hosts and this Mac don't have it.
 - [ ] Turning it on for a session on a tailnet host that is not the central host asks, in the confirm modal (X23): "Keeping fix-cart in sync needs studio-mini as this Mac's central host. Make it the central host?" Confirming does what choosing **Central host** in Settings does (X41), then turns sync on.
-- [ ] The worker link (X41) is open while **Use this Mac for heavy commands** is on *or* at least one session is kept in sync. Keep in sync does not turn on heavy commands. This replaces X41's "with `enabled: false` … no link is opened".
+- [x] The worker link (X41) is open while **Use this Mac for heavy commands** is on *or* at least one session is kept in sync. Keep in sync does not turn on heavy commands. This replaces X41's "with `enabled: false` … no link is opened". (`a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_taken`)
 - [ ] Turning it off asks: "Stop keeping fix-cart in sync? The copy on this Mac is removed." When files differ, the modal adds "2 files that differ are saved to ~/.moonlet/sync-leftovers/fix-cart first." The copy's worktree is then removed (`git worktree remove --force`). The branch stays in the Mac's repository.
 - [ ] A copy is kept in sync until it is turned off or its session is archived. It survives restarts of either daemon, live upgrades (S3) and the app being closed.
 - [ ] Several Macs may keep copies of one session. The central host serves them one change at a time.
@@ -50,16 +50,16 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 ### Making the copy
 
-- [ ] The copy lives in a repository on this Mac with the same project identity (X41) as the session's project:
+- [x] The copy lives in a repository on this Mac with the same project identity (X41) as the session's project:
   - this Mac's own project with that identity, when there is one;
-  - otherwise a clone moonlet makes once per identity at `$MOONLET_HOME/clones/<origin>` (such as `~/.moonlet/clones/github.com/acme/shop`), from the URL the central host sends. That clone is not added to the sidebar.
-- [ ] The URL the central host sends is its `origin` remote with any password or token removed and the scheme and user kept: `git@github.com:acme/shop.git` stays as it is, and `https://alex:ghp_x@github.com/acme/shop.git` becomes `https://github.com/acme/shop.git`. The clone uses this Mac's own git credentials.
-- [ ] A clone that fails pauses the copy with git's message: "Paused: cannot clone github.com/acme/shop: Repository not found." **Retry** tries again. A project with no origin (identity origin `null`) and no matching project on this Mac pauses with "Paused: add shop on this Mac first. studio-mini's shop has no origin to clone from."
-- [ ] Commits the session has and this Mac lacks, such as unpushed ones, come from the central host as a git pack after this Mac has fetched origin. No push to origin is needed.
-- [ ] The copy is a worktree on the session's branch. It sits at the session's own absolute path when this Mac can create it and nothing is there yet. When the two Macs share the user name, `/Users/alex/.moonlet/worktrees/shop/fix-cart` matches on both. Otherwise it sits at `$MOONLET_HOME/copies/<host>/<project>/<session>`, such as `~/.moonlet/copies/studio-mini/shop/fix-cart`.
-- [ ] When the session's branch is already checked out in another worktree on this Mac, the copy pauses with "Paused: fix-cart is checked out in ~/src/shop on this Mac."
-- [ ] A copy is never listed as a worktree of this Mac's project (the composer's existing worktrees, X46's worktrees without a session).
-- [ ] Once made, the copy's files and `HEAD` match the session's: the same tree, by the rule in "What syncs", and the same commit.
+  - otherwise a clone moonlet makes once per identity at `$MOONLET_HOME/clones/<origin>` (such as `~/.moonlet/clones/github.com/acme/shop`), from the URL the central host sends. That clone is not added to the sidebar. (`a_mac_with_the_project_keeps_the_copy_in_its_own_clone_out_of_its_worktree_list`, `a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_taken`)
+- [x] The URL the central host sends is its `origin` remote with any password or token removed and the scheme and user kept: `git@github.com:acme/shop.git` stays as it is, and `https://alex:ghp_x@github.com/acme/shop.git` becomes `https://github.com/acme/shop.git`. The clone uses this Mac's own git credentials. (`a_url_loses_its_password_or_token_but_keeps_its_scheme_and_user`)
+- [x] A clone that fails pauses the copy with git's message: "Paused: cannot clone github.com/acme/shop: Repository not found." **Retry** tries again. A project with no origin (identity origin `null`) and no matching project on this Mac pauses with "Paused: add shop on this Mac first. studio-mini's shop has no origin to clone from." (`a_clone_that_fails_pauses_the_copy_with_gits_message`, `a_failed_clone_says_why_in_one_line`, `a_project_without_an_origin_must_be_added_on_this_mac_first`)
+- [x] Commits the session has and this Mac lacks, such as unpushed ones, come from the central host as a git pack after this Mac has fetched origin. No push to origin is needed. (`a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_taken`, `a_mac_with_the_project_keeps_the_copy_in_its_own_clone_out_of_its_worktree_list`)
+- [x] The copy is a worktree on the session's branch. It sits at the session's own absolute path when this Mac can create it and nothing is there yet. When the two Macs share the user name, `/Users/alex/.moonlet/worktrees/shop/fix-cart` matches on both. Otherwise it sits at `$MOONLET_HOME/copies/<host>/<project>/<session>`, such as `~/.moonlet/copies/studio-mini/shop/fix-cart`. (`a_copy_takes_the_sessions_path_when_it_is_free`, `a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_taken`)
+- [x] When the session's branch is already checked out in another worktree on this Mac, the copy pauses with "Paused: fix-cart is checked out in ~/src/shop on this Mac." (`a_branch_checked_out_on_this_mac_pauses_the_copy`, `a_path_in_the_home_folder_is_shown_from_tilde`)
+- [x] A copy is never listed as a worktree of this Mac's project (the composer's existing worktrees, X46's worktrees without a session). (`a_mac_with_the_project_keeps_the_copy_in_its_own_clone_out_of_its_worktree_list`)
+- [x] Once made, the copy's files and `HEAD` match the session's: the same tree, by the rule in "What syncs", and the same commit. (`a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_taken`)
 
 ### Setup in the copy
 
@@ -88,7 +88,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 - [ ] The staging area does not sync. When a side receives commits that move its branch, its index is reset to the new `HEAD` and its files are left alone (as `git reset --mixed`), so anything staged there is unstaged.
 - [ ] A file over 100 MiB stays on its own machine. The copy's popover lists it: "big.bin is over 100 MB and stays on each machine." The rest syncs. A file that grows past the limit keeps the version last synced, so the other side never reads it as deleted. The limit holds for files HEAD tracks that are committed past an ignore rule too. (`a_file_over_the_limit_stays_on_its_machine_and_never_reads_as_deleted`, `a_file_committed_past_its_ignore_rule_is_still_held_to_the_size_limit`)
-- [ ] Submodule entries sync as commit ids. Submodule contents don't.
+- [x] Submodule entries sync as commit ids. Submodule contents don't. (`a_submodule_is_its_commit_not_its_files`)
 - [x] A file name that is not text (only Linux allows one) stays out of the snapshot, and the snapshot lists it apart: carried as text it would be renamed, or folded into another name. A tree from the other side naming one is refused. (`a_name_that_is_not_text_stays_out_of_the_snapshot`, `a_tree_naming_a_file_in_bytes_that_are_not_text_is_refused`)
 
 ### Keeping it in sync
@@ -180,13 +180,14 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 **Over the worker link (X41), worker to central host:**
 
-- `sync.open {copy, session}` returns `{path, branch, head, identity, origin_url}`, or `not_found` for a session that is gone.
+- `sync.open {copy, session}` returns `{path, branch, head, name, project, identity, origin_url}`, or `not_found` for a session that is gone.
+- `sync.fetch {copy, have, again}` returns the session's files and commit now, `{tree, head, too_big, pack}`, as the copy's base. `have` lists the commits the worker's repository already has (its branches, remote-tracking branches and copy bases), which the pack leaves out. With `again`, a made copy asks for a `sync.update` instead, as after `sync.retry`.
 - `sync.offer {copy, base, tree, head, pack}` carries the worker's changes. The answer is the reconciled `{base, tree, head, pack, differs}`.
 - `sync.close {copy}`.
 
 **Over the worker link, central host to worker:**
 
-- `sync.update {copy, base, tree, head, pack}`: the central host's new state, sent after its own changes and after reconciling another worker's offer. The answer is `{tree}`, the worker's snapshot after applying it.
+- `sync.update {copy, base, tree, head, too_big, pack}`: the central host's new state, sent after its own changes and after reconciling another worker's offer. The answer is `{tree, base, differs, pack}`: the worker's files after applying it, and the new base both sides keep. The worker reconciles against its own base, which the central host adopts, so a reply the central host missed (a lid closed mid-update) cannot leave the two apart. Objects of the new base that the update lacked come in `pack`.
 - `sync.closing {copy, reason: "archived"}`.
 
 **Types:**
