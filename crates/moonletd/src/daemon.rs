@@ -415,6 +415,13 @@ impl Daemon {
                 ok(status)
             }
             m::MOBILE_HOSTS => ok(self.mobile.hosts()),
+            m::MOBILE_UNPAIR => match &conn.phone {
+                Some(device) => {
+                    self.mobile.unpair(device)?;
+                    ok(true)
+                }
+                None => Err(RpcError::new("invalid_params", "not a paired device")),
+            },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
             _ => self.handle_project(conn, method, p).await,
         }

@@ -35,6 +35,7 @@ const NOW = 1_760_000_000_000;
 const device = (patch: Partial<MobileDevice> = {}): MobileDevice => ({
   id: "a1",
   name: "Alex's iPhone",
+  kind: "phone",
   created_at: NOW - 20_000,
   last_seen: NOW - 20_000,
   connected: true,

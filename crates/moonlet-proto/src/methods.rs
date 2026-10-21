@@ -181,6 +181,8 @@ pub const MOBILE_PAIR_CANCEL: &str = "mobile.pair_cancel";
 pub const MOBILE_REVOKE: &str = "mobile.revoke";
 /// The SSH hosts a phone can reach through this daemon: [`MobileHost`]s.
 pub const MOBILE_HOSTS: &str = "mobile.hosts";
+/// A paired device removes itself (X57); only on its own tailnet connection.
+pub const MOBILE_UNPAIR: &str = "mobile.unpair";
 pub const EV_MOBILE_CHANGED: &str = "mobile.changed";
 /// A phone paired with the current code: `{ device }`.
 pub const EV_MOBILE_PAIRED: &str = "mobile.paired";
@@ -1044,11 +1046,23 @@ pub struct MobileSetEnabled {
     pub enabled: bool,
 }
 
-/// A paired phone (X39).
+/// What paired: a phone (X39) or another Mac's app (X57).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    #[default]
+    Phone,
+    Desktop,
+}
+
+/// A paired device (X39, X57).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MobileDevice {
     pub id: String,
     pub name: String,
+    /// Devices paired before X57 are phones.
+    #[serde(default)]
+    pub kind: DeviceKind,
     pub created_at: u64,
     pub last_seen: Option<u64>,
     pub connected: bool,

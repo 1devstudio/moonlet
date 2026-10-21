@@ -587,10 +587,14 @@ export interface HostInfo {
   home: string | null;
 }
 
-/** A paired phone (X39). */
+/** What paired: a phone (X39) or another Mac's app (X57). */
+export type DeviceKind = "phone" | "desktop";
+
+/** A paired device (X39, X57). */
 export interface MobileDevice {
   id: string;
   name: string;
+  kind: DeviceKind;
   created_at: number;
   last_seen: number | null;
   connected: boolean;

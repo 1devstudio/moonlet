@@ -38,10 +38,18 @@ async fn serve(mut s: TcpStream, seen: Seen) {
         Message::Auth { pair: Some(c), .. } if c == "c0de" => Message::Authed {
             device_id: "d1".into(),
             token: Some("tok".into()),
+            // A daemon from before X57.
+            protocol: None,
+            daemon_version: None,
+            host: None,
         },
         Message::Auth { token: Some(t), .. } if t == "tok" => Message::Authed {
             device_id: "d1".into(),
             token: None,
+            // A daemon from before X57.
+            protocol: None,
+            daemon_version: None,
+            host: None,
         },
         _ => Message::err(
             0,
@@ -135,7 +143,8 @@ async fn pairing_keeps_the_token_and_skips_a_dead_address() {
             token: None,
             pair: Some("c0de".into()),
             device: Some("Alex's iPhone".into()),
-            route: None
+            route: None,
+            kind: None
         }
     );
 }
@@ -202,13 +211,15 @@ async fn a_paired_mac_connects_with_its_token_and_brings_its_ssh_hosts() {
         token: Some("tok".into()),
         pair: None,
         device: None,
-        route: None
+        route: None,
+        kind: None
     }));
     assert!(auths.contains(&Message::Auth {
         token: Some("tok".into()),
         pair: None,
         device: None,
-        route: Some("devbox".into())
+        route: Some("devbox".into()),
+        kind: None
     }));
     assert!(
         statuses
