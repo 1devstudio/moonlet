@@ -23,7 +23,8 @@ interface Tree {
 
 /** Add to chat and Open in, shown on the hovered row (X25). */
 function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
-  const choices = openInChoices(tree.targets, { dir: e.is_dir, remote: tree.host !== "local" });
+  const kind = useStore((s) => s.hosts[tree.host]?.kind) ?? (tree.host === "local" ? "local" : "ssh");
+  const choices = openInChoices(tree.targets, { dir: e.is_dir, kind });
   return (
     <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100" onClick={(ev) => ev.stopPropagation()}>
       {!e.is_dir && (

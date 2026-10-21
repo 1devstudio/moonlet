@@ -75,7 +75,7 @@ import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskA
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
-import { callbackForward, isWebPage, pagesToOpen } from "../lib/oauthRedirect";
+import { callbackForward, isWebPage, pagesToOpen, signInUnavailable } from "../lib/oauthRedirect";
 import { invoke } from "@tauri-apps/api/core";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { signInFor } from "../lib/profiles";
@@ -1451,10 +1451,20 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   // return to localhost is forwarded there over SSH.
   const asked = useRef(new Set<string>());
   // Copy link before there is a page: the copy waits for it (X29).
-  const copyOnly = useRef(new Map<string, (url: string) => void>());
+  const copyOnly = useRef(new Map<string, { resolve: (url: string) => void; reject: (e: Error) => void }>());
   const forwards = useRef(new Map<string, { bind: string; port: number }>());
+  // A sign-in this host cannot finish (X57) is cancelled as soon as its page
+  // shows where the browser would return; returns why, or null.
+  const cannotSignIn = (name: string, url: string) => {
+    const info = useStore.getState().hosts[host];
+    const why = info ? signInUnavailable(url, info, name) : null;
+    if (why) void mcpCall("cancel", name);
+    return why;
+  };
   const openPage = async (name: string, url: string) => {
     if (!isWebPage(url)) throw new Error(`not a web page: ${url}`);
+    const unavailable = cannotSignIn(name, url);
+    if (unavailable) throw new Error(unavailable);
     const fwd = host !== "local" ? callbackForward(url) : null;
     if (fwd && !forwards.current.has(name)) {
       await invoke("ssh_forward", { host, bind: fwd.bind, port: fwd.port, open: true });
@@ -1469,7 +1479,9 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       const url = servers.find((s) => s.name === name && s.status === "authing")?.auth_url;
       if (!url) continue;
       copyOnly.current.delete(name);
-      copy(url);
+      const unavailable = cannotSignIn(name, url);
+      if (unavailable) copy.reject(new Error(unavailable));
+      else copy.resolve(url);
     }
     for (const [name, fwd] of forwards.current) {
       if (servers.some((s) => s.name === name && s.status === "authing")) continue;
@@ -1494,14 +1506,18 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     onCancel: (name: string) => void mcpCall("cancel", name),
     onCopy: (name: string) => {
       const url = servers?.find((s) => s.name === name)?.auth_url;
-      if (url) return navigator.clipboard.writeText(url);
+      if (url) {
+        const unavailable = cannotSignIn(name, url);
+        if (unavailable) return Promise.reject(new Error(unavailable));
+        return navigator.clipboard.writeText(url);
+      }
       // No page yet: ask for one and copy it instead of opening it. WebKit
       // writes the clipboard only during the click, so the copy is started
       // now with the address to come.
-      const page = new Promise<string>((resolve) => copyOnly.current.set(name, resolve));
+      const page = new Promise<string>((resolve, reject) => copyOnly.current.set(name, { resolve, reject }));
       const copied = navigator.clipboard.write([new ClipboardItem({ "text/plain": page.then((u) => new Blob([u], { type: "text/plain" })) })]);
       void mcpCall("auth", name);
-      return copied.then(() => toast("Copied sign-in link"));
+      return Promise.all([copied, page]).then(() => toast("Copied sign-in link"));
     },
   };
   const addDir = async () => {

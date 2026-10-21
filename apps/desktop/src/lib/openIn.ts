@@ -1,3 +1,5 @@
+import type { HostKind } from "./protocol";
+
 export interface OpenTarget {
   id: string;
   label: string;
@@ -14,9 +16,18 @@ const REMOTE = ["vscode", "cursor"];
  * runs a file with its default app and launches a folder named `Foo.app`,
  * and a repository's names are not to be trusted.
  */
-export function openInChoices(targets: OpenTarget[], { dir, remote }: { dir: boolean; remote: boolean }): OpenTarget[] {
-  if (remote) return targets.filter((t) => REMOTE.includes(t.id));
+export function openInChoices(targets: OpenTarget[], { dir, kind }: { dir: boolean; kind: HostKind }): OpenTarget[] {
+  // Editors reach a remote folder only over SSH (`ssh-remote+`), which a
+  // tailnet host does not have (X57).
+  if (kind !== "local") return workspaceOpenTargets(targets, kind);
   return targets
     .filter((t) => dir || !TERMINALS.includes(t.id))
     .map((t) => (t.id === "finder" ? { ...t, id: "reveal" } : t));
+}
+
+/** The "Open in" choices for a workspace's folder, by how its host is reached. */
+export function workspaceOpenTargets(targets: OpenTarget[], kind: HostKind): OpenTarget[] {
+  if (kind === "tailnet") return [];
+  if (kind === "ssh") return targets.filter((t) => REMOTE.includes(t.id));
+  return targets;
 }
