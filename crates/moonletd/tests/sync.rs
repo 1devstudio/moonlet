@@ -964,6 +964,15 @@ fn mktree(repo: &Path, listing: &str) -> String {
         .to_string()
 }
 
+/// What a central host with no changes of its own answers an offer: the
+/// worker's files as they are, now the base.
+fn took_offer(offer: &Value) -> Value {
+    json!({
+        "from": "", "tree": offer["tree"], "base": offer["tree"], "head": offer["head"],
+        "differs": [], "too_big": [], "pack": null,
+    })
+}
+
 /// A fake central host serving one session (the clone `repo`, on branch
 /// `fix-cart`) that, once the copy is made, sends an update whose tree
 /// holds `..`: a path outside the copy.
@@ -1035,6 +1044,7 @@ async fn fake_central(
                     "origin_url": ORIGIN_URL,
                 }),
                 "sync.fetch" => json!({ "tree": tree, "head": head, "too_big": [], "pack": null }),
+                "sync.offer" => took_offer(&params),
                 _ => json!({}),
             };
             write_frame(&mut s, &Frame::Json(Message::ok(id, reply)))
@@ -1117,13 +1127,14 @@ async fn fake_central(
                         {
                             break (result, error);
                         }
-                        // An offer the worker queued while it was busy: this
-                        // central host takes none, so the worker goes on.
-                        Ok(Some(Frame::Json(Message::Request { id, .. }))) => {
-                            let no = moonlet_proto::RpcError::new("busy", "not now");
-                            write_frame(&mut s, &Frame::Json(Message::err(id, no)))
-                                .await
-                                .unwrap();
+                        // An offer the worker makes meanwhile: taken as it is.
+                        Ok(Some(Frame::Json(Message::Request { id, method, params }))) => {
+                            let reply = if method == "sync.offer" {
+                                Message::ok(id, took_offer(&params))
+                            } else {
+                                Message::err(id, moonlet_proto::RpcError::new("busy", "not now"))
+                            };
+                            write_frame(&mut s, &Frame::Json(reply)).await.unwrap();
                         }
                         Ok(Some(_)) => {}
                         _ => return,
