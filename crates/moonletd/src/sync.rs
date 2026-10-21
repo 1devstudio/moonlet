@@ -442,12 +442,7 @@ impl LiveCopies {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| opened.name.clone());
-            let fallback = self
-                .home
-                .join("copies")
-                .join(&k.host)
-                .join(&opened.project)
-                .join(dir);
+            let fallback = copies_dir(&self.home, &k.host, &opened.project, &dir);
             let path = copy_path(
                 Path::new(&opened.path),
                 &self.home.join("worktrees"),
@@ -496,7 +491,7 @@ impl LiveCopies {
                 h = k.host
             )));
         };
-        let dir = self.home.join("clones").join(origin);
+        let dir = clone_dir(&self.home, origin);
         if !dir.join(".git").exists() {
             git_sync::clone(url, &dir)
                 .await
@@ -1056,6 +1051,51 @@ fn inside(path: &Path, root: &Path) -> bool {
         .is_some_and(|p| std::fs::create_dir_all(p).is_ok())
 }
 
+/// `copies/<host>/<project>/<session>` under `home`. The names come from
+/// the central host, so each is one plain folder name (see [`segment`]).
+fn copies_dir(home: &Path, host: &str, project: &str, session: &str) -> PathBuf {
+    let base = home.join("copies");
+    let dir = base
+        .join(segment(host))
+        .join(segment(project))
+        .join(segment(session));
+    debug_assert!(dir.starts_with(&base));
+    dir
+}
+
+/// `clones/<origin>` under `home`, one folder per part of the normalized
+/// origin, with a port's `:` as `_`: `gitlab.example.com_8443/team/app`.
+fn clone_dir(home: &Path, origin: &str) -> PathBuf {
+    let base = home.join("clones");
+    let dir = origin.split('/').fold(base.clone(), |dir, part| {
+        dir.join(segment(&part.replace(':', "_")))
+    });
+    debug_assert!(dir.starts_with(&base));
+    dir
+}
+
+/// `name` as one folder name: itself when it is up to 100 of
+/// `[A-Za-z0-9._-]` and not `.` or `..`, else the first 16 hex digits of
+/// its SHA-256, so nothing a peer sends can leave the folder it goes in.
+fn segment(name: &str) -> String {
+    let plain = !name.is_empty()
+        && name.len() <= 100
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    if plain {
+        return name.to_string();
+    }
+    use sha2::{Digest, Sha256};
+    Sha256::digest(name.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Nothing at `path`, or an empty folder.
 fn free(path: &Path) -> bool {
     match std::fs::read_dir(path) {
@@ -1161,6 +1201,48 @@ mod tests {
         // Nothing was made for the refused paths.
         assert!(!ssh.exists());
         assert!(!root.path().join("Users/alex/.moonlet/.ssh").exists());
+    }
+
+    #[test]
+    fn folders_named_by_the_central_host_stay_under_copies_and_clones() {
+        let home = Path::new("/Users/alex/.moonlet");
+        assert_eq!(
+            copies_dir(home, "studio-mini", "shop", "fix-cart"),
+            Path::new("/Users/alex/.moonlet/copies/studio-mini/shop/fix-cart")
+        );
+        assert_eq!(
+            clone_dir(home, "github.com/acme/shop"),
+            Path::new("/Users/alex/.moonlet/clones/github.com/acme/shop")
+        );
+        assert_eq!(
+            clone_dir(home, "gitlab.example.com:8443/team/app"),
+            Path::new("/Users/alex/.moonlet/clones/gitlab.example.com_8443/team/app")
+        );
+        // Anything else is named by its hash.
+        assert_eq!(
+            clone_dir(home, "github.com/../../x"),
+            Path::new("/Users/alex/.moonlet/clones/github.com/5ec1f7e700f37c3d/5ec1f7e700f37c3d/x")
+        );
+        assert_eq!(
+            copies_dir(home, "studio-mini", "..", "a/b c"),
+            Path::new("/Users/alex/.moonlet/copies/studio-mini/5ec1f7e700f37c3d/0af99a6091695385")
+        );
+        assert_eq!(
+            copies_dir(home, "", "shop", "fix-cart"),
+            Path::new("/Users/alex/.moonlet/copies/e3b0c44298fc1c14/shop/fix-cart")
+        );
+        assert_eq!(
+            copies_dir(home, "Alex's MacBook", "shop", "fix-cart"),
+            Path::new("/Users/alex/.moonlet/copies/a8d87d4efcf00ec4/shop/fix-cart")
+        );
+        let long = copies_dir(home, "studio-mini", &"a".repeat(101), "fix-cart");
+        assert_eq!(long.parent().unwrap().file_name().unwrap().len(), 16);
+        assert_eq!(
+            copies_dir(home, "studio-mini", &"a".repeat(100), "fix-cart"),
+            home.join("copies/studio-mini")
+                .join("a".repeat(100))
+                .join("fix-cart")
+        );
     }
 
     #[test]
