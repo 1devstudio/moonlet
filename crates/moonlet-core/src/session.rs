@@ -782,6 +782,35 @@ impl SessionManager {
         Ok(())
     }
 
+    /// X41: projects saved before identities existed get one. A repository
+    /// that cannot be read keeps an empty identity, and the load goes on.
+    pub async fn fill_identities(&self) {
+        let missing: Vec<(String, String)> = self
+            .list_projects()
+            .into_iter()
+            .filter(|p| p.identity == Default::default())
+            .map(|p| (p.id, p.path))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let mut found = Vec::new();
+        for (id, path) in missing {
+            found.push((id, crate::identity::identity(Path::new(&path)).await));
+        }
+        let saved = self.mutate(|st| {
+            for (id, identity) in found {
+                if let Some(p) = st.projects.iter_mut().find(|p| p.id == id) {
+                    p.identity = identity;
+                }
+            }
+            Ok(())
+        });
+        if let Err(e) = saved {
+            tracing::warn!("cannot save project identities: {e:#}");
+        }
+    }
+
     pub async fn add_project(&self, path: &str) -> Result<Project> {
         self.add_project_to(path, None).await
     }
@@ -817,6 +846,7 @@ impl SessionManager {
                 .unwrap_or_else(|| root_s.clone()),
             path: root_s,
             base_branch: base,
+            identity: crate::identity::identity(&root).await,
         };
         let r = repo.clone();
         self.mutate(|st| {

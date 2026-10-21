@@ -688,6 +688,10 @@ impl Daemon {
                 ok(w.add_project(&r.path).await.map_err(internal)?)
             }
             m::PROJECT_LIST => ok(w.list_projects()),
+            m::PROJECT_IDENTITY => {
+                let r: m::GitPath = params(p)?;
+                ok(moonlet_core::identity::identity(&path(&r.path)).await)
+            }
             m::PROJECT_REMOVE => {
                 let r: m::IdRef = params(p)?;
                 w.remove_project(&r.id).map_err(internal)?;

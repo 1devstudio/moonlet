@@ -42,7 +42,7 @@ Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`;
 - `daemon.*`: info (with `data_dir`, the daemon's data folder, X55), shutdown, upgrade.
 - `terminal.*`: create, list, attach, detach, resize, kill, write, search.
 - `agent.report`: state reports from agent hooks (`moonlet hook …`).
-- `workspace.*`, `section.*`, `project.*` and `session.*`: workspaces, their sections, projects, worktree sessions, scripts (X32). `session.archive` takes `delete_remote` and returns `{ remote_error }` (X55; older daemons return `true`).
+- `workspace.*`, `section.*`, `project.*` and `session.*`: workspaces, their sections, projects, worktree sessions, scripts (X32). Each project has an `identity {origin, root}`, its normalized origin without credentials and its root commit, and `project.identity {path}` returns that of any folder (X41). `session.archive` takes `delete_remote` and returns `{ remote_error }` (X55; older daemons return `true`).
 - `profile.*`: Claude profiles, the config folders workspaces run Claude with (X33).
 - `claude.*`: version (the installed Claude Code, and whether an update runs) and update (runs `claude update`) (X36). Events: `claude.update_output` per line while it runs, `claude.update_done` when it ends.
 - `chat.*`: state, summaries (every chat's state without items, X40), send, send_now and unqueue (a queued message, X49), aside (a side question answered by a tool-less fork of the conversation, X49), permission, interrupt, settings (model, effort, permission mode) for structured agents (X6, X7). Events: `chat.item`, `chat.state`.
