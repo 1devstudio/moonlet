@@ -600,7 +600,7 @@ async fn a_branch_checked_out_on_this_mac_pauses_the_copy() {
     assert_eq!(
         reason(&copy),
         format!(
-            "{branch} is checked out in {} on this Mac.",
+            "moonlet/fix-cart is checked out in {} on this Mac.",
             there.display()
         )
     );
@@ -660,14 +660,22 @@ async fn a_branch_on_this_mac_behind_the_sessions_moves_up_to_it() {
     let s = central.session_path();
     write(&s.join("src/cart.ts"), "b\n");
     git(&s, &["commit", "-qam", "cart"]);
-    let repo = own_clone(&central, &worker, &[&["branch", "moonlet/fix-cart", "main"]]).await;
+    let repo = own_clone(
+        &central,
+        &worker,
+        &[&["branch", "moonlet/fix-cart", "main"]],
+    )
+    .await;
     link(&central, &worker).await;
     let _: Copy = worker
         .call("sync.start", json!({ "session": central.session_id() }))
         .await;
     let copy = in_sync(&worker).await;
     let head = git(&s, &["rev-parse", "HEAD"]);
-    assert_eq!(git(&PathBuf::from(&copy.path), &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        git(&PathBuf::from(&copy.path), &["rev-parse", "HEAD"]),
+        head
+    );
     assert_eq!(git(&repo, &["rev-parse", "moonlet/fix-cart"]), head);
 }
 
@@ -706,6 +714,10 @@ enum Update {
     /// `src/cart.ts` as `c`, against a base the worker never had, as when
     /// the central host missed the worker's last reply.
     StaleBase,
+    /// `src/cart.ts` as `c`, once the gate opens.
+    Gated(std::sync::Arc<tokio::sync::Notify>),
+    /// A tree id that is no object id at all.
+    BadId,
 }
 
 /// A fake central host serving one session (the clone `repo`, on branch
@@ -741,10 +753,14 @@ async fn fake_central(
         let head = git(&repo, &["rev-parse", "HEAD"]);
         let tree = git(&repo, &["rev-parse", "HEAD^{tree}"]);
         let root = git(&repo, &["rev-list", "--max-parents=0", "HEAD"]);
+        let mut copy_id = String::new();
         while let Ok(Some(frame)) = read_frame(&mut s).await {
-            let Frame::Json(Message::Request { id, method, .. }) = frame else {
+            let Frame::Json(Message::Request { id, method, params }) = frame else {
                 continue;
             };
+            if let Some(c) = params["copy"].as_str() {
+                copy_id = c.to_string();
+            }
             let reply = match method.as_str() {
                 "sync.open" => json!({
                     "path": repo.join("fix-cart"), "branch": "fix-cart", "head": head,
@@ -770,7 +786,7 @@ async fn fake_central(
                     let bad = mktree(&repo, &format!("{listing}\n040000 tree {sub}\t..\n"));
                     (bad, sub, tree.clone())
                 }
-                Update::StaleBase => {
+                Update::StaleBase | Update::Gated(_) | Update::BadId => {
                     write(&repo.join("c.txt"), "c\n");
                     let blob = git(&repo, &["hash-object", "-w", "c.txt"]);
                     let src = mktree(&repo, &format!("100644 blob {blob}\tcart.ts\n"));
@@ -780,12 +796,16 @@ async fn fake_central(
                         .map(|l| format!("{l}\n"))
                         .collect();
                     let new = mktree(&repo, &format!("{others}040000 tree {src}\tsrc\n"));
-                    // The empty tree: a base this copy never had.
-                    (
-                        new,
-                        format!("{src}\n{blob}"),
-                        "4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_string(),
-                    )
+                    match update {
+                        // The empty tree: a base this copy never had.
+                        Update::StaleBase => (
+                            new,
+                            format!("{src}\n{blob}"),
+                            "4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_string(),
+                        ),
+                        Update::Gated(_) => (new, format!("{src}\n{blob}"), tree.clone()),
+                        _ => ("--output=/tmp/x".to_string(), src, tree.clone()),
+                    }
                 }
             };
             let pack = {
@@ -805,34 +825,42 @@ async fn fake_central(
                     .unwrap();
                 child.wait_with_output().unwrap().stdout
             };
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            for f in moonlet_proto::pack_frames(1, &pack) {
-                write_frame(&mut s, &f).await.unwrap();
+            if let Update::Gated(gate) = &update {
+                gate.notified().await;
             }
-            let update = json!({ "copy": "", "base": base, "tree": bad, "head": head, "too_big": [], "pack": 1 });
-            let copy_id = std::fs::read_to_string(repo.join("copy-id")).unwrap_or_default();
-            let mut update = update;
-            update["copy"] = json!(copy_id.trim());
-            write_frame(
-                &mut s,
-                &Frame::Json(Message::Request {
-                    id: 1,
-                    method: "sync.update".into(),
-                    params: update,
-                }),
-            )
-            .await
-            .unwrap();
-            while let Ok(Some(frame)) = read_frame(&mut s).await {
-                if let Frame::Json(Message::Response {
-                    id: 1,
-                    result,
-                    error,
-                }) = frame
-                {
-                    *seen.lock().unwrap() = Some(json!({ "result": result, "error": error }));
-                    break;
+            // Until the copy is made, the worker answers `copying`.
+            for try_id in 1u64.. {
+                for f in moonlet_proto::pack_frames(try_id as u32, &pack) {
+                    write_frame(&mut s, &f).await.unwrap();
                 }
+                let update = json!({ "copy": copy_id, "base": base, "tree": bad, "head": head, "too_big": [], "pack": try_id });
+                write_frame(
+                    &mut s,
+                    &Frame::Json(Message::Request {
+                        id: try_id,
+                        method: "sync.update".into(),
+                        params: update,
+                    }),
+                )
+                .await
+                .unwrap();
+                let (result, error) = loop {
+                    match read_frame(&mut s).await {
+                        Ok(Some(Frame::Json(Message::Response { id, result, error })))
+                            if id == try_id =>
+                        {
+                            break (result, error);
+                        }
+                        Ok(Some(_)) => {}
+                        _ => return,
+                    }
+                };
+                if error.as_ref().is_some_and(|e| e.code == "copying") {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+                *seen.lock().unwrap() = Some(json!({ "result": result, "error": error }));
+                break;
             }
         }
     });
@@ -857,9 +885,7 @@ async fn an_update_reaching_outside_the_copy_pauses_it_and_writes_nothing() {
             json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": token } }),
         )
         .await;
-    let started: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
-    std::fs::write(repo.join("copy-id"), &started.id).unwrap();
-    in_sync(&worker).await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
     let copy = copy_in(&worker, paused, "paused").await;
     assert_eq!(reason(&copy), "studio-mini sent a path outside the copy.");
     let c = PathBuf::from(&copy.path);
@@ -885,8 +911,7 @@ async fn an_update_against_a_base_the_copy_moved_past_applies_and_gives_the_copy
             json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": "ab".repeat(32) } }),
         )
         .await;
-    let started: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
-    std::fs::write(repo.join("copy-id"), &started.id).unwrap();
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
     let copy = in_sync(&worker).await;
     let c = PathBuf::from(&copy.path);
     reads(&c.join("src/cart.ts"), "c\n").await;
@@ -899,4 +924,104 @@ async fn an_update_against_a_base_the_copy_moved_past_applies_and_gives_the_copy
     // Nothing differs, so the new base is the update's tree.
     assert_eq!(got["result"]["base"], got["result"]["tree"], "{got}");
     assert_eq!(got["result"]["differs"], json!([]));
+}
+
+/// A worker linked to `fake_central` serving a clone of `origin`, with a
+/// copy started; the worker's reply to the central host's update lands in
+/// the returned slot.
+async fn worker_of_fake(
+    scratch: &Path,
+    update: Update,
+) -> (Daemon, std::sync::Arc<std::sync::Mutex<Option<Value>>>) {
+    let origin = origin(scratch);
+    let repo = scratch.join("studio-mini-shop");
+    git(
+        scratch,
+        &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
+    );
+    let reply = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let addr = fake_central(repo, update, reply.clone()).await;
+    let worker = worker(&origin).await;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    eventually("the worker replies", || async {
+        reply.lock().unwrap().is_some()
+    })
+    .await;
+    (worker, reply)
+}
+
+#[tokio::test]
+async fn an_update_that_fails_leaves_the_copy_as_it_was_not_syncing() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = tempfile::tempdir().unwrap();
+    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    let origin = origin(scratch.path());
+    let repo = scratch.path().join("studio-mini-shop");
+    git(
+        scratch.path(),
+        &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
+    );
+    let reply = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let addr = fake_central(repo, Update::Gated(gate.clone()), reply.clone()).await;
+    let worker = worker(&origin).await;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    let copy = in_sync(&worker).await;
+    // git cannot replace src/cart.ts in a folder it may not write.
+    let src = PathBuf::from(&copy.path).join("src");
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o555)).unwrap();
+    gate.notify_one();
+    eventually("the worker replies", || async {
+        reply.lock().unwrap().is_some()
+    })
+    .await;
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let got = reply.lock().unwrap().clone().unwrap();
+    assert_ne!(got["error"], Value::Null, "{got}");
+    let copies: Vec<Copy> = worker.call("sync.list", json!({})).await;
+    assert!(
+        matches!(copies[0].state, CopyState::InSync),
+        "{:?}",
+        copies[0].state
+    );
+    assert_eq!(read(&src.join("cart.ts")).as_deref(), Some("a\n"));
+}
+
+#[tokio::test]
+async fn an_update_naming_no_object_id_is_refused() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_worker, reply) = worker_of_fake(scratch.path(), Update::BadId).await;
+    let got = reply.lock().unwrap().clone().unwrap();
+    assert_eq!(got["error"]["code"], "invalid_params", "{got}");
+    assert_eq!(
+        got["error"]["message"], "not an object id: --output=/tmp/x",
+        "{got}"
+    );
+}
+
+#[tokio::test]
+async fn two_starts_at_once_make_one_copy() {
+    let central = central().await;
+    let worker = worker_with(None).await;
+    link(&central, &worker).await;
+    let session = central.session_id();
+    let (mut a, mut b) = (worker.app().await, worker.app().await);
+    let (x, y) = tokio::join!(
+        a.request::<_, Copy>("sync.start", json!({ "session": session })),
+        b.request::<_, Copy>("sync.start", json!({ "session": session })),
+    );
+    assert_eq!(x.unwrap().id, y.unwrap().id);
+    let copies: Vec<Copy> = worker.call("sync.list", json!({})).await;
+    assert_eq!(copies.len(), 1);
 }

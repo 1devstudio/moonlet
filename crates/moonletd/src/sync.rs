@@ -39,6 +39,10 @@ const UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 /// Tries at applying before giving up until the next change.
 const APPLY_TRIES: usize = 5;
 
+/// How long a copy that kept changing under an update waits before asking
+/// the central host again.
+const RETRY_AFTER: Duration = Duration::from_secs(1);
+
 /// A copy this Mac keeps, as saved.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Kept {
@@ -281,24 +285,29 @@ impl LiveCopies {
             .link
             .central_name()
             .ok_or_else(|| RpcError::new("no_central_host", "this Mac has no central host"))?;
-        if let Some(k) = self
-            .data
-            .lock()
-            .unwrap()
-            .worker
-            .iter()
-            .find(|k| k.session == session && k.host == host)
-        {
-            return Ok(self.copy_of(k));
-        }
-        let kept = Kept {
-            id: uuid::Uuid::new_v4().to_string(),
-            host,
-            session,
-            ..Kept::default()
+        let id = {
+            // One lock for the look and the push: two starts at once make
+            // one copy.
+            let mut data = self.data.lock().unwrap();
+            if let Some(k) = data
+                .worker
+                .iter()
+                .find(|k| k.session == session && k.host == host)
+            {
+                let k = k.clone();
+                drop(data);
+                return Ok(self.copy_of(&k));
+            }
+            let kept = Kept {
+                id: uuid::Uuid::new_v4().to_string(),
+                host,
+                session,
+                ..Kept::default()
+            };
+            let id = kept.id.clone();
+            data.worker.push(kept);
+            id
         };
-        let id = kept.id.clone();
-        self.data.lock().unwrap().worker.push(kept);
         self.save();
         self.states
             .lock()
@@ -418,6 +427,15 @@ impl LiveCopies {
                 .await?,
         )
         .map_err(|e| Stop::Paused(e.to_string()))?;
+        if ![&fetched.tree, &fetched.head, &opened.head]
+            .into_iter()
+            .all(|id| git_sync::is_object_id(id))
+        {
+            return Err(Stop::Paused(format!(
+                "{} sent an invalid object id.",
+                k.host
+            )));
+        }
         if let Some(t) = fetched.pack {
             let pack = host
                 .take_pack(t)
@@ -442,7 +460,6 @@ impl LiveCopies {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| opened.name.clone());
-            let fallback = copies_dir(&self.home, &k.host, &opened.project, &dir);
             let others: Vec<PathBuf> = self
                 .data
                 .lock()
@@ -452,6 +469,10 @@ impl LiveCopies {
                 .filter(|o| o.id != k.id && !o.path.is_empty())
                 .map(|o| PathBuf::from(&o.path))
                 .collect();
+            let fallback = free_folder(
+                copies_dir(&self.home, &k.host, &opened.project, &dir),
+                &others,
+            );
             let path = copy_path(
                 Path::new(&opened.path),
                 &self.home.join("worktrees"),
@@ -518,8 +539,48 @@ impl LiveCopies {
 
     /// `sync.update` from the central host: its files and commit. Files
     /// changed here since the base keep this Mac's version and are listed
-    /// as differing.
+    /// as differing. An update that fails leaves the copy's state as it
+    /// was; one the copy kept changing under stays syncing and asks the
+    /// central host again.
     pub async fn update(
+        self: &Arc<Self>,
+        req: SyncUpdate,
+        pack: Option<Vec<u8>>,
+    ) -> Result<SyncUpdated, RpcError> {
+        for id in [&req.tree, &req.base, &req.head] {
+            if !git_sync::is_object_id(id) {
+                return Err(RpcError::new(
+                    "invalid_params",
+                    format!("not an object id: {id}"),
+                ));
+            }
+        }
+        let copy = req.copy.clone();
+        let before = self.states.lock().unwrap().get(&copy).cloned();
+        let r = self.update_files(req, pack).await;
+        match &r {
+            Err(e) if e.code == "busy" => {
+                let me = self.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(RETRY_AFTER).await;
+                    me.ask_again(&copy).await;
+                });
+            }
+            Err(_) => {
+                let syncing = matches!(
+                    self.states.lock().unwrap().get(&copy),
+                    Some(CopyState::Syncing { .. })
+                );
+                if syncing {
+                    self.set_state(&copy, before.unwrap_or(CopyState::InSync));
+                }
+            }
+            Ok(_) => {}
+        }
+        r
+    }
+
+    async fn update_files(
         &self,
         req: SyncUpdate,
         pack: Option<Vec<u8>>,
@@ -593,7 +654,6 @@ impl LiveCopies {
             break;
         }
         let Some((target, new_base, differs, too_big)) = done else {
-            self.set_state(&req.copy, CopyState::InSync);
             return Err(RpcError::new("busy", "the copy kept changing"));
         };
         git_sync::set_base_ref(&repo, &req.copy, &new_base)
@@ -1097,6 +1157,19 @@ fn copies_dir(home: &Path, host: &str, project: &str, session: &str) -> PathBuf 
     dir
 }
 
+/// `dir`, or `dir-2`, `dir-3` and so on: the first that is empty or missing
+/// and that no other copy holds.
+fn free_folder(dir: PathBuf, taken: &[PathBuf]) -> PathBuf {
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    std::iter::once(dir.clone())
+        .chain((2..).map(|n| dir.with_file_name(format!("{name}-{n}"))))
+        .find(|d| free(d) && !taken.contains(d))
+        .unwrap()
+}
+
 /// `clones/<origin>` under `home`, one folder per part of the normalized
 /// origin, with a port's `:` as `_`: `gitlab.example.com_8443/team/app`.
 fn clone_dir(home: &Path, origin: &str) -> PathBuf {
@@ -1292,6 +1365,24 @@ mod tests {
             copy_path(&at("web/fix-cart"), &worktrees, &[], fallback.clone()),
             fallback
         );
+    }
+
+    #[test]
+    fn a_copy_under_copies_takes_the_first_free_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("copies/studio-mini/shop/fix-cart");
+        assert_eq!(free_folder(dir.clone(), &[]), dir);
+        // Something left there, and another copy holding the next name.
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("old.txt"), "old\n").unwrap();
+        let second = home.path().join("copies/studio-mini/shop/fix-cart-2");
+        assert_eq!(
+            free_folder(dir.clone(), &[second]),
+            home.path().join("copies/studio-mini/shop/fix-cart-3")
+        );
+        // An empty folder is free.
+        std::fs::remove_file(dir.join("old.txt")).unwrap();
+        assert_eq!(free_folder(dir.clone(), &[]), dir);
     }
 
     #[test]

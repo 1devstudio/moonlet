@@ -137,7 +137,7 @@ impl PackAssembler {
         if self.done.contains_key(&transfer) {
             return Err(PackError::Complete(transfer));
         }
-        let waiting = self.partial.contains_key(&transfer) || self.done.contains_key(&transfer);
+        let waiting = self.partial.contains_key(&transfer);
         if !waiting && self.partial.len() + self.done.len() >= l.max_transfers {
             return Err(PackError::TooMany(l.max_transfers));
         }

@@ -257,7 +257,10 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
         .await?;
     }
     if !secrets_dropped.is_empty() {
-        let paths: Vec<u8> = secrets_dropped.iter().flat_map(|p| p.bytes().chain([0])).collect();
+        let paths: Vec<u8> = secrets_dropped
+            .iter()
+            .flat_map(|p| p.bytes().chain([0]))
+            .collect();
         git_env(
             worktree,
             &env,
@@ -472,11 +475,24 @@ fn folder_clashes(files: &Files) -> Vec<String> {
 }
 
 /// The files of `tree` in `repo`.
+/// Whether `id` is a full object id, SHA-1 or SHA-256: the only form an id
+/// from the other side may take before it reaches git.
+pub fn is_object_id(id: &str) -> bool {
+    matches!(id.len(), 40 | 64) && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 pub async fn read_files(repo: &Path, tree: &str) -> Result<Files> {
     let out = git_env(
         repo,
         &[],
-        &["ls-tree", "-r", "-z", "--full-tree", tree],
+        &[
+            "ls-tree",
+            "-r",
+            "-z",
+            "--full-tree",
+            "--end-of-options",
+            tree,
+        ],
         None,
     )
     .await?;
@@ -994,7 +1010,7 @@ pub async fn add_worktree(
             "invalid branch name: {branch}"
         )));
     }
-    if !matches!(head.len(), 40 | 64) || !head.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !is_object_id(head) {
         return Err(WorktreeError::Invalid(format!("not a commit id: {head}")));
     }
     let r = format!("refs/heads/{branch}");
@@ -1320,6 +1336,22 @@ mod tests {
         std::fs::remove_file(p.join("build/out.js")).unwrap();
         let fourth = snapshot(p, MAX_FILE).await.unwrap();
         assert!(!paths(listing(p, &fourth.tree).await).contains(&"build/out.js".to_string()));
+    }
+
+    #[test]
+    fn only_full_hex_ids_are_object_ids() {
+        assert!(is_object_id("4171b03ff0d2bd434751f17bc9d34da784f97e72"));
+        assert!(is_object_id(&"ab".repeat(32)));
+        for id in [
+            "",
+            "4171b03",
+            "HEAD",
+            "--output=/tmp/x",
+            "4171b03ff0d2bd434751f17bc9d34da784f97e7g",
+            "4171b03ff0d2bd434751f17bc9d34da784f97e72 ",
+        ] {
+            assert!(!is_object_id(id), "{id:?}");
+        }
     }
 
     #[tokio::test]
