@@ -7,17 +7,9 @@ import { rpc } from "../lib/daemon";
 import { M, type ClaudeProfile, type ProfileAccount, type TerminalInfo } from "../lib/protocol";
 import { errorToast, refreshProfile, shownWorkspace, useStore } from "../lib/store";
 import { goSettings } from "../lib/settingsNavigation";
-import { DEFAULT_PROFILE, NEW_PROFILE, accountLabel, accountState, defaultFolder, footerLabel, profileOptions } from "../lib/profiles";
+import { DEFAULT_PROFILE, NEW_PROFILE, accountLabel, authTerminal, type AuthAction, accountState, defaultFolder, footerLabel, profileOptions } from "../lib/profiles";
 import { TerminalPane } from "./TerminalPane";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
-
-type AuthAction = "login" | "login-console" | "logout";
-
-const AUTH_ARGS: Record<AuthAction, string[]> = {
-  login: ["auth", "login"],
-  "login-console": ["auth", "login", "--console"],
-  logout: ["auth", "logout"],
-};
 
 /** Runs `claude auth …` for a profile (`null`: the default) in a terminal,
  * then asks the daemon who it is signed in as. Signing in first asks how. */
@@ -33,11 +25,8 @@ export function ClaudeAuthDialog({ host, profile, logout, onClose }: { host: str
     let cancelled = false;
     let id: number | null = null;
     void rpc<TerminalInfo>(host, M.terminalCreate, {
-      cwd: profile?.path ?? "",
-      command: ["claude", ...AUTH_ARGS[action]],
-      env: profile ? { CLAUDE_CONFIG_DIR: profile.path } : {},
+      ...authTerminal(profile, action),
       kind: "run",
-      title: `claude ${AUTH_ARGS[action].join(" ")}`,
       cols: 100,
       rows: 24,
     })
