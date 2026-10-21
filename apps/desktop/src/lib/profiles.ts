@@ -26,11 +26,12 @@ const AUTH_ARGS: Record<AuthAction, string[]> = {
 /** The terminal that runs `claude auth …` for a profile (`null`: the
  * default, which runs from the home folder). */
 export function authTerminal(profile: ClaudeProfile | null, action: AuthAction): { cwd: string; command: string[]; env: Record<string, string>; title: string } {
+  const command = ["claude", ...AUTH_ARGS[action]];
   return {
     cwd: profile?.path ?? "~",
-    command: ["claude", ...AUTH_ARGS[action]],
+    command,
     env: profile ? { CLAUDE_CONFIG_DIR: profile.path } : {},
-    title: `claude ${AUTH_ARGS[action].join(" ")}`,
+    title: command.join(" "),
   };
 }
 
