@@ -1,5 +1,6 @@
 //! One app-side connection to a `moonletd` (ADR 0008): the desktop app's
-//! local daemon and SSH hosts (R1, R3), and the phone app's paired Macs (X39).
+//! local daemon, SSH hosts (R1, R3) and tailnet hosts (X57), and the phone
+//! app's paired Macs (X39).
 //!
 //! A [`Host`] keeps one connection and reconnects with backoff on its own.
 //! The daemon keeps sessions alive meanwhile, so a dropped link only pauses
@@ -27,6 +28,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, watch};
 
+pub mod tailnet;
+
 /// High bit on a session id in the output stream: reset the terminal and
 /// treat the record as an attach snapshot.
 pub const RESET_FLAG: TerminalId = 0x8000_0000;
@@ -36,6 +39,36 @@ pub const RESET_FLAG: TerminalId = 0x8000_0000;
 /// a different version and needs the user's consent to install (R2).
 pub const NEEDS_INSTALL: &str = "needs_install: ";
 
+/// A connection error for a daemon that speaks another protocol and cannot
+/// be installed from here (X57). Like [`NEEDS_INSTALL`], the host waits for
+/// [`Host::reconnect`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct NeedsUpdate {
+    pub daemon_version: String,
+}
+
+impl std::fmt::Display for NeedsUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the host runs moonletd {}, which speaks another protocol", self.daemon_version)
+    }
+}
+
+impl std::error::Error for NeedsUpdate {}
+
+/// A connection error for a daemon that refused the credentials, such as a
+/// removed device's token (X57); it holds the daemon's message. Retrying
+/// cannot help until the user does something, so the host waits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum HostStatus {
@@ -44,6 +77,11 @@ pub enum HostStatus {
     Reconnecting,
     /// The remote helper is missing or a different version; needs consent to install.
     NeedsInstall,
+    /// The daemon speaks another protocol; `daemon_version` says which side
+    /// to update (X57).
+    NeedsUpdate,
+    /// The daemon no longer accepts this device; `message` is its reason (X57).
+    Refused,
     Error,
 }
 
@@ -333,9 +371,18 @@ async fn connection_loop(
             }
             Err(e) => {
                 let msg = format!("{e:#}");
-                if let Some(m) = msg.strip_prefix(NEEDS_INSTALL) {
-                    host.set_status(HostStatus::NeedsInstall, Some(m.to_string()));
-                    // Wait for the user to install, then retry.
+                let waiting = if let Some(m) = msg.strip_prefix(NEEDS_INSTALL) {
+                    Some((HostStatus::NeedsInstall, Some(m.to_string())))
+                } else if let Some(n) = e.downcast_ref::<NeedsUpdate>() {
+                    host.info.lock().unwrap().daemon_version = Some(n.daemon_version.clone());
+                    Some((HostStatus::NeedsUpdate, None))
+                } else {
+                    e.downcast_ref::<Refused>()
+                        .map(|r| (HostStatus::Refused, Some(r.0.clone())))
+                };
+                if let Some((status, message)) = waiting {
+                    host.set_status(status, message);
+                    // Wait for the user to act, then retry.
                     tokio::select! {
                         _ = host.retry.notified() => {}
                         _ = stop.changed() => return,

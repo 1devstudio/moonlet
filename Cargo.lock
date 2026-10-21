@@ -2688,6 +2688,7 @@ dependencies = [
  "dirs 6.0.0",
  "libc",
  "moonlet-core",
+ "moonlet-link",
  "moonlet-proto",
  "nix",
  "serde",

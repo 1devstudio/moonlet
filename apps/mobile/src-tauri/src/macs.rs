@@ -5,22 +5,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
-use moonlet_link::{
-    BoxFuture, Connector, Events, Host, HostInfo, HostOptions, HostStatus, Reader, Writer,
-};
-use moonlet_proto::methods::MobileHost;
-use moonlet_proto::{Frame, Message, RpcError, read_frame, write_frame};
+use anyhow::{Result, anyhow};
+use moonlet_link::tailnet::{self, TailnetConnector};
+use moonlet_link::{Events, Host, HostInfo, HostOptions, HostStatus};
+use moonlet_proto::RpcError;
+use moonlet_proto::methods::{DeviceKind, MobileHost};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::net::TcpStream;
 
 /// The phone app's name in `hello`.
 pub const CLIENT: &str = "moonlet-mobile";
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A paired Mac. Its token is kept in the [`Tokens`] store, never in the
 /// app's file.
@@ -109,90 +104,15 @@ pub struct HostEntry {
     pub via: Option<String>,
 }
 
-/// Sends an `auth` frame on `stream` and reads the daemon's answer.
-async fn authenticate(stream: &mut TcpStream, auth: Message) -> Result<Message> {
-    write_frame(stream, &Frame::Json(auth)).await?;
-    match tokio::time::timeout(AUTH_TIMEOUT, read_frame(stream))
-        .await
-        .context("the Mac did not answer")??
-    {
-        Some(Frame::Json(m @ Message::Authed { .. })) => Ok(m),
-        Some(Frame::Json(Message::Response { error: Some(e), .. })) => Err(anyhow!(e.message)),
-        Some(other) => bail!("unexpected reply {other:?}"),
-        None => bail!("the Mac closed the connection"),
-    }
-}
-
-/// Connects to the first address that answers.
-async fn dial(addrs: &[String]) -> Result<TcpStream> {
-    let mut last = anyhow!("no address to connect to");
-    for a in addrs {
-        match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(a)).await {
-            Ok(Ok(s)) => {
-                let _ = s.set_nodelay(true);
-                return Ok(s);
-            }
-            Ok(Err(e)) => last = anyhow!("{a}: {e}"),
-            Err(_) => last = anyhow!("{a}: timed out"),
-        }
-    }
-    Err(last).context("cannot reach the Mac over Tailscale")
-}
-
 /// Pairs with the code from a `moonlet://pair` link; returns the Mac to keep.
 pub async fn pair(name: &str, addrs: Vec<String>, code: &str, device: &str) -> Result<SavedMac> {
-    let mut stream = dial(&addrs).await?;
-    let reply = authenticate(
-        &mut stream,
-        Message::Auth {
-            token: None,
-            pair: Some(code.into()),
-            device: Some(device.into()),
-            route: None,
-            kind: None,
-        },
-    )
-    .await?;
-    let Message::Authed {
-        device_id,
-        token: Some(token),
-        ..
-    } = reply
-    else {
-        bail!("the Mac did not hand out a token");
-    };
+    let paired = tailnet::pair(&addrs, code, device, DeviceKind::Phone).await?;
     Ok(SavedMac {
-        id: device_id,
+        id: paired.device_id,
         name: name.into(),
         addrs,
-        token,
+        token: paired.token,
     })
-}
-
-struct MacConnector {
-    mac: SavedMac,
-    route: Option<String>,
-}
-
-impl Connector for MacConnector {
-    fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
-        Box::pin(async move {
-            let mut stream = dial(&self.mac.addrs).await?;
-            authenticate(
-                &mut stream,
-                Message::Auth {
-                    token: Some(self.mac.token.clone()),
-                    pair: None,
-                    device: None,
-                    route: self.route.clone(),
-                    kind: None,
-                },
-            )
-            .await?;
-            let (r, w) = stream.into_split();
-            Ok((Box::new(r) as Reader, Box::new(w) as Writer))
-        })
-    }
 }
 
 /// Where statuses and events go: the webview, through the app.
@@ -301,8 +221,9 @@ impl Phone {
                 remote: route.is_some(),
                 client: CLIENT.into(),
             },
-            Arc::new(MacConnector {
-                mac: mac.clone(),
+            Arc::new(TailnetConnector {
+                addrs: mac.addrs.clone(),
+                token: mac.token.clone(),
                 route: route.map(|r| r.id.clone()),
             }),
             Arc::new(PhoneEvents {

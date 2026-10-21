@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use moonlet_core::client::{Client, wait_for_socket};
@@ -397,6 +398,84 @@ async fn a_paired_mac_can_remove_itself_but_manage_nothing_else() {
         .await
         .unwrap_err();
     assert_eq!(e.to_string(), "invalid_params: not a paired device");
+}
+
+/// Where a `moonlet_link::Host`'s statuses go.
+#[derive(Default)]
+struct Statuses(std::sync::Mutex<Vec<moonlet_link::HostInfo>>);
+
+impl moonlet_link::Events for Statuses {
+    fn status(&self, info: &moonlet_link::HostInfo) {
+        self.0.lock().unwrap().push(info.clone());
+    }
+    fn event(&self, _: &str, _: String, _: Value) {}
+}
+
+impl Statuses {
+    async fn wait_for(&self, status: moonlet_link::HostStatus) -> moonlet_link::HostInfo {
+        for _ in 0..500 {
+            if let Some(i) = self.0.lock().unwrap().last()
+                && i.status == status
+            {
+                return i.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("never {status:?}: {:?}", self.0.lock().unwrap().last());
+    }
+}
+
+#[tokio::test]
+async fn a_mac_pairs_and_connects_through_the_shared_tailnet_connector() {
+    use moonlet_link::tailnet::{TailnetConnector, pair};
+    use moonlet_link::{Host, HostOptions, HostStatus};
+
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let mut app = mac.app().await;
+    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let paired = pair(
+        std::slice::from_ref(&addr),
+        &p.code,
+        "Alex's MacBook Pro",
+        moonlet_proto::methods::DeviceKind::Desktop,
+    )
+    .await
+    .unwrap();
+    assert_eq!(paired.host.as_deref(), Some(p.host.as_str()));
+
+    let statuses = Arc::new(Statuses::default());
+    let host = Host::start(
+        HostOptions {
+            id: "studio-mini".into(),
+            label: "studio-mini".into(),
+            remote: true,
+            client: "moonlet-app".into(),
+        },
+        Arc::new(TailnetConnector {
+            addrs: vec![addr],
+            token: paired.token,
+            route: None,
+        }),
+        statuses.clone(),
+        tokio::runtime::Handle::current(),
+    );
+    statuses.wait_for(HostStatus::Connected).await;
+
+    // Removed on the host: the link ends, and the app waits for the user.
+    let _: bool = app
+        .request("mobile.revoke", json!({ "id": paired.device_id }))
+        .await
+        .unwrap();
+    let refused = statuses.wait_for(HostStatus::Refused).await;
+    assert_eq!(
+        refused.message.as_deref(),
+        Some("this phone is not paired with this Mac")
+    );
+    let seen = statuses.0.lock().unwrap().len();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(statuses.0.lock().unwrap().len(), seen, "it tried again");
+    host.stop();
 }
 
 #[tokio::test]
