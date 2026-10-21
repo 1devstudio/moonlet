@@ -1145,7 +1145,29 @@ async fn fake_central(
                         .as_ref()
                         .is_some_and(|r| r["applied"] == json!(false));
                 if not_yet {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    // As a real central host would, take the worker's offers
+                    // first; send again once it has been quiet a while.
+                    loop {
+                        let next =
+                            tokio::time::timeout(Duration::from_millis(300), read_frame(&mut s))
+                                .await;
+                        match next {
+                            Err(_) => break,
+                            Ok(Ok(Some(Frame::Json(Message::Request { id, method, params })))) => {
+                                let reply = if method == "sync.offer" {
+                                    Message::ok(id, took_offer(&params))
+                                } else {
+                                    Message::err(
+                                        id,
+                                        moonlet_proto::RpcError::new("busy", "not now"),
+                                    )
+                                };
+                                write_frame(&mut s, &Frame::Json(reply)).await.unwrap();
+                            }
+                            Ok(Ok(Some(_))) => {}
+                            Ok(_) => return,
+                        }
+                    }
                     continue;
                 }
                 *seen.lock().unwrap() = Some(json!({ "result": result, "error": error }));
