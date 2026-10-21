@@ -697,6 +697,7 @@ export type LinkState =
   | { kind: "connected"; since: number }
   | { kind: "reconnecting" }
   | { kind: "needs_update"; daemon_version: string }
+  | { kind: "refused" }
   | { kind: "error"; message: string };
 
 export interface LinkInfo {

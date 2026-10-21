@@ -4,9 +4,6 @@
 import type { HostInfo, LinkInfo } from "./protocol";
 import type { StatusLine } from "./settingsPage";
 
-/** The daemon's message when the central host removed this Mac's device. */
-const refused = (name: string) => `${name} no longer accepts this Mac`;
-
 const time = (ms: number) => {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -25,17 +22,20 @@ export function linkLine(link: LinkInfo): StatusLine {
       return { tone: "blocked", text: `Reconnecting to ${name}…` };
     case "needs_update":
       return { tone: "error", text: `Update moonlet on ${name}` };
+    case "refused":
+      return { tone: "error", text: `${name} no longer accepts this Mac. Pair it again.` };
     case "error":
-      return { tone: "error", text: s.message === refused(name) ? `${s.message}. Pair it again.` : s.message };
-    default:
+      return { tone: "error", text: s.message };
+    case "off":
       return { tone: "muted", text: "Not linked" };
   }
 }
 
-/** Retry goes with a connection error; a host that removed this Mac needs
- * pairing again instead, from its row. */
+/** Retry goes with a connection error, and with an update made on the
+ * central host; a host that removed this Mac needs pairing again instead,
+ * from its row. */
 export function linkRetries(link: LinkInfo): boolean {
-  return link.state.kind === "error" && link.state.message !== refused(link.central?.name ?? "");
+  return link.state.kind === "error" || link.state.kind === "needs_update";
 }
 
 /** The host row that is the central host: the tailnet host the link goes to.

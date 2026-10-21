@@ -242,8 +242,10 @@ function MacPairing({ pairing, host, now, onCancel }: { pairing: MobilePairing; 
   );
 }
 
-/** This Mac's link to its central host (X41); follows `link.changed`. */
-function useLink(): [LinkInfo | null, (l: LinkInfo) => void] {
+/** This Mac's link to its central host (X41); follows `link.changed`, which
+ * every change sends, so replies to changes are not used: one could arrive
+ * after a newer state. */
+function useLink(): LinkInfo | null {
   const [link, setLink] = useState<LinkInfo | null>(null);
   useEffect(() => {
     void rpc<LinkInfo>(HOST, M.linkGet).then(setLink).catch(() => setLink(null));
@@ -252,19 +254,13 @@ function useLink(): [LinkInfo | null, (l: LinkInfo) => void] {
     });
     return () => void unlisten.then((f) => f());
   }, []);
-  return [link, setLink];
+  return link;
 }
 
 /** "Use this Mac for heavy commands" and the link's state (X41). */
-function HeavyCommandsRow({ link, onChange }: { link: LinkInfo | null; onChange: (l: LinkInfo) => void }) {
+function HeavyCommandsRow({ link }: { link: LinkInfo | null }) {
   const id = useId();
-  const set = async (enabled: boolean) => {
-    try {
-      onChange(await rpc<LinkInfo>(HOST, M.linkSet, { worker: { enabled } }));
-    } catch (e) {
-      errorToast(e);
-    }
-  };
+  const set = (enabled: boolean) => rpc(HOST, M.linkSet, { worker: { enabled } }).catch(errorToast);
   return (
     <Row
       setting="heavy-commands"
@@ -309,9 +305,9 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [adding, setAdding] = useState<{ name: string } | null>(null);
   const { pairing, note, now, start, cancel } = usePairing();
-  const [link, setLink] = useLink();
+  const link = useLink();
   const central = centralHostId(Object.values(hosts), link);
-  const pickCentralHost = (next: string | null) => void hostsApi.setCentral(next).then(setLink, errorToast);
+  const pickCentralHost = (next: string | null) => void hostsApi.setCentral(next).catch(errorToast);
   const open = (h: string) => (sessions[h] ?? []).filter((s) => !s.archived).length;
   const local = hosts.local;
   const remotes = Object.values(hosts).filter((h) => h.remote);
@@ -362,7 +358,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
               </button>
             </HostRow>
             <TailnetSwitch status={status} setting="tailnet" onOff={cancel} />
-            <HeavyCommandsRow link={link} onChange={setLink} />
+            <HeavyCommandsRow link={link} />
             <div className="flex items-center gap-3 px-4 py-3">
               <Button size="sm" variant="primary" disabled={!canPair || !!pairing} onClick={() => void start()}>
                 <Laptop size={13} /> Let another Mac connect

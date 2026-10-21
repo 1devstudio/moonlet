@@ -16,7 +16,7 @@ describe("the link's status line (X41)", () => {
     expect(linkLine(info({ kind: "connected", since }))).toEqual({ tone: "done", text: "Linked to studio-mini since 10:42" });
     expect(linkLine(info({ kind: "reconnecting" }))).toEqual({ tone: "blocked", text: "Reconnecting to studio-mini…" });
     expect(linkLine(info({ kind: "needs_update", daemon_version: "0.1.26" }))).toEqual({ tone: "error", text: "Update moonlet on studio-mini" });
-    expect(linkLine(info({ kind: "error", message: "studio-mini no longer accepts this Mac" }))).toEqual({
+    expect(linkLine(info({ kind: "refused" }))).toEqual({
       tone: "error",
       text: "studio-mini no longer accepts this Mac. Pair it again.",
     });
@@ -28,11 +28,11 @@ describe("the link's status line (X41)", () => {
     expect(linkLine(info({ kind: "connected", since })).text).toBe("Linked to studio-mini since 09:05");
   });
 
-  it("offers Retry for a connection error only, not for a host that removed this Mac", () => {
+  it("offers Retry for a connection error and after updating, not for a host that removed this Mac", () => {
     expect(linkRetries(info({ kind: "error", message: "connection refused" }))).toBe(true);
-    expect(linkRetries(info({ kind: "error", message: "studio-mini no longer accepts this Mac" }))).toBe(false);
+    expect(linkRetries(info({ kind: "needs_update", daemon_version: "0.1.26" }))).toBe(true);
+    expect(linkRetries(info({ kind: "refused" }))).toBe(false);
     expect(linkRetries(info({ kind: "connected", since: 0 }))).toBe(false);
-    expect(linkRetries(info({ kind: "needs_update", daemon_version: "0.1.26" }))).toBe(false);
   });
 });
 
