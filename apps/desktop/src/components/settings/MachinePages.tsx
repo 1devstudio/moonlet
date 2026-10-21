@@ -1,18 +1,19 @@
 // Settings › Machines (X43): this Mac and the remote hosts, over the tailnet
 // (X57) or SSH (R1, R2), and the phones paired with this Mac (X39).
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { encode } from "uqr";
-import { Copy, Laptop, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "lucide-react";
+import { Check, Copy, Laptop, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi, onDaemonEvent, rpc } from "../../lib/daemon";
 import { countdown, deviceLine, devicesOfKind, pairEndedText } from "../../lib/mobile";
 import { addHostReady, displayCode, readAddHostInput } from "../../lib/addHost";
-import { EV, M, type HostInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
+import { EV, M, type HostInfo, type LinkInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
-import { Card, PageHeading, Section, Status, SwitchRow } from "./controls";
+import { centralHostId, linkLine, linkRetries, pickCentral } from "../../lib/workerLink";
+import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
 
 const iconBox = "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted";
 
@@ -241,12 +242,76 @@ function MacPairing({ pairing, host, now, onCancel }: { pairing: MobilePairing; 
   );
 }
 
+/** This Mac's link to its central host (X41); follows `link.changed`. */
+function useLink(): [LinkInfo | null, (l: LinkInfo) => void] {
+  const [link, setLink] = useState<LinkInfo | null>(null);
+  useEffect(() => {
+    void rpc<LinkInfo>(HOST, M.linkGet).then(setLink).catch(() => setLink(null));
+    const unlisten = onDaemonEvent((e) => {
+      if (e.host === HOST && e.name === EV.linkChanged) setLink(e.data as LinkInfo);
+    });
+    return () => void unlisten.then((f) => f());
+  }, []);
+  return [link, setLink];
+}
+
+/** "Use this Mac for heavy commands" and the link's state (X41). */
+function HeavyCommandsRow({ link, onChange }: { link: LinkInfo | null; onChange: (l: LinkInfo) => void }) {
+  const id = useId();
+  const set = async (enabled: boolean) => {
+    try {
+      onChange(await rpc<LinkInfo>(HOST, M.linkSet, { worker: { enabled } }));
+    } catch (e) {
+      errorToast(e);
+    }
+  };
+  return (
+    <Row
+      setting="heavy-commands"
+      label="Use this Mac for heavy commands"
+      labelId={id}
+      hint={
+        <>
+          {link && <Status line={linkLine(link)} />}
+          <span className="mt-0.5 block">For now this only links this Mac to its central host. Commands are not routed here yet.</span>
+        </>
+      }
+    >
+      {link && linkRetries(link) && (
+        <Button size="sm" variant="ghost" onClick={() => void rpc(HOST, M.linkRetry).catch(errorToast)}>
+          Retry
+        </Button>
+      )}
+      <Switch on={!!link?.worker.enabled} disabled={!link} labelledBy={id} onChange={(on) => void set(on)} />
+    </Row>
+  );
+}
+
+/** A tailnet host's Central host choice (X41): pressed on the central host. */
+function CentralHostButton({ host, central, onPick }: { host: string; central: string | null; onPick: (next: string | null) => void }) {
+  const on = central === host;
+  return (
+    <Button
+      size="sm"
+      variant={on ? "subtle" : "ghost"}
+      aria-pressed={on}
+      title={on ? `${host} is this Mac's central host. Click to clear it.` : `Make ${host} this Mac's central host`}
+      onClick={() => onPick(pickCentral(central, host))}
+    >
+      {on && <Check size={12} />} Central host
+    </Button>
+  );
+}
+
 export function HostsPage({ status }: { status: MobileStatus | null }) {
   const hosts = useStore((s) => s.hosts);
   const sessions = useStore((s) => s.sessions);
   const [busy, setBusy] = useState<string | null>(null);
   const [adding, setAdding] = useState<{ name: string } | null>(null);
   const { pairing, note, now, start, cancel } = usePairing();
+  const [link, setLink] = useLink();
+  const central = centralHostId(Object.values(hosts), link);
+  const pickCentralHost = (next: string | null) => void hostsApi.setCentral(next).then(setLink, errorToast);
   const open = (h: string) => (sessions[h] ?? []).filter((s) => !s.archived).length;
   const local = hosts.local;
   const remotes = Object.values(hosts).filter((h) => h.remote);
@@ -297,6 +362,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
               </button>
             </HostRow>
             <TailnetSwitch status={status} setting="tailnet" onOff={cancel} />
+            <HeavyCommandsRow link={link} onChange={setLink} />
             <div className="flex items-center gap-3 px-4 py-3">
               <Button size="sm" variant="primary" disabled={!canPair || !!pairing} onClick={() => void start()}>
                 <Laptop size={13} /> Let another Mac connect
@@ -331,6 +397,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
         <Card>
           {remotes.map((h) => (
             <HostRow key={h.id} host={h} sessions={open(h.id)}>
+              {h.kind === "tailnet" && <CentralHostButton host={h.id} central={central} onPick={pickCentralHost} />}
               {hostActions(h).map((a) =>
                 a === "install" || a === "reinstall" ? (
                   <Button key={a} size="sm" variant={a === "reinstall" ? "ghost" : "primary"} disabled={busy === h.id} onClick={() => void install(h.id)}>

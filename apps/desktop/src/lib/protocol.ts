@@ -690,6 +690,21 @@ export interface MobileStatus {
   devices: MobileDevice[];
 }
 
+/** This Mac's link to its central host, from `link.get` (X41); never the token. */
+export type LinkState =
+  | { kind: "off" }
+  | { kind: "connecting" }
+  | { kind: "connected"; since: number }
+  | { kind: "reconnecting" }
+  | { kind: "needs_update"; daemon_version: string }
+  | { kind: "error"; message: string };
+
+export interface LinkInfo {
+  central: { name: string; addrs: string[] } | null;
+  worker: { id: string; name: string; enabled: boolean };
+  state: LinkState;
+}
+
 /** A one-time pairing code and the link its QR code holds (X39). */
 export interface MobilePairing {
   code: string;
@@ -825,6 +840,9 @@ export const M = {
   mobilePairCancel: "mobile.pair_cancel",
   mobileRevoke: "mobile.revoke",
   mobileHosts: "mobile.hosts",
+  linkGet: "link.get",
+  linkSet: "link.set",
+  linkRetry: "link.retry",
 } as const;
 
 export const EV = {
@@ -853,6 +871,7 @@ export const EV = {
   mobileChanged: "mobile.changed",
   mobilePaired: "mobile.paired",
   mobilePairEnded: "mobile.pair_ended",
+  linkChanged: "link.changed",
 } as const;
 
 /**

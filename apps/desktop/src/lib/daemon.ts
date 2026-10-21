@@ -3,7 +3,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DaemonService, HostInfo } from "./protocol";
+import type { DaemonService, HostInfo, LinkInfo } from "./protocol";
 
 export interface RpcError {
   code: string;
@@ -38,6 +38,8 @@ export const hostsApi = {
   pair: (name: string, addrs: string[] | null, code: string) => invoke<HostInfo>("host_pair", { name, addrs, code }),
   remove: (id: string) => invoke("host_remove", { id }),
   reconnect: (id: string) => invoke("host_reconnect", { id }),
+  /** Makes a tailnet host this Mac's central host, or clears it; the app passes the token on (X41). */
+  setCentral: (id: string | null) => invoke<LinkInfo>("host_set_central", { id }),
   sshHosts: () => invoke<string[]>("ssh_hosts"),
   install: (host: string) => invoke<{ triple: string; version: string }>("remote_install", { host }),
   openTargets: () => invoke<{ id: string; label: string }[]>("open_targets"),

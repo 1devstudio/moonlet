@@ -1,6 +1,6 @@
 # X41 — Worker link and project identity
 
-- **Status:** draft
+- **Status:** implemented (untried between two real Macs)
 - **Priority / phase:** P1 · phase 4 (new scope: sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (the tailnet transport), [0008](../adr/0008-phone-link-over-tailscale.md) (`moonlet-link`)
@@ -19,7 +19,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 ## User journey
 
 1. On the MacBook, Settings › Hosts already lists `studio-mini`, added and paired over the tailnet (ADR 0011). You mark it **Central host**.
-2. Settings › This Mac has **Use this Mac for heavy commands**. You turn it on.
+2. Settings › Machines › Hosts › This Mac has **Use this Mac for heavy commands**. You turn it on.
 3. The line under the toggle reads "Linked to studio-mini since 10:42". If studio-mini runs a moonlet that speaks another protocol version, it reads "Update moonlet on studio-mini". If studio-mini has removed this Mac, it reads "studio-mini no longer accepts this Mac. Pair it again."
 4. On the Mac mini, `moonlet rpc worker.list` shows "Alex's MacBook Pro", macOS arm64, 10 cores, its projects and its round trip.
 5. You close the lid. Within about 30 s the worker is gone from the Mac mini's list. You open the lid, and it is back without you doing anything.
@@ -29,12 +29,12 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 ### Link settings
 
 - [x] `link.set {central, worker: {enabled, name}}` stores the link settings in `$MOONLET_HOME/link.json`, written with mode 0600. `link.get` returns them together with the link's state, without the token. (`the_file_is_private_and_the_shown_settings_have_no_token`, `a_linked_worker_is_listed_on_the_central_host_with_its_projects`)
-- [ ] `central` is `null` or `{name, addrs, token}`:
+- [x] `central` is `null` or `{name, addrs, token}`:
   - `name` is the host's label, such as `studio-mini`;
   - `addrs` are one or more `ip:port` addresses of the host's tailnet listener;
   - `token` is the device token this Mac got when it paired with the host.
 
-  When the user chooses **Central host**, the app's Rust side fills these in from its own entry for the host and calls `link.set` itself, so the token never reaches the webview (X57). The Mac is one paired device, so the app and its daemon share the token, and removing the Mac on the central host cuts both.
+  When the user chooses **Central host**, the app's Rust side fills these in from its own entry for the host and calls `link.set` itself, so the token never reaches the webview (X57). The Mac is one paired device, so the app and its daemon share the token, and removing the Mac on the central host cuts both. (`choosing_a_central_host_hands_its_name_addresses_and_token_to_link_set`, `worker-link.e2e.ts`)
 - [x] The first time the daemon reads `link.json`, it gives this machine a **worker id**. The id is a random UUID that never changes afterwards and that `link.set` cannot edit. Workers are told apart by id, never by name. (`the_first_load_makes_a_worker_id_that_later_loads_keep`, `link_set_cannot_change_the_worker_id`, `a_worker_id_links_once_and_names_may_repeat`) A `link.json` that cannot be parsed (not JSON, not text) is moved aside to `link.json.bad` rather than written over, and this machine starts afresh with a new id. One that exists but cannot be opened is left as it is and not written at start. (`a_link_json_that_is_not_text_is_kept_aside_too`, `a_link_json_that_cannot_be_opened_is_never_written_over`) A `link.set` whose settings cannot be written fails, and the settings stay as they were. (`a_link_json_that_cannot_be_read_is_kept_aside_not_written_over`, `link_set_fails_and_keeps_the_settings_when_link_json_cannot_be_written`)
 - [x] `name` is a label. It defaults to the Mac's computer name (the hostname on Linux) and `link.set` can change it. (`the_name_defaults_to_the_computer_name_and_link_set_changes_it`)
 - [x] An invalid `central` is rejected with an error, and nothing is stored: an empty `name` or one with control characters, no `addrs` or one that is not `ip:port`, or a `token` that is not 64 hex characters. (`an_invalid_central_is_refused_and_nothing_is_stored`)
@@ -105,8 +105,8 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ## UI
 
-- **Settings › Hosts:** each host paired over the tailnet gets a **Central host** choice. SSH hosts do not (ADR 0011). At most one host is the central host; choosing another moves it, and choosing it again clears it.
-- **Settings › This Mac:** a new section with a **Use this Mac for heavy commands** toggle and a status line, one per link state:
+- **Settings › Hosts:** each host paired over the tailnet gets a **Central host** choice. SSH hosts do not (ADR 0011). At most one host is the central host; choosing another moves it, and choosing it again clears it. Removing the central host from this Mac's list clears it too. (`workerLink.test.ts` the central host choice, `worker-link.e2e.ts`)
+- **Settings › Machines › Hosts › This Mac:** a **Use this Mac for heavy commands** row with a switch and a status line, one per link state:
   - "Not linked"
   - "Linking to studio-mini…"
   - "Linked to studio-mini since 10:42"
@@ -114,6 +114,8 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - "Update moonlet on studio-mini"
   - "studio-mini no longer accepts this Mac. Pair it again."
   - any other connection error, with **Retry**
+
+  (`workerLink.test.ts` the link's status line, `worker-link.e2e.ts`)
 - The toggle's help text says it only links this Mac for now; commands are not routed yet.
 
 ## Protocol and RPCs

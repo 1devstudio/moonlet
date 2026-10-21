@@ -16,6 +16,7 @@ use moonlet_link::tailnet::TailnetConnector;
 use moonlet_link::{
     BoxFuture, Connector, Events, Host, HostOptions, HostStatus, NEEDS_INSTALL, Reader, Writer,
 };
+use moonlet_proto::methods::{LinkCentral, LinkSet};
 use moonlet_proto::{Frame, Message, RpcError};
 use serde::Serialize;
 use serde_json::Value;
@@ -285,11 +286,38 @@ impl HostManager {
                 tracing::info!(host = id, "unpair: {}", e.message);
             }
         }
+        // A host this Mac forgets is no longer its central host (X41).
+        if self.kind(id) == HostKind::Tailnet
+            && let Ok(local) = self.get(LOCAL)
+            && let Ok(link) = local
+                .request(moonlet_proto::methods::LINK_GET, Value::Null)
+                .await
+            && link["central"]["name"] == id
+            && let Err(e) = self.set_central(None).await
+        {
+            tracing::warn!(host = id, "cannot clear the central host: {}", e.message);
+        }
         self.tailnet.lock().unwrap().remove(id);
         if let Some(h) = self.hosts.lock().unwrap().remove(id) {
             h.stop();
         }
         self.persist();
+    }
+
+    /// Makes a tailnet host this Mac's central host, or clears it (X41). The
+    /// token goes from the app's own host list to the local daemon, never
+    /// through the webview; the reply, like `link.get`, has no token.
+    pub async fn set_central(&self, id: Option<&str>) -> Result<Value, RpcError> {
+        let saved = match id {
+            Some(id) => Some(self.tailnet.lock().unwrap().get(id).cloned().ok_or_else(|| {
+                RpcError::new("unknown_host", format!("{id} is not a host on your tailnet"))
+            })?),
+            None => None,
+        };
+        let params = serde_json::to_value(central_link_set(saved.as_ref())).unwrap();
+        self.get(LOCAL)?
+            .request(moonlet_proto::methods::LINK_SET, params)
+            .await
     }
 
     pub fn reconnect(&self, id: &str) -> Result<(), RpcError> {
@@ -500,9 +528,46 @@ pub async fn pair_tailnet(
     }))
 }
 
+/// `link.set` params that make `saved` this Mac's central host (X41), or
+/// clear it.
+pub fn central_link_set(saved: Option<&TailnetHost>) -> LinkSet {
+    LinkSet {
+        central: Some(saved.map(|t| LinkCentral {
+            name: t.id.clone(),
+            addrs: t.addrs.clone(),
+            token: t.token.clone(),
+        })),
+        worker: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn choosing_a_central_host_hands_its_name_addresses_and_token_to_link_set() {
+        let mini = TailnetHost {
+            id: "studio-mini".into(),
+            device_id: "d1".into(),
+            addrs: vec!["100.101.102.103:47428".into()],
+            token: "ab".repeat(32),
+        };
+        assert_eq!(
+            serde_json::to_value(central_link_set(Some(&mini))).unwrap(),
+            serde_json::json!({
+                "central": {
+                    "name": "studio-mini",
+                    "addrs": ["100.101.102.103:47428"],
+                    "token": "ab".repeat(32),
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(central_link_set(None)).unwrap(),
+            serde_json::json!({ "central": null })
+        );
+    }
 
     #[test]
     fn a_tailnet_host_is_named_without_its_port() {

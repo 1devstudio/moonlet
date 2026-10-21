@@ -155,6 +155,7 @@ function index(c: SearchContext): Entry[] {
     app("hooks", "Claude Code › Hooks", undefined, "Claude Code hooks", "", "Codex skill install"),
     app("hosts", "Machines › Hosts", undefined, "Remote hosts", n(c.remoteHosts, "host"), "ssh helper"),
     app("hosts", "Machines › Hosts", "tailnet", "Allow connections from my tailnet", "", "pair Mac Tailscale"),
+    app("hosts", "Machines › Hosts", "heavy-commands", "Use this Mac for heavy commands", "", "central host worker link"),
     app("phones", "Machines › Phones", "phones", "Allow connections from my tailnet", "", "mobile phone pair Tailscale"),
     ...c.workspaces.flatMap((w): Entry[] => {
       const route: SettingsRoute = { page: "workspace", host: w.host, id: w.id };
