@@ -23,6 +23,7 @@ nix = { workspace = true, features = ["net"] }
 libc.workspace = true
 dirs.workspace = true
 sha2 = "0.10"
+qrcodegen = "1.8"
 
 [dev-dependencies]
 tempfile.workspace = true
