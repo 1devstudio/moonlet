@@ -1,4 +1,4 @@
-use crate::{Frame, KIND_INPUT, KIND_JSON, KIND_OUTPUT, MAX_FRAME_LEN, Message};
+use crate::{Frame, KIND_INPUT, KIND_JSON, KIND_OUTPUT, KIND_PACK, MAX_FRAME_LEN, Message};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProtoError {
@@ -48,6 +48,12 @@ pub(crate) fn encode_into(frame: &Frame, out: &mut Vec<u8>) -> Result<(), ProtoE
             out.extend_from_slice(&terminal.to_be_bytes());
             out.extend_from_slice(data);
         }
+        Frame::Pack { transfer, data } => {
+            out.extend_from_slice(&check(data.len() + 5)?.to_be_bytes());
+            out.push(KIND_PACK);
+            out.extend_from_slice(&transfer.to_be_bytes());
+            out.extend_from_slice(data);
+        }
     }
     Ok(())
 }
@@ -65,6 +71,15 @@ fn decode_body(kind: u8, body: &[u8]) -> Result<Frame, ProtoError> {
                 Frame::Output { terminal, data }
             } else {
                 Frame::Input { terminal, data }
+            })
+        }
+        KIND_PACK => {
+            if body.len() < 4 {
+                return Err(ProtoError::Truncated);
+            }
+            Ok(Frame::Pack {
+                transfer: u32::from_be_bytes(body[..4].try_into().unwrap()),
+                data: body[4..].to_vec(),
             })
         }
         other => Err(ProtoError::UnknownKind(other)),
@@ -230,6 +245,45 @@ mod tests {
             data: vec![0; MAX_FRAME_LEN],
         };
         assert!(matches!(encode_frame(&big), Err(ProtoError::TooLarge(_))));
+    }
+
+    #[test]
+    fn a_pack_frame_round_trips() {
+        let frame = Frame::Pack {
+            transfer: 9,
+            data: b"PACK\0\0\0\x02".to_vec(),
+        };
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&encode_frame(&frame).unwrap());
+        assert_eq!(decoder.next_frame().unwrap(), Some(frame));
+    }
+
+    #[test]
+    fn a_pack_goes_in_chunks_of_one_mebibyte_and_an_empty_one_ends_it() {
+        let pack: Vec<u8> = (0..3 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let frames = crate::pack_frames(4, &pack);
+        let sizes: Vec<(u32, usize)> = frames
+            .iter()
+            .map(|f| match f {
+                Frame::Pack { transfer, data } => (*transfer, data.len()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            sizes,
+            [(4, 1_048_576), (4, 1_048_576), (4, 1_048_576), (4, 0)]
+        );
+
+        let mut packs = crate::PackAssembler::default();
+        for f in frames {
+            let Frame::Pack { transfer, data } = f else {
+                unreachable!()
+            };
+            assert_eq!(packs.take(4), None, "complete before its end");
+            packs.push(transfer, data);
+        }
+        assert_eq!(packs.take(4).as_deref(), Some(&pack[..]));
+        assert_eq!(packs.take(4), None, "taken once");
     }
 
     #[tokio::test]

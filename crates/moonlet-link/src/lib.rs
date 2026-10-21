@@ -14,13 +14,14 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use moonlet_proto::{
-    Frame, FrameDecoder, Message, PROTOCOL_VERSION, RpcError, TerminalId, encode_frame,
+    Frame, FrameDecoder, Message, PROTOCOL_VERSION, PackAssembler, RpcError, TerminalId,
+    encode_frame,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -147,6 +148,9 @@ pub struct Host {
     next_id: AtomicU64,
     output: Mutex<Option<OutputSink>>,
     requests: Mutex<Option<Arc<dyn Requests>>>,
+    /// Packs the daemon sent, by transfer id, for its requests (X60).
+    packs: Mutex<PackAssembler>,
+    next_transfer: AtomicU32,
     batch: Mutex<Vec<u8>>,
     stop: watch::Sender<bool>,
     /// Kicks the reconnect loop to retry immediately.
@@ -197,6 +201,8 @@ impl Host {
             next_id: AtomicU64::new(1),
             output: Mutex::new(None),
             requests: Mutex::new(None),
+            packs: Mutex::new(PackAssembler::default()),
+            next_transfer: AtomicU32::new(1),
             batch: Mutex::new(Vec::new()),
             stop,
             retry: tokio::sync::Notify::new(),
@@ -279,6 +285,30 @@ impl Host {
     fn forget_request(&self, id: u64) {
         self.pending.lock().unwrap().remove(&id);
         self.attaching.lock().unwrap().remove(&id);
+    }
+
+    /// Sends `pack` to the daemon in [`Frame::Pack`] chunks and returns its
+    /// transfer id, for the request that uses it to name (X60). Frames go
+    /// out in order, so the pack is whole before that request arrives.
+    pub fn send_pack(&self, pack: &[u8]) -> Result<u32, RpcError> {
+        let link = self.link.lock().unwrap();
+        let link = link
+            .as_ref()
+            .ok_or_else(|| RpcError::new("disconnected", "not connected"))?;
+        let transfer = self.next_transfer.fetch_add(1, Ordering::Relaxed);
+        let mut bytes = Vec::with_capacity(pack.len() + 64);
+        for f in moonlet_proto::pack_frames(transfer, pack) {
+            bytes.extend(encode_frame(&f).map_err(|e| RpcError::new("too_large", e.to_string()))?);
+        }
+        link.tx
+            .send(bytes)
+            .map_err(|_| RpcError::new("disconnected", "connection closed"))?;
+        Ok(transfer)
+    }
+
+    /// The pack the daemon sent as `transfer`, once it is whole; once.
+    pub fn take_pack(&self, transfer: u32) -> Option<Vec<u8>> {
+        self.packs.lock().unwrap().take(transfer)
     }
 
     pub fn input(&self, session: TerminalId, data: Vec<u8>) -> Result<(), RpcError> {
@@ -497,6 +527,8 @@ async fn run_link(
     }
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // A pack cut off by the last link will never be whole.
+    *host.packs.lock().unwrap() = PackAssembler::default();
     *host.link.lock().unwrap() = Some(Link { tx });
     // Fetch home for path display; ignore failures.
     let h2 = host.clone();
@@ -548,6 +580,7 @@ async fn run_link(
 fn dispatch(host: &Arc<Host>, frame: Frame) {
     match frame {
         Frame::Output { terminal, data } => host.push_output(terminal, &data),
+        Frame::Pack { transfer, data } => host.packs.lock().unwrap().push(transfer, data),
         // An error no request asked for: the daemon says why it ends the link.
         Frame::Json(Message::Response {
             id: 0,

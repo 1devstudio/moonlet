@@ -4,14 +4,14 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use moonlet_core::terminal::{ClientId, ClientTx, dequeued};
 use std::sync::atomic::AtomicUsize;
-use moonlet_proto::{Frame, Message, PROTOCOL_VERSION, RpcError, encode_frame, read_frame};
+use moonlet_proto::{Frame, Message, PROTOCOL_VERSION, PackAssembler, RpcError, encode_frame, read_frame};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use serde_json::Value;
@@ -97,6 +97,9 @@ pub struct Conn {
     /// Ids from 1: 0 is the reply that ends a link.
     next_request: AtomicU64,
     closed: Notify,
+    /// Packs the client sent for its requests, by transfer id (X60).
+    packs: Mutex<PackAssembler>,
+    next_transfer: AtomicU32,
 }
 
 impl Conn {
@@ -122,6 +125,24 @@ impl Conn {
                 Err(RpcError::new("timeout", format!("{method} timed out")))
             }
         }
+    }
+
+    /// Sends `pack` in [`Frame::Pack`] chunks and returns its transfer id,
+    /// for the request that uses it to name (X60). Frames go out in order,
+    /// so the pack is whole before that request arrives.
+    pub fn send_pack(&self, pack: &[u8]) -> Result<u32, RpcError> {
+        let transfer = self.next_transfer.fetch_add(1, Ordering::Relaxed);
+        for f in moonlet_proto::pack_frames(transfer, pack) {
+            if !self.tx.send(f) {
+                return Err(RpcError::new("disconnected", "connection closed"));
+            }
+        }
+        Ok(transfer)
+    }
+
+    /// The pack the client sent as `transfer`, once it is whole; once.
+    pub fn take_pack(&self, transfer: u32) -> Option<Vec<u8>> {
+        self.packs.lock().unwrap().take(transfer)
     }
 
     /// Ends the connection, as if the client had closed it.
@@ -203,6 +224,8 @@ where
         pending: Mutex::new(HashMap::new()),
         next_request: AtomicU64::new(1),
         closed: Notify::new(),
+        packs: Mutex::new(PackAssembler::default()),
+        next_transfer: AtomicU32::new(1),
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
 
@@ -244,6 +267,8 @@ where
                 Frame::Input { terminal, data } => {
                     let _ = daemon.terminals.write(terminal, data);
                 }
+                // Before the request that names it is read (X60).
+                Frame::Pack { transfer, data } => conn.packs.lock().unwrap().push(transfer, data),
                 Frame::Json(Message::Request { id, method, params })
                     if method == moonlet_proto::methods::TERMINAL_ATTACH =>
                 {

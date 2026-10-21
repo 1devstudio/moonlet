@@ -19,8 +19,9 @@
 | 1 | JSON | one `Message` (see below) | both |
 | 2 | Output | `[u32 BE session id][raw PTY bytes]` | daemon to client |
 | 3 | Input | `[u32 BE session id][raw bytes]` | client to daemon |
+| 4 | Pack | `[u32 BE transfer id][git pack bytes]` | both, between a worker and its central host (X60) |
 
-Frames are at most 16 MiB. PTY bytes are never wrapped in JSON. The daemon coalesces output per client and flushes every 8 ms or at 64 KiB.
+Frames are at most 16 MiB. A git pack goes as Pack frames of at most 1 MiB each, so it never holds up terminal output, and an empty one ends it. The JSON message that uses the pack follows its frames and names it by transfer id (`pack`). PTY bytes are never wrapped in JSON. The daemon coalesces output per client and flushes every 8 ms or at 64 KiB.
 
 ## Messages
 
