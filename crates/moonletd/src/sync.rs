@@ -228,6 +228,10 @@ struct Data {
     /// of yet; the link stays open until it has.
     #[serde(default)]
     closed: Vec<Closed>,
+    /// Sessions this Mac started keeping because their project keeps new
+    /// sessions in sync: once, so a copy the user stopped stays stopped.
+    #[serde(default)]
+    auto: Vec<String>,
 }
 
 /// A copy this Mac stopped keeping, for the central host it was made with.
@@ -265,7 +269,14 @@ impl From<ClosedSaved> for Closed {
 /// `~/.moonlet/sync/projects.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ProjectChoices {
-    #[serde(default)]
+    /// New sessions in the project get a copy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    keep_new: bool,
+    /// When `keep_new` went on, on this Mac's clock: sessions the central
+    /// host made before then are not new. The two clocks are taken to agree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    keep_new_since: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     approved_setup: Vec<String>,
 }
 
@@ -818,6 +829,9 @@ impl LiveCopies {
         self.registered
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.send_closed_soon();
+        // Sessions made while the link was down.
+        let me = self.clone();
+        tokio::spawn(async move { me.fetch_sessions().await });
         let kept = self.data.lock().unwrap().worker.clone();
         for k in kept {
             if self.elsewhere(&k).is_some() {
@@ -1586,12 +1600,13 @@ impl LiveCopies {
         self.link.set_synced(self.link_holders());
     }
 
-    /// What keeps the link open: copies, and closes not sent yet. A close
-    /// for another host keeps it open too, so the link is there when that
-    /// host is central again.
+    /// What keeps the link open: the copies, those whose stop the central
+    /// host has yet to hear of, and a project that keeps new sessions in
+    /// sync, which needs the central host's news of them.
     fn link_holders(&self) -> usize {
+        let keep_new = self.load_projects().values().any(|p| p.keep_new);
         let data = self.data.lock().unwrap();
-        data.worker.len() + data.closed.len()
+        data.worker.len() + data.closed.len() + usize::from(keep_new)
     }
 
     /// `sync.closing` from the central host: the session is going away.
@@ -1779,6 +1794,122 @@ impl LiveCopies {
         }
         self.kicks.lock().unwrap().retain(|r, _| r.exists());
         !gone.is_empty()
+    }
+
+    // ---- Keeping new sessions in sync ----
+
+    /// `sync.project_get`.
+    pub fn project_get(&self, identity: &ProjectIdentity) -> m::ProjectSync {
+        let keep_new = project_key(identity)
+            .and_then(|key| self.load_projects().get(&key).map(|p| p.keep_new))
+            .unwrap_or(false);
+        m::ProjectSync { keep_new }
+    }
+
+    /// `sync.project_set`: new sessions in the project get a copy from now
+    /// on, or no longer do. Copies already kept stay.
+    pub fn project_set(
+        self: &Arc<Self>,
+        identity: &ProjectIdentity,
+        keep_new: bool,
+    ) -> Result<m::ProjectSync, RpcError> {
+        let key = project_key(identity).ok_or_else(|| {
+            RpcError::new(
+                "no_identity",
+                "the project has no commit to know it by on this Mac",
+            )
+        })?;
+        self.update_projects(&key, |p| {
+            if keep_new && !p.keep_new {
+                p.keep_new_since = Some(moonlet_core::paths::now_ms());
+            } else if !keep_new {
+                p.keep_new_since = None;
+            }
+            p.keep_new = keep_new;
+        });
+        self.link.set_synced(self.link_holders());
+        Ok(self.project_get(identity))
+    }
+
+    /// `sessions.changed` from the central host, over the link.
+    pub fn sessions_changed(self: &Arc<Self>, data: serde_json::Value) {
+        let Ok(sessions) = serde_json::from_value::<Vec<moonlet_proto::types::Session>>(data)
+        else {
+            return;
+        };
+        let me = self.clone();
+        tokio::spawn(async move { me.keep_new_sessions(sessions).await });
+    }
+
+    /// Asks the central host for its sessions, to pick up new ones.
+    async fn fetch_sessions(self: &Arc<Self>) {
+        if !self.load_projects().values().any(|p| p.keep_new) {
+            return;
+        }
+        let Some(host) = self.link.host() else { return };
+        match host.request(m::SESSION_LIST, serde_json::json!({})).await {
+            Ok(v) => {
+                if let Ok(sessions) = serde_json::from_value(v) {
+                    self.keep_new_sessions(sessions).await;
+                }
+            }
+            Err(e) => tracing::debug!("cannot list the central host's sessions: {}", e.message),
+        }
+    }
+
+    /// Starts keeping each new session of a project set to keep new
+    /// sessions in sync: made since the setting went on, not archived, and
+    /// not kept or stopped before.
+    async fn keep_new_sessions(self: &Arc<Self>, sessions: Vec<moonlet_proto::types::Session>) {
+        let lock = self.lock("keep-new");
+        let _one = lock.lock().await;
+        let choices = self.load_projects();
+        let Some(since) = choices
+            .values()
+            .filter(|p| p.keep_new)
+            .filter_map(|p| p.keep_new_since)
+            .min()
+        else {
+            return;
+        };
+        let candidates: Vec<_> = {
+            let data = self.data.lock().unwrap();
+            sessions
+                .into_iter()
+                .filter(|s| !s.archived && s.created_at >= since)
+                .filter(|s| !data.auto.contains(&s.id))
+                .filter(|s| !data.worker.iter().any(|k| k.session == s.id))
+                .collect()
+        };
+        if candidates.is_empty() {
+            return;
+        }
+        let Some(host) = self.link.host() else { return };
+        let projects: Vec<moonlet_proto::types::Project> = match host
+            .request(m::PROJECT_LIST, serde_json::json!({}))
+            .await
+            .ok()
+            .and_then(|v| serde_json::from_value(v).ok())
+        {
+            Some(p) => p,
+            None => return,
+        };
+        for s in candidates {
+            let Some(p) = projects.iter().find(|p| p.id == s.project_id) else {
+                continue;
+            };
+            let wanted = project_key(&p.identity)
+                .and_then(|key| choices.get(&key))
+                .is_some_and(|c| c.keep_new && c.keep_new_since.is_some_and(|t| s.created_at >= t));
+            if !wanted {
+                continue;
+            }
+            self.data.lock().unwrap().auto.push(s.id.clone());
+            self.save();
+            if let Err(e) = self.start(s.id.clone()) {
+                tracing::warn!(session = %s.id, "cannot keep a new session in sync: {}", e.message);
+            }
+        }
     }
 
     // ---- Setup in the copy ----
