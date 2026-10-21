@@ -14,7 +14,7 @@ import { loadTrackersConfig, useTasks } from "../../lib/tasksStore";
 import { projectTrackers } from "../../lib/trackerSources";
 import { Button, IconButton, cx } from "../ui";
 import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, SwitchRow, fieldCls } from "./controls";
-import { composerSync } from "../../lib/sync";
+import { syncOffered } from "../../lib/sync";
 import { projectKeepsNew, setProjectKeepsNew, useSync } from "../../lib/syncStore";
 import { useUnsaved } from "./useUnsaved";
 
@@ -102,7 +102,7 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   // This Mac's choice for a project on its central host (X60), saved with
   // the page to this Mac's daemon, not to the project's file.
   const central = useSync((s) => s.central);
-  const keepShown = composerSync(host, central, false).show;
+  const keepShown = syncOffered(host, central);
   const [keepNew, setKeepNew] = useState(false);
   const [origKeepNew, setOrigKeepNew] = useState(false);
   useEffect(() => {
@@ -127,18 +127,27 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   const save = async () => {
     if (!canSave || !file) return;
     setSaving(true);
+    // The project's file first: a stale file stops the save before this
+    // Mac's choice changes, and a failure names the part that failed.
+    try {
+      if (configDirty) show(await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id, version: file.version, config: fromForm(form) }));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const stale = message.includes("config changed on disk");
+      setSaveErr({ message: stale ? "The file changed on disk. Reload to see the new version." : message, stale });
+      setSaving(false);
+      return;
+    }
     try {
       if (keepDirty && project?.identity) {
         const r = await setProjectKeepsNew(project.identity, keepNew);
         setKeepNew(r.keep_new);
         setOrigKeepNew(r.keep_new);
       }
-      if (configDirty) show(await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id, version: file.version, config: fromForm(form) }));
       toast(configDirty ? `Saved ${name}` : "Saved");
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      const stale = message.includes("config changed on disk");
-      setSaveErr({ message: stale ? "The file changed on disk. Reload to see the new version." : message, stale });
+      setSaveErr({ message: `${configDirty ? `Saved ${name}, but not` : "Could not save"} Keep new sessions in sync with this Mac: ${message}`, stale: false });
     } finally {
       setSaving(false);
     }

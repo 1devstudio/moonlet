@@ -727,7 +727,10 @@ export interface Copy {
   /** Where the copy is on this Mac; empty until it is made. */
   path: string;
   state: CopyState;
-  setup: { state: SetupState; command: string } | null;
+  /** The copy's setup: the command its `.moonlet/config.toml` has now, and
+   * whether this exact command was approved for the project on this
+   * central host, so Run setup again asks first when it was not. */
+  setup: { state: SetupState; command: string; approved: boolean } | null;
   differs: string[];
   too_big: string[];
   diverged: { ahead: number; behind: number } | null;
@@ -893,6 +896,7 @@ export const M = {
   syncSkipSetup: "sync.skip_setup",
   syncProjectGet: "sync.project_get",
   syncProjectSet: "sync.project_set",
+  syncDecline: "sync.decline",
 } as const;
 
 export const EV = {

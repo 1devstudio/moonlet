@@ -3,31 +3,31 @@
 // offer it.
 
 import type { ConfirmOptions } from "./confirmOptions";
-import type { Copy } from "./protocol";
+import type { Copy, HostKind, LinkState } from "./protocol";
+import { tildePath } from "./profiles";
 
-/** `path` with the home folder as `~`. */
-export function tilde(path: string, home: string | null | undefined): string {
-  if (!home) return path;
-  const h = home.replace(/\/$/, "");
-  return path === h ? "~" : path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
-}
+const tilde = (path: string, home: string | null | undefined) => tildePath(path, home ?? null);
 
-const files = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/** `n` and the noun for it: "1 file", "3 files". */
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** The copy's status line: the sidebar mark's tooltip and the popover's first line. */
-export function syncLine(copy: Copy, at: { branch: string; home: string | null | undefined; path?: boolean }): { text: string } {
+/** The copy's status line: the sidebar mark's tooltip and the popover's
+ * first line. A copy waiting on a link the central host refused says to
+ * pair again rather than wait (X41). */
+export function syncLine(copy: Copy, at: { branch: string; home: string | null | undefined; path?: boolean; link?: LinkState }): string {
   const s = copy.state;
-  if (s.kind === "paused") return { text: `Paused: ${s.reason}` };
-  if (s.kind === "waiting") return { text: `Waiting for ${copy.host}. Changes made on this Mac sync when it is back.` };
-  if (s.kind === "copying") return { text: "Copying to this Mac…" };
-  if (copy.differs.length) return { text: copy.differs.length === 1 ? "1 file differs" : `${copy.differs.length} files differ` };
+  if (s.kind === "paused") return `Paused: ${s.reason}`;
+  if (s.kind === "waiting")
+    return at.link?.kind === "refused" ? `Paused: ${copy.host} no longer accepts this Mac. Pair it again.` : `Waiting for ${copy.host}. Changes made on this Mac sync when it is back.`;
+  if (s.kind === "copying") return "Copying to this Mac…";
+  if (copy.differs.length) return copy.differs.length === 1 ? "1 file differs" : `${copy.differs.length} files differ`;
   const d = copy.diverged;
-  if (d) return { text: `${at.branch} has diverged: ${files(d.ahead, "commit", "commits")} on this Mac, ${d.behind} on ${copy.host}. Files still sync.` };
+  if (d) return `${at.branch} has diverged: ${count(d.ahead, "commit", "commits")} on this Mac, ${d.behind} on ${copy.host}. Files still sync.`;
   const setup = copy.setup?.state;
-  if (setup?.kind === "running") return { text: "Running setup…" };
-  if (setup?.kind === "failed") return { text: `Setup failed (exit ${setup.exit})` };
-  if (s.kind === "syncing") return { text: `Syncing ${files(s.files, "file", "files")}…` };
-  return { text: at.path === false ? "In sync" : `In sync · ${tilde(copy.path, at.home)}` };
+  if (setup?.kind === "running") return "Running setup…";
+  if (setup?.kind === "failed") return `Setup failed (exit ${setup.exit})`;
+  if (s.kind === "syncing") return `Syncing ${count(s.files, "file", "files")}…`;
+  return at.path === false ? "In sync" : `In sync · ${tilde(copy.path, at.home)}`;
 }
 
 /** How the sidebar mark looks: muted while the copy can't sync, accent when it needs the user. */
@@ -41,16 +41,24 @@ export function markTone(copy: Copy): "muted" | "accent" | "plain" {
 /** Whether a session's right-click menu has Keep in sync with this Mac: on
  * the central host's sessions, and on another tailnet host's once the user
  * makes it the central host. */
-export function syncChoice(host: string, kind: string | undefined, central: string | null): { needsCentral: boolean } | null {
+export function syncChoice(host: string, kind: HostKind | undefined, central: string | null): { needsCentral: boolean } | null {
   if (kind !== "tailnet") return null;
   return { needsCentral: host !== central };
 }
 
-/** The composer's Keep in sync checkbox, and the project page's switch:
- * only for a project on the central host, ticked by the project's choice. */
-export function composerSync(host: string, central: string | null, keepNew: boolean): { show: boolean; checked: boolean } {
-  const show = !!central && host === central;
-  return { show, checked: show && keepNew };
+/** Whether a project offers keeping its sessions in sync: the composer's
+ * checkbox and the project page's switch, only on the central host. */
+export const syncOffered = (host: string, central: string | null): boolean => !!central && host === central;
+
+/** What the popover's setup row offers: the output once it ran, and Run
+ * setup, which asks first unless this exact command was approved. */
+export function setupActions(setup: NonNullable<Copy["setup"]>): { log: boolean; run: { label: string; asks: boolean } | null } {
+  const k = setup.state.kind;
+  if (k === "running") return { log: true, run: null };
+  if (k === "needs_approval") return { log: false, run: { label: "Run setup", asks: true } };
+  const asks = !setup.approved;
+  if (k === "skipped") return { log: false, run: { label: "Run setup", asks } };
+  return { log: true, run: { label: "Run setup again", asks } };
 }
 
 /** Asks to make a tailnet host the central host before keeping one of its sessions in sync. */
@@ -73,13 +81,11 @@ export function setupPrompt(project: string, command: string): ConfirmOptions & 
   };
 }
 
-const base = (path: string) => path.replace(/\/$/, "").split("/").pop() ?? "";
-
-/** Asks before turning sync off. The daemon saves differing files under
- * `sync-leftovers/<the copy's folder name>`. */
-export function stopPrompt(session: string, differing: number, copyPath: string, moonletHome: string, home: string | null | undefined): ConfirmOptions {
-  const folder = tilde(`${moonletHome}/sync-leftovers/${base(copyPath)}`, home);
-  const saved = differing === 0 ? "" : ` ${differing === 1 ? "1 file that differs is" : `${differing} files that differ are`} saved to ${folder} first.`;
+/** Asks before turning sync off. The daemon saves what would be lost in a
+ * new folder under `sync-leftovers`, named when it is done. */
+export function stopPrompt(session: string, differing: number, moonletHome: string, home: string | null | undefined): ConfirmOptions {
+  const folder = tilde(`${moonletHome}/sync-leftovers`, home);
+  const saved = differing === 0 ? "" : ` ${differing === 1 ? "1 file that differs is" : `${differing} files that differ are`} saved to a folder in ${folder} first.`;
   return {
     title: "Stop keeping in sync",
     message: `Stop keeping ${session} in sync? The copy on this Mac is removed.${saved}`,
@@ -89,7 +95,7 @@ export function stopPrompt(session: string, differing: number, copyPath: string,
 }
 
 /** The toast when a copy went: turned off, or its session archived on the central host. */
-export function endedToast(session: string, host: string, removed: { reason: string; folder: string; leftovers: string[] }, home: string | null | undefined): string {
+export function endedToast(session: string, host: string, removed: { reason: "stopped" | "archived"; folder: string; leftovers: string[] }, home: string | null | undefined): string {
   const n = removed.leftovers.length;
   const lead = removed.reason === "archived" ? `${session} was archived on ${host}.` : `Stopped keeping ${session} in sync.`;
   if (n === 0) return removed.reason === "archived" ? `${lead} Its copy on this Mac is removed.` : lead;
@@ -104,4 +110,11 @@ export function differsNotice(session: string, host: string, paths: string[]): {
 }
 
 /** A file the daemon leaves out of the copy for its size. */
-export const tooBigLine = (path: string) => `${path} is over 100 MB and stays on each machine.`;
+export const tooBigLine = (path: string) => `${path} is over 100 MiB and stays on each machine.`;
+
+/** Why Compare could not read one side (X60): null when the file is just
+ * not there, which Compare shows as deleted on that side. */
+export function compareReadError(e: unknown): string | null {
+  const message = e instanceof Error ? e.message : String(e);
+  return message.includes("No such file or directory") ? null : message;
+}

@@ -9,18 +9,19 @@ import { rpc } from "../lib/daemon";
 import { M, type FileContent } from "../lib/protocol";
 import { sesKey, useStore } from "../lib/store";
 import { resolveSync, useSync } from "../lib/syncStore";
+import { compareReadError } from "../lib/sync";
 import { editorFont } from "../lib/uiScale";
 import { Button, Dialog, Empty } from "./ui";
 
-/** What one side has: its text, or none when the file is gone there. */
-type Side = { text: string | null; binary: boolean };
+/** What one side has: its text, none when the file is gone there, or why it could not be read. */
+type Side = { text: string | null; binary: boolean; error?: string };
 
 async function read(host: string, path: string): Promise<Side> {
   try {
     const f = await rpc<FileContent>(host, M.fsRead, { path });
     return { text: f.content, binary: f.binary };
-  } catch {
-    return { text: null, binary: false };
+  } catch (e) {
+    return { text: null, binary: false, error: compareReadError(e) ?? undefined };
   }
 }
 
@@ -43,7 +44,7 @@ export function SyncCompare({ host, session, path }: { host: string; session: st
     if (copy) void resolveSync(copy, path, side);
     close();
   };
-  const label = (s: Side) => (s.text === null ? " (deleted)" : "");
+  const label = (s: Side) => (s.error ? ` (could not be read: ${s.error})` : s.text === null ? " (deleted)" : "");
   return (
     <Dialog
       title={path}
