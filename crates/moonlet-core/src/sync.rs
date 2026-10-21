@@ -73,11 +73,12 @@ fn pathspecs(specs: impl IntoIterator<Item = String>) -> Vec<u8> {
 /// Snapshots `worktree`: tracked files and the untracked ones that
 /// `.gitignore` and `.git/info/exclude` don't ignore. The user's global
 /// excludes are not applied, so two machines agree whatever theirs say.
-/// A file leaves the snapshot only once it is gone from disk: one that
-/// becomes ignored stays while it exists, as a tracked file does for git.
-/// A file over `max_file` bytes ([`MAX_FILE`] outside tests) keeps the
-/// version an earlier snapshot took, or stays out if none did: it stays
-/// on its machine, and the other side never reads it as deleted.
+/// A file leaves the snapshot only once it is gone from disk. One that
+/// becomes ignored, and that HEAD doesn't track, stays at the version an
+/// earlier snapshot took: the other side never reads it as deleted, and
+/// nothing new of it leaves this machine. So does a file over `max_file`
+/// bytes ([`MAX_FILE`] outside tests), or it stays out if no snapshot took
+/// it yet.
 pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     let index = private_index(worktree).await?;
     let file = IndexFile::new(&index);
@@ -96,6 +97,53 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
         // in, as they do for git.
         let from = if has_head { "HEAD" } else { "--empty" };
         git_env(worktree, &env, &["read-tree", from], None).await?;
+    }
+
+    let head: std::collections::HashSet<String> = if has_head {
+        let out = git_env(
+            worktree,
+            &[],
+            &["ls-tree", "-r", "-z", "--name-only", "HEAD"],
+            None,
+        )
+        .await?;
+        split_z(&out).collect()
+    } else {
+        Default::default()
+    };
+
+    // Files an earlier snapshot took that the rules now ignore, and that
+    // HEAD doesn't track: they stay as they were while they exist.
+    let mut ignored = no_global.to_vec();
+    ignored.extend([
+        "ls-files",
+        "-z",
+        "--cached",
+        "--ignored",
+        "--exclude-standard",
+    ]);
+    let frozen: std::collections::HashSet<String> =
+        split_z(&git_env(worktree, &env, &ignored, None).await?)
+            .filter(|p| !head.contains(p))
+            .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
+            .collect();
+    // Their entries as they are now, put back after `add`: a pathspec that
+    // names an ignored file makes `add` refuse.
+    let mut kept = Vec::new();
+    if !frozen.is_empty() {
+        let staged = git_env(worktree, &env, &["ls-files", "-z", "-s"], None).await?;
+        for line in split_z(&staged) {
+            // `<mode> <oid> <stage>\t<path>`
+            if let Some((meta, path)) = line.split_once('\t')
+                && frozen.contains(path)
+            {
+                let mut fields = meta.split(' ');
+                if let (Some(mode), Some(oid)) = (fields.next(), fields.next()) {
+                    kept.extend_from_slice(format!("{mode} {oid}\t{path}").as_bytes());
+                    kept.push(0);
+                }
+            }
+        }
     }
 
     // What `add` would hash: untracked files, and files changed since the
@@ -119,8 +167,8 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     too_big.sort();
     too_big.dedup();
 
-    // `add -A` follows every file already in the snapshot, ignored or not,
-    // and drops those gone from disk; the big ones it leaves as they were.
+    // `add -A` follows the files already in the snapshot and drops those
+    // gone from disk; the big ones it leaves as they were.
     let specs = pathspecs(
         std::iter::once(".".to_string())
             .chain(too_big.iter().map(|p| format!(":(exclude,literal){p}"))),
@@ -128,21 +176,24 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     let mut add: Vec<&str> = no_global.iter().copied().collect();
     add.extend(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]);
     git_env(worktree, &env, &add, Some(&specs)).await?;
+    if !kept.is_empty() {
+        git_env(
+            worktree,
+            &env,
+            &["update-index", "-z", "--index-info"],
+            Some(&kept),
+        )
+        .await?;
+    }
 
     // Files HEAD tracks are in even when ignored, also those committed
     // after the snapshot's index was first made.
     if has_head {
-        let head = git_env(
-            worktree,
-            &[],
-            &["ls-tree", "-r", "-z", "--name-only", "HEAD"],
-            None,
-        )
-        .await?;
         let cached = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
         let cached: std::collections::HashSet<String> = split_z(&cached).collect();
-        let missing: Vec<String> = split_z(&head)
-            .filter(|p| !cached.contains(p) && !too_big.contains(p))
+        let missing: Vec<&String> = head
+            .iter()
+            .filter(|p| !cached.contains(*p) && !too_big.contains(p))
             .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
             .collect();
         if !missing.is_empty() {
@@ -609,7 +660,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_file_ignored_after_a_snapshot_stays_while_it_exists() {
+    async fn a_file_ignored_after_a_snapshot_stays_at_its_last_version() {
         let dir = worked_example().await;
         let p = dir.path();
         std::fs::create_dir_all(p.join("build")).unwrap();
@@ -619,8 +670,9 @@ mod tests {
         assert!(paths(listing(p, &first.tree).await).contains(&"build/out.js".to_string()));
 
         // Ignored on both sides through .gitignore, and on this side only
-        // through .git/info/exclude, which doesn't sync: either way the
-        // other side must not read it as deleted.
+        // through .git/info/exclude, which doesn't sync. The other side
+        // must not read either as deleted, and their new contents must not
+        // leave this machine.
         std::fs::write(
             p.join(".gitignore"),
             "node_modules/\n.env\nvendor/\nbuild/\n",
@@ -628,20 +680,26 @@ mod tests {
         .unwrap();
         std::fs::write(p.join(".git/info/exclude"), "notes.txt\n").unwrap();
         std::fs::write(p.join("build/out.js"), "built again\n").unwrap();
+        std::fs::write(p.join("notes.txt"), "a secret now\n").unwrap();
         let second = snapshot(p, MAX_FILE).await.unwrap();
         assert_eq!(
             show(p, &second.tree, "build/out.js").await.as_deref(),
-            Some("built again\n")
+            Some("built\n")
         );
         assert_eq!(
             show(p, &second.tree, "notes.txt").await.as_deref(),
             Some("mine\n")
         );
 
+        // An untracked file the rules already ignore never enters.
+        std::fs::write(p.join("build/new.js"), "new\n").unwrap();
+        let third = snapshot(p, MAX_FILE).await.unwrap();
+        assert!(!paths(listing(p, &third.tree).await).contains(&"build/new.js".to_string()));
+
         // Gone from disk: gone from the snapshot.
         std::fs::remove_file(p.join("build/out.js")).unwrap();
-        let third = snapshot(p, MAX_FILE).await.unwrap();
-        assert!(!paths(listing(p, &third.tree).await).contains(&"build/out.js".to_string()));
+        let fourth = snapshot(p, MAX_FILE).await.unwrap();
+        assert!(!paths(listing(p, &fourth.tree).await).contains(&"build/out.js".to_string()));
     }
 
     #[tokio::test]
