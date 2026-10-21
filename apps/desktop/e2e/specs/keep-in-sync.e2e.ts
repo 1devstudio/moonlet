@@ -142,6 +142,20 @@ describe("keep in sync", () => {
     });
   });
 
+  it("opens the popover's Open in menu over it", async () => {
+    await mark("In sync · ").click();
+    const popover = '//div[@role="dialog"][@aria-label="Keep in sync"]';
+    await expect($(popover)).toBeDisplayed();
+    await $(`${popover}//button[starts-with(normalize-space(), "Open in")]`).click();
+    // The menu draws in a portal of its own; a click in it is no click outside.
+    await expect($('//div[@data-menu-panel]//button[normalize-space()="Terminal"]')).toBeDisplayed();
+    await $('//div[@data-menu-panel]').click();
+    await expect($(popover)).toBeDisplayed();
+    await browser.keys("Escape");
+    await browser.keys("Escape");
+    await expect($(popover)).not.toBeExisting();
+  });
+
   it("shows a file both sides changed until this Mac's version is kept", async () => {
     const copy = theCopy();
     writeFileSync(join(sessionPath, "README.md"), "shop, as the agent wrote it\n");

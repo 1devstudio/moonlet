@@ -1,15 +1,16 @@
 // Keep in sync (X60): the mark after a session's name in the sidebar, and
 // its popover with the copy's status, files that differ and actions.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowLeftRight, ChevronDown, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type Copy, type FileContent, type Session } from "../lib/protocol";
 import { errorToast, sesKey, useStore } from "../lib/store";
-import { markTone, syncLine, tilde, tooBigLine } from "../lib/sync";
-import { dismissSyncNote, resolveSync, retrySync, runSetup, askSetup, stopSync, useCentralBranch, useSync } from "../lib/syncStore";
-import { workspaceOpenTargets } from "../lib/openIn";
+import { markTone, setupActions, syncLine, tooBigLine } from "../lib/sync";
+import { tildePath } from "../lib/profiles";
+import { dismissSyncNote, resolveSync, retrySync, runSetupAgain, stopSync, syncDataDir, useCentralBranch, useSync } from "../lib/syncStore";
+import { workspaceOpenIn } from "../lib/openIn";
 import { Menu } from "./Menu";
 import { Button, IconButton, cx } from "./ui";
 
@@ -20,42 +21,76 @@ export function SyncMark({ host, s }: { host: string; s: Session }) {
   const key = sesKey(host, s.id);
   const copy = useSync((st) => st.copies[key]);
   const open = useSync((st) => st.popover === key);
+  const link = useSync((st) => st.link);
   const home = useStore((st) => st.hosts.local?.home ?? null);
-  const anchor = useRef<HTMLButtonElement>(null);
   if (!copy) return null;
-  const line = syncLine(copy, { branch: s.branch, home }).text;
+  const line = syncLine(copy, { branch: s.branch, home, link: link ?? undefined });
   return (
-    <>
-      <button
-        ref={anchor}
-        aria-label={`Keep in sync: ${line}`}
-        title={line}
-        data-sync-tone={markTone(copy)}
-        className={cx("flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-hover", TONE[markTone(copy)])}
-        onClick={(e) => {
-          e.stopPropagation();
-          useSync.setState({ popover: open ? null : key });
-        }}
-      >
-        <ArrowLeftRight size={12} />
-      </button>
-      {open && anchor.current && <SyncPopover copy={copy} s={s} anchor={anchor.current} />}
-    </>
+    <button
+      data-sync-anchor={key}
+      aria-label={`Keep in sync: ${line}`}
+      title={line}
+      data-sync-tone={markTone(copy)}
+      className={cx("flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-hover", TONE[markTone(copy)])}
+      onClick={(e) => {
+        e.stopPropagation();
+        useSync.setState({ popover: open ? null : key });
+      }}
+    >
+      <ArrowLeftRight size={12} />
+    </button>
   );
 }
 
-function SyncPopover({ copy, s, anchor }: { copy: Copy; s: Session; anchor: HTMLElement }) {
+const WIDTH = 360;
+
+/** Where the popover goes: under its session's mark, or, when the session's
+ * row is not in the sidebar (its group folded, another workspace shown),
+ * under the window's top bar. */
+function place(key: string): React.CSSProperties {
+  const mark = document.querySelector(`[data-sync-anchor="${CSS.escape(key)}"]`);
+  const r = mark?.getBoundingClientRect();
+  if (!r || (r.width === 0 && r.height === 0)) return { position: "fixed", left: Math.max(8, (window.innerWidth - WIDTH) / 2), top: 52, width: WIDTH };
+  return { position: "fixed", left: Math.min(r.left, window.innerWidth - WIDTH - 12), top: Math.min(r.bottom + 6, window.innerHeight - 200), width: WIDTH };
+}
+
+/** The open sync popover, wherever its session is; mounted once in the app. */
+export function SyncPopoverHost() {
+  const key = useSync((st) => st.popover);
+  const copy = useSync((st) => (st.popover ? st.copies[st.popover] : undefined));
+  const s = useStore((st) => (copy ? st.sessions[copy.host]?.find((w) => w.id === copy.session) : undefined));
+  // Settings or a dialog over the window closes it, as a click elsewhere does.
+  const covered = useStore((st) => !!st.settingsPage || !!st.dialog || !!st.confirm);
+  useEffect(() => {
+    if (covered) useSync.setState({ popover: null });
+  }, [covered]);
+  if (!key || !copy || !s) return null;
+  return <SyncPopover key={key} anchorKey={key} copy={copy} s={s} />;
+}
+
+function SyncPopover({ anchorKey, copy, s }: { anchorKey: string; copy: Copy; s: Session }) {
   const home = useStore((st) => st.hosts.local?.home ?? null);
   const noteSeen = useSync((st) => st.noteSeen);
-  const dataDir = useSync((st) => st.dataDir);
+  const link = useSync((st) => st.link);
   const panel = useRef<HTMLDivElement>(null);
+  const [style, setStyle] = useState<React.CSSProperties | null>(null);
   const [targets, setTargets] = useState<{ id: string; label: string }[]>([]);
   const [log, setLog] = useState<string | null>(null);
   useEffect(() => void hostsApi.openTargets().then(setTargets, () => {}), []);
+  // Placed after the render that may have just shown the session's row.
+  useLayoutEffect(() => {
+    const at = () => setStyle(place(anchorKey));
+    at();
+    window.addEventListener("resize", at);
+    return () => window.removeEventListener("resize", at);
+  }, [anchorKey]);
   useEffect(() => {
     const close = () => useSync.setState({ popover: null });
     const onDown = (e: MouseEvent) => {
-      if (!panel.current?.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
+      const t = e.target as Element;
+      // Its own Open in menu is drawn in a portal of its own.
+      if (panel.current?.contains(t) || t.closest?.(`[data-sync-anchor="${CSS.escape(anchorKey)}"], [data-menu-panel]`)) return;
+      close();
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("mousedown", onDown, true);
@@ -64,26 +99,21 @@ function SyncPopover({ copy, s, anchor }: { copy: Copy; s: Session; anchor: HTML
       window.removeEventListener("mousedown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [anchor]);
-  // Settings or a dialog over the window closes it, as a click elsewhere does.
-  const covered = useStore((st) => !!st.settingsPage || !!st.dialog || !!st.confirm);
-  useEffect(() => {
-    if (covered) useSync.setState({ popover: null });
-  }, [covered]);
-  const r = anchor.getBoundingClientRect();
-  const style: React.CSSProperties = { position: "fixed", left: Math.min(r.left, window.innerWidth - 372), top: Math.min(r.bottom + 6, window.innerHeight - 200), width: 360 };
+  }, [anchorKey]);
+  if (!style) return null;
   const setup = copy.setup;
   const paused = copy.state.kind === "paused";
+  const actions = setup && setupActions(setup);
   const showLog = async () => {
     if (log !== null) return setLog(null);
-    const path = `${dataDir ?? `${home}/.moonlet`}/sync/logs/${copy.id}.log`;
+    const path = `${syncDataDir()}/sync/logs/${copy.id}.log`;
     const f = await rpc<FileContent>("local", M.fsRead, { path }).catch(() => null);
     setLog(f?.content?.split("\n").slice(-40).join("\n") || "No output.");
   };
   return createPortal(
     <div ref={panel} role="dialog" aria-label="Keep in sync" style={style} className="z-50 flex max-h-[70vh] flex-col gap-3 overflow-y-auto rounded-xl border border-border-strong bg-[#232323] p-3 shadow-2xl">
       <div className="flex items-start gap-2">
-        <span className="min-w-0 flex-1 ui-text-13 text-fg">{syncLine(copy, { branch: s.branch, home, path: false }).text}</span>
+        <span className="min-w-0 flex-1 ui-text-13 text-fg">{syncLine(copy, { branch: s.branch, home, path: false, link: link ?? undefined })}</span>
         {paused && (
           <Button size="sm" onClick={() => void retrySync(copy)}>
             Retry
@@ -101,7 +131,7 @@ function SyncPopover({ copy, s, anchor }: { copy: Copy; s: Session; anchor: HTML
       {copy.path && (
         <div className="flex items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate font-mono ui-text-12 text-muted" title={copy.path}>
-            {tilde(copy.path, home)}
+            {tildePath(copy.path, home)}
           </span>
           <Button size="sm" onClick={() => void hostsApi.openIn("reveal", copy.path).catch(errorToast)}>
             Reveal in Finder
@@ -114,8 +144,8 @@ function SyncPopover({ copy, s, anchor }: { copy: Copy; s: Session; anchor: HTML
                 Open in… <ChevronDown size={11} />
               </Button>
             )}
-            items={workspaceOpenTargets(targets, "local")
-              .filter((t) => t.id !== "finder")
+            items={workspaceOpenIn(targets, { kind: "local", host: "local", path: copy.path }, copy.path)
+              .choices.filter((t) => t.id !== "finder")
               .map((t) => ({ label: t.label, onSelect: () => void hostsApi.openIn(t.id, copy.path).catch(errorToast) }))}
           />
         </div>
@@ -164,17 +194,14 @@ function SyncPopover({ copy, s, anchor }: { copy: Copy; s: Session; anchor: HTML
             Setup <code className="min-w-0 flex-1 truncate font-mono text-fg">{setup.command}</code>
           </span>
           <span className="flex gap-1.5">
-            {setup.state.kind !== "needs_approval" && setup.state.kind !== "skipped" && (
+            {actions?.log && (
               <Button size="sm" variant="ghost" onClick={() => void showLog()}>
                 {log === null ? "Show output" : "Hide output"}
               </Button>
             )}
-            {setup.state.kind !== "running" && (
-              <Button
-                size="sm"
-                onClick={() => void (setup.state.kind === "done" || setup.state.kind === "failed" ? runSetup(copy, setup.command) : askSetup(copy, setup.command))}
-              >
-                {setup.state.kind === "done" || setup.state.kind === "failed" ? "Run setup again" : "Run setup"}
+            {actions?.run && (
+              <Button size="sm" onClick={() => void runSetupAgain(copy)}>
+                {actions.run.label}
               </Button>
             )}
           </span>
@@ -182,7 +209,7 @@ function SyncPopover({ copy, s, anchor }: { copy: Copy; s: Session; anchor: HTML
         </div>
       )}
       <div className="border-t border-border pt-2">
-        <Button size="sm" variant="ghost" className={cx("text-error")} onClick={() => void stopSync(copy)}>
+        <Button size="sm" variant="ghost" className="text-error" onClick={() => void stopSync(copy)}>
           Stop keeping in sync
         </Button>
       </div>
