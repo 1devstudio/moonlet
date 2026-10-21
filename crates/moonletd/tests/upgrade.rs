@@ -85,7 +85,9 @@ async fn upgrade_keeps_sessions_alive() {
     output_until(&mut c, "before-42").await;
     drop(c);
 
-    let status = moonletd(home.path(), &socket, &["upgrade"]).status().unwrap();
+    let status = moonletd(home.path(), &socket, &["upgrade"])
+        .status()
+        .unwrap();
     assert!(status.success(), "moonletd upgrade failed");
 
     let mut c = Client::connect(&socket, "test").await.unwrap();
@@ -155,7 +157,9 @@ async fn start_takes_over_a_jaunt_daemon() {
     let mut old = plain(&["--socket", legacy.to_str().unwrap(), "daemon"]);
     old.env("JAUNT_SOCK", &legacy);
     let mut old = Kill(old.spawn().unwrap());
-    wait_for_socket(&legacy, Duration::from_secs(15)).await.unwrap();
+    wait_for_socket(&legacy, Duration::from_secs(15))
+        .await
+        .unwrap();
 
     let mut c = Client::connect(&legacy, "test").await.unwrap();
     let s: TerminalInfo = c
@@ -170,12 +174,22 @@ async fn start_takes_over_a_jaunt_daemon() {
         .await
         .unwrap();
     let _: AttachResult = c
-        .request(methods::TERMINAL_ATTACH, TerminalAttach { id: s.id, cols: None, rows: None })
+        .request(
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
+                id: s.id,
+                cols: None,
+                rows: None,
+            },
+        )
         .await
         .unwrap();
-    c.send(&Frame::Input { terminal: s.id, data: b"echo before-$((6*7))\n".to_vec() })
-        .await
-        .unwrap();
+    c.send(&Frame::Input {
+        terminal: s.id,
+        data: b"echo before-$((6*7))\n".to_vec(),
+    })
+    .await
+    .unwrap();
     output_until(&mut c, "before-42").await;
     drop(c);
 
@@ -185,17 +199,33 @@ async fn start_takes_over_a_jaunt_daemon() {
     let mut c = Client::connect(&socket, "test").await.unwrap();
     let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
-    let same = list.iter().find(|x| x.id == s.id).expect("jaunt's terminal is here");
+    let same = list
+        .iter()
+        .find(|x| x.id == s.id)
+        .expect("jaunt's terminal is here");
     assert_eq!(same.pid, s.pid, "same shell process");
     let attach: AttachResult = c
-        .request(methods::TERMINAL_ATTACH, TerminalAttach { id: s.id, cols: None, rows: None })
+        .request(
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
+                id: s.id,
+                cols: None,
+                rows: None,
+            },
+        )
         .await
         .unwrap();
-    assert!(attach.snapshot.contains("before-42"), "screen survives the takeover");
+    assert!(
+        attach.snapshot.contains("before-42"),
+        "screen survives the takeover"
+    );
 
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while old.0.try_wait().unwrap().is_none() {
-        assert!(std::time::Instant::now() < deadline, "jaunt's daemon is still running");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "jaunt's daemon is still running"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
 
@@ -203,6 +233,50 @@ async fn start_takes_over_a_jaunt_daemon() {
     let mut via_old = Client::connect(&legacy, "test").await.unwrap();
     let info: DaemonInfo = via_old.request(methods::DAEMON_INFO, ()).await.unwrap();
     assert_eq!(info.pid, after.pid);
+
+    let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
+    let _ = nix_kill(after.pid);
+}
+
+/// Reads one systemd notification from the socket a test plays systemd on.
+fn next_notification(sock: &std::os::unix::net::UnixDatagram) -> String {
+    let mut buf = [0u8; 512];
+    let n = sock.recv(&mut buf).expect("no notification in time");
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+#[tokio::test]
+async fn systemd_hears_ready_and_follows_the_upgrade() {
+    let home = tempfile::tempdir().unwrap();
+    let socket = home.path().join("run/d.sock");
+    let notify_path = home.path().join("notify.sock");
+    let systemd = std::os::unix::net::UnixDatagram::bind(&notify_path).unwrap();
+    systemd
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+
+    let _old = Kill(
+        moonletd(home.path(), &socket, &["daemon"])
+            .env("NOTIFY_SOCKET", &notify_path)
+            .spawn()
+            .unwrap(),
+    );
+    assert_eq!(next_notification(&systemd), "READY=1");
+    wait_for_socket(&socket, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    let status = moonletd(home.path(), &socket, &["upgrade"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "moonletd upgrade failed");
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
+    // The new daemon names itself before it answers the handoff.
+    assert_eq!(
+        next_notification(&systemd),
+        format!("MAINPID={}\nREADY=1", after.pid)
+    );
 
     let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
     let _ = nix_kill(after.pid);
