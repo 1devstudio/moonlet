@@ -443,9 +443,19 @@ impl LiveCopies {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| opened.name.clone());
             let fallback = copies_dir(&self.home, &k.host, &opened.project, &dir);
+            let others: Vec<PathBuf> = self
+                .data
+                .lock()
+                .unwrap()
+                .worker
+                .iter()
+                .filter(|o| o.id != k.id && !o.path.is_empty())
+                .map(|o| PathBuf::from(&o.path))
+                .collect();
             let path = copy_path(
                 Path::new(&opened.path),
                 &self.home.join("worktrees"),
+                &others,
                 fallback,
             );
             git_sync::add_worktree(&repo, &path, &opened.branch, &fetched.head)
@@ -1007,12 +1017,30 @@ async fn changed_paths(repo: &Path, a: &str, b: &str) -> u32 {
         .count() as u32
 }
 
-/// Where a copy goes: the session's own path when it lies inside this Mac's
-/// `worktrees` folder and nothing is there yet, else `fallback`. The path
+/// Where a copy goes: the session's own path when it is
+/// `<worktrees>/<project>/<session>` on this Mac, nothing is there yet, no
+/// repository holds it and no other copy has it, else `fallback`. The path
 /// comes from the central host, so it may never point elsewhere on this Mac,
-/// not by `..` nor through a symlink.
-fn copy_path(session: &Path, worktrees: &Path, fallback: PathBuf) -> PathBuf {
-    if inside(session, worktrees) && free(session) {
+/// not by `..` nor through a symlink, nor into a repository's own folder.
+fn copy_path(session: &Path, worktrees: &Path, taken: &[PathBuf], fallback: PathBuf) -> PathBuf {
+    let shaped = session.strip_prefix(worktrees).is_ok_and(|rest| {
+        rest.components().count() == 2
+            && rest
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+    });
+    let in_a_repository = || {
+        [worktrees, session.parent().unwrap_or(worktrees), session]
+            .iter()
+            .any(|p| p.join(".git").exists())
+    };
+    let other_copy = || {
+        taken
+            .iter()
+            .any(|t| t.starts_with(session) || session.starts_with(t))
+    };
+    if shaped && !in_a_repository() && !other_copy() && inside(session, worktrees) && free(session)
+    {
         session.to_path_buf()
     } else {
         fallback
@@ -1154,21 +1182,31 @@ mod tests {
         let session = root
             .path()
             .join("Users/alex/.moonlet/worktrees/shop/fix-cart");
-        assert_eq!(copy_path(&session, &worktrees, fallback.clone()), session);
+        assert_eq!(
+            copy_path(&session, &worktrees, &[], fallback.clone()),
+            session
+        );
 
         // An empty folder there is free too.
         std::fs::create_dir_all(&session).unwrap();
-        assert_eq!(copy_path(&session, &worktrees, fallback.clone()), session);
+        assert_eq!(
+            copy_path(&session, &worktrees, &[], fallback.clone()),
+            session
+        );
 
         // Something there: the copy goes under copies/.
         std::fs::write(session.join("README.md"), "hi").unwrap();
-        assert_eq!(copy_path(&session, &worktrees, fallback.clone()), fallback);
+        assert_eq!(
+            copy_path(&session, &worktrees, &[], fallback.clone()),
+            fallback
+        );
 
         // A relative path.
         assert_eq!(
             copy_path(
                 Path::new("worktrees/fix-cart"),
                 &worktrees,
+                &[],
                 fallback.clone()
             ),
             fallback
@@ -1186,13 +1224,16 @@ mod tests {
 
         // Elsewhere in the home folder.
         let ssh = root.path().join("Users/alex/.ssh");
-        assert_eq!(copy_path(&ssh, &worktrees, fallback.clone()), fallback);
+        assert_eq!(copy_path(&ssh, &worktrees, &[], fallback.clone()), fallback);
         // Back out of the worktrees with `..`.
         let back = root.path().join("Users/alex/.moonlet/worktrees/../.ssh");
-        assert_eq!(copy_path(&back, &worktrees, fallback.clone()), fallback);
+        assert_eq!(
+            copy_path(&back, &worktrees, &[], fallback.clone()),
+            fallback
+        );
         // The worktrees folder itself.
         assert_eq!(
-            copy_path(&worktrees, &worktrees, fallback.clone()),
+            copy_path(&worktrees, &worktrees, &[], fallback.clone()),
             fallback
         );
         // Through a symlink in the worktrees that points outside them.
@@ -1202,11 +1243,55 @@ mod tests {
         let through = root
             .path()
             .join("Users/alex/.moonlet/worktrees/shop/fix-cart");
-        assert_eq!(copy_path(&through, &worktrees, fallback.clone()), fallback);
+        assert_eq!(
+            copy_path(&through, &worktrees, &[], fallback.clone()),
+            fallback
+        );
 
         // Nothing was made for the refused paths.
         assert!(!ssh.exists());
         assert!(!root.path().join("Users/alex/.moonlet/.ssh").exists());
+    }
+
+    #[test]
+    fn a_copy_takes_only_a_project_and_session_folder_no_repository_holds() {
+        let root = tempfile::tempdir().unwrap();
+        let worktrees = root.path().join("Users/alex/.moonlet/worktrees");
+        std::fs::create_dir_all(&worktrees).unwrap();
+        let fallback = root
+            .path()
+            .join("Users/alex/.moonlet/copies/studio-mini/shop/fix-cart");
+        let at = |rest: &str| worktrees.join(rest);
+
+        assert_eq!(
+            copy_path(&at("shop/fix-cart"), &worktrees, &[], fallback.clone()),
+            at("shop/fix-cart")
+        );
+        // One folder too few, or too many.
+        assert_eq!(
+            copy_path(&at("shop"), &worktrees, &[], fallback.clone()),
+            fallback
+        );
+        assert_eq!(
+            copy_path(&at("shop/fix-cart/sub"), &worktrees, &[], fallback.clone()),
+            fallback
+        );
+        // Another copy's folder.
+        assert_eq!(
+            copy_path(
+                &at("shop/fix-cart"),
+                &worktrees,
+                &[at("shop/fix-cart")],
+                fallback.clone()
+            ),
+            fallback
+        );
+        // A project folder that is a repository itself.
+        std::fs::create_dir_all(at("web/.git")).unwrap();
+        assert_eq!(
+            copy_path(&at("web/fix-cart"), &worktrees, &[], fallback.clone()),
+            fallback
+        );
     }
 
     #[test]
