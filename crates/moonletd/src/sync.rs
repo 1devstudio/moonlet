@@ -24,10 +24,11 @@ use moonlet_core::fs::Watchers;
 use moonlet_core::session::SessionManager;
 use moonlet_core::sync::{self as git_sync, ApplyError, Files, HeadMove, MAX_FILE, UnpackError};
 use moonlet_proto::methods::{
-    self as m, CloseReason, Copy, CopyChanged, CopyRemoved, CopyState, Diverged, Keep, Resolution,
-    SyncClosing, SyncFetch, SyncFetched, SyncOffer, SyncOffered, SyncOpen, SyncOpened, SyncResolve,
-    SyncStopped, SyncUpdate, SyncUpdated,
+    self as m, CloseReason, Copy, CopyChanged, CopyRemoved, CopySetup, CopyState, Diverged, Keep,
+    Resolution, SetupState, SyncClosing, SyncFetch, SyncFetched, SyncOffer, SyncOffered, SyncOpen,
+    SyncOpened, SyncResolve, SyncStopped, SyncUpdate, SyncUpdated,
 };
+use moonlet_proto::types::ProjectIdentity;
 use moonlet_proto::{Message, RpcError};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -159,6 +160,11 @@ struct Kept {
     /// resumes by itself once that side is back on it.
     #[serde(default)]
     branch_pause: Option<Side>,
+    /// The session's project, whose approved setup commands apply.
+    #[serde(default)]
+    identity: Option<ProjectIdentity>,
+    #[serde(default)]
+    setup: Option<CopySetup>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -243,6 +249,30 @@ impl From<ClosedSaved> for Closed {
     }
 }
 
+/// This Mac's choices per project, by identity, in
+/// `~/.moonlet/sync/projects.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ProjectChoices {
+    #[serde(default)]
+    approved_setup: Vec<String>,
+}
+
+/// A setup started in its own session (`setsid`), so stopping it reaches
+/// every process it started, also jobs its shell moved to their own group.
+#[derive(Clone)]
+struct SetupRun {
+    sid: u32,
+    run: u64,
+    reaped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// A project's key in `projects.json`: its origin and root commit. A
+/// project with no root commit has none, so nothing is remembered for it.
+fn project_key(id: &ProjectIdentity) -> Option<String> {
+    let root = id.root.as_deref()?;
+    Some(format!("{} {root}", id.origin.as_deref().unwrap_or("")))
+}
+
 /// Why making or updating a copy stopped.
 enum Stop {
     /// The link is down; try again when it is back.
@@ -296,6 +326,13 @@ pub struct LiveCopies {
     /// This Mac is registered with its central host: until then the host
     /// answers `sync.close` with `forbidden`, and the close must wait.
     registered: std::sync::atomic::AtomicBool,
+    /// Each copy's last setup: its session, which run it is, and whether its
+    /// leader was waited for. It stays until the next run or the copy goes,
+    /// so jobs a setup left behind are stopped too.
+    setups: Mutex<HashMap<String, SetupRun>>,
+    runs: std::sync::atomic::AtomicU64,
+    /// One writer of `projects.json` at a time.
+    projects: Mutex<()>,
 }
 
 impl LiveCopies {
@@ -335,6 +372,9 @@ impl LiveCopies {
                 kicks: Mutex::new(HashMap::new()),
                 offering: Mutex::new(HashMap::new()),
                 registered: std::sync::atomic::AtomicBool::new(false),
+                setups: Mutex::new(HashMap::new()),
+                runs: std::sync::atomic::AtomicU64::new(0),
+                projects: Mutex::new(()),
             }
         })
     }
@@ -414,7 +454,7 @@ impl LiveCopies {
             session: k.session.clone(),
             path: k.path.clone(),
             state,
-            setup: None,
+            setup: k.setup.clone(),
             differs: k.differs.clone(),
             too_big: k.too_big.clone(),
             diverged: k.diverged.clone(),
@@ -774,6 +814,7 @@ impl LiveCopies {
             Ok(path) => {
                 self.set_state(&id, CopyState::InSync);
                 self.watch(&path);
+                self.begin_setup(&id);
             }
             Err(Stop::Offline) => self.set_state(&id, CopyState::Waiting),
             Err(Stop::Paused(reason)) => self.pause(&id, reason),
@@ -948,6 +989,7 @@ impl LiveCopies {
             kept.tree = Some(fetched.tree.clone());
             kept.head = Some(fetched.head.clone());
             kept.branch = opened.branch.clone();
+            kept.identity = Some(opened.identity.clone());
             kept.too_big = fetched.too_big.clone();
             kept.differs = differs.clone();
             kept.made_from = None;
@@ -1524,6 +1566,7 @@ impl LiveCopies {
                 return Err(RpcError::new("not_saved", why));
             }
         };
+        self.end_setup(id);
         let path = PathBuf::from(&k.path);
         let repo = PathBuf::from(&k.repo);
         self.unwatch(&path);
@@ -1683,6 +1726,226 @@ impl LiveCopies {
     /// `sync.use_central_branch`: a diverged copy's branch moves to the
     /// central host's commit, and this Mac's commits stay on a branch of
     /// their own, `<branch>-this-mac`. The files stay as they are.
+    // ---- Setup in the copy ----
+
+    fn load_projects(&self) -> std::collections::BTreeMap<String, ProjectChoices> {
+        std::fs::read(self.home.join("sync").join("projects.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn update_projects(&self, key: &str, f: impl FnOnce(&mut ProjectChoices)) {
+        let _one = self.projects.lock().unwrap();
+        let mut all = self.load_projects();
+        f(all.entry(key.to_string()).or_default());
+        let file = self.home.join("sync").join("projects.json");
+        let bytes = serde_json::to_vec_pretty(&all).unwrap();
+        if let Err(e) = crate::mobile::write_private(&file, &bytes) {
+            tracing::warn!("cannot write {}: {e:#}", file.display());
+        }
+    }
+
+    fn set_setup(&self, id: &str, setup: Option<CopySetup>) {
+        self.update_kept(id, |k| k.setup = setup);
+        self.changed(id);
+    }
+
+    /// A copy just made: its setup runs when this exact command was
+    /// approved for its project, and waits for the user otherwise.
+    fn begin_setup(self: &Arc<Self>, id: &str) {
+        let Some(k) = self.kept(id) else { return };
+        let Some(command) = setup_command(Path::new(&k.path)) else {
+            self.set_setup(id, None);
+            return;
+        };
+        let approved = k
+            .identity
+            .as_ref()
+            .and_then(project_key)
+            .is_some_and(|key| {
+                self.load_projects()
+                    .get(&key)
+                    .is_some_and(|p| p.approved_setup.contains(&command))
+            });
+        if approved {
+            self.run_setup_now(id, command);
+        } else {
+            self.set_setup(
+                id,
+                Some(CopySetup {
+                    state: SetupState::NeedsApproval,
+                    command,
+                }),
+            );
+        }
+    }
+
+    /// `sync.run_setup`: the user approved `command`, which must still be
+    /// the copy's setup; it is remembered for the project and runs.
+    pub fn run_setup(self: &Arc<Self>, copy: &str, command: &str) -> Result<Copy, RpcError> {
+        let k = self
+            .kept(copy)
+            .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
+        if k.path.is_empty() {
+            return Err(RpcError::new("not_ready", "the copy is not made yet"));
+        }
+        let current = setup_command(Path::new(&k.path)).unwrap_or_default();
+        if current != command {
+            return Err(RpcError::new("setup_changed", current));
+        }
+        if let Some(key) = k.identity.as_ref().and_then(project_key) {
+            self.update_projects(&key, |p| {
+                if !p.approved_setup.contains(&current) {
+                    p.approved_setup.push(current.clone());
+                }
+            });
+        }
+        self.run_setup_now(copy, current);
+        Ok(self.copy_of(&self.kept(copy).unwrap()))
+    }
+
+    /// `sync.skip_setup`: a setup waiting for approval is not run.
+    pub fn skip_setup(&self, copy: &str) -> Result<Copy, RpcError> {
+        let k = self
+            .kept(copy)
+            .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
+        if let Some(setup) = k.setup
+            && setup.state == SetupState::NeedsApproval
+        {
+            self.set_setup(
+                copy,
+                Some(CopySetup {
+                    state: SetupState::Skipped,
+                    ..setup
+                }),
+            );
+        }
+        Ok(self.copy_of(&self.kept(copy).unwrap()))
+    }
+
+    /// Runs `command` in copy `id` as X1 runs a setup, its output in
+    /// `sync/logs/<id>.log`; a setup still running is stopped first.
+    fn run_setup_now(self: &Arc<Self>, id: &str, command: String) {
+        self.end_setup(id);
+        let Some(k) = self.kept(id) else { return };
+        self.set_setup(
+            id,
+            Some(CopySetup {
+                state: SetupState::Running,
+                command: command.clone(),
+            }),
+        );
+        let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let me = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move {
+            let log = me.home.join("sync").join("logs").join(format!("{id}.log"));
+            let exit = match me.spawn_setup(&id, run, &k, &command, &log) {
+                Ok((mut child, reaped)) => {
+                    let exit = match child.wait().await {
+                        Ok(status) => status.code().unwrap_or(-1),
+                        Err(_) => -1,
+                    };
+                    reaped.store(true, std::sync::atomic::Ordering::SeqCst);
+                    exit
+                }
+                Err(e) => {
+                    tracing::warn!(copy = %id, "cannot run setup: {e:#}");
+                    let _ = std::fs::write(&log, format!("cannot run setup: {e:#}\n"));
+                    -1
+                }
+            };
+            // A setup stopped or run again meanwhile reports nothing.
+            let current = me
+                .setups
+                .lock()
+                .unwrap()
+                .get(&id)
+                .is_some_and(|s| s.run == run);
+            if current {
+                let state = if exit == 0 {
+                    SetupState::Done
+                } else {
+                    SetupState::Failed { exit }
+                };
+                me.set_setup(&id, Some(CopySetup { state, command }));
+            }
+        });
+    }
+
+    fn spawn_setup(
+        &self,
+        id: &str,
+        run: u64,
+        k: &Kept,
+        command: &str,
+        log: &Path,
+    ) -> anyhow::Result<(tokio::process::Child, Arc<std::sync::atomic::AtomicBool>)> {
+        std::fs::create_dir_all(log.parent().unwrap())?;
+        let out = std::fs::File::create(log)?;
+        let err = out.try_clone()?;
+        let name = Path::new(&k.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let mut cmd = tokio::process::Command::new(moonlet_core::pty::user_shell());
+        cmd.args(["-lic", command])
+            .current_dir(&k.path)
+            .envs([
+                ("MOONLET_ROOT_PATH", k.repo.as_str()),
+                ("MOONLET_SESSION_PATH", k.path.as_str()),
+                ("MOONLET_SESSION_NAME", name.as_str()),
+                ("MOONLET_BRANCH", k.branch.as_str()),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(out)
+            .stderr(err);
+        // SAFETY: setsid is async-signal-safe and touches no memory.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let child = cmd.spawn()?;
+        let reaped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Some(pid) = child.id() {
+            self.setups.lock().unwrap().insert(
+                id.to_string(),
+                SetupRun {
+                    sid: pid,
+                    run,
+                    reaped: reaped.clone(),
+                },
+            );
+        }
+        Ok((child, reaped))
+    }
+
+    /// Stops every process copy `id`'s setup started, as X1 stops a closed
+    /// tab's script: SIGHUP, then SIGTERM after 1.5 s, then SIGKILL after
+    /// 3 s more, until none is left in its session.
+    fn end_setup(&self, id: &str) {
+        let Some(s) = self.setups.lock().unwrap().remove(id) else {
+            return;
+        };
+        use moonlet_core::pty::signal_session;
+        use nix::sys::signal::Signal;
+        let reaped = |s: &SetupRun| s.reaped.load(std::sync::atomic::Ordering::SeqCst);
+        if !signal_session(s.sid, Signal::SIGHUP, reaped(&s)) {
+            return;
+        }
+        tokio::spawn(async move {
+            for (wait, signal) in [(1500, Signal::SIGTERM), (3000, Signal::SIGKILL)] {
+                tokio::time::sleep(Duration::from_millis(wait)).await;
+                if !signal_session(s.sid, signal, reaped(&s)) {
+                    return;
+                }
+            }
+        });
+    }
+
     pub async fn use_central_branch(self: &Arc<Self>, id: &str) -> Result<Copy, RpcError> {
         {
             let lock = self.lock(id);
@@ -2418,6 +2681,15 @@ impl LiveCopies {
 
 /// Applies `target` to the copy at `path` from a fresh snapshot, trying
 /// again while the copy changes under it.
+/// The copy's setup command, exactly as its `.moonlet/config.toml` has it;
+/// none when blank.
+fn setup_command(copy: &Path) -> Option<String> {
+    moonlet_core::project_config::load(copy, String::new())
+        .config
+        .setup
+        .filter(|c| !c.trim().is_empty())
+}
+
 async fn apply_tries(path: &Path, target: &str, host: &str) -> Result<(), Stop> {
     for _ in 0..APPLY_TRIES {
         let local = git_sync::snapshot(path, MAX_FILE)
@@ -2875,6 +3147,16 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
     // Every copy waits for the link; one not made yet says it copies only
     // once `make` really starts.
     for k in &kept {
+        // The daemon stopped during a setup, which ended with it.
+        if let Some(setup) = &k.setup
+            && setup.state == SetupState::Running
+        {
+            let failed = CopySetup {
+                state: SetupState::Failed { exit: -1 },
+                command: setup.command.clone(),
+            };
+            sync.update_kept(&k.id, |k| k.setup = Some(failed));
+        }
         sync.states
             .lock()
             .unwrap()

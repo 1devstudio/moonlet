@@ -525,6 +525,23 @@ impl Daemon {
                 ok(self.sync.start(r.session)?)
             }
             m::SYNC_LIST => ok(self.sync.list()),
+            m::SYNC_RUN_SETUP | m::SYNC_SKIP_SETUP => {
+                // The user approves what runs on this Mac: not a paired
+                // device, nor an agent through the CLI.
+                if conn.phone.is_some() {
+                    return Err(RpcError::new("forbidden", "run setup from the Mac"));
+                }
+                if conn.client == CLI_CLIENT {
+                    return Err(RpcError::new("forbidden", "only the moonlet app runs setup"));
+                }
+                if method == m::SYNC_RUN_SETUP {
+                    let r: m::SyncRunSetup = params(p)?;
+                    ok(self.sync.run_setup(&r.copy, &r.command)?)
+                } else {
+                    let r: m::CopyRef = params(p)?;
+                    ok(self.sync.skip_setup(&r.copy)?)
+                }
+            }
             m::SYNC_RETRY => {
                 app_only(conn, "sync")?;
                 let r: m::CopyRef = params(p)?;

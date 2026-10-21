@@ -69,11 +69,12 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 ### Setup in the copy
 
 - [ ] Once the copy is made, when the copy's `.moonlet/config.toml` has a `setup` script (X1), the app asks in the confirm modal: "Run shop's setup in the copy on this Mac? `pnpm install` (from .moonlet/config.toml)", with **Run setup** and **Skip**. The modal shows the command exactly as the file has it.
-- [ ] The approval is remembered for this project (by identity) and this exact command. A later copy with the same command runs it without asking. A copy whose command differs in any way, such as one an agent changed in the session, asks again and shows the new command.
-- [ ] Setup runs in the copy's folder the way X1 runs it (`$SHELL -lic`, with the session env vars of A4, the paths being the copy's). Files keep syncing while it runs. Ignored files it writes, such as `node_modules`, stay on this Mac.
+- [x] The approval is remembered for this project (by identity) and this exact command. A later copy with the same command runs it without asking. A copy whose command differs in any way, such as one an agent changed in the session, asks again and shows the new command. (`an_approved_setup_runs_unasked_until_its_command_changes`)
+- [x] Setup runs in the copy's folder the way X1 runs it (`$SHELL -lic`, with the session env vars of A4, the paths being the copy's). Files keep syncing while it runs. Ignored files it writes, such as `node_modules`, stay on this Mac. (`a_copy_runs_the_projects_setup_once_the_user_approves_the_command`, `a_failed_setup_says_how_it_exited_and_keeps_its_output`)
 - [ ] While setup runs, the copy reads "Running setup…". When it fails, the copy reads "Setup failed (exit 1)". Both states, and **Skip**, still sync files. The popover offers **Show output** and **Run setup again**. The output goes to `$MOONLET_HOME/sync/logs/<copy id>.log`, and only the last run is kept.
 - [ ] Setup runs once per copy. Later edits to the setup script don't run it again by themselves. **Run setup again** runs the current command, and asks first if that command hasn't been approved.
-- [ ] Turning the copy off, or archiving its session, stops a setup that is still running, as X1 stops a script whose tab closes.
+- [x] Turning the copy off, or archiving its session, stops a setup that is still running, as X1 stops a script whose tab closes: the setup runs in its own session, which gets SIGHUP, then SIGTERM after 1.5 s, then SIGKILL after 3 s more, so jobs its shell moved to their own group stop too. (`turning_sync_off_stops_a_setup_still_running`; archiving removes the copy the same way)
+- [x] Only the Mac's app approves or skips a setup: `sync.run_setup` and `sync.skip_setup` from a paired device or the `moonlet` CLI are refused with `forbidden`. (`a_copy_runs_the_projects_setup_once_the_user_approves_the_command`)
 
 ### What syncs
 
@@ -188,7 +189,8 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 - `sync.resolve {copy, path, keep: "central" | "worker"}` returns the `Copy`. It is a `sync.offer` with that resolution, so it needs the link: while it is down, it fails with `disconnected`. It fails with `invalid_params` for a path that does not differ, `paused` for a paused copy, `not_ready` for one not made yet, and `busy` when the copy kept changing and the resolution was not made (`resolving_says_why_it_could_not`, `resolving_a_paused_copy_says_it_is_paused`).
 - `sync.use_central_branch {copy}`, `invalid_params` when the branch has not diverged;
 - `sync.retry {copy}`;
-- `sync.run_setup {copy, command}`. It runs only when `command` is the copy's current setup command, and it records the approval. A stale command is refused with `setup_changed` and the current command.
+- `sync.run_setup {copy, command}`. It runs only when `command` is the copy's current setup command, and it records the approval. A stale command is refused with `setup_changed`, whose message is the current command.
+- `sync.skip_setup {copy}`: a setup waiting for approval becomes `skipped`. Both setup methods answer only the Mac's app.
 - `sync.project_get {identity}` and `sync.project_set {identity, keep_new}`, for the project page and the composer;
 - the event `sync.changed`: the `Copy`, plus `newly_differing`, the paths that started to differ with this change. A copy that needs approval for setup reports `setup: {state: "needs_approval", command}`, and the app shows the modal.
 
@@ -208,7 +210,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 **Types:**
 
 - `Copy {id, host, session, path, state, setup, differs: [path], too_big: [path], diverged: {ahead, behind} | null}`.
-- `setup` is `null` (no setup script), or `{state, command}`, where `state` is `needs_approval`, `running`, `done`, `failed {exit}` or `skipped`.
+- `setup` is `null` (no setup script), or `{state, command}`, where `state.kind` is `needs_approval`, `running`, `done`, `failed` (`exit`, -1 when a signal or a daemon restart ended it) or `skipped`.
 - `state` is `copying`, `in_sync`, `syncing {files}`, `waiting` or `paused {reason}`.
 - `base`, `tree` and `head` are git object ids.
 
@@ -315,7 +317,8 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
     - `sync.run_setup` with that command writes the file in the copy, and the file does not appear on the central host;
     - a second copy of the same project runs setup without asking;
     - a copy whose session changed the command to `touch other` asks again, and `sync.run_setup` with the old command is refused with `setup_changed`;
-    - a setup that exits 1 reports `failed {exit: 1}`, and its output is in the log.
+    - a setup that exits 1 reports `failed {exit: 1}`, and its output is in the log;
+    - turning sync off during a long setup ends the processes it started within 10 s.
   - With `keep_new` on for the project, a session made on the central host with `session.new` gets a copy within 5 s, and one made while the link is down gets a copy once it is back. With `keep_new` off, neither does. The setting survives a restart of this Mac's daemon.
   - A reconcile that leaves `src/cart.ts` differing reports it once in `sync.changed`. A later reconcile in which it still differs doesn't report it as new.
 - **Vitest, `apps/desktop/src/lib/`:**

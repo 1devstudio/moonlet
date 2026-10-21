@@ -140,12 +140,23 @@ where
 
 /// The central host `studio-mini`, its project `shop` (a clone of the bare
 /// origin, whose origin URL is [`ORIGIN_URL`]) and a session `Fix cart`.
+/// The tests that time a sync run alone: the others share this gate, and
+/// a timing test holds it whole. Two daemons per test, all at once, can
+/// otherwise slow a busy machine past the one second they measure.
+static GATE: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+enum Gate {
+    Shared(#[allow(dead_code)] tokio::sync::RwLockReadGuard<'static, ()>),
+    Alone(#[allow(dead_code)] tokio::sync::RwLockWriteGuard<'static, ()>),
+}
+
 struct Central {
     daemon: Daemon,
     addr: String,
     origin: PathBuf,
     session: Value,
     _scratch: tempfile::TempDir,
+    _gate: Gate,
 }
 
 impl Central {
@@ -181,6 +192,15 @@ async fn central() -> Central {
 
 /// [`central`], with the project's origin at `origin_url`, or none.
 async fn central_with(origin_url: Option<&str>) -> Central {
+    central_gated(origin_url, Gate::Shared(GATE.read().await)).await
+}
+
+/// [`central`], with no other test of this file running meanwhile.
+async fn central_alone() -> Central {
+    central_gated(Some(ORIGIN_URL), Gate::Alone(GATE.write().await)).await
+}
+
+async fn central_gated(origin_url: Option<&str>, gate: Gate) -> Central {
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     let empty = scratch.path().join("gitconfig");
@@ -240,6 +260,7 @@ async fn central_with(origin_url: Option<&str>) -> Central {
             origin,
             session,
             _scratch: scratch,
+            _gate: gate,
         };
     }
     panic!("the central host never listened");
@@ -293,6 +314,9 @@ async fn worker_as(origin: Option<&Path>, id: &str, name: &str) -> Daemon {
             ("GIT_CONFIG_GLOBAL", config.to_str().unwrap()),
             // ORIGIN_URL leads to a local folder through `insteadOf`.
             ("MOONLET_SYNC_LOCAL_ORIGINS", "1"),
+            // Setups run in a login shell: not the user's own, with its rc
+            // files.
+            ("SHELL", "/bin/sh"),
         ],
     )
     .await
@@ -400,7 +424,15 @@ async fn a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_
 
 /// A central host with a session, and a worker with an in-sync copy of it.
 async fn synced() -> (Central, Daemon, PathBuf) {
-    let central = central().await;
+    synced_to(central().await).await
+}
+
+/// [`synced`], with no other test of this file running meanwhile.
+async fn synced_alone() -> (Central, Daemon, PathBuf) {
+    synced_to(central_alone().await).await
+}
+
+async fn synced_to(central: Central) -> (Central, Daemon, PathBuf) {
     let worker = worker(&central.origin).await;
     link(&central, &worker).await;
     let _: Copy = worker
@@ -424,7 +456,7 @@ async fn reads(path: &Path, want: &str) -> Duration {
 
 #[tokio::test]
 async fn an_edit_on_the_central_host_shows_in_the_copy_within_a_second() {
-    let (central, _worker, c) = synced().await;
+    let (central, _worker, c) = synced_alone().await;
     let s = central.session_path();
     write(&s.join("node_modules/left-pad/index.js"), "ignored\n");
     write(&s.join("src/cart.ts"), "c\n");
@@ -444,7 +476,7 @@ async fn an_edit_on_the_central_host_shows_in_the_copy_within_a_second() {
 
 #[tokio::test]
 async fn an_edit_in_the_copy_reaches_the_central_host_within_a_second() {
-    let (central, worker, c) = synced().await;
+    let (central, worker, c) = synced_alone().await;
     let s = central.session_path();
     write(&c.join("node_modules/left-pad/index.js"), "ignored\n");
     write(&c.join("src/cart.ts"), "from the mac\n");
@@ -2649,4 +2681,288 @@ async fn a_copy_stopped_while_another_host_is_central_tells_its_own_host_later()
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// Gives the session a setup script, `command`, whose output files are
+/// ignored, before a copy is made.
+fn give_setup(central: &Central, command: &str) {
+    let s = central.session_path();
+    write(
+        &s.join(".moonlet/config.toml"),
+        &format!("setup = {}\n", toml_string(command)),
+    );
+    write(&s.join(".gitignore"), "node_modules/\nignored-by-setup\n");
+}
+
+fn toml_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Waits for the only copy's setup to be `want` (its `state` as JSON).
+async fn setup_is(worker: &Daemon, want: Value) -> Copy {
+    let mut last = None;
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(30) {
+        let list = copies(worker).await;
+        if let Some(c) = list.first()
+            && c.setup
+                .as_ref()
+                .map(|s| serde_json::to_value(&s.state).unwrap())
+                == Some(want.clone())
+        {
+            return c.clone();
+        }
+        last = list.first().cloned();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the copy's setup never got {want}: {last:?}");
+}
+
+#[tokio::test]
+async fn a_copy_runs_the_projects_setup_once_the_user_approves_the_command() {
+    let central = central().await;
+    give_setup(&central, "touch ignored-by-setup");
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+
+    let copy = setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    assert_eq!(
+        copy.setup.as_ref().unwrap().command,
+        "touch ignored-by-setup"
+    );
+    let c = PathBuf::from(&copy.path);
+    assert!(!c.join("ignored-by-setup").exists(), "setup ran unasked");
+
+    // An agent's CLI cannot approve it.
+    let mut cli = Client::connect(&worker.socket, "moonlet-cli")
+        .await
+        .unwrap();
+    let e = cli
+        .request::<_, Value>(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": "touch ignored-by-setup" }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app runs setup");
+
+    let _: Copy = worker
+        .call(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": "touch ignored-by-setup" }),
+        )
+        .await;
+    setup_is(&worker, json!({ "kind": "done" })).await;
+    assert!(c.join("ignored-by-setup").exists(), "setup did not run");
+    // Ignored, so it stays on this Mac.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!central.session_path().join("ignored-by-setup").exists());
+}
+
+/// Waits for copy `id`'s setup to be `want` (its `state` as JSON).
+async fn copy_setup_is(worker: &Daemon, id: &str, want: Value) -> Copy {
+    let mut last = None;
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(30) {
+        let c = copies(worker).await.into_iter().find(|c| c.id == id);
+        if let Some(c) = &c
+            && c.setup
+                .as_ref()
+                .map(|s| serde_json::to_value(&s.state).unwrap())
+                == Some(want.clone())
+        {
+            return c.clone();
+        }
+        last = c;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("copy {id}'s setup never got {want}: {last:?}");
+}
+
+#[tokio::test]
+async fn an_approved_setup_runs_unasked_until_its_command_changes() {
+    let central = central().await;
+    give_setup(&central, "touch ignored-by-setup");
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let first: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    let _: Copy = worker
+        .call(
+            "sync.run_setup",
+            json!({ "copy": first.id, "command": "touch ignored-by-setup" }),
+        )
+        .await;
+    setup_is(&worker, json!({ "kind": "done" })).await;
+
+    // A second session of the same project, with the same setup.
+    let project = central.session["project_id"].clone();
+    let second: Value = central
+        .daemon
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "Second" }),
+        )
+        .await;
+    let s2 = PathBuf::from(second["path"].as_str().unwrap());
+    write(
+        &s2.join(".moonlet/config.toml"),
+        "setup = \"touch ignored-by-setup\"\n",
+    );
+    write(&s2.join(".gitignore"), "node_modules/\nignored-by-setup\n");
+    let copy2: Copy = worker
+        .call("sync.start", json!({ "session": second["id"] }))
+        .await;
+    let done = copy_setup_is(&worker, &copy2.id, json!({ "kind": "done" })).await;
+    assert!(PathBuf::from(&done.path).join("ignored-by-setup").exists());
+
+    // A third whose session changed the command asks again.
+    let third: Value = central
+        .daemon
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "Third" }),
+        )
+        .await;
+    let s3 = PathBuf::from(third["path"].as_str().unwrap());
+    write(
+        &s3.join(".moonlet/config.toml"),
+        "setup = \"touch other\"\n",
+    );
+    write(
+        &s3.join(".gitignore"),
+        "node_modules/\nignored-by-setup\nother\n",
+    );
+    let copy3: Copy = worker
+        .call("sync.start", json!({ "session": third["id"] }))
+        .await;
+    let asks = copy_setup_is(&worker, &copy3.id, json!({ "kind": "needs_approval" })).await;
+    assert_eq!(asks.setup.unwrap().command, "touch other");
+    let e = worker
+        .app()
+        .await
+        .request::<_, Value>(
+            "sync.run_setup",
+            json!({ "copy": copy3.id, "command": "touch ignored-by-setup" }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "setup_changed: touch other");
+    assert!(!PathBuf::from(&asks.path).join("ignored-by-setup").exists());
+
+    // Remembered on this Mac, per project and exact command.
+    let projects: Value =
+        serde_json::from_str(&read(&worker.home.path().join("sync/projects.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        projects,
+        json!({ "git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe": { "approved_setup": ["touch ignored-by-setup"] } })
+    );
+}
+
+#[tokio::test]
+async fn a_failed_setup_says_how_it_exited_and_keeps_its_output() {
+    let central = central().await;
+    give_setup(&central, "echo installing; exit 1");
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    let _: Copy = worker
+        .call(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": "echo installing; exit 1" }),
+        )
+        .await;
+    let failed = setup_is(&worker, json!({ "kind": "failed", "exit": 1 })).await;
+    assert_eq!(failed.state, CopyState::InSync, "files still sync");
+    let log = read(
+        &worker
+            .home
+            .path()
+            .join(format!("sync/logs/{}.log", copy.id)),
+    )
+    .unwrap();
+    assert!(log.contains("installing\n"), "{log:?}");
+
+    // Skipping is for a setup that waits; files sync either way.
+    write(&central.session_path().join("src/cart.ts"), "during\n");
+    reads(&PathBuf::from(&failed.path).join("src/cart.ts"), "during\n").await;
+}
+
+#[tokio::test]
+async fn turning_sync_off_stops_a_setup_still_running() {
+    let central = central().await;
+    let scratch = tempfile::tempdir().unwrap();
+    let pid_file = scratch.path().join("pid");
+    let command = format!("sleep 317 & echo $! > '{}'; wait", pid_file.display());
+    give_setup(&central, &command);
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    let _: Copy = worker
+        .call(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": command }),
+        )
+        .await;
+    setup_is(&worker, json!({ "kind": "running" })).await;
+    eventually("setup started its sleep", || async {
+        read(&pid_file).is_some_and(|p| p.trim().parse::<i32>().is_ok())
+    })
+    .await;
+    let pid: i32 = read(&pid_file).unwrap().trim().parse().unwrap();
+    let alive = |pid: i32| {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(alive(pid));
+
+    let _: Value = worker.call("sync.stop", json!({ "copy": copy.id })).await;
+    let start = Instant::now();
+    while alive(pid) {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the setup's sleep outlived the copy"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn skipping_a_setup_leaves_it_unrun() {
+    let central = central().await;
+    give_setup(&central, "touch ignored-by-setup");
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    let skipped: Copy = worker
+        .call("sync.skip_setup", json!({ "copy": copy.id }))
+        .await;
+    assert_eq!(
+        serde_json::to_value(&skipped.setup.unwrap().state).unwrap(),
+        json!({ "kind": "skipped" })
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !PathBuf::from(&skipped.path)
+            .join("ignored-by-setup")
+            .exists()
+    );
 }

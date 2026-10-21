@@ -250,6 +250,12 @@ pub const SYNC_STOP: &str = "sync.stop";
 pub const SYNC_CLOSE: &str = "sync.close";
 /// [`SyncClosing`], central host to worker: the session is going away.
 pub const SYNC_CLOSING: &str = "sync.closing";
+/// [`SyncRunSetup`] → [`Copy`]: approves the copy's setup command and runs
+/// it. Refused with `setup_changed`, whose message is the current command,
+/// when the copy's setup is no longer `command`. Only the Mac's app asks.
+pub const SYNC_RUN_SETUP: &str = "sync.run_setup";
+/// [`CopyRef`] → [`Copy`]: the copy's setup is not run.
+pub const SYNC_SKIP_SETUP: &str = "sync.skip_setup";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
@@ -1334,7 +1340,28 @@ pub enum CopyState {
 /// The setup script in a copy (X60, "Setup in the copy").
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CopySetup {
-    pub state: String,
+    pub state: SetupState,
+    /// The command, exactly as the copy's `.moonlet/config.toml` has it.
+    pub command: String,
+}
+
+/// Where a copy's setup is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SetupState {
+    /// Waits for the user to approve this exact command.
+    NeedsApproval,
+    Running,
+    Done,
+    /// It exited with `exit`; -1 when a signal or a restart ended it.
+    Failed { exit: i32 },
+    Skipped,
+}
+
+/// `sync.run_setup` params: the command the user approved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncRunSetup {
+    pub copy: String,
     pub command: String,
 }
 
