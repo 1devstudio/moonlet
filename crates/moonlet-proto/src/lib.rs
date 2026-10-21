@@ -79,7 +79,8 @@ pub struct PackLimits {
     pub max_buffered: usize,
     /// Transfers waiting at once, whole or in part.
     pub max_transfers: usize,
-    /// How long a whole pack waits for the request that takes it.
+    /// How long a whole pack waits for the request that takes it, and a
+    /// pack in part for its next chunk.
     pub keep_done: std::time::Duration,
 }
 
@@ -107,6 +108,8 @@ pub enum PackError {
     TooMuch(usize),
     #[error("more than {0} packs are waiting")]
     TooMany(usize),
+    #[error("pack {0} is already whole")]
+    Complete(u32),
 }
 
 /// Puts packs back together from their [`Frame::Pack`] chunks, by
@@ -114,7 +117,8 @@ pub enum PackError {
 #[derive(Default)]
 pub struct PackAssembler {
     limits: PackLimits,
-    partial: std::collections::HashMap<u32, Vec<u8>>,
+    /// Packs in part, with when their last chunk came.
+    partial: std::collections::HashMap<u32, (Vec<u8>, std::time::Instant)>,
     done: std::collections::HashMap<u32, (Vec<u8>, std::time::Instant)>,
 }
 
@@ -130,25 +134,33 @@ impl PackAssembler {
     pub fn push(&mut self, transfer: u32, data: Vec<u8>) -> Result<(), PackError> {
         self.drop_stale();
         let l = self.limits;
+        if self.done.contains_key(&transfer) {
+            return Err(PackError::Complete(transfer));
+        }
         let waiting = self.partial.contains_key(&transfer) || self.done.contains_key(&transfer);
         if !waiting && self.partial.len() + self.done.len() >= l.max_transfers {
             return Err(PackError::TooMany(l.max_transfers));
         }
         if data.is_empty() {
-            let pack = self.partial.remove(&transfer).unwrap_or_default();
+            let pack = self.partial.remove(&transfer).map(|(p, _)| p).unwrap_or_default();
             self.done.insert(transfer, (pack, std::time::Instant::now()));
             return Ok(());
         }
-        let so_far = self.partial.get(&transfer).map_or(0, Vec::len);
+        let so_far = self.partial.get(&transfer).map_or(0, |(p, _)| p.len());
         if so_far + data.len() > l.max_pack {
             return Err(PackError::TooLarge(transfer, l.max_pack));
         }
-        let buffered: usize = self.partial.values().map(Vec::len).sum::<usize>()
+        let buffered: usize = self.partial.values().map(|(p, _)| p.len()).sum::<usize>()
             + self.done.values().map(|(p, _)| p.len()).sum::<usize>();
         if buffered + data.len() > l.max_buffered {
             return Err(PackError::TooMuch(l.max_buffered));
         }
-        self.partial.entry(transfer).or_default().extend_from_slice(&data);
+        let (pack, at) = self
+            .partial
+            .entry(transfer)
+            .or_insert_with(|| (Vec::new(), std::time::Instant::now()));
+        pack.extend_from_slice(&data);
+        *at = std::time::Instant::now();
         Ok(())
     }
 
@@ -158,9 +170,11 @@ impl PackAssembler {
         self.done.remove(&transfer).map(|(p, _)| p)
     }
 
-    /// Drops whole packs no request took in time.
+    /// Drops whole packs no request took in time, and packs in part whose
+    /// sender stopped sending.
     fn drop_stale(&mut self) {
         let keep = self.limits.keep_done;
         self.done.retain(|_, (_, at)| at.elapsed() < keep);
+        self.partial.retain(|_, (_, at)| at.elapsed() < keep);
     }
 }

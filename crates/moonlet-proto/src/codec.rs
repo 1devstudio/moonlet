@@ -361,6 +361,28 @@ mod tests {
         packs.push(4, vec![0; 10]).unwrap();
     }
 
+    #[test]
+    fn a_pack_left_half_sent_is_dropped_after_a_while() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 10]).unwrap();
+        packs.push(2, vec![0; 10]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        // Both half-sent packs went, so their room is free again.
+        packs.push(3, vec![0; 10]).unwrap();
+        packs.push(4, vec![0; 10]).unwrap();
+        packs.push(5, vec![0; 5]).unwrap();
+    }
+
+    #[test]
+    fn a_chunk_for_a_pack_already_whole_is_refused() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 4]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        assert_eq!(packs.push(1, vec![0; 4]), Err(crate::PackError::Complete(1)));
+        assert_eq!(packs.push(1, vec![]), Err(crate::PackError::Complete(1)));
+        assert_eq!(packs.take(1).map(|p| p.len()), Some(4));
+    }
+
     #[tokio::test]
     async fn eof_inside_a_header_is_an_error() {
         let mut clean: &[u8] = &[];
