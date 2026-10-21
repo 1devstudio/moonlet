@@ -178,6 +178,19 @@ jobs:
             exit 1
           fi
 
+      # The Linux helpers and the install script (X58), uploaded while the
+      # release is still a draft. The checksums are checked before upload.
+      - name: Upload the Linux install
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          scripts/package-linux.sh dist
+          (cd dist && shasum -a 256 -c SHA256SUMS)
+          for f in moonlet-linux-x86_64.tar.gz moonlet-linux-aarch64.tar.gz SHA256SUMS install.sh; do
+            [ -f "dist/$f" ] || { echo "::error::dist/$f is missing"; exit 1; }
+          done
+          gh release upload "$GITHUB_REF_NAME" dist/moonlet-linux-x86_64.tar.gz dist/moonlet-linux-aarch64.tar.gz dist/SHA256SUMS dist/install.sh --clobber
+
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

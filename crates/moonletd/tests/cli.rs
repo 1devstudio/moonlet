@@ -172,6 +172,24 @@ async fn pair_prints_the_code_and_link_and_says_who_paired() {
 }
 
 #[tokio::test]
+async fn pair_shows_the_name_it_is_given() {
+    let host = Host::start(true, "127.0.0.1").await;
+    host.listening().await;
+    let mut pair = host
+        .cmd(&["pair", "--name", "build-box"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (lines, _) = read_pairing(&mut BufReader::new(pair.stdout.take().unwrap()));
+    assert!(
+        lines.iter().any(|l| l.trim() == "Name: build-box"),
+        "{lines:?}"
+    );
+    let _ = pair.kill();
+    let _ = pair.wait();
+}
+
+#[tokio::test]
 async fn pair_needs_tailnet_access_and_tailscale() {
     let host = Host::start(false, "127.0.0.1").await;
     let out = host.run(&["pair"]);
