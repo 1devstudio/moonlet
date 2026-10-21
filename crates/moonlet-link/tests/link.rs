@@ -332,3 +332,84 @@ async fn an_error_the_daemon_sends_unasked_becomes_the_hosts_message() {
     })
     .await;
 }
+
+/// Answers `worker.ping` with the params it got, and nothing else (X41).
+struct Pong;
+
+impl moonlet_link::Requests for Pong {
+    fn request(&self, method: String, params: Value) -> BoxFuture<'static, Result<Value, RpcError>> {
+        Box::pin(async move {
+            match method.as_str() {
+                "worker.ping" => Ok(json!({ "pong": params })),
+                _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
+            }
+        })
+    }
+}
+
+/// The next reply the app sent, skipping its own requests.
+async fn next_reply(daemon: &mut FakeDaemon) -> Message {
+    loop {
+        match daemon.next().await {
+            Frame::Json(m @ Message::Response { .. }) => return m,
+            Frame::Json(Message::Request { id, method, .. }) if method == "daemon.info" => {
+                daemon.send(Frame::Json(Message::ok(id, json!({})))).await;
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_request_from_the_daemon_gets_the_handlers_answer_with_the_same_id() {
+    let (host, _seen, mut rx) = start();
+    host.set_requests(Arc::new(Pong));
+    let mut daemon = FakeDaemon::accept(&mut rx).await;
+    daemon
+        .send(Frame::Json(Message::Request {
+            id: 1,
+            method: "worker.ping".into(),
+            params: json!({ "n": 7 }),
+        }))
+        .await;
+    match next_reply(&mut daemon).await {
+        Message::Response { id, result, error } => {
+            assert_eq!(id, 1);
+            assert_eq!(error, None);
+            assert_eq!(result, Some(json!({ "pong": { "n": 7 } })));
+        }
+        other => panic!("expected a response, got {other:?}"),
+    }
+    daemon
+        .send(Frame::Json(Message::Request {
+            id: 2,
+            method: "sync.nothing".into(),
+            params: json!({}),
+        }))
+        .await;
+    match next_reply(&mut daemon).await {
+        Message::Response { id, error: Some(e), .. } => {
+            assert_eq!((id, e.code.as_str()), (2, "unknown_method"));
+        }
+        other => panic!("expected an error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_host_without_a_handler_refuses_the_daemons_requests() {
+    let (_host, _seen, mut rx) = start();
+    let mut daemon = FakeDaemon::accept(&mut rx).await;
+    daemon
+        .send(Frame::Json(Message::Request {
+            id: 1,
+            method: "worker.ping".into(),
+            params: json!({}),
+        }))
+        .await;
+    match next_reply(&mut daemon).await {
+        Message::Response { id, error: Some(e), .. } => {
+            assert_eq!((id, e.code.as_str()), (1, "unknown_method"));
+        }
+        other => panic!("expected an error, got {other:?}"),
+    }
+}
