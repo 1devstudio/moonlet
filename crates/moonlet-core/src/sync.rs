@@ -73,6 +73,25 @@ id_ecdsa*
 .netrc
 ";
 
+/// Whether `path`'s file name matches a [`NEVER_SYNCED`] pattern. The
+/// patterns are file names with `*`, so this holds whatever a
+/// `.gitignore` lets back in with `!`.
+fn never_synced(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    NEVER_SYNCED
+        .lines()
+        .any(|p| glob_match(p.as_bytes(), name.as_bytes()))
+}
+
+/// `*` matches any run of bytes; everything else matches itself.
+fn glob_match(pattern: &[u8], name: &[u8]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some((b'*', rest)) => (0..=name.len()).any(|i| glob_match(rest, &name[i..])),
+        Some((c, rest)) => name.first() == Some(c) && glob_match(rest, &name[1..]),
+    }
+}
+
 /// The private index a worktree's snapshots go through, beside its own
 /// index: the session's staging area is never touched.
 async fn private_index(worktree: &Path) -> Result<PathBuf> {
@@ -185,6 +204,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     }
     let mut too_big: Vec<String> = candidates
         .into_iter()
+        .filter(|p| !never_synced(p))
         .filter(|p| {
             std::fs::symlink_metadata(worktree.join(p))
                 .is_ok_and(|m| m.is_file() && m.len() > max_file)
@@ -194,10 +214,16 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     too_big.dedup();
 
     // `add -A` follows the files already in the snapshot and drops those
-    // gone from disk; the big ones it leaves as they were.
+    // gone from disk; the big ones it leaves as they were. Secrets are
+    // never even hashed, whatever a `.gitignore` says.
     let specs = pathspecs(
         std::iter::once(".".to_string())
-            .chain(too_big.iter().map(|p| format!(":(exclude,literal){p}"))),
+            .chain(too_big.iter().map(|p| format!(":(exclude,literal){p}")))
+            .chain(
+                NEVER_SYNCED
+                    .lines()
+                    .map(|p| format!(":(exclude,glob)**/{p}")),
+            ),
     );
     let mut add: Vec<&str> = our_excludes.iter().copied().collect();
     add.extend(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]);
@@ -212,35 +238,60 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
         .await?;
     }
 
+    // Secrets already in the snapshot follow their edits if HEAD tracks
+    // them, and leave it otherwise.
+    let cached = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
+    let cached: std::collections::HashSet<String> = split_z(&cached).collect();
+    let (secrets_kept, secrets_dropped): (Vec<&String>, Vec<&String>) = cached
+        .iter()
+        .filter(|p| never_synced(p))
+        .partition(|p| head.contains(*p));
+    if !secrets_kept.is_empty() {
+        let specs = pathspecs(secrets_kept.iter().map(|p| format!(":(literal){p}")));
+        git_env(
+            worktree,
+            &env,
+            &["add", "-u", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            Some(&specs),
+        )
+        .await?;
+    }
+    if !secrets_dropped.is_empty() {
+        let paths: Vec<u8> = secrets_dropped.iter().flat_map(|p| p.bytes().chain([0])).collect();
+        git_env(
+            worktree,
+            &env,
+            &["update-index", "--force-remove", "-z", "--stdin"],
+            Some(&paths),
+        )
+        .await?;
+    }
+
     // Files HEAD tracks are in even when ignored, also those committed
     // after the snapshot's index was first made.
-    if has_head {
-        let cached = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
-        let cached: std::collections::HashSet<String> = split_z(&cached).collect();
-        let mut missing: Vec<&String> = head
-            .iter()
-            .filter(|p| !cached.contains(*p) && !too_big.contains(p))
-            .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
-            .collect();
-        // Held to the size limit like the rest.
-        let (big, fits): (Vec<&String>, Vec<&String>) = missing.into_iter().partition(|p| {
-            std::fs::symlink_metadata(worktree.join(p))
-                .is_ok_and(|m| m.is_file() && m.len() > max_file)
-        });
-        missing = fits;
-        too_big.extend(big.into_iter().cloned());
-        too_big.sort();
-        too_big.dedup();
-        if !missing.is_empty() {
-            let specs = pathspecs(missing.iter().map(|p| format!(":(literal){p}")));
-            git_env(
-                worktree,
-                &env,
-                &["add", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
-                Some(&specs),
-            )
-            .await?;
-        }
+    let mut missing: Vec<String> = head
+        .iter()
+        .filter(|p| !cached.contains(*p) && !too_big.contains(p))
+        .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
+        .cloned()
+        .collect();
+    // Held to the size limit like the rest.
+    let (big, fits): (Vec<String>, Vec<String>) = missing.into_iter().partition(|p| {
+        std::fs::symlink_metadata(worktree.join(p)).is_ok_and(|m| m.is_file() && m.len() > max_file)
+    });
+    missing = fits;
+    too_big.extend(big);
+    too_big.sort();
+    too_big.dedup();
+    if !missing.is_empty() {
+        let specs = pathspecs(missing.iter().map(|p| format!(":(literal){p}")));
+        git_env(
+            worktree,
+            &env,
+            &["add", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            Some(&specs),
+        )
+        .await?;
     }
     // Names that are not text leave the snapshot, wherever they came from.
     let listed = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
@@ -1162,6 +1213,69 @@ mod tests {
                 ("src/new.ts", "100644"),
                 ("vendor/keep.js", "100644"),
             ])
+        );
+    }
+
+    #[tokio::test]
+    async fn secrets_stay_out_whatever_the_gitignore_lets_back_in() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        std::fs::create_dir_all(p.join("config")).unwrap();
+        std::fs::write(p.join("config/dev.key"), "dev only\n").unwrap();
+        git(p, &["add", "config/dev.key"]).await.unwrap();
+        git(p, &["commit", "-q", "-m", "dev key"]).await.unwrap();
+        // The project's own rules let the files back in.
+        let mut gitignore = std::fs::read_to_string(p.join(".gitignore")).unwrap();
+        gitignore.push_str("!.env.local\n!*.pem\n!.npmrc\n");
+        std::fs::write(p.join(".gitignore"), gitignore).unwrap();
+        for f in [".env.local", "deploy.pem", "sub/.npmrc", "notes.txt"] {
+            let path = p.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "secret\n").unwrap();
+        }
+        std::fs::write(p.join("config/dev.key"), "dev only, rotated\n").unwrap();
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let names: Vec<String> = listing(p, &snap.tree)
+            .await
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ".gitignore",
+                "config/dev.key",
+                "link",
+                "notes.txt",
+                "run.sh",
+                "scratch.txt",
+                "src/cart.ts",
+                "src/new.ts",
+                "vendor/keep.js",
+            ]
+        );
+        // A tracked secret still syncs its edits.
+        let key = git(
+            p,
+            &["cat-file", "-p", &format!("{}:config/dev.key", snap.tree)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(String::from_utf8(key).unwrap(), "dev only, rotated\n");
+
+        // A synced file renamed to a secret's name leaves.
+        std::fs::rename(p.join("notes.txt"), p.join("sub/.env.local")).unwrap();
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let names: Vec<String> = listing(p, &snap.tree)
+            .await
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(
+            !names
+                .iter()
+                .any(|n| n == "notes.txt" || n.ends_with(".env.local")),
+            "{names:?}"
         );
     }
 
