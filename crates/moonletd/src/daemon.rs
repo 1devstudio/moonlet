@@ -530,14 +530,15 @@ impl Daemon {
                 let r: m::SyncProject = params(p)?;
                 ok(self.sync.project_get(&r.identity))
             }
+            m::SYNC_DECLINE => {
+                app_only(conn, "sync")?;
+                let r: m::SyncStart = params(p)?;
+                self.sync.decline(r.session);
+                ok(true)
+            }
             m::SYNC_PROJECT_SET => {
                 // Like the link itself: from this Mac's app only.
-                if conn.phone.is_some() {
-                    return Err(RpcError::new("forbidden", "manage sync from the Mac"));
-                }
-                if conn.client == CLI_CLIENT {
-                    return Err(RpcError::new("forbidden", "only the moonlet app manages sync"));
-                }
+                app_only(conn, "sync")?;
                 let r: m::SyncProjectSet = params(p)?;
                 ok(self.sync.project_set(&r.identity, r.keep_new)?)
             }

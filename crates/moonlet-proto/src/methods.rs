@@ -262,6 +262,9 @@ pub const SYNC_PROJECT_GET: &str = "sync.project_get";
 /// [`SyncProjectSet`] → [`ProjectSync`]: keep the project's new sessions on
 /// the central host in sync with this Mac, or stop doing so.
 pub const SYNC_PROJECT_SET: &str = "sync.project_set";
+/// [`SyncStart`] → `true`: the session gets no copy, even when its project
+/// keeps new sessions in sync; the composer's unticked checkbox.
+pub const SYNC_DECLINE: &str = "sync.decline";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 

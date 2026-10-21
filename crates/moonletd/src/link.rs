@@ -498,10 +498,13 @@ impl Events for LinkEvents {
 
     fn event(&self, _host: &str, name: String, data: Value) {
         // New sessions, for the projects that keep them in sync (X60).
-        if name == m::EV_SESSIONS_CHANGED
-            && let Some(sync) = self.0.upgrade().and_then(|l| l.sync())
-        {
-            sync.sessions_changed(data);
+        let Some(sync) = self.0.upgrade().and_then(|l| l.sync()) else {
+            return;
+        };
+        match name.as_str() {
+            m::EV_SESSIONS_CHANGED => sync.sessions_changed(data),
+            m::EV_PROJECTS_CHANGED => sync.projects_changed(),
+            _ => {}
         }
     }
 }

@@ -228,8 +228,10 @@ struct Data {
     /// of yet; the link stays open until it has.
     #[serde(default)]
     closed: Vec<Closed>,
-    /// Sessions this Mac started keeping because their project keeps new
-    /// sessions in sync: once, so a copy the user stopped stays stopped.
+    /// Sessions this Mac has decided about: kept, by the app or because
+    /// their project keeps new sessions in sync, or declined. A new session
+    /// is kept once, so a copy the user stopped, or one the composer
+    /// declined, is not made again.
     #[serde(default)]
     auto: Vec<String>,
 }
@@ -288,6 +290,11 @@ struct SetupRun {
     run: u64,
     reaped: Arc<std::sync::atomic::AtomicBool>,
 }
+
+/// How long a new session waits before this Mac keeps it because its
+/// project keeps new sessions in sync: the composer, which decides itself,
+/// starts or declines it first.
+const KEEP_NEW_GRACE: Duration = Duration::from_secs(3);
 
 /// A project's key in `projects.json`: the central host's name, then the
 /// project's origin and root commit. The identity alone is not enough:
@@ -365,6 +372,14 @@ pub struct LiveCopies {
     /// leader was waited for. It stays until the next run or the copy goes,
     /// so jobs a setup left behind are stopped too.
     setups: Mutex<HashMap<String, SetupRun>>,
+    /// When this Mac first heard of each new session it may keep, so the
+    /// composer's own choice comes first.
+    heard: Mutex<HashMap<String, std::time::Instant>>,
+    /// The central host's projects, until they change or the link drops.
+    projects_seen: Mutex<Option<Vec<moonlet_proto::types::Project>>>,
+    /// Wakes the loop that looks at the central host's sessions again, for
+    /// the new sessions that waited.
+    keep_new_due: tokio::sync::Notify,
     runs: std::sync::atomic::AtomicU64,
     /// One writer of `projects.json` at a time.
     projects: Mutex<()>,
@@ -412,6 +427,9 @@ impl LiveCopies {
                 offering: Mutex::new(HashMap::new()),
                 registered: std::sync::atomic::AtomicBool::new(false),
                 setups: Mutex::new(HashMap::new()),
+                heard: Mutex::new(HashMap::new()),
+                projects_seen: Mutex::new(None),
+                keep_new_due: tokio::sync::Notify::new(),
                 runs: std::sync::atomic::AtomicU64::new(0),
                 projects: Mutex::new(()),
                 base_env,
@@ -740,6 +758,9 @@ impl LiveCopies {
                 ..Kept::default()
             };
             let id = kept.id.clone();
+            if !data.auto.contains(&kept.session) {
+                data.auto.push(kept.session.clone());
+            }
             data.worker.push(kept);
             id
         };
@@ -829,6 +850,7 @@ impl LiveCopies {
         self.registered
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.send_closed_soon();
+        *self.projects_seen.lock().unwrap() = None;
         // Sessions made while the link was down.
         let me = self.clone();
         tokio::spawn(async move { me.fetch_sessions().await });
@@ -1879,22 +1901,55 @@ impl LiveCopies {
         }
     }
 
+    /// `sync.decline`: session `session` gets no copy, even when its
+    /// project keeps new sessions in sync.
+    pub fn decline(&self, session: String) {
+        {
+            let mut data = self.data.lock().unwrap();
+            if data.auto.contains(&session) {
+                return;
+            }
+            data.auto.push(session);
+        }
+        self.save();
+    }
+
+    /// `projects.changed` from the central host: its projects are asked
+    /// for again when next needed.
+    pub fn projects_changed(&self) {
+        *self.projects_seen.lock().unwrap() = None;
+    }
+
+    /// The central host's projects, asked for once until they change.
+    async fn central_projects(&self) -> Option<Vec<moonlet_proto::types::Project>> {
+        let seen = self.projects_seen.lock().unwrap().clone();
+        if seen.is_some() {
+            return seen;
+        }
+        let host = self.link.host()?;
+        let projects: Vec<moonlet_proto::types::Project> = host
+            .request(m::PROJECT_LIST, serde_json::json!({}))
+            .await
+            .ok()
+            .and_then(|v| serde_json::from_value(v).ok())?;
+        *self.projects_seen.lock().unwrap() = Some(projects.clone());
+        Some(projects)
+    }
+
     /// Starts keeping each new session of a project set to keep new
     /// sessions in sync: made since the setting went on, not archived, and
-    /// not kept or stopped before.
+    /// not decided about before. One this Mac heard of less than
+    /// [`KEEP_NEW_GRACE`] ago waits, so the composer's own choice comes
+    /// first.
     async fn keep_new_sessions(self: &Arc<Self>, sessions: Vec<moonlet_proto::types::Session>) {
         let lock = self.lock("keep-new");
         let _one = lock.lock().await;
         let choices = self.load_projects();
-        let Some(since) = self
-            .keep_new_choices()
-            .into_iter()
-            .filter_map(|p| p.keep_new_since)
-            .min()
-        else {
+        let keeping: Vec<ProjectChoices> = self.keep_new_choices();
+        let Some(since) = keeping.iter().filter_map(|p| p.keep_new_since).min() else {
             return;
         };
-        let candidates: Vec<_> = {
+        let fresh: Vec<_> = {
             let data = self.data.lock().unwrap();
             sessions
                 .into_iter()
@@ -1903,35 +1958,43 @@ impl LiveCopies {
                 .filter(|s| !data.worker.iter().any(|k| k.session == s.id))
                 .collect()
         };
-        if candidates.is_empty() {
+        if fresh.is_empty() {
             return;
         }
-        let Some(host) = self.link.host() else { return };
-        let projects: Vec<moonlet_proto::types::Project> = match host
-            .request(m::PROJECT_LIST, serde_json::json!({}))
-            .await
-            .ok()
-            .and_then(|v| serde_json::from_value(v).ok())
-        {
-            Some(p) => p,
-            None => return,
-        };
-        for s in candidates {
-            let Some(p) = projects.iter().find(|p| p.id == s.project_id) else {
-                continue;
-            };
-            let wanted = self
-                .central_key(&p.identity)
+        let Some(projects) = self.central_projects().await else { return };
+        let wanted = |s: &moonlet_proto::types::Session| {
+            projects
+                .iter()
+                .find(|p| p.id == s.project_id)
+                .and_then(|p| self.central_key(&p.identity))
                 .and_then(|key| choices.get(&key))
-                .is_some_and(|c| c.keep_new && c.keep_new_since.is_some_and(|t| s.created_at >= t));
-            if !wanted {
+                .is_some_and(|c| {
+                    c.keep_new && c.keep_new_since.is_some_and(|t| s.created_at >= t)
+                })
+        };
+        let now = std::time::Instant::now();
+        let mut later = false;
+        for s in fresh.iter().filter(|s| wanted(s)) {
+            let heard = *self.heard.lock().unwrap().entry(s.id.clone()).or_insert(now);
+            if now.duration_since(heard) < KEEP_NEW_GRACE {
+                later = true;
                 continue;
             }
+            self.heard.lock().unwrap().remove(&s.id);
             self.data.lock().unwrap().auto.push(s.id.clone());
             self.save();
             if let Err(e) = self.start(s.id.clone()) {
                 tracing::warn!(session = %s.id, "cannot keep a new session in sync: {}", e.message);
             }
+        }
+        if later {
+            let me = Arc::downgrade(self);
+            tokio::spawn(async move {
+                tokio::time::sleep(KEEP_NEW_GRACE).await;
+                if let Some(me) = me.upgrade() {
+                    me.keep_new_due.notify_one();
+                }
+            });
         }
     }
 
@@ -3441,6 +3504,14 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
             .insert(k.id.clone(), CopyState::Waiting);
     }
     sync.link.set_synced(sync.link_holders());
+    // New sessions that waited for the composer are looked at again.
+    let due = sync.clone();
+    tokio::spawn(async move {
+        loop {
+            due.keep_new_due.notified().await;
+            due.fetch_sessions().await;
+        }
+    });
     for s in served {
         sync.watch(Path::new(&s.path));
     }

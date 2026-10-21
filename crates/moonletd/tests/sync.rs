@@ -3423,7 +3423,7 @@ async fn keeping_new_sessions_in_sync_is_a_choice_per_central_host() {
         .call("sync.project_get", json!({ "identity": identity }))
         .await;
     assert_eq!(got, json!({ "keep_new": false }));
-    let second = new_session(&central, "Second").await;
+    let _second = new_session(&central, "Second").await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     keeps(&worker, &[]).await;
 
@@ -3441,5 +3441,128 @@ async fn keeping_new_sessions_in_sync_is_a_choice_per_central_host() {
         json!(true),
         "{projects}"
     );
-    let _ = second;
+}
+
+/// `worker` linked to `central`, keeping new `shop` sessions in sync.
+async fn keeping_new(central: &Central) -> Daemon {
+    let worker = worker(&central.origin).await;
+    link(central, &worker).await;
+    let identity = shop_identity(central).await;
+    let _: Value = worker
+        .call(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": true }),
+        )
+        .await;
+    worker
+}
+
+#[tokio::test]
+async fn a_session_the_app_kept_and_the_user_stopped_is_not_made_again() {
+    let central = central().await;
+    let worker = keeping_new(&central).await;
+    let second = new_session(&central, "Second").await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": second }))
+        .await;
+    let _: Value = worker.call("sync.stop", json!({ "copy": copy.id })).await;
+
+    let third = new_session(&central, "Third").await;
+    keeps(&worker, &[&third]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    keeps(&worker, &[&third]).await;
+}
+
+#[tokio::test]
+async fn a_session_the_composer_declines_gets_no_copy() {
+    let central = central().await;
+    let worker = keeping_new(&central).await;
+    let second = new_session(&central, "Second").await;
+    let _: Value = worker
+        .call("sync.decline", json!({ "session": second }))
+        .await;
+
+    let third = new_session(&central, "Third").await;
+    keeps(&worker, &[&third]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    keeps(&worker, &[&third]).await;
+}
+
+#[tokio::test]
+async fn keeping_new_sessions_needs_a_project_known_by_its_first_commit() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let mut app = worker.app().await;
+    let e = app
+        .request::<_, Value>(
+            "sync.project_set",
+            json!({ "identity": { "origin": "git.invalid/acme/new", "root": null }, "keep_new": true }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "no_identity: the project has no commit to know it by on this Mac"
+    );
+}
+
+/// Turns the central host's tailnet access off, which drops the link, and
+/// gives a closure that turns it back on.
+async fn link_off(central: &Central) {
+    let _: Value = central
+        .daemon
+        .call("mobile.set_enabled", json!({ "enabled": false }))
+        .await;
+}
+
+async fn link_on(central: &Central) {
+    let _: Value = central
+        .daemon
+        .call("mobile.set_enabled", json!({ "enabled": true }))
+        .await;
+}
+
+async fn link_state(worker: &Daemon) -> String {
+    let info: Value = worker.call("link.get", json!({})).await;
+    info["state"]["kind"].as_str().unwrap_or_default().to_string()
+}
+
+#[tokio::test]
+async fn sessions_made_while_the_link_was_down_get_copies_once_it_is_back_unless_archived() {
+    let central = central().await;
+    let worker = keeping_new(&central).await;
+    eventually("linked", || async { link_state(&worker).await == "connected" }).await;
+    link_off(&central).await;
+    eventually("link dropped", || async { link_state(&worker).await != "connected" }).await;
+    let second = new_session(&central, "Second").await;
+    let gone = new_session(&central, "Gone").await;
+    let _: Value = central
+        .daemon
+        .call("session.archive", json!({ "id": gone }))
+        .await;
+
+    link_on(&central).await;
+    keeps(&worker, &[&second]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    keeps(&worker, &[&second]).await;
+}
+
+#[tokio::test]
+async fn sessions_made_while_the_link_was_down_get_no_copy_when_keep_new_is_off() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    // Linked for heavy commands, so the link is up without any copy.
+    let _: Value = worker
+        .call("link.set", json!({ "worker": { "enabled": true } }))
+        .await;
+    eventually("linked", || async { link_state(&worker).await == "connected" }).await;
+    link_off(&central).await;
+    eventually("link dropped", || async { link_state(&worker).await != "connected" }).await;
+    let _second = new_session(&central, "Second").await;
+
+    link_on(&central).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    keeps(&worker, &[]).await;
 }
