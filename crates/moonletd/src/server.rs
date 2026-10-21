@@ -46,8 +46,6 @@ pub async fn bind(path: &Path) -> Result<UnixListener> {
 }
 
 pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf) -> Result<()> {
-    // Before the first request, so `project.list` never lacks one (X41).
-    daemon.sessions.fill_identities().await;
     let my_uid = nix::unistd::getuid().as_raw();
     let mut shutdown = daemon.shutdown_signal();
     loop {
