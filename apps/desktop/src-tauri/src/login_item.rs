@@ -108,6 +108,15 @@ impl Service {
     }
 }
 
+/// Whether `register()` may add the login item. macOS can report an agent
+/// it has never registered as not found; a missing plist fails `register()`.
+fn unregistered(state: LoginItemState) -> bool {
+    matches!(
+        state,
+        LoginItemState::NotRegistered | LoginItemState::NotFound
+    )
+}
+
 /// What the app does about the login item when it starts.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Launch {
@@ -146,7 +155,7 @@ impl OldPlist {
 pub fn on_launch(choice: Option<bool>, old: OldPlist, state: LoginItemState) -> Launch {
     let ours = old == OldPlist::Ours;
     let on = ours || choice.unwrap_or(true);
-    let register = on && state == LoginItemState::NotRegistered;
+    let register = on && unregistered(state);
     let takes_over = ours && (register || state == LoginItemState::Enabled);
     Launch {
         remove_old_plist: takes_over,
@@ -246,15 +255,13 @@ pub enum TurnOn {
     /// Switched off in Login Items: only the user can allow it there.
     OpenLoginItems,
     Nothing,
-    Unavailable,
 }
 
 pub fn toggle_on(state: LoginItemState) -> TurnOn {
     match state {
-        LoginItemState::NotRegistered => TurnOn::Register,
         LoginItemState::RequiresApproval => TurnOn::OpenLoginItems,
         LoginItemState::Enabled => TurnOn::Nothing,
-        LoginItemState::NotFound => TurnOn::Unavailable,
+        LoginItemState::NotRegistered | LoginItemState::NotFound => TurnOn::Register,
     }
 }
 
@@ -288,7 +295,6 @@ pub fn set(on: bool) -> Result<Service> {
         }
         TurnOn::OpenLoginItems => sm::open_settings(),
         TurnOn::Nothing => {}
-        TurnOn::Unavailable => bail!("macOS cannot find moonlet's login item. Reinstall moonlet."),
     }
     Ok(status())
 }
@@ -402,6 +408,14 @@ mod tests {
                 ..NOTHING
             }
         );
+        // macOS reports an agent it has never registered as not found.
+        assert_eq!(
+            on_launch(None, OldPlist::None, LoginItemState::NotFound),
+            Launch {
+                register: true,
+                ..NOTHING
+            }
+        );
     }
 
     #[test]
@@ -443,14 +457,10 @@ mod tests {
 
     #[test]
     fn the_old_plist_stays_while_no_login_item_can_take_over() {
-        // Switched off in Login Items, or unknown to macOS: nothing would
-        // start the daemon at the next login without the old agent.
+        // Switched off in Login Items: nothing would start the daemon at
+        // the next login without the old agent.
         assert_eq!(
             on_launch(None, OldPlist::Ours, LoginItemState::RequiresApproval),
-            NOTHING
-        );
-        assert_eq!(
-            on_launch(Some(true), OldPlist::Ours, LoginItemState::NotFound),
             NOTHING
         );
     }
@@ -480,6 +490,16 @@ mod tests {
     fn the_old_plist_is_replaced_by_the_login_item_and_counts_as_on() {
         assert_eq!(
             on_launch(Some(false), OldPlist::Ours, LoginItemState::NotRegistered),
+            Launch {
+                remove_old_plist: true,
+                record: Some(true),
+                register: true
+            }
+        );
+        // 0.1.27 on macOS 27 found the login item not found next to the old
+        // plist. `launch` deletes the plist only once the item is enabled.
+        assert_eq!(
+            on_launch(Some(true), OldPlist::Ours, LoginItemState::NotFound),
             Launch {
                 remove_old_plist: true,
                 record: Some(true),
@@ -539,7 +559,8 @@ mod tests {
             TurnOn::OpenLoginItems
         );
         assert_eq!(toggle_on(LoginItemState::Enabled), TurnOn::Nothing);
-        assert_eq!(toggle_on(LoginItemState::NotFound), TurnOn::Unavailable);
+        // A plist that is really missing fails `register()` with macOS's reason.
+        assert_eq!(toggle_on(LoginItemState::NotFound), TurnOn::Register);
     }
 
     #[test]
