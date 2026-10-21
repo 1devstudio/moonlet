@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use moonlet_core::fs::Watchers;
 use moonlet_core::session::SessionManager;
-use moonlet_core::sync::{self as git_sync, ApplyError, Entry, Files, MAX_FILE};
+use moonlet_core::sync::{self as git_sync, ApplyError, Entry, Files, MAX_FILE, UnpackError};
 use moonlet_proto::methods::{
     self as m, Copy, CopyState, SyncFetch, SyncFetched, SyncOpen, SyncOpened, SyncUpdate,
     SyncUpdated,
@@ -424,7 +424,7 @@ impl LiveCopies {
                 .ok_or_else(|| Stop::Paused("the session's files did not arrive".into()))?;
             git_sync::unpack(&repo, &pack)
                 .await
-                .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+                .map_err(|e| Stop::Paused(refused(&k.host, &e)))?;
         }
 
         let made = !k.path.is_empty() && Path::new(&k.path).exists();
@@ -526,7 +526,15 @@ impl LiveCopies {
         let repo = PathBuf::from(&k.repo);
         let path = PathBuf::from(&k.path);
         if let Some(pack) = pack {
-            git_sync::unpack(&repo, &pack).await.map_err(internal)?;
+            match git_sync::unpack(&repo, &pack).await {
+                Ok(()) => {}
+                Err(UnpackError::Git(e)) => return Err(internal(format!("{e:#}"))),
+                Err(e) => {
+                    let why = refused(&k.host, &e);
+                    self.pause(&req.copy, why.clone());
+                    return Err(RpcError::new("paused", why));
+                }
+            }
         }
         let files = git_sync::read_files(&repo, &req.tree)
             .await
@@ -928,6 +936,14 @@ async fn apply_tries(path: &Path, target: &str, host: &str) -> Result<(), Stop> 
 
 fn outside(host: &str) -> String {
     format!("{host} sent a path outside the copy.")
+}
+
+/// Why a copy pauses over a pack from `host` that git refused.
+fn refused(host: &str, e: &UnpackError) -> String {
+    match e {
+        UnpackError::Unsafe(_) => outside(host),
+        e => format!("{host} sent files git refuses: {e}"),
+    }
 }
 
 /// Reconciles the central host's tree with this Mac's, keeping this Mac's

@@ -508,22 +508,44 @@ pub enum ApplyError {
 
 /// The first path in `files` that would write outside the worktree: one
 /// with an empty, `.`, `..` or `.git` part, or one under a symlink of the
-/// same tree.
+/// same tree. Like git's own `verify_path`, a part counts as `.git` in any
+/// of the spellings macOS or Windows read as `.git`, and a `.gitmodules`
+/// may not be a symlink.
 pub fn unsafe_path(files: &Files) -> Option<String> {
     files
-        .keys()
-        .find(|path| {
+        .iter()
+        .find(|(path, entry)| {
             let parts: Vec<&str> = path.split('/').collect();
             parts
                 .iter()
-                .any(|p| p.is_empty() || *p == "." || *p == ".." || p.eq_ignore_ascii_case(".git"))
+                .any(|p| p.is_empty() || *p == "." || *p == ".." || reads_as(p, ".git"))
+                || (entry.mode == "120000"
+                    && parts.last().is_some_and(|p| reads_as(p, ".gitmodules")))
                 || (1..parts.len()).any(|n| {
                     files
                         .get(&parts[..n].join("/"))
                         .is_some_and(|e| e.mode == "120000")
                 })
         })
-        .cloned()
+        .map(|(path, _)| path.clone())
+}
+
+/// Whether a path part names `dotname` (`.git`, `.gitmodules`) on a Mac or
+/// on Windows: case aside, macOS ignores some invisible characters, and
+/// Windows ignores trailing dots and spaces and knows the short name
+/// `git~1` (`gitmod~1`).
+fn reads_as(part: &str, dotname: &str) -> bool {
+    // The code points HFS+ ignores in names, as git's `is_hfs_dot_generic`.
+    let ignored = |c: &char| {
+        matches!(*c as u32, 0x200c..=0x200f | 0x202a..=0x202e | 0x206a..=0x206f | 0xfeff)
+    };
+    let name: String = part.chars().filter(|c| !ignored(c)).collect::<String>().to_lowercase();
+    let name = name.trim_end_matches(['.', ' ']);
+    let short = match dotname {
+        ".git" => "git~1",
+        _ => "gitmod~1",
+    };
+    name == dotname || name == short
 }
 
 /// Turns `worktree` from `from`, a fresh snapshot of it, into `to`. Only
@@ -645,24 +667,69 @@ pub async fn present(repo: &Path, oids: &[String]) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Stores the objects of a pack from [`pack_objects`] in `repo`.
-pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<()> {
-    if !pack.is_empty() {
-        git_env(
-            repo,
-            &[],
-            &["index-pack", "--stdin", "--fix-thin"],
-            Some(pack),
-        )
-        .await?;
+/// Why [`unpack`] stored nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum UnpackError {
+    /// A tree in the pack has a path git would refuse to write, such as a
+    /// `..` or `.git` entry.
+    #[error("a path outside the worktree: {0}")]
+    Unsafe(String),
+    /// Git found another broken object in the pack.
+    #[error("git refused the pack: {0}")]
+    Refused(String),
+    #[error(transparent)]
+    Git(#[from] anyhow::Error),
+}
+
+/// Stores the objects of a pack from [`pack_objects`] in `repo`. The other
+/// side may be hostile, so the pack is checked as git checks a fetch with
+/// `transfer.fsckObjects`: a broken object, or a tree with a `.git` or `..`
+/// entry, refuses the whole pack and stores nothing.
+pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<(), UnpackError> {
+    if pack.is_empty() {
+        return Ok(());
+    }
+    let out = run_raw_env(
+        "git",
+        repo,
+        &["index-pack", "--stdin", "--fix-thin", "--strict"],
+        &[],
+        Some(pack),
+        GIT_TIMEOUT,
+    )
+    .await?;
+    if out.status == 0 {
         // Each pack stays a file of its own; past git's limit `gc --auto`
         // repacks them, so they don't pile up one per sync.
         let repo = repo.to_path_buf();
         tokio::spawn(async move {
             let _ = git_env(&repo, &[], &["gc", "--auto", "--quiet"], None).await;
         });
+        return Ok(());
     }
-    Ok(())
+    // `error: object <oid>: <fsck id>: <message>`, then `fatal: fsck error`.
+    let why = out
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("error: object "))
+        .unwrap_or(out.stderr.trim())
+        .to_string();
+    // The fsck ids of names that would write outside the worktree.
+    let unsafe_ids = [
+        ": hasDot:",
+        ": hasDotdot:",
+        ": hasDotgit:",
+        ": gitmodulesSymlink:",
+        ": fullPathname:",
+        ": emptyName:",
+    ];
+    if unsafe_ids.iter().any(|id| why.contains(id)) {
+        Err(UnpackError::Unsafe(why))
+    } else if out.stderr.contains("fsck error") {
+        Err(UnpackError::Refused(why))
+    } else {
+        Err(UnpackError::Git(anyhow::anyhow!("git index-pack: {}", out.stderr)))
+    }
 }
 
 /// `url` without a password or token, for another machine to clone from
@@ -1364,6 +1431,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn names_a_mac_or_windows_reads_as_git_are_found() {
+        // What git's own verify_path refuses: macOS ignores some invisible
+        // characters in names, and Windows reads `git~1` and a trailing dot
+        // or space as `.git`.
+        for path in [
+            ".g\u{200c}it/hooks/post-checkout",
+            "sub/\u{feff}.GIT/config",
+            ".git\u{200d}/config",
+            "GIT~1/config",
+            "sub/git~1/config",
+            ".git./config",
+            ".git /config",
+        ] {
+            let bad = files(&[(path, "100644", "a")]);
+            assert_eq!(unsafe_path(&bad).as_deref(), Some(path), "{path:?}");
+        }
+        // A symlinked .gitmodules, which git would follow when it reads it.
+        for path in [".gitmodules", "sub/.GitModules", ".gitmodules\u{200c}"] {
+            let bad = files(&[(path, "120000", "a")]);
+            assert_eq!(unsafe_path(&bad).as_deref(), Some(path), "{path:?}");
+        }
+        // Names that only look alike are fine.
+        let ok = files(&[
+            (".gitmodules", "100644", "a"),
+            (".github/workflows/ci.yml", "100644", "b"),
+            ("git~2/x", "100644", "c"),
+            ("my.git/x", "100644", "d"),
+            (".gitignore", "120000", "e"),
+        ]);
+        assert_eq!(unsafe_path(&ok), None);
+    }
+
     #[tokio::test]
     async fn a_tree_reaching_outside_is_not_applied() {
         let dir = worked_example().await;
@@ -1472,6 +1572,34 @@ mod tests {
                 .is_empty()
         );
         unpack(&w, &[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_pack_with_a_tree_git_would_refuse_is_not_stored() {
+        let central = worked_example().await;
+        let c = central.path();
+        let copy = tempfile::tempdir().unwrap();
+        let w = copy.path().join("shop");
+        git(copy.path(), &["clone", "-q", c.to_str().unwrap(), "shop"])
+            .await
+            .unwrap();
+        let blob = String::from_utf8(git(c, &["rev-parse", "HEAD:run.sh"]).await.unwrap()).unwrap();
+        // A hostile central host's tree, with a `.git` entry that a checkout
+        // would write into the copy's repository.
+        let hooks = git_mktree(c, &format!("100755 blob {}\tpost-checkout\n", blob.trim())).await;
+        let dotgit = git_mktree(c, &format!("040000 tree {hooks}\thooks\n")).await;
+        let evil = git_mktree(c, &format!("040000 tree {dotgit}\t.git\n")).await;
+        let pack = pack_objects(c, &[&evil], &[]).await.unwrap();
+
+        let e = unpack(&w, &pack).await.unwrap_err();
+        assert!(matches!(e, UnpackError::Unsafe(_)), "{e}");
+        assert!(!exists(&w, &evil).await);
+
+        let dotdot = git_mktree(c, &format!("100644 blob {}\t..\n", blob.trim())).await;
+        let pack = pack_objects(c, &[&dotdot], &[]).await.unwrap();
+        let e = unpack(&w, &pack).await.unwrap_err();
+        assert!(matches!(e, UnpackError::Unsafe(_)), "{e}");
+        assert!(!exists(&w, &dotdot).await);
     }
 
     #[test]
