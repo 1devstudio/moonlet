@@ -76,10 +76,12 @@ describe("DoneBursts", () => {
 });
 
 describe("differsAlert (X60 a file differs between machines)", () => {
-  it("notifies in the background, and with a toast while moonlet is in front", () => {
+  it("notifies in the background, and with a toast instead while moonlet is in front", () => {
     expect(differsAlert({ focused: false, notifyWhenFocused: false, banner: true })).toEqual({ banner: true, toast: false });
     expect(differsAlert({ focused: true, notifyWhenFocused: false, banner: true })).toEqual({ banner: false, toast: true });
-    expect(differsAlert({ focused: true, notifyWhenFocused: true, banner: true })).toEqual({ banner: true, toast: true });
+  });
+  it("notifies instead of the toast in front too when notifications are wanted while focused", () => {
+    expect(differsAlert({ focused: true, notifyWhenFocused: true, banner: true })).toEqual({ banner: true, toast: false });
   });
   it("sends nothing with its switch off; the mark and the popover still show the files", () => {
     expect(differsAlert({ focused: false, notifyWhenFocused: false, banner: false })).toEqual({ banner: false, toast: false });
