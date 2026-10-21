@@ -31,3 +31,21 @@ export function workspaceOpenTargets(targets: OpenTarget[], kind: HostKind): Ope
   if (kind === "ssh") return targets.filter((t) => REMOTE.includes(t.id));
   return targets;
 }
+
+/**
+ * Open in for an entry of a session kept in sync (X60): its copy on this
+ * Mac, at the same relative path, with this Mac's apps. Null without a
+ * copy, or for a path outside the session.
+ */
+export function syncedOpenIn(targets: OpenTarget[], { dir }: { dir: boolean; kind: HostKind }, copyPath: string | null, sessionPath: string, path: string): { path: string; choices: OpenTarget[] } | null {
+  if (!copyPath) return null;
+  const root = sessionPath.replace(/\/$/, "");
+  const rel = path === root ? "" : path.startsWith(`${root}/`) ? path.slice(root.length) : null;
+  if (rel === null) return null;
+  return { path: `${copyPath.replace(/\/$/, "")}${rel}`, choices: openInChoices(targets, { dir, kind: "local" }) };
+}
+
+/** Open in for the folder of a session kept in sync: its copy, with this Mac's apps (X60). */
+export function syncedWorkspaceOpenIn(targets: OpenTarget[], copyPath: string | null): OpenTarget[] {
+  return copyPath ? workspaceOpenTargets(targets, "local") : [];
+}

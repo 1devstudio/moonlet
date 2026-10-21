@@ -8,7 +8,8 @@ import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
 import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
-import { workspaceOpenTargets } from "../lib/openIn";
+import { syncedWorkspaceOpenIn, workspaceOpenTargets } from "../lib/openIn";
+import { useSync } from "../lib/syncStore";
 import { chatKey, loadChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
 import { agentRows, agentsTabDot } from "../lib/subagents";
@@ -41,7 +42,9 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
   const remote = host !== "local";
   const askAgain = useStore((s) => grantMenuLabel(s.readGrants, host, ws.id));
   const kind = useStore((s) => s.hosts[host]?.kind) ?? (remote ? "ssh" : "local");
-  const usable = workspaceOpenTargets(targets, kind);
+  // A session kept in sync opens its copy on this Mac (X60).
+  const copyPath = useSync((s) => s.copies[sesKey(host, ws.id)]?.path || null);
+  const usable = copyPath ? syncedWorkspaceOpenIn(targets, copyPath) : workspaceOpenTargets(targets, kind);
   const item = (label: string, run: () => void, danger = false) => (
     <button
       key={label}
@@ -63,7 +66,7 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="absolute right-0 z-40 mt-1 w-52 overflow-hidden rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
-            {usable.map((t) => item(`Open in ${t.label}`, () => void hostsApi.openIn(t.id, ws.path, host).catch(errorToast)))}
+            {usable.map((t) => item(`Open in ${t.label}`, () => void (copyPath ? hostsApi.openIn(t.id, copyPath) : hostsApi.openIn(t.id, ws.path, host)).catch(errorToast)))}
             <div className="my-1 border-t border-border" />
             {item("Commit…", () => useStore.setState({ dialog: { kind: "commit" } }))}
             {item("Re-run setup script", () => void runScript("setup"))}

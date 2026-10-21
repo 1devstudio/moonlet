@@ -5,7 +5,8 @@ import { M, type DirEntry, type Session } from "../lib/protocol";
 import { errorToast, sesKey, useStore } from "../lib/store";
 import { draftToAgent, openFileTab } from "../lib/actions";
 import { fileMention } from "../lib/chat";
-import { openInChoices, type OpenTarget } from "../lib/openIn";
+import { openInChoices, syncedOpenIn, type OpenTarget } from "../lib/openIn";
+import { useSync } from "../lib/syncStore";
 import { FileIcon } from "./FileIcon";
 import { Menu } from "./Menu";
 import { IconButton, cx } from "./ui";
@@ -24,7 +25,12 @@ interface Tree {
 /** Add to chat and Open in, shown on the hovered row (X25). */
 function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
   const kind = useStore((s) => s.hosts[tree.host]?.kind) ?? (tree.host === "local" ? "local" : "ssh");
-  const choices = openInChoices(tree.targets, { dir: e.is_dir, kind });
+  // A session kept in sync opens its copy on this Mac (X60).
+  const sessionId = useStore((s) => s.sessions[tree.host]?.find((w) => w.path === tree.root)?.id);
+  const copyPath = useSync((s) => (sessionId ? s.copies[sesKey(tree.host, sessionId)]?.path || null : null));
+  const synced = syncedOpenIn(tree.targets, { dir: e.is_dir, kind }, copyPath, tree.root, e.path);
+  const choices = synced?.choices ?? openInChoices(tree.targets, { dir: e.is_dir, kind });
+  const open = (t: OpenTarget) => (synced ? hostsApi.openIn(t.id, synced.path) : hostsApi.openIn(t.id, e.path, tree.host));
   return (
     <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100" onClick={(ev) => ev.stopPropagation()}>
       {!e.is_dir && (
@@ -42,7 +48,7 @@ function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
         )}
         items={[
           { kind: "label", label: "Open in" },
-          ...choices.map((t) => ({ label: t.label, onSelect: () => void hostsApi.openIn(t.id, e.path, tree.host).catch(errorToast) })),
+          ...choices.map((t) => ({ label: t.label, onSelect: () => void open(t).catch(errorToast) })),
         ]}
       />
     </span>
