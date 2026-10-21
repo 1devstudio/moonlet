@@ -147,10 +147,13 @@ describe("keep in sync", () => {
     const popover = '//div[@role="dialog"][@aria-label="Keep in sync"]';
     await expect($(popover)).toBeDisplayed();
     await $(`${popover}//button[starts-with(normalize-space(), "Open in")]`).click();
-    // The menu draws in a portal of its own; a click in it is no click outside.
+    // The menu draws in a portal of its own; pressing in it is no press
+    // outside the popover. Only a mousedown: picking an item would open the
+    // copy in a real app on this Mac.
     await expect($('//div[@data-menu-panel]//button[normalize-space()="Terminal"]')).toBeDisplayed();
-    await $('//div[@data-menu-panel]').click();
+    await browser.execute(() => document.querySelector("[data-menu-panel]")?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
     await expect($(popover)).toBeDisplayed();
+    await expect($('//div[@data-menu-panel]')).toBeDisplayed();
     await browser.keys("Escape");
     await browser.keys("Escape");
     await expect($(popover)).not.toBeExisting();
@@ -158,8 +161,18 @@ describe("keep in sync", () => {
 
   it("shows a file both sides changed until this Mac's version is kept", async () => {
     const copy = theCopy();
-    writeFileSync(join(sessionPath, "README.md"), "shop, as the agent wrote it\n");
-    writeFileSync(join(copy.path, "README.md"), "shop, as I wrote it\n");
+    // Both edits land before either side hears of the other's: with the
+    // central host's daemon frozen meanwhile, the agent's edit cannot reach
+    // the copy first and simply be overwritten by this Mac's.
+    const { pid } = await centralRpc<{ pid: number }>("daemon.info");
+    process.kill(pid, "SIGSTOP");
+    try {
+      writeFileSync(join(sessionPath, "README.md"), "shop, as the agent wrote it\n");
+      writeFileSync(join(copy.path, "README.md"), "shop, as I wrote it\n");
+      await browser.pause(1000);
+    } finally {
+      process.kill(pid, "SIGCONT");
+    }
     await expect(mark("1 file differs")).toBeExisting({ wait: 20_000 });
 
     await mark("1 file differs").click();
