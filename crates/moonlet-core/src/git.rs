@@ -92,7 +92,18 @@ pub(crate) async fn run_raw_env(
 
 /// Runs git and fails on a non-zero exit.
 pub async fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let out = run_raw("git", cwd, args, None, Duration::from_secs(60)).await?;
+    git_with(cwd, &[], args, None, Duration::from_secs(60)).await
+}
+
+/// [`git`] with environment variables, input and a timeout of its own.
+pub(crate) async fn git_with(
+    cwd: &Path,
+    env: &[(&str, &str)],
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let out = run_raw_env("git", cwd, args, env, stdin, timeout).await?;
     if out.status != 0 {
         bail!("git {}: {}", args.join(" "), out.stderr);
     }
@@ -106,10 +117,7 @@ pub async fn git_text(cwd: &Path, args: &[&str]) -> Result<String> {
 }
 
 async fn git_stdin(cwd: &Path, args: &[&str], stdin: &[u8]) -> Result<()> {
-    let out = run_raw("git", cwd, args, Some(stdin), Duration::from_secs(60)).await?;
-    if out.status != 0 {
-        bail!("git {}: {}", args.join(" "), out.stderr);
-    }
+    git_with(cwd, &[], args, Some(stdin), Duration::from_secs(60)).await?;
     Ok(())
 }
 

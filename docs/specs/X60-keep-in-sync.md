@@ -84,10 +84,10 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   | `run.sh` | tracked, mode 755 | yes, as 755 |
   | `link` | a symlink to `src/cart.ts` | yes, as a symlink |
 
-  A file that an earlier snapshot took in leaves the next one once it is ignored, as git would leave it untracked. (`a_snapshot_follows_gits_rules_without_global_excludes`, `a_file_ignored_after_a_snapshot_leaves_the_next_one`)
+  A file that an earlier snapshot took in leaves a snapshot only once it is gone from disk. One that becomes ignored stays while it exists, as a tracked file does for git: `.git/info/exclude` doesn't sync, so a file ignored on one side only would otherwise read as deleted on the other. Files HEAD tracks are always in, also ignored ones committed later. (`a_snapshot_follows_gits_rules_without_global_excludes`, `a_file_ignored_after_a_snapshot_stays_while_it_exists`, `a_file_head_tracks_is_in_even_when_force_added_later`, `thousands_of_paths_fit_whatever_the_command_line_allows`)
 
 - [ ] The staging area does not sync. When a side receives commits that move its branch, its index is reset to the new `HEAD` and its files are left alone (as `git reset --mixed`), so anything staged there is unstaged.
-- [ ] A file over 100 MiB stays on its own machine. The copy's popover lists it: "big.bin is over 100 MB and stays on each machine." The rest syncs.
+- [ ] A file over 100 MiB stays on its own machine. The copy's popover lists it: "big.bin is over 100 MB and stays on each machine." The rest syncs. A file that grows past the limit keeps the version last synced, so the other side never reads it as deleted. (`a_file_over_the_limit_stays_on_its_machine_and_never_reads_as_deleted`)
 - [ ] Submodule entries sync as commit ids. Submodule contents don't.
 
 ### Keeping it in sync
@@ -108,6 +108,9 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   | none | `a` | none | `a` on both |
   | none | `a` | `a` | `a` on both |
   | none | `a` | `b` | **differs** |
+  | `a` | `b` | deleted | **differs** |
+  | `a` | `a` | deleted | deleted on both |
+  | `a` | deleted | deleted | deleted on both |
 
   A file on one side where the result would also have a folder of that name, such as `a` from studio-mini and `a/x` from this Mac, differs too: one tree can't hold both. (`reconciling_follows_the_worked_examples`, `a_file_against_a_folder_of_the_same_name_differs`, `reconciling_trees_writes_each_sides_tree`)
 

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 
-use crate::git::run_raw_env;
+use crate::git::{git_with, run_raw_env};
 
 /// Files over this size stay on their own machine.
 pub const MAX_FILE: u64 = 100 * 1024 * 1024;
@@ -20,6 +20,10 @@ pub struct Snapshot {
     pub too_big: Vec<String>,
 }
 
+/// How long one git call may take: snapshots of big worktrees and packs
+/// take a while.
+const GIT_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Runs git in `cwd` with `env`, failing on a non-zero exit.
 async fn git_env(
     cwd: &Path,
@@ -27,40 +31,69 @@ async fn git_env(
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> Result<Vec<u8>> {
-    let out = run_raw_env("git", cwd, args, env, stdin, Duration::from_secs(300)).await?;
-    if out.status != 0 {
-        bail!("git {}: {}", args.join(" "), out.stderr);
+    git_with(cwd, env, args, stdin, GIT_TIMEOUT).await
+}
+
+/// `GIT_INDEX_FILE` pointing at an index of moonlet's own.
+struct IndexFile(String);
+
+impl IndexFile {
+    fn new(path: &Path) -> Self {
+        Self(path.to_string_lossy().into_owned())
     }
-    Ok(out.stdout)
+
+    fn env(&self) -> [(&str, &str); 1] {
+        [("GIT_INDEX_FILE", self.0.as_str())]
+    }
+}
+
+/// The worktree's git dir, where moonlet keeps its own files beside git's.
+async fn git_dir(worktree: &Path) -> Result<PathBuf> {
+    let dir = git_env(worktree, &[], &["rev-parse", "--absolute-git-dir"], None).await?;
+    Ok(PathBuf::from(String::from_utf8_lossy(&dir).trim()))
 }
 
 /// The private index a worktree's snapshots go through, beside its own
 /// index: the session's staging area is never touched.
 async fn private_index(worktree: &Path) -> Result<PathBuf> {
-    let dir = git_env(worktree, &[], &["rev-parse", "--absolute-git-dir"], None).await?;
-    Ok(PathBuf::from(String::from_utf8_lossy(&dir).trim()).join("moonlet-sync-index"))
+    Ok(git_dir(worktree).await?.join("moonlet-sync-index"))
+}
+
+/// NUL-separated pathspecs for `--pathspec-from-file=- --pathspec-file-nul`,
+/// so any number of paths fits whatever the command line allows.
+fn pathspecs(specs: impl IntoIterator<Item = String>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for spec in specs {
+        out.extend_from_slice(spec.as_bytes());
+        out.push(0);
+    }
+    out
 }
 
 /// Snapshots `worktree`: tracked files and the untracked ones that
 /// `.gitignore` and `.git/info/exclude` don't ignore. The user's global
 /// excludes are not applied, so two machines agree whatever theirs say.
-/// Files over `max_file` bytes are left out ([`MAX_FILE`] outside tests).
+/// A file leaves the snapshot only once it is gone from disk: one that
+/// becomes ignored stays while it exists, as a tracked file does for git.
+/// A file over `max_file` bytes ([`MAX_FILE`] outside tests) keeps the
+/// version an earlier snapshot took, or stays out if none did: it stays
+/// on its machine, and the other side never reads it as deleted.
 pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     let index = private_index(worktree).await?;
-    let index_s = index.to_string_lossy().to_string();
-    let env = [("GIT_INDEX_FILE", index_s.as_str())];
+    let file = IndexFile::new(&index);
+    let env = file.env();
     let no_global = ["-c", "core.excludesFile=/dev/null"];
+    let has_head = git_env(
+        worktree,
+        &[],
+        &["rev-parse", "-q", "--verify", "HEAD"],
+        None,
+    )
+    .await
+    .is_ok();
     if !index.exists() {
         // Start from HEAD, so tracked files that match an ignore rule stay
         // in, as they do for git.
-        let has_head = git_env(
-            worktree,
-            &[],
-            &["rev-parse", "-q", "--verify", "HEAD"],
-            None,
-        )
-        .await
-        .is_ok();
         let from = if has_head { "HEAD" } else { "--empty" };
         git_env(worktree, &env, &["read-tree", from], None).await?;
     }
@@ -86,47 +119,42 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     too_big.sort();
     too_big.dedup();
 
-    let excluded: Vec<String> = too_big
-        .iter()
-        .map(|p| format!(":(exclude,literal){p}"))
-        .collect();
+    // `add -A` follows every file already in the snapshot, ignored or not,
+    // and drops those gone from disk; the big ones it leaves as they were.
+    let specs = pathspecs(
+        std::iter::once(".".to_string())
+            .chain(too_big.iter().map(|p| format!(":(exclude,literal){p}"))),
+    );
     let mut add: Vec<&str> = no_global.iter().copied().collect();
-    add.extend(["add", "-A", "--", "."]);
-    add.extend(excluded.iter().map(String::as_str));
-    git_env(worktree, &env, &add, None).await?;
+    add.extend(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]);
+    git_env(worktree, &env, &add, Some(&specs)).await?;
 
-    // `add` keeps what an earlier snapshot took in, even once it is
-    // ignored; git itself would drop an ignored file that HEAD lacks.
-    let ignored_args: Vec<&str> = no_global
-        .iter()
-        .chain(&[
-            "ls-files",
-            "-z",
-            "--cached",
-            "--ignored",
-            "--exclude-standard",
-        ])
-        .copied()
-        .collect();
-    let ignored: Vec<String> =
-        split_z(&git_env(worktree, &env, &ignored_args, None).await?).collect();
-    let mut gone = too_big.clone();
-    if !ignored.is_empty() {
+    // Files HEAD tracks are in even when ignored, also those committed
+    // after the snapshot's index was first made.
+    if has_head {
         let head = git_env(
             worktree,
             &[],
             &["ls-tree", "-r", "-z", "--name-only", "HEAD"],
             None,
         )
-        .await
-        .unwrap_or_default();
-        let tracked: std::collections::HashSet<String> = split_z(&head).collect();
-        gone.extend(ignored.into_iter().filter(|p| !tracked.contains(p)));
-    }
-    if !gone.is_empty() {
-        let mut rm = vec!["update-index", "--force-remove", "--"];
-        rm.extend(gone.iter().map(String::as_str));
-        git_env(worktree, &env, &rm, None).await?;
+        .await?;
+        let cached = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
+        let cached: std::collections::HashSet<String> = split_z(&cached).collect();
+        let missing: Vec<String> = split_z(&head)
+            .filter(|p| !cached.contains(p) && !too_big.contains(p))
+            .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
+            .collect();
+        if !missing.is_empty() {
+            let specs = pathspecs(missing.iter().map(|p| format!(":(literal){p}")));
+            git_env(
+                worktree,
+                &env,
+                &["add", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
+                Some(&specs),
+            )
+            .await?;
+        }
     }
     let tree = git_env(worktree, &env, &["write-tree"], None).await?;
     Ok(Snapshot {
@@ -250,8 +278,13 @@ pub async fn read_files(repo: &Path, tree: &str) -> Result<Files> {
         None,
     )
     .await?;
+    parse_ls_tree(&out)
+}
+
+/// The files of `git ls-tree -r -z` output.
+fn parse_ls_tree(out: &[u8]) -> Result<Files> {
     let mut files = Files::new();
-    for line in split_z(&out) {
+    for line in split_z(out) {
         // `<mode> <type> <oid>\t<path>`
         let Some((meta, path)) = line.split_once('\t') else {
             bail!("unexpected ls-tree line {line:?}")
@@ -271,14 +304,20 @@ pub async fn read_files(repo: &Path, tree: &str) -> Result<Files> {
     Ok(files)
 }
 
+/// Whether a refused `read-tree -m -u` refused because of the worktree: a
+/// file edited since the snapshot, or an untracked one in the way.
+fn worktree_changed(stderr: &str) -> bool {
+    stderr.contains("not uptodate") || stderr.contains("would be overwritten")
+}
+
 /// Writes `files` as a tree in `repo` and returns its id. Every object must
 /// already be in the repository.
 pub async fn write_files(repo: &Path, files: &Files) -> Result<String> {
-    let dir = git_env(repo, &[], &["rev-parse", "--absolute-git-dir"], None).await?;
-    let index = PathBuf::from(String::from_utf8_lossy(&dir).trim())
+    let index = git_dir(repo)
+        .await?
         .join(format!("moonlet-sync-tmp-{}", uuid::Uuid::new_v4()));
-    let index_s = index.to_string_lossy().to_string();
-    let env = [("GIT_INDEX_FILE", index_s.as_str())];
+    let file = IndexFile::new(&index);
+    let env = file.env();
     let mut info = Vec::new();
     for (path, e) in files {
         info.extend_from_slice(format!("{} {}\t{path}\0", e.mode, e.oid).as_bytes());
@@ -362,8 +401,8 @@ pub async fn apply(worktree: &Path, from: &str, to: &str) -> Result<(), ApplyErr
         return Err(ApplyError::Unsafe(path));
     }
     let index = private_index(worktree).await?;
-    let index_s = index.to_string_lossy().to_string();
-    let env = [("GIT_INDEX_FILE", index_s.as_str())];
+    let file = IndexFile::new(&index);
+    let env = file.env();
     git_env(worktree, &env, &["read-tree", from], None).await?;
     // Fresh stat data, so files unchanged since the snapshot count as such.
     // It exits 1 when some did change; read-tree then refuses those.
@@ -373,7 +412,7 @@ pub async fn apply(worktree: &Path, from: &str, to: &str) -> Result<(), ApplyErr
         &["update-index", "-q", "--refresh"],
         &env,
         None,
-        Duration::from_secs(300),
+        GIT_TIMEOUT,
     )
     .await?;
     let out = run_raw_env(
@@ -382,7 +421,7 @@ pub async fn apply(worktree: &Path, from: &str, to: &str) -> Result<(), ApplyErr
         &["read-tree", "-m", "-u", from, to],
         &env,
         None,
-        Duration::from_secs(300),
+        GIT_TIMEOUT,
     )
     .await?;
     if out.status == 0 {
@@ -390,7 +429,7 @@ pub async fn apply(worktree: &Path, from: &str, to: &str) -> Result<(), ApplyErr
     }
     // Leave the private index at `from`, as the worktree still is.
     let _ = git_env(worktree, &env, &["read-tree", from], None).await;
-    if out.stderr.contains("not uptodate") || out.stderr.contains("would be overwritten") {
+    if worktree_changed(&out.stderr) {
         Err(ApplyError::Changed(out.stderr))
     } else {
         Err(ApplyError::Git(anyhow::anyhow!(
@@ -450,6 +489,12 @@ pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<()> {
             Some(pack),
         )
         .await?;
+        // Each pack stays a file of its own; past git's limit `gc --auto`
+        // repacks them, so they don't pile up one per sync.
+        let repo = repo.to_path_buf();
+        tokio::spawn(async move {
+            let _ = git_env(&repo, &[], &["gc", "--auto", "--quiet"], None).await;
+        });
     }
     Ok(())
 }
@@ -559,70 +604,104 @@ mod tests {
         assert_eq!(String::from_utf8(staged).unwrap(), "");
     }
 
+    fn paths(listing: Vec<(String, String)>) -> Vec<String> {
+        listing.into_iter().map(|(p, _)| p).collect()
+    }
+
     #[tokio::test]
-    async fn a_file_ignored_after_a_snapshot_leaves_the_next_one() {
+    async fn a_file_ignored_after_a_snapshot_stays_while_it_exists() {
         let dir = worked_example().await;
         let p = dir.path();
         std::fs::create_dir_all(p.join("build")).unwrap();
         std::fs::write(p.join("build/out.js"), "built\n").unwrap();
+        std::fs::write(p.join("notes.txt"), "mine\n").unwrap();
         let first = snapshot(p, MAX_FILE).await.unwrap();
-        assert!(
-            listing(p, &first.tree)
-                .await
-                .contains(&("build/out.js".into(), "100644".into()))
-        );
+        assert!(paths(listing(p, &first.tree).await).contains(&"build/out.js".to_string()));
 
+        // Ignored on both sides through .gitignore, and on this side only
+        // through .git/info/exclude, which doesn't sync: either way the
+        // other side must not read it as deleted.
         std::fs::write(
             p.join(".gitignore"),
             "node_modules/\n.env\nvendor/\nbuild/\n",
         )
         .unwrap();
+        std::fs::write(p.join(".git/info/exclude"), "notes.txt\n").unwrap();
+        std::fs::write(p.join("build/out.js"), "built again\n").unwrap();
         let second = snapshot(p, MAX_FILE).await.unwrap();
-        let paths: Vec<String> = listing(p, &second.tree)
-            .await
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect();
         assert_eq!(
-            paths,
-            [
-                ".gitignore",
-                "link",
-                "run.sh",
-                "scratch.txt",
-                "src/cart.ts",
-                "src/new.ts",
-                "vendor/keep.js"
-            ]
+            show(p, &second.tree, "build/out.js").await.as_deref(),
+            Some("built again\n")
+        );
+        assert_eq!(
+            show(p, &second.tree, "notes.txt").await.as_deref(),
+            Some("mine\n")
+        );
+
+        // Gone from disk: gone from the snapshot.
+        std::fs::remove_file(p.join("build/out.js")).unwrap();
+        let third = snapshot(p, MAX_FILE).await.unwrap();
+        assert!(!paths(listing(p, &third.tree).await).contains(&"build/out.js".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_file_head_tracks_is_in_even_when_force_added_later() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        snapshot(p, MAX_FILE).await.unwrap();
+        // vendor/ is ignored; this file is committed past that.
+        std::fs::write(p.join("vendor/later.js"), "later\n").unwrap();
+        git(p, &["add", "-f", "vendor/later.js"]).await.unwrap();
+        git(p, &["commit", "-q", "-m", "later"]).await.unwrap();
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        assert_eq!(
+            show(p, &snap.tree, "vendor/later.js").await.as_deref(),
+            Some("later\n")
         );
     }
 
     #[tokio::test]
-    async fn files_over_the_limit_stay_out_even_once_they_grow() {
+    async fn thousands_of_paths_fit_whatever_the_command_line_allows() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        // 6000 names of 200 bytes: 1.2 MB, past macOS's 1 MiB ARG_MAX.
+        std::fs::create_dir_all(p.join("build")).unwrap();
+        for i in 0..6000 {
+            std::fs::write(p.join(format!("build/{i:05}{}", "x".repeat(195))), "ab").unwrap();
+        }
+        let snap = snapshot(p, 1).await.unwrap();
+        assert_eq!(
+            snap.too_big
+                .iter()
+                .filter(|p| p.starts_with("build/"))
+                .count(),
+            6000
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_over_the_limit_stays_on_its_machine_and_never_reads_as_deleted() {
         let dir = worked_example().await;
         let p = dir.path();
         std::fs::write(p.join("big.bin"), vec![7u8; 2048]).unwrap();
         std::fs::write(p.join("grows.bin"), vec![7u8; 10]).unwrap();
         let first = snapshot(p, 1024).await.unwrap();
         assert_eq!(first.too_big, ["big.bin"]);
-        let paths: Vec<String> = listing(p, &first.tree)
-            .await
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect();
+        let listed = paths(listing(p, &first.tree).await);
         assert!(
-            paths.contains(&"grows.bin".to_string()) && !paths.contains(&"big.bin".to_string())
+            listed.contains(&"grows.bin".to_string()) && !listed.contains(&"big.bin".to_string())
         );
+        let small = show(p, &first.tree, "grows.bin").await;
 
         std::fs::write(p.join("grows.bin"), vec![7u8; 2048]).unwrap();
         let second = snapshot(p, 1024).await.unwrap();
         assert_eq!(second.too_big, ["big.bin", "grows.bin"]);
-        let paths: Vec<String> = listing(p, &second.tree)
+        // Its last synced version stays in, so the other side keeps it.
+        assert_eq!(show(p, &second.tree, "grows.bin").await, small);
+        let r = reconcile_trees(p, &first.tree, &first.tree, &second.tree)
             .await
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect();
-        assert!(!paths.contains(&"grows.bin".to_string()), "{paths:?}");
+            .unwrap();
+        assert_eq!(show(p, &r.central, "grows.bin").await, small);
     }
 
     fn files(rows: &[(&str, &str, &str)]) -> Files {
@@ -650,6 +729,9 @@ mod tests {
             ("5", "100644", "a"),
             ("6", "100644", "a"),
             ("7", "100644", "a"),
+            ("11", "100644", "a"),
+            ("12", "100644", "a"),
+            ("13", "100644", "a"),
         ]);
         let central = files(&[
             ("1", "100644", "a"),
@@ -661,6 +743,9 @@ mod tests {
             ("8", "100644", "a"),
             ("9", "100644", "a"),
             ("10", "100644", "a"),
+            ("11", "100644", "b"),
+            ("12", "100644", "a"),
+            // 13: deleted on studio-mini.
         ]);
         let worker = files(&[
             ("1", "100644", "b"),
@@ -673,14 +758,16 @@ mod tests {
             // 8: none on this Mac.
             ("9", "100644", "a"),
             ("10", "100644", "b"),
+            // 11, 12 and 13: deleted on this Mac.
         ]);
         let r = reconcile(&base, &central, &worker);
-        assert_eq!(r.differs, ["10", "4", "6"]);
+        assert_eq!(r.differs, ["10", "11", "4", "6"]);
         assert_eq!(
             r.central,
             files(&[
                 ("1", "100644", "b"),
                 ("10", "100644", "a"),
+                ("11", "100644", "b"),
                 ("2", "100644", "b"),
                 ("3", "100644", "b"),
                 ("4", "100644", "b"),
@@ -707,6 +794,7 @@ mod tests {
             r.base,
             files(&[
                 ("1", "100644", "b"),
+                ("11", "100644", "a"),
                 ("2", "100644", "b"),
                 ("3", "100644", "b"),
                 ("4", "100644", "a"),
@@ -909,7 +997,7 @@ mod tests {
             matches!(e, ApplyError::Unsafe(ref path) if path == ".."),
             "{e}"
         );
-        assert!(!p.parent().unwrap().join("escaped").exists());
+        assert_eq!(snapshot(p, MAX_FILE).await.unwrap().tree, here);
     }
 
     async fn git_mktree(repo: &Path, listing: &str) -> String {
@@ -938,8 +1026,10 @@ mod tests {
         let blob = blob.trim();
         let copy = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
         set_base_ref(p, copy, &base).await.unwrap();
-        // Nothing else may keep it: the private index is gone too.
-        std::fs::remove_file(p.join(".git/moonlet-sync-index")).unwrap();
+        // Nothing else may keep it: the file goes, and the next snapshot
+        // no longer has it.
+        std::fs::remove_file(p.join("src/new.ts")).unwrap();
+        snapshot(p, MAX_FILE).await.unwrap();
         git(p, &["-c", "gc.reflogExpire=now", "gc", "-q", "--prune=now"])
             .await
             .unwrap();
@@ -1027,5 +1117,82 @@ mod tests {
             }
         );
         assert!(!files.contains_key("lib/inner.txt"));
+    }
+
+    #[test]
+    fn an_ls_tree_listing_reads_as_files() {
+        // `git ls-tree -r -z --full-tree HEAD`, git 2.54, a repository with
+        // a submodule, a symlink, a script and a file.
+        let out = b"160000 commit 1231a766a2008e2b34e1ab18d115b8dc30f0e8bb\tlib\x00120000 blob 637ced4b407bfd4258c4839c49d91d64d4cb06e3\tlink\x00100755 blob 1a2485251c33a70432394c93fb89330ef214bfc9\trun.sh\x00100644 blob 587be6b4c3f93f93c489c0111bba5596147a26cb\tsrc/cart.ts\x00";
+        assert_eq!(
+            parse_ls_tree(out).unwrap(),
+            files(&[
+                ("lib", "160000", "1231a766a2008e2b34e1ab18d115b8dc30f0e8bb"),
+                ("link", "120000", "637ced4b407bfd4258c4839c49d91d64d4cb06e3"),
+                (
+                    "run.sh",
+                    "100755",
+                    "1a2485251c33a70432394c93fb89330ef214bfc9"
+                ),
+                (
+                    "src/cart.ts",
+                    "100644",
+                    "587be6b4c3f93f93c489c0111bba5596147a26cb"
+                ),
+            ])
+        );
+        assert!(parse_ls_tree(b"100644 blob\x00").is_err());
+    }
+
+    #[test]
+    fn a_refused_read_tree_says_whether_the_worktree_changed() {
+        // Stderr of `git read-tree -m -u` refusing, git 2.54.
+        for changed in [
+            "error: Entry 'src/cart.ts' not uptodate. Cannot merge.",
+            "error: Untracked working tree file 'src/new.ts' would be overwritten by merge.",
+        ] {
+            assert!(worktree_changed(changed), "{changed}");
+        }
+        assert!(!worktree_changed(
+            "fatal: failed to unpack tree object deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        ));
+    }
+
+    async fn packs(repo: &Path) -> usize {
+        let out = String::from_utf8(git(repo, &["count-objects", "-v"]).await.unwrap()).unwrap();
+        out.lines()
+            .find_map(|l| l.strip_prefix("packs: "))
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn packs_from_many_syncs_get_repacked() {
+        let central = worked_example().await;
+        let c = central.path();
+        let copy = tempfile::tempdir().unwrap();
+        let w = copy.path().join("shop");
+        git(copy.path(), &["clone", "-q", c.to_str().unwrap(), "shop"])
+            .await
+            .unwrap();
+        let mut have = snapshot(&w, MAX_FILE).await.unwrap().tree;
+        for i in 0..60 {
+            std::fs::write(c.join("src/cart.ts"), format!("edit {i}\n")).unwrap();
+            let next = snapshot(c, MAX_FILE).await.unwrap().tree;
+            unpack(&w, &pack_objects(c, &next, &[&have]).await.unwrap())
+                .await
+                .unwrap();
+            have = next;
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while packs(&w).await >= 50 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{} packs",
+                packs(&w).await
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
     }
 }
