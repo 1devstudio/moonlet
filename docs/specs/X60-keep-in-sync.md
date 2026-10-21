@@ -233,7 +233,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   - the paths that differ.
 
   On the central host, it also records each copy's worker id. No token is in it.
-- **On this Mac,** `$MOONLET_HOME/sync/projects.json` holds, per central host and project identity (the key is `<host> <origin> <root>`):
+- **On this Mac,** `$MOONLET_HOME/sync/projects.json` holds, per central host and project identity (the key is `<host> <origin> <root>`, made only when the root is a full hex commit id and the origin has no spaces, so it reads one way only; otherwise nothing is remembered):
   - `keep_new`, the project page's switch;
   - `approved_setup`, the setup commands the user approved, as exact strings.
 

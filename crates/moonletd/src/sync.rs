@@ -271,8 +271,18 @@ struct SetupRun {
 /// another central host could claim it and have an approved setup run. A
 /// project with no root commit has none, so nothing is remembered for it.
 fn project_key(host: &str, id: &ProjectIdentity) -> Option<String> {
+    // The identity comes from the central host. With no space in the origin
+    // and a full hex root, the key reads one way only, from the right; the
+    // host is this Mac's own name for it.
     let root = id.root.as_deref()?;
-    Some(format!("{host} {} {root}", id.origin.as_deref().unwrap_or("")))
+    if !matches!(root.len(), 40 | 64) || !root.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let origin = id.origin.as_deref().unwrap_or("");
+    if origin.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    Some(format!("{host} {origin} {root}"))
 }
 
 /// Why making or updating a copy stopped.
@@ -3589,6 +3599,50 @@ mod tests {
         );
         // Nothing edited since: the answer's base as it is.
         assert_eq!(base_of_edits(&offered, &offered, &answer_base), answer_base);
+    }
+
+    #[test]
+    fn a_project_key_is_made_only_from_an_origin_without_spaces_and_a_full_root() {
+        let id = |origin: Option<&str>, root: Option<&str>| ProjectIdentity {
+            origin: origin.map(String::from),
+            root: root.map(String::from),
+        };
+        let root = "4171b03ff0d2bd434751f17bc9d34da784f97e72";
+        assert_eq!(
+            project_key(
+                "Alex's Mac mini",
+                &id(Some("github.com/acme/shop"), Some(root))
+            )
+            .as_deref(),
+            Some("Alex's Mac mini github.com/acme/shop 4171b03ff0d2bd434751f17bc9d34da784f97e72")
+        );
+        assert_eq!(
+            project_key("studio-mini", &id(None, Some(root))).as_deref(),
+            Some("studio-mini  4171b03ff0d2bd434751f17bc9d34da784f97e72")
+        );
+        // A central host could otherwise make one project's key read as another's.
+        assert_eq!(
+            project_key("studio-mini", &id(Some("acme shop"), Some(root))),
+            None
+        );
+        assert_eq!(
+            project_key(
+                "studio-mini",
+                &id(Some("github.com/acme/shop"), Some("4171b03 x"))
+            ),
+            None
+        );
+        assert_eq!(
+            project_key(
+                "studio-mini",
+                &id(Some("github.com/acme/shop"), Some("4171b03f"))
+            ),
+            None
+        );
+        assert_eq!(
+            project_key("studio-mini", &id(Some("github.com/acme/shop"), None)),
+            None
+        );
     }
 
     #[test]
