@@ -8,10 +8,9 @@
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { connect } from "node:net";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { BIN_DIR, closeSettings, fill, openSettings, rpc, sel, world } from "../fixtures";
+import { BIN_DIR, closeSettings, fill, openSettings, rpc, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const home = join(w.root, "sync-central-home");
@@ -25,34 +24,7 @@ const SESSION = "Fix cart";
 const dialog = '//div[@role="dialog"][@aria-label="Add host"]';
 
 /** One request to the central host's daemon over its socket. */
-function centralRpc<T>(method: string, params: object = {}): Promise<T> {
-  const { protocol } = JSON.parse(execFileSync(join(BIN_DIR, "moonletd"), ["status"], { env }).toString()) as { protocol: number };
-  const frame = (msg: object) => {
-    const json = Buffer.from(JSON.stringify(msg));
-    const head = Buffer.alloc(5);
-    head.writeUInt32BE(json.length + 1, 0);
-    head.writeUInt8(1, 4);
-    return Buffer.concat([head, json]);
-  };
-  return new Promise((resolve, reject) => {
-    const s = connect(sock, () => s.write(Buffer.concat([frame({ t: "hello", protocol, client: "e2e" }), frame({ t: "request", id: 1, method, params })])));
-    let buf = Buffer.alloc(0);
-    s.on("data", (d) => {
-      buf = Buffer.concat([buf, d]);
-      while (buf.length >= 4 && buf.length >= 4 + buf.readUInt32BE(0)) {
-        const len = buf.readUInt32BE(0);
-        const msg = buf[4] === 1 ? JSON.parse(buf.subarray(5, 4 + len).toString()) : null;
-        buf = buf.subarray(4 + len);
-        if (msg?.t === "response" && msg.id === 1) {
-          s.destroy();
-          if (msg.error) reject(new Error(msg.error.message));
-          else resolve(msg.result as T);
-        }
-      }
-    });
-    s.on("error", reject);
-  });
-}
+const centralRpc = <T>(method: string, params: object = {}) => socketRpc<T>(sock, env, method, params);
 
 /** Runs `moonletd pair` on the central host; resolves with the link it prints. */
 function startPairing(): { proc: ChildProcess; link: Promise<string> } {
