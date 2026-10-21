@@ -11,6 +11,7 @@ mod launch;
 mod mobile;
 mod server;
 mod service;
+mod tailnet_cli;
 mod upgrade;
 
 use std::path::PathBuf;
@@ -39,6 +40,16 @@ enum ServiceAction {
 }
 
 #[derive(Subcommand)]
+enum TailnetAction {
+    /// Let paired devices connect over the tailnet.
+    On,
+    /// Stop listening on the tailnet.
+    Off,
+    /// Print whether and where it listens.
+    Status,
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Run the daemon in the foreground.
     Daemon {
@@ -61,6 +72,13 @@ enum Cmd {
     Status,
     /// Stop the daemon and every session it owns.
     Stop,
+    /// Tailnet access: other Macs and phones connect over Tailscale (X57).
+    Tailnet {
+        #[command(subcommand)]
+        action: TailnetAction,
+    },
+    /// Show a one-time code that pairs a Mac or a phone with this host.
+    Pair,
 }
 
 fn main() -> Result<()> {
@@ -91,6 +109,18 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&info)?);
             Ok(())
         }),
+        Cmd::Tailnet { action } => rt.block_on(tailnet_cli::tailnet(
+            &socket,
+            match action {
+                TailnetAction::On => Some(true),
+                TailnetAction::Off => Some(false),
+                TailnetAction::Status => None,
+            },
+        )),
+        Cmd::Pair => {
+            let code = rt.block_on(tailnet_cli::pair(&socket))?;
+            std::process::exit(code)
+        }
         Cmd::Stop => rt.block_on(async {
             let mut c = Client::connect(&socket, "moonletd-stop").await?;
             let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await?;
