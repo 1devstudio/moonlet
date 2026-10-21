@@ -20,8 +20,8 @@ These terms are used the same way in the UI, the code, the protocol and the docs
 | **Tailnet access** | A host's setting "Allow connections from my tailnet": its daemon listens on its Tailscale addresses, and paired devices connect there. The code keeps its first name, from when only phones used it. | `mobile.*`, `MobileStatus` |
 | **Paired device** | A phone or a Mac that has paired with a host once and holds its token. A Mac paired with a host reaches it as a tailnet host. | `MobileDevice` |
 | **Central host** | The always-on host that owns your sessions and runs their agents. Other devices are windows onto it. | `CentralHost` |
-| **Worker** | A host that lends its CPU to a central host for heavy commands. The central host itself counts as one. | `Worker` |
-| **Live copy** | A worker's copy of a session's files, kept in step with the central host both ways. | `LiveCopy` |
+| **Worker** | A host linked to a central host: it holds live copies of the central host's sessions (X60), and lends its CPU for heavy commands once routing exists. A worker may only hold copies. The central host itself counts as one. | `Worker` |
+| **Live copy** | A worker's copy of a session's files, a git worktree kept in sync with the central host both ways (X60, "Keep in sync"). | `LiveCopy`; the protocol type is `Copy` |
 | **Routed command** | A heavy command, such as a test run, that an agent on the central host runs and that is carried out on a worker's live copy, with its output and exit status coming back. | `RoutedCommand` |
 | **Project identity** | What makes two folders on different hosts the same project: the repository's origin and its first commit, never its path. | `ProjectIdentity` |
 | **Task** | An issue in a task tracker (a Linear or Jira issue, a ClickUp task, a GitHub issue), shown in Tasks mode with the sessions working on it. A session works on at most one task; a task can have several sessions. | `Task` |
