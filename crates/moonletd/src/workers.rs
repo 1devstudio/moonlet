@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use moonlet_core::paths::now_ms;
-use moonlet_proto::Message;
+use moonlet_proto::{Message, RpcError};
 use moonlet_proto::methods::{self as m, WorkerInfo, WorkerRegister};
 
 use crate::server::Conn;
@@ -29,6 +29,9 @@ struct Entry {
 
 pub struct Workers {
     list: Mutex<HashMap<String, Entry>>,
+    /// The paired device each worker id first registered from, since this
+    /// daemon started: another device may not take that id over.
+    owners: Mutex<HashMap<String, String>>,
     ping_every: Duration,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -42,6 +45,7 @@ impl Workers {
             .map_or(PING_EVERY, Duration::from_millis);
         Workers {
             list: Mutex::new(HashMap::new()),
+            owners: Mutex::new(HashMap::new()),
             ping_every,
             emit: Box::new(emit),
         }
@@ -63,10 +67,24 @@ impl Workers {
         (self.emit)(Message::event(m::EV_WORKERS_CHANGED, self.list()));
     }
 
-    /// Lists the worker on `conn`. A worker that links again with the same
-    /// id replaces its older connection, which is closed.
-    pub fn register(self: &Arc<Self>, conn: Arc<Conn>, worker: WorkerRegister) {
+    /// Lists the worker on `conn`, the connection of paired device `device`.
+    /// A worker that links again with the same id replaces its older
+    /// connection, which is closed; a worker id belongs to the device that
+    /// first registered it.
+    pub fn register(
+        self: &Arc<Self>,
+        conn: Arc<Conn>,
+        device: &str,
+        worker: WorkerRegister,
+    ) -> Result<(), RpcError> {
         let id = worker.id.clone();
+        {
+            let mut owners = self.owners.lock().unwrap();
+            let owner = owners.entry(id.clone()).or_insert_with(|| device.to_string());
+            if owner != device {
+                return Err(RpcError::new("forbidden", "another Mac links with this worker id"));
+            }
+        }
         let old = self.list.lock().unwrap().insert(
             id.clone(),
             Entry {
@@ -89,6 +107,7 @@ impl Workers {
         if !again {
             tokio::spawn(ping_loop(Arc::downgrade(self), id, conn));
         }
+        Ok(())
     }
 
     /// Drops the workers on a connection that closed.

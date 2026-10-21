@@ -129,6 +129,13 @@ impl Conn {
         self.closed.notify_one();
     }
 
+    /// Fails every request still waiting for this client's reply: it is gone.
+    fn fail_pending(&self) {
+        for (_, tx) in self.pending.lock().unwrap().drain() {
+            let _ = tx.send(Err(RpcError::new("disconnected", "connection closed")));
+        }
+    }
+
     fn reply(&self, id: u64, reply: Result<Value, RpcError>) {
         if let Some(tx) = self.pending.lock().unwrap().remove(&id) {
             let _ = tx.send(reply);
@@ -290,6 +297,7 @@ where
     }
     .await;
 
+    conn.fail_pending();
     daemon.terminals.detach_all(conn.id);
     daemon.on_disconnect(conn.id);
     event_task.abort();

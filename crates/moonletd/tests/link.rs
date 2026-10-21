@@ -679,3 +679,23 @@ async fn one_link_set_says_link_changed_once() {
     }
     assert_eq!(changes, [json!("off")]);
 }
+
+#[tokio::test]
+async fn another_paired_device_cannot_take_a_workers_id() {
+    let (central, addr) = central().await;
+    let mac = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let phone = pair(&central, &addr, "Alex's iPhone").await;
+    let mut real = raw(&addr, &mac, "moonletd-worker").await;
+    assert_eq!(
+        refused(&ask(&mut real, 1, "worker.register", registration(WORKER_ID, "MacBook Pro")).await),
+        None
+    );
+    let mut impostor = raw(&addr, &phone, "moonletd-worker").await;
+    assert_eq!(
+        refused(&ask(&mut impostor, 1, "worker.register", registration(WORKER_ID, "MacBook Pro")).await)
+            .as_deref(),
+        Some("forbidden")
+    );
+    // The real worker keeps its link.
+    assert!(ask(&mut real, 2, "worker.list", json!({})).await.is_some());
+}

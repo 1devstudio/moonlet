@@ -484,11 +484,11 @@ impl Daemon {
             m::WORKER_REGISTER => {
                 // Only a worker's daemon, over the tailnet with a paired
                 // device's token, registers.
-                if conn.phone.is_none() || conn.client != crate::link::WORKER_CLIENT {
+                let Some(device) = conn.phone.as_deref().filter(|_| conn.client == crate::link::WORKER_CLIENT) else {
                     return Err(RpcError::new("forbidden", "only a worker registers"));
-                }
+                };
                 let r: m::WorkerRegister = params(p)?;
-                self.workers.register(conn.clone(), r);
+                self.workers.register(conn.clone(), device, r)?;
                 ok(true)
             }
             _ => self.handle_project(conn, method, p).await,
