@@ -17,6 +17,8 @@ These terms are used the same way in the UI, the code, the protocol and the docs
 | **Queued message** | A message sent while the agent works, which the agent has not read yet. Claude reads it when the running step ends; **Send now** asks Claude to read it at once. | `QueuedMessage` |
 | **Aside** | A side question answered from a chat's conversation by a separate, tool-less Claude, without touching the running turn or being added to the session. Claude Code's `/btw` in the terminal. | `chat.aside` |
 | **Host** | A machine running `moonletd`: this Mac, or a remote host reached over the tailnet (paired once) or over SSH. Not "node" or "server". | `Host` |
+| **Tailnet access** | A host's setting "Allow connections from my tailnet": its daemon listens on its Tailscale addresses, and paired devices connect there. The code keeps its first name, from when only phones used it. | `mobile.*`, `MobileStatus` |
+| **Paired device** | A phone or a Mac that has paired with a host once and holds its token. A Mac paired with a host reaches it as a tailnet host. | `MobileDevice` |
 | **Central host** | The always-on host that owns your sessions and runs their agents. Other devices are windows onto it. | `CentralHost` |
 | **Worker** | A host that lends its CPU to a central host for heavy commands. The central host itself counts as one. | `Worker` |
 | **Live copy** | A worker's copy of a session's files, kept in step with the central host both ways. | `LiveCopy` |
