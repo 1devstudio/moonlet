@@ -200,6 +200,24 @@ pub const EV_MOBILE_PAIRED: &str = "mobile.paired";
 /// The current code stopped working without a pairing: `{ reason }`.
 pub const EV_MOBILE_PAIR_ENDED: &str = "mobile.pair_ended";
 
+// Workers and their central host (X41)
+/// This Mac's link to its central host, without the token: [`LinkInfo`].
+pub const LINK_GET: &str = "link.get";
+/// [`LinkSet`] → [`LinkInfo`].
+pub const LINK_SET: &str = "link.set";
+/// Retries a link that waits for the user (`needs_update`, `error`).
+pub const LINK_RETRY: &str = "link.retry";
+/// A worker introduces itself to its central host: [`WorkerRegister`].
+pub const WORKER_REGISTER: &str = "worker.register";
+/// The central host's linked workers: [`WorkerInfo`]s.
+pub const WORKER_LIST: &str = "worker.list";
+/// Sent by the central host to a worker, every 10 s.
+pub const WORKER_PING: &str = "worker.ping";
+/// [`LinkInfo`], on every change of the link's settings or state.
+pub const EV_LINK_CHANGED: &str = "link.changed";
+/// [`WorkerInfo`]s, when a worker registers or goes away.
+pub const EV_WORKERS_CHANGED: &str = "workers.changed";
+
 // Events
 pub const EV_TERMINAL_CREATED: &str = "terminal.created";
 pub const EV_TERMINAL_UPDATED: &str = "terminal.updated";
@@ -1155,4 +1173,98 @@ pub struct MobilePairing {
 pub struct MobileHost {
     pub id: String,
     pub label: String,
+}
+
+/// Where a worker's link goes (X41): the central host's label, its tailnet
+/// listener's `ip:port` addresses, and the device token this Mac got when it
+/// paired with it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkCentral {
+    pub name: String,
+    pub addrs: Vec<String>,
+    pub token: String,
+}
+
+/// [`LinkCentral`] as `link.get` shows it: never the token.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkCentralInfo {
+    pub name: String,
+    pub addrs: Vec<String>,
+}
+
+/// This machine as a worker. `id` never changes once made.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkWorker {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+}
+
+/// `link.set` params. An absent field stays as it is; `central: null`
+/// clears the central host.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct LinkSet {
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub central: Option<Option<LinkCentral>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<LinkWorkerSet>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct LinkWorkerSet {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// The link's state: `off`, or one of the host statuses of `moonlet-link`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LinkState {
+    Off,
+    Connecting,
+    Connected { since: u64 },
+    Reconnecting,
+    NeedsUpdate { daemon_version: String },
+    Error { message: String },
+}
+
+/// `link.get`: the settings without the token, and the state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkInfo {
+    pub central: Option<LinkCentralInfo>,
+    pub worker: LinkWorker,
+    pub state: LinkState,
+}
+
+/// One of a worker's projects, as its central host sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerProject {
+    pub identity: crate::types::ProjectIdentity,
+    pub path: String,
+}
+
+/// `worker.register` params, sent again on every link.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerRegister {
+    pub id: String,
+    pub name: String,
+    /// `macos` or `linux`.
+    pub os: String,
+    /// `arm64` or `x86_64`.
+    pub arch: String,
+    pub cores: u32,
+    pub version: String,
+    pub projects: Vec<WorkerProject>,
+}
+
+/// A linked worker in `worker.list`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerInfo {
+    #[serde(flatten)]
+    pub worker: WorkerRegister,
+    pub connected_since: u64,
+    /// The last `worker.ping` round trip; none before the first.
+    pub rtt_ms: Option<u64>,
 }

@@ -636,7 +636,7 @@ impl Mobile {
 }
 
 /// Writes `bytes` to `path` with mode 0600, through a temporary file.
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {

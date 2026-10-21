@@ -41,6 +41,10 @@ pub struct Daemon {
     pub mobile: Arc<crate::mobile::Mobile>,
     /// Clones started from Add project (X59).
     clones: Arc<crate::clones::Clones>,
+    /// This Mac's link to its central host (X41).
+    pub link: Arc<crate::link::WorkerLink>,
+    /// The workers linked to this daemon as their central host (X41).
+    pub workers: Arc<crate::workers::Workers>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -144,6 +148,14 @@ impl Daemon {
         let emitter = terminals.clone();
         let mobile = Arc::new(crate::mobile::Mobile::load(crate::mobile::Mobile::default_file(), move |m| emitter.emit(m)));
         let clones = crate::clones::Clones::new(sessions.clone(), terminals.clone());
+        let emitter = terminals.clone();
+        let link = crate::link::WorkerLink::new(
+            crate::link::LinkStore::load(moonlet_core::paths::home().join("link.json"), &crate::link::computer_name()),
+            sessions.clone(),
+            move |m| emitter.emit(m),
+        );
+        let emitter = terminals.clone();
+        let workers = Arc::new(crate::workers::Workers::new(move |m| emitter.emit(m)));
         Arc::new(Self {
             clones,
             terminals,
@@ -158,6 +170,8 @@ impl Daemon {
             accounts: Mutex::new(HashMap::new()),
             claude_updating: AtomicBool::new(false),
             mobile,
+            link,
+            workers,
         })
     }
 
@@ -207,6 +221,7 @@ impl Daemon {
 
     pub fn on_disconnect(&self, client: u64) {
         self.watchers.release_client(client);
+        self.workers.disconnected(client);
     }
 
     pub fn info(&self) -> DaemonInfo {
@@ -222,7 +237,7 @@ impl Daemon {
         }
     }
 
-    pub async fn handle(self: &Arc<Self>, conn: &Conn, method: &str, p: Value) -> HandlerResult {
+    pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
         let s = &self.terminals;
         match method {
             m::DAEMON_INFO => ok(self.info()),
@@ -445,6 +460,26 @@ impl Daemon {
             m::REPO_CLONE_CANCEL => {
                 let r: m::IdRef = params(p)?;
                 self.clones.cancel(&r.id).map_err(internal)?;
+                ok(true)
+            }
+            m::LINK_GET => ok(self.link.info()),
+            m::LINK_SET => {
+                let r: m::LinkSet = params(p)?;
+                ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
+            }
+            m::LINK_RETRY => {
+                self.link.retry();
+                ok(self.link.info())
+            }
+            m::WORKER_LIST => ok(self.workers.list()),
+            m::WORKER_REGISTER => {
+                // Only a worker's daemon, over the tailnet with a paired
+                // device's token, registers.
+                if conn.phone.is_none() || conn.client != crate::link::WORKER_CLIENT {
+                    return Err(RpcError::new("forbidden", "only a worker registers"));
+                }
+                let r: m::WorkerRegister = params(p)?;
+                self.workers.register(conn.clone(), r);
                 ok(true)
             }
             _ => self.handle_project(conn, method, p).await,

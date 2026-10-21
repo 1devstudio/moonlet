@@ -3,7 +3,10 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use moonlet_core::terminal::{ClientId, ClientTx, dequeued};
@@ -11,7 +14,8 @@ use std::sync::atomic::AtomicUsize;
 use moonlet_proto::{Frame, Message, PROTOCOL_VERSION, RpcError, encode_frame, read_frame};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
+use serde_json::Value;
+use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::daemon::Daemon;
 
@@ -87,6 +91,49 @@ pub struct Conn {
     pub client: String,
     /// The paired phone's device id on a phone connection (X39).
     pub phone: Option<String>,
+    /// Requests this daemon sent the client, waiting for its reply. Only a
+    /// worker gets any (X41).
+    pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>>,
+    /// Ids from 1: 0 is the reply that ends a link.
+    next_request: AtomicU64,
+    closed: Notify,
+}
+
+impl Conn {
+    /// Sends the client a request and waits for its reply (X41).
+    pub async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, RpcError> {
+        let id = self.next_request.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert(id, tx);
+        let sent = self.tx.send(Frame::Json(Message::Request {
+            id,
+            method: method.into(),
+            params,
+        }));
+        if !sent {
+            self.pending.lock().unwrap().remove(&id);
+            return Err(RpcError::new("disconnected", "connection closed"));
+        }
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(reply)) => reply,
+            Ok(Err(_)) => Err(RpcError::new("disconnected", "connection closed")),
+            Err(_) => {
+                self.pending.lock().unwrap().remove(&id);
+                Err(RpcError::new("timeout", format!("{method} timed out")))
+            }
+        }
+    }
+
+    /// Ends the connection, as if the client had closed it.
+    pub fn close(&self) {
+        self.closed.notify_one();
+    }
+
+    fn reply(&self, id: u64, reply: Result<Value, RpcError>) {
+        if let Some(tx) = self.pending.lock().unwrap().remove(&id) {
+            let _ = tx.send(reply);
+        }
+    }
 }
 
 /// Serves one client. `phone` is the device id of a phone connection (X39).
@@ -146,6 +193,9 @@ where
         tx: tx.clone(),
         client,
         phone,
+        pending: Mutex::new(HashMap::new()),
+        next_request: AtomicU64::new(1),
+        closed: Notify::new(),
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
 
@@ -175,7 +225,14 @@ where
     });
 
     let result = async {
-        while let Some(frame) = read_frame(&mut reader).await? {
+        loop {
+            let frame = tokio::select! {
+                frame = read_frame(&mut reader) => match frame? {
+                    Some(frame) => frame,
+                    None => break,
+                },
+                _ = conn.closed.notified() => break,
+            };
             match frame {
                 Frame::Input { terminal, data } => {
                     let _ = daemon.terminals.write(terminal, data);
@@ -218,6 +275,12 @@ where
                             Err(e) => Message::err(id, e),
                         };
                         let _ = conn.tx.send(Frame::Json(reply));
+                    });
+                }
+                Frame::Json(Message::Response { id, result, error }) => {
+                    conn.reply(id, match error {
+                        Some(e) => Err(e),
+                        None => Ok(result.unwrap_or(Value::Null)),
                     });
                 }
                 other => tracing::debug!("ignoring unexpected frame {other:?}"),

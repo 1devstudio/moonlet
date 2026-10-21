@@ -9,12 +9,14 @@
 mod clones;
 mod daemon;
 mod launch;
+mod link;
 mod mobile;
 mod notify;
 mod server;
 mod service;
 mod tailnet_cli;
 mod upgrade;
+mod workers;
 
 use std::path::PathBuf;
 
@@ -257,6 +259,8 @@ fn run_daemon(
         });
         // Phones over Tailscale, when the user allows them (X39).
         mobile::spawn(daemon.clone());
+        // This Mac's link to its central host, when one is set (X41).
+        link::spawn(daemon.clone());
         // A daemon that took over already told systemd (X58).
         if fresh {
             notify::ready();
