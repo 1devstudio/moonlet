@@ -41,10 +41,11 @@ pub const NEEDS_INSTALL: &str = "needs_install: ";
 
 /// A connection error for a daemon that speaks another protocol and cannot
 /// be installed from here (X57). Like [`NEEDS_INSTALL`], the host waits for
-/// [`Host::reconnect`].
+/// [`Host::reconnect`]. `os` is the daemon's, when it says (X58).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NeedsUpdate {
     pub daemon_version: String,
+    pub os: Option<String>,
 }
 
 impl std::fmt::Display for NeedsUpdate {
@@ -95,6 +96,8 @@ pub struct HostInfo {
     pub daemon_version: Option<String>,
     pub hostname: Option<String>,
     pub home: Option<String>,
+    /// `macos` or `linux`, from a tailnet daemon's `authed` (X58).
+    pub os: Option<String>,
 }
 
 pub type Reader = Box<dyn AsyncRead + Unpin + Send>;
@@ -178,6 +181,7 @@ impl Host {
                 daemon_version: None,
                 hostname: None,
                 home: None,
+                os: None,
             }),
             link: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
@@ -374,7 +378,10 @@ async fn connection_loop(
                 let waiting = if let Some(m) = msg.strip_prefix(NEEDS_INSTALL) {
                     Some((HostStatus::NeedsInstall, Some(m.to_string())))
                 } else if let Some(n) = e.downcast_ref::<NeedsUpdate>() {
-                    host.info.lock().unwrap().daemon_version = Some(n.daemon_version.clone());
+                    let mut i = host.info.lock().unwrap();
+                    i.daemon_version = Some(n.daemon_version.clone());
+                    i.os = n.os.clone();
+                    drop(i);
                     Some((HostStatus::NeedsUpdate, None))
                 } else {
                     e.downcast_ref::<Refused>()

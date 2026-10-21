@@ -6,7 +6,7 @@
 
 - **Local:** Unix socket at `~/.moonlet/run/moonletd.sock`. The directory is `0700` and the socket is `0600`. The daemon also checks that the peer's uid matches its own.
 - **Remote:** `ssh <host> ~/.moonlet/bin/moonletd proxy` bridges stdio to the remote daemon's socket and starts that daemon if it is not running. The daemon outlives the SSH connection.
-- **Phone (X39):** TCP port 47428 on the Mac's Tailscale addresses only, while phone access is on. The first frame must be `auth`; see Messages.
+- **Tailnet (X39, X57):** TCP port 47428 on the host's Tailscale addresses only, while tailnet access is on. Paired phones and Macs connect here. The first frame must be `auth`; see Messages.
 
 ## Framing
 
@@ -29,7 +29,7 @@ Every JSON message is an object with a `t` tag:
 - `hello` `{protocol, client}` is sent by the client first. The daemon answers `welcome` `{protocol, daemon_version, host, pid}`, or closes the connection if `protocol` differs from its own.
 - `request` `{id, method, params}` gets exactly one `response` `{id, result | error}`. `error` is `{code, message}`.
 - `event` `{name, data}` is a daemon broadcast to every connected client.
-- `auth` `{token?, pair?, device?, kind?, route?}` comes first on a phone connection, before `hello` (X39). `kind` (`phone` or `desktop`, X57) says what is pairing; it defaults to `phone`. The daemon answers `authed` `{device_id, token?, protocol, daemon_version, host}` (`token` only after a pairing; daemons before X57 leave out the last three) or one `response` with `id` 0 and error `unauthorized`, then closes. With `route`, everything after `authed` comes from `ssh <route> moonletd proxy`.
+- `auth` `{token?, pair?, device?, kind?, route?}` comes first on a tailnet connection, before `hello` (X39). `kind` (`phone` or `desktop`, X57) says what is pairing; it defaults to `phone`. The daemon answers `authed` `{device_id, token?, protocol, daemon_version, host, os}` (`token` only after a pairing; `os` is `macos` or `linux`, X58; daemons before X57 leave out the last four) or one `response` with `id` 0 and error `unauthorized`, then closes. With `route`, everything after `authed` comes from `ssh <route> moonletd proxy`.
 
 ## Attach ordering
 
