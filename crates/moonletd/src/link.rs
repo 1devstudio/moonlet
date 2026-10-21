@@ -224,8 +224,20 @@ impl WorkerLink {
             self.close();
         }
         self.apply();
+        // A link waiting for the user tries again on new settings, too.
+        if !moved && self.waiting() {
+            self.retry();
+        }
         self.changed();
         Ok(self.info())
+    }
+
+    /// Whether the link waits for the user: an update, or pairing again.
+    fn waiting(&self) -> bool {
+        matches!(
+            *self.state.lock().unwrap(),
+            LinkState::NeedsUpdate { .. } | LinkState::Refused | LinkState::Error { .. }
+        )
     }
 
     /// `link.retry`: a link waiting for the user tries again now.
@@ -339,9 +351,7 @@ impl WorkerLink {
             HostStatus::NeedsUpdate => LinkState::NeedsUpdate {
                 daemon_version: info.daemon_version.clone().unwrap_or_default(),
             },
-            HostStatus::Refused => LinkState::Error {
-                message: format!("{name} no longer accepts this Mac"),
-            },
+            HostStatus::Refused => LinkState::Refused,
             HostStatus::NeedsInstall | HostStatus::Error => LinkState::Error {
                 message: info
                     .message

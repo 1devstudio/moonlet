@@ -421,6 +421,14 @@ async fn a_central_host_on_another_protocol_needs_an_update_and_waits_for_a_retr
     assert_eq!(reached.load(Ordering::SeqCst), 1, "it retried by itself");
     let _: LinkInfo = worker.call("link.retry", json!({})).await;
     eventually("a retry", || async { reached.load(Ordering::SeqCst) == 2 }).await;
+    // Changing the settings tries again too.
+    let _: LinkInfo = worker
+        .call("link.set", json!({ "worker": { "name": "Work laptop" } }))
+        .await;
+    eventually("a retry on link.set", || async {
+        reached.load(Ordering::SeqCst) == 3
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -437,10 +445,8 @@ async fn a_mac_the_central_host_removed_says_so_and_waits_for_a_retry() {
         .id
         .clone();
     let _: Value = central.call("mobile.revoke", json!({ "id": device })).await;
-    let want = LinkState::Error {
-        message: "studio-mini no longer accepts this Mac".into(),
-    };
-    eventually("the error", || async { link_state(&worker).await == want }).await;
+    let want = LinkState::Refused;
+    eventually("refused", || async { link_state(&worker).await == want }).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(link_state(&worker).await, want, "it retried by itself");
 }

@@ -1227,6 +1227,8 @@ pub enum LinkState {
     Connected { since: u64 },
     Reconnecting,
     NeedsUpdate { daemon_version: String },
+    /// The central host no longer accepts this Mac: pair it again.
+    Refused,
     Error { message: String },
 }
 
