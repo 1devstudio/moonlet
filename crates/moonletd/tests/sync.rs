@@ -3407,3 +3407,39 @@ async fn turning_keep_new_off_leaves_the_copies_and_makes_no_more() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     keeps(&worker, &[&second]).await;
 }
+
+#[tokio::test]
+async fn keeping_new_sessions_in_sync_is_a_choice_per_central_host() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    // Chosen for a project of the same identity on another central host.
+    write(
+        &worker.home.path().join("sync/projects.json"),
+        &json!({ "build-box git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe": { "keep_new": true, "keep_new_since": 1 } }).to_string(),
+    );
+    link(&central, &worker).await;
+    let identity = shop_identity(&central).await;
+    let got: Value = worker
+        .call("sync.project_get", json!({ "identity": identity }))
+        .await;
+    assert_eq!(got, json!({ "keep_new": false }));
+    let second = new_session(&central, "Second").await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    keeps(&worker, &[]).await;
+
+    let _: Value = worker
+        .call(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": true }),
+        )
+        .await;
+    let projects: Value =
+        serde_json::from_str(&read(&worker.home.path().join("sync/projects.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        projects["studio-mini git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe"]["keep_new"],
+        json!(true),
+        "{projects}"
+    );
+    let _ = second;
+}

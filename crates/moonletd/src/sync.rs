@@ -1604,7 +1604,7 @@ impl LiveCopies {
     /// host has yet to hear of, and a project that keeps new sessions in
     /// sync, which needs the central host's news of them.
     fn link_holders(&self) -> usize {
-        let keep_new = self.load_projects().values().any(|p| p.keep_new);
+        let keep_new = !self.keep_new_choices().is_empty();
         let data = self.data.lock().unwrap();
         data.worker.len() + data.closed.len() + usize::from(keep_new)
     }
@@ -1798,9 +1798,28 @@ impl LiveCopies {
 
     // ---- Keeping new sessions in sync ----
 
+    /// A project's key for this Mac's central host, as the project page
+    /// and new sessions see it.
+    fn central_key(&self, identity: &ProjectIdentity) -> Option<String> {
+        project_key(&self.link.central_name()?, identity)
+    }
+
+    /// The projects of this Mac's central host set to keep new sessions in
+    /// sync.
+    fn keep_new_choices(&self) -> Vec<ProjectChoices> {
+        let Some(host) = self.link.central_name() else { return Vec::new() };
+        let prefix = format!("{host} ");
+        self.load_projects()
+            .into_iter()
+            .filter(|(key, p)| key.starts_with(&prefix) && p.keep_new)
+            .map(|(_, p)| p)
+            .collect()
+    }
+
     /// `sync.project_get`.
     pub fn project_get(&self, identity: &ProjectIdentity) -> m::ProjectSync {
-        let keep_new = project_key(identity)
+        let keep_new = self
+            .central_key(identity)
             .and_then(|key| self.load_projects().get(&key).map(|p| p.keep_new))
             .unwrap_or(false);
         m::ProjectSync { keep_new }
@@ -1813,7 +1832,10 @@ impl LiveCopies {
         identity: &ProjectIdentity,
         keep_new: bool,
     ) -> Result<m::ProjectSync, RpcError> {
-        let key = project_key(identity).ok_or_else(|| {
+        if self.link.central_name().is_none() {
+            return Err(RpcError::new("no_central_host", "this Mac has no central host"));
+        }
+        let key = self.central_key(identity).ok_or_else(|| {
             RpcError::new(
                 "no_identity",
                 "the project has no commit to know it by on this Mac",
@@ -1843,7 +1865,7 @@ impl LiveCopies {
 
     /// Asks the central host for its sessions, to pick up new ones.
     async fn fetch_sessions(self: &Arc<Self>) {
-        if !self.load_projects().values().any(|p| p.keep_new) {
+        if self.keep_new_choices().is_empty() {
             return;
         }
         let Some(host) = self.link.host() else { return };
@@ -1864,9 +1886,9 @@ impl LiveCopies {
         let lock = self.lock("keep-new");
         let _one = lock.lock().await;
         let choices = self.load_projects();
-        let Some(since) = choices
-            .values()
-            .filter(|p| p.keep_new)
+        let Some(since) = self
+            .keep_new_choices()
+            .into_iter()
             .filter_map(|p| p.keep_new_since)
             .min()
         else {
@@ -1898,7 +1920,8 @@ impl LiveCopies {
             let Some(p) = projects.iter().find(|p| p.id == s.project_id) else {
                 continue;
             };
-            let wanted = project_key(&p.identity)
+            let wanted = self
+                .central_key(&p.identity)
                 .and_then(|key| choices.get(&key))
                 .is_some_and(|c| c.keep_new && c.keep_new_since.is_some_and(|t| s.created_at >= t));
             if !wanted {
