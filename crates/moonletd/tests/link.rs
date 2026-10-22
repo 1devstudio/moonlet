@@ -673,7 +673,13 @@ async fn a_paired_mac_cannot_set_the_central_host_directly() {
     // A paired Mac over the tailnet may not hand over a token (X61), nor
     // clear the central host.
     let mut device = raw(&addr, &token, "moonlet-app").await;
-    for (id, params) in [(1, elsewhere.clone()), (2, json!({ "central": null }))] {
+    // Not as an array either, which serde reads as the same fields.
+    let as_array = json!([elsewhere["central"], { "enabled": true }]);
+    for (id, params) in [
+        (1, elsewhere.clone()),
+        (2, json!({ "central": null })),
+        (3, as_array),
+    ] {
         let reply = ask(&mut device, id, "link.set", params).await;
         let Some(Message::Response { error: Some(e), .. }) = reply else {
             panic!("a paired Mac set the central host: {reply:?}")
