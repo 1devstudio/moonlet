@@ -209,7 +209,7 @@ export async function keepInSync(host: string, session: string): Promise<void> {
   }
 }
 
-/** Settings' Central host choice (X41, X60). */
+/** Settings' Make central host and Clear central host (X41, X60). */
 export async function changeCentral(next: string | null): Promise<void> {
   await moveCentral(next);
 }
