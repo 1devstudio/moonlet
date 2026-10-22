@@ -93,14 +93,14 @@ export function updateStatus(s: UpdateState, checking: boolean, error: string | 
   }
 }
 
-/** Runs `check` ten seconds after launch and every six hours, while
+/** Runs `check` ten seconds after launch and every hour, while
  *  `enabled` (the "Check for updates automatically" setting) says so. */
 export function scheduleUpdateChecks(check: () => void, enabled: () => boolean) {
   const auto = () => {
     if (enabled()) check();
   };
   setTimeout(auto, 10_000);
-  setInterval(auto, 6 * 3_600_000);
+  setInterval(auto, 3_600_000);
 }
 
 /** What a dev or e2e build says when asked to check: only release builds
