@@ -876,34 +876,63 @@ pub fn parse_short_status(out: &str) -> Vec<UnpushedFile> {
     files
 }
 
-/// What in `dir` is only on this machine (X55).
-pub async fn unpushed(dir: &Path) -> Result<UnpushedWork> {
+/// What in `dir` is only on this machine (X55): uncommitted files, and the
+/// commits that removing the folder and deleting `branch` (the session's,
+/// else the checked-out one) would lose. `merged` is the head commit of the
+/// branch's merged PR: GitHub keeps it and what it contains, even after a
+/// squash merge and once the branch is deleted.
+pub async fn unpushed(dir: &Path, branch: Option<&str>, merged: Option<&str>) -> Result<UnpushedWork> {
     let status = git_text(dir, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]).await?;
-    let upstream = git_text(dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
-        .await
-        .ok()
-        .filter(|u| !u.is_empty());
-    let count = match &upstream {
-        Some(_) => git_text(dir, &["rev-list", "--count", "@{upstream}..HEAD"]).await?,
-        None => {
-            // On no other branch or remote: deleting this branch loses them.
-            // `--branches` takes the short name; on a detached HEAD there is none.
-            let own = current_branch(dir).await.unwrap_or_default();
-            let exclude = format!("--exclude={own}");
-            let mut args = vec!["rev-list", "--count", "HEAD", "--not"];
-            if !own.is_empty() {
-                args.push(&exclude);
-            }
-            args.extend(["--branches", "--remotes"]);
-            git_text(dir, &args).await?
-        }
+    let own = match branch {
+        Some(b) => Some(b.to_string()),
+        None => current_branch(dir).await.ok(),
     };
+    let own = match own.filter(|b| !b.is_empty()) {
+        Some(b) if local_branch_exists(dir, &b).await => Some(b),
+        _ => None,
+    };
+    let upstream = match &own {
+        Some(b) => git_text(dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", &format!("{b}@{{upstream}}")])
+            .await
+            .ok()
+            .filter(|u| !u.is_empty()),
+        None => None,
+    };
+    // Only a commit id this clone has: anything else would fail the count.
+    let merged = match merged.filter(|m| m.len() >= 7 && m.chars().all(|c| c.is_ascii_hexdigit())) {
+        Some(m) if git(dir, &["cat-file", "-e", &format!("{m}^{{commit}}")]).await.is_ok() => Some(m),
+        _ => None,
+    };
+    // Commits on the branch, or a detached HEAD, that no other branch or
+    // remote has. A HEAD on another branch is kept with that branch.
+    // `--branches` takes the short name.
+    let exclude = own.as_ref().map(|b| format!("--exclude={b}"));
+    let mut args = vec!["rev-list", "--count", "HEAD"];
+    args.extend(own.as_deref());
+    args.push("--not");
+    args.extend(merged);
+    args.extend(exclude.as_deref());
+    args.extend(["--branches", "--remotes"]);
+    let count = git_text(dir, &args).await?;
     Ok(UnpushedWork { files: parse_short_status(&status), commits: count.trim().parse().unwrap_or(0), upstream })
 }
 
-/// `git push -u origin HEAD`, as Create pull request does.
-pub async fn push(dir: &Path) -> Result<()> {
-    git(dir, &["push", "-u", "origin", "HEAD"]).await?;
+/// A branch name from a caller is used only once git knows it: then it
+/// cannot start with `-`.
+async fn local_branch_exists(dir: &Path, branch: &str) -> bool {
+    git(dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).await.is_ok()
+}
+
+/// `git push -u origin <branch>`, the session's branch when git knows it,
+/// else HEAD as Create pull request does.
+pub async fn push(dir: &Path, branch: Option<&str>) -> Result<()> {
+    let mut target = "HEAD";
+    if let Some(b) = branch.filter(|b| !b.is_empty())
+        && local_branch_exists(dir, b).await
+    {
+        target = b;
+    }
+    git(dir, &["push", "-u", "origin", target]).await?;
     Ok(())
 }
 
@@ -1366,7 +1395,7 @@ pub async fn pr_list_head(path: &Path, branch: &str) -> Result<serde_json::Value
 }
 
 /// Fields `parse_pr` reads, plus `createdAt` for `session_pr`.
-const PR_FIELDS: &str = "number,url,state,title,isDraft,reviewDecision,statusCheckRollup,createdAt";
+const PR_FIELDS: &str = "number,url,state,title,isDraft,reviewDecision,statusCheckRollup,headRefOid,createdAt";
 
 /// Maps one PR object from `gh pr view` or `gh pr list`.
 fn parse_pr(v: &serde_json::Value) -> PullRequest {
@@ -1387,6 +1416,7 @@ fn parse_pr(v: &serde_json::Value) -> PullRequest {
             .filter(|s| !s.is_empty())
             .map(String::from),
         draft: v["isDraft"].as_bool().unwrap_or(false),
+        head_oid: v["headRefOid"].as_str().filter(|s| !s.is_empty()).map(String::from),
     }
 }
 
@@ -1632,14 +1662,14 @@ pub(crate) mod tests {
         }
         std::fs::write(p.join("a.txt"), "changed\n").unwrap();
         std::fs::write(p.join("new.ts"), "n\n").unwrap();
-        let w = unpushed(p).await.unwrap();
+        let w = unpushed(p, None, None).await.unwrap();
         assert_eq!(w.commits, 2);
         assert_eq!(w.upstream.as_deref(), Some("origin/moonlet/fix"));
         let files: Vec<_> = w.files.iter().map(|f| (f.status.as_str(), f.path.as_str())).collect();
         assert_eq!(files, [("M", "a.txt"), ("?", "new.ts")]);
 
-        push(p).await.unwrap();
-        assert_eq!(unpushed(p).await.unwrap().commits, 0);
+        push(p, None).await.unwrap();
+        assert_eq!(unpushed(p, None, None).await.unwrap().commits, 0);
     }
 
     #[tokio::test]
@@ -1648,8 +1678,75 @@ pub(crate) mod tests {
         let p = dir.path();
         git(p, &["checkout", "-q", "-b", "moonlet/new"]).await.unwrap();
         git(p, &["commit", "-q", "--allow-empty", "-m", "mine"]).await.unwrap();
-        let w = unpushed(p).await.unwrap();
+        let w = unpushed(p, None, None).await.unwrap();
         assert_eq!((w.commits, w.upstream, w.files.len()), (1, None, 0));
+    }
+
+    #[tokio::test]
+    async fn commits_on_a_branch_the_worktree_moved_to_are_not_lost() {
+        // An agent checked out another branch in the session's worktree:
+        // archiving deletes the session's branch, the other one stays.
+        let dir = repo().await;
+        let p = dir.path();
+        git(p, &["checkout", "-q", "-b", "moonlet/session"]).await.unwrap();
+        git(p, &["checkout", "-q", "-b", "refactor/lint"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "lint"]).await.unwrap();
+        let w = unpushed(p, Some("moonlet/session"), None).await.unwrap();
+        assert_eq!((w.commits, w.upstream), (0, None));
+    }
+
+    #[tokio::test]
+    async fn the_session_branch_is_read_when_another_is_checked_out() {
+        let dir = repo().await;
+        let p = dir.path();
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare"]).await.unwrap();
+        git(p, &["remote", "add", "origin", origin.path().to_str().unwrap()]).await.unwrap();
+        git(p, &["checkout", "-q", "-b", "moonlet/session"]).await.unwrap();
+        git(p, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "mine"]).await.unwrap();
+        git(p, &["checkout", "-q", "main"]).await.unwrap();
+        let w = unpushed(p, Some("moonlet/session"), None).await.unwrap();
+        assert_eq!((w.commits, w.upstream.as_deref()), (1, Some("origin/moonlet/session")));
+        // A branch git does not know reads as none: only the checked-out one counts.
+        assert_eq!(unpushed(p, Some("--output=x"), None).await.unwrap().commits, 0);
+    }
+
+    #[tokio::test]
+    async fn a_squash_merged_prs_commits_are_not_lost() {
+        // GitHub squashed the PR into main and deleted its branch, so its
+        // commits are on no remote, but GitHub keeps the PR's head.
+        let dir = repo().await;
+        let p = dir.path();
+        git(p, &["checkout", "-q", "-b", "moonlet/session"]).await.unwrap();
+        for n in ["one", "two"] {
+            git(p, &["commit", "-q", "--allow-empty", "-m", n]).await.unwrap();
+        }
+        let head = git_text(p, &["rev-parse", "HEAD"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "after the merge"]).await.unwrap();
+        assert_eq!(unpushed(p, Some("moonlet/session"), None).await.unwrap().commits, 3);
+        assert_eq!(unpushed(p, Some("moonlet/session"), Some(&head)).await.unwrap().commits, 1);
+        // A head this clone never had, or not a commit id, changes nothing.
+        let unknown = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(unpushed(p, Some("moonlet/session"), Some(unknown)).await.unwrap().commits, 3);
+        assert_eq!(unpushed(p, Some("moonlet/session"), Some("--all")).await.unwrap().commits, 3);
+    }
+
+    #[tokio::test]
+    async fn push_sends_the_session_branch_not_the_checked_out_one() {
+        let dir = repo().await;
+        let p = dir.path();
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare"]).await.unwrap();
+        git(p, &["remote", "add", "origin", origin.path().to_str().unwrap()]).await.unwrap();
+        git(p, &["checkout", "-q", "-b", "moonlet/session"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "mine"]).await.unwrap();
+        git(p, &["checkout", "-q", "-b", "refactor/lint"]).await.unwrap();
+        push(p, Some("moonlet/session")).await.unwrap();
+        let heads = git_text(origin.path(), &["for-each-ref", "--format=%(refname)", "refs/heads"]).await.unwrap();
+        assert_eq!(heads, "refs/heads/moonlet/session");
+        let w = unpushed(p, Some("moonlet/session"), None).await.unwrap();
+        assert_eq!((w.commits, w.upstream.as_deref()), (0, Some("origin/moonlet/session")));
     }
 
     #[tokio::test]
@@ -2112,6 +2209,21 @@ pub(crate) mod tests {
             "url": "https://github.com/1devstudio/jaunt/pull/25",
             "reviewDecision": "", "statusCheckRollup": []
         }])
+    }
+
+    #[test]
+    fn a_prs_head_commit_is_read() {
+        // `gh pr list --head feature/how-often-do-we-check-if-there-is-a-new-version
+        // --state all` on 1devstudio/moonlet (trimmed to the fields read).
+        let list = serde_json::json!([{
+            "createdAt": "2026-10-22T07:04:09Z", "headRefOid": "cd463af7f84581530cb97eafa5ccbc70c9be2646",
+            "isDraft": false, "number": 328, "reviewDecision": "", "state": "MERGED",
+            "title": "feat: check for app and Claude Code updates every hour (X35, X36)",
+            "url": "https://github.com/1devstudio/moonlet/pull/328"
+        }]);
+        let pr = session_pr(&list, 0, 0).unwrap();
+        assert_eq!(pr.head_oid.as_deref(), Some("cd463af7f84581530cb97eafa5ccbc70c9be2646"));
+        assert_eq!(session_pr(&merged_pr_25(), 0, 0).unwrap().head_oid, None);
     }
 
     #[test]

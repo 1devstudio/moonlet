@@ -572,6 +572,8 @@ export interface PullRequest {
   checks: CheckRun[];
   review_decision: string | null;
   draft?: boolean;
+  /** The PR branch's last commit; GitHub keeps it after a merge (X55). */
+  head_oid?: string | null;
 }
 
 /** A GitHub stack of dependent PRs (spec X11); `prs` is bottom first. */

@@ -12,7 +12,7 @@ import { agentReadiness, isStructured, tabAgent } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
-import { archiveFlags, archivePlan, gitSettingsOf, unpushedView } from "./gitSettings";
+import { archiveFlags, archivePlan, gitSettingsOf, unpushedParams, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
 import { toggleTasksMode } from "./tasksStore";
 
@@ -284,17 +284,19 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const s = useStore.getState();
   const base = s.projects[c.host]?.find((p) => p.id === c.ws.project_id)?.base_branch ?? c.ws.base;
   const git = gitSettingsOf(s.gitSettings, c.host);
-  const plan = archivePlan(git, s.prs[sesKey(c.host, c.ws.id)]?.state, c.ws.branch, base);
+  const pr = s.prs[sesKey(c.host, c.ws.id)];
+  const plan = archivePlan(git, pr?.state, c.ws.branch, base);
   // Work only on this machine that the archive would take (X55).
   const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.host);
-  const work = git.warn_unpushed ? await rpc<UnpushedWork>(c.host, M.gitUnpushed, { path: c.ws.path }).catch(() => null) : null;
+  const params = unpushedParams(c.ws, pr);
+  const work = git.warn_unpushed ? await rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null;
   const view = work && unpushedView(work, plan, c.ws.branch, where);
   const answer = await askConfirm(view ? unpushedPrompt(c.ws.name, plan, view) : archivePrompt(c.ws.name, plan));
   if (!answer) return;
   const flags = archiveFlags(plan, answer.checked);
   if (answer.alt) {
     try {
-      await rpc(c.host, M.gitPush, { path: c.ws.path });
+      await rpc(c.host, M.gitPush, params);
     } catch (e) {
       errorToast(e);
       return;

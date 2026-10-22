@@ -4,7 +4,8 @@ import { type ReactNode, useEffect, useState } from "react";
 import { Archive, ChevronLeft, ExternalLink, MoreHorizontal } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { rpc } from "@desktop/lib/daemon";
-import { M, type Session, type SessionArchived, type UnpushedWork } from "@desktop/lib/protocol";
+import { M, type PullRequest, type Session, type SessionArchived, type UnpushedWork } from "@desktop/lib/protocol";
+import { unpushedParams } from "@desktop/lib/gitSettings";
 import { type SessionTab, showScreen, useApp } from "../lib/app";
 import { sessionState } from "../lib/inbox";
 import { taskChip } from "../lib/sessionList";
@@ -30,7 +31,7 @@ const TABS: { id: SessionTab; label: string }[] = [
 
 /** Archiving, as the host's Git settings say (X55): what happens to the
  * folder and branch, and work that is only on the host. */
-function ArchiveSheet({ host, session, prState, onClose }: { host: string; session: Session; prState: string | null | undefined; onClose: () => void }) {
+function ArchiveSheet({ host, session, pr, onClose }: { host: string; session: Session; pr: PullRequest | null | undefined; onClose: () => void }) {
   const d = useApp((s) => s.data[host]);
   const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
   const git = d?.git ?? null;
@@ -40,17 +41,18 @@ function ArchiveSheet({ host, session, prState, onClose }: { host: string; sessi
   const [checked, setChecked] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const { busy, error, run } = useBusy();
+  const params = unpushedParams(session, pr);
   useEffect(() => {
     if (!warn) return;
-    void rpc<UnpushedWork>(host, M.gitUnpushed, { path: session.path })
+    void rpc<UnpushedWork>(host, M.gitUnpushed, params)
       .then(setWork)
       .catch(() => setWork("failed"));
-  }, [host, session.path, warn]);
+  }, [host, params.path, params.branch, params.merged_head, warn]);
   const base = d?.projects.find((p) => p.id === session.project_id)?.base_branch ?? session.base;
-  const sheet = archiveSheet({ session, base, git, prState, work: work ?? null, hostLabel });
+  const sheet = archiveSheet({ session, base, git, prState: pr?.state, work: work ?? null, hostLabel });
   const archive = (push: boolean) =>
     run(async () => {
-      if (push) await rpc(host, M.gitPush, { path: session.path });
+      if (push) await rpc(host, M.gitPush, params);
       const done = await rpc<SessionArchived | boolean>(host, M.sessionArchive, { id: session.id, ...sheet.flags(checked) });
       const note = archivedNote(done, session.branch);
       if (note) setRemoteError(note);
@@ -205,7 +207,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
           </div>
         </Sheet>
       )}
-      {archiving && <ArchiveSheet host={host} session={session} prState={pr?.state} onClose={() => setArchiving(false)} />}
+      {archiving && <ArchiveSheet host={host} session={session} pr={pr} onClose={() => setArchiving(false)} />}
     </div>
   );
 }
