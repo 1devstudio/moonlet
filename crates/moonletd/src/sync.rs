@@ -228,6 +228,12 @@ struct Data {
     /// of yet; the link stays open until it has.
     #[serde(default)]
     closed: Vec<Closed>,
+    /// Sessions this Mac has decided about: kept, by the app or because
+    /// their project keeps new sessions in sync, or declined. A new session
+    /// is kept once, so a copy the user stopped, or one the composer
+    /// declined, is not made again.
+    #[serde(default)]
+    auto: Vec<String>,
 }
 
 /// A copy this Mac stopped keeping, for the central host it was made with.
@@ -265,7 +271,14 @@ impl From<ClosedSaved> for Closed {
 /// `~/.moonlet/sync/projects.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ProjectChoices {
-    #[serde(default)]
+    /// New sessions in the project get a copy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    keep_new: bool,
+    /// When `keep_new` went on, on this Mac's clock: sessions the central
+    /// host made before then are not new. The two clocks are taken to agree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    keep_new_since: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     approved_setup: Vec<String>,
 }
 
@@ -277,6 +290,11 @@ struct SetupRun {
     run: u64,
     reaped: Arc<std::sync::atomic::AtomicBool>,
 }
+
+/// How long a new session waits before this Mac keeps it because its
+/// project keeps new sessions in sync: the composer, which decides itself,
+/// starts or declines it first.
+const KEEP_NEW_GRACE: Duration = Duration::from_secs(3);
 
 /// A project's key in `projects.json`: the central host's name, then the
 /// project's origin and root commit. The identity alone is not enough:
@@ -295,6 +313,14 @@ fn project_key(host: &str, id: &ProjectIdentity) -> Option<String> {
         return None;
     }
     Some(format!("{host} {origin} {root}"))
+}
+
+/// The central host a [`project_key`] belongs to: all before its last two
+/// parts, which hold no space (the origin, maybe empty, and the root).
+fn key_host(key: &str) -> Option<&str> {
+    let mut parts = key.rsplitn(3, ' ');
+    let (_root, _origin, host) = (parts.next()?, parts.next()?, parts.next()?);
+    Some(host)
 }
 
 /// Why making or updating a copy stopped.
@@ -354,6 +380,17 @@ pub struct LiveCopies {
     /// leader was waited for. It stays until the next run or the copy goes,
     /// so jobs a setup left behind are stopped too.
     setups: Mutex<HashMap<String, SetupRun>>,
+    /// When this Mac first heard of each new session it may keep, so the
+    /// composer's own choice comes first.
+    heard: Mutex<HashMap<String, std::time::Instant>>,
+    /// The central host's projects, until they change or the link drops.
+    projects_seen: Mutex<Option<Vec<moonlet_proto::types::Project>>>,
+    /// Goes up whenever that list is dropped, so an answer asked for before
+    /// is not kept.
+    projects_gen: std::sync::atomic::AtomicU64,
+    /// Wakes the loop that looks at the central host's sessions again, for
+    /// the new sessions that waited.
+    keep_new_due: tokio::sync::Notify,
     runs: std::sync::atomic::AtomicU64,
     /// One writer of `projects.json` at a time.
     projects: Mutex<()>,
@@ -401,6 +438,10 @@ impl LiveCopies {
                 offering: Mutex::new(HashMap::new()),
                 registered: std::sync::atomic::AtomicBool::new(false),
                 setups: Mutex::new(HashMap::new()),
+                heard: Mutex::new(HashMap::new()),
+                projects_seen: Mutex::new(None),
+                projects_gen: std::sync::atomic::AtomicU64::new(0),
+                keep_new_due: tokio::sync::Notify::new(),
                 runs: std::sync::atomic::AtomicU64::new(0),
                 projects: Mutex::new(()),
                 base_env,
@@ -729,6 +770,9 @@ impl LiveCopies {
                 ..Kept::default()
             };
             let id = kept.id.clone();
+            if !data.auto.contains(&kept.session) {
+                data.auto.push(kept.session.clone());
+            }
             data.worker.push(kept);
             id
         };
@@ -818,6 +862,10 @@ impl LiveCopies {
         self.registered
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.send_closed_soon();
+        self.drop_projects();
+        // Sessions made while the link was down.
+        let me = self.clone();
+        tokio::spawn(async move { me.fetch_sessions().await });
         let kept = self.data.lock().unwrap().worker.clone();
         for k in kept {
             if self.elsewhere(&k).is_some() {
@@ -1586,12 +1634,13 @@ impl LiveCopies {
         self.link.set_synced(self.link_holders());
     }
 
-    /// What keeps the link open: copies, and closes not sent yet. A close
-    /// for another host keeps it open too, so the link is there when that
-    /// host is central again.
+    /// What keeps the link open: the copies, those whose stop the central
+    /// host has yet to hear of, and a project that keeps new sessions in
+    /// sync, which needs the central host's news of them.
     fn link_holders(&self) -> usize {
+        let keep_new = !self.keep_new_choices().is_empty();
         let data = self.data.lock().unwrap();
-        data.worker.len() + data.closed.len()
+        data.worker.len() + data.closed.len() + usize::from(keep_new)
     }
 
     /// `sync.closing` from the central host: the session is going away.
@@ -1779,6 +1828,236 @@ impl LiveCopies {
         }
         self.kicks.lock().unwrap().retain(|r, _| r.exists());
         !gone.is_empty()
+    }
+
+    // ---- Keeping new sessions in sync ----
+
+    /// A project's key for this Mac's central host, as the project page
+    /// and new sessions see it.
+    fn central_key(&self, identity: &ProjectIdentity) -> Option<String> {
+        project_key(&self.link.central_name()?, identity)
+    }
+
+    /// The projects of this Mac's central host set to keep new sessions in
+    /// sync.
+    fn keep_new_choices(&self) -> Vec<ProjectChoices> {
+        let Some(host) = self.link.central_name() else {
+            return Vec::new();
+        };
+        self.load_projects()
+            .into_iter()
+            .filter(|(key, p)| key_host(key) == Some(host.as_str()) && p.keep_new)
+            .map(|(_, p)| p)
+            .collect()
+    }
+
+    /// `sync.project_get`.
+    pub fn project_get(&self, identity: &ProjectIdentity) -> m::ProjectSync {
+        let keep_new = self
+            .central_key(identity)
+            .and_then(|key| self.load_projects().get(&key).map(|p| p.keep_new))
+            .unwrap_or(false);
+        m::ProjectSync { keep_new }
+    }
+
+    /// `sync.project_set`: new sessions in the project get a copy from now
+    /// on, or no longer do. Copies already kept stay.
+    pub fn project_set(
+        self: &Arc<Self>,
+        identity: &ProjectIdentity,
+        keep_new: bool,
+    ) -> Result<m::ProjectSync, RpcError> {
+        if self.link.central_name().is_none() {
+            return Err(RpcError::new(
+                "no_central_host",
+                "this Mac has no central host",
+            ));
+        }
+        let key = self.central_key(identity).ok_or_else(|| {
+            RpcError::new(
+                "no_identity",
+                "the project has no commit to know it by on this Mac",
+            )
+        })?;
+        self.update_projects(&key, |p| {
+            if keep_new && !p.keep_new {
+                p.keep_new_since = Some(moonlet_core::paths::now_ms());
+            } else if !keep_new {
+                p.keep_new_since = None;
+            }
+            p.keep_new = keep_new;
+        })?;
+        self.link.set_synced(self.link_holders());
+        Ok(self.project_get(identity))
+    }
+
+    /// `sessions.changed` from the central host, over the link.
+    pub fn sessions_changed(self: &Arc<Self>, data: serde_json::Value) {
+        if self.keep_new_choices().is_empty() {
+            return;
+        }
+        let Ok(sessions) = serde_json::from_value::<Vec<moonlet_proto::types::Session>>(data)
+        else {
+            return;
+        };
+        let me = self.clone();
+        tokio::spawn(async move { me.keep_new_sessions(sessions).await });
+    }
+
+    /// Asks the central host for its sessions, to pick up new ones.
+    async fn fetch_sessions(self: &Arc<Self>) {
+        if self.keep_new_choices().is_empty() {
+            return;
+        }
+        let Some(host) = self.link.host() else { return };
+        match host.request(m::SESSION_LIST, serde_json::json!({})).await {
+            Ok(v) => {
+                if let Ok(sessions) = serde_json::from_value(v) {
+                    self.keep_new_sessions(sessions).await;
+                }
+            }
+            Err(e) => {
+                tracing::debug!("cannot list the central host's sessions: {}", e.message);
+                self.look_again_later();
+            }
+        }
+    }
+
+    /// Looks at the central host's sessions again after [`KEEP_NEW_GRACE`].
+    fn look_again_later(self: &Arc<Self>) {
+        let me = Arc::downgrade(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(KEEP_NEW_GRACE).await;
+            if let Some(me) = me.upgrade() {
+                me.keep_new_due.notify_one();
+            }
+        });
+    }
+
+    /// `sync.decline`: session `session` gets no copy, even when its
+    /// project keeps new sessions in sync.
+    pub fn decline(&self, session: String) {
+        self.heard.lock().unwrap().remove(&session);
+        {
+            let mut data = self.data.lock().unwrap();
+            if data.auto.contains(&session) {
+                return;
+            }
+            data.auto.push(session);
+        }
+        self.save();
+    }
+
+    /// `projects.changed` from the central host: its projects are asked
+    /// for again when next needed.
+    pub fn projects_changed(&self) {
+        self.drop_projects();
+    }
+
+    fn drop_projects(&self) {
+        let mut seen = self.projects_seen.lock().unwrap();
+        *seen = None;
+        self.projects_gen
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The central host's projects, asked for once until they change.
+    async fn central_projects(&self) -> Option<Vec<moonlet_proto::types::Project>> {
+        let seen = self.projects_seen.lock().unwrap().clone();
+        if seen.is_some() {
+            return seen;
+        }
+        let asked_at = self.projects_gen.load(std::sync::atomic::Ordering::SeqCst);
+        let host = self.link.host()?;
+        let projects: Vec<moonlet_proto::types::Project> = host
+            .request(m::PROJECT_LIST, serde_json::json!({}))
+            .await
+            .ok()
+            .and_then(|v| serde_json::from_value(v).ok())?;
+        let mut seen = self.projects_seen.lock().unwrap();
+        // Dropped while the answer was on its way: it may be stale.
+        if self.projects_gen.load(std::sync::atomic::Ordering::SeqCst) == asked_at {
+            *seen = Some(projects.clone());
+        }
+        Some(projects)
+    }
+
+    /// Starts keeping each new session of a project set to keep new
+    /// sessions in sync: made since the setting went on, not archived, and
+    /// not decided about before. One this Mac heard of less than
+    /// [`KEEP_NEW_GRACE`] ago waits, so the composer's own choice comes
+    /// first.
+    async fn keep_new_sessions(self: &Arc<Self>, sessions: Vec<moonlet_proto::types::Session>) {
+        let lock = self.lock("keep-new");
+        let _one = lock.lock().await;
+        let choices = self.load_projects();
+        let keeping: Vec<ProjectChoices> = self.keep_new_choices();
+        // Sessions decided about since they were heard of need no wait.
+        {
+            let auto = self.data.lock().unwrap().auto.clone();
+            self.heard
+                .lock()
+                .unwrap()
+                .retain(|id, _| !auto.contains(id));
+        }
+        let Some(since) = keeping.iter().filter_map(|p| p.keep_new_since).min() else {
+            return;
+        };
+        let fresh: Vec<_> = {
+            let data = self.data.lock().unwrap();
+            sessions
+                .into_iter()
+                .filter(|s| !s.archived && s.created_at >= since)
+                .filter(|s| !data.auto.contains(&s.id))
+                .filter(|s| !data.worker.iter().any(|k| k.session == s.id))
+                .collect()
+        };
+        if fresh.is_empty() {
+            return;
+        }
+        let Some(projects) = self.central_projects().await else {
+            self.look_again_later();
+            return;
+        };
+        let wanted = |s: &moonlet_proto::types::Session| {
+            projects
+                .iter()
+                .find(|p| p.id == s.project_id)
+                .and_then(|p| self.central_key(&p.identity))
+                .and_then(|key| choices.get(&key))
+                .is_some_and(|c| c.keep_new && c.keep_new_since.is_some_and(|t| s.created_at >= t))
+        };
+        let now = std::time::Instant::now();
+        let mut later = false;
+        for s in fresh.iter().filter(|s| wanted(s)) {
+            let heard = *self
+                .heard
+                .lock()
+                .unwrap()
+                .entry(s.id.clone())
+                .or_insert(now);
+            if now.duration_since(heard) < KEEP_NEW_GRACE {
+                later = true;
+                continue;
+            }
+            self.heard.lock().unwrap().remove(&s.id);
+            // Decided under one lock with `sync.decline` and `sync.start`, so
+            // a choice made while this pass waited stands.
+            {
+                let mut data = self.data.lock().unwrap();
+                if data.auto.contains(&s.id) || data.worker.iter().any(|k| k.session == s.id) {
+                    continue;
+                }
+                data.auto.push(s.id.clone());
+            }
+            self.save();
+            if let Err(e) = self.start(s.id.clone()) {
+                tracing::warn!(session = %s.id, "cannot keep a new session in sync: {}", e.message);
+            }
+        }
+        if later {
+            self.look_again_later();
+        }
     }
 
     // ---- Setup in the copy ----
@@ -3287,6 +3566,14 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
             .insert(k.id.clone(), CopyState::Waiting);
     }
     sync.link.set_synced(sync.link_holders());
+    // New sessions that waited for the composer are looked at again.
+    let due = sync.clone();
+    tokio::spawn(async move {
+        loop {
+            due.keep_new_due.notified().await;
+            due.fetch_sessions().await;
+        }
+    });
     for s in served {
         sync.watch(Path::new(&s.path));
     }
@@ -3295,6 +3582,22 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_projects_key_names_its_central_host_whole() {
+        let root = "4171b03ff0d2bd434751f17bc9d34da784f97e72";
+        let key = |host: &str| format!("{host} github.com/acme/shop {root}");
+        assert_eq!(key_host(&key("Studio Mini")), Some("Studio Mini"));
+        assert_eq!(key_host(&key("Studio")), Some("Studio"));
+        // "Studio" is not a prefix match for "Studio Mini"'s projects.
+        assert_ne!(key_host(&key("Studio Mini")), Some("Studio"));
+        // No origin: two spaces before the root.
+        assert_eq!(
+            key_host(&format!("studio-mini  {root}")),
+            Some("studio-mini")
+        );
+        assert_eq!(key_host("nonsense"), None);
+    }
 
     #[test]
     fn two_leftovers_folders_made_at_once_are_two() {

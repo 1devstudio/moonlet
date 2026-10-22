@@ -256,6 +256,15 @@ pub const SYNC_CLOSING: &str = "sync.closing";
 pub const SYNC_RUN_SETUP: &str = "sync.run_setup";
 /// [`CopyRef`] → [`Copy`]: the copy's setup is not run.
 pub const SYNC_SKIP_SETUP: &str = "sync.skip_setup";
+/// [`SyncProject`] → [`ProjectSync`]: this Mac's choices for a project on
+/// the central host.
+pub const SYNC_PROJECT_GET: &str = "sync.project_get";
+/// [`SyncProjectSet`] → [`ProjectSync`]: keep the project's new sessions on
+/// the central host in sync with this Mac, or stop doing so.
+pub const SYNC_PROJECT_SET: &str = "sync.project_set";
+/// [`SyncStart`] → `true`: the session gets no copy, even when its project
+/// keeps new sessions in sync; the composer's unticked checkbox.
+pub const SYNC_DECLINE: &str = "sync.decline";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
@@ -1361,6 +1370,26 @@ pub enum SetupState {
     /// It exited with `exit`; -1 when a signal or a restart ended it.
     Failed { exit: i32 },
     Skipped,
+}
+
+/// Names a project on the central host by its identity (X41).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncProject {
+    pub identity: crate::types::ProjectIdentity,
+}
+
+/// `sync.project_set` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncProjectSet {
+    pub identity: crate::types::ProjectIdentity,
+    pub keep_new: bool,
+}
+
+/// This Mac's choices for a project on the central host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectSync {
+    /// New sessions in the project are kept in sync with this Mac.
+    pub keep_new: bool,
 }
 
 /// `sync.run_setup` params: the command the user approved.
