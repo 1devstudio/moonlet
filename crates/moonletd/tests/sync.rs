@@ -1282,6 +1282,7 @@ async fn fake_central(
 
 #[tokio::test]
 async fn an_update_reaching_outside_the_copy_pauses_it_and_writes_nothing() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     let repo = scratch.path().join("studio-mini-shop");
@@ -1311,6 +1312,7 @@ async fn an_update_reaching_outside_the_copy_pauses_it_and_writes_nothing() {
 
 #[tokio::test]
 async fn an_update_against_a_base_the_copy_never_had_applies_while_the_copy_is_unchanged() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     let repo = scratch.path().join("studio-mini-shop");
@@ -3262,4 +3264,305 @@ async fn skipping_a_setup_leaves_it_unrun() {
             .join("ignored-by-setup")
             .exists()
     );
+}
+
+/// The identity of the central host's project `shop`.
+async fn shop_identity(central: &Central) -> Value {
+    let projects: Vec<Value> = central.daemon.call("project.list", json!({})).await;
+    projects[0]["identity"].clone()
+}
+
+async fn new_session(central: &Central, name: &str) -> String {
+    let s: Value = central
+        .daemon
+        .call(
+            "session.create",
+            json!({ "project_id": central.session["project_id"], "name": name }),
+        )
+        .await;
+    s["id"].as_str().unwrap().to_string()
+}
+
+/// Waits until this Mac keeps exactly the sessions `want`, in any order.
+async fn keeps(worker: &Daemon, want: &[&str]) -> Duration {
+    let mut want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
+    want.sort();
+    let start = Instant::now();
+    let mut last = Vec::new();
+    while start.elapsed() < Duration::from_secs(30) {
+        let mut have: Vec<String> = copies(worker)
+            .await
+            .into_iter()
+            .map(|c| c.session)
+            .collect();
+        have.sort();
+        if have == want {
+            return start.elapsed();
+        }
+        last = have;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("this Mac never kept {want:?}: {last:?}");
+}
+
+#[tokio::test]
+async fn a_project_set_to_keep_new_sessions_in_sync_gets_a_copy_of_each_new_one() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let identity = shop_identity(&central).await;
+    let off: Value = worker
+        .call("sync.project_get", json!({ "identity": identity }))
+        .await;
+    assert_eq!(off, json!({ "keep_new": false }));
+    // Not from an agent's CLI.
+    let mut cli = Client::connect(&worker.socket, "moonlet-cli")
+        .await
+        .unwrap();
+    let e = cli
+        .request::<_, Value>(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": true }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "forbidden: only the moonlet app manages sync"
+    );
+    let on: Value = worker
+        .call(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": true }),
+        )
+        .await;
+    assert_eq!(on, json!({ "keep_new": true }));
+
+    // A session made now gets a copy; the one from before does not.
+    let second = new_session(&central, "Second").await;
+    let took = keeps(&worker, &[&second]).await;
+    assert!(took < Duration::from_secs(5), "took {took:?}");
+
+    // Starting it again gives the same copy.
+    let a: Copy = worker
+        .call("sync.start", json!({ "session": second }))
+        .await;
+    let b: Copy = worker
+        .call("sync.start", json!({ "session": second }))
+        .await;
+    assert_eq!(a.id, b.id);
+
+    // A copy the user stopped stays stopped.
+    let _: Value = worker.call("sync.stop", json!({ "copy": a.id })).await;
+    let third = new_session(&central, "Third").await;
+    keeps(&worker, &[&third]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    keeps(&worker, &[&third]).await;
+}
+
+#[tokio::test]
+async fn a_session_made_while_this_mac_was_away_gets_its_copy_when_it_is_back() {
+    let central = central().await;
+    let mut worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let identity = shop_identity(&central).await;
+    let _: Value = worker
+        .call(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": true }),
+        )
+        .await;
+    worker.stop();
+    let second = new_session(&central, "Second").await;
+    worker.restart().await;
+    keeps(&worker, &[&second]).await;
+    // The setting outlived the restart.
+    let still: Value = worker
+        .call("sync.project_get", json!({ "identity": identity }))
+        .await;
+    assert_eq!(still, json!({ "keep_new": true }));
+}
+
+#[tokio::test]
+async fn turning_keep_new_off_leaves_the_copies_and_makes_no_more() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let identity = shop_identity(&central).await;
+    let _: Value = worker
+        .call(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": true }),
+        )
+        .await;
+    let second = new_session(&central, "Second").await;
+    keeps(&worker, &[&second]).await;
+    let _: Value = worker
+        .call(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": false }),
+        )
+        .await;
+    new_session(&central, "Third").await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    keeps(&worker, &[&second]).await;
+}
+
+#[tokio::test]
+async fn keeping_new_sessions_in_sync_is_a_choice_per_central_host() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    // Chosen for a project of the same identity on another central host.
+    write(
+        &worker.home.path().join("sync/projects.json"),
+        &json!({ "build-box git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe": { "keep_new": true, "keep_new_since": 1 } }).to_string(),
+    );
+    link(&central, &worker).await;
+    let identity = shop_identity(&central).await;
+    let got: Value = worker
+        .call("sync.project_get", json!({ "identity": identity }))
+        .await;
+    assert_eq!(got, json!({ "keep_new": false }));
+    let _second = new_session(&central, "Second").await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    keeps(&worker, &[]).await;
+
+    let _: Value = worker
+        .call(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": true }),
+        )
+        .await;
+    let projects: Value =
+        serde_json::from_str(&read(&worker.home.path().join("sync/projects.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        projects["studio-mini git.invalid/acme/shop 1a8cad3285c1b89b9133296af42c8d001c492bfe"]["keep_new"],
+        json!(true),
+        "{projects}"
+    );
+}
+
+/// `worker` linked to `central`, keeping new `shop` sessions in sync.
+async fn keeping_new(central: &Central) -> Daemon {
+    let worker = worker(&central.origin).await;
+    link(central, &worker).await;
+    let identity = shop_identity(central).await;
+    let _: Value = worker
+        .call(
+            "sync.project_set",
+            json!({ "identity": identity, "keep_new": true }),
+        )
+        .await;
+    worker
+}
+
+#[tokio::test]
+async fn a_session_the_app_kept_and_the_user_stopped_is_not_made_again() {
+    let central = central().await;
+    let worker = keeping_new(&central).await;
+    let second = new_session(&central, "Second").await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": second }))
+        .await;
+    let _: Value = worker.call("sync.stop", json!({ "copy": copy.id })).await;
+
+    let third = new_session(&central, "Third").await;
+    keeps(&worker, &[&third]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    keeps(&worker, &[&third]).await;
+}
+
+#[tokio::test]
+async fn a_session_the_composer_declines_gets_no_copy() {
+    let central = central().await;
+    let worker = keeping_new(&central).await;
+    let second = new_session(&central, "Second").await;
+    let _: Value = worker
+        .call("sync.decline", json!({ "session": second }))
+        .await;
+
+    let third = new_session(&central, "Third").await;
+    keeps(&worker, &[&third]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    keeps(&worker, &[&third]).await;
+}
+
+#[tokio::test]
+async fn keeping_new_sessions_needs_a_project_known_by_its_first_commit() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let mut app = worker.app().await;
+    let e = app
+        .request::<_, Value>(
+            "sync.project_set",
+            json!({ "identity": { "origin": "git.invalid/acme/new", "root": null }, "keep_new": true }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "no_identity: the project has no commit to know it by on this Mac"
+    );
+}
+
+/// Turns the central host's tailnet access off, which drops the link, and
+/// gives a closure that turns it back on.
+async fn link_off(central: &Central) {
+    let _: Value = central
+        .daemon
+        .call("mobile.set_enabled", json!({ "enabled": false }))
+        .await;
+}
+
+async fn link_on(central: &Central) {
+    let _: Value = central
+        .daemon
+        .call("mobile.set_enabled", json!({ "enabled": true }))
+        .await;
+}
+
+async fn link_state(worker: &Daemon) -> String {
+    let info: Value = worker.call("link.get", json!({})).await;
+    info["state"]["kind"].as_str().unwrap_or_default().to_string()
+}
+
+#[tokio::test]
+async fn sessions_made_while_the_link_was_down_get_copies_once_it_is_back_unless_archived() {
+    let central = central().await;
+    let worker = keeping_new(&central).await;
+    eventually("linked", || async { link_state(&worker).await == "connected" }).await;
+    link_off(&central).await;
+    eventually("link dropped", || async { link_state(&worker).await != "connected" }).await;
+    let second = new_session(&central, "Second").await;
+    let gone = new_session(&central, "Gone").await;
+    let _: Value = central
+        .daemon
+        .call("session.archive", json!({ "id": gone }))
+        .await;
+
+    link_on(&central).await;
+    keeps(&worker, &[&second]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    keeps(&worker, &[&second]).await;
+}
+
+#[tokio::test]
+async fn sessions_made_while_the_link_was_down_get_no_copy_when_keep_new_is_off() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    // Linked for heavy commands, so the link is up without any copy.
+    let _: Value = worker
+        .call("link.set", json!({ "worker": { "enabled": true } }))
+        .await;
+    eventually("linked", || async { link_state(&worker).await == "connected" }).await;
+    link_off(&central).await;
+    eventually("link dropped", || async { link_state(&worker).await != "connected" }).await;
+    let _second = new_session(&central, "Second").await;
+
+    link_on(&central).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    keeps(&worker, &[]).await;
 }

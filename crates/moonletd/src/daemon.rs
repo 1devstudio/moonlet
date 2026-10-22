@@ -526,6 +526,22 @@ impl Daemon {
                 ok(self.sync.start(r.session)?)
             }
             m::SYNC_LIST => ok(self.sync.list()),
+            m::SYNC_PROJECT_GET => {
+                let r: m::SyncProject = params(p)?;
+                ok(self.sync.project_get(&r.identity))
+            }
+            m::SYNC_DECLINE => {
+                app_only(conn, "sync")?;
+                let r: m::SyncStart = params(p)?;
+                self.sync.decline(r.session);
+                ok(true)
+            }
+            m::SYNC_PROJECT_SET => {
+                // Like the link itself: from this Mac's app only.
+                app_only(conn, "sync")?;
+                let r: m::SyncProjectSet = params(p)?;
+                ok(self.sync.project_set(&r.identity, r.keep_new)?)
+            }
             m::SYNC_RUN_SETUP | m::SYNC_SKIP_SETUP => {
                 // The user approves what runs on this Mac: not a paired
                 // device, nor an agent through the CLI.

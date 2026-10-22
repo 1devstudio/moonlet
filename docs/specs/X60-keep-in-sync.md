@@ -46,10 +46,14 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 ### Keeping new sessions in sync
 
 - [ ] The project page of a project on the central host (Settings › Projects › shop, X43) has **Keep new sessions in sync with this Mac**, off by default. It is this Mac's setting, saved by this Mac's daemon, not in `.moonlet/config.toml`, because another Mac paired with the same host decides for itself. Projects on other hosts don't have it.
-- [ ] Projects are matched by identity (X41), so the setting holds when the project is removed and added again on the central host.
-- [ ] The new-session composer (X54), for a project on the central host, has a **Keep in sync with this Mac** checkbox. It is ticked when the project's setting is on, and the user can untick it for one session. A ticked box turns sync on as soon as the session is made.
-- [ ] A session made on the central host any other way while the setting is on, such as from the phone or by an agent's `moonlet session new`, is kept in sync too. While linked, this Mac's daemon sees such a session within 5 s. A session made while the link is down is picked up once it is back, unless it is gone by then.
-- [ ] Turning the setting off leaves the existing copies alone. It only changes what happens to new sessions.
+- [x] Projects are matched by central host and identity (X41), so the setting holds when the project is removed and added again on the central host, and a project of the same identity on another central host has its own setting. (`a_session_made_while_this_mac_was_away_gets_its_copy_when_it_is_back`: the setting is kept by identity in `projects.json`; `keeping_new_sessions_in_sync_is_a_choice_per_central_host`)
+- [ ] The new-session composer (X54), for a project on the central host, has a **Keep in sync with this Mac** checkbox. It is ticked when the project's setting is on, and the user can untick it for one session. A ticked box turns sync on as soon as the session is made (`sync.start`); an unticked one declines it (`sync.decline`). A new session waits 3 s before this Mac keeps it for its project's setting, so the composer's own choice comes first. (daemon: `a_session_the_composer_declines_gets_no_copy`)
+- [x] A session made on the central host any other way while the setting is on, such as from the phone or by an agent's `moonlet session new`, is kept in sync too. While linked, this Mac's daemon keeps such a session within 5 s. A session made while the link is down is picked up once it is back, unless it is gone by then. (`a_project_set_to_keep_new_sessions_in_sync_gets_a_copy_of_each_new_one`, `a_session_made_while_this_mac_was_away_gets_its_copy_when_it_is_back`, `sessions_made_while_the_link_was_down_get_copies_once_it_is_back_unless_archived`, `sessions_made_while_the_link_was_down_get_no_copy_when_keep_new_is_off`)
+- [x] Turning the setting off leaves the existing copies alone. It only changes what happens to new sessions. (`turning_keep_new_off_leaves_the_copies_and_makes_no_more`)
+
+- [x] "New" means made on the central host since the setting went on, by the session's `created_at` against the time this Mac turned it on; the two clocks are taken to agree. Sessions already there stay as they are. A session is decided about once: a copy of a new session that the user stops is not made again, whether this Mac or the app started it, and neither is one the composer declined. (`a_project_set_to_keep_new_sessions_in_sync_gets_a_copy_of_each_new_one`, `a_session_the_app_kept_and_the_user_stopped_is_not_made_again`)
+- [x] While a project keeps new sessions in sync, the worker link stays open, so this Mac hears of new sessions even with no copy yet. Only the Mac's app changes the setting: `sync.project_set` from a paired device or the `moonlet` CLI is refused with `forbidden`. (`a_project_set_to_keep_new_sessions_in_sync_gets_a_copy_of_each_new_one`)
+- [x] `sync.start` for a session already kept returns its copy. (`a_project_set_to_keep_new_sessions_in_sync_gets_a_copy_of_each_new_one`)
 
 ### Making the copy
 
@@ -192,7 +196,8 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 - `sync.retry {copy}`;
 - `sync.run_setup {copy, command}`. It runs only when `command` is the copy's current setup command, and it records the approval. A stale command is refused with `setup_changed`, whose message is the current command; a copy with no setup script with `no_setup`.
 - `sync.skip_setup {copy}`: a setup waiting for approval becomes `skipped`. Both setup methods answer only the Mac's app.
-- `sync.project_get {identity}` and `sync.project_set {identity, keep_new}`, for the project page and the composer;
+- `sync.project_get {identity}` and `sync.project_set {identity, keep_new}`, each returning `{keep_new}`, for the project page and the composer. A project without a root commit has no identity to keep the setting by, and `sync.project_set` refuses it with `no_identity` (`keeping_new_sessions_needs_a_project_known_by_its_first_commit`); without a central host, with `no_central_host`;
+- `sync.decline {session}`: the session gets no copy, even when its project keeps new sessions in sync. The app only;
 - the event `sync.changed`: the `Copy`, plus `newly_differing`, the paths that started to differ with this change. A copy that needs approval for setup reports `setup: {state: "needs_approval", command}`, and the app shows the modal.
 
 **Over the worker link (X41), worker to central host:**
@@ -236,6 +241,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   On the central host, it also records each copy's worker id. No token is in it.
 - **On this Mac,** `$MOONLET_HOME/sync/projects.json` holds, per central host and project identity (the key is `<host> <origin> <root>`, made only when the root is a full hex commit id and the origin has no spaces, so it reads one way only; otherwise nothing is remembered):
   - `keep_new`, the project page's switch;
+  - `keep_new_since`, when this Mac turned it on, in milliseconds;
   - `approved_setup`, the setup commands the user approved, as exact strings.
 
   Example:
@@ -249,6 +255,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   }
   ```
 
+- **On this Mac,** `copies.json` also lists the sessions this Mac started keeping because of `keep_new` (`auto`), so a stopped one is not made again.
 - **On this Mac,** `$MOONLET_HOME/sync/logs/<copy id>.log` holds the last setup run's output.
 - **The notification switch** is an app setting, next to X47's.
 - **A private index per copy,** `<git dir of the worktree>/moonlet-sync-index`, holds the snapshot. Git's stat cache keeps re-snapshotting cheap. The session's own index is never used for a snapshot.
@@ -320,7 +327,7 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
     - a copy whose session changed the command to `touch other` asks again, and `sync.run_setup` with the old command is refused with `setup_changed`;
     - a setup that exits 1 reports `failed {exit: 1}`, and its output is in the log;
     - turning sync off during a long setup ends the processes it started within 10 s.
-  - With `keep_new` on for the project, a session made on the central host with `session.new` gets a copy within 5 s, and one made while the link is down gets a copy once it is back. With `keep_new` off, neither does. The setting survives a restart of this Mac's daemon.
+  - With `keep_new` on for the project, a session made on the central host with `session.create` gets a copy within 5 s, and one made while the link is down gets a copy once it is back. With `keep_new` off, neither does. The setting survives a restart of this Mac's daemon.
   - A reconcile that leaves `src/cart.ts` differing reports it once in `sync.changed`. A later reconcile in which it still differs doesn't report it as new.
 - **Vitest, `apps/desktop/src/lib/`:**
   - `sync.test.ts`:

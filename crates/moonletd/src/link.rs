@@ -496,7 +496,17 @@ impl Events for LinkEvents {
         }
     }
 
-    fn event(&self, _host: &str, _name: String, _data: Value) {}
+    fn event(&self, _host: &str, name: String, data: Value) {
+        // New sessions, for the projects that keep them in sync (X60).
+        let Some(sync) = self.0.upgrade().and_then(|l| l.sync()) else {
+            return;
+        };
+        match name.as_str() {
+            m::EV_SESSIONS_CHANGED => sync.sessions_changed(data),
+            m::EV_PROJECTS_CHANGED => sync.projects_changed(),
+            _ => {}
+        }
+    }
 }
 
 /// What a worker answers its central host.
