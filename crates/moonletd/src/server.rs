@@ -84,6 +84,10 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
     Ok(())
 }
 
+/// Queued bytes past which [`Conn::request_after_queue`] waits before its
+/// timeout starts: about what a slow link writes in a second or two.
+const QUEUED_BEFORE_WAITING: usize = 256 * 1024;
+
 /// Per-connection context passed to request handlers.
 pub struct Conn {
     pub id: ClientId,
@@ -148,11 +152,12 @@ impl Conn {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, RpcError> {
-        while self.tx.queued() > 0 {
+        // A small pack goes out at once; only a big one is waited for.
+        while self.tx.queued() > QUEUED_BEFORE_WAITING {
             if self.gone.load(Ordering::Relaxed) {
                 return Err(RpcError::new("disconnected", "connection closed"));
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
         self.request(method, params, timeout).await
     }
