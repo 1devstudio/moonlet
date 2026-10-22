@@ -878,18 +878,17 @@ pub fn parse_short_status(out: &str) -> Vec<UnpushedFile> {
 
 /// What in `dir` is only on this machine (X55): uncommitted files, and the
 /// commits that removing the folder and deleting `branch` (the session's,
-/// else the checked-out one) would lose. `merged` is the head commit of the
-/// branch's merged PR: GitHub keeps it and what it contains, even after a
-/// squash merge and once the branch is deleted.
-pub async fn unpushed(dir: &Path, branch: Option<&str>, merged: Option<&str>) -> Result<UnpushedWork> {
+/// else the checked-out one) would lose. `merged_head` is the head commit of
+/// the branch's merged PR: GitHub keeps it and what it contains, even after
+/// a squash merge and once the branch is deleted.
+pub async fn unpushed(dir: &Path, branch: Option<&str>, merged_head: Option<&str>) -> Result<UnpushedWork> {
     let status = git_text(dir, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]).await?;
     let own = match branch {
-        Some(b) => Some(b.to_string()),
-        None => current_branch(dir).await.ok(),
-    };
-    let own = match own.filter(|b| !b.is_empty()) {
-        Some(b) if local_branch_exists(dir, &b).await => Some(b),
-        _ => None,
+        Some(b) => known_branch(dir, b).await,
+        None => match current_branch(dir).await {
+            Ok(b) => known_branch(dir, &b).await,
+            Err(_) => None,
+        },
     };
     let upstream = match &own {
         Some(b) => git_text(dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", &format!("{b}@{{upstream}}")])
@@ -899,40 +898,57 @@ pub async fn unpushed(dir: &Path, branch: Option<&str>, merged: Option<&str>) ->
         None => None,
     };
     // Only a commit id this clone has: anything else would fail the count.
-    let merged = match merged.filter(|m| m.len() >= 7 && m.chars().all(|c| c.is_ascii_hexdigit())) {
+    let merged_head = match merged_head.filter(|m| m.len() >= 7 && m.chars().all(|c| c.is_ascii_hexdigit())) {
         Some(m) if git(dir, &["cat-file", "-e", &format!("{m}^{{commit}}")]).await.is_ok() => Some(m),
         _ => None,
     };
     // Commits on the branch, or a detached HEAD, that no other branch or
     // remote has. A HEAD on another branch is kept with that branch.
     // `--branches` takes the short name.
+    let own_ref = own.as_ref().map(|b| format!("refs/heads/{b}"));
     let exclude = own.as_ref().map(|b| format!("--exclude={b}"));
     let mut args = vec!["rev-list", "--count", "HEAD"];
-    args.extend(own.as_deref());
+    args.extend(own_ref.as_deref());
     args.push("--not");
-    args.extend(merged);
+    args.extend(merged_head);
     args.extend(exclude.as_deref());
     args.extend(["--branches", "--remotes"]);
     let count = git_text(dir, &args).await?;
     Ok(UnpushedWork { files: parse_short_status(&status), commits: count.trim().parse().unwrap_or(0), upstream })
 }
 
-/// A branch name from a caller is used only once git knows it: then it
-/// cannot start with `-`.
-async fn local_branch_exists(dir: &Path, branch: &str) -> bool {
-    git(dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).await.is_ok()
+/// `branch` when it is a local branch git can be given safely. `git
+/// update-ref` makes a branch named like an option, which `git branch`
+/// refuses: such a name is never passed on.
+async fn known_branch(dir: &Path, branch: &str) -> Option<String> {
+    if branch.is_empty() || branch.starts_with('-') {
+        return None;
+    }
+    git(dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
+        .await
+        .ok()
+        .map(|_| branch.to_string())
 }
 
 /// `git push -u origin <branch>`, the session's branch when git knows it,
-/// else HEAD as Create pull request does.
+/// else HEAD as Create pull request does. Refuses while a detached HEAD has
+/// commits no branch has: the push would not save them.
 pub async fn push(dir: &Path, branch: Option<&str>) -> Result<()> {
-    let mut target = "HEAD";
-    if let Some(b) = branch.filter(|b| !b.is_empty())
-        && local_branch_exists(dir, b).await
-    {
-        target = b;
+    let target = match branch {
+        Some(b) => known_branch(dir, b).await.map(|b| format!("refs/heads/{b}:refs/heads/{b}")),
+        None => None,
+    };
+    if target.is_some() && current_branch(dir).await.is_err() {
+        let n: u32 = git_text(dir, &["rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"])
+            .await?
+            .parse()
+            .unwrap_or(0);
+        if n > 0 {
+            let (what, verb, it) = if n == 1 { ("commit", "is", "it") } else { ("commits", "are", "them") };
+            bail!("{n} {what} on a detached HEAD {verb} on no branch. Put {it} on a branch first.");
+        }
     }
-    git(dir, &["push", "-u", "origin", target]).await?;
+    git(dir, &["push", "-u", "origin", target.as_deref().unwrap_or("HEAD")]).await?;
     Ok(())
 }
 
@@ -1747,6 +1763,42 @@ pub(crate) mod tests {
         assert_eq!(heads, "refs/heads/moonlet/session");
         let w = unpushed(p, Some("moonlet/session"), None).await.unwrap();
         assert_eq!((w.commits, w.upstream.as_deref()), (0, Some("origin/moonlet/session")));
+    }
+
+    #[tokio::test]
+    async fn a_branch_named_like_an_option_is_not_passed_to_git() {
+        // `git update-ref` makes such a branch; `git branch` would refuse it.
+        let dir = repo().await;
+        let p = dir.path();
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare"]).await.unwrap();
+        git(p, &["remote", "add", "origin", origin.path().to_str().unwrap()]).await.unwrap();
+        let bad = "--receive-pack=false";
+        git(p, &["update-ref", &format!("refs/heads/{bad}"), "HEAD"]).await.unwrap();
+        push(p, Some(bad)).await.unwrap();
+        let heads = git_text(origin.path(), &["for-each-ref", "--format=%(refname)", "refs/heads"]).await.unwrap();
+        assert_eq!(heads, "refs/heads/main");
+        let w = unpushed(p, Some("--all"), None).await;
+        assert_eq!(w.unwrap().commits, 0);
+    }
+
+    #[tokio::test]
+    async fn push_refuses_while_a_detached_head_has_commits_of_its_own() {
+        // Pushing the session's branch would not save them, and the archive
+        // after it removes the folder.
+        let dir = repo().await;
+        let p = dir.path();
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare"]).await.unwrap();
+        git(p, &["remote", "add", "origin", origin.path().to_str().unwrap()]).await.unwrap();
+        git(p, &["checkout", "-q", "-b", "moonlet/session"]).await.unwrap();
+        git(p, &["checkout", "-q", "--detach"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "detached"]).await.unwrap();
+        assert_eq!(unpushed(p, Some("moonlet/session"), None).await.unwrap().commits, 1);
+        let err = push(p, Some("moonlet/session")).await.unwrap_err();
+        assert_eq!(err.to_string(), "1 commit on a detached HEAD is on no branch. Put it on a branch first.");
+        let heads = git_text(origin.path(), &["for-each-ref", "--format=%(refname)", "refs/heads"]).await.unwrap();
+        assert_eq!(heads, "");
     }
 
     #[tokio::test]
