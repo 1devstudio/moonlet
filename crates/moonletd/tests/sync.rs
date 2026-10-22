@@ -1949,6 +1949,54 @@ async fn stepped_central(
 }
 
 #[tokio::test]
+async fn a_pause_for_another_reason_outlasts_the_session_leaving_its_branch_and_coming_back() {
+    let scratch = tempfile::tempdir().unwrap();
+    let origin = origin(scratch.path());
+    git(
+        scratch.path(),
+        &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
+    );
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    let replies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let addr = stepped_central(
+        scratch.path().join("studio-mini-shop"),
+        vec![Step::Outside, Step::OffBranch, Step::Edit],
+        go.clone(),
+        replies.clone(),
+    )
+    .await;
+    let worker = worker(&origin).await;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    in_sync(&worker).await;
+    let replied = |n: usize| {
+        let replies = replies.clone();
+        move || {
+            let replies = replies.clone();
+            async move { replies.lock().unwrap().len() >= n }
+        }
+    };
+    let outside = "studio-mini sent a path outside the copy.";
+
+    go.notify_one();
+    eventually("the first update is answered", replied(1)).await;
+    assert_eq!(reason(&copy_in(&worker, paused, "paused").await), outside);
+
+    // The session leaving its branch and coming back lifts nothing.
+    go.notify_one();
+    eventually("the second update is answered", replied(2)).await;
+    assert_eq!(reason(&copies(&worker).await[0]), outside);
+    go.notify_one();
+    eventually("the third update is answered", replied(3)).await;
+    assert_eq!(reason(&copies(&worker).await[0]), outside);
+}
+
+#[tokio::test]
 async fn a_pause_for_another_reason_outlasts_the_session_coming_back_to_its_branch() {
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());

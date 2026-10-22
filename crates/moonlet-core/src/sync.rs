@@ -756,7 +756,12 @@ pub async fn commit_tree(repo: &Path, commit: &str) -> Result<String> {
     let tree = git_env(
         repo,
         &[],
-        &["rev-parse", "--verify", "--end-of-options", &format!("{commit}^{{tree}}")],
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{commit}^{{tree}}"),
+        ],
         None,
     )
     .await?;
@@ -1017,6 +1022,14 @@ pub async fn create_branch(repo: &Path, name: &str, at: &str) -> Result<()> {
     commit_id(at)?;
     let r = format!("refs/heads/{name}");
     git_env(repo, &[], &["update-ref", &r, at, ""], None).await?;
+    Ok(())
+}
+
+/// Deletes branch `name` from `repo` while it is still at `at`.
+pub async fn delete_branch(repo: &Path, name: &str, at: &str) -> Result<()> {
+    commit_id(at)?;
+    let r = format!("refs/heads/{name}");
+    git_env(repo, &[], &["update-ref", "-d", &r, at], None).await?;
     Ok(())
 }
 
