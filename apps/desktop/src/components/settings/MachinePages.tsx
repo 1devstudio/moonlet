@@ -362,13 +362,16 @@ function PairCentralDialog({ host, central, onClose }: { host: string; central: 
     onClose();
     if (r.error) errorToast(remoteLinkError(r.error, host));
   };
+  // A pairing under way finishes, and may turn the link on, whatever the
+  // dialog does: it stays open until then.
+  const close = () => void (busy || onClose());
   return (
     <Dialog
       title={`Pair ${host} with ${central.name}`}
-      onClose={onClose}
+      onClose={close}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={close}>
             Cancel
           </Button>
           <Button variant="primary" disabled={!code || busy} onClick={() => void submit()}>
