@@ -495,6 +495,9 @@ impl Daemon {
                 let Some(device) = conn.phone.as_deref().filter(|_| conn.client == crate::link::WORKER_CLIENT) else {
                     return Err(RpcError::new("forbidden", "only a worker registers"));
                 };
+                if !self.mobile.is_paired(device) {
+                    return Err(RpcError::new("forbidden", "this Mac is no longer paired"));
+                }
                 let r: m::WorkerRegister = params(p)?;
                 self.workers.register(conn.clone(), device, r)?;
                 ok(true)

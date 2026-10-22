@@ -728,3 +728,57 @@ async fn a_mac_removed_and_paired_again_links_with_its_worker_id() {
         None
     );
 }
+
+#[tokio::test]
+async fn a_second_mac_with_the_same_worker_id_says_so_and_waits() {
+    let (central, addr) = central().await;
+    let _first = linked_worker(&central, &addr).await;
+    // A second Mac with this Mac's link.json, as a migration copies it.
+    let second = worker(WORKER_ID, "Alex's MacBook Air").await;
+    let token = pair(&central, &addr, "Alex's MacBook Air").await;
+    link(&second, &addr, &token).await;
+    let want = LinkState::Error {
+        message: "another Mac links with this worker id".into(),
+    };
+    eventually("an error", || async { link_state(&second).await == want }).await;
+    let names: Vec<_> = workers(&central).await.into_iter().map(|w| w.worker.name).collect();
+    assert_eq!(names, ["Alex's MacBook Pro"]);
+}
+
+#[tokio::test]
+async fn a_mac_that_removed_itself_cannot_register_on_its_closing_connection() {
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    assert_eq!(refused(&ask(&mut s, 1, "mobile.unpair", json!({})).await), None);
+    assert_eq!(
+        refused(&ask(&mut s, 2, "worker.register", registration(WORKER_ID, "MacBook Pro")).await)
+            .as_deref(),
+        Some("forbidden")
+    );
+}
+
+#[tokio::test]
+async fn a_new_name_reaches_the_central_host_while_linked() {
+    let (central, addr) = central().await;
+    let worker = linked_worker(&central, &addr).await;
+    let _: LinkInfo = worker
+        .call("link.set", json!({ "worker": { "name": "Work laptop" } }))
+        .await;
+    eventually("the new name", || async {
+        workers(&central).await.first().map(|w| w.worker.name.clone()) == Some("Work laptop".into())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_retry_leaves_a_working_link_alone() {
+    let (central, addr) = central().await;
+    let worker = linked_worker(&central, &addr).await;
+    let since = workers(&central).await[0].connected_since;
+    let _: LinkInfo = worker.call("link.retry", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let now = workers(&central).await;
+    assert_eq!(now.len(), 1);
+    assert_eq!(now[0].connected_since, since, "the link was made again");
+}

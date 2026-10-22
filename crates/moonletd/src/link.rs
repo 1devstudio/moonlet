@@ -9,7 +9,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use moonlet_core::paths::now_ms;
@@ -45,11 +45,27 @@ impl LinkStore {
     /// Reads `path`. The first time, this machine gets a worker id that
     /// never changes afterwards, and the name `computer_name`.
     pub fn load(path: PathBuf, computer_name: &str) -> LinkStore {
-        let text = std::fs::read_to_string(&path).ok();
-        let read = text
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => Some(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                // It may hold the id: never written over while unreadable.
+                tracing::warn!("cannot read {}: {e}", path.display());
+                let data = LinkFile {
+                    central: None,
+                    worker: LinkWorker {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: computer_name.to_string(),
+                        enabled: false,
+                    },
+                };
+                return LinkStore { path, data };
+            }
+        };
+        let read = bytes
             .as_deref()
-            .and_then(|s| serde_json::from_str::<LinkFile>(s).ok());
-        if text.is_some() && read.is_none() {
+            .and_then(|b| serde_json::from_slice::<LinkFile>(b).ok());
+        if bytes.is_some() && read.is_none() {
             // Kept for the user rather than written over: it holds the id.
             let bad = path.with_extension("json.bad");
             match std::fs::rename(&path, &bad) {
@@ -139,7 +155,8 @@ fn check_central(c: &LinkCentral, own: &[IpAddr]) -> Result<(), RpcError> {
         let addr: SocketAddr = a
             .parse()
             .map_err(|_| invalid(format!("{a} is not an ip:port address")))?;
-        if own.contains(&addr.ip()) {
+        // `::ffff:100.x` is the same address as `100.x`.
+        if own.contains(&addr.ip().to_canonical()) {
             return Err(invalid("this Mac is the central host"));
         }
     }
@@ -179,6 +196,9 @@ pub struct WorkerLink {
     store: Mutex<LinkStore>,
     state: Mutex<LinkState>,
     host: Mutex<Option<Arc<Host>>>,
+    /// Which host is current: a stopped host's late news carries an older
+    /// number and is ignored.
+    generation: AtomicU64,
     /// Sessions this Mac keeps in sync (X60); the link stays open for them.
     synced: AtomicUsize,
     /// Set while `link.set` applies a change, which says `link.changed` once.
@@ -197,6 +217,7 @@ impl WorkerLink {
             store: Mutex::new(store),
             state: Mutex::new(LinkState::Off),
             host: Mutex::new(None),
+            generation: AtomicU64::new(0),
             synced: AtomicUsize::new(0),
             quiet: AtomicBool::new(false),
             sessions,
@@ -233,6 +254,7 @@ impl WorkerLink {
     /// `link.set`: stores the settings, then opens, moves or closes the link.
     pub fn set(self: &Arc<Self>, req: LinkSet, own: &[IpAddr]) -> Result<LinkInfo, RpcError> {
         let moved = req.central.is_some();
+        let renamed = req.worker.as_ref().is_some_and(|w| w.name.is_some());
         self.store.lock().unwrap().set(req, own)?;
         // One link.changed for the whole change, at the end.
         self.quiet.store(true, Ordering::SeqCst);
@@ -244,6 +266,14 @@ impl WorkerLink {
         // A link waiting for the user tries again on new settings, too.
         if !moved && self.waiting() {
             self.retry();
+        }
+        // The central host learns a new name now, not at the next link.
+        if renamed
+            && !moved
+            && matches!(*self.state.lock().unwrap(), LinkState::Connected { .. })
+            && let Some(host) = self.host.lock().unwrap().clone()
+        {
+            tokio::spawn(self.clone().register(host));
         }
         self.quiet.store(false, Ordering::SeqCst);
         self.changed();
@@ -258,8 +288,15 @@ impl WorkerLink {
         )
     }
 
-    /// `link.retry`: a link waiting for the user tries again now.
+    /// `link.retry`: a link waiting for the user tries again now. A link
+    /// that works, or is being made, is left alone.
     pub fn retry(&self) {
+        if matches!(
+            *self.state.lock().unwrap(),
+            LinkState::Connected { .. } | LinkState::Connecting
+        ) {
+            return;
+        }
         if let Some(h) = self.host.lock().unwrap().as_ref() {
             h.reconnect();
         }
@@ -275,6 +312,8 @@ impl WorkerLink {
     /// Opens the link when it should be open and is not, and closes it
     /// when it should not be.
     pub fn apply(self: &Arc<Self>) {
+        // Decided under the host's lock, so a close cannot slip in between.
+        let mut host = self.host.lock().unwrap();
         let (want, central) = {
             let store = self.store.lock().unwrap();
             let central = store.central().cloned();
@@ -287,10 +326,10 @@ impl WorkerLink {
         };
         match (want, central) {
             (true, Some(central)) => {
-                let mut host = self.host.lock().unwrap();
                 if host.is_some() {
                     return;
                 }
+                let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
                 let h = Host::start(
                     HostOptions {
                         id: central.name.clone(),
@@ -303,18 +342,22 @@ impl WorkerLink {
                         token: central.token.clone(),
                         route: None,
                     }),
-                    Arc::new(LinkEvents(Arc::downgrade(self))),
+                    Arc::new(LinkEvents(Arc::downgrade(self), generation)),
                     tokio::runtime::Handle::current(),
                 );
                 h.set_requests(Arc::new(WorkerRequests));
                 *host = Some(h);
             }
-            _ => self.close(),
+            _ => {
+                drop(host);
+                self.close();
+            }
         }
     }
 
     /// Closes the link, if it is open.
     pub fn close(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         if let Some(h) = self.host.lock().unwrap().take() {
             h.stop();
         }
@@ -345,11 +388,19 @@ impl WorkerLink {
         let params = serde_json::to_value(reg).unwrap();
         if let Err(e) = host.request(m::WORKER_REGISTER, params).await {
             tracing::warn!("cannot register with the central host: {}", e.message);
+            // Linked but not listed: say so, and wait for a retry.
+            let current = self.host.lock().unwrap().as_ref().is_some_and(|h| Arc::ptr_eq(h, &host));
+            if current {
+                self.set_state(LinkState::Error { message: e.message });
+            }
         }
     }
 
-    fn status(self: &Arc<Self>, info: &HostInfo) {
+    fn status(self: &Arc<Self>, info: &HostInfo, generation: u64) {
         // A stopped host's last words are not this link's.
+        if generation != self.generation.load(Ordering::SeqCst) {
+            return;
+        }
         let current = self.host.lock().unwrap().clone();
         let Some(host) = current else { return };
         let name = self
@@ -396,12 +447,13 @@ fn arch() -> &'static str {
     }
 }
 
-struct LinkEvents(Weak<WorkerLink>);
+/// A host's news for its link, with the host's generation.
+struct LinkEvents(Weak<WorkerLink>, u64);
 
 impl Events for LinkEvents {
     fn status(&self, info: &HostInfo) {
         if let Some(link) = self.0.upgrade() {
-            link.status(info);
+            link.status(info, self.1);
         }
     }
 
@@ -485,6 +537,29 @@ mod tests {
             "{ \"worker\": { \"id\": "
         );
         assert_eq!(store.worker().name, "Alex's MacBook Pro");
+    }
+
+    #[test]
+    fn a_link_json_that_is_not_text_is_kept_aside_too() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(file(&dir), b"{\"worker\": \xff\xfe}").unwrap();
+        LinkStore::load(file(&dir), "Alex's MacBook Pro");
+        assert_eq!(
+            std::fs::read(dir.path().join("link.json.bad")).unwrap(),
+            b"{\"worker\": \xff\xfe}"
+        );
+    }
+
+    #[test]
+    fn a_link_json_that_cannot_be_opened_is_never_written_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
+        let kept = format!(r#"{{"central":null,"worker":{{"id":"{id}","name":"Mac","enabled":true}}}}"#);
+        std::fs::write(file(&dir), &kept).unwrap();
+        std::fs::set_permissions(file(&dir), std::fs::Permissions::from_mode(0o200)).unwrap();
+        LinkStore::load(file(&dir), "Mac");
+        std::fs::set_permissions(file(&dir), std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(std::fs::read_to_string(file(&dir)).unwrap(), kept);
     }
 
     #[test]
@@ -577,6 +652,14 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.message, "this Mac is the central host");
         assert_eq!(store.central(), None);
+        // The same address written as IPv6.
+        let e = store
+            .set(
+                central("studio-mini", &["[::ffff:100.101.102.103]:47428"], TOKEN),
+                &own,
+            )
+            .unwrap_err();
+        assert_eq!(e.message, "this Mac is the central host");
         store
             .set(central("studio-mini", &["100.64.0.9:47428"], TOKEN), &own)
             .unwrap();

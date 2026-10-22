@@ -487,6 +487,12 @@ impl Mobile {
         Ok(())
     }
 
+    /// Whether device `id` is still paired. A device that removed itself
+    /// keeps its connection a moment longer, for the reply.
+    pub fn is_paired(&self, id: &str) -> bool {
+        self.data.lock().unwrap().devices.iter().any(|d| d.id == id)
+    }
+
     fn forget(&self, id: &str) -> Result<(), RpcError> {
         let mut data = self.data.lock().unwrap();
         let before = data.devices.len();
