@@ -49,3 +49,44 @@ export function centralHostId(hosts: HostInfo[], link: LinkInfo | null): string 
 export function pickCentral(current: string | null, picked: string): string | null {
   return current === picked ? null : picked;
 }
+
+/**
+ * Follows the link's settings and state: `link.changed` events, and a
+ * `link.get` snapshot at the start and each time this Mac's daemon is back.
+ * A snapshot asked for before the latest event is older than it, and is
+ * dropped. Returns a function that stops following.
+ */
+export function watchLink(io: {
+  get: () => Promise<LinkInfo>;
+  onChanged: (cb: (link: LinkInfo) => void) => () => void;
+  onReconnected: (cb: () => void) => () => void;
+  set: (link: LinkInfo | null) => void;
+}): () => void {
+  let stopped = false;
+  let events = 0;
+  const read = () => {
+    const asked = events;
+    io.get().then(
+      (link) => {
+        if (!stopped && asked === events) io.set(link);
+      },
+      () => {
+        if (!stopped && asked === events) io.set(null);
+      },
+    );
+  };
+  const offChanged = io.onChanged((link) => {
+    if (stopped) return;
+    events += 1;
+    io.set(link);
+  });
+  const offReconnected = io.onReconnected(() => {
+    if (!stopped) read();
+  });
+  read();
+  return () => {
+    stopped = true;
+    offChanged();
+    offReconnected();
+  };
+}

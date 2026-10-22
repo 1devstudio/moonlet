@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centralHostId, linkLine, linkRetries, pickCentral } from "./workerLink";
+import { centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "./workerLink";
 import type { HostInfo, LinkInfo, LinkState } from "./protocol";
 
 const info = (state: LinkState, central: string | null = "studio-mini"): LinkInfo => ({
@@ -55,5 +55,61 @@ describe("the central host choice (X41)", () => {
     expect(pickCentral(null, "studio-mini")).toBe("studio-mini");
     expect(pickCentral("studio-mini", "build-box")).toBe("build-box");
     expect(pickCentral("studio-mini", "studio-mini")).toBeNull();
+  });
+});
+
+describe("following the link (X41)", () => {
+  const info = (kind: "off" | "connecting", name = "studio-mini"): LinkInfo => ({
+    central: { name, addrs: ["100.101.102.103:47428"] },
+    worker: { id: "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37", name: "Alex's MacBook Pro", enabled: kind !== "off" },
+    state: { kind } as LinkState,
+  });
+
+  /** A fake daemon: `get` answers when resolved by the test. */
+  function fake() {
+    const answers: ((l: LinkInfo) => void)[] = [];
+    let changed: (l: LinkInfo) => void = () => {};
+    let reconnected: () => void = () => {};
+    const seen: (LinkInfo | null)[] = [];
+    const stop = watchLink({
+      get: () => new Promise<LinkInfo>((r) => answers.push(r)),
+      onChanged: (cb) => {
+        changed = cb;
+        return () => {};
+      },
+      onReconnected: (cb) => {
+        reconnected = cb;
+        return () => {};
+      },
+      set: (l) => seen.push(l),
+    });
+    return { answers, changed: (l: LinkInfo) => changed(l), reconnected: () => reconnected(), seen, stop };
+  }
+
+  it("drops a snapshot that an event overtook", async () => {
+    const f = fake();
+    f.changed(info("connecting"));
+    f.answers[0](info("off"));
+    await Promise.resolve();
+    expect(f.seen.map((l) => l?.state.kind)).toEqual(["connecting"]);
+  });
+
+  it("reads the link again when this Mac's daemon is back", async () => {
+    const f = fake();
+    f.answers[0](info("off"));
+    await Promise.resolve();
+    f.reconnected();
+    f.answers[1](info("connecting"));
+    await Promise.resolve();
+    expect(f.seen.map((l) => l?.state.kind)).toEqual(["off", "connecting"]);
+  });
+
+  it("sets nothing once stopped", async () => {
+    const f = fake();
+    f.stop();
+    f.answers[0](info("off"));
+    f.changed(info("connecting"));
+    await Promise.resolve();
+    expect(f.seen).toEqual([]);
   });
 });

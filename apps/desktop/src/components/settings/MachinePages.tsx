@@ -5,14 +5,14 @@ import { useEffect, useId, useState } from "react";
 import { encode } from "uqr";
 import { Check, Copy, Laptop, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
-import { hostsApi, onDaemonEvent, rpc } from "../../lib/daemon";
+import { hostsApi, onDaemonEvent, onHostStatus, rpc } from "../../lib/daemon";
 import { countdown, deviceLine, devicesOfKind, pairEndedText } from "../../lib/mobile";
 import { addHostReady, displayCode, readAddHostInput } from "../../lib/addHost";
 import { EV, M, type HostInfo, type LinkInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
-import { centralHostId, linkLine, linkRetries, pickCentral } from "../../lib/workerLink";
+import { centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "../../lib/workerLink";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
 
 const iconBox = "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted";
@@ -247,13 +247,26 @@ function MacPairing({ pairing, host, now, onCancel }: { pairing: MobilePairing; 
  * after a newer state. */
 function useLink(): LinkInfo | null {
   const [link, setLink] = useState<LinkInfo | null>(null);
-  useEffect(() => {
-    void rpc<LinkInfo>(HOST, M.linkGet).then(setLink).catch(() => setLink(null));
-    const unlisten = onDaemonEvent((e) => {
-      if (e.host === HOST && e.name === EV.linkChanged) setLink(e.data as LinkInfo);
-    });
-    return () => void unlisten.then((f) => f());
-  }, []);
+  useEffect(
+    () =>
+      watchLink({
+        get: () => rpc<LinkInfo>(HOST, M.linkGet),
+        onChanged: (cb) => {
+          const off = onDaemonEvent((e) => {
+            if (e.host === HOST && e.name === EV.linkChanged) cb(e.data as LinkInfo);
+          });
+          return () => void off.then((f) => f());
+        },
+        onReconnected: (cb) => {
+          const off = onHostStatus((h) => {
+            if (h.id === HOST && h.status === "connected") cb();
+          });
+          return () => void off.then((f) => f());
+        },
+        set: setLink,
+      }),
+    [],
+  );
   return link;
 }
 

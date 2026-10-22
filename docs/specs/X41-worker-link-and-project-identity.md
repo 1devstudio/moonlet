@@ -117,6 +117,8 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
   (`workerLink.test.ts` the link's status line, `worker-link.e2e.ts`)
 - The toggle's help text says it only links this Mac for now; commands are not routed yet.
+- When this Mac's daemon cannot say whether a host being removed is the central host, or cannot clear it, the host is not removed and the error shows; its token never stays in use for a host the list no longer has. Choosing the central host and removing a host never interleave. (`a_host_is_forgotten_only_once_it_is_known_not_to_stay_central`)
+- The row follows `link.changed`, and reads the link again whenever this Mac's daemon is back; a reading older than the last event is dropped. (`workerLink.test.ts` following the link)
 
 ## Protocol and RPCs
 
