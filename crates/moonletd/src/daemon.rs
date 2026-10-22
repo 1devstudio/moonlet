@@ -41,6 +41,10 @@ pub struct Daemon {
     pub mobile: Arc<crate::mobile::Mobile>,
     /// Clones started from Add project (X59).
     clones: Arc<crate::clones::Clones>,
+    /// This Mac's link to its central host (X41).
+    pub link: Arc<crate::link::WorkerLink>,
+    /// The workers linked to this daemon as their central host (X41).
+    pub workers: Arc<crate::workers::Workers>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -65,6 +69,18 @@ impl Drop for Flag<'_> {
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
 pub const CLI_CLIENT: &str = "moonlet-cli";
+
+/// Refuses what only the Mac's own app may do, such as managing `what`:
+/// never a paired device over the tailnet, nor an agent's `moonlet` CLI.
+pub(crate) fn app_only(conn: &Conn, what: &str) -> Result<(), RpcError> {
+    if conn.phone.is_some() {
+        return Err(RpcError::new("forbidden", format!("manage {what} from the Mac")));
+    }
+    if conn.client == CLI_CLIENT {
+        return Err(RpcError::new("forbidden", format!("only the moonlet app manages {what}")));
+    }
+    Ok(())
+}
 
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
     serde_json::from_value(v).map_err(|e| RpcError::new("invalid_params", e.to_string()))
@@ -144,6 +160,14 @@ impl Daemon {
         let emitter = terminals.clone();
         let mobile = Arc::new(crate::mobile::Mobile::load(crate::mobile::Mobile::default_file(), move |m| emitter.emit(m)));
         let clones = crate::clones::Clones::new(sessions.clone(), terminals.clone());
+        let emitter = terminals.clone();
+        let link = crate::link::WorkerLink::new(
+            crate::link::LinkStore::load(moonlet_core::paths::home().join("link.json"), &crate::link::computer_name()),
+            sessions.clone(),
+            move |m| emitter.emit(m),
+        );
+        let emitter = terminals.clone();
+        let workers = Arc::new(crate::workers::Workers::new(move |m| emitter.emit(m)));
         Arc::new(Self {
             clones,
             terminals,
@@ -158,6 +182,8 @@ impl Daemon {
             accounts: Mutex::new(HashMap::new()),
             claude_updating: AtomicBool::new(false),
             mobile,
+            link,
+            workers,
         })
     }
 
@@ -207,6 +233,7 @@ impl Daemon {
 
     pub fn on_disconnect(&self, client: u64) {
         self.watchers.release_client(client);
+        self.workers.disconnected(client);
     }
 
     pub fn info(&self) -> DaemonInfo {
@@ -222,7 +249,7 @@ impl Daemon {
         }
     }
 
-    pub async fn handle(self: &Arc<Self>, conn: &Conn, method: &str, p: Value) -> HandlerResult {
+    pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
         let s = &self.terminals;
         match method {
             m::DAEMON_INFO => ok(self.info()),
@@ -422,6 +449,7 @@ impl Daemon {
             m::MOBILE_UNPAIR => match &conn.phone {
                 Some(device) => {
                     self.mobile.unpair(device)?;
+                    self.workers.forget_device(device);
                     ok(true)
                 }
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
@@ -447,6 +475,33 @@ impl Daemon {
                 self.clones.cancel(&r.id).map_err(internal)?;
                 ok(true)
             }
+            m::LINK_GET => ok(self.link.info()),
+            // Like phone access: a paired device or an agent's CLI could
+            // otherwise point this Mac's link at a host of its choosing.
+            m::LINK_SET => {
+                app_only(conn, "the link")?;
+                let r: m::LinkSet = params(p)?;
+                ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
+            }
+            m::LINK_RETRY => {
+                app_only(conn, "the link")?;
+                self.link.retry();
+                ok(self.link.info())
+            }
+            m::WORKER_LIST => ok(self.workers.list()),
+            m::WORKER_REGISTER => {
+                // Only a worker's daemon, over the tailnet with a paired
+                // device's token, registers.
+                let Some(device) = conn.phone.as_deref().filter(|_| conn.client == crate::link::WORKER_CLIENT) else {
+                    return Err(RpcError::new("forbidden", "only a worker registers"));
+                };
+                if !self.mobile.is_paired(device) {
+                    return Err(RpcError::new("forbidden", "this Mac is no longer paired"));
+                }
+                let r: m::WorkerRegister = params(p)?;
+                self.workers.register(conn.clone(), device, r)?;
+                ok(true)
+            }
             _ => self.handle_project(conn, method, p).await,
         }
     }
@@ -454,12 +509,7 @@ impl Daemon {
     /// Phone access (X39): managed from the Mac's app only, never from a
     /// phone or an agent's `moonlet` CLI.
     fn handle_mobile(self: &Arc<Self>, conn: &Conn, method: &str, p: Value) -> HandlerResult {
-        if conn.phone.is_some() {
-            return Err(RpcError::new("forbidden", "manage phones from the Mac"));
-        }
-        if conn.client == CLI_CLIENT {
-            return Err(RpcError::new("forbidden", "only the moonlet app manages phones"));
-        }
+        app_only(conn, "phones")?;
         match method {
             m::MOBILE_STATUS => ok(self.mobile.status()),
             m::MOBILE_SET_ENABLED => {
@@ -475,6 +525,7 @@ impl Daemon {
             m::MOBILE_REVOKE => {
                 let r: m::IdRef = params(p)?;
                 self.mobile.revoke(&r.id)?;
+                self.workers.forget_device(&r.id);
                 ok(true)
             }
             _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),

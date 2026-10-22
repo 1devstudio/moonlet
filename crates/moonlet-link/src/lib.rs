@@ -121,6 +121,13 @@ pub trait Events: Send + Sync + 'static {
     fn event(&self, host: &str, name: String, data: Value);
 }
 
+/// Answers the requests a daemon sends on the link. Only a worker's link
+/// to its central host gets any (X41); a host without a handler refuses
+/// them with `unknown_method`.
+pub trait Requests: Send + Sync + 'static {
+    fn request(&self, method: String, params: Value) -> BoxFuture<'static, Result<Value, RpcError>>;
+}
+
 type Pending = HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>;
 type OutputSink = Box<dyn Fn(Vec<u8>) + Send + Sync>;
 
@@ -139,6 +146,7 @@ pub struct Host {
     attaching: Mutex<HashMap<u64, TerminalId>>,
     next_id: AtomicU64,
     output: Mutex<Option<OutputSink>>,
+    requests: Mutex<Option<Arc<dyn Requests>>>,
     batch: Mutex<Vec<u8>>,
     stop: watch::Sender<bool>,
     /// Kicks the reconnect loop to retry immediately.
@@ -188,6 +196,7 @@ impl Host {
             attaching: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             output: Mutex::new(None),
+            requests: Mutex::new(None),
             batch: Mutex::new(Vec::new()),
             stop,
             retry: tokio::sync::Notify::new(),
@@ -211,6 +220,11 @@ impl Host {
     /// Where batched PTY output goes from now on.
     pub fn set_output(&self, sink: impl Fn(Vec<u8>) + Send + Sync + 'static) {
         *self.output.lock().unwrap() = Some(Box::new(sink));
+    }
+
+    /// What answers the daemon's requests from now on (X41).
+    pub fn set_requests(&self, handler: Arc<dyn Requests>) {
+        *self.requests.lock().unwrap() = Some(handler);
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> {
@@ -343,12 +357,35 @@ async fn flush_loop(host: std::sync::Weak<Host>) {
     }
 }
 
+/// How long to wait before each retry: 300 ms, doubling up to 5 s, and
+/// back to 300 ms once a connection is made.
+struct Backoff(Duration);
+
+impl Backoff {
+    const FIRST: Duration = Duration::from_millis(300);
+    const MAX: Duration = Duration::from_secs(5);
+
+    fn new() -> Backoff {
+        Backoff(Self::FIRST)
+    }
+
+    fn next(&mut self) -> Duration {
+        let wait = self.0;
+        self.0 = (self.0 * 2).min(Self::MAX);
+        wait
+    }
+
+    fn reset(&mut self) {
+        self.0 = Self::FIRST;
+    }
+}
+
 async fn connection_loop(
     host: Arc<Host>,
     connector: Arc<dyn Connector>,
     mut stop: watch::Receiver<bool>,
 ) {
-    let mut backoff = Duration::from_millis(300);
+    let mut backoff = Backoff::new();
     let mut attempt = 0u32;
     loop {
         if *stop.borrow() {
@@ -361,9 +398,14 @@ async fn connection_loop(
         };
         let failure = host.failure.lock().unwrap().take();
         host.set_status(status, failure);
-        match connector.connect().await {
+        let connected = connector.connect().await;
+        // Stopped while connecting: whatever came of it is no news.
+        if *stop.borrow() {
+            return;
+        }
+        match connected {
             Ok((reader, writer)) => {
-                backoff = Duration::from_millis(300);
+                backoff.reset();
                 if let Err(e) = run_link(&host, &*connector, reader, writer, &mut stop).await {
                     tracing::info!(host = %host.id, "link ended: {e:#}");
                 }
@@ -402,11 +444,10 @@ async fn connection_loop(
         }
         attempt += 1;
         tokio::select! {
-            _ = tokio::time::sleep(backoff) => {}
+            _ = tokio::time::sleep(backoff.next()) => {}
             _ = host.retry.notified() => {}
             _ = stop.changed() => return,
         }
-        backoff = (backoff * 2).min(Duration::from_secs(5));
     }
 }
 
@@ -541,6 +582,7 @@ fn dispatch(host: &Arc<Host>, frame: Frame) {
                 });
             }
         }
+        Frame::Json(Message::Request { id, method, params }) => answer(host, id, method, params),
         Frame::Json(Message::Event { name, data }) => {
             if name == moonlet_proto::methods::EV_AGENT_ATTENTION || name.starts_with("session.") {
                 // Make sure output that preceded the state change is on screen first.
@@ -550,6 +592,35 @@ fn dispatch(host: &Arc<Host>, frame: Frame) {
         }
         _ => {}
     }
+}
+
+/// Runs the handler for a daemon's request and sends its reply on the
+/// link the request came on, if that link is still up.
+fn answer(host: &Arc<Host>, id: u64, method: String, params: Value) {
+    let handler = host.requests.lock().unwrap().clone();
+    // The link this request came on: a reply must not reach a newer one,
+    // whose daemon numbers its own requests from 1 again.
+    let Some(link) = host.link.lock().unwrap().as_ref().map(|l| l.tx.clone()) else {
+        return;
+    };
+    host.rt.clone().spawn(async move {
+        let result = match handler {
+            Some(h) => h.request(method, params).await,
+            None => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
+        };
+        let reply = match result {
+            Ok(value) => Message::ok(id, value),
+            Err(e) => Message::err(id, e),
+        };
+        let bytes = match encode_frame(&Frame::Json(reply)) {
+            Ok(b) => b,
+            Err(e) => match encode_frame(&Frame::Json(Message::err(id, RpcError::new("too_large", e.to_string())))) {
+                Ok(b) => b,
+                Err(_) => return,
+            },
+        };
+        let _ = link.send(bytes);
+    });
 }
 
 /// How long the app waits for a daemon reply. `claude update` gets ten
@@ -569,6 +640,16 @@ fn request_timeout(method: &str) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retries_wait_longer_each_time_up_to_five_seconds() {
+        // X41's worked sequence, in milliseconds.
+        let mut b = Backoff::new();
+        let waits: Vec<u128> = (0..7).map(|_| b.next().as_millis()).collect();
+        assert_eq!(waits, [300, 600, 1200, 2400, 4800, 5000, 5000]);
+        b.reset();
+        assert_eq!(b.next(), Duration::from_millis(300));
+    }
 
     #[test]
     fn waits_longer_than_the_daemon_for_claude_update() {

@@ -24,7 +24,7 @@ pub use codec::{read_frame, write_frame};
 pub use message::{Message, RpcError};
 
 /// Bumped on any incompatible change to framing, messages or method shapes.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Upper bound for a single frame. Larger frames are a protocol error.
 pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;

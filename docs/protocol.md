@@ -29,6 +29,7 @@ Every JSON message is an object with a `t` tag:
 - `hello` `{protocol, client}` is sent by the client first. The daemon answers `welcome` `{protocol, daemon_version, host, pid}`, or closes the connection if `protocol` differs from its own.
 - `request` `{id, method, params}` gets exactly one `response` `{id, result | error}`. `error` is `{code, message}`.
 - `event` `{name, data}` is a daemon broadcast to every connected client.
+- On a worker's connection to its central host (hello `client` `moonletd-worker`, X41), requests also go the other way: the central host sends `request`, numbered from 1, and the worker answers with `response`. `id` 0 stays the reply that ends a link. No other client ever receives a request.
 - `auth` `{token?, pair?, device?, kind?, route?}` comes first on a tailnet connection, before `hello` (X39). `kind` (`phone` or `desktop`, X57) says what is pairing; it defaults to `phone`. The daemon answers `authed` `{device_id, token?, protocol, daemon_version, host, os}` (`token` only after a pairing; `os` is `macos` or `linux`, X58; daemons before X57 leave out the last four) or one `response` with `id` 0 and error `unauthorized`, then closes. With `route`, everything after `authed` comes from `ssh <route> moonletd proxy`.
 
 ## Attach ordering
@@ -52,6 +53,8 @@ Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`;
 - `fs.*`: list, files, read, write, watch.
 - `shell.history`: the login shell's history for input suggestions.
 - `mobile.*`: status, set_enabled, pair_start, pair_cancel, revoke, hosts, unpair for tailnet access (X39, X57). Only the desktop app may call them, except `mobile.hosts`, which phones use, and `mobile.unpair`, with which a paired device removes itself from its own connection. Events: `mobile.changed`, `mobile.paired`, `mobile.pair_ended`.
+- `link.*` (X41): get, set and retry this Mac's link to its central host, kept in `~/.moonlet/link.json`. `link.get` returns `{central: {name, addrs} | null, worker: {id, name, enabled}, state}`, never the token; `state.kind` is `off`, `connecting`, `connected` (`since`), `reconnecting`, `needs_update` (`daemon_version`), `refused` (the central host no longer accepts this Mac) or `error` (`message`). A link in `needs_update`, `refused` or `error` tries again on `link.retry` or any `link.set`. `link.set {central?, worker?: {enabled?, name?}}` changes only what it is given; `central: null` clears it. Event: `link.changed`, the same as `link.get`.
+- `worker.*` (X41): on the central host, `worker.register` (only from a `moonletd-worker` connection over the tailnet) and `worker.list`, each worker with `{id, name, os, arch, cores, version, projects: [{identity, path}], connected_since, rtt_ms}`. The central host sends `worker.ping` to each worker every 10 s and drops one that misses three in a row. Event: `workers.changed`, the list.
 
 ## Versioning
 
