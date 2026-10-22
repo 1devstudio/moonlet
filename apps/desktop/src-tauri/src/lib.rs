@@ -56,8 +56,13 @@ fn host_add(hosts: Hosts, id: String) -> Result<HostEntry, RpcError> {
 
 #[tauri::command]
 async fn host_remove(hosts: Hosts<'_>, id: String) -> Result<(), RpcError> {
-    hosts.remove(&id).await;
-    Ok(())
+    hosts.remove(&id).await
+}
+
+/// Makes a host this Mac's central host, or with `None` clears it (X41).
+#[tauri::command]
+async fn host_set_central(hosts: Hosts<'_>, id: Option<String>) -> Result<Value, RpcError> {
+    hosts.set_central(id.as_deref()).await
 }
 
 #[tauri::command]
@@ -495,6 +500,7 @@ pub fn run() {
             host_list,
             host_add,
             host_remove,
+            host_set_central,
             host_reconnect,
             host_subscribe,
             rpc,

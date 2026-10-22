@@ -79,7 +79,7 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X38 | A new tab is an agent, and it can pick up earlier chats and plans | P1 | 3 | implemented (look unchecked in app) | [X38-new-agent-tab-context.md](X38-new-agent-tab-context.md) |
 | X39 | Pair a phone and let it reach the daemon over Tailscale | P1 | 3 | implemented (the iPhone untried) | [X39-phone-pairing-and-link.md](X39-phone-pairing-and-link.md) |
 | X40 | The moonlet phone app | P1 | 3 | implemented (iPhone build and push untried) | [X40-mobile-app.md](X40-mobile-app.md) |
-| X41 | Worker link and project identity | P1 | 4 | draft | [X41-worker-link-and-project-identity.md](X41-worker-link-and-project-identity.md) |
+| X41 | Worker link and project identity | P1 | 4 | implemented (untried between two real Macs) | [X41-worker-link-and-project-identity.md](X41-worker-link-and-project-identity.md) |
 | X42 | Agents view: the subagents a chat launches | P1 | 3 | implemented (look unchecked in app) | [X42-subagents-view.md](X42-subagents-view.md) |
 | X43 | Settings page (nav, app pages, workspace and project pages, shortcuts, search) | P1 | 3 | implemented (look unchecked in app) | [X43-settings-page.md](X43-settings-page.md) |
 | X44 | Task trackers (Linear, Jira Cloud, ClickUp, GitHub Issues) | P1 | 3 | draft (GitHub, Linear, Jira Cloud and ClickUp implemented; Linear OAuth waits for a registered client ID; GitHub project boards to come) | [X44-task-trackers.md](X44-task-trackers.md) |

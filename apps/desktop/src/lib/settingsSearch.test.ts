@@ -186,3 +186,11 @@ describe("tailnet access in the search (X57)", () => {
     ]);
   });
 });
+
+describe("the worker link in the search (X41)", () => {
+  it("finds Use this Mac for heavy commands on Hosts, also as the central host", () => {
+    const found = (q: string) => searchSettings(q, ctx).map((r) => [r.path, r.route, r.setting]);
+    expect(found("heavy commands")).toEqual([["Machines › Hosts", { page: "hosts" }, "heavy-commands"]]);
+    expect(found("central host")).toEqual([["Machines › Hosts", { page: "hosts" }, "heavy-commands"]]);
+  });
+});

@@ -16,6 +16,7 @@ use moonlet_link::tailnet::TailnetConnector;
 use moonlet_link::{
     BoxFuture, Connector, Events, Host, HostOptions, HostStatus, NEEDS_INSTALL, Reader, Writer,
 };
+use moonlet_proto::methods::{LinkCentral, LinkSet};
 use moonlet_proto::{Frame, Message, RpcError};
 use serde::Serialize;
 use serde_json::Value;
@@ -119,6 +120,9 @@ pub struct HostManager {
     hosts: Mutex<HashMap<String, Arc<Host>>>,
     /// The hosts paired over the tailnet, with their tokens (X57).
     tailnet: Mutex<HashMap<String, TailnetHost>>,
+    /// Held while the central host is chosen, or checked before a host is
+    /// forgotten, so the two never interleave.
+    central: tokio::sync::Mutex<()>,
 }
 
 impl HostManager {
@@ -127,6 +131,7 @@ impl HostManager {
             app,
             hosts: Mutex::new(HashMap::new()),
             tailnet: Mutex::new(HashMap::new()),
+            central: tokio::sync::Mutex::new(()),
         });
         mgr.add(LOCAL, false);
         let saved = moonlet_core::ssh::saved_hosts();
@@ -269,9 +274,9 @@ impl HostManager {
 
     /// Forgets a host. A connected tailnet host is asked to forget this Mac
     /// first (`mobile.unpair`), so its token stops working there too.
-    pub async fn remove(&self, id: &str) {
+    pub async fn remove(&self, id: &str) -> Result<(), RpcError> {
         if id == LOCAL {
-            return;
+            return Ok(());
         }
         let host = self.hosts.lock().unwrap().get(id).cloned();
         if let Some(h) = &host
@@ -285,11 +290,48 @@ impl HostManager {
                 tracing::info!(host = id, "unpair: {}", e.message);
             }
         }
+        // A host this Mac forgets is no longer its central host (X41): it is
+        // kept, with its token, until that is known to be cleared.
+        let _central = self.central.lock().await;
+        if self.kind(id) == HostKind::Tailnet {
+            let link = match self.get(LOCAL) {
+                Ok(local) => local.request(moonlet_proto::methods::LINK_GET, Value::Null).await,
+                Err(e) => Err(e),
+            };
+            if central_to_clear(id, link)? {
+                self.link_central(None).await.map_err(|e| {
+                    tracing::warn!(host = id, "cannot clear the central host: {}", e.message);
+                    RpcError::new(e.code, format!("Cannot stop using {id} as this Mac's central host: {}", e.message))
+                })?;
+            }
+        }
         self.tailnet.lock().unwrap().remove(id);
         if let Some(h) = self.hosts.lock().unwrap().remove(id) {
             h.stop();
         }
         self.persist();
+        Ok(())
+    }
+
+    /// Makes a tailnet host this Mac's central host, or clears it (X41). The
+    /// token goes from the app's own host list to the local daemon, never
+    /// through the webview; the reply, like `link.get`, has no token.
+    pub async fn set_central(&self, id: Option<&str>) -> Result<Value, RpcError> {
+        let _central = self.central.lock().await;
+        self.link_central(id).await
+    }
+
+    async fn link_central(&self, id: Option<&str>) -> Result<Value, RpcError> {
+        let saved = match id {
+            Some(id) => Some(self.tailnet.lock().unwrap().get(id).cloned().ok_or_else(|| {
+                RpcError::new("unknown_host", format!("{id} is not a host on your tailnet"))
+            })?),
+            None => None,
+        };
+        let params = serde_json::to_value(central_link_set(saved.as_ref())).unwrap();
+        self.get(LOCAL)?
+            .request(moonlet_proto::methods::LINK_SET, params)
+            .await
     }
 
     pub fn reconnect(&self, id: &str) -> Result<(), RpcError> {
@@ -500,9 +542,75 @@ pub async fn pair_tailnet(
     }))
 }
 
+/// `link.set` params that make `saved` this Mac's central host (X41), or
+/// clear it.
+pub fn central_link_set(saved: Option<&TailnetHost>) -> LinkSet {
+    LinkSet {
+        central: Some(saved.map(|t| LinkCentral {
+            name: t.id.clone(),
+            addrs: t.addrs.clone(),
+            token: t.token.clone(),
+        })),
+        worker: None,
+    }
+}
+
+/// Whether forgetting host `id` must first clear it as this Mac's central
+/// host, from what `link.get` answered. Without an answer it cannot be
+/// known, so the host is not forgotten.
+fn central_to_clear(id: &str, link: Result<Value, RpcError>) -> Result<bool, RpcError> {
+    let link = link.map_err(|e| {
+        RpcError::new(
+            e.code,
+            format!("Cannot check whether {id} is this Mac's central host: {}", e.message),
+        )
+    })?;
+    Ok(link["central"]["name"] == id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn choosing_a_central_host_hands_its_name_addresses_and_token_to_link_set() {
+        let mini = TailnetHost {
+            id: "studio-mini".into(),
+            device_id: "d1".into(),
+            addrs: vec!["100.101.102.103:47428".into()],
+            token: "ab".repeat(32),
+        };
+        assert_eq!(
+            serde_json::to_value(central_link_set(Some(&mini))).unwrap(),
+            serde_json::json!({
+                "central": {
+                    "name": "studio-mini",
+                    "addrs": ["100.101.102.103:47428"],
+                    "token": "ab".repeat(32),
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(central_link_set(None)).unwrap(),
+            serde_json::json!({ "central": null })
+        );
+    }
+
+    #[test]
+    fn a_host_is_forgotten_only_once_it_is_known_not_to_stay_central() {
+        let link = |name: &str| Ok(serde_json::json!({ "central": { "name": name } }));
+        assert_eq!(central_to_clear("studio-mini", link("studio-mini")), Ok(true));
+        assert_eq!(central_to_clear("studio-mini", link("build-box")), Ok(false));
+        assert_eq!(
+            central_to_clear("studio-mini", Ok(serde_json::json!({ "central": null }))),
+            Ok(false)
+        );
+        let down = Err(RpcError::new("disconnected", "this Mac's daemon is not reachable"));
+        assert_eq!(
+            central_to_clear("studio-mini", down).unwrap_err().message,
+            "Cannot check whether studio-mini is this Mac's central host: this Mac's daemon is not reachable"
+        );
+    }
 
     #[test]
     fn a_tailnet_host_is_named_without_its_port() {

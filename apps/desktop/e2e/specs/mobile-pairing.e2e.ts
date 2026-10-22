@@ -4,7 +4,7 @@
 
 import { connect } from "node:net";
 import { $, browser, expect } from "@wdio/globals";
-import { closeSettings, openSettings, sel } from "../fixtures";
+import { closeSettings, jsonFrame, openSettings, sel } from "../fixtures";
 
 const allow = sel.settingsSwitch("Allow connections from my tailnet");
 const allowed = async () => (await $(allow).getAttribute("aria-checked")) === "true";
@@ -13,13 +13,7 @@ const allowed = async () => (await $(allow).getAttribute("aria-checked")) === "t
 function phoneAuth(addr: string, fields: object): Promise<{ t: string; token?: string }> {
   const [host, port] = [addr.slice(0, addr.lastIndexOf(":")), Number(addr.slice(addr.lastIndexOf(":") + 1))];
   return new Promise((resolve, reject) => {
-    const sock = connect(port, host, () => {
-      const json = Buffer.from(JSON.stringify({ t: "auth", ...fields }));
-      const head = Buffer.alloc(5);
-      head.writeUInt32BE(json.length + 1, 0);
-      head.writeUInt8(1, 4);
-      sock.write(Buffer.concat([head, json]));
-    });
+    const sock = connect(port, host, () => sock.write(jsonFrame({ t: "auth", ...fields })));
     let buf = Buffer.alloc(0);
     sock.on("data", (d) => {
       buf = Buffer.concat([buf, d]);
