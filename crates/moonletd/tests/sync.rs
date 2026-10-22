@@ -1837,15 +1837,17 @@ async fn stepped_central(
         // The steps go out from their own task as `go` allows.
         let (w2, c2, repo2) = (wr.clone(), copy_id.clone(), repo.clone());
         let (head2, tree2) = (head.clone(), tree.clone());
-        let pending = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
-            u64,
-            (),
-        >::new()));
-        let p2 = pending.clone();
+        // Replies to the updates in flight, by request id.
+        type Waiters = std::collections::HashMap<u64, tokio::sync::oneshot::Sender<Value>>;
+        let waiting = std::sync::Arc::new(std::sync::Mutex::new(Waiters::new()));
+        // While a step waits for its answer, offers are answered as a real
+        // central host would: `wrong_branch` while the session is off its
+        // branch, else turned away until the update is in.
+        let answer = std::sync::Arc::new(std::sync::Mutex::new(OfferAnswer::Take));
+        let (waits, a2) = (waiting.clone(), answer.clone());
         tokio::spawn(async move {
             for (n, step) in steps.into_iter().enumerate() {
                 go.notified().await;
-                let id = 1000 + n as u64;
                 let listing = git(&repo2, &["ls-tree", "HEAD"]);
                 let blob = git(&repo2, &["rev-parse", "HEAD:src/cart.ts"]);
                 let (t, objects, off) = match step {
@@ -1868,10 +1870,12 @@ async fn stepped_central(
                         (new.clone(), format!("{new}\n{src}\n{blob}\n"), None)
                     }
                 };
-                let mut w = w2.lock().await;
-                let pack = if objects.is_empty() {
-                    None
+                *a2.lock().unwrap() = if off.is_some() {
+                    OfferAnswer::WrongBranch
                 } else {
+                    OfferAnswer::Busy
+                };
+                let bytes = (!objects.is_empty()).then(|| {
                     use std::io::Write;
                     let mut child = Command::new("git")
                         .args(["pack-objects", "--stdout", "-q"])
@@ -1886,28 +1890,55 @@ async fn stepped_central(
                         .unwrap()
                         .write_all(objects.as_bytes())
                         .unwrap();
-                    let bytes = child.wait_with_output().unwrap().stdout;
-                    for f in moonlet_proto::pack_frames(id as u32, &bytes) {
-                        write_frame(&mut *w, &f).await.unwrap();
-                    }
-                    Some(id)
-                };
-                let copy = c2.lock().unwrap().clone();
-                let update = json!({
-                    "copy": copy, "base": tree2, "tree": t, "head": head2, "too_big": [],
-                    "pack": pack, "off_branch": off,
+                    child.wait_with_output().unwrap().stdout
                 });
-                p2.lock().unwrap().insert(id, ());
-                write_frame(
-                    &mut *w,
-                    &Frame::Json(Message::Request {
-                        id,
-                        method: "sync.update".into(),
-                        params: update,
-                    }),
-                )
-                .await
-                .unwrap();
+                // Sent again while the worker answers that it was busy: an
+                // off-branch update's own answer reads the same, so it goes
+                // once, and its offers carry the news instead.
+                for attempt in 0..150u64 {
+                    let id = 1000 + 1000 * n as u64 + attempt;
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    waits.lock().unwrap().insert(id, tx);
+                    {
+                        let mut w = w2.lock().await;
+                        let pack = match &bytes {
+                            Some(b) => {
+                                for f in moonlet_proto::pack_frames(id as u32, b) {
+                                    write_frame(&mut *w, &f).await.unwrap();
+                                }
+                                Some(id)
+                            }
+                            None => None,
+                        };
+                        let copy = c2.lock().unwrap().clone();
+                        let update = json!({
+                            "copy": copy, "base": tree2, "tree": t, "head": head2, "too_big": [],
+                            "pack": pack, "off_branch": off,
+                        });
+                        write_frame(
+                            &mut *w,
+                            &Frame::Json(Message::Request {
+                                id,
+                                method: "sync.update".into(),
+                                params: update,
+                            }),
+                        )
+                        .await
+                        .unwrap();
+                    }
+                    let Ok(reply) = rx.await else { return };
+                    let busy =
+                        reply["error"].is_null() && reply["result"]["applied"] == json!(false);
+                    if busy && off.is_none() {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        continue;
+                    }
+                    replies.lock().unwrap().push(reply);
+                    break;
+                }
+                if off.is_none() {
+                    *a2.lock().unwrap() = OfferAnswer::Take;
+                }
             }
         });
         while let Ok(Some(frame)) = read_frame(&mut rd).await {
@@ -1917,35 +1948,56 @@ async fn stepped_central(
                         *copy_id.lock().unwrap() = c.to_string();
                     }
                     let reply = match method.as_str() {
-                        "sync.open" => json!({
-                            "path": repo.join("fix-cart"), "branch": "fix-cart", "head": head,
-                            "name": "Fix cart", "project": "shop",
-                            "identity": { "origin": "git.invalid/acme/shop", "root": root },
-                            "origin_url": ORIGIN_URL,
-                        }),
-                        "sync.fetch" => {
-                            json!({ "tree": tree, "head": head, "too_big": [], "pack": null })
-                        }
-                        "sync.offer" => took_offer(&params),
-                        _ => json!({}),
+                        "sync.open" => Message::ok(
+                            id,
+                            json!({
+                                "path": repo.join("fix-cart"), "branch": "fix-cart", "head": head,
+                                "name": "Fix cart", "project": "shop",
+                                "identity": { "origin": "git.invalid/acme/shop", "root": root },
+                                "origin_url": ORIGIN_URL,
+                            }),
+                        ),
+                        "sync.fetch" => Message::ok(
+                            id,
+                            json!({ "tree": tree, "head": head, "too_big": [], "pack": null }),
+                        ),
+                        "sync.offer" => match *answer.lock().unwrap() {
+                            OfferAnswer::Take => Message::ok(id, took_offer(&params)),
+                            OfferAnswer::Busy => {
+                                Message::err(id, moonlet_proto::RpcError::new("busy", "not now"))
+                            }
+                            OfferAnswer::WrongBranch => Message::err(
+                                id,
+                                moonlet_proto::RpcError::new("wrong_branch", "main"),
+                            ),
+                        },
+                        _ => Message::ok(id, json!({})),
                     };
-                    write_frame(&mut *wr.lock().await, &Frame::Json(Message::ok(id, reply)))
+                    write_frame(&mut *wr.lock().await, &Frame::Json(reply))
                         .await
                         .unwrap();
                 }
-                Frame::Json(Message::Response { id, result, error })
-                    if pending.lock().unwrap().remove(&id).is_some() =>
-                {
-                    replies
-                        .lock()
-                        .unwrap()
-                        .push(json!({ "result": result, "error": error }));
+                Frame::Json(Message::Response { id, result, error }) => {
+                    if let Some(tx) = waiting.lock().unwrap().remove(&id) {
+                        let _ = tx.send(json!({ "result": result, "error": error }));
+                    }
                 }
                 _ => {}
             }
         }
     });
     addr
+}
+
+/// How [`stepped_central`] answers an offer.
+#[derive(Clone, Copy)]
+enum OfferAnswer {
+    /// As the worker made it.
+    Take,
+    /// Turned away while an update waits.
+    Busy,
+    /// The session is off its branch.
+    WrongBranch,
 }
 
 #[tokio::test]
