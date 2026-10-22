@@ -11,7 +11,7 @@ moonlet runs the `claude` found on the user's PATH. Claude Code updates itself i
 
 ## User journey
 
-1. Ten seconds after launch, and every six hours after, moonlet asks the daemon for `claude --version` and npm for the newest release.
+1. Ten seconds after launch, and every hour after, moonlet asks the daemon for `claude --version` and npm for the newest release.
 2. A newer release shows a banner above the sidebar footer: "Claude Code 2.1.296 is available", "You have 2.1.292", **Later** and **Update**.
 3. The user clicks **Update**. The banner reads "Updating Claude Code", "2.1.292 → 2.1.296", lists the steps (Check for updates, Download and install, Done) with the current one spinning, and an animated bar runs underneath.
 4. When `claude update` reports success, the banner reads "Claude Code updated to 2.1.296" and "New agents start on 2.1.296." with a close button.

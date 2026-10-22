@@ -87,7 +87,7 @@ export interface Settings {
   planApproveMode: string;
   /** Shiki theme of the editor and diffs (X26). */
   editorTheme: string;
-  /** Look for a new moonlet release at launch and every six hours (X35). */
+  /** Look for a new moonlet release at launch and every hour (X35). */
   autoUpdateCheck: boolean;
   /** How session rows show their task: A, a number column, or B, task lines (X48). */
   sessionRows?: RowStyle;

@@ -11,7 +11,7 @@
 
 1. Bump the version (`Cargo.toml`, `apps/desktop/package.json`, `tauri.conf.json`, `Cargo.lock`) in a `chore: bump the version to X.Y.Z` PR and merge it.
 2. Tag the merge and push the tag: `git tag vX.Y.Z origin/main && git push origin vX.Y.Z`.
-3. `.github/workflows/release.yml` builds on an Apple Silicon runner, signs the app with the Developer ID, has Apple notarize it, signs `moonlet.app.tar.gz` with the updater key and publishes the release with `latest.json`. Installed apps find it within six hours, or at once with **Check now** in Settings › Updates.
+3. `.github/workflows/release.yml` builds on an Apple Silicon runner, signs the app with the Developer ID, has Apple notarize it, signs `moonlet.app.tar.gz` with the updater key and publishes the release with `latest.json`. Installed apps find it within an hour, or at once with **Check now** in Settings › Updates.
 
 The workflow needs two repository secrets, set once:
 
