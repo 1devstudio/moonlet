@@ -1619,8 +1619,10 @@ impl LiveCopies {
         if lost.is_empty() {
             return Ok(saved);
         }
+        // Nowhere to put them: the first file that would be lost says so.
+        let first = lost.iter().next().cloned().unwrap_or_default();
         let folder = make_leftovers_folder(&self.home.join("sync-leftovers"), &segment(&dir))
-            .map_err(|e| Unsaved::new(&shown, e))?;
+            .map_err(|e| Unsaved::new(&first, e))?;
         saved.folder = folder.display().to_string();
         saved.leftovers = save_lost(&path, &folder, lost)?;
         if saved.leftovers.is_empty() {
