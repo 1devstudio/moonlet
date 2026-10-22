@@ -103,15 +103,20 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   // the page to this Mac's daemon, not to the project's file.
   const central = useSync((s) => s.central);
   const keepShown = syncOffered(host, central);
-  const [keepNew, setKeepNew] = useState(false);
-  const [origKeepNew, setOrigKeepNew] = useState(false);
+  // null until this Mac's daemon has said; the switch waits for it.
+  const [keepNew, setKeepNew] = useState<boolean | null>(null);
+  const [origKeepNew, setOrigKeepNew] = useState<boolean | null>(null);
+  const [keepLoaded, setKeepLoaded] = useState(false);
+  const keepUnknown = keepLoaded && keepNew === null;
   useEffect(() => {
     if (!keepShown) return;
     let live = true;
+    setKeepLoaded(false);
     void projectKeepsNew(project?.identity).then((k) => {
       if (!live) return;
       setKeepNew(k);
       setOrigKeepNew(k);
+      setKeepLoaded(true);
     });
     return () => {
       live = false;
@@ -139,7 +144,7 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
       return;
     }
     try {
-      if (keepDirty && project?.identity) {
+      if (keepDirty && keepNew !== null && project?.identity) {
         const r = await setProjectKeepsNew(project.identity, keepNew);
         setKeepNew(r.keep_new);
         setOrigKeepNew(r.keep_new);
@@ -273,7 +278,7 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
           No <span className="font-mono text-fg">.moonlet/config.toml</span> yet. Saving creates it.
         </p>
       )}
-      <fieldset disabled={loading} className={cx("m-0 flex min-w-0 flex-col gap-8 border-0 p-0", loading && "opacity-50")}>
+      <fieldset disabled={loading || saving} className={cx("m-0 flex min-w-0 flex-col gap-8 border-0 p-0", loading && "opacity-50")}>
         <Section title="Scripts">
           <Card>
             <Row setting="project-setup" label="Setup" htmlFor="settings-p-setup" hint="Runs in a new session's worktree after it is created.">
@@ -404,9 +409,15 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
               <SwitchRow
                 setting="project-keep-new"
                 label="Keep new sessions in sync with this Mac"
-                hint={project?.identity?.root ? `New sessions in ${project.name} on ${host} get a live copy on this Mac.` : `${project?.name ?? "This project"} has no commit yet to know it by on this Mac.`}
-                on={keepNew}
-                disabled={!project?.identity?.root}
+                hint={
+                  !project?.identity?.root
+                    ? `${project?.name ?? "This project"} has no commit yet to know it by on this Mac.`
+                    : keepUnknown
+                      ? "This Mac's daemon could not say whether it keeps new sessions in sync."
+                      : `New sessions in ${project.name} on ${host} get a live copy on this Mac.`
+                }
+                on={!!keepNew}
+                disabled={!project?.identity?.root || keepNew === null}
                 onChange={setKeepNew}
               />
             </Card>

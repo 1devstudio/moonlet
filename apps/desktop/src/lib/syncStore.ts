@@ -250,12 +250,13 @@ export const resolveSync = (copy: Copy, path: string, keep: "central" | "worker"
 export const useCentralBranch = (copy: Copy) => rpc(LOCAL, M.syncUseCentralBranch, { copy: copy.id }).catch(errorToast);
 export const retrySync = (copy: Copy) => rpc(LOCAL, M.syncRetry, { copy: copy.id }).catch(errorToast);
 
-/** The project page's switch and the composer's default (X60). */
-export async function projectKeepsNew(identity: ProjectIdentity | undefined): Promise<boolean> {
+/** The project page's switch and the composer's default (X60); null when
+ * this Mac's daemon cannot say, so nothing decides on a guess. */
+export async function projectKeepsNew(identity: ProjectIdentity | undefined): Promise<boolean | null> {
   if (!identity?.root) return false;
   return rpc<{ keep_new: boolean }>(LOCAL, M.syncProjectGet, { identity })
     .then((r) => r.keep_new)
-    .catch(() => false);
+    .catch(() => null);
 }
 
 export const setProjectKeepsNew = (identity: ProjectIdentity, keep_new: boolean) => rpc<{ keep_new: boolean }>(LOCAL, M.syncProjectSet, { identity, keep_new });

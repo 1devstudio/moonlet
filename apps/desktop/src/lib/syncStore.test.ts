@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { Copy, CopyChanged } from "./protocol";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
-import { changeCentral, declineSync, keepInSync, openSyncPopover, runSetupAgain, startSync, stopSync, useSync } from "./syncStore";
+import { changeCentral, declineSync, keepInSync, openSyncPopover, projectKeepsNew, runSetupAgain, startSync, stopSync, useSync } from "./syncStore";
 
 const calls = vi.hoisted(() => [] as { method: string; params: unknown }[]);
 /** What the daemon answers, by method; a function may throw a daemon error. */
@@ -192,6 +192,24 @@ describe("a copy that went (X60)", () => {
     answerConfirm(true, false);
     await stopping;
     expect(toasts()).toContain("fix-cart is still kept in sync: could not save .env before removing the copy: Permission denied");
+  });
+});
+
+describe("a project's choice to keep new sessions in sync (X60)", () => {
+  const identity = { origin: "github.com/acme/shop", root: "4171b03ff0d2bd434751f17bc9d34da784f97e72" };
+
+  it("reads what this Mac's daemon says", async () => {
+    answers["sync.project_get"] = () => ({ keep_new: true });
+    expect(await projectKeepsNew(identity)).toBe(true);
+  });
+
+  it("is unknown, not off, when this Mac's daemon cannot say", async () => {
+    delete answers["sync.project_get"];
+    expect(await projectKeepsNew(identity)).toBeNull();
+  });
+
+  it("is off for a project without a first commit", async () => {
+    expect(await projectKeepsNew({ origin: "github.com/acme/shop", root: null })).toBe(false);
   });
 });
 

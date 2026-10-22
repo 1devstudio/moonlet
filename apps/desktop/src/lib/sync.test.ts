@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Copy } from "./protocol";
-import { centralChangePrompt, centralPrompt, compareReadError, differsNotice, endedToast, markTone, setupActions, setupPrompt, stopPrompt, syncChoice, syncLine, syncOffered, tooBigLine } from "./sync";
+import { centralChangePrompt, centralPrompt, compareReadError, composerSync, differsNotice, endedToast, markTone, setupActions, setupPrompt, stopPrompt, syncChoice, syncLine, syncOffered, tooBigLine } from "./sync";
 
 const copy = (patch: Partial<Copy> = {}): Copy => ({
   id: "c1",
@@ -198,5 +198,22 @@ describe("moving or clearing the central host while sessions are kept in sync (X
     expect(centralChangePrompt("studio-mini", null, 1, "/Users/alex/.moonlet", "/Users/alex")?.message).toBe(
       "1 session is kept in sync with studio-mini. Clearing the central host stops keeping it in sync: its copy on this Mac is removed, and files only this Mac has are saved to a folder in ~/.moonlet/sync-leftovers first.",
     );
+  });
+});
+
+describe("composerSync (X60 what the composer's checkbox does once the session is made)", () => {
+  it("keeps or declines as the box reads once its default is known or the user ticked it", () => {
+    expect(composerSync({ shown: true, value: true, touched: false })).toBe("keep");
+    expect(composerSync({ shown: true, value: false, touched: false })).toBe("decline");
+    expect(composerSync({ shown: true, value: true, touched: true })).toBe("keep");
+    expect(composerSync({ shown: true, value: false, touched: true })).toBe("decline");
+  });
+
+  it("says nothing while the project's choice is unknown and the user left the box alone", () => {
+    expect(composerSync({ shown: true, value: null, touched: false })).toBeNull();
+  });
+
+  it("says nothing for a project that does not offer it", () => {
+    expect(composerSync({ shown: false, value: true, touched: true })).toBeNull();
   });
 });

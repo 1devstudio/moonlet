@@ -50,6 +50,15 @@ export function syncChoice(host: string, kind: HostKind | undefined, central: st
  * checkbox and the project page's switch, only on the central host. */
 export const syncOffered = (host: string, central: string | null): boolean => !!central && host === central;
 
+/** What the composer's checkbox does once the session is made. `value` is
+ * null while the project's choice is unknown (still loading, or this Mac's
+ * daemon could not say): a box the user left alone then says nothing, since
+ * declining is for good. */
+export function composerSync(box: { shown: boolean; value: boolean | null; touched: boolean }): "keep" | "decline" | null {
+  if (!box.shown || box.value === null) return null;
+  return box.value ? "keep" : "decline";
+}
+
 /** What the popover's setup row offers: the output once it ran, and Run
  * setup, which asks first unless this exact command was approved. */
 export function setupActions(setup: NonNullable<Copy["setup"]>): { log: boolean; run: { label: string; asks: boolean } | null } {
