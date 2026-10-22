@@ -214,10 +214,10 @@ impl Daemon {
             .collect()
     }
 
-    /// Who may change the worker link: the Mac's app, or a paired Mac over
-    /// the tailnet (X61), which may not set `central`, as that hands over a
-    /// token. A phone and an agent's CLI may not.
-    fn link_manager(&self, conn: &Conn, sets_central: bool) -> Result<(), RpcError> {
+    /// Refuses all but those who may change the worker link: the Mac's app,
+    /// or a paired Mac over the tailnet (X61), which may not set `central`,
+    /// as that hands over a token. A phone and an agent's CLI may not.
+    fn link_managers_only(&self, conn: &Conn, sets_central: bool) -> Result<(), RpcError> {
         let Some(device) = conn.phone.as_deref() else {
             return app_only(conn, "the link");
         };
@@ -519,17 +519,17 @@ impl Daemon {
             // at a host of its choosing. A paired Mac may, as it can already
             // run commands here (X61), but never hands over a token.
             m::LINK_SET => {
+                self.link_managers_only(conn, p.get("central").is_some())?;
                 let r: m::LinkSet = params(p)?;
-                self.link_manager(conn, r.central.is_some())?;
                 ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
             }
             m::LINK_RETRY => {
-                self.link_manager(conn, false)?;
+                self.link_managers_only(conn, false)?;
                 self.link.retry();
                 ok(self.link.info())
             }
             m::LINK_PAIR => {
-                self.link_manager(conn, false)?;
+                self.link_managers_only(conn, false)?;
                 let r: m::LinkPair = params(p)?;
                 ok(self.link.pair(r, &crate::mobile::tailscale_addresses()).await?)
             }
