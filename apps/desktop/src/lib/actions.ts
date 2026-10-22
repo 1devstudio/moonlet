@@ -293,7 +293,7 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const view = work && unpushedView(work, plan, c.ws.branch, where);
   const answer = await askConfirm(view ? unpushedPrompt(c.ws.name, plan, view) : archivePrompt(c.ws.name, plan));
   if (!answer) return;
-  const flags = archiveFlags(plan, answer.checked);
+  const flags = archiveFlags(plan, answer.checked, !!answer.alt);
   if (answer.alt) {
     try {
       await rpc(c.host, M.gitPush, params);

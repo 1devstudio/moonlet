@@ -107,10 +107,12 @@ export function archivePlan(g: GitSettings, prState: string | null | undefined, 
   }
 }
 
-/** `session.archive`'s flags for `plan`, with the prompt's checkbox. */
-export function archiveFlags(plan: ArchivePlan, checked: boolean) {
+/** `session.archive`'s flags for `plan`, with the prompt's checkbox. After
+ * Push, then archive (`pushed`) the branch stays on origin: the push just
+ * saved commits there that the merged PR doesn't have. */
+export function archiveFlags(plan: ArchivePlan, checked: boolean, pushed = false) {
   const del = plan.branch === "delete" || (plan.branch === "ask" && checked);
-  return { remove_worktree: plan.removeWorktree, delete_branch: del, delete_remote: del && plan.remote };
+  return { remove_worktree: plan.removeWorktree, delete_branch: del, delete_remote: del && plan.remote && !pushed };
 }
 
 /** `git.unpushed`'s and `git.push`'s params for a session: its own branch,

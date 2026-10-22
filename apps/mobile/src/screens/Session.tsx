@@ -44,16 +44,22 @@ function ArchiveSheet({ host, session, pr, onClose }: { host: string; session: S
   const params = unpushedParams(session, pr);
   useEffect(() => {
     if (!warn) return;
+    // The PR can load after the sheet opens: only the latest answer counts.
+    let live = true;
+    setWork(undefined);
     void rpc<UnpushedWork>(host, M.gitUnpushed, params)
-      .then(setWork)
-      .catch(() => setWork("failed"));
+      .then((w) => live && setWork(w))
+      .catch(() => live && setWork("failed"));
+    return () => {
+      live = false;
+    };
   }, [host, params.path, params.branch, params.merged_head, warn]);
   const base = d?.projects.find((p) => p.id === session.project_id)?.base_branch ?? session.base;
   const sheet = archiveSheet({ session, base, git, prState: pr?.state, work: work ?? null, hostLabel });
   const archive = (push: boolean) =>
     run(async () => {
       if (push) await rpc(host, M.gitPush, params);
-      const done = await rpc<SessionArchived | boolean>(host, M.sessionArchive, { id: session.id, ...sheet.flags(checked) });
+      const done = await rpc<SessionArchived | boolean>(host, M.sessionArchive, { id: session.id, ...sheet.flags(checked, push) });
       const note = archivedNote(done, session.branch);
       if (note) setRemoteError(note);
       else showScreen(null);
