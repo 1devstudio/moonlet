@@ -199,6 +199,14 @@ export interface Project {
   name: string;
   path: string;
   base_branch: string;
+  /** Absent from daemons older than X41. */
+  identity?: ProjectIdentity;
+}
+
+/** The same repository on any machine (X41): normalized origin and root commit. */
+export interface ProjectIdentity {
+  origin: string | null;
+  root: string | null;
 }
 
 /** gh on a host (X59). */
@@ -711,6 +719,7 @@ export const M = {
   hooksInstall: "hooks.install",
   projectAdd: "project.add",
   projectList: "project.list",
+  projectIdentity: "project.identity",
   projectRemove: "project.remove",
   projectConfig: "project.config",
   projectConfigFile: "project.config_file",

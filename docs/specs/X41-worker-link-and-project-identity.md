@@ -68,11 +68,11 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ### Project identity
 
-- [ ] Every project has an `identity {origin, root}`.
-  - It is computed when the project is added, and on daemon start for projects added before this change.
+- [x] Every project has an `identity {origin, root}`. (`a_project_has_an_identity_without_credentials`, `projects_saved_without_an_identity_get_one_on_start`)
+  - It is computed when the project is added, and refreshed on each daemon start. The origin is read again every start, as a remote can move: a repository without an `origin` remote gets `null`, and a folder that cannot be read keeps the origin it had. The root never changes, so it is read only while it is `null`. (`a_projects_origin_is_read_again_on_start`, `projects_saved_without_an_identity_get_one_on_start`)
   - `project.list` returns it.
   - `project.identity {path}` returns the identity of any folder.
-- [ ] `origin` normalizes the `origin` remote. Worked examples:
+- [x] `origin` normalizes the `origin` remote. Worked examples (`origins_normalize_as_in_the_worked_examples`):
 
   | `git remote get-url origin` | `origin` |
   |---|---|
@@ -82,6 +82,9 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   | `ssh://git@github.com:22/1devstudio/moonlet.git/` | `github.com/1devstudio/moonlet` |
   | `https://user:token@GitHub.com/1devstudio/moonlet.git` | `github.com/1devstudio/moonlet` |
   | `https://gitlab.example.com:8443/team/app.git` | `gitlab.example.com:8443/team/app` |
+  | `https://github.com/acme/shop.git?access_token=secret` | `github.com/acme/shop` |
+  | `https://github.com/acme/shop#readme` | `github.com/acme/shop` |
+  | `git@github.com:acme/shop.git?access_token=secret` | `github.com/acme/shop` |
   | `/Users/alex/src/app` (a local path) | `null` |
   | (no `origin` remote) | `null` |
 
@@ -89,13 +92,14 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - credentials, the scheme and the user are removed;
   - the host is lowercased;
   - a port is kept only when it is not the scheme's default;
+  - a query or fragment is removed, since it may carry a token;
   - a trailing `.git` or `/` is removed;
   - the path's case is kept.
-- [ ] `root` is the root commit of `HEAD`'s history. Worked example: this repository's root is `4171b03ff0d2bd434751f17bc9d34da784f97e72`.
+- [x] `root` is the root commit of `HEAD`'s history. (`the_root_is_the_oldest_root_commit`, `a_repository_has_its_origin_and_root_and_a_shallow_or_empty_one_no_root`) Worked example: this repository's root is `4171b03ff0d2bd434751f17bc9d34da784f97e72`.
   - With several roots (merged histories), it is the oldest by committer date, with ties broken by the smallest hash.
   - A shallow clone (`git rev-parse --is-shallow-repository` prints `true`) and a repository with no commits have `root: null`. A shallow clone's boundary commits look like roots but are not.
-- [ ] Two projects are the same project when their roots are equal and not `null`, and their origins are equal (two `null` origins count as equal). A local clone without an origin therefore never matches a fork that happens to share its root.
-- [ ] Only the normalized `origin` is stored or sent. A token in a remote URL never appears in `project.list`, `project.identity` or `worker.list`.
+- [x] Two projects are the same project when their roots are equal and not `null`, and their origins are equal (two `null` origins count as equal). A local clone without an origin therefore never matches a fork that happens to share its root. (`same_project_needs_a_known_root_and_the_same_origin`)
+- [ ] Only the normalized `origin` is stored or sent. A token in a remote URL never appears in `project.list`, `project.identity` or `worker.list`. (`project.list` and `project.identity`: `a_project_has_an_identity_without_credentials`; `worker.list` comes with the link)
 
 ## UI
 

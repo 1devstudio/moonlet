@@ -782,6 +782,44 @@ impl SessionManager {
         Ok(())
     }
 
+    /// X41: projects saved before identities existed, or with a field that
+    /// could not be read, get one. A repository that cannot be read keeps
+    /// what it has, and the load goes on.
+    pub async fn fill_identities(&self) {
+        let projects: Vec<(String, String, bool)> = self
+            .list_projects()
+            .into_iter()
+            .map(|p| (p.id, p.path, p.identity.root.is_none()))
+            .collect();
+        if projects.is_empty() {
+            return;
+        }
+        // The origin is read again every time, as a repository's remote can
+        // move; the root never changes, so it is read only while unknown.
+        let mut found = Vec::new();
+        for (id, path, no_root) in projects {
+            let path = Path::new(&path);
+            let origin = crate::identity::origin(path).await;
+            let root = if no_root { crate::identity::root(path).await } else { None };
+            found.push((id, origin, root));
+        }
+        let saved = self.mutate(|st| {
+            for (id, origin, root) in found {
+                if let Some(p) = st.projects.iter_mut().find(|p| p.id == id) {
+                    // A folder that cannot be read keeps what was known.
+                    if let Some(origin) = origin {
+                        p.identity.origin = origin;
+                    }
+                    p.identity.root = root.or(p.identity.root.take());
+                }
+            }
+            Ok(())
+        });
+        if let Err(e) = saved {
+            tracing::warn!("cannot save project identities: {e:#}");
+        }
+    }
+
     pub async fn add_project(&self, path: &str) -> Result<Project> {
         self.add_project_to(path, None).await
     }
@@ -817,6 +855,7 @@ impl SessionManager {
                 .unwrap_or_else(|| root_s.clone()),
             path: root_s,
             base_branch: base,
+            identity: crate::identity::identity(&root).await,
         };
         let r = repo.clone();
         self.mutate(|st| {
