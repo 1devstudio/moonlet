@@ -239,6 +239,10 @@ pub const SYNC_OFFER: &str = "sync.offer";
 /// [`SyncResolve`] → [`Copy`]: one side's version of a differing path goes
 /// to both. Asked of this Mac's own daemon.
 pub const SYNC_RESOLVE: &str = "sync.resolve";
+/// [`CopyRef`]: a diverged copy's branch moves to the central host's
+/// commit, and this Mac's commits stay on `<branch>-this-mac`. Returns the
+/// [`Copy`].
+pub const SYNC_USE_CENTRAL_BRANCH: &str = "sync.use_central_branch";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
@@ -1407,6 +1411,11 @@ pub struct SyncUpdate {
     pub head: String,
     pub too_big: Vec<String>,
     pub pack: Option<u32>,
+    /// Set when the session is not on its branch: the branch it is on, or
+    /// empty for a detached `HEAD`. The copy then pauses until an update
+    /// without it, and `tree` and `head` are not applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_branch: Option<String>,
 }
 
 /// Whether the worker took an update. It takes one only when its files are

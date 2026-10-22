@@ -1602,3 +1602,514 @@ async fn resolving_a_paused_copy_says_it_is_paused() {
         .unwrap_err();
     assert!(e.to_string().starts_with("paused:"), "{e}");
 }
+
+/// The commit `HEAD` is at in `dir`, and its subject.
+fn last_commit(dir: &Path) -> (String, String) {
+    (
+        git(dir, &["rev-parse", "HEAD"]),
+        git(dir, &["log", "-1", "--format=%s"]),
+    )
+}
+
+#[tokio::test]
+async fn a_commit_on_the_central_host_moves_the_copys_branch_and_unstages_it() {
+    let (central, _worker, c) = synced().await;
+    let s = central.session_path();
+    // Staged in the copy only; the file itself syncs, untracked there.
+    write(&c.join("staged.txt"), "staged\n");
+    git(&c, &["add", "staged.txt"]);
+    reads(&s.join("staged.txt"), "staged\n").await;
+
+    write(&s.join("src/cart.ts"), "committed\n");
+    git(&s, &["commit", "-qam", "cart from the agent"]);
+    let want = last_commit(&s);
+    eventually("the copy's branch moves to the agent's commit", || async {
+        last_commit(&c) == want
+    })
+    .await;
+    assert_eq!(want.1, "cart from the agent");
+    assert_eq!(
+        git(&c, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        git(&s, &["rev-parse", "--abbrev-ref", "HEAD"])
+    );
+    // The staging area follows HEAD: nothing staged, nothing modified once
+    // the files are there too.
+    reads(&c.join("src/cart.ts"), "committed\n").await;
+    eventually("the copy has nothing staged", || async {
+        git(&c, &["status", "--porcelain"]) == "?? staged.txt"
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_commit_in_the_copy_moves_the_sessions_branch() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    // Staged in the session only (the agent's `git add`).
+    write(&s.join("agent.txt"), "agent\n");
+    git(&s, &["add", "agent.txt"]);
+    reads(&c.join("agent.txt"), "agent\n").await;
+    write(&c.join("src/cart.ts"), "from the mac\n");
+    git(&c, &["commit", "-qam", "cart from the mac"]);
+    let want = last_commit(&c);
+    eventually(
+        "the session's branch moves to the copy's commit",
+        || async { last_commit(&s) == want },
+    )
+    .await;
+    assert_eq!(want.1, "cart from the mac");
+    // The session's staging area follows its new commit: unstaged.
+    eventually("the session has nothing staged or changed", || async {
+        git(&s, &["status", "--porcelain"]) == "?? agent.txt"
+    })
+    .await;
+    let copy = in_sync(&worker).await;
+    assert_eq!(copy.diverged, None);
+}
+
+#[tokio::test]
+async fn commits_on_both_sides_diverge_while_files_still_sync_until_the_central_branch_is_used() {
+    let (mut central, worker, c) = synced().await;
+    let s = central.session_path();
+    let branch = "moonlet/fix-cart";
+    let id = copies(&worker).await[0].id.clone();
+    let mut app = worker.app().await;
+    let e = app
+        .request::<_, Copy>("sync.use_central_branch", json!({ "copy": id }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "invalid_params: the branch has not diverged");
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("mac.txt"), "mac\n");
+    git(&c, &["add", "mac.txt"]);
+    git(&c, &["commit", "-qm", "one on the mac"]);
+    let mac = last_commit(&c).0;
+    for n in ["1", "2"] {
+        write(&s.join(format!("mini{n}.txt")), "mini\n");
+        git(&s, &["add", "-A"]);
+        git(&s, &["commit", "-qm", &format!("{n} on the mini")]);
+    }
+    let mini = last_commit(&s).0;
+    central.daemon.restart().await;
+
+    eventually("the copy says it diverged", || async {
+        copies(&worker).await[0].diverged
+            == Some(moonlet_proto::methods::Diverged {
+                ahead: 1,
+                behind: 2,
+            })
+    })
+    .await;
+    // Each branch stays where it was; the files still sync both ways.
+    assert_eq!(last_commit(&c).0, mac);
+    assert_eq!(last_commit(&s).0, mini);
+    reads(&c.join("mini2.txt"), "mini\n").await;
+    reads(&s.join("mac.txt"), "mac\n").await;
+    write(&s.join("src/cart.ts"), "still syncing\n");
+    reads(&c.join("src/cart.ts"), "still syncing\n").await;
+
+    // Use studio-mini's branch: this Mac's commit stays on a branch of its
+    // own, the next free name.
+    let first = git(&c, &["rev-list", "--max-parents=0", "HEAD"]);
+    git(&c, &["branch", "moonlet/fix-cart-this-mac", &first]);
+    let copy: Copy = worker
+        .call("sync.use_central_branch", json!({ "copy": id }))
+        .await;
+    assert_eq!(copy.diverged, None);
+    assert_eq!(last_commit(&c).0, mini);
+    assert_eq!(git(&c, &["rev-parse", "moonlet/fix-cart-this-mac-2"]), mac);
+    assert_eq!(git(&c, &["rev-parse", "moonlet/fix-cart-this-mac"]), first);
+    assert_eq!(git(&c, &["rev-parse", "--abbrev-ref", "HEAD"]), branch);
+    // The files are as they were: this Mac's commit's file is now untracked.
+    assert_eq!(read(&c.join("mac.txt")).as_deref(), Some("mac\n"));
+    assert_eq!(
+        read(&c.join("src/cart.ts")).as_deref(),
+        Some("still syncing\n")
+    );
+    assert_eq!(
+        git(&c, &["status", "--porcelain"]),
+        "M src/cart.ts\n?? mac.txt"
+    );
+    // The session keeps its commits and gets no new one.
+    assert_eq!(last_commit(&s).0, mini);
+    in_sync(&worker).await;
+    assert_eq!(copies(&worker).await[0].diverged, None);
+}
+
+#[tokio::test]
+async fn a_side_on_another_branch_pauses_the_copy_until_it_is_back() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    let branch = "moonlet/fix-cart";
+
+    git(&c, &["checkout", "-q", "-b", "other"]);
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(reason(&copy), "the copy is on other, not moonlet/fix-cart.");
+    git(&c, &["checkout", "-q", branch]);
+    in_sync(&worker).await;
+    write(&s.join("src/cart.ts"), "after the copy came back\n");
+    reads(&c.join("src/cart.ts"), "after the copy came back\n").await;
+
+    git(&c, &["checkout", "-q", "--detach"]);
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&copy),
+        "the copy is on a detached HEAD, not moonlet/fix-cart."
+    );
+    git(&c, &["checkout", "-q", branch]);
+    in_sync(&worker).await;
+
+    git(&s, &["checkout", "-q", "--detach"]);
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&copy),
+        "the session on studio-mini is on a detached HEAD, not moonlet/fix-cart."
+    );
+    git(&s, &["checkout", "-q", branch]);
+    in_sync(&worker).await;
+
+    git(&s, &["checkout", "-q", "-b", "elsewhere"]);
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&copy),
+        "the session on studio-mini is on elsewhere, not moonlet/fix-cart."
+    );
+    // Paused, the copy's edits wait.
+    write(&c.join("src/cart.ts"), "while the session was away\n");
+    git(&s, &["checkout", "-q", branch]);
+    in_sync(&worker).await;
+    reads(&s.join("src/cart.ts"), "while the session was away\n").await;
+}
+
+/// One update [`stepped_central`] sends.
+enum Step {
+    /// The session is on `main`, not its branch.
+    OffBranch,
+    /// A tree with `../escaped.txt`.
+    Outside,
+    /// `src/cart.ts` as `c`.
+    Edit,
+}
+
+/// A fake central host serving one session (the clone `repo`, on branch
+/// `fix-cart`) that sends `steps` in order, one each time `go` is
+/// notified, and keeps the worker's replies in `replies`.
+async fn stepped_central(
+    repo: PathBuf,
+    steps: Vec<Step>,
+    go: std::sync::Arc<tokio::sync::Notify>,
+    replies: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+) -> String {
+    use moonlet_proto::{Frame, Message, read_frame, write_frame};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        let (s, _) = listener.accept().await.unwrap();
+        let (mut rd, wr) = s.into_split();
+        let wr = std::sync::Arc::new(tokio::sync::Mutex::new(wr));
+        let _auth = read_frame(&mut rd).await.unwrap();
+        let authed = Message::Authed {
+            device_id: "d1".into(),
+            token: None,
+            protocol: Some(moonlet_proto::PROTOCOL_VERSION),
+            daemon_version: Some(env!("CARGO_PKG_VERSION").into()),
+            host: Some("studio-mini".into()),
+            os: Some("macos".into()),
+        };
+        write_frame(&mut *wr.lock().await, &Frame::Json(authed))
+            .await
+            .unwrap();
+        let _hello = read_frame(&mut rd).await.unwrap();
+        let welcome = Message::Welcome {
+            protocol: moonlet_proto::PROTOCOL_VERSION,
+            daemon_version: env!("CARGO_PKG_VERSION").into(),
+            host: "studio-mini".into(),
+            pid: 1,
+        };
+        write_frame(&mut *wr.lock().await, &Frame::Json(welcome))
+            .await
+            .unwrap();
+        let head = git(&repo, &["rev-parse", "HEAD"]);
+        let tree = git(&repo, &["rev-parse", "HEAD^{tree}"]);
+        let root = git(&repo, &["rev-list", "--max-parents=0", "HEAD"]);
+        let copy_id = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        // The steps go out from their own task as `go` allows.
+        let (w2, c2, repo2) = (wr.clone(), copy_id.clone(), repo.clone());
+        let (head2, tree2) = (head.clone(), tree.clone());
+        // Replies to the updates in flight, by request id.
+        type Waiters = std::collections::HashMap<u64, tokio::sync::oneshot::Sender<Value>>;
+        let waiting = std::sync::Arc::new(std::sync::Mutex::new(Waiters::new()));
+        // While a step waits for its answer, offers are answered as a real
+        // central host would: `wrong_branch` while the session is off its
+        // branch, else turned away until the update is in.
+        let answer = std::sync::Arc::new(std::sync::Mutex::new(OfferAnswer::Take));
+        let (waits, a2) = (waiting.clone(), answer.clone());
+        tokio::spawn(async move {
+            for (n, step) in steps.into_iter().enumerate() {
+                go.notified().await;
+                let listing = git(&repo2, &["ls-tree", "HEAD"]);
+                let blob = git(&repo2, &["rev-parse", "HEAD:src/cart.ts"]);
+                let (t, objects, off) = match step {
+                    Step::OffBranch => (tree2.clone(), String::new(), Some("main")),
+                    Step::Outside => {
+                        let sub = mktree(&repo2, &format!("100644 blob {blob}\tescaped.txt\n"));
+                        let bad = mktree(&repo2, &format!("{listing}\n040000 tree {sub}\t..\n"));
+                        (bad.clone(), format!("{bad}\n{sub}\n"), None)
+                    }
+                    Step::Edit => {
+                        write(&repo2.join("c.txt"), "c\n");
+                        let blob = git(&repo2, &["hash-object", "-w", "c.txt"]);
+                        let src = mktree(&repo2, &format!("100644 blob {blob}\tcart.ts\n"));
+                        let others: String = listing
+                            .lines()
+                            .filter(|l| !l.ends_with("\tsrc"))
+                            .map(|l| format!("{l}\n"))
+                            .collect();
+                        let new = mktree(&repo2, &format!("{others}040000 tree {src}\tsrc\n"));
+                        (new.clone(), format!("{new}\n{src}\n{blob}\n"), None)
+                    }
+                };
+                *a2.lock().unwrap() = if off.is_some() {
+                    OfferAnswer::WrongBranch
+                } else {
+                    OfferAnswer::Busy
+                };
+                let bytes = (!objects.is_empty()).then(|| {
+                    use std::io::Write;
+                    let mut child = Command::new("git")
+                        .args(["pack-objects", "--stdout", "-q"])
+                        .current_dir(&repo2)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .spawn()
+                        .unwrap();
+                    child
+                        .stdin
+                        .take()
+                        .unwrap()
+                        .write_all(objects.as_bytes())
+                        .unwrap();
+                    child.wait_with_output().unwrap().stdout
+                });
+                // Sent again while the worker answers that it was busy: an
+                // off-branch update's own answer reads the same, so it goes
+                // once, and its offers carry the news instead.
+                for attempt in 0..150u64 {
+                    let id = 1000 + 1000 * n as u64 + attempt;
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    waits.lock().unwrap().insert(id, tx);
+                    {
+                        let mut w = w2.lock().await;
+                        let pack = match &bytes {
+                            Some(b) => {
+                                for f in moonlet_proto::pack_frames(id as u32, b) {
+                                    write_frame(&mut *w, &f).await.unwrap();
+                                }
+                                Some(id)
+                            }
+                            None => None,
+                        };
+                        let copy = c2.lock().unwrap().clone();
+                        let update = json!({
+                            "copy": copy, "base": tree2, "tree": t, "head": head2, "too_big": [],
+                            "pack": pack, "off_branch": off,
+                        });
+                        write_frame(
+                            &mut *w,
+                            &Frame::Json(Message::Request {
+                                id,
+                                method: "sync.update".into(),
+                                params: update,
+                            }),
+                        )
+                        .await
+                        .unwrap();
+                    }
+                    let Ok(reply) = rx.await else { return };
+                    let busy =
+                        reply["error"].is_null() && reply["result"]["applied"] == json!(false);
+                    if busy && off.is_none() {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        continue;
+                    }
+                    replies.lock().unwrap().push(reply);
+                    break;
+                }
+                if off.is_none() {
+                    *a2.lock().unwrap() = OfferAnswer::Take;
+                }
+            }
+        });
+        while let Ok(Some(frame)) = read_frame(&mut rd).await {
+            match frame {
+                Frame::Json(Message::Request { id, method, params }) => {
+                    if let Some(c) = params["copy"].as_str() {
+                        *copy_id.lock().unwrap() = c.to_string();
+                    }
+                    let reply = match method.as_str() {
+                        "sync.open" => Message::ok(
+                            id,
+                            json!({
+                                "path": repo.join("fix-cart"), "branch": "fix-cart", "head": head,
+                                "name": "Fix cart", "project": "shop",
+                                "identity": { "origin": "git.invalid/acme/shop", "root": root },
+                                "origin_url": ORIGIN_URL,
+                            }),
+                        ),
+                        "sync.fetch" => Message::ok(
+                            id,
+                            json!({ "tree": tree, "head": head, "too_big": [], "pack": null }),
+                        ),
+                        "sync.offer" => match *answer.lock().unwrap() {
+                            OfferAnswer::Take => Message::ok(id, took_offer(&params)),
+                            OfferAnswer::Busy => {
+                                Message::err(id, moonlet_proto::RpcError::new("busy", "not now"))
+                            }
+                            OfferAnswer::WrongBranch => Message::err(
+                                id,
+                                moonlet_proto::RpcError::new("wrong_branch", "main"),
+                            ),
+                        },
+                        _ => Message::ok(id, json!({})),
+                    };
+                    write_frame(&mut *wr.lock().await, &Frame::Json(reply))
+                        .await
+                        .unwrap();
+                }
+                Frame::Json(Message::Response { id, result, error }) => {
+                    if let Some(tx) = waiting.lock().unwrap().remove(&id) {
+                        let _ = tx.send(json!({ "result": result, "error": error }));
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    addr
+}
+
+/// How [`stepped_central`] answers an offer.
+#[derive(Clone, Copy)]
+enum OfferAnswer {
+    /// As the worker made it.
+    Take,
+    /// Turned away while an update waits.
+    Busy,
+    /// The session is off its branch.
+    WrongBranch,
+}
+
+#[tokio::test]
+async fn a_pause_for_another_reason_outlasts_the_session_leaving_its_branch_and_coming_back() {
+    let scratch = tempfile::tempdir().unwrap();
+    let origin = origin(scratch.path());
+    git(
+        scratch.path(),
+        &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
+    );
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    let replies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let addr = stepped_central(
+        scratch.path().join("studio-mini-shop"),
+        vec![Step::Outside, Step::OffBranch, Step::Edit],
+        go.clone(),
+        replies.clone(),
+    )
+    .await;
+    let worker = worker(&origin).await;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    in_sync(&worker).await;
+    let replied = |n: usize| {
+        let replies = replies.clone();
+        move || {
+            let replies = replies.clone();
+            async move { replies.lock().unwrap().len() >= n }
+        }
+    };
+    let outside = "studio-mini sent a path outside the copy.";
+
+    go.notify_one();
+    eventually("the first update is answered", replied(1)).await;
+    assert_eq!(reason(&copy_in(&worker, paused, "paused").await), outside);
+
+    // The session leaving its branch and coming back lifts nothing.
+    go.notify_one();
+    eventually("the second update is answered", replied(2)).await;
+    assert_eq!(reason(&copies(&worker).await[0]), outside);
+    go.notify_one();
+    eventually("the third update is answered", replied(3)).await;
+    assert_eq!(reason(&copies(&worker).await[0]), outside);
+}
+
+#[tokio::test]
+async fn a_pause_for_another_reason_outlasts_the_session_coming_back_to_its_branch() {
+    let scratch = tempfile::tempdir().unwrap();
+    let origin = origin(scratch.path());
+    git(
+        scratch.path(),
+        &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
+    );
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    let replies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let addr = stepped_central(
+        scratch.path().join("studio-mini-shop"),
+        vec![Step::OffBranch, Step::Outside, Step::Edit],
+        go.clone(),
+        replies.clone(),
+    )
+    .await;
+    let worker = worker(&origin).await;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    let copy = in_sync(&worker).await;
+    let replied = |n: usize| {
+        let replies = replies.clone();
+        move || {
+            let replies = replies.clone();
+            async move { replies.lock().unwrap().len() >= n }
+        }
+    };
+
+    // The session leaves its branch; the user retries anyway.
+    go.notify_one();
+    eventually("the first update is answered", replied(1)).await;
+    let paused_copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&paused_copy),
+        "the session on studio-mini is on main, not fix-cart."
+    );
+    let _: Copy = worker.call("sync.retry", json!({ "copy": copy.id })).await;
+
+    // Then studio-mini sends a path outside the copy.
+    go.notify_one();
+    eventually("the second update is answered", replied(2)).await;
+    let outside = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&outside),
+        "studio-mini sent a path outside the copy."
+    );
+
+    // An ordinary update, on the branch, does not lift that pause.
+    go.notify_one();
+    eventually("the third update is answered", replied(3)).await;
+    let third = replies.lock().unwrap()[2].clone();
+    assert_eq!(third["error"]["code"], "paused", "{third}");
+    assert_eq!(
+        reason(&copies(&worker).await[0]),
+        "studio-mini sent a path outside the copy."
+    );
+    let c = PathBuf::from(&copy.path);
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("a\n"));
+}

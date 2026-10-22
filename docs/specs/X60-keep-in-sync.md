@@ -91,7 +91,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   A file that an earlier snapshot took in leaves a snapshot only once it is gone from disk. One that becomes ignored, and that HEAD doesn't track, stays at the version the last snapshot took while it exists: `.git/info/exclude` doesn't sync, so a file ignored on one side only would otherwise read as deleted on the other, and freezing it keeps anything written to it after it was ignored on its own machine. Files HEAD tracks are always in and follow their edits, also ignored ones committed later. (`a_snapshot_follows_gits_rules_without_global_excludes`, `a_file_ignored_after_a_snapshot_stays_at_its_last_version`, `a_file_head_tracks_is_in_even_when_force_added_later`, `thousands_of_paths_fit_whatever_the_command_line_allows`)
 - [x] Untracked files that usually hold secrets never sync, even when `.gitignore` doesn't ignore them: `.env`, `.env.local`, `.env.*.local`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `.npmrc` and `.netrc`. An agent on the other side can edit `.gitignore`, so this list lives in moonlet, not the repository. Both sides apply the same list in place of the user's global excludes, so they still agree. A `!` rule in `.gitignore`, such as `!.env.local`, cannot bring them back: moonlet matches the list against file names itself and never hashes such a file. A file renamed to such a name leaves the snapshot. A tracked file on the list still syncs, edits included, because git already has it. (`untracked_secrets_stay_out_even_when_no_gitignore_says_so`, `secrets_stay_out_whatever_the_gitignore_lets_back_in`)
 
-- [ ] The staging area does not sync. When a side receives commits that move its branch, its index is reset to the new `HEAD` and its files are left alone (as `git reset --mixed`), so anything staged there is unstaged.
+- [x] The staging area does not sync. When a side receives commits that move its branch, its index is reset to the new `HEAD` and its files are left alone (as `git reset --mixed`), so anything staged there is unstaged. (`a_commit_on_the_central_host_moves_the_copys_branch_and_unstages_it`)
 - [ ] A file over 100 MiB stays on its own machine. The copy's popover lists it: "big.bin is over 100 MB and stays on each machine." The rest syncs. A file that grows past the limit keeps the version last synced, so the other side never reads it as deleted. The limit holds for files HEAD tracks that are committed past an ignore rule too. (`a_file_over_the_limit_stays_on_its_machine_and_never_reads_as_deleted`, `a_file_committed_past_its_ignore_rule_is_still_held_to_the_size_limit`)
 - [x] Submodule entries sync as commit ids. Submodule contents don't. (`a_submodule_is_its_commit_not_its_files`)
 - [x] A file name that is not text (only Linux allows one) stays out of the snapshot, and the snapshot lists it apart: carried as text it would be renamed, or folded into another name. A tree from the other side naming one is refused. (`a_name_that_is_not_text_stays_out_of_the_snapshot`, `a_tree_naming_a_file_in_bytes_that_are_not_text_is_refused`)
@@ -131,9 +131,15 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 ### Commits
 
-- [ ] A commit on either side moves the branch on the other. The other side receives the commit as a git pack and fast-forwards its branch.
-- [ ] When both sides have commits the other lacks, the branch has **diverged**. Files keep syncing, and the branch stays where it is on each side. The copy reads "fix-cart has diverged: 1 commit on this Mac, 2 on studio-mini. Files still sync." **Use studio-mini's branch** moves this Mac's branch to the central host's commit and keeps this Mac's commits on a new branch, `fix-cart-this-mac`.
-- [ ] When either side checks out another branch, or detaches `HEAD`, the copy pauses with "Paused: the copy is on main, not fix-cart." It resumes when the branch is checked out again.
+- [x] A commit on either side moves the branch on the other. The other side receives the commit as a git pack and fast-forwards its branch. A commit changes no file the watcher sees, so each side also looks at its commit and branch every 0.5 s (two `git` runs per copy each time: a known cost, until the watcher follows the worktree's `HEAD` and refs instead). A branch moves only from the commit it was read at, so a commit made meanwhile is never lost, and a side whose branch is no longer checked out keeps its staging area. (`a_commit_on_the_central_host_moves_the_copys_branch_and_unstages_it`, `a_commit_in_the_copy_moves_the_sessions_branch`)
+- [x] When both sides have commits the other lacks, the branch has **diverged**. Files keep syncing, and the branch stays where it is on each side. `Copy.diverged` is `{ahead, behind}`: the commits only on this Mac, and those only on the central host. The copy reads "fix-cart has diverged: 1 commit on this Mac, 2 on studio-mini. Files still sync." **Use studio-mini's branch** (`sync.use_central_branch`) moves this Mac's branch to the central host's commit, leaving the files as they are, and keeps this Mac's commits on a new branch, `fix-cart-this-mac` (`fix-cart-this-mac-2` and so on when that name is taken). On a copy that has not diverged it fails with `invalid_params` "the branch has not diverged". (`commits_on_both_sides_diverge_while_files_still_sync_until_the_central_branch_is_used`)
+- [x] When either side checks out another branch, or detaches `HEAD`, the copy pauses, and nothing syncs until it resumes by itself once that side is back on the branch. The reasons, for a session on `fix-cart`:
+  - "Paused: the copy is on main, not fix-cart."
+  - "Paused: the copy is on a detached HEAD, not fix-cart."
+  - "Paused: the session on studio-mini is on main, not fix-cart."
+  - "Paused: the session on studio-mini is on a detached HEAD, not fix-cart."
+
+  (`a_side_on_another_branch_pauses_the_copy_until_it_is_back`)
 
 ### Disconnects and restarts
 
@@ -177,7 +183,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 - `sync.stop {copy}`;
 - `sync.list` returns every `Copy`;
 - `sync.resolve {copy, path, keep: "central" | "worker"}` returns the `Copy`. It is a `sync.offer` with that resolution, so it needs the link: while it is down, it fails with `disconnected`. It fails with `invalid_params` for a path that does not differ, `paused` for a paused copy, `not_ready` for one not made yet, and `busy` when the copy kept changing and the resolution was not made (`resolving_says_why_it_could_not`, `resolving_a_paused_copy_says_it_is_paused`).
-- `sync.use_central_branch {copy}`;
+- `sync.use_central_branch {copy}`, `invalid_params` when the branch has not diverged;
 - `sync.retry {copy}`;
 - `sync.run_setup {copy, command}`. It runs only when `command` is the copy's current setup command, and it records the approval. A stale command is refused with `setup_changed` and the current command.
 - `sync.project_get {identity}` and `sync.project_set {identity, keep_new}`, for the project page and the composer;
@@ -192,7 +198,8 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 
 **Over the worker link, central host to worker:**
 
-- `sync.update {copy, base, tree, head, too_big, pack}`: the central host's new state, sent after its own changes and after another copy's offer changed the session. The answer is `{applied, tree}`, where `tree` is the worker's files, or `null` when its own offer was under way and it did not look. The worker takes the update only while its own files are its base, and then both keep `tree` as the base. Otherwise, or while its own offer is under way, it answers `applied: false` and offers its files, and that round decides. The worker's base wins in each round, so a reply the central host missed (a lid closed mid-update) cannot leave the two apart.
+- `sync.update {copy, base, tree, head, too_big, pack, off_branch?}`: the central host's new state, sent after its own changes and after another copy's offer changed the session. The answer is `{applied, tree}`, where `tree` is the worker's files, or `null` when its own offer was under way and it did not look. The worker takes the update only while its own files are its base, and then both keep `tree` as the base. Otherwise, or while its own offer is under way, it answers `applied: false` and offers its files, and that round decides. The worker's base wins in each round, so a reply the central host missed (a lid closed mid-update) cannot leave the two apart.
+  With `off_branch` (the branch the session is on, empty for a detached `HEAD`), the session has left its branch: the worker pauses the copy and applies nothing. An offer the central host gets while the session is off its branch fails with `wrong_branch`, its message the branch the session is on, and the worker pauses the copy the same way. Such a pause lifts by itself once the session is back; any other pause replaces it and waits for `sync.retry`. (`a_side_on_another_branch_pauses_the_copy_until_it_is_back`, `a_pause_for_another_reason_outlasts_the_session_coming_back_to_its_branch`)
 - `sync.closing {copy, reason: "archived"}`.
 
 **Types:**

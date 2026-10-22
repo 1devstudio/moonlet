@@ -535,6 +535,11 @@ impl Daemon {
                 let r: m::SyncResolve = params(p)?;
                 ok(self.sync.resolve(r).await?)
             }
+            m::SYNC_USE_CENTRAL_BRANCH => {
+                app_only(conn, "sync")?;
+                let r: m::CopyRef = params(p)?;
+                ok(self.sync.use_central_branch(&r.copy).await?)
+            }
             m::SYNC_OPEN | m::SYNC_FETCH | m::SYNC_OFFER => {
                 // Only a worker's daemon, over the tailnet (X60).
                 if conn.phone.is_none() || conn.client != crate::link::WORKER_CLIENT {
