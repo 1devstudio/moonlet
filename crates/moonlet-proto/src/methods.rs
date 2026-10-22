@@ -233,7 +233,13 @@ pub const SYNC_OPEN: &str = "sync.open";
 pub const SYNC_FETCH: &str = "sync.fetch";
 /// Central host to worker: [`SyncUpdate`] → [`SyncUpdated`].
 pub const SYNC_UPDATE: &str = "sync.update";
-/// A [`Copy`], on every change of its state.
+/// Worker to central host: [`SyncOffer`] → [`SyncOffered`], the copy's
+/// changes, which the central host reconciles with its own.
+pub const SYNC_OFFER: &str = "sync.offer";
+/// [`SyncResolve`] → [`Copy`]: one side's version of a differing path goes
+/// to both. Asked of this Mac's own daemon.
+pub const SYNC_RESOLVE: &str = "sync.resolve";
+/// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
 // Events
@@ -1403,13 +1409,74 @@ pub struct SyncUpdate {
     pub pack: Option<u32>,
 }
 
-/// The worker's files after an update, the paths it kept its own version
-/// of, and the new base both sides keep. Objects of `base` that the update
-/// lacked come in `pack`.
+/// Whether the worker took an update. It takes one only when its files are
+/// still the base; otherwise it keeps `tree`, its own files, and offers
+/// them ([`SyncOffer`]) for the central host to reconcile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncUpdated {
+    pub applied: bool,
+    /// The worker's files, when it could look: not while it was busy.
+    pub tree: Option<String>,
+}
+
+/// Which side's version a differing path keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Keep {
+    Central,
+    Worker,
+}
+
+/// `sync.resolve`: `path` of `copy` takes `keep`'s version on both sides.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncResolve {
+    pub copy: String,
+    pub path: String,
+    pub keep: Keep,
+}
+
+/// One path resolved in a [`SyncOffer`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Resolution {
+    pub path: String,
+    pub keep: Keep,
+}
+
+/// `sync.offer`: the worker's files (`tree`) and commit (`head`) against
+/// its base. Objects the base lacks come in `pack`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncOffer {
+    pub copy: String,
+    pub base: String,
+    pub tree: String,
+    pub head: String,
+    pub too_big: Vec<String>,
+    pub pack: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolve: Option<Resolution>,
+}
+
+/// The central host's reconcile of an offer: the worker goes from `from`,
+/// the tree it offered, to `tree`, and both keep `base`. `differs` lists
+/// the paths each side keeps its own version of; `pack` brings the
+/// objects the worker lacks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncOffered {
+    pub from: String,
     pub tree: String,
     pub base: String,
+    pub head: String,
     pub differs: Vec<String>,
+    pub too_big: Vec<String>,
     pub pack: Option<u32>,
+}
+
+/// `sync.changed`: a copy, and the paths that started to differ with this
+/// change, so the app notifies each once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopyChanged {
+    #[serde(flatten)]
+    pub copy: Copy,
+    #[serde(default)]
+    pub newly_differing: Vec<String>,
 }
