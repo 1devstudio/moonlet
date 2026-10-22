@@ -315,6 +315,14 @@ fn project_key(host: &str, id: &ProjectIdentity) -> Option<String> {
     Some(format!("{host} {origin} {root}"))
 }
 
+/// The central host a [`project_key`] belongs to: all before its last two
+/// parts, which hold no space (the origin, maybe empty, and the root).
+fn key_host(key: &str) -> Option<&str> {
+    let mut parts = key.rsplitn(3, ' ');
+    let (_root, _origin, host) = (parts.next()?, parts.next()?, parts.next()?);
+    Some(host)
+}
+
 /// Why making or updating a copy stopped.
 enum Stop {
     /// The link is down; try again when it is back.
@@ -377,6 +385,9 @@ pub struct LiveCopies {
     heard: Mutex<HashMap<String, std::time::Instant>>,
     /// The central host's projects, until they change or the link drops.
     projects_seen: Mutex<Option<Vec<moonlet_proto::types::Project>>>,
+    /// Goes up whenever that list is dropped, so an answer asked for before
+    /// is not kept.
+    projects_gen: std::sync::atomic::AtomicU64,
     /// Wakes the loop that looks at the central host's sessions again, for
     /// the new sessions that waited.
     keep_new_due: tokio::sync::Notify,
@@ -429,6 +440,7 @@ impl LiveCopies {
                 setups: Mutex::new(HashMap::new()),
                 heard: Mutex::new(HashMap::new()),
                 projects_seen: Mutex::new(None),
+                projects_gen: std::sync::atomic::AtomicU64::new(0),
                 keep_new_due: tokio::sync::Notify::new(),
                 runs: std::sync::atomic::AtomicU64::new(0),
                 projects: Mutex::new(()),
@@ -850,7 +862,7 @@ impl LiveCopies {
         self.registered
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.send_closed_soon();
-        *self.projects_seen.lock().unwrap() = None;
+        self.drop_projects();
         // Sessions made while the link was down.
         let me = self.clone();
         tokio::spawn(async move { me.fetch_sessions().await });
@@ -1829,11 +1841,12 @@ impl LiveCopies {
     /// The projects of this Mac's central host set to keep new sessions in
     /// sync.
     fn keep_new_choices(&self) -> Vec<ProjectChoices> {
-        let Some(host) = self.link.central_name() else { return Vec::new() };
-        let prefix = format!("{host} ");
+        let Some(host) = self.link.central_name() else {
+            return Vec::new();
+        };
         self.load_projects()
             .into_iter()
-            .filter(|(key, p)| key.starts_with(&prefix) && p.keep_new)
+            .filter(|(key, p)| key_host(key) == Some(host.as_str()) && p.keep_new)
             .map(|(_, p)| p)
             .collect()
     }
@@ -1855,7 +1868,10 @@ impl LiveCopies {
         keep_new: bool,
     ) -> Result<m::ProjectSync, RpcError> {
         if self.link.central_name().is_none() {
-            return Err(RpcError::new("no_central_host", "this Mac has no central host"));
+            return Err(RpcError::new(
+                "no_central_host",
+                "this Mac has no central host",
+            ));
         }
         let key = self.central_key(identity).ok_or_else(|| {
             RpcError::new(
@@ -1870,13 +1886,16 @@ impl LiveCopies {
                 p.keep_new_since = None;
             }
             p.keep_new = keep_new;
-        });
+        })?;
         self.link.set_synced(self.link_holders());
         Ok(self.project_get(identity))
     }
 
     /// `sessions.changed` from the central host, over the link.
     pub fn sessions_changed(self: &Arc<Self>, data: serde_json::Value) {
+        if self.keep_new_choices().is_empty() {
+            return;
+        }
         let Ok(sessions) = serde_json::from_value::<Vec<moonlet_proto::types::Session>>(data)
         else {
             return;
@@ -1897,13 +1916,28 @@ impl LiveCopies {
                     self.keep_new_sessions(sessions).await;
                 }
             }
-            Err(e) => tracing::debug!("cannot list the central host's sessions: {}", e.message),
+            Err(e) => {
+                tracing::debug!("cannot list the central host's sessions: {}", e.message);
+                self.look_again_later();
+            }
         }
+    }
+
+    /// Looks at the central host's sessions again after [`KEEP_NEW_GRACE`].
+    fn look_again_later(self: &Arc<Self>) {
+        let me = Arc::downgrade(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(KEEP_NEW_GRACE).await;
+            if let Some(me) = me.upgrade() {
+                me.keep_new_due.notify_one();
+            }
+        });
     }
 
     /// `sync.decline`: session `session` gets no copy, even when its
     /// project keeps new sessions in sync.
     pub fn decline(&self, session: String) {
+        self.heard.lock().unwrap().remove(&session);
         {
             let mut data = self.data.lock().unwrap();
             if data.auto.contains(&session) {
@@ -1917,7 +1951,14 @@ impl LiveCopies {
     /// `projects.changed` from the central host: its projects are asked
     /// for again when next needed.
     pub fn projects_changed(&self) {
-        *self.projects_seen.lock().unwrap() = None;
+        self.drop_projects();
+    }
+
+    fn drop_projects(&self) {
+        let mut seen = self.projects_seen.lock().unwrap();
+        *seen = None;
+        self.projects_gen
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The central host's projects, asked for once until they change.
@@ -1926,13 +1967,18 @@ impl LiveCopies {
         if seen.is_some() {
             return seen;
         }
+        let asked_at = self.projects_gen.load(std::sync::atomic::Ordering::SeqCst);
         let host = self.link.host()?;
         let projects: Vec<moonlet_proto::types::Project> = host
             .request(m::PROJECT_LIST, serde_json::json!({}))
             .await
             .ok()
             .and_then(|v| serde_json::from_value(v).ok())?;
-        *self.projects_seen.lock().unwrap() = Some(projects.clone());
+        let mut seen = self.projects_seen.lock().unwrap();
+        // Dropped while the answer was on its way: it may be stale.
+        if self.projects_gen.load(std::sync::atomic::Ordering::SeqCst) == asked_at {
+            *seen = Some(projects.clone());
+        }
         Some(projects)
     }
 
@@ -1946,6 +1992,14 @@ impl LiveCopies {
         let _one = lock.lock().await;
         let choices = self.load_projects();
         let keeping: Vec<ProjectChoices> = self.keep_new_choices();
+        // Sessions decided about since they were heard of need no wait.
+        {
+            let auto = self.data.lock().unwrap().auto.clone();
+            self.heard
+                .lock()
+                .unwrap()
+                .retain(|id, _| !auto.contains(id));
+        }
         let Some(since) = keeping.iter().filter_map(|p| p.keep_new_since).min() else {
             return;
         };
@@ -1961,40 +2015,48 @@ impl LiveCopies {
         if fresh.is_empty() {
             return;
         }
-        let Some(projects) = self.central_projects().await else { return };
+        let Some(projects) = self.central_projects().await else {
+            self.look_again_later();
+            return;
+        };
         let wanted = |s: &moonlet_proto::types::Session| {
             projects
                 .iter()
                 .find(|p| p.id == s.project_id)
                 .and_then(|p| self.central_key(&p.identity))
                 .and_then(|key| choices.get(&key))
-                .is_some_and(|c| {
-                    c.keep_new && c.keep_new_since.is_some_and(|t| s.created_at >= t)
-                })
+                .is_some_and(|c| c.keep_new && c.keep_new_since.is_some_and(|t| s.created_at >= t))
         };
         let now = std::time::Instant::now();
         let mut later = false;
         for s in fresh.iter().filter(|s| wanted(s)) {
-            let heard = *self.heard.lock().unwrap().entry(s.id.clone()).or_insert(now);
+            let heard = *self
+                .heard
+                .lock()
+                .unwrap()
+                .entry(s.id.clone())
+                .or_insert(now);
             if now.duration_since(heard) < KEEP_NEW_GRACE {
                 later = true;
                 continue;
             }
             self.heard.lock().unwrap().remove(&s.id);
-            self.data.lock().unwrap().auto.push(s.id.clone());
+            // Decided under one lock with `sync.decline` and `sync.start`, so
+            // a choice made while this pass waited stands.
+            {
+                let mut data = self.data.lock().unwrap();
+                if data.auto.contains(&s.id) || data.worker.iter().any(|k| k.session == s.id) {
+                    continue;
+                }
+                data.auto.push(s.id.clone());
+            }
             self.save();
             if let Err(e) = self.start(s.id.clone()) {
                 tracing::warn!(session = %s.id, "cannot keep a new session in sync: {}", e.message);
             }
         }
         if later {
-            let me = Arc::downgrade(self);
-            tokio::spawn(async move {
-                tokio::time::sleep(KEEP_NEW_GRACE).await;
-                if let Some(me) = me.upgrade() {
-                    me.keep_new_due.notify_one();
-                }
-            });
+            self.look_again_later();
         }
     }
 
@@ -3520,6 +3582,22 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_projects_key_names_its_central_host_whole() {
+        let root = "4171b03ff0d2bd434751f17bc9d34da784f97e72";
+        let key = |host: &str| format!("{host} github.com/acme/shop {root}");
+        assert_eq!(key_host(&key("Studio Mini")), Some("Studio Mini"));
+        assert_eq!(key_host(&key("Studio")), Some("Studio"));
+        // "Studio" is not a prefix match for "Studio Mini"'s projects.
+        assert_ne!(key_host(&key("Studio Mini")), Some("Studio"));
+        // No origin: two spaces before the root.
+        assert_eq!(
+            key_host(&format!("studio-mini  {root}")),
+            Some("studio-mini")
+        );
+        assert_eq!(key_host("nonsense"), None);
+    }
 
     #[test]
     fn two_leftovers_folders_made_at_once_are_two() {
