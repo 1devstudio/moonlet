@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { Copy, CopyChanged } from "./protocol";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
-import { changeCentral, declineSync, openSyncPopover, runSetupAgain, startSync, stopSync, useSync } from "./syncStore";
+import { changeCentral, declineSync, keepInSync, openSyncPopover, runSetupAgain, startSync, stopSync, useSync } from "./syncStore";
 
 const calls = vi.hoisted(() => [] as { method: string; params: unknown }[]);
 /** What the daemon answers, by method; a function may throw a daemon error. */
@@ -252,6 +252,59 @@ describe("changing the central host while sessions are kept in sync (X41, X60)",
     await settle();
     answerConfirm(false, false);
     await moved;
+    expect(calls).toEqual([]);
+    expect(useSync.getState().central).toBe("studio-mini");
+  });
+
+  it("counts a copy already gone as stopped and still moves it", async () => {
+    const { DaemonError } = (await import("./daemon")) as unknown as { DaemonError: new (e: { code: string; message: string }) => Error };
+    answers["sync.stop"] = () => {
+      throw new DaemonError({ code: "not_found", message: "no such copy" });
+    };
+    useSync.setState({ central: "studio-mini", copies: { a: copy() } });
+    const moved = changeCentral("build-box");
+    await settle();
+    answerConfirm(true, false);
+    await moved;
+    expect(calls.map((c) => c.method)).toEqual(["sync.stop", "host_set_central"]);
+    expect(useSync.getState().central).toBe("build-box");
+  });
+
+  it("keeping a session of another host in sync asks about the copies the old central host leaves behind", async () => {
+    answers["sync.stop"] = () => ({ folder: "", leftovers: [] });
+    answers["sync.start"] = () => copy({ id: "n1", host: "build-box", session: "b1" });
+    useStore.setState({
+      hosts: { ...useStore.getState().hosts, "build-box": { id: "build-box", label: "build-box", kind: "tailnet", remote: true, status: "connected" } } as never,
+      sessions: { ...useStore.getState().sessions, "build-box": [{ id: "b1", name: "spike", project_id: "p9" }] } as never,
+    });
+    useSync.setState({ central: "studio-mini", copies: { a: copy() } });
+    const keeping = keepInSync("build-box", "b1");
+    await settle();
+    expect(useStore.getState().confirm?.options.message).toContain("needs build-box as this Mac's central host");
+    answerConfirm(true, false);
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ title: "Change the central host" });
+    answerConfirm(true, false);
+    await keeping;
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["sync.stop", { copy: "c1" }],
+      ["host_set_central", "build-box"],
+      ["sync.start", { session: "b1" }],
+    ]);
+  });
+
+  it("keeps nothing in sync when the user keeps the old central host's copies", async () => {
+    useStore.setState({
+      hosts: { ...useStore.getState().hosts, "build-box": { id: "build-box", label: "build-box", kind: "tailnet", remote: true, status: "connected" } } as never,
+      sessions: { ...useStore.getState().sessions, "build-box": [{ id: "b1", name: "spike", project_id: "p9" }] } as never,
+    });
+    useSync.setState({ central: "studio-mini", copies: { a: copy() } });
+    const keeping = keepInSync("build-box", "b1");
+    await settle();
+    answerConfirm(true, false);
+    await settle();
+    answerConfirm(false, false);
+    await keeping;
     expect(calls).toEqual([]);
     expect(useSync.getState().central).toBe("studio-mini");
   });

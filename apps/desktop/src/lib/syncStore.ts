@@ -182,12 +182,7 @@ export async function keepInSync(host: string, session: string): Promise<void> {
   if (choice.needsCentral) {
     const name = st.sessions[host]?.find((s) => s.id === session)?.name ?? "this session";
     if (!(await askConfirm(centralPrompt(name, host)))) return;
-    try {
-      setSync(fromLink(await hostsApi.setCentral(host)));
-    } catch (e) {
-      errorToast(e);
-      return;
-    }
+    if (!(await moveCentral(host))) return;
   }
   try {
     const copy = await rpc<Copy>(LOCAL, M.syncStart, { session });
@@ -197,29 +192,38 @@ export async function keepInSync(host: string, session: string): Promise<void> {
   }
 }
 
-/** Settings' Central host choice: moving or clearing it while sessions of
- * the current central host are kept in sync asks first, then stops them,
- * since they would wait for a host that is no longer central (X41, X60). */
+/** Settings' Central host choice (X41, X60). */
 export async function changeCentral(next: string | null): Promise<void> {
+  await moveCentral(next);
+}
+
+/** Moves or clears the central host. Sessions of the current one kept in
+ * sync would wait for a host that is no longer central, so this asks
+ * first and stops them. False when the user said no or a step failed. */
+async function moveCentral(next: string | null): Promise<boolean> {
   const { copies, central } = getSync();
   const kept = Object.values(copies).filter((c) => c.host === central);
   const ask = centralChangePrompt(central, next, kept.length, syncDataDir(), home());
   if (ask) {
-    if (!(await askConfirm(ask))) return;
+    if (!(await askConfirm(ask))) return false;
     for (const c of kept) {
       try {
         await rpc(LOCAL, M.syncStop, { copy: c.id });
       } catch (e) {
+        // Already gone: nothing is left behind.
+        if (e instanceof DaemonError && e.code === "not_found") continue;
         if (e instanceof DaemonError && (e.code === "not_saved" || e.code === "failed")) toast(`${sessionName(c, "A session")} is still kept in sync: ${e.message}`, "error");
         else errorToast(e);
-        return;
+        return false;
       }
     }
   }
   try {
     setSync(fromLink(await hostsApi.setCentral(next)));
+    return true;
   } catch (e) {
     errorToast(e);
+    return false;
   }
 }
 
