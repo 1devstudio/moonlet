@@ -91,6 +91,12 @@ fn free_port() -> u16 {
 /// daemon can take a free port first, so this waits for its own daemon to
 /// listen, and moves to another port if it never does.
 async fn central() -> (Daemon, String) {
+    listening("127.0.0.1", |_| {}).await
+}
+
+/// A daemon with tailnet access on, listening on `ip` as its own
+/// "Tailscale address"; `prepare` fills its home first.
+async fn listening(ip: &str, prepare: impl Fn(&Path)) -> (Daemon, String) {
     for _ in 0..5 {
         let home = tempfile::tempdir().unwrap();
         let port = free_port();
@@ -99,15 +105,20 @@ async fn central() -> (Daemon, String) {
             format!(r#"{{ "enabled": true, "port": {port} }}"#),
         )
         .unwrap();
+        prepare(home.path());
         let d = Daemon::start(
             home,
             &[
-                ("MOONLET_MOBILE_ADDRS", "127.0.0.1"),
+                ("MOONLET_MOBILE_ADDRS", ip),
                 ("MOONLET_WORKER_PING_MS", "200"),
             ],
         )
         .await;
-        let addr = format!("127.0.0.1:{port}");
+        let addr = if ip.contains(':') {
+            format!("[{ip}]:{port}")
+        } else {
+            format!("{ip}:{port}")
+        };
         for _ in 0..40 {
             let st: Value = d.call("mobile.status", json!({})).await;
             if st["listening"].as_array().is_some_and(|l| l.contains(&json!(addr))) {
@@ -651,7 +662,7 @@ async fn a_mac_cannot_link_to_itself() {
 }
 
 #[tokio::test]
-async fn only_the_macs_app_sets_or_retries_the_link() {
+async fn a_paired_mac_cannot_set_the_central_host_directly() {
     let (central, addr) = central().await;
     let token = pair(&central, &addr, "Alex's MacBook Pro").await;
     let elsewhere = json!({
@@ -659,16 +670,25 @@ async fn only_the_macs_app_sets_or_retries_the_link() {
         "worker": { "enabled": true }
     });
 
-    // A paired device over the tailnet, phone or desktop.
+    // A paired Mac over the tailnet may not hand over a token (X61), nor
+    // clear the central host.
     let mut device = raw(&addr, &token, "moonlet-app").await;
-    assert_eq!(
-        refused(&ask(&mut device, 1, "link.set", elsewhere.clone()).await).as_deref(),
-        Some("forbidden")
-    );
-    assert_eq!(
-        refused(&ask(&mut device, 2, "link.retry", json!({})).await).as_deref(),
-        Some("forbidden")
-    );
+    // Not as an array either, which serde reads as the same fields.
+    let as_array = json!([elsewhere["central"], { "enabled": true }]);
+    for (id, params) in [
+        (1, elsewhere.clone()),
+        (2, json!({ "central": null })),
+        (3, as_array),
+    ] {
+        let reply = ask(&mut device, id, "link.set", params).await;
+        let Some(Message::Response { error: Some(e), .. }) = reply else {
+            panic!("a paired Mac set the central host: {reply:?}")
+        };
+        assert_eq!(
+            (e.code.as_str(), e.message.as_str()),
+            ("forbidden", "a paired Mac cannot set the central host; pair with it instead")
+        );
+    }
 
     // An agent's `moonlet` CLI on the Mac itself.
     let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
@@ -954,4 +974,270 @@ async fn only_a_worker_sends_packs() {
         ),
         None
     );
+}
+
+/// X61: the remote host `build-box`, a worker that is not linked yet. It is
+/// on the tailnet at ::1, so the central host at 127.0.0.1 is not itself.
+async fn remote_host() -> (Daemon, String) {
+    listening("::1", |home| {
+        std::fs::write(
+            home.join("link.json"),
+            json!({ "central": null, "worker": { "id": WORKER_ID, "name": "build-box", "enabled": false } })
+                .to_string(),
+        )
+        .unwrap();
+    })
+    .await
+}
+
+/// `{name, addrs}` of the central host, as a paired Mac sends it.
+fn studio_mini(addr: &str) -> Value {
+    json!({ "name": "studio-mini", "addrs": [addr] })
+}
+
+fn answer(reply: Option<Message>) -> Value {
+    match reply {
+        Some(Message::Response {
+            result: Some(r),
+            error: None,
+            ..
+        }) => r,
+        other => panic!("not an answer: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_remote_host_pairs_with_the_central_host_and_links_as_a_worker() {
+    let (central, central_addr) = central().await;
+    let (remote, remote_addr) = remote_host().await;
+    // This Mac, paired with the remote host, drives it over the tailnet.
+    let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
+    let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
+
+    let code: MobilePairing = central.call("mobile.pair_start", json!({})).await;
+    let info = answer(
+        ask(
+            &mut mac,
+            1,
+            "link.pair",
+            json!({ "central": studio_mini(&central_addr), "code": code.code }),
+        )
+        .await,
+    );
+    assert_eq!(
+        info["central"],
+        json!({ "name": "studio-mini", "addrs": [central_addr] }),
+        "{info}"
+    );
+    assert!(!info.to_string().contains("token"), "{info}");
+    let info = answer(ask(&mut mac, 2, "link.set", json!({ "worker": { "enabled": true } })).await);
+    assert_eq!(info["worker"]["enabled"], json!(true), "{info}");
+
+    eventually("build-box links", || async {
+        workers(&central).await.iter().any(|w| w.worker.name == "build-box")
+    })
+    .await;
+    let st: Value = central.call("mobile.status", json!({})).await;
+    assert!(
+        st["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["name"] == "build-box" && d["kind"] == "desktop"),
+        "{st}"
+    );
+}
+
+#[tokio::test]
+async fn a_paired_mac_sets_the_link_and_a_phone_or_the_cli_cannot() {
+    let (central, central_addr) = central().await;
+    let (remote, remote_addr) = remote_host().await;
+    let code: MobilePairing = central.call("mobile.pair_start", json!({})).await;
+    let pairing = json!({ "central": studio_mini(&central_addr), "code": code.code });
+    let enable = json!({ "worker": { "enabled": true } });
+
+    // A paired phone.
+    let p: MobilePairing = remote.call("mobile.pair_start", json!({})).await;
+    let phone_token = moonlet_link::tailnet::pair(
+        std::slice::from_ref(&remote_addr),
+        &p.code,
+        "Alex's iPhone",
+        DeviceKind::Phone,
+    )
+    .await
+    .unwrap()
+    .token;
+    let mut phone = raw(&remote_addr, &phone_token, "moonlet-mobile").await;
+    // Even with params that do not parse, the answer is no.
+    let garbled = json!({ "worker": 5 });
+    for (id, method, params) in [
+        (1, "link.set", &enable),
+        (2, "link.retry", &json!({})),
+        (3, "link.pair", &pairing),
+        (4, "link.set", &garbled),
+    ] {
+        assert_eq!(
+            refused(&ask(&mut phone, id, method, params.clone()).await).as_deref(),
+            Some("forbidden"),
+            "{method}"
+        );
+    }
+
+    // An agent's `moonlet` CLI on the remote host itself.
+    let mut cli = Client::connect(&remote.socket, "moonlet-cli").await.unwrap();
+    for (method, params) in [("link.set", &enable), ("link.retry", &json!({})), ("link.pair", &pairing)] {
+        let e = cli.request::<_, Value>(method, params.clone()).await.unwrap_err();
+        assert_eq!(e.to_string(), "forbidden: only the moonlet app manages the link", "{method}");
+    }
+    let info: Value = remote.call("link.get", json!({})).await;
+    assert_eq!(info["central"], Value::Null, "{info}");
+    assert_eq!(info["worker"]["enabled"], json!(false), "{info}");
+
+    // A paired Mac.
+    let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
+    let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
+    answer(ask(&mut mac, 1, "link.pair", pairing.clone()).await);
+    let info = answer(ask(&mut mac, 2, "link.set", enable.clone()).await);
+    assert_eq!(info["worker"]["enabled"], json!(true), "{info}");
+    answer(ask(&mut mac, 3, "link.retry", json!({})).await);
+}
+
+#[tokio::test]
+async fn a_wrong_code_leaves_the_link_as_it_was() {
+    let (_central, central_addr) = central().await;
+    let (remote, remote_addr) = remote_host().await;
+    let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
+    let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
+
+    let reply = ask(
+        &mut mac,
+        1,
+        "link.pair",
+        json!({ "central": studio_mini(&central_addr), "code": "0000000000" }),
+    )
+    .await;
+    let Some(Message::Response { error: Some(e), .. }) = reply else {
+        panic!("a wrong code paired: {reply:?}")
+    };
+    assert_eq!(e.code, "pair_failed");
+    assert_eq!(e.message, "The code was not accepted. Start pairing again on studio-mini.");
+    let info: Value = remote.call("link.get", json!({})).await;
+    assert_eq!(info["central"], Value::Null, "{info}");
+}
+
+#[tokio::test]
+async fn link_pair_refuses_a_bad_central_before_pairing() {
+    let (remote, remote_addr) = remote_host().await;
+    let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
+    let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
+    // Nothing listens at 127.0.0.1:9: a refusal before pairing is the only
+    // way to get these messages.
+    for (id, central, message) in [
+        (1, json!({ "name": "", "addrs": ["127.0.0.1:9"] }), "\"\" is not a name"),
+        (2, json!({ "name": "studio-mini", "addrs": [] }), "the central host has no address"),
+        (3, json!({ "name": "studio-mini", "addrs": ["studio-mini"] }), "studio-mini is not an ip:port address"),
+        (4, json!({ "name": "studio-mini", "addrs": [remote_addr] }), "this Mac is the central host"),
+    ] {
+        let reply = ask(&mut mac, id, "link.pair", json!({ "central": central, "code": "7KQ2MX9PDA" })).await;
+        let Some(Message::Response { error: Some(e), .. }) = reply else {
+            panic!("{central} was accepted: {reply:?}")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("invalid_params", message), "{central}");
+    }
+    let info: Value = remote.call("link.get", json!({})).await;
+    assert_eq!(info["central"], Value::Null, "{info}");
+}
+
+/// A central host that pairs anyone, but only once `go` fires: a pairing
+/// that is slow to answer. Returns its address and whether it was reached.
+async fn slow_central(go: tokio::sync::oneshot::Receiver<()>) -> (String, tokio::sync::oneshot::Receiver<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let (reached_tx, reached) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.unwrap();
+        let _ = moonlet_proto::read_frame(&mut s).await;
+        let _ = reached_tx.send(());
+        let _ = go.await;
+        let authed = Message::Authed {
+            device_id: "d1".into(),
+            token: Some("cd".repeat(32)),
+            protocol: Some(moonlet_proto::PROTOCOL_VERSION),
+            daemon_version: Some("0.1.29".into()),
+            host: Some("studio-mini".into()),
+            os: Some("macos".into()),
+        };
+        let _ = moonlet_proto::write_frame(&mut s, &Frame::Json(authed)).await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    });
+    (addr, reached)
+}
+
+#[tokio::test]
+async fn a_pairing_that_ends_after_the_central_host_changed_does_not_undo_the_change() {
+    let (remote, remote_addr) = remote_host().await;
+    let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
+    let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
+    let (go, wait) = tokio::sync::oneshot::channel();
+    let (slow_addr, reached) = slow_central(wait).await;
+
+    let pairing = tokio::spawn(async move {
+        ask(
+            &mut mac,
+            1,
+            "link.pair",
+            json!({ "central": studio_mini(&slow_addr), "code": "7KQ2MX9PDA" }),
+        )
+        .await
+    });
+    reached.await.unwrap();
+    // Meanwhile, the remote host's own app picks another central host.
+    let _: Value = remote
+        .call(
+            "link.set",
+            json!({ "central": { "name": "other-mini", "addrs": ["127.0.0.1:9"], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    go.send(()).unwrap();
+
+    let reply = pairing.await.unwrap();
+    let Some(Message::Response { error: Some(e), .. }) = reply else {
+        panic!("the late pairing was saved: {reply:?}")
+    };
+    assert_eq!(
+        (e.code.as_str(), e.message.as_str()),
+        ("conflict", "The central host changed while pairing with studio-mini. Pair again.")
+    );
+    let info: Value = remote.call("link.get", json!({})).await;
+    assert_eq!(info["central"]["name"], json!("other-mini"), "{info}");
+}
+
+#[tokio::test]
+async fn a_pairing_that_cannot_be_saved_says_how_to_undo_it() {
+    let (central, central_addr) = central().await;
+    let (remote, remote_addr) = remote_host().await;
+    let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
+    let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
+    // `link.json` is written through `link.json.tmp`: a folder there stops it.
+    std::fs::create_dir(remote.home.path().join("link.json.tmp")).unwrap();
+
+    let code: MobilePairing = central.call("mobile.pair_start", json!({})).await;
+    let reply = ask(
+        &mut mac,
+        1,
+        "link.pair",
+        json!({ "central": studio_mini(&central_addr), "code": code.code }),
+    )
+    .await;
+    let Some(Message::Response { error: Some(e), .. }) = reply else {
+        panic!("an unsaved pairing worked: {reply:?}")
+    };
+    assert_eq!(e.code, "pair_unsaved");
+    assert!(
+        e.message.starts_with("Paired with studio-mini, but could not save it. Remove build-box on studio-mini and pair again: "),
+        "{}",
+        e.message
+    );
+    let info: Value = remote.call("link.get", json!({})).await;
+    assert_eq!(info["central"], Value::Null, "{info}");
 }

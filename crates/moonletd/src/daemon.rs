@@ -214,6 +214,31 @@ impl Daemon {
             .collect()
     }
 
+    /// Refuses all but those who may change the worker link: the Mac's app,
+    /// or a paired Mac over the tailnet (X61), which may not set `central`,
+    /// as that hands over a token. A phone and an agent's CLI may not.
+    fn link_managers_only(&self, conn: &Conn, sets_central: bool) -> Result<(), RpcError> {
+        let Some(device) = conn.phone.as_deref() else {
+            return app_only(conn, "the link");
+        };
+        let mac = self
+            .mobile
+            .status()
+            .devices
+            .iter()
+            .any(|d| d.id == device && d.kind == m::DeviceKind::Desktop);
+        if !mac {
+            return app_only(conn, "the link");
+        }
+        if sets_central {
+            return Err(RpcError::new(
+                "forbidden",
+                "a paired Mac cannot set the central host; pair with it instead",
+            ));
+        }
+        Ok(())
+    }
+
     /// Every change to profiles or their accounts sends the full list, as
     /// `profile.list` returns it.
     fn emit_profiles(&self) {
@@ -490,17 +515,27 @@ impl Daemon {
                 ok(true)
             }
             m::LINK_GET => ok(self.link.info()),
-            // Like phone access: a paired device or an agent's CLI could
-            // otherwise point this Mac's link at a host of its choosing.
+            // A phone or an agent's CLI could otherwise point this Mac's link
+            // at a host of its choosing. A paired Mac may, as it can already
+            // run commands here (X61), but never hands over a token.
             m::LINK_SET => {
-                app_only(conn, "the link")?;
+                // Checked before the params are read, so a phone learns
+                // nothing from them, and again on what was read: serde also
+                // takes the params as an array, which has no "central" key.
+                self.link_managers_only(conn, false)?;
                 let r: m::LinkSet = params(p)?;
+                self.link_managers_only(conn, r.central.is_some())?;
                 ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
             }
             m::LINK_RETRY => {
-                app_only(conn, "the link")?;
+                self.link_managers_only(conn, false)?;
                 self.link.retry();
                 ok(self.link.info())
+            }
+            m::LINK_PAIR => {
+                self.link_managers_only(conn, false)?;
+                let r: m::LinkPair = params(p)?;
+                ok(self.link.pair(r, &crate::mobile::tailscale_addresses()).await?)
             }
             m::WORKER_LIST => ok(self.workers.list()),
             m::WORKER_REGISTER => {

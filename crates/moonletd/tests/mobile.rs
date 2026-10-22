@@ -726,8 +726,8 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
         matches!(hosts, Message::Response { error: None, .. }),
         "{hosts:?}"
     );
-    // Nor point the host's worker link elsewhere (X41).
-    for (id, method) in [(5, "link.set"), (6, "link.retry")] {
+    // Nor point the host's worker link elsewhere (X41, X61).
+    for (id, method) in [(5, "link.set"), (6, "link.retry"), (7, "link.pair")] {
         let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
             panic!("{method} worked through a route")
         };
