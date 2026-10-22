@@ -68,7 +68,7 @@ None in the daemon. The app adds `tauri-plugin-updater` (check, download, instal
 
 ## Test plan
 
-- Unit (`lib/updater.test.ts`): `afterCheck` (found, not found, same version again, during a download or install, and what an automatic and a manual check tell the user, errors included), `afterDownloadEvent` progress, `updateButton` (label, action and tooltip per state, so Restart relaunches), `updateStatus` (the Settings status and the last error) and `scheduleUpdateChecks` (10 s, every 6 h, skipped while the setting is off, with fake timers).
+- Unit (`lib/updater.test.ts`): `afterCheck` (found, not found, same version again, during a download or install, and what an automatic and a manual check tell the user, errors included), `afterDownloadEvent` progress, `updateButton` (label, action and tooltip per state, so Restart relaunches), `updateStatus` (the Settings status and the last error) and `scheduleUpdateChecks` (10 s, every hour, skipped while the setting is off, with fake timers).
 - Unit (`lib/runActions.test.ts`): "Check for updates…" is in the Run action catalogue.
 - Not covered by unit tests: the plugin calls themselves (`check`, `downloadAndInstall`, `relaunch`), the signature check (the updater plugin's own) and the workflow. They wait for the manual run below. The signed archive was checked once by hand: a local build with the workflow's configs produced `moonlet.app.tar.gz.sig`, which `minisign-verify` accepts with the public key in `tauri.conf.json` and rejects for a tampered archive.
 - No e2e spec: e2e builds are debug builds, which have no updater, and a real update needs a published signed release. The automatic-check checkbox is a plain localStorage setting like X10's sounds.
