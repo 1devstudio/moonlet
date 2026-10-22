@@ -17,6 +17,8 @@ const sock = join(w.root, "central.sock");
 const env = { ...w.env, MOONLET_HOME: home, MOONLET_SOCK: sock, MOONLET_MOBILE_ADDRS: "::1" };
 const dialog = '//div[@role="dialog"][@aria-label="Add host"]';
 const heavy = '//*[@data-setting="heavy-commands"]';
+/** The tag beside a host's name that says it is the central host. */
+const centralTag = (row: string) => `${row}//span[normalize-space()="Central host"]`;
 
 /** One request to the central host's daemon over its socket. */
 const centralRpc = <T>(method: string, params: object = {}) => socketRpc<T>(sock, env, method, params);
@@ -75,8 +77,10 @@ describe("worker link", () => {
     await $(`${dialog}//button[normalize-space()="Add"]`).click();
     await $(`${row()}//*[starts-with(normalize-space(), "Connected · moonletd ")]`).waitForExist({ timeout: 20000 });
 
+    await expect($(centralTag(row()))).not.toBeExisting();
     await $(`${row()}//button[normalize-space()="Make central host"]`).click();
     await expect($(`${row()}//button[normalize-space()="Clear central host"]`)).toBeDisplayed();
+    await expect($(centralTag(row()))).toBeDisplayed();
   });
 
   it("links this Mac when heavy commands are on, and the central host lists it", async () => {
@@ -91,6 +95,7 @@ describe("worker link", () => {
   it("Clear central host clears it, and the link goes", async () => {
     await $(`${row()}//button[normalize-space()="Clear central host"]`).click();
     await expect($(`${row()}//button[normalize-space()="Make central host"]`)).toBeDisplayed();
+    await expect($(centralTag(row()))).not.toBeExisting();
     await $(`${heavy}//*[normalize-space()="Not linked"]`).waitForExist({ timeout: 10000 });
     await browser.waitUntil(async () => (await centralRpc<unknown[]>("worker.list")).length === 0, {
       timeout: 10000,

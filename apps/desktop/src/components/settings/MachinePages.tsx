@@ -18,7 +18,7 @@ import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./co
 
 const iconBox = "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted";
 
-function HostRow({ host, sessions, children }: { host: HostInfo; sessions: number; children?: React.ReactNode }) {
+function HostRow({ host, sessions, central, children }: { host: HostInfo; sessions: number; central?: boolean; children?: React.ReactNode }) {
   const appVersion = useStore((s) => s.appVersion) ?? "";
   const command = updateCommand(host, appVersion);
   return (
@@ -30,6 +30,7 @@ function HostRow({ host, sessions, children }: { host: HostInfo; sessions: numbe
         <span className="flex items-center gap-2 ui-text-13 font-medium">
           {host.id}
           {host.kind === "tailnet" && <span className="rounded bg-raised px-1.5 py-px ui-text-11 font-normal text-muted">Tailnet</span>}
+          {central && <span className="rounded bg-raised px-1.5 py-px ui-text-11 font-normal text-muted">Central host</span>}
         </span>
         <Status line={hostLine(host, sessions, appVersion)} />
         {command && (
@@ -400,7 +401,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
       <Section title="Remote hosts">
         <Card>
           {remotes.map((h) => (
-            <HostRow key={h.id} host={h} sessions={open(h.id)}>
+            <HostRow key={h.id} host={h} sessions={open(h.id)} central={h.id === central}>
               {h.kind === "tailnet" && <CentralHostButton host={h.id} central={central} onPick={pickCentralHost} />}
               {hostActions(h).map((a) =>
                 a === "install" || a === "reinstall" ? (
