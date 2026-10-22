@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { hideNativeContextMenu } from "./nativeMenu";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { installNoNativeMenu } from "./nativeMenu";
 
 function rightClick(el: Element): MouseEvent {
   const e = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
@@ -7,16 +7,14 @@ function rightClick(el: Element): MouseEvent {
   return e;
 }
 
-describe("hideNativeContextMenu", () => {
-  let undo = () => {};
+describe("installNoNativeMenu", () => {
+  beforeAll(() => installNoNativeMenu());
   afterEach(() => {
-    undo();
     document.body.innerHTML = "";
   });
 
   it("stops the webview's own menu (Back, Forward, Reload) on a right-click anywhere", () => {
-    document.body.innerHTML = `<div><button>2 tool calls</button></div><input /><p>text</p>`;
-    undo = hideNativeContextMenu(window);
+    document.body.innerHTML = `<div><button>Open</button></div><input /><p>text</p>`;
     for (const sel of ["button", "input", "p"]) {
       expect(rightClick(document.querySelector(sel)!).defaultPrevented).toBe(true);
     }
@@ -26,7 +24,6 @@ describe("hideNativeContextMenu", () => {
     document.body.innerHTML = `<div id="row"></div>`;
     const row = document.getElementById("row")!;
     row.addEventListener("contextmenu", (e) => e.stopPropagation());
-    undo = hideNativeContextMenu(window);
     expect(rightClick(row).defaultPrevented).toBe(true);
   });
 
@@ -34,7 +31,6 @@ describe("hideNativeContextMenu", () => {
     document.body.innerHTML = `<div id="row"></div>`;
     const opened: string[] = [];
     document.getElementById("row")!.addEventListener("contextmenu", () => opened.push("row menu"));
-    undo = hideNativeContextMenu(window);
     rightClick(document.getElementById("row")!);
     expect(opened).toEqual(["row menu"]);
   });
