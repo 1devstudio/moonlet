@@ -517,12 +517,16 @@ impl Daemon {
                 self.sync.worker_linked(&id);
                 ok(true)
             }
+            // A copy clones and writes on this Mac: only its app starts one
+            // (X60). Anyone may list them.
             m::SYNC_START => {
+                app_only(conn, "sync")?;
                 let r: m::SyncStart = params(p)?;
                 ok(self.sync.start(r.session)?)
             }
             m::SYNC_LIST => ok(self.sync.list()),
             m::SYNC_RETRY => {
+                app_only(conn, "sync")?;
                 let r: m::CopyRef = params(p)?;
                 ok(self.sync.retry(&r.copy)?)
             }

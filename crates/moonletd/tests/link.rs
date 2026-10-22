@@ -663,6 +663,34 @@ async fn only_the_macs_app_sets_or_retries_the_link() {
 }
 
 #[tokio::test]
+async fn only_the_macs_app_starts_or_retries_a_copy() {
+    // X60: a copy clones and writes on this Mac, so a paired device or an
+    // agent's CLI may only list copies.
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut device = raw(&addr, &token, "moonlet-app").await;
+    let start = json!({ "session": "s1" });
+    assert_eq!(
+        refused(&ask(&mut device, 1, "sync.start", start.clone()).await).as_deref(),
+        Some("forbidden")
+    );
+    assert_eq!(
+        refused(&ask(&mut device, 2, "sync.retry", json!({ "copy": "c1" })).await).as_deref(),
+        Some("forbidden")
+    );
+    let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
+    let e = cli.request::<_, Value>("sync.start", start).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    let e = cli
+        .request::<_, Value>("sync.retry", json!({ "copy": "c1" }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    let copies: Value = cli.request("sync.list", json!({})).await.unwrap();
+    assert_eq!(copies, json!([]));
+}
+
+#[tokio::test]
 async fn one_link_set_says_link_changed_once() {
     let (central, addr) = central().await;
     let worker = linked_worker(&central, &addr).await;
