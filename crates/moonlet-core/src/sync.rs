@@ -880,6 +880,19 @@ pub async fn head(worktree: &Path) -> Result<String> {
 /// Clones `url` into `dir` with this machine's own credentials. The error
 /// is git's own message, such as `repository '…' not found`.
 pub async fn clone(url: &str, dir: &Path) -> std::result::Result<(), String> {
+    if !clonable_url(url) {
+        return Err(format!("only https and ssh origins are cloned: {url}"));
+    }
+    // Never into, nor away with, a folder this clone didn't make.
+    let made = match std::fs::read_dir(dir) {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err(format!("{} is in the way", dir.display()));
+            }
+            false
+        }
+        Err(_) => true,
+    };
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -889,7 +902,7 @@ pub async fn clone(url: &str, dir: &Path) -> std::result::Result<(), String> {
         "git",
         cwd,
         &["clone", "-q", "--", url, &dir_s],
-        &[],
+        &origin_env(),
         None,
         Duration::from_secs(1800),
     )
@@ -898,8 +911,51 @@ pub async fn clone(url: &str, dir: &Path) -> std::result::Result<(), String> {
     if out.status == 0 {
         return Ok(());
     }
-    let _ = std::fs::remove_dir_all(dir);
+    if made {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     Err(clone_error(&out.stderr))
+}
+
+/// Whether `url` is one a copy clones from: `https://`, `ssh://` or
+/// scp-like `[user@]host:path`. Never a local path, `file://` or another
+/// transport: the URL comes from the central host, and a local one would
+/// copy this Mac's own repositories into the clone.
+pub fn clonable_url(url: &str) -> bool {
+    if let Some((scheme, rest)) = url.split_once("://") {
+        return matches!(scheme, "https" | "ssh") && !rest.is_empty();
+    }
+    // scp-like: a host before the first `:`, and no `/` before it.
+    match url.split_once(':') {
+        Some((host, path)) => {
+            let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+            // `<transport>::<address>` is a remote helper, not a host.
+            host.len() > 1
+                && !path.is_empty()
+                && !path.starts_with(':')
+                && !url.starts_with(['-', '/', '.'])
+                && host
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        }
+        None => false,
+    }
+}
+
+/// Test-only: `MOONLET_SYNC_LOCAL_ORIGINS=1` lets git reach an https
+/// origin that a `url.insteadOf` rule turns into a local path, as the
+/// daemon tests' origins are.
+fn local_origins() -> bool {
+    std::env::var_os("MOONLET_SYNC_LOCAL_ORIGINS").is_some_and(|v| v == "1")
+}
+
+/// What git may use to reach an origin: https and ssh only.
+fn origin_env() -> Vec<(&'static str, &'static str)> {
+    if local_origins() {
+        Vec::new()
+    } else {
+        vec![("GIT_ALLOW_PROTOCOL", "https:ssh")]
+    }
 }
 
 /// The line of a failed clone's output that says why: the server's own
@@ -921,7 +977,7 @@ pub async fn fetch_origin(repo: &Path) {
         "git",
         repo,
         &["fetch", "-q", "--no-tags", "origin"],
-        &[],
+        &origin_env(),
         None,
         Duration::from_secs(600),
     )
@@ -1986,6 +2042,49 @@ mod tests {
         ] {
             assert_eq!(scrub_url(url), want, "{url}");
         }
+    }
+
+    #[test]
+    fn only_https_and_ssh_origins_are_cloned() {
+        for url in [
+            "https://github.com/acme/shop.git",
+            "ssh://git@github.com/acme/shop.git",
+            "git@github.com:acme/shop.git",
+            "github.com:acme/shop.git",
+        ] {
+            assert!(clonable_url(url), "{url}");
+        }
+        for url in [
+            "file:///Users/alex/src/secret",
+            "/Users/alex/src/secret",
+            "./secret",
+            "git://github.com/acme/shop.git",
+            "http://github.com/acme/shop.git",
+            "ext::sh -c touch% /tmp/pwned",
+            "-uhelp",
+            "C:/repo",
+        ] {
+            assert!(!clonable_url(url), "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_clone_never_removes_a_folder_it_did_not_make() {
+        let dir = tempfile::tempdir().unwrap();
+        let there = dir.path().join("acme");
+        std::fs::create_dir_all(there.join("shop/repo")).unwrap();
+        std::fs::write(there.join("notes.txt"), "mine\n").unwrap();
+        let e = clone("https://git.invalid/acme.git", &there)
+            .await
+            .unwrap_err();
+        assert_eq!(e, format!("{} is in the way", there.display()));
+        assert_eq!(read(&there, "notes.txt").as_deref(), Some("mine\n"));
+        assert!(there.join("shop/repo").is_dir());
+
+        // A folder it makes for a clone that fails goes again.
+        let new = dir.path().join("fresh/repo");
+        assert!(clone("https://git.invalid/acme.git", &new).await.is_err());
+        assert!(!new.exists());
     }
 
     #[test]

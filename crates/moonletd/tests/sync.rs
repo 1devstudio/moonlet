@@ -281,6 +281,8 @@ async fn worker_with(origin: Option<&Path>) -> Daemon {
         &[
             ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
             ("GIT_CONFIG_GLOBAL", config.to_str().unwrap()),
+            // ORIGIN_URL leads to a local folder through `insteadOf`.
+            ("MOONLET_SYNC_LOCAL_ORIGINS", "1"),
         ],
     )
     .await
@@ -381,7 +383,7 @@ async fn a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_
         worker
             .home
             .path()
-            .join("clones/git.invalid/acme/shop/.git")
+            .join("clones/git.invalid/acme/shop/repo/.git")
             .is_dir()
     );
 }
@@ -505,7 +507,7 @@ async fn a_clone_that_fails_pauses_the_copy_with_gits_message() {
         !worker
             .home
             .path()
-            .join("clones/git.invalid/acme/shop")
+            .join("clones/git.invalid/acme/shop/repo")
             .exists()
     );
 
@@ -516,6 +518,22 @@ async fn a_clone_that_fails_pauses_the_copy_with_gits_message() {
     assert!(
         reason(&copy).starts_with("cannot clone git.invalid/acme/shop: "),
         "{copy:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_origin_this_mac_does_not_clone_from_pauses_the_copy() {
+    // Only https and ssh: the URL comes from the central host.
+    let central = central_with(Some("git://git.example.com/acme/shop.git")).await;
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let copy = copy_in(&worker, paused, "paused").await;
+    assert_eq!(
+        reason(&copy),
+        "cannot clone git.example.com/acme/shop: only https and ssh origins are cloned: git://git.example.com/acme/shop.git"
     );
 }
 

@@ -1174,9 +1174,14 @@ fn free_folder(dir: PathBuf, taken: &[PathBuf]) -> PathBuf {
 /// origin, with a port's `:` as `_`: `gitlab.example.com_8443/team/app`.
 fn clone_dir(home: &Path, origin: &str) -> PathBuf {
     let base = home.join("clones");
-    let dir = origin.split('/').fold(base.clone(), |dir, part| {
-        dir.join(segment(&part.replace(':', "_")))
-    });
+    // Each origin's clone is a `repo` folder of its own, so `host/a` and
+    // `host/a/b` never sit one inside the other.
+    let dir = origin
+        .split('/')
+        .fold(base.clone(), |dir, part| {
+            dir.join(segment(&part.replace(':', "_")))
+        })
+        .join("repo");
     debug_assert!(dir.starts_with(&base));
     dir
 }
@@ -1386,6 +1391,14 @@ mod tests {
     }
 
     #[test]
+    fn one_origins_clone_never_sits_inside_anothers() {
+        let home = Path::new("/Users/alex/.moonlet");
+        let outer = clone_dir(home, "git.example.com/acme");
+        let inner = clone_dir(home, "git.example.com/acme/shop");
+        assert!(!inner.starts_with(&outer) && !outer.starts_with(&inner));
+    }
+
+    #[test]
     fn folders_named_by_the_central_host_stay_under_copies_and_clones() {
         let home = Path::new("/Users/alex/.moonlet");
         assert_eq!(
@@ -1394,16 +1407,18 @@ mod tests {
         );
         assert_eq!(
             clone_dir(home, "github.com/acme/shop"),
-            Path::new("/Users/alex/.moonlet/clones/github.com/acme/shop")
+            Path::new("/Users/alex/.moonlet/clones/github.com/acme/shop/repo")
         );
         assert_eq!(
             clone_dir(home, "gitlab.example.com:8443/team/app"),
-            Path::new("/Users/alex/.moonlet/clones/gitlab.example.com_8443/team/app")
+            Path::new("/Users/alex/.moonlet/clones/gitlab.example.com_8443/team/app/repo")
         );
         // Anything else is named by its hash.
         assert_eq!(
             clone_dir(home, "github.com/../../x"),
-            Path::new("/Users/alex/.moonlet/clones/github.com/5ec1f7e700f37c3d/5ec1f7e700f37c3d/x")
+            Path::new(
+                "/Users/alex/.moonlet/clones/github.com/5ec1f7e700f37c3d/5ec1f7e700f37c3d/x/repo"
+            )
         );
         assert_eq!(
             copies_dir(home, "studio-mini", "..", "a/b c"),
