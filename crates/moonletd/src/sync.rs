@@ -190,6 +190,10 @@ struct Served {
     /// The session's branch.
     #[serde(default)]
     branch: String,
+    /// The repository's common git dir, where the base's ref lives; kept,
+    /// so the ref goes even once the session's worktree is gone.
+    #[serde(default)]
+    repo: String,
     /// The worker was told the session left its branch, and is told when it
     /// is back.
     #[serde(default)]
@@ -230,7 +234,10 @@ enum ClosedSaved {
 impl From<ClosedSaved> for Closed {
     fn from(c: ClosedSaved) -> Self {
         match c {
-            ClosedSaved::Id(copy) => Closed { copy, host: String::new() },
+            ClosedSaved::Id(copy) => Closed {
+                copy,
+                host: String::new(),
+            },
             ClosedSaved::Full { copy, host } => Closed { copy, host },
         }
     }
@@ -286,6 +293,9 @@ pub struct LiveCopies {
     /// Copies with an offer under way, and whether another should follow
     /// it: updates turned away meanwhile ask for one more, not one each.
     offering: Mutex<HashMap<String, bool>>,
+    /// This Mac is registered with its central host: until then the host
+    /// answers `sync.close` with `forbidden`, and the close must wait.
+    registered: std::sync::atomic::AtomicBool,
 }
 
 impl LiveCopies {
@@ -324,6 +334,7 @@ impl LiveCopies {
                 watchers,
                 kicks: Mutex::new(HashMap::new()),
                 offering: Mutex::new(HashMap::new()),
+                registered: std::sync::atomic::AtomicBool::new(false),
             }
         })
     }
@@ -671,7 +682,9 @@ impl LiveCopies {
     }
 
     /// Asks the central host for the session's state again. A copy it no
-    /// longer serves, because the session was archived meanwhile, goes.
+    /// longer serves is made again from the session, keeping its edits as a
+    /// copy never finished does: only a session archived meanwhile, which
+    /// `sync.open` then says, takes the copy away.
     async fn ask_again(self: &Arc<Self>, id: &str) {
         let Some(host) = self.kept(id).and_then(|k| self.host_for(&k)) else {
             return;
@@ -687,9 +700,13 @@ impl LiveCopies {
         {
             Ok(_) => {}
             Err(e) if e.code == "not_found" => {
-                if let Err(e) = self.remove(id, CloseReason::Archived).await {
-                    tracing::warn!(copy = %id, "cannot remove the copy: {}", e.message);
-                }
+                self.update_kept(id, |kept| {
+                    kept.made_from = kept.base.take().or(kept.made_from.take());
+                    kept.base_head = None;
+                    kept.sent_base = None;
+                    kept.tree = None;
+                });
+                tokio::spawn(self.clone().make(id.to_string()));
             }
             Err(e) => {
                 tracing::debug!(copy = %id, "cannot ask for the session again: {}", e.message);
@@ -701,6 +718,8 @@ impl LiveCopies {
     /// others wait for the central host's state, which it sends when this
     /// Mac registers.
     pub fn link_up(self: &Arc<Self>) {
+        self.registered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.send_closed_soon();
         let kept = self.data.lock().unwrap().worker.clone();
         for k in kept {
@@ -721,6 +740,8 @@ impl LiveCopies {
 
     /// The link is down: copies wait for it.
     pub fn link_down(&self) {
+        self.registered
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         let ids: Vec<String> = self
             .data
             .lock()
@@ -814,8 +835,13 @@ impl LiveCopies {
         let path = if made {
             PathBuf::from(&k.path)
         } else {
-            // A copy whose folder was deleted still holds its branch.
-            let _ = git_sync::prune_worktrees(&repo).await;
+            // A copy whose folder was deleted still holds its branch: that
+            // worktree alone is forgotten, never the user's others.
+            if let Some(there) = git_sync::checked_out(&repo, &opened.branch).await
+                && !there.exists()
+            {
+                let _ = git_sync::forget_worktree(&repo, &there).await;
+            }
             if let Some(there) = git_sync::checked_out(&repo, &opened.branch).await {
                 return Err(Stop::Paused(format!(
                     "{} is checked out in {} on this Mac.",
@@ -1429,6 +1455,9 @@ impl LiveCopies {
     /// stopped keeping. Another host never hears of them: it would not know
     /// the copy, and its own host would keep serving it.
     async fn send_closed(&self) {
+        if !self.registered.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let Some(host) = self.link.host() else { return };
         let central = self.link.central_name();
         let closed: Vec<Closed> = self
@@ -1457,7 +1486,9 @@ impl LiveCopies {
         self.link.set_synced(self.link_holders());
     }
 
-    /// What keeps the link open: copies, and closes not sent yet.
+    /// What keeps the link open: copies, and closes not sent yet. A close
+    /// for another host keeps it open too, so the link is there when that
+    /// host is central again.
     fn link_holders(&self) -> usize {
         let data = self.data.lock().unwrap();
         data.worker.len() + data.closed.len()
@@ -1503,8 +1534,8 @@ impl LiveCopies {
                 self.watch(&path);
                 return Err(RpcError::new("failed", why));
             }
-        } else if !k.repo.is_empty() {
-            let _ = git_sync::prune_worktrees(&repo).await;
+        } else if !k.repo.is_empty() && !k.path.is_empty() {
+            let _ = git_sync::forget_worktree(&repo, &path).await;
         }
         if !k.repo.is_empty() {
             let _ = git_sync::delete_base_ref(&repo, id).await;
@@ -1549,13 +1580,25 @@ impl LiveCopies {
             folder: folder.display().to_string(),
             leftovers: Vec::new(),
         };
-        let Some(base) = &k.base else {
-            return Ok(saved);
-        };
-        if !path.exists() {
+        if k.path.is_empty() || !path.exists() {
             return Ok(saved);
         }
         let repo = PathBuf::from(&k.repo);
+        // A copy not finished, or made again, compares with what it was made
+        // from; failing that, with its commit.
+        let base = match k.base.clone().or(k.made_from.clone()) {
+            Some(b) => b,
+            None => {
+                let shown = tilde(&path);
+                let head = git_sync::head(&path)
+                    .await
+                    .map_err(|e| Unsaved::new(&shown, format!("{e:#}")))?;
+                git_sync::commit_tree(&repo, &head)
+                    .await
+                    .map_err(|e| Unsaved::new(&shown, format!("{e:#}")))?
+            }
+        };
+        let base = &base;
         let shown = tilde(&path);
         let whole = |e: anyhow::Error| Unsaved::new(&shown, format!("{e:#}"));
         let local = git_sync::snapshot(&path, MAX_FILE).await.map_err(whole)?;
@@ -1573,7 +1616,16 @@ impl LiveCopies {
             .collect();
         lost.extend(only_here);
         lost.extend(local.too_big);
+        if lost.is_empty() {
+            return Ok(saved);
+        }
+        let folder = make_leftovers_folder(&self.home.join("sync-leftovers"), &segment(&dir))
+            .map_err(|e| Unsaved::new(&shown, e))?;
+        saved.folder = folder.display().to_string();
         saved.leftovers = save_lost(&path, &folder, lost)?;
+        if saved.leftovers.is_empty() {
+            let _ = std::fs::remove_dir(&folder);
+        }
         Ok(saved)
     }
 
@@ -1766,6 +1818,10 @@ impl LiveCopies {
             .ok_or_else(|| RpcError::new("not_found", "the session's project is gone"))?;
         let path = Path::new(&session.path);
         let head = git_sync::head(path).await.map_err(internal)?;
+        let repo = git_sync::common_dir(path)
+            .await
+            .map(|d| d.display().to_string())
+            .unwrap_or_default();
         let origin_url = moonlet_core::git::origin_url(Path::new(&project.path))
             .await
             .map(|u| git_sync::scrub_url(&u));
@@ -1782,6 +1838,7 @@ impl LiveCopies {
                 central_tree: None,
                 differs: Vec::new(),
                 branch: session.branch.clone(),
+                repo,
                 off_branch_sent: false,
             });
         }
@@ -1854,7 +1911,8 @@ impl LiveCopies {
         let Some(served) = self.served(id) else {
             return;
         };
-        self.forget_served(&served, Path::new(&served.path)).await;
+        let repo = served_repo(&served);
+        self.forget_served(&served, &repo).await;
     }
 
     /// Forgets `served`, deleting its base's ref in `repo` (the session's
@@ -1887,12 +1945,18 @@ impl LiveCopies {
             .collect();
         let mut copies = Vec::new();
         for s in served {
-            let repo = git_sync::common_dir(Path::new(&s.path))
-                .await
-                .unwrap_or_else(|_| PathBuf::from(&s.path));
+            let repo = match s.repo.is_empty() {
+                false => PathBuf::from(&s.repo),
+                true => git_sync::common_dir(Path::new(&s.path))
+                    .await
+                    .unwrap_or_else(|_| PathBuf::from(&s.path)),
+            };
             copies.push((s, repo));
         }
-        Archiving { copies }
+        Archiving {
+            session: session.to_string(),
+            copies,
+        }
     }
 
     /// The session was archived: each linked worker removes its copy,
@@ -1900,7 +1964,22 @@ impl LiveCopies {
     /// links again. Nothing waits for the workers. The session then serves
     /// no copies.
     pub fn archived(self: &Arc<Self>, archiving: Archiving) {
-        for (s, repo) in archiving.copies {
+        // A copy opened while the archive ran is let go too.
+        let mut copies = archiving.copies;
+        let late: Vec<Served> = self
+            .data
+            .lock()
+            .unwrap()
+            .central
+            .iter()
+            .filter(|s| s.session == archiving.session && !copies.iter().any(|(c, _)| c.id == s.id))
+            .cloned()
+            .collect();
+        copies.extend(late.into_iter().map(|s| {
+            let repo = served_repo(&s);
+            (s, repo)
+        }));
+        for (s, repo) in copies {
             if let Some(conn) = self.workers.conn(&s.worker) {
                 let req = SyncClosing {
                     copy: s.id.clone(),
@@ -2642,7 +2721,14 @@ fn free(path: &Path) -> bool {
 
 /// A session's copies, read before it is archived.
 pub struct Archiving {
+    session: String,
     copies: Vec<(Served, PathBuf)>,
+}
+
+/// Where served copy `s`'s base ref lives: its repository's git dir, or the
+/// session's worktree for one saved before that was kept.
+fn served_repo(s: &Served) -> PathBuf {
+    PathBuf::from(if s.repo.is_empty() { &s.path } else { &s.repo })
 }
 
 /// A file that could not be saved before a copy went, and why.
@@ -2664,14 +2750,27 @@ impl Unsaved {
 /// A folder under `root` for `name`'s leftovers, named for now:
 /// `fix-cart-20261021-184500`, then `-2`, `-3`… when that is taken.
 fn leftovers_folder(root: &Path, name: &str) -> PathBuf {
-    let first = root.join(format!("{name}-{}", local_stamp()));
+    root.join(format!("{name}-{}", local_stamp()))
+}
+
+/// Makes the leftovers folder: `leftovers_folder`'s name, or the first of
+/// `-2`, `-3`… nobody made yet. Made with `create_dir`, so two copies
+/// stopped in the same second never share one.
+fn make_leftovers_folder(root: &Path, name: &str) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(root)?;
+    let first = leftovers_folder(root, name);
     let mut folder = first.clone();
     let mut n = 2;
-    while std::fs::symlink_metadata(&folder).is_ok() {
-        folder = PathBuf::from(format!("{}-{n}", first.display()));
-        n += 1;
+    loop {
+        match std::fs::create_dir(&folder) {
+            Ok(()) => return Ok(folder),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                folder = PathBuf::from(format!("{}-{n}", first.display()));
+                n += 1;
+            }
+            Err(e) => return Err(e),
+        }
     }
-    folder
 }
 
 /// Now on this Mac's clock, as `20261021-184500`.
@@ -2725,9 +2824,7 @@ fn below_link(root: &Path, rel: &Path) -> bool {
     rel.ancestors()
         .skip(1)
         .filter(|a| !a.as_os_str().is_empty())
-        .any(|a| {
-            std::fs::symlink_metadata(root.join(a)).is_ok_and(|m| m.file_type().is_symlink())
-        })
+        .any(|a| std::fs::symlink_metadata(root.join(a)).is_ok_and(|m| m.file_type().is_symlink()))
 }
 
 /// Copies `from` to `rel` under `folder`, making the folders on the way and
@@ -2792,6 +2889,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn two_leftovers_folders_made_at_once_are_two() {
+        let root = tempfile::tempdir().unwrap();
+        let a = make_leftovers_folder(root.path(), "fix-cart").unwrap();
+        let b = make_leftovers_folder(root.path(), "fix-cart").unwrap();
+        assert_ne!(a, b);
+        assert!(a.is_dir() && b.is_dir());
+        let a_name = a.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            b.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&a_name)
+        );
+    }
+
+    #[test]
     fn an_offer_turned_away_waits_retries_pauses_or_stops_by_why() {
         use OfferNext::*;
         assert_eq!(after_offer_error("disconnected", 0), Wait);
@@ -2836,8 +2949,14 @@ mod tests {
         assert_eq!(
             data.closed,
             vec![
-                Closed { copy: "7d3f1c2a".into(), host: String::new() },
-                Closed { copy: "5b0c7a3e".into(), host: "studio-mini".into() },
+                Closed {
+                    copy: "7d3f1c2a".into(),
+                    host: String::new()
+                },
+                Closed {
+                    copy: "5b0c7a3e".into(),
+                    host: "studio-mini".into()
+                },
             ]
         );
     }
@@ -2862,7 +2981,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(saved, ["a.txt", "link"]);
-        assert_eq!(std::fs::read_to_string(folder.join("a.txt")).unwrap(), "mine");
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+            "mine"
+        );
         assert_eq!(std::fs::read_link(folder.join("link")).unwrap(), outside);
         let listing: Vec<_> = std::fs::read_dir(&outside)
             .unwrap()

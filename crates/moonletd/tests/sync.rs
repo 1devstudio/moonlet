@@ -2237,6 +2237,25 @@ async fn a_session_archived_while_this_mac_was_away_takes_its_copy_when_it_is_ba
 }
 
 #[tokio::test]
+async fn a_central_host_that_lost_its_list_of_copies_gets_the_copy_again_not_removed() {
+    let (mut central, worker, c) = synced().await;
+    let s = central.session_path();
+    write(&c.join("docs/notes.md"), "mine\n");
+    reads(&s.join("docs/notes.md"), "mine\n").await;
+    // studio-mini forgets the copies it serves, as with a lost or broken
+    // copies.json, and comes back.
+    central.daemon.stop();
+    std::fs::remove_file(central.daemon.home.path().join("sync/copies.json")).unwrap();
+    central.daemon.restart().await;
+
+    let again = in_sync(&worker).await;
+    assert_eq!(PathBuf::from(&again.path), c);
+    assert!(leftovers_folders(&worker).is_empty());
+    write(&s.join("src/cart.ts"), "after\n");
+    reads(&c.join("src/cart.ts"), "after\n").await;
+}
+
+#[tokio::test]
 async fn a_copy_whose_folder_was_deleted_pauses_until_it_is_made_again() {
     let (central, worker, c) = synced().await;
     let s = central.session_path();
@@ -2624,7 +2643,10 @@ async fn a_copy_stopped_while_another_host_is_central_tells_its_own_host_later()
     let _: Value = worker.call("link.set", studio_mini).await;
     let deadline = Instant::now() + Duration::from_secs(20);
     while !sync_refs(&session).is_empty() {
-        assert!(Instant::now() < deadline, "studio-mini never let the copy go");
+        assert!(
+            Instant::now() < deadline,
+            "studio-mini never let the copy go"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }

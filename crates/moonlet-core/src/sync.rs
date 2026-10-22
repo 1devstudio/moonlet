@@ -1119,10 +1119,12 @@ pub async fn remove_worktree(repo: &Path, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Forgets `repo`'s worktrees whose folders are gone.
-pub async fn prune_worktrees(repo: &Path) -> Result<()> {
-    git_env(repo, &[], &["worktree", "prune"], None).await?;
-    Ok(())
+/// Forgets `repo`'s worktree at `dir`, whose folder may be gone, so its
+/// branch is free again.
+pub async fn forget_worktree(repo: &Path, dir: &Path) -> Result<()> {
+    // Only this one: `git worktree prune` would also drop the user's own
+    // worktrees whose folders are gone.
+    remove_worktree(repo, dir).await
 }
 
 /// Clones `url` into `dir` with this machine's own credentials. The error
@@ -2452,7 +2454,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_removed_worktree_leaves_its_branch_and_a_pruned_one_frees_it() {
+    async fn a_removed_worktree_leaves_its_branch_and_a_forgotten_one_frees_it() {
         let dir = worked_example().await;
         let p = dir.path();
         git(p, &["commit", "-q", "-a", "-m", "more"]).await.unwrap();
@@ -2465,13 +2467,18 @@ mod tests {
         assert!(!w.exists());
         assert_eq!(rev(p, "feature").await, commit);
 
-        // A worktree whose folder was deleted holds its branch until pruned.
+        // A worktree whose folder was deleted holds its branch until it is
+        // forgotten; another deleted one, the user's own, stays as it was.
         let gone = other.path().join("gone");
+        let users = other.path().join("users");
         add_worktree(p, &gone, "other", &commit).await.unwrap();
+        add_worktree(p, &users, "users", &commit).await.unwrap();
         std::fs::remove_dir_all(&gone).unwrap();
+        std::fs::remove_dir_all(&users).unwrap();
         assert!(checked_out(p, "other").await.is_some());
-        prune_worktrees(p).await.unwrap();
+        forget_worktree(p, &gone).await.unwrap();
         assert_eq!(checked_out(p, "other").await, None);
+        assert!(checked_out(p, "users").await.is_some());
     }
 
     #[test]
