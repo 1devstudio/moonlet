@@ -194,6 +194,50 @@ pub fn signal_session(sid: u32, signal: Signal, leader_reaped: bool) -> bool {
     any
 }
 
+/// When process `pid` started, in microseconds since the epoch on macOS
+/// and clock ticks since boot on Linux: the same number for one process,
+/// a different one for another that later got the same pid. `None` when
+/// there is no such process.
+pub fn process_start(pid: u32) -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+        let n = unsafe {
+            libc::proc_pidinfo(
+                pid as i32,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        };
+        (n == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // Field 22, counted after the command name, which may hold spaces.
+        let rest = &stat[stat.rfind(')')? + 2..];
+        rest.split(' ').nth(19)?.parse().ok()
+    }
+}
+
+/// After a SIGHUP to session `sid`: SIGTERM after 1.5 s, then SIGKILL after
+/// 3 s more, while any process is left in it. `reaped` says whether the
+/// session's leader was waited for (see [`signal_session`]).
+pub fn escalate_session(sid: u32, reaped: impl Fn() -> bool + Send + 'static) {
+    tokio::spawn(async move {
+        for (delay, sig) in [(1500, Signal::SIGTERM), (3000, Signal::SIGKILL)] {
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            if !signal_session(sid, sig, reaped()) {
+                return;
+            }
+        }
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn all_pids() -> Vec<i32> {
     // SAFETY: a null buffer asks for the count; the second call fills at most
@@ -269,6 +313,23 @@ pub fn user_shell() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_keeps_its_start_time_and_another_has_its_own() {
+        let me = std::process::id();
+        let first = process_start(me).expect("this process has a start time");
+        assert_eq!(process_start(me), Some(first));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let theirs = process_start(child.id()).expect("the child has a start time");
+        assert_ne!(theirs, first);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(process_start(child.id()), None);
+    }
 
     #[test]
     fn a_new_session_on_the_exited_leaders_pid_is_left_alone() {
