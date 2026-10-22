@@ -23,7 +23,10 @@ export function linkLine(link: LinkInfo): StatusLine {
     case "needs_update":
       return { tone: "error", text: `Update moonlet on ${name}` };
     case "refused":
-      return { tone: "error", text: `${name} no longer accepts this Mac. Pair it again.` };
+      return {
+        tone: "error",
+        text: `${name} no longer accepts this Mac. Pair it again.`,
+      };
     case "error":
       return { tone: "error", text: s.message };
     case "off":
@@ -38,11 +41,61 @@ export function linkRetries(link: LinkInfo): boolean {
   return link.state.kind === "error" || link.state.kind === "needs_update";
 }
 
+/** The line under a remote host's "Use for heavy commands" (X61), for its
+ * link `link` and this Mac's central host `central`. */
+export function remoteLinkLine(link: LinkInfo, host: string, central: string | null): StatusLine {
+  if (link.state.kind === "off")
+    return {
+      tone: "muted",
+      text: central ? "Not linked" : "Choose a central host first",
+    };
+  const name = link.central?.name ?? "";
+  if (central && name !== central) return { tone: "blocked", text: `Linked to ${name}, not to ${central}` };
+  if (link.state.kind === "refused") return { tone: "error", text: `${name} no longer accepts ${host}` };
+  return linkLine(link);
+}
+
+/** The button beside a remote host's line (X61): Retry as for this Mac, or
+ * Pair again once this Mac's central host has removed the host. */
+export function remoteLinkAction(link: LinkInfo, central: string | null): "retry" | "pair-again" | null {
+  if (!central || link.central?.name !== central) return null;
+  if (link.state.kind === "refused") return "pair-again";
+  return linkRetries(link) ? "retry" : null;
+}
+
+/** What turning a remote host's switch on takes (X61): only `link.set` when
+ * `host` is paired with this Mac's central host `central`, or else a
+ * pairing code for `link.pair` first, after asking `confirm` when that moves
+ * the host off another central host. */
+export function turnOnNeeds(link: LinkInfo, host: string, central: string): { kind: "enable" } | { kind: "pair"; confirm?: string } {
+  const name = link.central?.name;
+  if (name === central && link.state.kind !== "refused") return { kind: "enable" };
+  if (name && name !== central)
+    return {
+      kind: "pair",
+      confirm: `${host} is linked to ${name}. Link it to ${central} instead?`,
+    };
+  return { kind: "pair" };
+}
+
+/** What the pairing dialog says when `link.pair` fails on `host` (X61): a
+ * host from before X61 does not know the method. */
+export function linkPairError(e: unknown, host: string): string {
+  if ((e as { code?: string })?.code === "unknown_method") return `Update moonlet on ${host}`;
+  return e instanceof Error ? e.message : String(e);
+}
+
 /** The host row that is the central host: the tailnet host the link goes to.
  * A tailnet host's id is its name on the tailnet, as the link's is. */
 export function centralHostId(hosts: HostInfo[], link: LinkInfo | null): string | null {
   const name = link?.central?.name;
   return hosts.find((h) => h.kind === "tailnet" && h.id === name)?.id ?? null;
+}
+
+/** The remote hosts with a "Use for heavy commands" switch (X61): connected
+ * tailnet hosts, but not the central host, which never links to itself. */
+export function heavyHostIds(hosts: HostInfo[], central: string | null): string[] {
+  return hosts.filter((h) => h.kind === "tailnet" && h.status === "connected" && h.id !== central).map((h) => h.id);
 }
 
 /** Choosing a host makes it the central host; choosing it again clears it. */
