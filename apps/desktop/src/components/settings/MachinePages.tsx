@@ -1,7 +1,7 @@
 // Settings › Machines (X43): this Mac and the remote hosts, over the tailnet
 // (X57) or SSH (R1, R2), and the phones paired with this Mac (X39).
 
-import { useEffect, useId, useState } from "react";
+import { Fragment, useEffect, useId, useState } from "react";
 import { encode } from "uqr";
 import { Copy, Laptop, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
@@ -12,7 +12,7 @@ import { EV, M, type HostInfo, type LinkInfo, type MobilePairing, type MobileSta
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
-import { centralHostButton, centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "../../lib/workerLink";
+import { centralHostButton, centralHostId, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, turnOnNeeds, watchLink } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
 
@@ -244,30 +244,30 @@ function MacPairing({ pairing, host, now, onCancel }: { pairing: MobilePairing; 
   );
 }
 
-/** This Mac's link to its central host (X41); follows `link.changed`, which
- * every change sends, so replies to changes are not used: one could arrive
- * after a newer state. */
-function useLink(): LinkInfo | null {
+/** A host's link to its central host: this Mac's (X41), or a remote
+ * host's (X61). Follows `link.changed`, which every change sends, so replies
+ * to changes are not used: one could arrive after a newer state. */
+function useLink(host = HOST): LinkInfo | null {
   const [link, setLink] = useState<LinkInfo | null>(null);
   useEffect(
     () =>
       watchLink({
-        get: () => rpc<LinkInfo>(HOST, M.linkGet),
+        get: () => rpc<LinkInfo>(host, M.linkGet),
         onChanged: (cb) => {
           const off = onDaemonEvent((e) => {
-            if (e.host === HOST && e.name === EV.linkChanged) cb(e.data as LinkInfo);
+            if (e.host === host && e.name === EV.linkChanged) cb(e.data as LinkInfo);
           });
           return () => void off.then((f) => f());
         },
         onReconnected: (cb) => {
           const off = onHostStatus((h) => {
-            if (h.id === HOST && h.status === "connected") cb();
+            if (h.id === host && h.status === "connected") cb();
           });
           return () => void off.then((f) => f());
         },
         set: setLink,
       }),
-    [],
+    [host],
   );
   return link;
 }
@@ -298,6 +298,119 @@ function HeavyCommandsRow({ link }: { link: LinkInfo | null }) {
   );
 }
 
+/** A remote host's "Use for heavy commands" (X61): links it to this Mac's
+ * central host `central`, pairing it there first when it needs to. */
+function RemoteHeavyRow({ host, central }: { host: string; central: LinkInfo["central"] }) {
+  const id = useId();
+  const link = useLink(host);
+  const [pairing, setPairing] = useState(false);
+  const enable = (enabled: boolean) => rpc(host, M.linkSet, { worker: { enabled } }).catch((e) => errorToast(remoteLinkError(e, host)));
+  const turnOn = async () => {
+    if (!link || !central) return;
+    const needs = turnOnNeeds(link, host, central.name);
+    if (needs.kind === "enable") return void enable(true);
+    const move = needs.confirm ? { title: "Use for heavy commands", message: needs.confirm, action: "Link" } : null;
+    if (!move || (await askConfirm(move))) setPairing(true);
+  };
+  const centralName = central?.name ?? null;
+  const action = link && remoteLinkAction(link, centralName);
+  return (
+    <>
+      <Row
+        setting={`heavy-commands-${host}`}
+        label="Use for heavy commands"
+        labelId={id}
+        hint={
+          <>
+            {link && <Status line={remoteLinkLine(link, host, centralName)} />}
+            <span className="mt-0.5 block">For now this only links {host} to the central host. Commands are not routed there yet.</span>
+          </>
+        }
+      >
+        {action === "retry" && (
+          <Button size="sm" variant="ghost" onClick={() => void rpc(host, M.linkRetry).catch(errorToast)}>
+            Retry
+          </Button>
+        )}
+        {action === "pair-again" && (
+          <Button size="sm" variant="primary" onClick={() => setPairing(true)}>
+            Pair again
+          </Button>
+        )}
+        <Switch on={!!link && remoteSwitchOn(link, centralName)} disabled={!link || !central} labelledBy={id} onChange={(on) => void (on ? turnOn() : enable(false))} />
+      </Row>
+      {pairing && central && <PairCentralDialog host={host} central={central} onClose={() => setPairing(false)} />}
+    </>
+  );
+}
+
+/** Asks for a pairing code from the central host, with which a remote host
+ * pairs itself there (X61); the token stays on that host. */
+function PairCentralDialog({ host, central, onClose }: { host: string; central: NonNullable<LinkInfo["central"]>; onClose: () => void }) {
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const input = readAddHostInput(text);
+  const code = input.kind === "link" || input.kind === "code" ? input.code : null;
+  const submit = async () => {
+    if (!code || busy) return;
+    setError(null);
+    setBusy(true);
+    const r = await pairThenLink((method, params) => rpc(host, method, params), central, code);
+    setBusy(false);
+    if (!r.paired) return setError(remoteLinkError(r.error, host));
+    onClose();
+    if (r.error) errorToast(remoteLinkError(r.error, host));
+  };
+  // A pairing under way finishes, and may turn the link on, whatever the
+  // dialog does: it stays open until then.
+  const close = () => void (busy || onClose());
+  return (
+    <Dialog
+      title={`Pair ${host} with ${central.name}`}
+      onClose={close}
+      footer={
+        <>
+          <Button variant="ghost" disabled={busy} onClick={close}>
+            Cancel
+          </Button>
+          <Button variant="primary" disabled={!code || busy} onClick={() => void submit()}>
+            {busy ? "Pairing…" : "Pair"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <Field
+          label="Pairing code"
+          hint={
+            input.kind === "invalid" ? (
+              <span className="text-error">{input.message}</span>
+            ) : (
+              <>
+                Get a code on {central.name}: Let another Mac connect in moonlet, or <span className="font-mono">moonletd pair</span>.
+              </>
+            )
+          }
+        >
+          <input className={cx(inputCls, "font-mono")} value={text} autoFocus onChange={(e) => setText(e.target.value)} placeholder="7KQ2M-X9PDA" />
+        </Field>
+        {error && (
+          <p role="alert" className="ui-text-12.5 text-error">
+            {error}
+          </p>
+        )}
+        <button type="submit" hidden />
+      </form>
+    </Dialog>
+  );
+}
+
 /** A tailnet host's central host choice (X41): makes it the central host, or clears it. */
 function CentralHostButton({ host, central, onPick }: { host: string; central: string | null; onPick: (next: string | null) => void }) {
   const { label, title } = centralHostButton(central, host);
@@ -320,6 +433,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
   const open = (h: string) => (sessions[h] ?? []).filter((s) => !s.archived).length;
   const local = hosts.local;
   const remotes = Object.values(hosts).filter((h) => h.remote);
+  const heavy = heavyHostIds(remotes, central);
   const macs = status ? devicesOfKind(status, "desktop") : [];
   const canPair = !!status?.enabled && status.listening.length > 0;
   const install = async (id: string) => {
@@ -401,27 +515,30 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
       <Section title="Remote hosts">
         <Card>
           {remotes.map((h) => (
-            <HostRow key={h.id} host={h} sessions={open(h.id)} central={h.id === central}>
-              {h.kind === "tailnet" && <CentralHostButton host={h.id} central={central} onPick={pickCentralHost} />}
-              {hostActions(h).map((a) =>
-                a === "install" || a === "reinstall" ? (
-                  <Button key={a} size="sm" variant={a === "reinstall" ? "ghost" : "primary"} disabled={busy === h.id} onClick={() => void install(h.id)}>
-                    {busy === h.id ? "Installing…" : a === "reinstall" ? "Reinstall helper" : "Install helper"}
-                  </Button>
-                ) : a === "pair-again" ? (
-                  <Button key={a} size="sm" variant="primary" onClick={() => pairAgain(h.id)}>
-                    Pair again
-                  </Button>
-                ) : (
-                  <Button key={a} size="sm" variant="ghost" onClick={() => void hostsApi.reconnect(h.id).catch(errorToast)}>
-                    Retry
-                  </Button>
-                ),
-              )}
-              <IconButton title={`Remove ${h.id}`} onClick={() => void remove(h)}>
-                <Trash2 size={13} />
-              </IconButton>
-            </HostRow>
+            <Fragment key={h.id}>
+              <HostRow host={h} sessions={open(h.id)} central={h.id === central}>
+                {h.kind === "tailnet" && <CentralHostButton host={h.id} central={central} onPick={pickCentralHost} />}
+                {hostActions(h).map((a) =>
+                  a === "install" || a === "reinstall" ? (
+                    <Button key={a} size="sm" variant={a === "reinstall" ? "ghost" : "primary"} disabled={busy === h.id} onClick={() => void install(h.id)}>
+                      {busy === h.id ? "Installing…" : a === "reinstall" ? "Reinstall helper" : "Install helper"}
+                    </Button>
+                  ) : a === "pair-again" ? (
+                    <Button key={a} size="sm" variant="primary" onClick={() => pairAgain(h.id)}>
+                      Pair again
+                    </Button>
+                  ) : (
+                    <Button key={a} size="sm" variant="ghost" onClick={() => void hostsApi.reconnect(h.id).catch(errorToast)}>
+                      Retry
+                    </Button>
+                  ),
+                )}
+                <IconButton title={`Remove ${h.id}`} onClick={() => void remove(h)}>
+                  <Trash2 size={13} />
+                </IconButton>
+              </HostRow>
+              {heavy.includes(h.id) && <RemoteHeavyRow host={h.id} central={link?.central ?? null} />}
+            </Fragment>
           ))}
           <div className="flex px-4 py-3">
             <Button onClick={() => setAdding({ name: "" })}>
