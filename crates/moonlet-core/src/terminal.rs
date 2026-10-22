@@ -68,11 +68,12 @@ pub fn dequeued(counter: &AtomicUsize, frame: &Frame) {
 }
 
 /// Bytes a frame counts against [`MAX_QUEUED_OUTPUT`]: terminal output,
-/// and replies whose payload carries a snapshot (attach). Small control
+/// pack chunks (X60, so a request sent after a pack can wait for it), and
+/// replies whose payload carries a snapshot (attach). Small control
 /// messages are not counted.
 fn counted_len(frame: &Frame) -> usize {
     match frame {
-        Frame::Output { data, .. } => data.len(),
+        Frame::Output { data, .. } | Frame::Pack { data, .. } => data.len(),
         Frame::Json(Message::Response { result: Some(v), .. }) => {
             v.get("snapshot").and_then(|s| s.as_str()).map_or(0, str::len)
         }
@@ -1046,6 +1047,22 @@ async fn quiet_watcher(mgr: std::sync::Weak<TerminalManager>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pack_counts_as_queued_until_it_is_written() {
+        // A request sent after a pack waits for the pack to go first (X60).
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let tx = ClientTx::new(tx);
+        for f in moonlet_proto::pack_frames(3, &vec![0u8; 3000]) {
+            tx.send(f);
+        }
+        assert_eq!(tx.queued(), 3000);
+        let counter = tx.counter();
+        while let Ok(f) = rx.try_recv() {
+            dequeued(&counter, &f);
+        }
+        assert_eq!(tx.queued(), 0);
+    }
 
     fn manager() -> Arc<TerminalManager> {
         let env: BTreeMap<String, String> = std::env::vars().collect();

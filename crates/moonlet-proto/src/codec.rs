@@ -374,6 +374,18 @@ mod tests {
     }
 
     #[test]
+    fn the_rest_of_a_pack_dropped_for_being_slow_never_passes_for_all_of_it() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![1; 10]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        packs.take(9);
+        // The rest arrives after the first part was dropped.
+        packs.push(1, vec![2; 4]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        assert_eq!(packs.take(1), None);
+    }
+
+    #[test]
     fn a_chunk_for_a_pack_already_whole_is_refused() {
         let mut packs = crate::PackAssembler::new(small());
         packs.push(1, vec![0; 4]).unwrap();

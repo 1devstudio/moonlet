@@ -120,7 +120,13 @@ pub struct PackAssembler {
     /// Packs in part, with when their last chunk came.
     partial: std::collections::HashMap<u32, (Vec<u8>, std::time::Instant)>,
     done: std::collections::HashMap<u32, (Vec<u8>, std::time::Instant)>,
+    /// Packs in part dropped for being slow, with when: the rest of one
+    /// that still arrives is thrown away, never taken for the whole pack.
+    dropped: std::collections::HashMap<u32, std::time::Instant>,
 }
+
+/// How many dropped transfers [`PackAssembler`] remembers.
+const MAX_DROPPED: usize = 1024;
 
 impl PackAssembler {
     pub fn new(limits: PackLimits) -> Self {
@@ -136,6 +142,12 @@ impl PackAssembler {
         let l = self.limits;
         if self.done.contains_key(&transfer) {
             return Err(PackError::Complete(transfer));
+        }
+        if self.dropped.contains_key(&transfer) {
+            if data.is_empty() {
+                self.dropped.remove(&transfer);
+            }
+            return Ok(());
         }
         let waiting = self.partial.contains_key(&transfer);
         if !waiting && self.partial.len() + self.done.len() >= l.max_transfers {
@@ -175,6 +187,22 @@ impl PackAssembler {
     fn drop_stale(&mut self) {
         let keep = self.limits.keep_done;
         self.done.retain(|_, (_, at)| at.elapsed() < keep);
-        self.partial.retain(|_, (_, at)| at.elapsed() < keep);
+        let now = std::time::Instant::now();
+        let dropped = &mut self.dropped;
+        self.partial.retain(|id, (_, at)| {
+            let fresh = at.elapsed() < keep;
+            if !fresh {
+                dropped.insert(*id, now);
+            }
+            fresh
+        });
+        // Forgotten after ten times the wait, and never more than a few.
+        self.dropped.retain(|_, at| at.elapsed() < keep * 10);
+        while self.dropped.len() > MAX_DROPPED {
+            let oldest = self.dropped.iter().min_by_key(|(_, at)| **at).map(|(id, _)| *id);
+            if let Some(id) = oldest {
+                self.dropped.remove(&id);
+            }
+        }
     }
 }

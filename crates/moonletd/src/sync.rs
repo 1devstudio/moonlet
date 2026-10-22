@@ -968,7 +968,7 @@ impl LiveCopies {
             pack,
         };
         let reply: SyncUpdated = serde_json::from_value(
-            conn.request(m::SYNC_UPDATE, serde_json::to_value(req)?, UPDATE_TIMEOUT)
+            conn.request_after_queue(m::SYNC_UPDATE, serde_json::to_value(req)?, UPDATE_TIMEOUT)
                 .await
                 .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?,
         )?;

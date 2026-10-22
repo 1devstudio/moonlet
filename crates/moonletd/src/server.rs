@@ -103,6 +103,8 @@ pub struct Conn {
     /// Packs the client sent for its requests, by transfer id (X60).
     packs: Mutex<PackAssembler>,
     next_transfer: AtomicU32,
+    /// Set once the connection has ended.
+    gone: std::sync::atomic::AtomicBool,
 }
 
 impl Conn {
@@ -137,6 +139,24 @@ impl Conn {
         }
     }
 
+    /// [`Conn::request`] whose `timeout` starts once everything queued
+    /// before it, such as a pack, has been written: a big pack on a slow
+    /// link doesn't eat the time the client has to answer (X60).
+    pub async fn request_after_queue(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, RpcError> {
+        while self.tx.queued() > 0 {
+            if self.gone.load(Ordering::Relaxed) {
+                return Err(RpcError::new("disconnected", "connection closed"));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        self.request(method, params, timeout).await
+    }
+
     /// Sends `pack` in [`Frame::Pack`] chunks and returns its transfer id,
     /// for the request that uses it to name (X60). Frames go out in order,
     /// so the pack is whole before that request arrives.
@@ -162,6 +182,7 @@ impl Conn {
 
     /// Fails every request still waiting for this client's reply: it is gone.
     fn fail_pending(&self) {
+        self.gone.store(true, Ordering::Relaxed);
         for (_, tx) in self.pending.lock().unwrap().drain() {
             let _ = tx.send(Err(RpcError::new("disconnected", "connection closed")));
         }
@@ -238,6 +259,7 @@ where
         closed: Notify::new(),
         packs: Mutex::new(PackAssembler::default()),
         next_transfer: AtomicU32::new(1),
+        gone: std::sync::atomic::AtomicBool::new(false),
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
 
