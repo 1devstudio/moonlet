@@ -18,7 +18,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ## User journey
 
-1. On the MacBook, Settings › Hosts already lists `studio-mini`, added and paired over the tailnet (ADR 0011). You mark it **Central host**.
+1. On the MacBook, Settings › Hosts already lists `studio-mini`, added and paired over the tailnet (ADR 0011). You choose **Make central host** on its row.
 2. Settings › Machines › Hosts › This Mac has **Use this Mac for heavy commands**. You turn it on.
 3. The line under the toggle reads "Linked to studio-mini since 10:42". If studio-mini runs a moonlet that speaks another protocol version, it reads "Update moonlet on studio-mini". If studio-mini has removed this Mac, it reads "studio-mini no longer accepts this Mac. Pair it again."
 4. On the Mac mini, `moonlet rpc worker.list` shows "Alex's MacBook Pro", macOS arm64, 10 cores, its projects and its round trip.
@@ -34,7 +34,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - `addrs` are one or more `ip:port` addresses of the host's tailnet listener;
   - `token` is the device token this Mac got when it paired with the host.
 
-  When the user chooses **Central host**, the app's Rust side fills these in from its own entry for the host and calls `link.set` itself, so the token never reaches the webview (X57). The Mac is one paired device, so the app and its daemon share the token, and removing the Mac on the central host cuts both. (`choosing_a_central_host_hands_its_name_addresses_and_token_to_link_set`, `worker-link.e2e.ts`)
+  When the user chooses **Make central host**, the app's Rust side fills these in from its own entry for the host and calls `link.set` itself, so the token never reaches the webview (X57). The Mac is one paired device, so the app and its daemon share the token, and removing the Mac on the central host cuts both. (`choosing_a_central_host_hands_its_name_addresses_and_token_to_link_set`, `worker-link.e2e.ts`)
 - [x] The first time the daemon reads `link.json`, it gives this machine a **worker id**. The id is a random UUID that never changes afterwards and that `link.set` cannot edit. Workers are told apart by id, never by name. (`the_first_load_makes_a_worker_id_that_later_loads_keep`, `link_set_cannot_change_the_worker_id`, `a_worker_id_links_once_and_names_may_repeat`) A `link.json` that cannot be parsed (not JSON, not text) is moved aside to `link.json.bad` rather than written over, and this machine starts afresh with a new id. One that exists but cannot be opened is left as it is and not written at start. (`a_link_json_that_is_not_text_is_kept_aside_too`, `a_link_json_that_cannot_be_opened_is_never_written_over`) A `link.set` whose settings cannot be written fails, and the settings stay as they were. (`a_link_json_that_cannot_be_read_is_kept_aside_not_written_over`, `link_set_fails_and_keeps_the_settings_when_link_json_cannot_be_written`)
 - [x] `name` is a label. It defaults to the Mac's computer name (the hostname on Linux) and `link.set` can change it. (`the_name_defaults_to_the_computer_name_and_link_set_changes_it`)
 - [x] An invalid `central` is rejected with an error, and nothing is stored: an empty `name` or one with control characters, no `addrs` or one that is not `ip:port`, or a `token` that is not 64 hex characters. (`an_invalid_central_is_refused_and_nothing_is_stored`)
@@ -106,7 +106,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ## UI
 
-- **Settings › Hosts:** each host paired over the tailnet gets a **Central host** choice. SSH hosts do not (ADR 0011). At most one host is the central host; choosing another moves it, and choosing it again clears it. Removing the central host from this Mac's list clears it too. (`workerLink.test.ts` the central host choice, `worker-link.e2e.ts` "removing the central host from this Mac's list clears it")
+- **Settings › Hosts:** each host paired over the tailnet gets a button named for what it does: **Make central host**, or **Clear central host** on the central host's row, whose name also has a **Central host** tag beside it. SSH hosts do not (ADR 0011). At most one host is the central host; making another one moves it, and **Clear central host** clears it. Removing the central host from this Mac's list clears it too. (`workerLink.test.ts` the central host choice, `worker-link.e2e.ts` "marks a paired tailnet host as the central host", "Clear central host clears it, and the link goes", "removing the central host from this Mac's list clears it")
 - **Settings › Machines › Hosts › This Mac:** a **Use this Mac for heavy commands** row with a switch and a status line, one per link state:
   - "Not linked"
   - "Linking to studio-mini…"
@@ -210,8 +210,9 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
   - A daemon started on a `state.json` whose projects have no identity reports identities in `project.list`.
 - **Vitest, `apps/desktop/src/lib/`:**
   - the status line text for each link state;
-  - choosing a central host moves the choice, so at most one host has it, and choosing it again clears it.
-- **e2e, `apps/desktop/e2e/specs/worker-link.e2e.ts`:** the fixture starts a second scratch daemon as the central host, listening on `::1`, and the app pairs with it. Not on 127.0.0.1: the app's own daemon in the tests counts that as one of its addresses, and a Mac never links to itself. Marking it **Central host** and turning on **Use this Mac for heavy commands** shows "Linked to …". Saving settings is a crucial feature (X12).
+  - choosing a central host moves the choice, so at most one host has it, and choosing it again clears it;
+  - the row's button names what it does: **Make central host**, or **Clear central host** on the central host's row.
+- **e2e, `apps/desktop/e2e/specs/worker-link.e2e.ts`:** the fixture starts a second scratch daemon as the central host, listening on `::1`, and the app pairs with it. Not on 127.0.0.1: the app's own daemon in the tests counts that as one of its addresses, and a Mac never links to itself. Choosing **Make central host** and turning on **Use this Mac for heavy commands** shows "Linked to …". Saving settings is a crucial feature (X12).
 
 ## Open questions
 

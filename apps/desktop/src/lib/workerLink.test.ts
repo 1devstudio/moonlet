@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "./workerLink";
+import { centralHostButton, centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "./workerLink";
 import type { HostInfo, LinkInfo, LinkState } from "./protocol";
 
 const info = (state: LinkState, central: string | null = "studio-mini"): LinkInfo => ({
@@ -55,6 +55,15 @@ describe("the central host choice (X41)", () => {
     expect(pickCentral(null, "studio-mini")).toBe("studio-mini");
     expect(pickCentral("studio-mini", "build-box")).toBe("build-box");
     expect(pickCentral("studio-mini", "studio-mini")).toBeNull();
+  });
+
+  it("reads as the action it takes, on every tailnet host's row", () => {
+    expect(centralHostButton(null, "studio-mini")).toEqual({ label: "Make central host", title: "Make studio-mini this Mac's central host" });
+    expect(centralHostButton("build-box", "studio-mini")).toEqual({ label: "Make central host", title: "Make studio-mini this Mac's central host" });
+    expect(centralHostButton("studio-mini", "studio-mini")).toEqual({
+      label: "Clear central host",
+      title: "studio-mini is this Mac's central host. Click to clear it.",
+    });
   });
 });
 

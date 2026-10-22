@@ -1,5 +1,5 @@
 // This Mac's link to its central host (X41): the status line under "Use this
-// Mac for heavy commands", and which host row has the Central host choice.
+// Mac for heavy commands", and which host row is the central host.
 
 import type { HostInfo, LinkInfo } from "./protocol";
 import type { StatusLine } from "./settingsPage";
@@ -48,6 +48,14 @@ export function centralHostId(hosts: HostInfo[], link: LinkInfo | null): string 
 /** Choosing a host makes it the central host; choosing it again clears it. */
 export function pickCentral(current: string | null, picked: string): string | null {
   return current === picked ? null : picked;
+}
+
+/** A host row's central host button names what clicking it does, so it never
+ * reads as a label: make this host the central host, or clear it. */
+export function centralHostButton(central: string | null, host: string): { label: string; title: string } {
+  return central === host
+    ? { label: "Clear central host", title: `${host} is this Mac's central host. Click to clear it.` }
+    : { label: "Make central host", title: `Make ${host} this Mac's central host` };
 }
 
 /**
