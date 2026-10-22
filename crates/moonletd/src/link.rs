@@ -39,6 +39,9 @@ struct LinkFile {
 pub struct LinkStore {
     path: PathBuf,
     data: LinkFile,
+    /// How many times `central` was set since the daemon started: a
+    /// pairing saves its token only if it has not moved meanwhile (X61).
+    revision: u64,
 }
 
 impl LinkStore {
@@ -59,7 +62,7 @@ impl LinkStore {
                         enabled: false,
                     },
                 };
-                return LinkStore { path, data };
+                return LinkStore { path, data, revision: 0 };
             }
         };
         let read = bytes
@@ -90,7 +93,7 @@ impl LinkStore {
                 d
             }
         };
-        LinkStore { path, data }
+        LinkStore { path, data, revision: 0 }
     }
 
     pub fn central(&self) -> Option<&LinkCentral> {
@@ -111,7 +114,23 @@ impl LinkStore {
 
     /// Applies `link.set`. `own` are this machine's Tailscale addresses: the
     /// central host never links to itself. Nothing is stored on an error.
+    #[cfg(test)]
     pub fn set(&mut self, req: LinkSet, own: &[IpAddr]) -> Result<(), RpcError> {
+        self.set_at(req, own, None)
+    }
+
+    /// The current [`LinkStore::revision`] of `central`.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// [`LinkStore::set`], refused with `conflict` when `central` has been
+    /// set since `revision`.
+    fn set_at(&mut self, req: LinkSet, own: &[IpAddr], revision: Option<u64>) -> Result<(), RpcError> {
+        if revision.is_some_and(|r| r != self.revision) {
+            return Err(RpcError::new("conflict", "the central host changed"));
+        }
+        let moves = req.central.is_some();
         let mut next = self.data.clone();
         if let Some(central) = req.central {
             if let Some(c) = &central {
@@ -131,6 +150,9 @@ impl LinkStore {
         save(&self.path, &next)
             .map_err(|e| RpcError::new("internal", format!("cannot write {}: {e:#}", self.path.display())))?;
         self.data = next;
+        if moves {
+            self.revision += 1;
+        }
         Ok(())
     }
 }
@@ -262,9 +284,14 @@ impl WorkerLink {
 
     /// `link.set`: stores the settings, then opens, moves or closes the link.
     pub fn set(self: &Arc<Self>, req: LinkSet, own: &[IpAddr]) -> Result<LinkInfo, RpcError> {
+        self.set_at(req, own, None)
+    }
+
+    /// [`WorkerLink::set`], only while `central` is still at `revision`.
+    fn set_at(self: &Arc<Self>, req: LinkSet, own: &[IpAddr], revision: Option<u64>) -> Result<LinkInfo, RpcError> {
         let moved = req.central.is_some();
         let renamed = req.worker.as_ref().is_some_and(|w| w.name.is_some());
-        self.store.lock().unwrap().set(req, own)?;
+        self.store.lock().unwrap().set_at(req, own, revision)?;
         // One link.changed for the whole change, at the end.
         self.quiet.store(true, Ordering::SeqCst);
         if moved {
@@ -291,25 +318,36 @@ impl WorkerLink {
 
     /// `link.pair` (X61): pairs this machine with the central host using a
     /// code from it, then makes it the central host with the new token.
-    /// Nothing is stored when the pairing fails.
+    /// Nothing is stored when the pairing fails, nor when the central host
+    /// was changed while it ran: the newer choice stands.
     pub async fn pair(self: &Arc<Self>, req: LinkPair, own: &[IpAddr]) -> Result<LinkInfo, RpcError> {
         let LinkPair { central, code } = req;
         check_target(&central.name, &central.addrs, own)?;
-        let device = self.store.lock().unwrap().worker().name.clone();
+        let (device, revision) = {
+            let store = self.store.lock().unwrap();
+            (store.worker().name.clone(), store.revision())
+        };
         let paired = moonlet_link::tailnet::pair(&central.addrs, &code, &device, DeviceKind::Desktop)
             .await
             .map_err(|e| RpcError::new("pair_failed", moonlet_link::tailnet::pair_error_text(&central.name, &e)))?;
-        self.set(
-            LinkSet {
-                central: Some(Some(LinkCentral {
-                    name: central.name,
-                    addrs: central.addrs,
-                    token: paired.token,
-                })),
-                worker: None,
-            },
-            own,
-        )
+        let name = central.name.clone();
+        let req = LinkSet {
+            central: Some(Some(LinkCentral {
+                name: central.name,
+                addrs: central.addrs,
+                token: paired.token,
+            })),
+            worker: None,
+        };
+        self.set_at(req, own, Some(revision)).map_err(|e| match e.code.as_str() {
+            "conflict" => RpcError::new("conflict", format!("The central host changed while pairing with {name}. Pair again.")),
+            // The central host has paired this machine, and only the token
+            // in hand could use that pairing.
+            _ => RpcError::new(
+                "pair_unsaved",
+                format!("Paired with {name}, but could not save it. Remove {device} on {name} and pair again: {}", e.message),
+            ),
+        })
     }
 
     /// Whether the link waits for the user: an update, or pairing again.

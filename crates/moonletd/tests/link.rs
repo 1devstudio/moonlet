@@ -1147,3 +1147,97 @@ async fn link_pair_refuses_a_bad_central_before_pairing() {
     let info: Value = remote.call("link.get", json!({})).await;
     assert_eq!(info["central"], Value::Null, "{info}");
 }
+
+/// A central host that pairs anyone, but only once `go` fires: a pairing
+/// that is slow to answer. Returns its address and whether it was reached.
+async fn slow_central(go: tokio::sync::oneshot::Receiver<()>) -> (String, tokio::sync::oneshot::Receiver<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let (reached_tx, reached) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.unwrap();
+        let _ = moonlet_proto::read_frame(&mut s).await;
+        let _ = reached_tx.send(());
+        let _ = go.await;
+        let authed = Message::Authed {
+            device_id: "d1".into(),
+            token: Some("cd".repeat(32)),
+            protocol: Some(moonlet_proto::PROTOCOL_VERSION),
+            daemon_version: Some("0.1.29".into()),
+            host: Some("studio-mini".into()),
+            os: Some("macos".into()),
+        };
+        let _ = moonlet_proto::write_frame(&mut s, &Frame::Json(authed)).await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    });
+    (addr, reached)
+}
+
+#[tokio::test]
+async fn a_pairing_that_ends_after_the_central_host_changed_does_not_undo_the_change() {
+    let (remote, remote_addr) = remote_host().await;
+    let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
+    let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
+    let (go, wait) = tokio::sync::oneshot::channel();
+    let (slow_addr, reached) = slow_central(wait).await;
+
+    let pairing = tokio::spawn(async move {
+        ask(
+            &mut mac,
+            1,
+            "link.pair",
+            json!({ "central": studio_mini(&slow_addr), "code": "7KQ2MX9PDA" }),
+        )
+        .await
+    });
+    reached.await.unwrap();
+    // Meanwhile, the remote host's own app picks another central host.
+    let _: Value = remote
+        .call(
+            "link.set",
+            json!({ "central": { "name": "other-mini", "addrs": ["127.0.0.1:9"], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    go.send(()).unwrap();
+
+    let reply = pairing.await.unwrap();
+    let Some(Message::Response { error: Some(e), .. }) = reply else {
+        panic!("the late pairing was saved: {reply:?}")
+    };
+    assert_eq!(
+        (e.code.as_str(), e.message.as_str()),
+        ("conflict", "The central host changed while pairing with studio-mini. Pair again.")
+    );
+    let info: Value = remote.call("link.get", json!({})).await;
+    assert_eq!(info["central"]["name"], json!("other-mini"), "{info}");
+}
+
+#[tokio::test]
+async fn a_pairing_that_cannot_be_saved_says_how_to_undo_it() {
+    let (central, central_addr) = central().await;
+    let (remote, remote_addr) = remote_host().await;
+    let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
+    let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
+    // `link.json` is written through `link.json.tmp`: a folder there stops it.
+    std::fs::create_dir(remote.home.path().join("link.json.tmp")).unwrap();
+
+    let code: MobilePairing = central.call("mobile.pair_start", json!({})).await;
+    let reply = ask(
+        &mut mac,
+        1,
+        "link.pair",
+        json!({ "central": studio_mini(&central_addr), "code": code.code }),
+    )
+    .await;
+    let Some(Message::Response { error: Some(e), .. }) = reply else {
+        panic!("an unsaved pairing worked: {reply:?}")
+    };
+    assert_eq!(e.code, "pair_unsaved");
+    assert!(
+        e.message.starts_with("Paired with studio-mini, but could not save it. Remove build-box on studio-mini and pair again: "),
+        "{}",
+        e.message
+    );
+    let info: Value = remote.call("link.get", json!({})).await;
+    assert_eq!(info["central"], Value::Null, "{info}");
+}
