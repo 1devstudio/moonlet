@@ -202,10 +202,38 @@ struct Data {
     worker: Vec<Kept>,
     #[serde(default)]
     central: Vec<Served>,
-    /// Copies this Mac stopped keeping that the central host has not heard
+    /// Copies this Mac stopped keeping that their central host has not heard
     /// of yet; the link stays open until it has.
     #[serde(default)]
-    closed: Vec<String>,
+    closed: Vec<Closed>,
+}
+
+/// A copy this Mac stopped keeping, for the central host it was made with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "ClosedSaved")]
+struct Closed {
+    copy: String,
+    /// Empty for a stop saved before closes named their host: it goes to
+    /// whichever host is central.
+    host: String,
+}
+
+/// How a `Closed` is read: copies saved before they named their host are
+/// plain ids.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ClosedSaved {
+    Id(String),
+    Full { copy: String, host: String },
+}
+
+impl From<ClosedSaved> for Closed {
+    fn from(c: ClosedSaved) -> Self {
+        match c {
+            ClosedSaved::Id(copy) => Closed { copy, host: String::new() },
+            ClosedSaved::Full { copy, host } => Closed { copy, host },
+        }
+    }
 }
 
 /// Why making or updating a copy stopped.
@@ -1378,12 +1406,15 @@ impl LiveCopies {
     /// `sync.stop`: stops keeping copy `id` in sync and removes it from this
     /// Mac, after saving what would be lost.
     pub async fn stop(self: &Arc<Self>, id: &str) -> Result<SyncStopped, RpcError> {
-        if self.kept(id).is_none() {
+        let Some(k) = self.kept(id) else {
             return Err(RpcError::new("not_found", "no such copy"));
-        }
+        };
         let saved = self.remove(id, CloseReason::Stopped).await?;
-        // The central host lets the copy go now, or once the link is back.
-        self.data.lock().unwrap().closed.push(id.to_string());
+        // Its central host lets the copy go now, or once it is linked again.
+        self.data.lock().unwrap().closed.push(Closed {
+            copy: id.to_string(),
+            host: k.host,
+        });
         self.save();
         self.send_closed_soon();
         Ok(saved)
@@ -1394,11 +1425,23 @@ impl LiveCopies {
         tokio::spawn(async move { me.send_closed().await });
     }
 
-    /// Tells the central host of the copies this Mac stopped keeping.
+    /// Tells the central host of the copies made with it that this Mac
+    /// stopped keeping. Another host never hears of them: it would not know
+    /// the copy, and its own host would keep serving it.
     async fn send_closed(&self) {
         let Some(host) = self.link.host() else { return };
-        let closed = self.data.lock().unwrap().closed.clone();
-        for id in closed {
+        let central = self.link.central_name();
+        let closed: Vec<Closed> = self
+            .data
+            .lock()
+            .unwrap()
+            .closed
+            .iter()
+            .filter(|c| c.host.is_empty() || central.as_deref() == Some(c.host.as_str()))
+            .cloned()
+            .collect();
+        for c in closed {
+            let id = c.copy;
             let req = m::CopyRef { copy: id.clone() };
             match host
                 .request(m::SYNC_CLOSE, serde_json::to_value(req).unwrap())
@@ -1408,7 +1451,7 @@ impl LiveCopies {
                 Err(e) if e.code == "not_found" || e.code == "forbidden" => {}
                 Err(_) => return,
             }
-            self.data.lock().unwrap().closed.retain(|c| *c != id);
+            self.data.lock().unwrap().closed.retain(|c| c.copy != id);
             self.save();
         }
         self.link.set_synced(self.link_holders());
@@ -2782,6 +2825,21 @@ mod tests {
             let e = object_ids(&[id, bad]).unwrap_err();
             assert_eq!(e.code, "invalid_params", "{bad}");
         }
+    }
+
+    #[test]
+    fn stops_saved_before_they_named_their_host_still_load() {
+        let data: Data = serde_json::from_str(
+            r#"{ "closed": ["7d3f1c2a", { "copy": "5b0c7a3e", "host": "studio-mini" }] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            data.closed,
+            vec![
+                Closed { copy: "7d3f1c2a".into(), host: String::new() },
+                Closed { copy: "5b0c7a3e".into(), host: "studio-mini".into() },
+            ]
+        );
     }
 
     #[test]

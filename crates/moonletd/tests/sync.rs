@@ -2581,3 +2581,50 @@ async fn a_copy_waits_while_another_host_is_the_central_host() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_copy_stopped_while_another_host_is_central_tells_its_own_host_later() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    let token = pair_with(&central).await;
+    let studio_mini =
+        json!({ "central": { "name": "studio-mini", "addrs": [central.addr], "token": token } });
+    let _: Value = worker.call("link.set", studio_mini.clone()).await;
+    let c: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    in_sync(&worker).await;
+    let session = central.session_path();
+    assert_eq!(sync_refs(&session), format!("refs/moonlet/sync/{}", c.id));
+
+    let (other, addr) = build_box().await;
+    let p: MobilePairing = other.call("mobile.pair_start", json!({})).await;
+    let token = moonlet_link::tailnet::pair(
+        &[addr.clone()],
+        &p.code,
+        "Alex's MacBook Pro",
+        DeviceKind::Desktop,
+    )
+    .await
+    .unwrap()
+    .token;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "build-box", "addrs": [addr], "token": token } }),
+        )
+        .await;
+    copy_in(&worker, paused, "paused while build-box is central").await;
+    let _: Value = worker.call("sync.stop", json!({ "copy": c.id })).await;
+    // build-box never knew the copy; studio-mini still serves it.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(sync_refs(&session), format!("refs/moonlet/sync/{}", c.id));
+
+    // studio-mini again: it hears of the stop and lets the copy go.
+    let _: Value = worker.call("link.set", studio_mini).await;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !sync_refs(&session).is_empty() {
+        assert!(Instant::now() < deadline, "studio-mini never let the copy go");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
