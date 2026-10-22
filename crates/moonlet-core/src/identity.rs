@@ -8,12 +8,31 @@ use moonlet_proto::types::ProjectIdentity;
 /// The identity of the repository holding `path`. Fields that cannot be
 /// read are `None`.
 pub async fn identity(path: &Path) -> ProjectIdentity {
-    let origin = crate::git::origin_url(path)
+    ProjectIdentity {
+        origin: origin(path).await.flatten(),
+        root: root(path).await,
+    }
+}
+
+/// The normalized origin of the repository holding `path`: `Some(None)`
+/// when it has no `origin` remote, `None` when the repository cannot be
+/// read at all.
+pub async fn origin(path: &Path) -> Option<Option<String>> {
+    crate::git::git_text(path, &["rev-parse", "--git-dir"])
         .await
-        .and_then(|u| normalize_origin(&u));
+        .ok()?;
+    Some(
+        crate::git::origin_url(path)
+            .await
+            .and_then(|u| normalize_origin(&u)),
+    )
+}
+
+/// The root commit of the repository holding `path`, or `None`.
+pub async fn root(path: &Path) -> Option<String> {
     // A shallow clone's boundary commits look like roots but are not.
     let shallow = crate::git::git_text(path, &["rev-parse", "--is-shallow-repository"]).await;
-    let root = match shallow.as_deref() {
+    match shallow.as_deref() {
         Ok("false") => {
             crate::git::git_text(path, &["log", "--max-parents=0", "--format=%H %ct", "HEAD"])
                 .await
@@ -21,8 +40,7 @@ pub async fn identity(path: &Path) -> ProjectIdentity {
                 .and_then(|log| pick_root(&log))
         }
         _ => None,
-    };
-    ProjectIdentity { origin, root }
+    }
 }
 
 /// Whether two identities are the same project: equal roots that are known,
@@ -36,6 +54,9 @@ pub fn same_project(a: &ProjectIdentity, b: &ProjectIdentity) -> bool {
 /// default, no trailing `.git` or `/`. A local path (or `file://`) has none.
 pub fn normalize_origin(url: &str) -> Option<String> {
     let url = url.trim();
+    // A query or fragment is no part of the repository, and may carry a
+    // token (`?access_token=…`), in either URL form.
+    let url = url.split(['?', '#']).next().unwrap_or(url);
     let (scheme, rest) = match url.split_once("://") {
         Some((s, r)) => (s.to_ascii_lowercase(), r),
         None => {
@@ -51,9 +72,6 @@ pub fn normalize_origin(url: &str) -> Option<String> {
     if scheme == "file" {
         return None;
     }
-    // A query or fragment is no part of the repository, and may carry a
-    // token (`?access_token=…`).
-    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
     let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
     let hostport = host_only(auth).to_ascii_lowercase();
     let default = match scheme.as_str() {
@@ -133,6 +151,10 @@ mod tests {
             ),
             (
                 "https://github.com/acme/shop#readme",
+                Some("github.com/acme/shop"),
+            ),
+            (
+                "git@github.com:acme/shop.git?access_token=secret",
                 Some("github.com/acme/shop"),
             ),
             ("/Users/alex/src/app", None),

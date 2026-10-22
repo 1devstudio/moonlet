@@ -786,27 +786,31 @@ impl SessionManager {
     /// could not be read, get one. A repository that cannot be read keeps
     /// what it has, and the load goes on.
     pub async fn fill_identities(&self) {
-        let missing: Vec<(String, String)> = self
+        let projects: Vec<(String, String, bool)> = self
             .list_projects()
             .into_iter()
-            // Retried while any field is missing: a root that could not be
-            // read once may be readable now.
-            .filter(|p| p.identity.origin.is_none() || p.identity.root.is_none())
-            .map(|p| (p.id, p.path))
+            .map(|p| (p.id, p.path, p.identity.root.is_none()))
             .collect();
-        if missing.is_empty() {
+        if projects.is_empty() {
             return;
         }
+        // The origin is read again every time, as a repository's remote can
+        // move; the root never changes, so it is read only while unknown.
         let mut found = Vec::new();
-        for (id, path) in missing {
-            found.push((id, crate::identity::identity(Path::new(&path)).await));
+        for (id, path, no_root) in projects {
+            let path = Path::new(&path);
+            let origin = crate::identity::origin(path).await;
+            let root = if no_root { crate::identity::root(path).await } else { None };
+            found.push((id, origin, root));
         }
         let saved = self.mutate(|st| {
-            for (id, identity) in found {
+            for (id, origin, root) in found {
                 if let Some(p) = st.projects.iter_mut().find(|p| p.id == id) {
-                    // A field read before stays when it cannot be read now.
-                    p.identity.origin = identity.origin.or(p.identity.origin.take());
-                    p.identity.root = identity.root.or(p.identity.root.take());
+                    // A folder that cannot be read keeps what was known.
+                    if let Some(origin) = origin {
+                        p.identity.origin = origin;
+                    }
+                    p.identity.root = root.or(p.identity.root.take());
                 }
             }
             Ok(())

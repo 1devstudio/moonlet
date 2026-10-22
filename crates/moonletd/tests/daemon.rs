@@ -1836,3 +1836,40 @@ async fn projects_saved_without_an_identity_get_one_on_start() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_projects_origin_is_read_again_on_start() {
+    use moonlet_proto::types::Project;
+    let home = tempfile::tempdir().unwrap();
+    // Its origin moved since it was saved.
+    let moved = home.path().join("shop");
+    shop_repo(&moved);
+    // Its origin remote was removed since.
+    let local = home.path().join("local");
+    shop_repo(&local);
+    git_in(&local, &["remote", "remove", "origin"]).unwrap();
+    std::fs::create_dir_all(home.path().join(".moonlet")).unwrap();
+    let root = "5af9891b3892ce4e1d3fd498c75b6aaf1b27d96a";
+    let state = serde_json::json!({"version": 3, "projects": [
+        {"id": "p1", "name": "shop", "path": moved, "base_branch": "main",
+         "identity": {"origin": "github.com/acme/old-shop", "root": root}},
+        {"id": "p2", "name": "local", "path": local, "base_branch": "main",
+         "identity": {"origin": "github.com/acme/shop", "root": root}},
+        // A folder that cannot be read keeps what was known.
+        {"id": "p3", "name": "gone", "path": home.path().join("gone"), "base_branch": "main",
+         "identity": {"origin": "github.com/acme/gone", "root": root}},
+    ]});
+    std::fs::write(home.path().join(".moonlet/state.json"), state.to_string()).unwrap();
+    let d = HomeDaemon::start(home, None).await;
+    let mut c = d.client().await;
+    let list: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
+    let ids: Vec<_> = list.iter().map(|p| (p.id.as_str(), p.identity.origin.as_deref(), p.identity.root.as_deref())).collect();
+    assert_eq!(
+        ids,
+        [
+            ("p1", Some("github.com/acme/shop"), Some(root)),
+            ("p2", None, Some(root)),
+            ("p3", Some("github.com/acme/gone"), Some(root)),
+        ]
+    );
+}

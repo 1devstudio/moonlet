@@ -69,7 +69,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 ### Project identity
 
 - [x] Every project has an `identity {origin, root}`. (`a_project_has_an_identity_without_credentials`, `projects_saved_without_an_identity_get_one_on_start`)
-  - It is computed when the project is added, and on daemon start for projects added before this change. A field that could not be read (`null`) is tried again on each start, and a field already known is kept.
+  - It is computed when the project is added, and refreshed on each daemon start. The origin is read again every start, as a remote can move: a repository without an `origin` remote gets `null`, and a folder that cannot be read keeps the origin it had. The root never changes, so it is read only while it is `null`. (`a_projects_origin_is_read_again_on_start`, `projects_saved_without_an_identity_get_one_on_start`)
   - `project.list` returns it.
   - `project.identity {path}` returns the identity of any folder.
 - [x] `origin` normalizes the `origin` remote. Worked examples (`origins_normalize_as_in_the_worked_examples`):
@@ -84,6 +84,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   | `https://gitlab.example.com:8443/team/app.git` | `gitlab.example.com:8443/team/app` |
   | `https://github.com/acme/shop.git?access_token=secret` | `github.com/acme/shop` |
   | `https://github.com/acme/shop#readme` | `github.com/acme/shop` |
+  | `git@github.com:acme/shop.git?access_token=secret` | `github.com/acme/shop` |
   | `/Users/alex/src/app` (a local path) | `null` |
   | (no `origin` remote) | `null` |
 
