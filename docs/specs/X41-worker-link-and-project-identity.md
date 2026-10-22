@@ -69,7 +69,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 ### Project identity
 
 - [x] Every project has an `identity {origin, root}`. (`a_project_has_an_identity_without_credentials`, `projects_saved_without_an_identity_get_one_on_start`)
-  - It is computed when the project is added, and on daemon start for projects added before this change.
+  - It is computed when the project is added, and on daemon start for projects added before this change. A field that could not be read (`null`) is tried again on each start, and a field already known is kept.
   - `project.list` returns it.
   - `project.identity {path}` returns the identity of any folder.
 - [x] `origin` normalizes the `origin` remote. Worked examples (`origins_normalize_as_in_the_worked_examples`):
@@ -82,6 +82,8 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   | `ssh://git@github.com:22/1devstudio/moonlet.git/` | `github.com/1devstudio/moonlet` |
   | `https://user:token@GitHub.com/1devstudio/moonlet.git` | `github.com/1devstudio/moonlet` |
   | `https://gitlab.example.com:8443/team/app.git` | `gitlab.example.com:8443/team/app` |
+  | `https://github.com/acme/shop.git?access_token=secret` | `github.com/acme/shop` |
+  | `https://github.com/acme/shop#readme` | `github.com/acme/shop` |
   | `/Users/alex/src/app` (a local path) | `null` |
   | (no `origin` remote) | `null` |
 
@@ -89,6 +91,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - credentials, the scheme and the user are removed;
   - the host is lowercased;
   - a port is kept only when it is not the scheme's default;
+  - a query or fragment is removed, since it may carry a token;
   - a trailing `.git` or `/` is removed;
   - the path's case is kept.
 - [x] `root` is the root commit of `HEAD`'s history. (`the_root_is_the_oldest_root_commit`, `a_repository_has_its_origin_and_root_and_a_shallow_or_empty_one_no_root`) Worked example: this repository's root is `4171b03ff0d2bd434751f17bc9d34da784f97e72`.

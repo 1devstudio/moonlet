@@ -31,9 +31,9 @@ pub fn same_project(a: &ProjectIdentity, b: &ProjectIdentity) -> bool {
     a.root.is_some() && a.root == b.root && a.origin == b.origin
 }
 
-/// `host[:port]/path` of a remote URL: no scheme, user or credentials, the
-/// host lowercased, a port only when not the scheme's default, no trailing
-/// `.git` or `/`. A local path (or `file://`) has none.
+/// `host[:port]/path` of a remote URL: no scheme, user, credentials, query
+/// or fragment, the host lowercased, a port only when not the scheme's
+/// default, no trailing `.git` or `/`. A local path (or `file://`) has none.
 pub fn normalize_origin(url: &str) -> Option<String> {
     let url = url.trim();
     let (scheme, rest) = match url.split_once("://") {
@@ -51,6 +51,9 @@ pub fn normalize_origin(url: &str) -> Option<String> {
     if scheme == "file" {
         return None;
     }
+    // A query or fragment is no part of the repository, and may carry a
+    // token (`?access_token=…`).
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
     let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
     let hostport = host_only(auth).to_ascii_lowercase();
     let default = match scheme.as_str() {
@@ -123,6 +126,14 @@ mod tests {
             (
                 "https://gitlab.example.com:8443/team/app.git",
                 Some("gitlab.example.com:8443/team/app"),
+            ),
+            (
+                "https://github.com/acme/shop.git?access_token=secret",
+                Some("github.com/acme/shop"),
+            ),
+            (
+                "https://github.com/acme/shop#readme",
+                Some("github.com/acme/shop"),
             ),
             ("/Users/alex/src/app", None),
         ] {

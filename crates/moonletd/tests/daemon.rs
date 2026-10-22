@@ -1812,10 +1812,15 @@ async fn projects_saved_without_an_identity_get_one_on_start() {
     let home = tempfile::tempdir().unwrap();
     let repo = home.path().join("shop");
     shop_repo(&repo);
+    // Saved with only half an identity, as when the root could not be read.
+    let half = home.path().join("shop-half");
+    shop_repo(&half);
     std::fs::create_dir_all(home.path().join(".moonlet")).unwrap();
     let state = serde_json::json!({"version": 3, "projects": [
         {"id": "p1", "name": "shop", "path": repo, "base_branch": "main"},
         {"id": "p2", "name": "gone", "path": home.path().join("gone"), "base_branch": "main"},
+        {"id": "p3", "name": "shop-half", "path": half, "base_branch": "main",
+         "identity": {"origin": "github.com/acme/shop", "root": null}},
     ]});
     std::fs::write(home.path().join(".moonlet/state.json"), state.to_string()).unwrap();
     let d = HomeDaemon::start(home, None).await;
@@ -1827,6 +1832,7 @@ async fn projects_saved_without_an_identity_get_one_on_start() {
         [
             ("p1", Some("github.com/acme/shop"), Some("5af9891b3892ce4e1d3fd498c75b6aaf1b27d96a")),
             ("p2", None, None),
+            ("p3", Some("github.com/acme/shop"), Some("5af9891b3892ce4e1d3fd498c75b6aaf1b27d96a")),
         ]
     );
 }

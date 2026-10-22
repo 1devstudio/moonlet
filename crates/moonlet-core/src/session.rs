@@ -782,13 +782,16 @@ impl SessionManager {
         Ok(())
     }
 
-    /// X41: projects saved before identities existed get one. A repository
-    /// that cannot be read keeps an empty identity, and the load goes on.
+    /// X41: projects saved before identities existed, or with a field that
+    /// could not be read, get one. A repository that cannot be read keeps
+    /// what it has, and the load goes on.
     pub async fn fill_identities(&self) {
         let missing: Vec<(String, String)> = self
             .list_projects()
             .into_iter()
-            .filter(|p| p.identity == Default::default())
+            // Retried while any field is missing: a root that could not be
+            // read once may be readable now.
+            .filter(|p| p.identity.origin.is_none() || p.identity.root.is_none())
             .map(|p| (p.id, p.path))
             .collect();
         if missing.is_empty() {
@@ -801,7 +804,9 @@ impl SessionManager {
         let saved = self.mutate(|st| {
             for (id, identity) in found {
                 if let Some(p) = st.projects.iter_mut().find(|p| p.id == id) {
-                    p.identity = identity;
+                    // A field read before stays when it cannot be read now.
+                    p.identity.origin = identity.origin.or(p.identity.origin.take());
+                    p.identity.root = identity.root.or(p.identity.root.take());
                 }
             }
             Ok(())
