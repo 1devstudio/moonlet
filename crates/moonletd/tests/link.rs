@@ -662,7 +662,7 @@ async fn a_mac_cannot_link_to_itself() {
 }
 
 #[tokio::test]
-async fn only_the_macs_app_sets_or_retries_the_link() {
+async fn a_paired_mac_cannot_set_the_central_host_directly() {
     let (central, addr) = central().await;
     let token = pair(&central, &addr, "Alex's MacBook Pro").await;
     let elsewhere = json!({
@@ -670,12 +670,19 @@ async fn only_the_macs_app_sets_or_retries_the_link() {
         "worker": { "enabled": true }
     });
 
-    // A paired Mac over the tailnet may not hand over a token (X61).
+    // A paired Mac over the tailnet may not hand over a token (X61), nor
+    // clear the central host.
     let mut device = raw(&addr, &token, "moonlet-app").await;
-    assert_eq!(
-        refused(&ask(&mut device, 1, "link.set", elsewhere.clone()).await).as_deref(),
-        Some("forbidden")
-    );
+    for (id, params) in [(1, elsewhere.clone()), (2, json!({ "central": null }))] {
+        let reply = ask(&mut device, id, "link.set", params).await;
+        let Some(Message::Response { error: Some(e), .. }) = reply else {
+            panic!("a paired Mac set the central host: {reply:?}")
+        };
+        assert_eq!(
+            (e.code.as_str(), e.message.as_str()),
+            ("forbidden", "a paired Mac cannot set the central host; pair with it instead")
+        );
+    }
 
     // An agent's `moonlet` CLI on the Mac itself.
     let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
@@ -1055,7 +1062,14 @@ async fn a_paired_mac_sets_the_link_and_a_phone_or_the_cli_cannot() {
     .unwrap()
     .token;
     let mut phone = raw(&remote_addr, &phone_token, "moonlet-mobile").await;
-    for (id, method, params) in [(1, "link.set", &enable), (2, "link.retry", &json!({})), (3, "link.pair", &pairing)] {
+    // Even with params that do not parse, the answer is no.
+    let garbled = json!({ "worker": 5 });
+    for (id, method, params) in [
+        (1, "link.set", &enable),
+        (2, "link.retry", &json!({})),
+        (3, "link.pair", &pairing),
+        (4, "link.set", &garbled),
+    ] {
         assert_eq!(
             refused(&ask(&mut phone, id, method, params.clone()).await).as_deref(),
             Some("forbidden"),
