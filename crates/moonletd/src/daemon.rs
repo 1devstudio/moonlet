@@ -804,7 +804,7 @@ impl Daemon {
             }
             m::GIT_PUSH => {
                 let r: m::GitUnpushed = params(p)?;
-                git::push(&path(&r.path), r.branch.as_deref()).await.map_err(internal)?;
+                git::push(&path(&r.path), r.branch.as_deref(), r.merged_head.as_deref()).await.map_err(internal)?;
                 ok(true)
             }
             m::GIT_SETTINGS => ok(git_settings::load(&git_settings::path())),

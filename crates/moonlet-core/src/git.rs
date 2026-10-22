@@ -885,8 +885,9 @@ pub async fn unpushed(dir: &Path, branch: Option<&str>, merged_head: Option<&str
     let status = git_text(dir, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]).await?;
     let own = match branch {
         Some(b) => known_branch(dir, b).await,
-        None => match current_branch(dir).await {
-            Ok(b) => known_branch(dir, &b).await,
+        // The full name: `--short` reads `heads/<b>` when a tag shares it.
+        None => match git_text(dir, &["symbolic-ref", "-q", "HEAD"]).await {
+            Ok(r) => known_branch(dir, r.strip_prefix("refs/heads/").unwrap_or_default()).await,
             Err(_) => None,
         },
     };
@@ -897,11 +898,7 @@ pub async fn unpushed(dir: &Path, branch: Option<&str>, merged_head: Option<&str
             .filter(|u| !u.is_empty()),
         None => None,
     };
-    // Only a commit id this clone has: anything else would fail the count.
-    let merged_head = match merged_head.filter(|m| m.len() >= 7 && m.chars().all(|c| c.is_ascii_hexdigit())) {
-        Some(m) if git(dir, &["cat-file", "-e", &format!("{m}^{{commit}}")]).await.is_ok() => Some(m),
-        _ => None,
-    };
+    let merged_head = known_commit(dir, merged_head).await;
     // Commits on the branch, or a detached HEAD, that no other branch or
     // remote has. A HEAD on another branch is kept with that branch.
     // `--branches` takes the short name.
@@ -915,6 +912,13 @@ pub async fn unpushed(dir: &Path, branch: Option<&str>, merged_head: Option<&str
     args.extend(["--branches", "--remotes"]);
     let count = git_text(dir, &args).await?;
     Ok(UnpushedWork { files: parse_short_status(&status), commits: count.trim().parse().unwrap_or(0), upstream })
+}
+
+/// `id` when it is a commit id this clone has: anything else would fail a
+/// `rev-list`, or be read as an option.
+async fn known_commit<'a>(dir: &Path, id: Option<&'a str>) -> Option<&'a str> {
+    let id = id.filter(|m| m.len() >= 7 && m.chars().all(|c| c.is_ascii_hexdigit()))?;
+    git(dir, &["cat-file", "-e", &format!("{id}^{{commit}}")]).await.ok().map(|_| id)
 }
 
 /// `branch` when it is a local branch git can be given safely. `git
@@ -932,17 +936,17 @@ async fn known_branch(dir: &Path, branch: &str) -> Option<String> {
 
 /// `git push -u origin <branch>`, the session's branch when git knows it,
 /// else HEAD as Create pull request does. Refuses while a detached HEAD has
-/// commits no branch has: the push would not save them.
-pub async fn push(dir: &Path, branch: Option<&str>) -> Result<()> {
+/// commits that neither a branch nor the merged PR's head has: the push
+/// would not save them.
+pub async fn push(dir: &Path, branch: Option<&str>, merged_head: Option<&str>) -> Result<()> {
     let target = match branch {
         Some(b) => known_branch(dir, b).await.map(|b| format!("refs/heads/{b}:refs/heads/{b}")),
         None => None,
     };
     if target.is_some() && current_branch(dir).await.is_err() {
-        let n: u32 = git_text(dir, &["rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"])
-            .await?
-            .parse()
-            .unwrap_or(0);
+        let mut args = vec!["rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"];
+        args.extend(known_commit(dir, merged_head).await);
+        let n: u32 = git_text(dir, &args).await?.parse().unwrap_or(0);
         if n > 0 {
             let (what, verb, it) = if n == 1 { ("commit", "is", "it") } else { ("commits", "are", "them") };
             bail!("{n} {what} on a detached HEAD {verb} on no branch. Put {it} on a branch first.");
@@ -1684,7 +1688,7 @@ pub(crate) mod tests {
         let files: Vec<_> = w.files.iter().map(|f| (f.status.as_str(), f.path.as_str())).collect();
         assert_eq!(files, [("M", "a.txt"), ("?", "new.ts")]);
 
-        push(p, None).await.unwrap();
+        push(p, None, None).await.unwrap();
         assert_eq!(unpushed(p, None, None).await.unwrap().commits, 0);
     }
 
@@ -1758,7 +1762,7 @@ pub(crate) mod tests {
         git(p, &["checkout", "-q", "-b", "moonlet/session"]).await.unwrap();
         git(p, &["commit", "-q", "--allow-empty", "-m", "mine"]).await.unwrap();
         git(p, &["checkout", "-q", "-b", "refactor/lint"]).await.unwrap();
-        push(p, Some("moonlet/session")).await.unwrap();
+        push(p, Some("moonlet/session"), None).await.unwrap();
         let heads = git_text(origin.path(), &["for-each-ref", "--format=%(refname)", "refs/heads"]).await.unwrap();
         assert_eq!(heads, "refs/heads/moonlet/session");
         let w = unpushed(p, Some("moonlet/session"), None).await.unwrap();
@@ -1775,7 +1779,7 @@ pub(crate) mod tests {
         git(p, &["remote", "add", "origin", origin.path().to_str().unwrap()]).await.unwrap();
         let bad = "--receive-pack=false";
         git(p, &["update-ref", &format!("refs/heads/{bad}"), "HEAD"]).await.unwrap();
-        push(p, Some(bad)).await.unwrap();
+        push(p, Some(bad), None).await.unwrap();
         let heads = git_text(origin.path(), &["for-each-ref", "--format=%(refname)", "refs/heads"]).await.unwrap();
         assert_eq!(heads, "refs/heads/main");
         let w = unpushed(p, Some("--all"), None).await;
@@ -1795,10 +1799,39 @@ pub(crate) mod tests {
         git(p, &["checkout", "-q", "--detach"]).await.unwrap();
         git(p, &["commit", "-q", "--allow-empty", "-m", "detached"]).await.unwrap();
         assert_eq!(unpushed(p, Some("moonlet/session"), None).await.unwrap().commits, 1);
-        let err = push(p, Some("moonlet/session")).await.unwrap_err();
+        let err = push(p, Some("moonlet/session"), None).await.unwrap_err();
         assert_eq!(err.to_string(), "1 commit on a detached HEAD is on no branch. Put it on a branch first.");
         let heads = git_text(origin.path(), &["for-each-ref", "--format=%(refname)", "refs/heads"]).await.unwrap();
         assert_eq!(heads, "");
+    }
+
+    #[tokio::test]
+    async fn the_checked_out_branch_is_read_when_a_tag_shares_its_name() {
+        // An older app sends no branch. `symbolic-ref --short` then reads
+        // `heads/fix`, which is not the branch's name.
+        let dir = repo().await;
+        let p = dir.path();
+        git(p, &["tag", "fix"]).await.unwrap();
+        git(p, &["checkout", "-q", "-b", "fix"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "mine"]).await.unwrap();
+        assert_eq!(unpushed(p, None, None).await.unwrap().commits, 1);
+    }
+
+    #[tokio::test]
+    async fn push_lets_a_detached_head_at_the_merged_prs_head_go() {
+        // GitHub keeps the merged PR's head, so the push need not save it.
+        let dir = repo().await;
+        let p = dir.path();
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare"]).await.unwrap();
+        git(p, &["remote", "add", "origin", origin.path().to_str().unwrap()]).await.unwrap();
+        git(p, &["branch", "moonlet/session"]).await.unwrap();
+        git(p, &["checkout", "-q", "--detach"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "merged as #12"]).await.unwrap();
+        let head = git_text(p, &["rev-parse", "HEAD"]).await.unwrap();
+        push(p, Some("moonlet/session"), Some(&head)).await.unwrap();
+        let heads = git_text(origin.path(), &["for-each-ref", "--format=%(refname)", "refs/heads"]).await.unwrap();
+        assert_eq!(heads, "refs/heads/moonlet/session");
     }
 
     #[tokio::test]
