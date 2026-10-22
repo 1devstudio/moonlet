@@ -59,6 +59,46 @@ enum Round {
     Offline,
 }
 
+/// What follows an offer the central host turned away.
+#[derive(Debug, PartialEq)]
+enum OfferNext {
+    /// The link is down; the copy waits for it.
+    Wait,
+    /// Made again after a pause.
+    Retry,
+    /// The copy pauses: it would be turned away again.
+    Pause,
+    /// Nothing to do until something changes.
+    Stop,
+}
+
+/// How many times in a row an offer that fails (`failed` here, `internal`
+/// on the central host) is tried.
+const INTERNAL_TRIES: u32 = 5;
+
+/// What follows an offer turned away with `code`, after `internal`
+/// failures of this Mac's own in a row.
+fn after_offer_error(code: &str, internal: u32) -> OfferNext {
+    match code {
+        "disconnected" => OfferNext::Wait,
+        "refused" => OfferNext::Pause,
+        "paused" | "not_found" | "not_ready" | "forbidden" | "invalid_params" => OfferNext::Stop,
+        "failed" | "internal" if internal >= INTERNAL_TRIES => OfferNext::Stop,
+        _ => OfferNext::Retry,
+    }
+}
+
+/// Every id is a full object id: ids from the other side reach git.
+fn object_ids(ids: &[&str]) -> Result<(), RpcError> {
+    match ids.iter().find(|id| !git_sync::is_object_id(id)) {
+        Some(id) => Err(RpcError::new(
+            "invalid_params",
+            format!("not an object id: {id}"),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// A copy this Mac keeps, as saved.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Kept {
@@ -659,14 +699,7 @@ impl LiveCopies {
         req: SyncUpdate,
         pack: Option<Vec<u8>>,
     ) -> Result<SyncUpdated, RpcError> {
-        for id in [&req.tree, &req.base, &req.head] {
-            if !git_sync::is_object_id(id) {
-                return Err(RpcError::new(
-                    "invalid_params",
-                    format!("not an object id: {id}"),
-                ));
-            }
-        }
+        object_ids(&[&req.tree, &req.base, &req.head])?;
         let copy = req.copy.clone();
         let before = self.states.lock().unwrap().get(&copy).cloned();
         let r = self.update_files(req, pack).await;
@@ -810,6 +843,14 @@ impl LiveCopies {
                 .await
                 .map_err(internal)?;
             if !force && resolve.is_none() && last.as_deref() == Some(local.tree.as_str()) {
+                // Reverted to the last round's files: nothing is left to send.
+                let syncing = matches!(
+                    self.states.lock().unwrap().get(id),
+                    Some(CopyState::Syncing { .. })
+                );
+                if syncing {
+                    self.set_state(id, CopyState::InSync);
+                }
                 return Ok(Round::Made);
             }
             let Some(host) = self.link.host() else {
@@ -844,13 +885,18 @@ impl LiveCopies {
                 .await
             {
                 Ok(v) => v,
-                Err(e) if matches!(e.code.as_str(), "disconnected" | "timeout") => {
+                Err(e) if e.code == "disconnected" => {
                     self.set_state(id, CopyState::Waiting);
                     return Ok(Round::Offline);
                 }
                 Err(e) => return Err(e),
             };
             let r: SyncOffered = serde_json::from_value(reply).map_err(internal)?;
+            if let Err(e) = object_ids(&[&r.tree, &r.base, &r.head]) {
+                let reason = format!("{} sent {}", k.host, e.message);
+                self.pause(id, reason.clone());
+                return Err(RpcError::new("paused", reason));
+            }
             if let Some(t) = r.pack {
                 let pack = host.take_pack(t).ok_or_else(|| {
                     RpcError::new("failed", "the central host's pack did not arrive")
@@ -952,22 +998,40 @@ impl LiveCopies {
     /// [`OFFER_WAIT_MAX`]. The copy shows syncing meanwhile.
     async fn offer_until_taken(&self, id: &str, force: bool) {
         let mut wait = OFFER_WAIT;
+        let mut internal = 0;
         loop {
-            match self.offer_changes(id, force, None).await {
+            let e = match self.offer_changes(id, force, None).await {
                 Ok(_) => return,
-                Err(e)
-                    if matches!(
-                        e.code.as_str(),
-                        "paused" | "not_found" | "not_ready" | "forbidden" | "invalid_params"
-                    ) =>
-                {
-                    tracing::debug!(copy = %id, "offer not made: {}", e.message);
-                    return;
-                }
-                Err(e) => {
+                Err(e) => e,
+            };
+            if matches!(e.code.as_str(), "failed" | "internal") {
+                internal += 1;
+            }
+            match after_offer_error(&e.code, internal) {
+                OfferNext::Retry => {
                     tracing::debug!(copy = %id, "offer turned away, again in {wait:?}: {}", e.message);
                     tokio::time::sleep(wait).await;
                     wait = (wait * 2).min(OFFER_WAIT_MAX);
+                }
+                OfferNext::Pause => {
+                    let host = self.kept(id).map(|k| k.host).unwrap_or_default();
+                    self.pause(
+                        id,
+                        format!("{host} refused the copy's files: {}", e.message),
+                    );
+                    return;
+                }
+                OfferNext::Wait => {
+                    self.set_state(id, CopyState::Waiting);
+                    return;
+                }
+                OfferNext::Stop => {
+                    if matches!(e.code.as_str(), "failed" | "internal") {
+                        tracing::warn!(copy = %id, "offer failed {internal} times: {}", e.message);
+                    } else {
+                        tracing::debug!(copy = %id, "offer not made: {}", e.message);
+                    }
+                    return;
                 }
             }
         }
@@ -1217,6 +1281,7 @@ impl LiveCopies {
         pack: Option<Vec<u8>>,
     ) -> Result<SyncOffered, RpcError> {
         self.owner(conn, &req.copy)?;
+        object_ids(&[&req.tree, &req.base, &req.head])?;
         let served = self
             .served(&req.copy)
             .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
@@ -1820,6 +1885,42 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_offer_turned_away_waits_retries_pauses_or_stops_by_why() {
+        use OfferNext::*;
+        assert_eq!(after_offer_error("disconnected", 0), Wait);
+        // A slow answer is not a dropped link: the offer is made again.
+        assert_eq!(after_offer_error("timeout", 0), Retry);
+        assert_eq!(after_offer_error("busy", 0), Retry);
+        // The central host refusing the copy's files lasts: say so.
+        assert_eq!(after_offer_error("refused", 0), Pause);
+        for code in [
+            "paused",
+            "not_found",
+            "not_ready",
+            "forbidden",
+            "invalid_params",
+        ] {
+            assert_eq!(after_offer_error(code, 0), Stop, "{code}");
+        }
+        // Failures, here or on the central host, are tried a few times.
+        for code in ["failed", "internal"] {
+            assert_eq!(after_offer_error(code, 0), Retry, "{code}");
+            assert_eq!(after_offer_error(code, INTERNAL_TRIES - 1), Retry, "{code}");
+            assert_eq!(after_offer_error(code, INTERNAL_TRIES), Stop, "{code}");
+        }
+    }
+
+    #[test]
+    fn only_full_object_ids_pass_from_the_other_side() {
+        let id = "4171b03ff0d2bd434751f17bc9d34da784f97e72";
+        assert!(object_ids(&[id, id]).is_ok());
+        for bad in ["HEAD", "--all", "4171b03f", ""] {
+            let e = object_ids(&[id, bad]).unwrap_err();
+            assert_eq!(e.code, "invalid_params", "{bad}");
+        }
+    }
 
     #[test]
     fn a_copy_takes_the_sessions_path_when_it_is_free() {
