@@ -9,17 +9,16 @@ import { rpc } from "../lib/daemon";
 import { M, type FileContent } from "../lib/protocol";
 import { sesKey, useStore } from "../lib/store";
 import { resolveSync, useSync } from "../lib/syncStore";
-import { compareReadError } from "../lib/sync";
+import { compareLabel, compareReadError, READ_CAP_MIB, type CompareSide } from "../lib/sync";
 import { editorFont } from "../lib/uiScale";
 import { Button, Dialog, Empty } from "./ui";
 
-/** What one side has: its text, none when the file is gone there, or why it could not be read. */
-type Side = { text: string | null; binary: boolean; error?: string };
+type Side = CompareSide;
 
 async function read(host: string, path: string): Promise<Side> {
   try {
-    const f = await rpc<FileContent>(host, M.fsRead, { path });
-    return { text: f.content, binary: f.binary };
+    const f = await rpc<FileContent>(host, M.fsRead, { path, max_bytes: READ_CAP_MIB * 1024 * 1024 });
+    return { text: f.content, binary: f.binary, truncated: f.truncated };
   } catch (e) {
     return { text: null, binary: false, error: compareReadError(e) ?? undefined };
   }
@@ -44,7 +43,6 @@ export function SyncCompare({ host, session, path }: { host: string; session: st
     if (copy) void resolveSync(copy, path, side);
     close();
   };
-  const label = (s: Side) => (s.error ? ` (could not be read: ${s.error})` : s.text === null ? " (deleted)" : "");
   return (
     <Dialog
       title={path}
@@ -65,10 +63,10 @@ export function SyncCompare({ host, session, path }: { host: string; session: st
       <div className="mb-2 flex ui-text-12 text-muted">
         <span className="flex-1">
           {host}
-          {sides && label(sides.central)}
+          {sides && compareLabel(sides.central)}
         </span>
         <span className="flex-1">
-          This Mac{sides && label(sides.here)}
+          This Mac{sides && compareLabel(sides.here)}
         </span>
       </div>
       <div className="h-[60vh] overflow-hidden rounded-lg border border-border">

@@ -7,7 +7,7 @@ import { ArrowLeftRight, ChevronDown, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type Copy, type FileContent, type Session } from "../lib/protocol";
 import { errorToast, sesKey, useStore } from "../lib/store";
-import { markTone, setupActions, syncLine, tooBigLine } from "../lib/sync";
+import { logTail, markTone, popoverPlace, READ_CAP_MIB, setupActions, syncLine, tooBigLine } from "../lib/sync";
 import { tildePath } from "../lib/profiles";
 import { dismissSyncNote, resolveSync, retrySync, runSetupAgain, stopSync, syncDataDir, useCentralBranch, useSync } from "../lib/syncStore";
 import { workspaceOpenIn } from "../lib/openIn";
@@ -44,14 +44,12 @@ export function SyncMark({ host, s }: { host: string; s: Session }) {
 
 const WIDTH = 360;
 
-/** Where the popover goes: under its session's mark, or, when the session's
- * row is not in the sidebar (its group folded, another workspace shown),
- * under the window's top bar. */
+/** Where the popover goes (`popoverPlace`), from its session's mark on screen. */
 function place(key: string): React.CSSProperties {
   const mark = document.querySelector(`[data-sync-anchor="${CSS.escape(key)}"]`);
   const r = mark?.getBoundingClientRect();
-  if (!r || (r.width === 0 && r.height === 0)) return { position: "fixed", left: Math.max(8, (window.innerWidth - WIDTH) / 2), top: 52, width: WIDTH };
-  return { position: "fixed", left: Math.min(r.left, window.innerWidth - WIDTH - 12), top: Math.min(r.bottom + 6, window.innerHeight - 200), width: WIDTH };
+  const shown = r && !(r.width === 0 && r.height === 0);
+  return { position: "fixed", width: WIDTH, ...popoverPlace(shown ? r : null, { width: window.innerWidth, height: window.innerHeight }, WIDTH) };
 }
 
 /** The open sync popover, wherever its session is; mounted once in the app. */
@@ -107,11 +105,11 @@ function SyncPopover({ anchorKey, copy, s }: { anchorKey: string; copy: Copy; s:
   const showLog = async () => {
     if (log !== null) return setLog(null);
     const path = `${syncDataDir()}/sync/logs/${copy.id}.log`;
-    const f = await rpc<FileContent>("local", M.fsRead, { path }).catch(() => null);
-    setLog(f?.content?.split("\n").slice(-40).join("\n") || "No output.");
+    const f = await rpc<FileContent>("local", M.fsRead, { path, max_bytes: READ_CAP_MIB * 1024 * 1024 }).catch(() => null);
+    setLog(logTail(f?.content ?? "", !!f?.truncated));
   };
   return createPortal(
-    <div ref={panel} role="dialog" aria-label="Keep in sync" style={style} className="z-50 flex max-h-[70vh] flex-col gap-3 overflow-y-auto rounded-xl border border-border-strong bg-[#232323] p-3 shadow-2xl">
+    <div ref={panel} role="dialog" aria-label="Keep in sync" style={style} className="z-50 flex flex-col gap-3 overflow-y-auto rounded-xl border border-border-strong bg-[#232323] p-3 shadow-2xl">
       <div className="flex items-start gap-2">
         <span className="min-w-0 flex-1 ui-text-13 text-fg">{syncLine(copy, { branch: s.branch, home, path: false, link: link ?? undefined })}</span>
         {paused && (

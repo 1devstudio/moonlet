@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Copy } from "./protocol";
-import { centralChangePrompt, centralPrompt, compareReadError, composerSync, differsNotice, endedToast, markTone, setupActions, setupPrompt, stopPrompt, syncChoice, syncLine, syncOffered, tooBigLine } from "./sync";
+import { centralChangePrompt, centralPrompt, compareLabel, compareReadError, composerSync, differsNotice, logTail, popoverPlace, endedToast, markTone, setupActions, setupPrompt, stopPrompt, syncChoice, syncLine, syncOffered, tooBigLine } from "./sync";
 
 const copy = (patch: Partial<Copy> = {}): Copy => ({
   id: "c1",
@@ -198,6 +198,50 @@ describe("moving or clearing the central host while sessions are kept in sync (X
     expect(centralChangePrompt("studio-mini", null, 1, "/Users/alex/.moonlet", "/Users/alex")?.message).toBe(
       "1 session is kept in sync with studio-mini. Clearing the central host stops keeping it in sync: its copy on this Mac is removed, and files only this Mac has are saved to a folder in ~/.moonlet/sync-leftovers first.",
     );
+  });
+});
+
+describe("compareLabel (X60 Compare)", () => {
+  it("says when one side is gone, could not be read, or is cut short", () => {
+    expect(compareLabel({ text: "a", binary: false })).toBe("");
+    expect(compareLabel({ text: null, binary: false })).toBe(" (deleted)");
+    expect(compareLabel({ text: null, binary: false, error: "permission denied" })).toBe(" (could not be read: permission denied)");
+    expect(compareLabel({ text: "a", binary: false, truncated: true })).toBe(" (only the first 64 MiB shown)");
+  });
+});
+
+describe("logTail (X60 the popover's setup output)", () => {
+  it("shows the last 40 lines", () => {
+    const out = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n");
+    expect(logTail(out, false)).toBe(Array.from({ length: 40 }, (_, i) => `line ${i + 11}`).join("\n"));
+  });
+
+  it("says when the output was too long to read to its end", () => {
+    expect(logTail("one\ntwo", true)).toBe("The output is over 64 MiB; these are the last lines of its first 64 MiB.\none\ntwo");
+  });
+
+  it("says when there is none", () => {
+    expect(logTail("", false)).toBe("No output.");
+  });
+});
+
+describe("popoverPlace (X60 where the sync popover goes)", () => {
+  const view = { width: 1200, height: 800 };
+
+  it("goes under the mark, no taller than the room left below it", () => {
+    expect(popoverPlace({ left: 100, top: 200, bottom: 220 }, view, 360)).toEqual({ left: 100, top: 226, maxHeight: 562 });
+  });
+
+  it("goes over the mark when there is more room above than the little left below", () => {
+    expect(popoverPlace({ left: 100, top: 700, bottom: 720 }, view, 360)).toEqual({ left: 100, bottom: 106, maxHeight: 682 });
+  });
+
+  it("keeps inside the window on the right", () => {
+    expect(popoverPlace({ left: 1000, top: 200, bottom: 220 }, view, 360).left).toBe(828);
+  });
+
+  it("goes under the top bar when the mark is not on screen", () => {
+    expect(popoverPlace(null, view, 360)).toEqual({ left: 420, top: 52, maxHeight: 736 });
   });
 });
 

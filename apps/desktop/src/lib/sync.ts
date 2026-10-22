@@ -145,3 +145,52 @@ export function compareReadError(e: unknown): string | null {
   const message = e instanceof Error ? e.message : String(e);
   return message.includes("No such file or directory") ? null : message;
 }
+
+/** The most a file read gives (the daemon's cap for `fs.read`), in MiB. */
+export const READ_CAP_MIB = 64;
+
+/** One side of Compare: its text, none when the file is gone there, why it
+ * could not be read, and whether only its start was read. */
+export interface CompareSide {
+  text: string | null;
+  binary: boolean;
+  error?: string;
+  truncated?: boolean;
+}
+
+/** What Compare says after a side's name. */
+export function compareLabel(s: CompareSide): string {
+  if (s.error) return ` (could not be read: ${s.error})`;
+  if (s.text === null) return " (deleted)";
+  return s.truncated ? ` (only the first ${READ_CAP_MIB} MiB shown)` : "";
+}
+
+/** The popover's setup output: its last 40 lines, saying so when the log
+ * was too long to read to its end. */
+export function logTail(content: string, truncated: boolean): string {
+  const tail = content.split("\n").slice(-40).join("\n");
+  if (truncated) return `The output is over ${READ_CAP_MIB} MiB; these are the last lines of its first ${READ_CAP_MIB} MiB.\n${tail}`;
+  return tail || "No output.";
+}
+
+/** Where the sync popover goes: under its session's mark, or over it when
+ * there is more room above than the little left below, never taller than
+ * the room it has. Under the window's top bar when the mark is not on
+ * screen (its group folded, another workspace shown). */
+export function popoverPlace(
+  mark: { left: number; top: number; bottom: number } | null,
+  view: { width: number; height: number },
+  width: number,
+): { left: number; top?: number; bottom?: number; maxHeight: number } {
+  const MARGIN = 12;
+  const GAP = 6;
+  if (!mark) {
+    const top = 52;
+    return { left: Math.max(8, (view.width - width) / 2), top, maxHeight: view.height - top - MARGIN };
+  }
+  const left = Math.min(mark.left, view.width - width - MARGIN);
+  const below = view.height - (mark.bottom + GAP) - MARGIN;
+  const above = mark.top - GAP - MARGIN;
+  if (below < 240 && above > below) return { left, bottom: view.height - mark.top + GAP, maxHeight: above };
+  return { left, top: mark.bottom + GAP, maxHeight: below };
+}
