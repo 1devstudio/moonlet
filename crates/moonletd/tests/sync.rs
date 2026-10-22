@@ -1194,9 +1194,12 @@ async fn fake_central(
                         {
                             break (result, error);
                         }
-                        // An offer the worker makes meanwhile: taken as it is.
+                        // An offer the worker makes meanwhile. A real central
+                        // host would answer it with its own change; this one
+                        // turns it away until its update is in, unless the
+                        // first reply is all it asks about.
                         Ok(Some(Frame::Json(Message::Request { id, method, params }))) => {
-                            let reply = if method == "sync.offer" {
+                            let reply = if method == "sync.offer" && once {
                                 Message::ok(id, took_offer(&params))
                             } else {
                                 Message::err(id, moonlet_proto::RpcError::new("busy", "not now"))
@@ -1212,23 +1215,20 @@ async fn fake_central(
                         .as_ref()
                         .is_some_and(|r| r["applied"] == json!(false));
                 if not_yet && !once {
-                    // As a real central host would, take the worker's offers
-                    // first; send again once it has been quiet a while.
+                    // Turn the worker's offers away (it backs off and lets go
+                    // of the copy), and send again once it has been quiet a
+                    // while.
                     loop {
                         let next =
                             tokio::time::timeout(Duration::from_millis(300), read_frame(&mut s))
                                 .await;
                         match next {
                             Err(_) => break,
-                            Ok(Ok(Some(Frame::Json(Message::Request { id, method, params })))) => {
-                                let reply = if method == "sync.offer" {
-                                    Message::ok(id, took_offer(&params))
-                                } else {
-                                    Message::err(
-                                        id,
-                                        moonlet_proto::RpcError::new("busy", "not now"),
-                                    )
-                                };
+                            Ok(Ok(Some(Frame::Json(Message::Request { id, .. })))) => {
+                                let reply = Message::err(
+                                    id,
+                                    moonlet_proto::RpcError::new("busy", "not now"),
+                                );
                                 write_frame(&mut s, &Frame::Json(reply)).await.unwrap();
                             }
                             Ok(Ok(Some(_))) => {}
