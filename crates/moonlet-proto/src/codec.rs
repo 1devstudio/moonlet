@@ -1,4 +1,4 @@
-use crate::{Frame, KIND_INPUT, KIND_JSON, KIND_OUTPUT, MAX_FRAME_LEN, Message};
+use crate::{Frame, KIND_INPUT, KIND_JSON, KIND_OUTPUT, KIND_PACK, MAX_FRAME_LEN, Message};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProtoError {
@@ -48,6 +48,12 @@ pub(crate) fn encode_into(frame: &Frame, out: &mut Vec<u8>) -> Result<(), ProtoE
             out.extend_from_slice(&terminal.to_be_bytes());
             out.extend_from_slice(data);
         }
+        Frame::Pack { transfer, data } => {
+            out.extend_from_slice(&check(data.len() + 5)?.to_be_bytes());
+            out.push(KIND_PACK);
+            out.extend_from_slice(&transfer.to_be_bytes());
+            out.extend_from_slice(data);
+        }
     }
     Ok(())
 }
@@ -65,6 +71,15 @@ fn decode_body(kind: u8, body: &[u8]) -> Result<Frame, ProtoError> {
                 Frame::Output { terminal, data }
             } else {
                 Frame::Input { terminal, data }
+            })
+        }
+        KIND_PACK => {
+            if body.len() < 4 {
+                return Err(ProtoError::Truncated);
+            }
+            Ok(Frame::Pack {
+                transfer: u32::from_be_bytes(body[..4].try_into().unwrap()),
+                data: body[4..].to_vec(),
             })
         }
         other => Err(ProtoError::UnknownKind(other)),
@@ -230,6 +245,154 @@ mod tests {
             data: vec![0; MAX_FRAME_LEN],
         };
         assert!(matches!(encode_frame(&big), Err(ProtoError::TooLarge(_))));
+    }
+
+    #[test]
+    fn a_pack_frame_round_trips() {
+        let frame = Frame::Pack {
+            transfer: 9,
+            data: b"PACK\0\0\0\x02".to_vec(),
+        };
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&encode_frame(&frame).unwrap());
+        assert_eq!(decoder.next_frame().unwrap(), Some(frame));
+    }
+
+    #[test]
+    fn a_pack_goes_in_chunks_of_one_mebibyte_and_an_empty_one_ends_it() {
+        let pack: Vec<u8> = (0..3 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let frames = crate::pack_frames(4, &pack);
+        let sizes: Vec<(u32, usize)> = frames
+            .iter()
+            .map(|f| match f {
+                Frame::Pack { transfer, data } => (*transfer, data.len()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            sizes,
+            [(4, 1_048_576), (4, 1_048_576), (4, 1_048_576), (4, 0)]
+        );
+
+        let mut packs = crate::PackAssembler::default();
+        for f in frames {
+            let Frame::Pack { transfer, data } = f else {
+                unreachable!()
+            };
+            assert_eq!(packs.take(4), None, "complete before its end");
+            packs.push(transfer, data).unwrap();
+        }
+        assert_eq!(packs.take(4).as_deref(), Some(&pack[..]));
+        assert_eq!(packs.take(4), None, "taken once");
+    }
+
+    fn small() -> crate::PackLimits {
+        crate::PackLimits {
+            max_pack: 10,
+            max_buffered: 25,
+            max_transfers: 3,
+            keep_done: std::time::Duration::from_millis(100),
+        }
+    }
+
+    #[test]
+    fn the_real_limits_are_one_gibibyte_sixteen_transfers_and_a_minute() {
+        let l = crate::PackLimits::default();
+        assert_eq!(l.max_pack, 1_073_741_824);
+        assert_eq!(l.max_buffered, 1_073_741_824);
+        assert_eq!(l.max_transfers, 16);
+        assert_eq!(l.keep_done, std::time::Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_pack_over_its_limit_is_refused() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 6]).unwrap();
+        let e = packs.push(1, vec![0; 5]).unwrap_err();
+        assert_eq!(e.to_string(), "pack 1 is over 10 bytes");
+        // Exactly the limit is fine.
+        packs.push(2, vec![0; 10]).unwrap();
+        packs.push(2, vec![]).unwrap();
+        assert_eq!(packs.take(2).map(|p| p.len()), Some(10));
+    }
+
+    #[test]
+    fn packs_waiting_together_may_not_pass_the_buffer_limit() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 10]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        packs.push(2, vec![0; 10]).unwrap();
+        let e = packs.push(3, vec![0; 6]).unwrap_err();
+        assert_eq!(e.to_string(), "packs waiting are over 25 bytes");
+        // Taking one frees its room.
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 10]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        packs.push(2, vec![0; 10]).unwrap();
+        packs.take(1).unwrap();
+        packs.push(3, vec![0; 10]).unwrap();
+    }
+
+    #[test]
+    fn only_so_many_transfers_wait_at_once() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![1]).unwrap();
+        packs.push(2, vec![1]).unwrap();
+        packs.push(2, vec![]).unwrap();
+        packs.push(3, vec![1]).unwrap();
+        let e = packs.push(4, vec![1]).unwrap_err();
+        assert_eq!(e.to_string(), "more than 3 packs are waiting");
+        // More chunks of one already waiting are fine.
+        packs.push(3, vec![1]).unwrap();
+    }
+
+    #[test]
+    fn a_pack_nobody_takes_is_dropped_after_a_while() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 10]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        packs.push(2, vec![0; 10]).unwrap();
+        packs.push(2, vec![]).unwrap();
+        assert_eq!(packs.take(1), None);
+        assert_eq!(packs.take(2).map(|p| p.len()), Some(10));
+        // Its room is free again.
+        packs.push(3, vec![0; 10]).unwrap();
+        packs.push(4, vec![0; 10]).unwrap();
+    }
+
+    #[test]
+    fn a_pack_left_half_sent_is_dropped_after_a_while() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 10]).unwrap();
+        packs.push(2, vec![0; 10]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        // Both half-sent packs went, so their room is free again.
+        packs.push(3, vec![0; 10]).unwrap();
+        packs.push(4, vec![0; 10]).unwrap();
+        packs.push(5, vec![0; 5]).unwrap();
+    }
+
+    #[test]
+    fn the_rest_of_a_pack_dropped_for_being_slow_never_passes_for_all_of_it() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![1; 10]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        packs.take(9);
+        // The rest arrives after the first part was dropped.
+        packs.push(1, vec![2; 4]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        assert_eq!(packs.take(1), None);
+    }
+
+    #[test]
+    fn a_chunk_for_a_pack_already_whole_is_refused() {
+        let mut packs = crate::PackAssembler::new(small());
+        packs.push(1, vec![0; 4]).unwrap();
+        packs.push(1, vec![]).unwrap();
+        assert_eq!(packs.push(1, vec![0; 4]), Err(crate::PackError::Complete(1)));
+        assert_eq!(packs.push(1, vec![]), Err(crate::PackError::Complete(1)));
+        assert_eq!(packs.take(1).map(|p| p.len()), Some(4));
     }
 
     #[tokio::test]

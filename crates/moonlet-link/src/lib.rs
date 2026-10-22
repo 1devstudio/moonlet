@@ -14,13 +14,14 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use moonlet_proto::{
-    Frame, FrameDecoder, Message, PROTOCOL_VERSION, RpcError, TerminalId, encode_frame,
+    Frame, FrameDecoder, Message, PROTOCOL_VERSION, PackAssembler, RpcError, TerminalId,
+    encode_frame,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -133,6 +134,9 @@ type OutputSink = Box<dyn Fn(Vec<u8>) + Send + Sync>;
 
 struct Link {
     tx: mpsc::UnboundedSender<Vec<u8>>,
+    /// Bytes that go out ahead of everything queued on `tx`: replies to
+    /// pings, which must not wait behind a pack (X60).
+    urgent: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 pub struct Host {
@@ -147,6 +151,9 @@ pub struct Host {
     next_id: AtomicU64,
     output: Mutex<Option<OutputSink>>,
     requests: Mutex<Option<Arc<dyn Requests>>>,
+    /// Packs the daemon sent, by transfer id, for its requests (X60).
+    packs: Mutex<PackAssembler>,
+    next_transfer: AtomicU32,
     batch: Mutex<Vec<u8>>,
     stop: watch::Sender<bool>,
     /// Kicks the reconnect loop to retry immediately.
@@ -197,6 +204,8 @@ impl Host {
             next_id: AtomicU64::new(1),
             output: Mutex::new(None),
             requests: Mutex::new(None),
+            packs: Mutex::new(PackAssembler::default()),
+            next_transfer: AtomicU32::new(1),
             batch: Mutex::new(Vec::new()),
             stop,
             retry: tokio::sync::Notify::new(),
@@ -279,6 +288,30 @@ impl Host {
     fn forget_request(&self, id: u64) {
         self.pending.lock().unwrap().remove(&id);
         self.attaching.lock().unwrap().remove(&id);
+    }
+
+    /// Sends `pack` to the daemon in [`Frame::Pack`] chunks and returns its
+    /// transfer id, for the request that uses it to name (X60). Frames go
+    /// out in order, so the pack is whole before that request arrives.
+    pub fn send_pack(&self, pack: &[u8]) -> Result<u32, RpcError> {
+        let link = self.link.lock().unwrap();
+        let link = link
+            .as_ref()
+            .ok_or_else(|| RpcError::new("disconnected", "not connected"))?;
+        let transfer = self.next_transfer.fetch_add(1, Ordering::Relaxed);
+        // Chunk by chunk, so a ping's reply can go out between two.
+        for f in moonlet_proto::pack_frames(transfer, pack) {
+            let bytes = encode_frame(&f).map_err(|e| RpcError::new("too_large", e.to_string()))?;
+            link.tx
+                .send(bytes)
+                .map_err(|_| RpcError::new("disconnected", "connection closed"))?;
+        }
+        Ok(transfer)
+    }
+
+    /// The pack the daemon sent as `transfer`, once it is whole; once.
+    pub fn take_pack(&self, transfer: u32) -> Option<Vec<u8>> {
+        self.packs.lock().unwrap().take(transfer)
     }
 
     pub fn input(&self, session: TerminalId, data: Vec<u8>) -> Result<(), RpcError> {
@@ -496,8 +529,11 @@ async fn run_link(
         other => bail!("unexpected handshake reply {other:?}"),
     }
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    *host.link.lock().unwrap() = Some(Link { tx });
+    let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (urgent, urgent_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // A pack cut off by the last link will never be whole.
+    *host.packs.lock().unwrap() = PackAssembler::default();
+    *host.link.lock().unwrap() = Some(Link { tx, urgent });
     // Fetch home for path display; ignore failures.
     let h2 = host.clone();
     host.rt.spawn(async move {
@@ -513,21 +549,14 @@ async fn run_link(
         }
     });
 
-    let writer_task = host.rt.spawn(async move {
-        while let Some(mut bytes) = rx.recv().await {
-            while let Ok(more) = rx.try_recv() {
-                bytes.extend_from_slice(&more);
-            }
-            if writer.write_all(&bytes).await.is_err() || writer.flush().await.is_err() {
-                break;
-            }
-        }
-    });
+    let writer_task = host.rt.spawn(write_link(writer, urgent_rx, rx));
 
-    let result = loop {
+    let result = 'link: loop {
         // Frames already buffered alongside the handshake.
         while let Some(frame) = decoder.next_frame()? {
-            dispatch(host, frame);
+            if let Err(e) = dispatch(host, frame) {
+                break 'link Err(e.into());
+            }
         }
         tokio::select! {
             n = reader.read(&mut buf) => {
@@ -545,9 +574,56 @@ async fn run_link(
     result
 }
 
-fn dispatch(host: &Arc<Host>, frame: Frame) {
+/// Writes queued bytes, coalescing what is already queued. `urgent` bytes
+/// go out first, and between any two pack chunks (each up to 1 MiB).
+async fn write_link<W: AsyncWrite + Unpin>(
+    mut writer: W,
+    mut urgent: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+) {
+    let mut urgent_open = true;
+    loop {
+        let mut bytes = Vec::new();
+        while let Ok(more) = urgent.try_recv() {
+            bytes.extend_from_slice(&more);
+        }
+        if bytes.is_empty() {
+            tokio::select! {
+                biased;
+                b = urgent.recv(), if urgent_open => match b {
+                    Some(b) => bytes = b,
+                    None => {
+                        urgent_open = false;
+                        continue;
+                    }
+                },
+                b = rx.recv() => match b {
+                    Some(b) => bytes = b,
+                    None => return,
+                },
+            }
+        }
+        while bytes.len() < 256 * 1024 {
+            if let Ok(more) = urgent.try_recv() {
+                bytes.extend_from_slice(&more);
+                continue;
+            }
+            match rx.try_recv() {
+                Ok(more) => bytes.extend_from_slice(&more),
+                Err(_) => break,
+            }
+        }
+        if writer.write_all(&bytes).await.is_err() || writer.flush().await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Fails only on a pack over its limits, which ends the link.
+fn dispatch(host: &Arc<Host>, frame: Frame) -> Result<(), moonlet_proto::PackError> {
     match frame {
         Frame::Output { terminal, data } => host.push_output(terminal, &data),
+        Frame::Pack { transfer, data } => host.packs.lock().unwrap().push(transfer, data)?,
         // An error no request asked for: the daemon says why it ends the link.
         Frame::Json(Message::Response {
             id: 0,
@@ -592,6 +668,7 @@ fn dispatch(host: &Arc<Host>, frame: Frame) {
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// Runs the handler for a daemon's request and sends its reply on the
@@ -600,7 +677,15 @@ fn answer(host: &Arc<Host>, id: u64, method: String, params: Value) {
     let handler = host.requests.lock().unwrap().clone();
     // The link this request came on: a reply must not reach a newer one,
     // whose daemon numbers its own requests from 1 again.
-    let Some(link) = host.link.lock().unwrap().as_ref().map(|l| l.tx.clone()) else {
+    // A ping's reply goes ahead of a pack being sent, or a big pack on a
+    // slow link would make the central host drop this worker (X60).
+    let Some(link) = host.link.lock().unwrap().as_ref().map(|l| {
+        if method == moonlet_proto::methods::WORKER_PING {
+            l.urgent.clone()
+        } else {
+            l.tx.clone()
+        }
+    }) else {
         return;
     };
     host.rt.clone().spawn(async move {
@@ -631,6 +716,9 @@ fn request_timeout(method: &str) -> Duration {
         660
     } else if method.starts_with("gh.") || method.starts_with("workspace.") || method.starts_with("repo.") {
         180
+    } else if method.starts_with("sync.") {
+        // A copy's first pack can be a whole repository's history (X60).
+        600
     } else {
         60
     };
@@ -640,6 +728,32 @@ fn request_timeout(method: &str) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_pings_reply_never_waits_behind_a_pack_queued_before_it() {
+        // X60: this worker sends a 3 MiB pack, then answers a ping.
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (urgent_tx, urgent) = mpsc::unbounded_channel();
+        for f in moonlet_proto::pack_frames(7, &vec![0u8; 3 * 1024 * 1024]) {
+            tx.send(encode_frame(&f).unwrap()).unwrap();
+        }
+        urgent_tx
+            .send(encode_frame(&Frame::Json(Message::ok(1, serde_json::json!({})))).unwrap())
+            .unwrap();
+        drop((tx, urgent_tx));
+        let (ours, mut theirs) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(write_link(ours, urgent, rx));
+        let mut order = Vec::new();
+        while let Some(f) = moonlet_proto::read_frame(&mut theirs).await.unwrap() {
+            order.push(match f {
+                Frame::Pack { data, .. } if data.is_empty() => "end",
+                Frame::Pack { .. } => "chunk",
+                Frame::Json(Message::Response { .. }) => "pong",
+                _ => "other",
+            });
+        }
+        assert_eq!(order, ["pong", "chunk", "chunk", "chunk", "end"]);
+    }
 
     #[test]
     fn retries_wait_longer_each_time_up_to_five_seconds() {

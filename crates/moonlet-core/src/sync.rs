@@ -56,6 +56,42 @@ async fn git_dir(worktree: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(String::from_utf8_lossy(&dir).trim()))
 }
 
+/// Untracked files that never sync, whatever `.gitignore` says, since an
+/// agent on the other side can edit `.gitignore`: files that usually hold
+/// secrets. Both sides apply this list in place of the user's own global
+/// excludes, which differ between machines, so they still agree.
+pub const NEVER_SYNCED: &str = "\
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+.npmrc
+.netrc
+";
+
+/// Whether `path`'s file name matches a [`NEVER_SYNCED`] pattern. The
+/// patterns are file names with `*`, so this holds whatever a
+/// `.gitignore` lets back in with `!`.
+fn never_synced(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    NEVER_SYNCED
+        .lines()
+        .any(|p| glob_match(p.as_bytes(), name.as_bytes()))
+}
+
+/// `*` matches any run of bytes; everything else matches itself.
+fn glob_match(pattern: &[u8], name: &[u8]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some((b'*', rest)) => (0..=name.len()).any(|i| glob_match(rest, &name[i..])),
+        Some((c, rest)) => name.first() == Some(c) && glob_match(rest, &name[1..]),
+    }
+}
+
 /// The private index a worktree's snapshots go through, beside its own
 /// index: the session's staging area is never touched.
 async fn private_index(worktree: &Path) -> Result<PathBuf> {
@@ -74,8 +110,9 @@ fn pathspecs(specs: impl IntoIterator<Item = String>) -> Vec<u8> {
 }
 
 /// Snapshots `worktree`: tracked files and the untracked ones that
-/// `.gitignore` and `.git/info/exclude` don't ignore. The user's global
-/// excludes are not applied, so two machines agree whatever theirs say.
+/// `.gitignore`, `.git/info/exclude` and [`NEVER_SYNCED`] don't ignore. The
+/// user's global excludes are not applied, so two machines agree whatever
+/// theirs say.
 /// A file leaves the snapshot only once it is gone from disk. One that
 /// becomes ignored, and that HEAD doesn't track, stays at the version an
 /// earlier snapshot took: the other side never reads it as deleted, and
@@ -86,7 +123,12 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     let index = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
-    let no_global = ["-c", "core.excludesFile=/dev/null"];
+    let excludes = git_dir(worktree).await?.join("moonlet-sync-excludes");
+    if std::fs::read_to_string(&excludes).ok().as_deref() != Some(NEVER_SYNCED) {
+        std::fs::write(&excludes, NEVER_SYNCED)?;
+    }
+    let excludes_opt = format!("core.excludesFile={}", excludes.display());
+    let our_excludes = ["-c", excludes_opt.as_str()];
     let has_head = git_env(
         worktree,
         &[],
@@ -117,7 +159,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
 
     // Files an earlier snapshot took that the rules now ignore, and that
     // HEAD doesn't track: they stay as they were while they exist.
-    let mut ignored = no_global.to_vec();
+    let mut ignored = our_excludes.to_vec();
     ignored.extend([
         "ls-files",
         "-z",
@@ -156,12 +198,13 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
         &["ls-files", "-z", "--others", "--exclude-standard"][..],
         &["ls-files", "-z", "--modified"][..],
     ] {
-        let args: Vec<&str> = no_global.iter().chain(listing).copied().collect();
+        let args: Vec<&str> = our_excludes.iter().chain(listing).copied().collect();
         let out = git_env(worktree, &env, &args, None).await?;
         candidates.extend(split_z(&out));
     }
     let mut too_big: Vec<String> = candidates
         .into_iter()
+        .filter(|p| !never_synced(p))
         .filter(|p| {
             std::fs::symlink_metadata(worktree.join(p))
                 .is_ok_and(|m| m.is_file() && m.len() > max_file)
@@ -171,12 +214,18 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     too_big.dedup();
 
     // `add -A` follows the files already in the snapshot and drops those
-    // gone from disk; the big ones it leaves as they were.
+    // gone from disk; the big ones it leaves as they were. Secrets are
+    // never even hashed, whatever a `.gitignore` says.
     let specs = pathspecs(
         std::iter::once(".".to_string())
-            .chain(too_big.iter().map(|p| format!(":(exclude,literal){p}"))),
+            .chain(too_big.iter().map(|p| format!(":(exclude,literal){p}")))
+            .chain(
+                NEVER_SYNCED
+                    .lines()
+                    .map(|p| format!(":(exclude,glob)**/{p}")),
+            ),
     );
-    let mut add: Vec<&str> = no_global.iter().copied().collect();
+    let mut add: Vec<&str> = our_excludes.iter().copied().collect();
     add.extend(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]);
     git_env(worktree, &env, &add, Some(&specs)).await?;
     if !kept.is_empty() {
@@ -189,35 +238,63 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
         .await?;
     }
 
+    // Secrets already in the snapshot follow their edits if HEAD tracks
+    // them, and leave it otherwise.
+    let cached = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
+    let cached: std::collections::HashSet<String> = split_z(&cached).collect();
+    let (secrets_kept, secrets_dropped): (Vec<&String>, Vec<&String>) = cached
+        .iter()
+        .filter(|p| never_synced(p))
+        .partition(|p| head.contains(*p));
+    if !secrets_kept.is_empty() {
+        let specs = pathspecs(secrets_kept.iter().map(|p| format!(":(literal){p}")));
+        git_env(
+            worktree,
+            &env,
+            &["add", "-u", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            Some(&specs),
+        )
+        .await?;
+    }
+    if !secrets_dropped.is_empty() {
+        let paths: Vec<u8> = secrets_dropped
+            .iter()
+            .flat_map(|p| p.bytes().chain([0]))
+            .collect();
+        git_env(
+            worktree,
+            &env,
+            &["update-index", "--force-remove", "-z", "--stdin"],
+            Some(&paths),
+        )
+        .await?;
+    }
+
     // Files HEAD tracks are in even when ignored, also those committed
     // after the snapshot's index was first made.
-    if has_head {
-        let cached = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
-        let cached: std::collections::HashSet<String> = split_z(&cached).collect();
-        let mut missing: Vec<&String> = head
-            .iter()
-            .filter(|p| !cached.contains(*p) && !too_big.contains(p))
-            .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
-            .collect();
-        // Held to the size limit like the rest.
-        let (big, fits): (Vec<&String>, Vec<&String>) = missing.into_iter().partition(|p| {
-            std::fs::symlink_metadata(worktree.join(p))
-                .is_ok_and(|m| m.is_file() && m.len() > max_file)
-        });
-        missing = fits;
-        too_big.extend(big.into_iter().cloned());
-        too_big.sort();
-        too_big.dedup();
-        if !missing.is_empty() {
-            let specs = pathspecs(missing.iter().map(|p| format!(":(literal){p}")));
-            git_env(
-                worktree,
-                &env,
-                &["add", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
-                Some(&specs),
-            )
-            .await?;
-        }
+    let mut missing: Vec<String> = head
+        .iter()
+        .filter(|p| !cached.contains(*p) && !too_big.contains(p))
+        .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
+        .cloned()
+        .collect();
+    // Held to the size limit like the rest.
+    let (big, fits): (Vec<String>, Vec<String>) = missing.into_iter().partition(|p| {
+        std::fs::symlink_metadata(worktree.join(p)).is_ok_and(|m| m.is_file() && m.len() > max_file)
+    });
+    missing = fits;
+    too_big.extend(big);
+    too_big.sort();
+    too_big.dedup();
+    if !missing.is_empty() {
+        let specs = pathspecs(missing.iter().map(|p| format!(":(literal){p}")));
+        git_env(
+            worktree,
+            &env,
+            &["add", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            Some(&specs),
+        )
+        .await?;
     }
     // Names that are not text leave the snapshot, wherever they came from.
     let listed = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
@@ -398,11 +475,24 @@ fn folder_clashes(files: &Files) -> Vec<String> {
 }
 
 /// The files of `tree` in `repo`.
+/// Whether `id` is a full object id, SHA-1 or SHA-256: the only form an id
+/// from the other side may take before it reaches git.
+pub fn is_object_id(id: &str) -> bool {
+    matches!(id.len(), 40 | 64) && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 pub async fn read_files(repo: &Path, tree: &str) -> Result<Files> {
     let out = git_env(
         repo,
         &[],
-        &["ls-tree", "-r", "-z", "--full-tree", tree],
+        &[
+            "ls-tree",
+            "-r",
+            "-z",
+            "--full-tree",
+            "--end-of-options",
+            tree,
+        ],
         None,
     )
     .await?;
@@ -508,22 +598,46 @@ pub enum ApplyError {
 
 /// The first path in `files` that would write outside the worktree: one
 /// with an empty, `.`, `..` or `.git` part, or one under a symlink of the
-/// same tree.
+/// same tree. Like git's own `verify_path`, a part counts as `.git` in any
+/// of the spellings macOS or Windows read as `.git`, and a `.gitmodules`
+/// may not be a symlink.
 pub fn unsafe_path(files: &Files) -> Option<String> {
     files
-        .keys()
-        .find(|path| {
+        .iter()
+        .find(|(path, entry)| {
             let parts: Vec<&str> = path.split('/').collect();
             parts
                 .iter()
-                .any(|p| p.is_empty() || *p == "." || *p == ".." || p.eq_ignore_ascii_case(".git"))
+                .any(|p| p.is_empty() || *p == "." || *p == ".." || reads_as(p, ".git"))
+                || (entry.mode == "120000"
+                    && parts.last().is_some_and(|p| reads_as(p, ".gitmodules")))
                 || (1..parts.len()).any(|n| {
                     files
                         .get(&parts[..n].join("/"))
                         .is_some_and(|e| e.mode == "120000")
                 })
         })
-        .cloned()
+        .map(|(path, _)| path.clone())
+}
+
+/// Whether a path part names `dotname` (`.git`, `.gitmodules`) on a Mac or
+/// on Windows: case aside, macOS ignores some invisible characters, and
+/// Windows ignores trailing dots and spaces and knows the short name
+/// `git~1` (`gitmod~1`).
+fn reads_as(part: &str, dotname: &str) -> bool {
+    // The code points HFS+ ignores in names, as git's `is_hfs_dot_generic`.
+    let ignored = |c: &char| matches!(*c as u32, 0x200c..=0x200f | 0x202a..=0x202e | 0x206a..=0x206f | 0xfeff);
+    let name: String = part
+        .chars()
+        .filter(|c| !ignored(c))
+        .collect::<String>()
+        .to_lowercase();
+    let name = name.trim_end_matches(['.', ' ']);
+    let short = match dotname {
+        ".git" => "git~1",
+        _ => "gitmod~1",
+    };
+    name == dotname || name == short
 }
 
 /// Turns `worktree` from `from`, a fresh snapshot of it, into `to`. Only
@@ -593,13 +707,34 @@ pub async fn delete_base_ref(repo: &Path, copy: &str) -> Result<()> {
     Ok(())
 }
 
-/// A git pack of the objects `new` (a tree or commit) reaches and none of
+/// A git pack of the objects `new` (trees or commits) reach and none of
 /// `not` does: what the other side, which has `not`, lacks. Empty when it
 /// lacks nothing.
-pub async fn pack_objects(repo: &Path, new: &str, not: &[&str]) -> Result<Vec<u8>> {
-    let mut args = vec!["rev-list", "--objects", new, "--not"];
-    args.extend(not);
-    let objects = git_env(repo, &[], &args, None).await?;
+pub async fn pack_objects(repo: &Path, new: &[&str], not: &[&str]) -> Result<Vec<u8>> {
+    // Ids only, and through stdin: some come from the other side, and any
+    // number of them fits.
+    if let Some(bad) = new.iter().chain(not).find(|id| !is_object_id(id)) {
+        bail!("not an object id: {bad:?}");
+    }
+    let mut revs = String::new();
+    for id in new {
+        revs.push_str(id);
+        revs.push('\n');
+    }
+    // `^<id>`, not a `--not` line: git 2.55 refuses options in --stdin
+    // mode ("options not supported in --stdin mode").
+    for id in not {
+        revs.push('^');
+        revs.push_str(id);
+        revs.push('\n');
+    }
+    let objects = git_env(
+        repo,
+        &[],
+        &["rev-list", "--objects", "--stdin"],
+        Some(revs.as_bytes()),
+    )
+    .await?;
     if objects.iter().all(u8::is_ascii_whitespace) {
         return Ok(Vec::new());
     }
@@ -613,23 +748,425 @@ pub async fn pack_objects(repo: &Path, new: &str, not: &[&str]) -> Result<Vec<u8
     .await
 }
 
-/// Stores the objects of a pack from [`pack_objects`] in `repo`.
-pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<()> {
-    if !pack.is_empty() {
-        git_env(
-            repo,
-            &[],
-            &["index-pack", "--stdin", "--fix-thin"],
-            Some(pack),
-        )
-        .await?;
+/// The tree of `commit` in `repo`.
+pub async fn commit_tree(repo: &Path, commit: &str) -> Result<String> {
+    if !is_object_id(commit) {
+        bail!("not an object id: {commit:?}");
+    }
+    let tree = git_env(
+        repo,
+        &[],
+        &["rev-parse", "--verify", "--end-of-options", &format!("{commit}^{{tree}}")],
+        None,
+    )
+    .await?;
+    Ok(String::from_utf8_lossy(&tree).trim().to_string())
+}
+
+/// Which of `oids` are objects in `repo`, in their order: what another
+/// side says it has can only be left out of a pack if this side has it too.
+pub async fn present(repo: &Path, oids: &[String]) -> Result<Vec<String>> {
+    let ids: Vec<&String> = oids
+        .iter()
+        .filter(|o| o.len() >= 40 && o.chars().all(|c| c.is_ascii_hexdigit()))
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let input: String = ids.iter().map(|o| format!("{o}\n")).collect();
+    let out = git_env(
+        repo,
+        &[],
+        &["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        Some(input.as_bytes()),
+    )
+    .await?;
+    let found: std::collections::HashSet<String> = String::from_utf8_lossy(&out)
+        .lines()
+        .filter(|l| !l.ends_with(" missing"))
+        .filter_map(|l| l.split(' ').next().map(String::from))
+        .collect();
+    Ok(ids
+        .into_iter()
+        .filter(|o| found.contains(*o))
+        .cloned()
+        .collect())
+}
+
+/// Why [`unpack`] stored nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum UnpackError {
+    /// A tree in the pack has a path git would refuse to write, such as a
+    /// `..` or `.git` entry.
+    #[error("a path outside the worktree: {0}")]
+    Unsafe(String),
+    /// Git found another broken object in the pack.
+    #[error("git refused the pack: {0}")]
+    Refused(String),
+    #[error(transparent)]
+    Git(#[from] anyhow::Error),
+}
+
+/// Stores the objects of a pack from [`pack_objects`] in `repo`. The other
+/// side may be hostile, so the pack is checked as git checks a fetch with
+/// `transfer.fsckObjects`: a broken object, or a tree with a `.git` or `..`
+/// entry, refuses the whole pack and stores nothing.
+pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<(), UnpackError> {
+    if pack.is_empty() {
+        return Ok(());
+    }
+    let out = run_raw_env(
+        "git",
+        repo,
+        &["index-pack", "--stdin", "--fix-thin", "--strict"],
+        &[],
+        Some(pack),
+        GIT_TIMEOUT,
+    )
+    .await?;
+    if out.status == 0 {
         // Each pack stays a file of its own; past git's limit `gc --auto`
         // repacks them, so they don't pile up one per sync.
         let repo = repo.to_path_buf();
         tokio::spawn(async move {
             let _ = git_env(&repo, &[], &["gc", "--auto", "--quiet"], None).await;
         });
+        return Ok(());
     }
+    // `error: object <oid>: <fsck id>: <message>`, then `fatal: fsck error`.
+    let why = out
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("error: object "))
+        .unwrap_or(out.stderr.trim())
+        .to_string();
+    // The fsck ids of names that would write outside the worktree.
+    let unsafe_ids = [
+        ": hasDot:",
+        ": hasDotdot:",
+        ": hasDotgit:",
+        ": gitmodulesSymlink:",
+        ": fullPathname:",
+        ": emptyName:",
+    ];
+    if unsafe_ids.iter().any(|id| why.contains(id)) {
+        Err(UnpackError::Unsafe(why))
+    } else if out.stderr.contains("fsck error") {
+        Err(UnpackError::Refused(why))
+    } else {
+        Err(UnpackError::Git(anyhow::anyhow!(
+            "git index-pack: {}",
+            out.stderr
+        )))
+    }
+}
+
+/// `url` without a password or token, for another machine to clone from
+/// with its own credentials. An `http(s)` URL loses its whole user part,
+/// which is often a token itself; other schemes keep the user name, and
+/// `git@host:path` stays as it is.
+pub fn scrub_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(i) => rest.split_at(i),
+        None => (rest, ""),
+    };
+    let Some((user, host)) = authority.rsplit_once('@') else {
+        return url.to_string();
+    };
+    let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    let user = match user.split_once(':') {
+        _ if web => None,
+        Some((name, _)) => Some(name),
+        None => Some(user),
+    };
+    match user {
+        Some(u) if !u.is_empty() => format!("{scheme}://{u}@{host}{path}"),
+        _ => format!("{scheme}://{host}{path}"),
+    }
+}
+
+/// The commit `HEAD` is at in `worktree`.
+pub async fn head(worktree: &Path) -> Result<String> {
+    let out = git_env(worktree, &[], &["rev-parse", "HEAD"], None).await?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// Clones `url` into `dir` with this machine's own credentials. The error
+/// is git's own message, such as `repository '…' not found`.
+pub async fn clone(url: &str, dir: &Path) -> std::result::Result<(), String> {
+    if !clonable_url(url) {
+        return Err(format!("only https and ssh origins are cloned: {url}"));
+    }
+    // Never into, nor away with, a folder this clone didn't make.
+    let made = match std::fs::read_dir(dir) {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err(format!("{} is in the way", dir.display()));
+            }
+            false
+        }
+        Err(_) => true,
+    };
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let dir_s = dir.to_string_lossy().to_string();
+    let cwd = dir.parent().unwrap_or(Path::new("/"));
+    let out = run_raw_env(
+        "git",
+        cwd,
+        &["clone", "-q", "--", url, &dir_s],
+        &origin_env(),
+        None,
+        Duration::from_secs(1800),
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))?;
+    if out.status == 0 {
+        return Ok(());
+    }
+    if made {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    Err(clone_error(&out.stderr))
+}
+
+/// Whether `url` is one a copy clones from: `https://`, `ssh://` or
+/// scp-like `[user@]host:path`. Never a local path, `file://` or another
+/// transport: the URL comes from the central host, and a local one would
+/// copy this Mac's own repositories into the clone.
+pub fn clonable_url(url: &str) -> bool {
+    if let Some((scheme, rest)) = url.split_once("://") {
+        return matches!(scheme, "https" | "ssh") && !rest.is_empty();
+    }
+    // scp-like: a host before the first `:`, and no `/` before it.
+    match url.split_once(':') {
+        Some((host, path)) => {
+            let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+            // `<transport>::<address>` is a remote helper, not a host.
+            host.len() > 1
+                && !path.is_empty()
+                && !path.starts_with(':')
+                && !url.starts_with(['-', '/', '.'])
+                && host
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        }
+        None => false,
+    }
+}
+
+/// Test-only: `MOONLET_SYNC_LOCAL_ORIGINS=1` lets git reach an https
+/// origin that a `url.insteadOf` rule turns into a local path, as the
+/// daemon tests' origins are.
+fn local_origins() -> bool {
+    std::env::var_os("MOONLET_SYNC_LOCAL_ORIGINS").is_some_and(|v| v == "1")
+}
+
+/// What git may use to reach an origin: https and ssh only.
+fn origin_env() -> Vec<(&'static str, &'static str)> {
+    if local_origins() {
+        Vec::new()
+    } else {
+        vec![("GIT_ALLOW_PROTOCOL", "https:ssh")]
+    }
+}
+
+/// The line of a failed clone's output that says why: the server's own
+/// (`remote: Repository not found.`), else git's first `fatal:` one.
+fn clone_error(stderr: &str) -> String {
+    let lines = || stderr.lines().map(str::trim);
+    lines()
+        .find_map(|l| l.strip_prefix("remote: "))
+        .or_else(|| lines().find_map(|l| l.strip_prefix("fatal: ")))
+        .or_else(|| lines().rfind(|l| !l.is_empty()))
+        .unwrap_or("git clone failed")
+        .to_string()
+}
+
+/// Fetches origin, so only what it lacks needs to come from the central
+/// host. A failed fetch only means more comes from there.
+pub async fn fetch_origin(repo: &Path) {
+    let _ = run_raw_env(
+        "git",
+        repo,
+        &["fetch", "-q", "--no-tags", "origin"],
+        &origin_env(),
+        None,
+        Duration::from_secs(600),
+    )
+    .await;
+}
+
+/// The commits `repo`'s branches, remote-tracking branches and copy bases
+/// point at: what a pack sent to it can leave out.
+pub async fn have(repo: &Path) -> Vec<String> {
+    let out = git_env(
+        repo,
+        &[],
+        &[
+            "for-each-ref",
+            "--format=%(objectname)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/moonlet",
+        ],
+        None,
+    )
+    .await
+    .unwrap_or_default();
+    let mut ids: Vec<String> = String::from_utf8_lossy(&out)
+        .lines()
+        .map(String::from)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    // A repository with thousands of branches only makes a pack a little
+    // smaller with all of them; the other side checks each one it is sent.
+    ids.truncate(MAX_HAVE);
+    ids
+}
+
+/// The most commits [`have`] names.
+const MAX_HAVE: usize = 2000;
+
+/// The worktree of `repo`, the main one included, that has `branch`
+/// checked out.
+pub async fn checked_out(repo: &Path, branch: &str) -> Option<PathBuf> {
+    let out = git_env(repo, &[], &["worktree", "list", "--porcelain"], None)
+        .await
+        .ok()?;
+    let want = format!("branch refs/heads/{branch}");
+    String::from_utf8_lossy(&out)
+        .split("\n\n")
+        .find(|entry| entry.lines().any(|l| l == want))
+        .and_then(|entry| entry.lines().find_map(|l| l.strip_prefix("worktree ")))
+        .map(PathBuf::from)
+}
+
+/// Adds a worktree of `repo` at `dir` on `branch`, set to `head` first.
+/// Why [`add_worktree`] made nothing.
+#[derive(Debug)]
+pub enum WorktreeError {
+    /// The branch name or commit id is not one git takes as it is.
+    Invalid(String),
+    /// The branch exists here with commits the given one lacks.
+    Ahead,
+    Git(anyhow::Error),
+}
+
+impl std::fmt::Display for WorktreeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorktreeError::Invalid(why) => f.write_str(why),
+            WorktreeError::Ahead => f.write_str("the branch has commits of its own"),
+            WorktreeError::Git(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+impl From<anyhow::Error> for WorktreeError {
+    fn from(e: anyhow::Error) -> Self {
+        WorktreeError::Git(e)
+    }
+}
+
+impl From<std::io::Error> for WorktreeError {
+    fn from(e: std::io::Error) -> Self {
+        WorktreeError::Git(e.into())
+    }
+}
+
+/// Makes worktree `dir` of `repo` on `branch` at commit `head`, both from
+/// the central host. A branch already here is used when it is at `head`,
+/// moved up to it when behind, and never moved back: with commits of its
+/// own it is left alone and nothing is made.
+pub async fn add_worktree(
+    repo: &Path,
+    dir: &Path,
+    branch: &str,
+    head: &str,
+) -> Result<(), WorktreeError> {
+    let valid_name = !branch.starts_with('-')
+        && run_raw_env(
+            "git",
+            repo,
+            &["check-ref-format", "--branch", branch],
+            &[],
+            None,
+            Duration::from_secs(30),
+        )
+        .await
+        .is_ok_and(|o| o.status == 0);
+    if !valid_name {
+        return Err(WorktreeError::Invalid(format!(
+            "invalid branch name: {branch}"
+        )));
+    }
+    if !is_object_id(head) {
+        return Err(WorktreeError::Invalid(format!("not a commit id: {head}")));
+    }
+    let r = format!("refs/heads/{branch}");
+    let here = git_env(
+        repo,
+        &[],
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            "--end-of-options",
+            &format!("{r}^{{commit}}"),
+        ],
+        None,
+    )
+    .await
+    .ok()
+    .map(|o| String::from_utf8_lossy(&o).trim().to_string());
+    match here {
+        // Made only if still missing.
+        None => {
+            git_env(repo, &[], &["update-ref", &r, head, ""], None).await?;
+        }
+        Some(here) if here == head => {}
+        Some(here) => {
+            let behind = run_raw_env(
+                "git",
+                repo,
+                &[
+                    "merge-base",
+                    "--is-ancestor",
+                    "--end-of-options",
+                    &here,
+                    head,
+                ],
+                &[],
+                None,
+                Duration::from_secs(60),
+            )
+            .await?
+            .status
+                == 0;
+            if !behind {
+                return Err(WorktreeError::Ahead);
+            }
+            // Moved only from where it was seen.
+            git_env(repo, &[], &["update-ref", &r, head, &here], None).await?;
+        }
+    }
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let dir_s = dir.to_string_lossy().to_string();
+    git_env(
+        repo,
+        &[],
+        &["worktree", "add", "-q", "--end-of-options", &dir_s, branch],
+        None,
+    )
+    .await?;
     Ok(())
 }
 
@@ -753,6 +1290,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn untracked_secrets_stay_out_even_when_no_gitignore_says_so() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        // Committed on purpose: a tracked file still syncs.
+        std::fs::create_dir_all(p.join("config")).unwrap();
+        std::fs::write(p.join("config/dev.key"), "dev only\n").unwrap();
+        git(p, &["add", "config/dev.key"]).await.unwrap();
+        git(p, &["commit", "-q", "-m", "dev key"]).await.unwrap();
+        for f in [
+            ".env.local",
+            ".env.production.local",
+            "deploy.pem",
+            "certs/server.key",
+            "id_ed25519",
+            "id_rsa.pub",
+            ".npmrc",
+            ".netrc",
+        ] {
+            let path = p.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "secret\n").unwrap();
+        }
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        assert_eq!(
+            listing(p, &snap.tree).await,
+            pairs(&[
+                (".gitignore", "100644"),
+                ("config/dev.key", "100644"),
+                ("link", "120000"),
+                ("run.sh", "100755"),
+                ("scratch.txt", "100644"),
+                ("src/cart.ts", "100644"),
+                ("src/new.ts", "100644"),
+                ("vendor/keep.js", "100644"),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn secrets_stay_out_whatever_the_gitignore_lets_back_in() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        std::fs::create_dir_all(p.join("config")).unwrap();
+        std::fs::write(p.join("config/dev.key"), "dev only\n").unwrap();
+        git(p, &["add", "config/dev.key"]).await.unwrap();
+        git(p, &["commit", "-q", "-m", "dev key"]).await.unwrap();
+        // The project's own rules let the files back in.
+        let mut gitignore = std::fs::read_to_string(p.join(".gitignore")).unwrap();
+        gitignore.push_str("!.env.local\n!*.pem\n!.npmrc\n");
+        std::fs::write(p.join(".gitignore"), gitignore).unwrap();
+        for f in [".env.local", "deploy.pem", "sub/.npmrc", "notes.txt"] {
+            let path = p.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "secret\n").unwrap();
+        }
+        std::fs::write(p.join("config/dev.key"), "dev only, rotated\n").unwrap();
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let names: Vec<String> = listing(p, &snap.tree)
+            .await
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ".gitignore",
+                "config/dev.key",
+                "link",
+                "notes.txt",
+                "run.sh",
+                "scratch.txt",
+                "src/cart.ts",
+                "src/new.ts",
+                "vendor/keep.js",
+            ]
+        );
+        // A tracked secret still syncs its edits.
+        let key = git(
+            p,
+            &["cat-file", "-p", &format!("{}:config/dev.key", snap.tree)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(String::from_utf8(key).unwrap(), "dev only, rotated\n");
+
+        // A synced file renamed to a secret's name leaves.
+        std::fs::rename(p.join("notes.txt"), p.join("sub/.env.local")).unwrap();
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let names: Vec<String> = listing(p, &snap.tree)
+            .await
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(
+            !names
+                .iter()
+                .any(|n| n == "notes.txt" || n.ends_with(".env.local")),
+            "{names:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_file_ignored_after_a_snapshot_stays_at_its_last_version() {
         let dir = worked_example().await;
         let p = dir.path();
@@ -793,6 +1432,22 @@ mod tests {
         std::fs::remove_file(p.join("build/out.js")).unwrap();
         let fourth = snapshot(p, MAX_FILE).await.unwrap();
         assert!(!paths(listing(p, &fourth.tree).await).contains(&"build/out.js".to_string()));
+    }
+
+    #[test]
+    fn only_full_hex_ids_are_object_ids() {
+        assert!(is_object_id("4171b03ff0d2bd434751f17bc9d34da784f97e72"));
+        assert!(is_object_id(&"ab".repeat(32)));
+        for id in [
+            "",
+            "4171b03",
+            "HEAD",
+            "--output=/tmp/x",
+            "4171b03ff0d2bd434751f17bc9d34da784f97e7g",
+            "4171b03ff0d2bd434751f17bc9d34da784f97e72 ",
+        ] {
+            assert!(!is_object_id(id), "{id:?}");
+        }
     }
 
     #[tokio::test]
@@ -1188,6 +1843,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn names_a_mac_or_windows_reads_as_git_are_found() {
+        // What git's own verify_path refuses: macOS ignores some invisible
+        // characters in names, and Windows reads `git~1` and a trailing dot
+        // or space as `.git`.
+        for path in [
+            ".g\u{200c}it/hooks/post-checkout",
+            "sub/\u{feff}.GIT/config",
+            ".git\u{200d}/config",
+            "GIT~1/config",
+            "sub/git~1/config",
+            ".git./config",
+            ".git /config",
+        ] {
+            let bad = files(&[(path, "100644", "a")]);
+            assert_eq!(unsafe_path(&bad).as_deref(), Some(path), "{path:?}");
+        }
+        // A symlinked .gitmodules, which git would follow when it reads it.
+        for path in [".gitmodules", "sub/.GitModules", ".gitmodules\u{200c}"] {
+            let bad = files(&[(path, "120000", "a")]);
+            assert_eq!(unsafe_path(&bad).as_deref(), Some(path), "{path:?}");
+        }
+        // Names that only look alike are fine.
+        let ok = files(&[
+            (".gitmodules", "100644", "a"),
+            (".github/workflows/ci.yml", "100644", "b"),
+            ("git~2/x", "100644", "c"),
+            ("my.git/x", "100644", "d"),
+            (".gitignore", "120000", "e"),
+        ]);
+        assert_eq!(unsafe_path(&ok), None);
+    }
+
     #[tokio::test]
     async fn a_tree_reaching_outside_is_not_applied() {
         let dir = worked_example().await;
@@ -1255,6 +1943,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pack_takes_any_number_of_ids_and_only_ids() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let tree = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let head = String::from_utf8(git(p, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
+        // 30 000 ids: past what a command line holds on macOS.
+        let many: Vec<&str> = std::iter::repeat_n(head.trim(), 30_000).collect();
+        let pack = pack_objects(p, &[&tree], &many).await.unwrap();
+        assert!(!pack.is_empty());
+        // An option where an id goes is refused, not passed to git.
+        assert!(pack_objects(p, &[&tree], &["--all"]).await.is_err());
+        assert!(pack_objects(p, &["--all"], &[head.trim()]).await.is_err());
+    }
+
+    #[tokio::test]
     async fn a_pack_carries_what_the_other_side_lacks() {
         let central = worked_example().await;
         let c = central.path();
@@ -1267,7 +1970,7 @@ mod tests {
         let mine = snapshot(&w, MAX_FILE).await.unwrap().tree;
         assert!(!exists(&w, &theirs).await);
 
-        let pack = pack_objects(c, &theirs, &[&mine]).await.unwrap();
+        let pack = pack_objects(c, &[&theirs], &[&mine]).await.unwrap();
         unpack(&w, &pack).await.unwrap();
         apply(&w, &mine, &theirs).await.unwrap();
         assert_eq!(
@@ -1284,18 +1987,244 @@ mod tests {
         let old = String::from_utf8(git(c, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
         git(c, &["commit", "-qam", "cart"]).await.unwrap();
         let new = String::from_utf8(git(c, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
-        let pack = pack_objects(c, new.trim(), &[old.trim()]).await.unwrap();
+        let pack = pack_objects(c, &[new.trim()], &[old.trim()]).await.unwrap();
         unpack(&w, &pack).await.unwrap();
         assert!(exists(&w, new.trim()).await);
 
         // Nothing new: nothing to send.
         assert!(
-            pack_objects(c, new.trim(), &[new.trim()])
+            pack_objects(c, &[new.trim()], &[new.trim()])
                 .await
                 .unwrap()
                 .is_empty()
         );
         unpack(&w, &[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_pack_with_a_tree_git_would_refuse_is_not_stored() {
+        let central = worked_example().await;
+        let c = central.path();
+        let copy = tempfile::tempdir().unwrap();
+        let w = copy.path().join("shop");
+        git(copy.path(), &["clone", "-q", c.to_str().unwrap(), "shop"])
+            .await
+            .unwrap();
+        let blob = String::from_utf8(git(c, &["rev-parse", "HEAD:run.sh"]).await.unwrap()).unwrap();
+        // A hostile central host's tree, with a `.git` entry that a checkout
+        // would write into the copy's repository.
+        let hooks = git_mktree(c, &format!("100755 blob {}\tpost-checkout\n", blob.trim())).await;
+        let dotgit = git_mktree(c, &format!("040000 tree {hooks}\thooks\n")).await;
+        let evil = git_mktree(c, &format!("040000 tree {dotgit}\t.git\n")).await;
+        let pack = pack_objects(c, &[&evil], &[]).await.unwrap();
+
+        let e = unpack(&w, &pack).await.unwrap_err();
+        assert!(matches!(e, UnpackError::Unsafe(_)), "{e}");
+        assert!(!exists(&w, &evil).await);
+
+        let dotdot = git_mktree(c, &format!("100644 blob {}\t..\n", blob.trim())).await;
+        let pack = pack_objects(c, &[&dotdot], &[]).await.unwrap();
+        let e = unpack(&w, &pack).await.unwrap_err();
+        assert!(matches!(e, UnpackError::Unsafe(_)), "{e}");
+        assert!(!exists(&w, &dotdot).await);
+    }
+
+    #[test]
+    fn a_url_loses_its_password_or_token_but_keeps_its_scheme_and_user() {
+        for (url, want) in [
+            (
+                "git@github.com:acme/shop.git",
+                "git@github.com:acme/shop.git",
+            ),
+            (
+                "https://alex:ghp_x@github.com/acme/shop.git",
+                "https://github.com/acme/shop.git",
+            ),
+            (
+                "ssh://git@github.com/acme/shop.git",
+                "ssh://git@github.com/acme/shop.git",
+            ),
+            (
+                "https://ghp_x@github.com/acme/shop.git",
+                "https://github.com/acme/shop.git",
+            ),
+            (
+                "ssh://git:secret@github.com:22/acme/shop.git",
+                "ssh://git@github.com:22/acme/shop.git",
+            ),
+            (
+                "https://github.com/acme/shop.git",
+                "https://github.com/acme/shop.git",
+            ),
+        ] {
+            assert_eq!(scrub_url(url), want, "{url}");
+        }
+    }
+
+    #[test]
+    fn only_https_and_ssh_origins_are_cloned() {
+        for url in [
+            "https://github.com/acme/shop.git",
+            "ssh://git@github.com/acme/shop.git",
+            "git@github.com:acme/shop.git",
+            "github.com:acme/shop.git",
+        ] {
+            assert!(clonable_url(url), "{url}");
+        }
+        for url in [
+            "file:///Users/alex/src/secret",
+            "/Users/alex/src/secret",
+            "./secret",
+            "git://github.com/acme/shop.git",
+            "http://github.com/acme/shop.git",
+            "ext::sh -c touch% /tmp/pwned",
+            "-uhelp",
+            "C:/repo",
+        ] {
+            assert!(!clonable_url(url), "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_clone_never_removes_a_folder_it_did_not_make() {
+        let dir = tempfile::tempdir().unwrap();
+        let there = dir.path().join("acme");
+        std::fs::create_dir_all(there.join("shop/repo")).unwrap();
+        std::fs::write(there.join("notes.txt"), "mine\n").unwrap();
+        let e = clone("https://git.invalid/acme.git", &there)
+            .await
+            .unwrap_err();
+        assert_eq!(e, format!("{} is in the way", there.display()));
+        assert_eq!(read(&there, "notes.txt").as_deref(), Some("mine\n"));
+        assert!(there.join("shop/repo").is_dir());
+
+        // A folder it makes for a clone that fails goes again.
+        let new = dir.path().join("fresh/repo");
+        assert!(clone("https://git.invalid/acme.git", &new).await.is_err());
+        assert!(!new.exists());
+    }
+
+    #[test]
+    fn a_failed_clone_says_why_in_one_line() {
+        // Captured from git 2.54 against github.com and a local path.
+        let github = "remote: Repository not found.\nfatal: repository 'https://github.com/1devstudio/no-such-repo-x60-check.git/' not found";
+        assert_eq!(clone_error(github), "Repository not found.");
+        let local = "fatal: '/tmp/missing.git' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+        assert_eq!(
+            clone_error(local),
+            "'/tmp/missing.git' does not appear to be a git repository"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_branch_checked_out_anywhere_is_found_the_main_checkout_too() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        assert_eq!(
+            checked_out(p, "main")
+                .await
+                .map(|d| std::fs::canonicalize(d).unwrap()),
+            Some(std::fs::canonicalize(p).unwrap())
+        );
+        let head = head(p).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let w = other.path().join("fix-cart");
+        add_worktree(p, &w, "fix-cart", &head).await.unwrap();
+        assert_eq!(
+            checked_out(p, "fix-cart")
+                .await
+                .map(|d| std::fs::canonicalize(d).unwrap()),
+            Some(std::fs::canonicalize(&w).unwrap())
+        );
+        assert_eq!(checked_out(p, "nowhere").await, None);
+    }
+
+    #[tokio::test]
+    async fn a_worktree_needs_a_branch_name_git_accepts_and_a_full_commit_id() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let head = head(p).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+        for (branch, commit) in [
+            ("-f", head.as_str()),
+            ("fix..cart", head.as_str()),
+            ("fix-cart", "HEAD"),
+            ("fix-cart", &head[..12]),
+            ("fix-cart", "--orphan"),
+        ] {
+            let e = add_worktree(p, &other.path().join("w"), branch, commit)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(e, WorktreeError::Invalid(_)),
+                "{branch} {commit}: {e:?}"
+            );
+        }
+        assert!(!other.path().join("w").exists());
+        assert!(
+            git(p, &["rev-parse", "--verify", "-q", "refs/heads/fix-cart"])
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_branch_already_here_moves_only_forward() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let base = head(p).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "theirs"])
+            .await
+            .unwrap();
+        let theirs = head(p).await.unwrap();
+        git(p, &["reset", "-q", "--soft", &base]).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+
+        // Behind: it moves up to their commit.
+        git(p, &["branch", "behind", &base]).await.unwrap();
+        add_worktree(p, &other.path().join("behind"), "behind", &theirs)
+            .await
+            .unwrap();
+        assert_eq!(rev(p, "behind").await, theirs);
+
+        // Its own commits: left alone.
+        git(p, &["branch", "mine", &base]).await.unwrap();
+        git(p, &["checkout", "-q", "mine"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "mine"])
+            .await
+            .unwrap();
+        let mine = head(p).await.unwrap();
+        git(p, &["checkout", "-q", "main"]).await.unwrap();
+        let e = add_worktree(p, &other.path().join("mine"), "mine", &theirs)
+            .await
+            .unwrap_err();
+        assert!(matches!(e, WorktreeError::Ahead), "{e:?}");
+        assert_eq!(rev(p, "mine").await, mine);
+        assert!(!other.path().join("mine").exists());
+    }
+
+    async fn rev(p: &Path, name: &str) -> String {
+        String::from_utf8(git(p, &["rev-parse", name]).await.unwrap())
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn only_the_objects_a_repository_has_are_present() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let head = String::from_utf8(git(p, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
+        let head = head.trim().to_string();
+        let missing = "0123456789abcdef0123456789abcdef01234567".to_string();
+        assert_eq!(
+            present(p, &[missing.clone(), head.clone(), "not-an-id".into()])
+                .await
+                .unwrap(),
+            vec![head]
+        );
+        assert!(present(p, &[missing]).await.unwrap().is_empty());
+        assert!(present(p, &[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1398,7 +2327,7 @@ mod tests {
         for i in 0..60 {
             std::fs::write(c.join("src/cart.ts"), format!("edit {i}\n")).unwrap();
             let next = snapshot(c, MAX_FILE).await.unwrap().tree;
-            unpack(&w, &pack_objects(c, &next, &[&have]).await.unwrap())
+            unpack(&w, &pack_objects(c, &[&next], &[&have]).await.unwrap())
                 .await
                 .unwrap();
             have = next;

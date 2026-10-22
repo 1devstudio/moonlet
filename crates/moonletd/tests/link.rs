@@ -565,6 +565,32 @@ async fn the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_device
 }
 
 #[tokio::test]
+async fn one_connection_links_one_worker() {
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut w = raw(&addr, &token, "moonletd-worker").await;
+    assert_eq!(
+        refused(
+            &ask(
+                &mut w,
+                1,
+                "worker.register",
+                registration(WORKER_ID, "Alex's MacBook Pro")
+            )
+            .await
+        ),
+        None
+    );
+    let other = registration("5b0c7a3e-0d7e-4a51-8f1e-6c2b9a4d3e10", "Another");
+    assert_eq!(
+        refused(&ask(&mut w, 2, "worker.register", other).await).as_deref(),
+        Some("forbidden")
+    );
+    let list: Vec<Value> = central.call("worker.list", json!({})).await;
+    assert_eq!(list.len(), 1, "{list:?}");
+}
+
+#[tokio::test]
 async fn a_worker_id_links_once_and_names_may_repeat() {
     let (central, addr) = central().await;
     let token = pair(&central, &addr, "Alex's MacBook Pro").await;
@@ -660,6 +686,34 @@ async fn only_the_macs_app_sets_or_retries_the_link() {
     // Nothing changed.
     let info: Value = central.call("link.get", json!({})).await;
     assert_eq!(info["central"], Value::Null, "{info}");
+}
+
+#[tokio::test]
+async fn only_the_macs_app_starts_or_retries_a_copy() {
+    // X60: a copy clones and writes on this Mac, so a paired device or an
+    // agent's CLI may only list copies.
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut device = raw(&addr, &token, "moonlet-app").await;
+    let start = json!({ "session": "s1" });
+    assert_eq!(
+        refused(&ask(&mut device, 1, "sync.start", start.clone()).await).as_deref(),
+        Some("forbidden")
+    );
+    assert_eq!(
+        refused(&ask(&mut device, 2, "sync.retry", json!({ "copy": "c1" })).await).as_deref(),
+        Some("forbidden")
+    );
+    let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
+    let e = cli.request::<_, Value>("sync.start", start).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    let e = cli
+        .request::<_, Value>("sync.retry", json!({ "copy": "c1" }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    let copies: Value = cli.request("sync.list", json!({})).await.unwrap();
+    assert_eq!(copies, json!([]));
 }
 
 #[tokio::test]
@@ -781,4 +835,75 @@ async fn a_retry_leaves_a_working_link_alone() {
     let now = workers(&central).await;
     assert_eq!(now.len(), 1);
     assert_eq!(now[0].connected_since, since, "the link was made again");
+}
+
+/// Reads until the daemon ends the connection; returns the error it gave.
+async fn ended(s: &mut tokio::net::TcpStream) -> Option<String> {
+    use moonlet_proto::read_frame;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut why = None;
+    while Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_secs(5), read_frame(s)).await {
+            Ok(Ok(Some(Frame::Json(Message::Response { id: 0, error: Some(e), .. })))) => {
+                why = Some(e.message)
+            }
+            Ok(Ok(Some(_))) => {}
+            Ok(Ok(None)) | Ok(Err(_)) => return why,
+            Err(_) => panic!("the connection stayed open"),
+        }
+    }
+    panic!("the connection stayed open");
+}
+
+#[tokio::test]
+async fn only_a_worker_sends_packs() {
+    use moonlet_proto::write_frame;
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let pack = Frame::Pack {
+        transfer: 1,
+        data: b"PACK".to_vec(),
+    };
+
+    // A paired device over the tailnet, as a phone or the app.
+    for client in ["moonlet-mobile", "moonlet-app"] {
+        let mut s = raw(&addr, &token, client).await;
+        write_frame(&mut s, &pack).await.unwrap();
+        assert_eq!(
+            ended(&mut s).await.as_deref(),
+            Some("only a worker sends packs"),
+            "{client}"
+        );
+    }
+
+    // The app and the CLI on the Mac itself.
+    for client in ["moonlet-app", "moonlet-cli"] {
+        let c = Client::connect(&central.socket, client).await.unwrap();
+        let mut s = c.into_stream();
+        write_frame(&mut s, &pack).await.unwrap();
+        let mut buf = Vec::new();
+        let n = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf),
+        )
+        .await
+        .expect("the connection stayed open");
+        assert!(n.is_ok(), "{client}");
+    }
+
+    // A worker may.
+    let mut w = raw(&addr, &token, "moonletd-worker").await;
+    write_frame(&mut w, &pack).await.unwrap();
+    assert_eq!(
+        refused(
+            &ask(
+                &mut w,
+                1,
+                "worker.register",
+                registration(WORKER_ID, "Alex's MacBook Pro")
+            )
+            .await
+        ),
+        None
+    );
 }

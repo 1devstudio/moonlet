@@ -84,6 +84,20 @@ impl Workers {
         worker: WorkerRegister,
     ) -> Result<(), RpcError> {
         let id = worker.id.clone();
+        // One worker per connection: a second id would leave the first
+        // listed against a connection that no longer speaks for it.
+        if self
+            .list
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(other, e)| e.conn.id == conn.id && *other != id)
+        {
+            return Err(RpcError::new(
+                "forbidden",
+                "this connection already links another worker",
+            ));
+        }
         {
             let mut owners = self.owners.lock().unwrap();
             let owner = owners.entry(id.clone()).or_insert_with(|| device.to_string());
@@ -127,6 +141,21 @@ impl Workers {
         if removed {
             self.changed();
         }
+    }
+
+    /// The connection of the linked worker `id` (X60).
+    pub fn conn(&self, id: &str) -> Option<Arc<Conn>> {
+        self.list.lock().unwrap().get(id).map(|e| e.conn.clone())
+    }
+
+    /// The id of the worker linked on connection `conn` (X60).
+    pub fn worker_on(&self, conn: u64) -> Option<String> {
+        self.list
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, e)| e.conn.id == conn)
+            .map(|(id, _)| id.clone())
     }
 
     /// Whether `id` is still listed on `conn`.

@@ -76,13 +76,31 @@ pub(crate) async fn run_raw_env(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("cannot run {program}"))?;
-    if let (Some(data), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        pipe.write_all(data).await?;
-        drop(pipe);
-    }
-    let out = tokio::time::timeout(timeout, child.wait_with_output())
-        .await
-        .with_context(|| format!("{program} {} timed out", args.join(" ")))??;
+    // The input is written beside reading the output, not before it: a
+    // program that answers as it reads would otherwise fill its output
+    // pipe and wait on us while we wait on it. Both count to the timeout.
+    let writer = match (stdin, child.stdin.take()) {
+        (Some(data), Some(mut pipe)) => {
+            let data = data.to_vec();
+            Some(tokio::spawn(async move {
+                let written = pipe.write_all(&data).await;
+                drop(pipe);
+                written
+            }))
+        }
+        _ => None,
+    };
+    let out = tokio::time::timeout(timeout, async {
+        let out = child.wait_with_output().await?;
+        if let Some(writer) = writer {
+            // A program that exits before reading all of its input closes
+            // the pipe; its exit status says what went wrong.
+            let _ = writer.await;
+        }
+        anyhow::Ok(out)
+    })
+    .await
+    .with_context(|| format!("{program} {} timed out", args.join(" ")))??;
     Ok(Output {
         status: out.status.code().unwrap_or(-1),
         stdout: out.stdout,
@@ -1549,6 +1567,34 @@ fn parse_stack(v: &serde_json::Value, current: u64) -> Option<PrStack> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_long_input_and_a_long_answer_never_wait_on_each_other() {
+        // `cat-file --batch-check` answers each line as it reads it: with
+        // input and output both past a pipe's buffer, writing all of the
+        // input before reading any output would wait forever.
+        let dir = repo().await;
+        let p = dir.path();
+        std::fs::write(p.join("f"), "x").unwrap();
+        let blob = git_text(p, &["hash-object", "-w", "f"]).await.unwrap();
+        let input: Vec<u8> = format!("{blob}\n").repeat(20_000).into_bytes();
+        let out = tokio::time::timeout(
+            Duration::from_secs(30),
+            run_raw_env(
+                "git",
+                p,
+                &["cat-file", "--batch-check"],
+                &[],
+                Some(&input),
+                Duration::from_secs(20),
+            ),
+        )
+        .await
+        .expect("git and its input waited on each other")
+        .unwrap();
+        assert_eq!(out.status, 0);
+        assert_eq!(out.stdout.iter().filter(|b| **b == b'\n').count(), 20_000);
+    }
 
     pub async fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
