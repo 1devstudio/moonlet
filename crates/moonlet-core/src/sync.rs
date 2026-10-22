@@ -18,6 +18,9 @@ pub struct Snapshot {
     pub tree: String,
     /// Paths left out for being over the size limit, sorted.
     pub too_big: Vec<String>,
+    /// Paths whose names are not text (only Linux allows them), left out:
+    /// carried as text they would be renamed. Shown with U+FFFD, sorted.
+    pub bad_names: Vec<String>,
 }
 
 /// How long one git call may take: snapshots of big worktrees and packs
@@ -191,11 +194,20 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     if has_head {
         let cached = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
         let cached: std::collections::HashSet<String> = split_z(&cached).collect();
-        let missing: Vec<&String> = head
+        let mut missing: Vec<&String> = head
             .iter()
             .filter(|p| !cached.contains(*p) && !too_big.contains(p))
             .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
             .collect();
+        // Held to the size limit like the rest.
+        let (big, fits): (Vec<&String>, Vec<&String>) = missing.into_iter().partition(|p| {
+            std::fs::symlink_metadata(worktree.join(p))
+                .is_ok_and(|m| m.is_file() && m.len() > max_file)
+        });
+        missing = fits;
+        too_big.extend(big.into_iter().cloned());
+        too_big.sort();
+        too_big.dedup();
         if !missing.is_empty() {
             let specs = pathspecs(missing.iter().map(|p| format!(":(literal){p}")));
             git_env(
@@ -207,10 +219,33 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
             .await?;
         }
     }
+    // Names that are not text leave the snapshot, wherever they came from.
+    let listed = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
+    let bad = bad_names_z(&listed);
+    if !bad.is_empty() {
+        let mut stdin = Vec::new();
+        for name in &bad {
+            stdin.extend_from_slice(name);
+            stdin.push(0);
+        }
+        git_env(
+            worktree,
+            &env,
+            &["update-index", "-z", "--force-remove", "--stdin"],
+            Some(&stdin),
+        )
+        .await?;
+    }
+    let mut bad_names: Vec<String> = bad
+        .iter()
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .collect();
+    bad_names.sort();
     let tree = git_env(worktree, &env, &["write-tree"], None).await?;
     Ok(Snapshot {
         tree: String::from_utf8_lossy(&tree).trim().to_string(),
         too_big,
+        bad_names,
     })
 }
 
@@ -259,7 +294,7 @@ pub fn reconcile(base: &Files, central: &Files, worker: &Files) -> Reconciled<Fi
         let r = merge(&paths, &differs, base, central, worker);
         let clashes: Vec<String> = [&r.base, &r.central, &r.worker]
             .into_iter()
-            .flat_map(folder_clashes)
+            .flat_map(|t| folder_clashes(t).into_iter().chain(case_clashes(t, base)))
             .filter(|p| !differs.contains(p))
             .collect();
         if clashes.is_empty() {
@@ -301,6 +336,48 @@ fn merge(
     r
 }
 
+/// Paths of `files` new against `base` that a Mac's disk would fold into
+/// another path: `README.md` beside `Readme.md`, or `docs/y.md` beside
+/// `Docs/x.md`. One would overwrite the other, so they differ instead.
+/// Names that already sat side by side in the base are left alone.
+fn case_clashes(files: &Files, base: &Files) -> Vec<String> {
+    use std::collections::{BTreeMap, BTreeSet};
+    // Every path and folder, by its lowercase form.
+    let mut spellings: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    for p in files.keys() {
+        let mut end = 0;
+        for part in p.split('/') {
+            end += part.len();
+            let prefix = &p[..end];
+            spellings
+                .entry(prefix.to_lowercase())
+                .or_default()
+                .insert(prefix);
+            end += 1;
+        }
+    }
+    let folded: BTreeSet<&str> = spellings
+        .values()
+        .filter(|s| s.len() > 1)
+        .flatten()
+        .copied()
+        .collect();
+    files
+        .keys()
+        .filter(|p| !base.contains_key(*p))
+        .filter(|p| {
+            let mut end = 0;
+            p.split('/').any(|part| {
+                end += part.len();
+                let hit = folded.contains(&p[..end]);
+                end += 1;
+                hit
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 /// Paths that are both a file and a folder's prefix in `files`: `a` and
 /// `a/x`, say. Both are returned.
 fn folder_clashes(files: &Files) -> Vec<String> {
@@ -335,7 +412,13 @@ pub async fn read_files(repo: &Path, tree: &str) -> Result<Files> {
 /// The files of `git ls-tree -r -z` output.
 fn parse_ls_tree(out: &[u8]) -> Result<Files> {
     let mut files = Files::new();
-    for line in split_z(out) {
+    for line in out.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+        let Ok(line) = std::str::from_utf8(line) else {
+            bail!(
+                "a file name that is not text: {}",
+                String::from_utf8_lossy(line)
+            )
+        };
         // `<mode> <type> <oid>\t<path>`
         let Some((meta, path)) = line.split_once('\t') else {
             bail!("unexpected ls-tree line {line:?}")
@@ -550,10 +633,20 @@ pub async fn unpack(repo: &Path, pack: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// The NUL-separated names of `out` that are text. Names that aren't are
+/// skipped, never carried with a replacement character: see [`bad_names_z`].
 fn split_z(out: &[u8]) -> impl Iterator<Item = String> + '_ {
     out.split(|b| *b == 0)
         .filter(|s| !s.is_empty())
-        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .filter_map(|s| String::from_utf8(s.to_vec()).ok())
+}
+
+/// The NUL-separated names of `out` that are not text, as they are.
+fn bad_names_z(out: &[u8]) -> Vec<Vec<u8>> {
+    out.split(|b| *b == 0)
+        .filter(|s| !s.is_empty() && std::str::from_utf8(s).is_err())
+        .map(<[u8]>::to_vec)
+        .collect()
 }
 
 #[cfg(test)]
@@ -762,6 +855,40 @@ mod tests {
         assert_eq!(show(p, &r.central, "grows.bin").await, small);
     }
 
+    #[tokio::test]
+    async fn a_name_that_is_not_text_stays_out_of_the_snapshot() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = worked_example().await;
+        let p = dir.path();
+        let name = std::ffi::OsStr::from_bytes(b"bad\xff.txt");
+        if std::fs::write(p.join(name), "x\n").is_err() {
+            // macOS file systems refuse such names; only Linux has them.
+            return;
+        }
+        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        assert_eq!(snap.bad_names, ["bad\u{fffd}.txt"]);
+        let raw = git(p, &["ls-tree", "-r", "-z", "--name-only", &snap.tree])
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(raw.as_ref()).contains("bad"));
+    }
+
+    #[tokio::test]
+    async fn a_file_committed_past_its_ignore_rule_is_still_held_to_the_size_limit() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let first = snapshot(p, 1024).await.unwrap();
+        std::fs::write(p.join("vendor/blob.bin"), vec![1u8; 10]).unwrap();
+        git(p, &["add", "-f", "vendor/blob.bin"]).await.unwrap();
+        git(p, &["commit", "-q", "-m", "blob"]).await.unwrap();
+        // Grown past the limit before the next snapshot.
+        std::fs::write(p.join("vendor/blob.bin"), vec![1u8; 2048]).unwrap();
+        let snap = snapshot(p, 1024).await.unwrap();
+        assert_eq!(snap.too_big, ["vendor/blob.bin"]);
+        assert!(!paths(listing(p, &snap.tree).await).contains(&"vendor/blob.bin".to_string()));
+        let _ = first;
+    }
+
     fn files(rows: &[(&str, &str, &str)]) -> Files {
         rows.iter()
             .map(|(p, mode, oid)| {
@@ -874,6 +1001,31 @@ mod tests {
         let r = reconcile(&base, &worker, &worker);
         assert!(r.differs.is_empty());
         assert_eq!(r.base, worker);
+    }
+
+    #[test]
+    fn names_that_differ_only_in_case_differ_when_new() {
+        // A Mac's disk keeps one of the two, so one would overwrite the other.
+        let base = files(&[("src/a.ts", "100644", "a")]);
+        let central = files(&[("src/a.ts", "100644", "a"), ("Readme.md", "100644", "c")]);
+        let worker = files(&[("src/a.ts", "100644", "a"), ("README.md", "100644", "w")]);
+        let r = reconcile(&base, &central, &worker);
+        assert_eq!(r.differs, ["README.md", "Readme.md"]);
+        assert_eq!(
+            r.central,
+            files(&[("Readme.md", "100644", "c"), ("src/a.ts", "100644", "a")])
+        );
+        assert_eq!(
+            r.worker,
+            files(&[("README.md", "100644", "w"), ("src/a.ts", "100644", "a")])
+        );
+        assert_eq!(r.base, files(&[("src/a.ts", "100644", "a")]));
+
+        // Folders too: `Docs/` on one side, `docs/` on the other.
+        let central = files(&[("src/a.ts", "100644", "a"), ("Docs/x.md", "100644", "c")]);
+        let worker = files(&[("src/a.ts", "100644", "a"), ("docs/y.md", "100644", "w")]);
+        let r = reconcile(&base, &central, &worker);
+        assert_eq!(r.differs, ["Docs/x.md", "docs/y.md"]);
     }
 
     #[test]
@@ -1200,6 +1352,14 @@ mod tests {
             ])
         );
         assert!(parse_ls_tree(b"100644 blob\x00").is_err());
+    }
+
+    #[test]
+    fn a_tree_naming_a_file_in_bytes_that_are_not_text_is_refused() {
+        // A Linux machine allows such names; carrying them as text would
+        // rename the file, or fold two names into one.
+        let out = b"100644 blob 587be6b4c3f93f93c489c0111bba5596147a26cb\tbad\xff\x00";
+        assert!(parse_ls_tree(out).is_err());
     }
 
     #[test]

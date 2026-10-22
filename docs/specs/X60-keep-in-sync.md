@@ -87,8 +87,9 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   A file that an earlier snapshot took in leaves a snapshot only once it is gone from disk. One that becomes ignored, and that HEAD doesn't track, stays at the version the last snapshot took while it exists: `.git/info/exclude` doesn't sync, so a file ignored on one side only would otherwise read as deleted on the other, and freezing it keeps anything written to it after it was ignored on its own machine. Files HEAD tracks are always in and follow their edits, also ignored ones committed later. (`a_snapshot_follows_gits_rules_without_global_excludes`, `a_file_ignored_after_a_snapshot_stays_at_its_last_version`, `a_file_head_tracks_is_in_even_when_force_added_later`, `thousands_of_paths_fit_whatever_the_command_line_allows`)
 
 - [ ] The staging area does not sync. When a side receives commits that move its branch, its index is reset to the new `HEAD` and its files are left alone (as `git reset --mixed`), so anything staged there is unstaged.
-- [ ] A file over 100 MiB stays on its own machine. The copy's popover lists it: "big.bin is over 100 MB and stays on each machine." The rest syncs. A file that grows past the limit keeps the version last synced, so the other side never reads it as deleted. (`a_file_over_the_limit_stays_on_its_machine_and_never_reads_as_deleted`)
+- [ ] A file over 100 MiB stays on its own machine. The copy's popover lists it: "big.bin is over 100 MB and stays on each machine." The rest syncs. A file that grows past the limit keeps the version last synced, so the other side never reads it as deleted. The limit holds for files HEAD tracks that are committed past an ignore rule too. (`a_file_over_the_limit_stays_on_its_machine_and_never_reads_as_deleted`, `a_file_committed_past_its_ignore_rule_is_still_held_to_the_size_limit`)
 - [ ] Submodule entries sync as commit ids. Submodule contents don't.
+- [x] A file name that is not text (only Linux allows one) stays out of the snapshot, and the snapshot lists it apart: carried as text it would be renamed, or folded into another name. A tree from the other side naming one is refused. (`a_name_that_is_not_text_stays_out_of_the_snapshot`, `a_tree_naming_a_file_in_bytes_that_are_not_text_is_refused`)
 
 ### Keeping it in sync
 
@@ -108,11 +109,12 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   | none | `a` | none | `a` on both |
   | none | `a` | `a` | `a` on both |
   | none | `a` | `b` | **differs** |
+  | none (`Readme.md`) | `a` | none, but `README.md` is `b` | both names **differ**: a Mac's disk holds only one of them |
   | `a` | `b` | deleted | **differs** |
   | `a` | `a` | deleted | deleted on both |
   | `a` | deleted | deleted | deleted on both |
 
-  A file on one side where the result would also have a folder of that name, such as `a` from studio-mini and `a/x` from this Mac, differs too: one tree can't hold both. (`reconciling_follows_the_worked_examples`, `a_file_against_a_folder_of_the_same_name_differs`, `reconciling_trees_writes_each_sides_tree`)
+  A file on one side where the result would also have a folder of that name, such as `a` from studio-mini and `a/x` from this Mac, differs too: one tree can't hold both. So do new names that differ only in case, files or folders (`Readme.md` from studio-mini and `README.md` from this Mac, or `Docs/x.md` and `docs/y.md`): a Mac's disk would keep one and overwrite it with the other. Names that already sat side by side in the base are left alone. (`names_that_differ_only_in_case_differ_when_new`) (`reconciling_follows_the_worked_examples`, `a_file_against_a_folder_of_the_same_name_differs`, `reconciling_trees_writes_each_sides_tree`)
 
 - [ ] A path that differs stays different, and the other paths keep syncing. When one side's file later changes to match the other's, the path no longer differs.
 - [ ] When a path starts to differ, the app shows a desktop notification: "fix-cart: src/cart.ts changed on both studio-mini and this Mac. Pick a version." Several paths that start to differ in one reconcile give one notification: "fix-cart: 3 files changed on both studio-mini and this Mac. Pick a version for each." Clicking it opens the session with the mark's popover. A path that still differs is not notified again.
