@@ -3,6 +3,7 @@
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { $, browser, expect } from "@wdio/globals";
 import type { ChainablePromiseElement } from "webdriverio";
@@ -135,6 +136,39 @@ export function tearDown(w: World) {
 export function rpc<T = unknown>(w: World, method: string, params: object): T {
   const out = execFileSync(join(BIN_DIR, "moonlet"), ["rpc", method, JSON.stringify(params)], { env: w.env, stdio: "pipe" });
   return JSON.parse(out.toString() || "null") as T;
+}
+
+/** One JSON frame of the daemon's protocol: `[u32 len][u8 kind 1][json]`. */
+export function jsonFrame(msg: object): Buffer {
+  const json = Buffer.from(JSON.stringify(msg));
+  const head = Buffer.alloc(5);
+  head.writeUInt32BE(json.length + 1, 0);
+  head.writeUInt8(1, 4);
+  return Buffer.concat([head, json]);
+}
+
+/** One request to a second scratch daemon over its socket `sock`, as any
+ *  client may send it. `env` points `moonletd status` at that daemon. */
+export function socketRpc<T>(sock: string, env: NodeJS.ProcessEnv, method: string, params: object = {}): Promise<T> {
+  const { protocol } = JSON.parse(execFileSync(join(BIN_DIR, "moonletd"), ["status"], { env }).toString()) as { protocol: number };
+  return new Promise((resolve, reject) => {
+    const s = connect(sock, () => s.write(Buffer.concat([jsonFrame({ t: "hello", protocol, client: "e2e" }), jsonFrame({ t: "request", id: 1, method, params })])));
+    let buf = Buffer.alloc(0);
+    s.on("data", (d) => {
+      buf = Buffer.concat([buf, d]);
+      while (buf.length >= 4 && buf.length >= 4 + buf.readUInt32BE(0)) {
+        const len = buf.readUInt32BE(0);
+        const msg = buf[4] === 1 ? JSON.parse(buf.subarray(5, 4 + len).toString()) : null;
+        buf = buf.subarray(4 + len);
+        if (msg?.t === "response" && msg.id === 1) {
+          s.destroy();
+          if (msg.error) reject(new Error(msg.error.message));
+          else resolve(msg.result as T);
+        }
+      }
+    });
+    s.on("error", reject);
+  });
 }
 
 export const projectId = (w: World) => rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!.id;
