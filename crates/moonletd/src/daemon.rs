@@ -519,8 +519,12 @@ impl Daemon {
             // at a host of its choosing. A paired Mac may, as it can already
             // run commands here (X61), but never hands over a token.
             m::LINK_SET => {
-                self.link_managers_only(conn, p.get("central").is_some())?;
+                // Checked before the params are read, so a phone learns
+                // nothing from them, and again on what was read: serde also
+                // takes the params as an array, which has no "central" key.
+                self.link_managers_only(conn, false)?;
                 let r: m::LinkSet = params(p)?;
+                self.link_managers_only(conn, r.central.is_some())?;
                 ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
             }
             m::LINK_RETRY => {
