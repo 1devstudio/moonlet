@@ -88,6 +88,9 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
 pub struct Conn {
     pub id: ClientId,
     pub tx: ClientTx,
+    /// Frames that go out ahead of everything queued on `tx`: pings, which
+    /// must not wait behind a pack (X60).
+    urgent: mpsc::UnboundedSender<Frame>,
     pub client: String,
     /// The paired phone's device id on a phone connection (X39).
     pub phone: Option<String>,
@@ -108,11 +111,18 @@ impl Conn {
         let id = self.next_request.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, tx);
-        let sent = self.tx.send(Frame::Json(Message::Request {
+        let frame = Frame::Json(Message::Request {
             id,
             method: method.into(),
             params,
-        }));
+        });
+        // A ping asks whether the worker is there: it must not wait behind a
+        // pack, or a big one on a slow link would drop the worker (X60).
+        let sent = if method == moonlet_proto::methods::WORKER_PING {
+            self.urgent.send(frame).is_ok()
+        } else {
+            self.tx.send(frame)
+        };
         if !sent {
             self.pending.lock().unwrap().remove(&id);
             return Err(RpcError::new("disconnected", "connection closed"));
@@ -177,7 +187,8 @@ where
 {
     let (raw_tx, rx) = mpsc::unbounded_channel::<Frame>();
     let tx = ClientTx::new(raw_tx);
-    let writer_task = tokio::spawn(write_loop(writer, rx, tx.counter()));
+    let (urgent, urgent_rx) = mpsc::unbounded_channel::<Frame>();
+    let writer_task = tokio::spawn(write_loop(writer, urgent_rx, rx, tx.counter()));
 
     let client = match read_frame(&mut reader).await? {
         Some(Frame::Json(Message::Hello { protocol, client })) => {
@@ -219,6 +230,7 @@ where
     let conn = Arc::new(Conn {
         id: daemon.terminals.new_client_id(),
         tx: tx.clone(),
+        urgent,
         client,
         phone,
         pending: Mutex::new(HashMap::new()),
@@ -365,18 +377,45 @@ fn push_frame(buf: &mut Vec<u8>, frame: Frame) {
 }
 
 /// Writes queued frames, coalescing whatever is already queued into one
-/// syscall so bursts of PTY output cost one write.
+/// syscall so bursts of PTY output cost one write. `urgent` frames go out
+/// first, and between any two pack chunks (each up to 1 MiB) on `rx`.
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut writer: W,
+    mut urgent: mpsc::UnboundedReceiver<Frame>,
     mut rx: mpsc::UnboundedReceiver<Frame>,
     queued: Arc<AtomicUsize>,
 ) {
     let mut buf = Vec::with_capacity(64 * 1024);
-    while let Some(frame) = rx.recv().await {
+    let mut urgent_open = true;
+    loop {
         buf.clear();
-        dequeued(&queued, &frame);
-        push_frame(&mut buf, frame);
+        while let Ok(f) = urgent.try_recv() {
+            push_frame(&mut buf, f);
+        }
+        if buf.is_empty() {
+            tokio::select! {
+                biased;
+                f = urgent.recv(), if urgent_open => match f {
+                    Some(f) => push_frame(&mut buf, f),
+                    None => {
+                        urgent_open = false;
+                        continue;
+                    }
+                },
+                f = rx.recv() => match f {
+                    Some(f) => {
+                        dequeued(&queued, &f);
+                        push_frame(&mut buf, f);
+                    }
+                    None => return,
+                },
+            }
+        }
         while buf.len() < 256 * 1024 {
+            if let Ok(f) = urgent.try_recv() {
+                push_frame(&mut buf, f);
+                continue;
+            }
             match rx.try_recv() {
                 Ok(f) => {
                     dequeued(&queued, &f);
@@ -391,5 +430,45 @@ async fn write_loop<W: AsyncWrite + Unpin>(
         if writer.flush().await.is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What went out, in order: pings, pack chunks and the pack's end.
+    async fn written(mut out: tokio::io::DuplexStream) -> Vec<&'static str> {
+        let mut order = Vec::new();
+        while let Some(f) = read_frame(&mut out).await.unwrap() {
+            order.push(match f {
+                Frame::Pack { data, .. } if data.is_empty() => "end",
+                Frame::Pack { .. } => "chunk",
+                Frame::Json(Message::Request { .. }) => "ping",
+                _ => "other",
+            });
+        }
+        order
+    }
+
+    #[tokio::test]
+    async fn a_ping_never_waits_behind_a_pack_queued_before_it() {
+        // X60: a 3 MiB pack to a worker, then the central host's ping.
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (urgent_tx, urgent) = mpsc::unbounded_channel();
+        for f in moonlet_proto::pack_frames(7, &vec![0u8; 3 * 1024 * 1024]) {
+            tx.send(f).unwrap();
+        }
+        urgent_tx
+            .send(Frame::Json(Message::Request {
+                id: 1,
+                method: moonlet_proto::methods::WORKER_PING.into(),
+                params: serde_json::json!({}),
+            }))
+            .unwrap();
+        drop((tx, urgent_tx));
+        let (ours, theirs) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(write_loop(ours, urgent, rx, Arc::new(AtomicUsize::new(0))));
+        assert_eq!(written(theirs).await, ["ping", "chunk", "chunk", "chunk", "end"]);
     }
 }

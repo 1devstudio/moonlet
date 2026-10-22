@@ -205,7 +205,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 **Packs:**
 
 - A new frame kind 4, `Pack`, with payload `[u32 BE transfer id][bytes]`, carries git pack data. The JSON field `pack` names a transfer id, or is `null` when no objects are needed.
-- Chunks are at most 1 MiB, so a large pack never holds up terminal output on the same connection. An empty chunk ends the transfer.
+- Chunks are at most 1 MiB, so a large pack never holds up terminal output on the same connection. An empty chunk ends the transfer. A `worker.ping` and its reply go out ahead of queued chunks, so a large pack on a slow link never makes the central host drop the worker (X41's 3 missed pings). (`a_ping_never_waits_behind_a_pack_queued_before_it`, `a_pings_reply_never_waits_behind_a_pack_queued_before_it`)
 - Only a worker's daemon may send packs; any other connection that sends one is closed. A pack is at most 1 GiB, at most 1 GiB waits at once on one connection, in at most 16 transfers, and a pack nobody takes, or one whose next chunk doesn't come, is dropped after 60 s. Going over a limit, or sending a chunk for a pack already whole, ends the connection.
 - A pack holds only the objects the other side's base lacks (`git rev-list --objects <new> --not <base>`).
 
