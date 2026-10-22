@@ -13,7 +13,7 @@ describe("afterCheck", () => {
     expect(afterCheck({ phase: "idle" }, { found: null }, AUTO)).toEqual({ state: { phase: "current" }, notice: null, error: null });
   });
 
-  it("announces a version once: the six-hour check finding it again stays quiet", () => {
+  it("announces a version once: the hourly check finding it again stays quiet", () => {
     expect(afterCheck({ phase: "available", version: "0.1.15" }, { found: "0.1.15" }, AUTO)).toEqual({ state: { phase: "available", version: "0.1.15" }, notice: null, error: null });
   });
 
