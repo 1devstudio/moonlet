@@ -721,8 +721,10 @@ pub async fn pack_objects(repo: &Path, new: &[&str], not: &[&str]) -> Result<Vec
         revs.push_str(id);
         revs.push('\n');
     }
-    revs.push_str("--not\n");
+    // `^<id>`, not a `--not` line: git 2.55 refuses options in --stdin
+    // mode ("options not supported in --stdin mode").
     for id in not {
+        revs.push('^');
         revs.push_str(id);
         revs.push('\n');
     }
