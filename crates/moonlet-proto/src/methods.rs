@@ -207,6 +207,9 @@ pub const LINK_GET: &str = "link.get";
 pub const LINK_SET: &str = "link.set";
 /// Retries a link that waits for the user (`needs_update`, `error`).
 pub const LINK_RETRY: &str = "link.retry";
+/// Pairs this machine with a central host using its pairing code, and
+/// makes it the central host (X61): [`LinkPair`] → [`LinkInfo`].
+pub const LINK_PAIR: &str = "link.pair";
 /// A worker introduces itself to its central host: [`WorkerRegister`].
 pub const WORKER_REGISTER: &str = "worker.register";
 /// The central host's linked workers: [`WorkerInfo`]s.
@@ -1240,6 +1243,14 @@ pub struct LinkCentral {
 pub struct LinkCentralInfo {
     pub name: String,
     pub addrs: Vec<String>,
+}
+
+/// `link.pair` params: the central host to pair with, and a pairing code
+/// from it. The token the pairing gives stays on this machine.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LinkPair {
+    pub central: LinkCentralInfo,
+    pub code: String,
 }
 
 /// This machine as a worker. `id` never changes once made.

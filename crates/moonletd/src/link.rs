@@ -17,7 +17,7 @@ use moonlet_core::session::SessionManager;
 use moonlet_link::tailnet::TailnetConnector;
 use moonlet_link::{BoxFuture, Events, Host, HostInfo, HostOptions, HostStatus, Requests};
 use moonlet_proto::methods::{
-    self as m, LinkCentral, LinkCentralInfo, LinkInfo, LinkSet, LinkState, LinkWorker,
+    self as m, DeviceKind, LinkCentral, LinkCentralInfo, LinkInfo, LinkPair, LinkSet, LinkState, LinkWorker,
     WorkerProject, WorkerRegister,
 };
 use moonlet_proto::{Message, RpcError};
@@ -147,11 +147,20 @@ fn check_name(name: &str) -> Result<(), RpcError> {
 }
 
 fn check_central(c: &LinkCentral, own: &[IpAddr]) -> Result<(), RpcError> {
-    check_name(&c.name)?;
-    if c.addrs.is_empty() {
+    check_target(&c.name, &c.addrs, own)?;
+    if c.token.len() != 64 || !c.token.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(invalid("the token is not 64 hex characters"));
+    }
+    Ok(())
+}
+
+/// The central host's name and addresses, which are never this machine's.
+fn check_target(name: &str, addrs: &[String], own: &[IpAddr]) -> Result<(), RpcError> {
+    check_name(name)?;
+    if addrs.is_empty() {
         return Err(invalid("the central host has no address"));
     }
-    for a in &c.addrs {
+    for a in addrs {
         let addr: SocketAddr = a
             .parse()
             .map_err(|_| invalid(format!("{a} is not an ip:port address")))?;
@@ -160,14 +169,21 @@ fn check_central(c: &LinkCentral, own: &[IpAddr]) -> Result<(), RpcError> {
             return Err(invalid("this Mac is the central host"));
         }
     }
-    if c.token.len() != 64 || !c.token.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err(invalid("the token is not 64 hex characters"));
-    }
     Ok(())
 }
 
 fn save(path: &Path, data: &LinkFile) -> anyhow::Result<()> {
     crate::mobile::write_private(path, &serde_json::to_vec_pretty(data)?)
+}
+
+/// Why pairing with the central host `name` failed, as the Add host dialog
+/// says it (X57).
+fn pair_error_text(name: &str, error: &anyhow::Error) -> String {
+    if error.downcast_ref::<moonlet_link::Refused>().is_some() {
+        format!("The code was not accepted. Start pairing again on {name}.")
+    } else {
+        format!("Cannot pair with {name}: {error:#}")
+    }
 }
 
 /// Whether the link should be open: a central host is set, and either this
@@ -281,6 +297,29 @@ impl WorkerLink {
         self.quiet.store(false, Ordering::SeqCst);
         self.changed();
         Ok(self.info())
+    }
+
+    /// `link.pair` (X61): pairs this machine with the central host using a
+    /// code from it, then makes it the central host with the new token.
+    /// Nothing is stored when the pairing fails.
+    pub async fn pair(self: &Arc<Self>, req: LinkPair, own: &[IpAddr]) -> Result<LinkInfo, RpcError> {
+        let LinkPair { central, code } = req;
+        check_target(&central.name, &central.addrs, own)?;
+        let device = self.store.lock().unwrap().worker().name.clone();
+        let paired = moonlet_link::tailnet::pair(&central.addrs, &code, &device, DeviceKind::Desktop)
+            .await
+            .map_err(|e| RpcError::new("pair_failed", pair_error_text(&central.name, &e)))?;
+        self.set(
+            LinkSet {
+                central: Some(Some(LinkCentral {
+                    name: central.name,
+                    addrs: central.addrs,
+                    token: paired.token,
+                })),
+                worker: None,
+            },
+            own,
+        )
     }
 
     /// Whether the link waits for the user: an update, or pairing again.
