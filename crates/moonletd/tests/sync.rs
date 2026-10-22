@@ -383,7 +383,7 @@ async fn a_copy_has_the_sessions_files_and_commit_under_copies_when_its_path_is_
         worker
             .home
             .path()
-            .join("clones/git.invalid/acme/shop/repo/.git")
+            .join("clones/git.invalid/4d1d250ce91ee1c7/.git")
             .is_dir()
     );
 }
@@ -533,7 +533,7 @@ async fn a_clone_that_fails_pauses_the_copy_with_gits_message() {
         !worker
             .home
             .path()
-            .join("clones/git.invalid/acme/shop/repo")
+            .join("clones/git.invalid/4d1d250ce91ee1c7")
             .exists()
     );
 

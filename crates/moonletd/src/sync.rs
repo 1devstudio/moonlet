@@ -517,9 +517,7 @@ impl LiveCopies {
         let mut base = fetched.tree.clone();
         let mut differs = Vec::new();
         let made_from = self.kept(&k.id).and_then(|kept| kept.made_from);
-        if made
-            && let Some(from) = made_from
-        {
+        if made && let Some(from) = made_from {
             let local = git_sync::snapshot(&path, MAX_FILE)
                 .await
                 .map_err(|e| Stop::Paused(format!("{e:#}")))?;
@@ -585,6 +583,12 @@ impl LiveCopies {
             )));
         };
         let dir = clone_dir(&self.home, origin);
+        if !clone_folder_ok(&self.home, &dir) {
+            return Err(Stop::Paused(format!(
+                "the clone folder for {origin} is not a plain folder under {}.",
+                tilde(&self.home.join("clones"))
+            )));
+        }
         if !dir.join(".git").exists() {
             git_sync::clone(url, &dir)
                 .await
@@ -1247,20 +1251,53 @@ fn free_folder(dir: PathBuf, taken: &[PathBuf]) -> PathBuf {
         .unwrap()
 }
 
-/// `clones/<origin>` under `home`, one folder per part of the normalized
-/// origin, with a port's `:` as `_`: `gitlab.example.com_8443/team/app`.
+/// `clones/<host>/<16 hex digits of the origin's SHA-256>` under `home`,
+/// with a port's `:` as `_`: one folder per origin, never inside another's
+/// whatever the central host names, `github.com/acme/shop/repo` included.
 fn clone_dir(home: &Path, origin: &str) -> PathBuf {
-    let base = home.join("clones");
-    // Each origin's clone is a `repo` folder of its own, so `host/a` and
-    // `host/a/b` never sit one inside the other.
-    let dir = origin
+    use sha2::{Digest, Sha256};
+    let host = origin
         .split('/')
-        .fold(base.clone(), |dir, part| {
-            dir.join(segment(&part.replace(':', "_")))
-        })
-        .join("repo");
+        .next()
+        .unwrap_or_default()
+        .replace(':', "_");
+    let hash: String = Sha256::digest(origin.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let base = home.join("clones");
+    let dir = base.join(segment(&host)).join(hash);
     debug_assert!(dir.starts_with(&base));
     dir
+}
+
+/// A clone folder found on disk may be used: it lies under `home`'s
+/// `clones` and no folder on the way there, itself included, is a link.
+fn clone_folder_ok(home: &Path, dir: &Path) -> bool {
+    let base = home.join("clones");
+    let Ok(rest) = dir.strip_prefix(&base) else {
+        return false;
+    };
+    let mut at = base.clone();
+    if at
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return false;
+    }
+    for part in rest.components() {
+        if !matches!(part, std::path::Component::Normal(_)) {
+            return false;
+        }
+        at.push(part);
+        match at.symlink_metadata() {
+            Ok(m) if m.file_type().is_symlink() => return false,
+            Ok(_) => {}
+            Err(_) => return true,
+        }
+    }
+    true
 }
 
 /// `name` as one folder name: itself when it is up to 100 of
@@ -1470,9 +1507,32 @@ mod tests {
     #[test]
     fn one_origins_clone_never_sits_inside_anothers() {
         let home = Path::new("/Users/alex/.moonlet");
-        let outer = clone_dir(home, "git.example.com/acme");
-        let inner = clone_dir(home, "git.example.com/acme/shop");
-        assert!(!inner.starts_with(&outer) && !outer.starts_with(&inner));
+        for (a, b) in [
+            ("git.example.com/acme", "git.example.com/acme/shop"),
+            ("github.com/acme/shop", "github.com/acme/shop/repo"),
+        ] {
+            let (a, b) = (clone_dir(home, a), clone_dir(home, b));
+            assert!(!a.starts_with(&b) && !b.starts_with(&a), "{a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn a_clone_folder_is_used_only_inside_clones_with_no_link_on_the_way() {
+        let home = tempfile::tempdir().unwrap();
+        let clones = home.path().join("clones");
+        let dir = clone_dir(home.path(), "github.com/acme/shop");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(clone_folder_ok(home.path(), &dir));
+        // A link among its folders could point the clone anywhere.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let linked = clones.join("gitlab.com");
+        std::os::unix::fs::symlink(elsewhere.path(), &linked).unwrap();
+        assert!(!clone_folder_ok(
+            home.path(),
+            &linked.join("0123456789abcdef")
+        ));
+        // Nor is anything outside clones.
+        assert!(!clone_folder_ok(home.path(), elsewhere.path()));
     }
 
     #[test]
@@ -1503,20 +1563,19 @@ mod tests {
             copies_dir(home, "studio-mini", "shop", "fix-cart"),
             Path::new("/Users/alex/.moonlet/copies/studio-mini/shop/fix-cart")
         );
+        // The host, then the first 16 hex digits of the origin's SHA-256
+        // (`printf %s <origin> | shasum -a 256`).
         assert_eq!(
             clone_dir(home, "github.com/acme/shop"),
-            Path::new("/Users/alex/.moonlet/clones/github.com/acme/shop/repo")
+            Path::new("/Users/alex/.moonlet/clones/github.com/c566806a55dcd4dd")
         );
         assert_eq!(
             clone_dir(home, "gitlab.example.com:8443/team/app"),
-            Path::new("/Users/alex/.moonlet/clones/gitlab.example.com_8443/team/app/repo")
+            Path::new("/Users/alex/.moonlet/clones/gitlab.example.com_8443/fb0fecc8a6b28086")
         );
-        // Anything else is named by its hash.
         assert_eq!(
             clone_dir(home, "github.com/../../x"),
-            Path::new(
-                "/Users/alex/.moonlet/clones/github.com/5ec1f7e700f37c3d/5ec1f7e700f37c3d/x/repo"
-            )
+            Path::new("/Users/alex/.moonlet/clones/github.com/8eca46d8c5ef6dac")
         );
         assert_eq!(
             copies_dir(home, "studio-mini", "..", "a/b c"),
