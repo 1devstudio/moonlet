@@ -275,7 +275,7 @@ async fn forward_from_phone(
                 Some("manage phones from the Mac")
             }
             Frame::Json(Message::Request { method, .. })
-                if method == m::LINK_SET || method == m::LINK_RETRY =>
+                if method == m::LINK_SET || method == m::LINK_RETRY || method == m::LINK_PAIR =>
             {
                 Some("manage the link from the Mac")
             }
