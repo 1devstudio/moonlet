@@ -541,6 +541,7 @@ impl Daemon {
                 ok(self.sync.use_central_branch(&r.copy).await?)
             }
             m::SYNC_STOP => {
+                app_only(conn, "sync")?;
                 let r: m::CopyRef = params(p)?;
                 ok(self.sync.stop(&r.copy).await?)
             }
