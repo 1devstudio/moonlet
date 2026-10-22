@@ -531,6 +531,7 @@ impl Daemon {
                 ok(self.sync.retry(&r.copy)?)
             }
             m::SYNC_RESOLVE => {
+                app_only(conn, "sync")?;
                 let r: m::SyncResolve = params(p)?;
                 ok(self.sync.resolve(r).await?)
             }

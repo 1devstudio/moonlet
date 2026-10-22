@@ -717,6 +717,22 @@ async fn only_the_macs_app_starts_or_retries_a_copy() {
 }
 
 #[tokio::test]
+async fn only_the_macs_app_resolves_a_differing_file() {
+    // X60: only the Mac's app changes a copy.
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut device = raw(&addr, &token, "moonlet-app").await;
+    let params = json!({ "copy": "c1", "path": "README.md", "keep": "central" });
+    assert_eq!(
+        refused(&ask(&mut device, 1, "sync.resolve", params.clone()).await).as_deref(),
+        Some("forbidden")
+    );
+    let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
+    let e = cli.request::<_, Value>("sync.resolve", params).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+}
+
+#[tokio::test]
 async fn one_link_set_says_link_changed_once() {
     let (central, addr) = central().await;
     let worker = linked_worker(&central, &addr).await;
