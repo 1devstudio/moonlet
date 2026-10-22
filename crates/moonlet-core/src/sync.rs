@@ -711,11 +711,28 @@ pub async fn delete_base_ref(repo: &Path, copy: &str) -> Result<()> {
 /// `not` does: what the other side, which has `not`, lacks. Empty when it
 /// lacks nothing.
 pub async fn pack_objects(repo: &Path, new: &[&str], not: &[&str]) -> Result<Vec<u8>> {
-    let mut args = vec!["rev-list", "--objects"];
-    args.extend(new);
-    args.push("--not");
-    args.extend(not);
-    let objects = git_env(repo, &[], &args, None).await?;
+    // Ids only, and through stdin: some come from the other side, and any
+    // number of them fits.
+    if let Some(bad) = new.iter().chain(not).find(|id| !is_object_id(id)) {
+        bail!("not an object id: {bad:?}");
+    }
+    let mut revs = String::new();
+    for id in new {
+        revs.push_str(id);
+        revs.push('\n');
+    }
+    revs.push_str("--not\n");
+    for id in not {
+        revs.push_str(id);
+        revs.push('\n');
+    }
+    let objects = git_env(
+        repo,
+        &[],
+        &["rev-list", "--objects", "--stdin"],
+        Some(revs.as_bytes()),
+    )
+    .await?;
     if objects.iter().all(u8::is_ascii_whitespace) {
         return Ok(Vec::new());
     }
@@ -934,8 +951,14 @@ pub async fn have(repo: &Path) -> Vec<String> {
         .collect();
     ids.sort();
     ids.dedup();
+    // A repository with thousands of branches only makes a pack a little
+    // smaller with all of them; the other side checks each one it is sent.
+    ids.truncate(MAX_HAVE);
     ids
 }
+
+/// The most commits [`have`] names.
+const MAX_HAVE: usize = 2000;
 
 /// The worktree of `repo`, the main one included, that has `branch`
 /// checked out.
@@ -1844,6 +1867,21 @@ mod tests {
         assert!(!exists(p, blob).await);
 
         assert!(set_base_ref(p, "../../HEAD", &base).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_pack_takes_any_number_of_ids_and_only_ids() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let tree = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let head = String::from_utf8(git(p, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
+        // 30 000 ids: past what a command line holds on macOS.
+        let many: Vec<&str> = std::iter::repeat_n(head.trim(), 30_000).collect();
+        let pack = pack_objects(p, &[&tree], &many).await.unwrap();
+        assert!(!pack.is_empty());
+        // An option where an id goes is refused, not passed to git.
+        assert!(pack_objects(p, &[&tree], &["--all"]).await.is_err());
+        assert!(pack_objects(p, &["--all"], &[head.trim()]).await.is_err());
     }
 
     #[tokio::test]
