@@ -565,6 +565,32 @@ async fn the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_device
 }
 
 #[tokio::test]
+async fn one_connection_links_one_worker() {
+    let (central, addr) = central().await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut w = raw(&addr, &token, "moonletd-worker").await;
+    assert_eq!(
+        refused(
+            &ask(
+                &mut w,
+                1,
+                "worker.register",
+                registration(WORKER_ID, "Alex's MacBook Pro")
+            )
+            .await
+        ),
+        None
+    );
+    let other = registration("5b0c7a3e-0d7e-4a51-8f1e-6c2b9a4d3e10", "Another");
+    assert_eq!(
+        refused(&ask(&mut w, 2, "worker.register", other).await).as_deref(),
+        Some("forbidden")
+    );
+    let list: Vec<Value> = central.call("worker.list", json!({})).await;
+    assert_eq!(list.len(), 1, "{list:?}");
+}
+
+#[tokio::test]
 async fn a_worker_id_links_once_and_names_may_repeat() {
     let (central, addr) = central().await;
     let token = pair(&central, &addr, "Alex's MacBook Pro").await;

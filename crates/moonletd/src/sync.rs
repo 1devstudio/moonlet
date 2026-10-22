@@ -1232,13 +1232,13 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
         let data = sync.data.lock().unwrap();
         (data.worker.clone(), data.central.clone())
     };
+    // Every copy waits for the link; one not made yet says it copies only
+    // once `make` really starts.
     for k in &kept {
-        let state = if k.base.is_some() {
-            CopyState::Waiting
-        } else {
-            CopyState::Copying
-        };
-        sync.states.lock().unwrap().insert(k.id.clone(), state);
+        sync.states
+            .lock()
+            .unwrap()
+            .insert(k.id.clone(), CopyState::Waiting);
     }
     sync.link.set_synced(kept.len());
     for s in served {

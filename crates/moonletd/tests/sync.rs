@@ -487,6 +487,32 @@ async fn a_restarted_worker_resumes_its_copy() {
 }
 
 #[tokio::test]
+async fn a_copy_not_made_yet_waits_after_a_restart_while_its_host_is_away() {
+    let scratch = tempfile::tempdir().unwrap();
+    let mut worker = worker(&origin(scratch.path())).await;
+    // A central host nobody answers for.
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": ["127.0.0.1:9"], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    worker.restart().await;
+    let list = copies(&worker).await;
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].state, CopyState::Waiting, "{list:?}");
+}
+
+#[tokio::test]
+async fn a_copy_never_reads_in_sync_once_its_link_is_closed() {
+    let (_central, worker, _c) = synced().await;
+    let _: Value = worker.call("link.set", json!({ "central": null })).await;
+    let list = copies(&worker).await;
+    assert_ne!(list[0].state, CopyState::InSync, "{list:?}");
+}
+
+#[tokio::test]
 async fn a_clone_that_fails_pauses_the_copy_with_gits_message() {
     let central = central().await;
     let missing = central.origin.with_file_name("missing.git");

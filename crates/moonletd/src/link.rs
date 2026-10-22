@@ -384,6 +384,10 @@ impl WorkerLink {
             h.stop();
         }
         self.set_state(LinkState::Off);
+        // A stopped host reports nothing more, so the copies hear it here.
+        if let Some(sync) = self.sync() {
+            sync.link_down();
+        }
     }
 
     /// Introduces this worker to its central host, on every new link.

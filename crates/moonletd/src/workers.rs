@@ -84,6 +84,20 @@ impl Workers {
         worker: WorkerRegister,
     ) -> Result<(), RpcError> {
         let id = worker.id.clone();
+        // One worker per connection: a second id would leave the first
+        // listed against a connection that no longer speaks for it.
+        if self
+            .list
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(other, e)| e.conn.id == conn.id && *other != id)
+        {
+            return Err(RpcError::new(
+                "forbidden",
+                "this connection already links another worker",
+            ));
+        }
         {
             let mut owners = self.owners.lock().unwrap();
             let owner = owners.entry(id.clone()).or_insert_with(|| device.to_string());
