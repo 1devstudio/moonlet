@@ -67,6 +67,12 @@ impl Workers {
         (self.emit)(Message::event(m::EV_WORKERS_CHANGED, self.list()));
     }
 
+    /// Releases the worker ids a paired device held, once it is removed: the
+    /// same Mac pairing again is a new device, and links with its old id.
+    pub fn forget_device(&self, device: &str) {
+        self.owners.lock().unwrap().retain(|_, owner| owner != device);
+    }
+
     /// Lists the worker on `conn`, the connection of paired device `device`.
     /// A worker that links again with the same id replaces its older
     /// connection, which is closed; a worker id belongs to the device that

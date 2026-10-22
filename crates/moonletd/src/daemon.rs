@@ -449,6 +449,7 @@ impl Daemon {
             m::MOBILE_UNPAIR => match &conn.phone {
                 Some(device) => {
                     self.mobile.unpair(device)?;
+                    self.workers.forget_device(device);
                     ok(true)
                 }
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
@@ -521,6 +522,7 @@ impl Daemon {
             m::MOBILE_REVOKE => {
                 let r: m::IdRef = params(p)?;
                 self.mobile.revoke(&r.id)?;
+                self.workers.forget_device(&r.id);
                 ok(true)
             }
             _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),

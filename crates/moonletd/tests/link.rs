@@ -699,3 +699,32 @@ async fn another_paired_device_cannot_take_a_workers_id() {
     // The real worker keeps its link.
     assert!(ask(&mut real, 2, "worker.list", json!({})).await.is_some());
 }
+
+#[tokio::test]
+async fn a_mac_removed_and_paired_again_links_with_its_worker_id() {
+    let (central, addr) = central().await;
+    let first = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut old = raw(&addr, &first, "moonletd-worker").await;
+    assert_eq!(
+        refused(&ask(&mut old, 1, "worker.register", registration(WORKER_ID, "MacBook Pro")).await),
+        None
+    );
+    let status: moonlet_proto::methods::MobileStatus =
+        central.call("mobile.status", json!({})).await;
+    let device = status
+        .devices
+        .iter()
+        .find(|d| d.name == "Alex's MacBook Pro")
+        .unwrap()
+        .id
+        .clone();
+    let _: Value = central.call("mobile.revoke", json!({ "id": device })).await;
+
+    // The same Mac pairs again: a new device, the same worker id.
+    let again = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut new = raw(&addr, &again, "moonletd-worker").await;
+    assert_eq!(
+        refused(&ask(&mut new, 1, "worker.register", registration(WORKER_ID, "MacBook Pro")).await),
+        None
+    );
+}
