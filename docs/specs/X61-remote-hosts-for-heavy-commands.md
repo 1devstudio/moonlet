@@ -34,7 +34,7 @@ As in X41, nothing is routed yet: the switch links the host as a worker, and rou
 - [x] When the central host paired this machine but its token cannot be saved, `link.pair` fails with `pair_unsaved`, "Paired with studio-mini, but could not save it. Remove build-box on studio-mini and pair again: …", since the used code cannot pair again. (`a_pairing_that_cannot_be_saved_says_how_to_undo_it`)
 - [x] `link.set`, `link.retry` and `link.pair` are accepted from the Mac's own app, as before, and now also from a paired **Mac** (a `desktop` device) over the tailnet. A paired phone and the `moonlet` CLI are still refused with `forbidden`. (`a_paired_mac_sets_the_link_and_a_phone_or_the_cli_cannot`)
 - [x] From a paired Mac, `link.set` may change `worker` only. A `central` in it is refused with `forbidden`, so a paired Mac never hands a remote host a token; the central host changes only through `link.pair`. (`a_paired_mac_cannot_set_the_central_host_directly`)
-- [x] A daemon from before this spec answers `link.pair` with an unknown-method error. The app then shows "Update moonlet on build-box". `PROTOCOL_VERSION` does not change. (`workerLink.test.ts` turning a remote host's switch on)
+- [x] A daemon from before this spec answers `link.pair` with an unknown-method error, and a paired Mac's `link.set` with `forbidden`. The app then shows "Update moonlet on build-box". `PROTOCOL_VERSION` does not change. (`workerLink.test.ts` turning a remote host's switch on)
 
 ### Desktop
 
@@ -55,12 +55,13 @@ As in X41, nothing is routed yet: the switch links the host as a worker, and rou
   - "studio-mini no longer accepts build-box", with **Pair again**, which opens the code dialog
   - "Linked to other-mini, not to studio-mini" when the host's central host is another one
   - any other connection error, with **Retry**
-- [x] A failed `link.pair` or `link.set` shows its error in the dialog or as a toast, and the switch shows the host's real state. (`remote-worker.e2e.ts`)
+- [x] A failed `link.pair` shows its error in the dialog, which stays open. Once `link.pair` worked its code is used up, so a failed `link.set` after it closes the dialog and shows its error as a toast. The switch shows the host's real state. (`remote-worker.e2e.ts`, `workerLink.test.ts` pairing a remote host with the central host)
+- [x] The switch is on only while the host takes heavy commands for this Mac's central host: a host linked to another central host shows it off, and turning it on asks to move it. (`workerLink.test.ts` a remote host's switch)
 
 ## UI
 
 - **Settings › Machines › Hosts › Remote hosts:** under a connected tailnet host's row, a **Use for heavy commands** row like This Mac's: label, status line, the help text "For now this only links build-box to the central host. Commands are not routed there yet.", **Retry** or **Pair again** when the state calls for it, and the switch.
-- **Pairing code dialog:** title "Pair build-box with studio-mini", one code field, the help text "Get a code on studio-mini: Let another Mac connect in moonlet, or `moonletd pair`.", **Cancel** and **Pair**. While pairing, **Pair** reads "Pairing…" and is disabled. An error shows under the field and keeps the dialog open.
+- **Pairing code dialog:** title "Pair build-box with studio-mini", one field for the code (the pairing link `moonletd pair` prints works too), the help text "Get a code on studio-mini: Let another Mac connect in moonlet, or `moonletd pair`.", **Cancel** and **Pair**. While pairing, **Pair** reads "Pairing…" and is disabled. An error shows under the field and keeps the dialog open.
 - Settings search already leads to the Hosts page for "heavy commands" (X43).
 
 ## Protocol and RPCs
