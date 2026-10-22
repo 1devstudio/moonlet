@@ -52,7 +52,7 @@ The idle Mac mini outran the loaded MacBook, so load-aware placement is required
 - Delivery is sliced:
   - worker link and project identity ([X41](../specs/X41-worker-link-and-project-identity.md));
   - central host setup;
-  - live copies (one way, then both ways);
+  - live copies (one way, then both ways), both in [X60](../specs/X60-keep-in-sync.md);
   - routing;
   - takeover and cloud workers.
 

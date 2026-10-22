@@ -97,3 +97,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X57 | Add a remote host over the tailnet (pair once, no SSH) | P1 | 3 | implemented (untried between two real Macs) | [X57-tailnet-hosts.md](X57-tailnet-hosts.md) |
 | X58 | Install moonlet on a Linux host with one command (systemd service, release assets) | P1 | 3 | implemented (untried on a real release) | [X58-linux-install-script.md](X58-linux-install-script.md) |
 | X59 | Add a project from GitHub (clone tab, your repositories, live progress) | P1 | 3 | implemented (remote hosts untried) | [X59-add-project-from-github.md](X59-add-project-from-github.md) |
+| X60 | Keep in sync: a live copy of a remote session on this Mac | P1 | 4 | draft | [X60-keep-in-sync.md](X60-keep-in-sync.md) |
