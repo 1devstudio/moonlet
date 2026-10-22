@@ -95,6 +95,16 @@ pub async fn pair(addrs: &[String], code: &str, device: &str, kind: DeviceKind) 
     })
 }
 
+/// Why pairing with host `name` failed, as the app's Add host dialog and a
+/// worker pairing with its central host (X61) say it.
+pub fn pair_error_text(name: &str, error: &anyhow::Error) -> String {
+    if error.downcast_ref::<Refused>().is_some() {
+        format!("The code was not accepted. Start pairing again on {name}.")
+    } else {
+        format!("Cannot pair with {name}: {error:#}")
+    }
+}
+
 /// Reaches a paired daemon with its device token. With `route`, the daemon
 /// connects through to one of its SSH hosts (X39).
 pub struct TailnetConnector {
@@ -138,5 +148,25 @@ impl Connector for TailnetConnector {
             let (r, w) = stream.into_split();
             Ok((Box::new(r) as Reader, Box::new(w) as Writer))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_code_says_to_start_again_on_the_host() {
+        let refused = anyhow::Error::new(Refused("this phone is not paired with this Mac".into()));
+        assert_eq!(
+            pair_error_text("studio-mini", &refused),
+            "The code was not accepted. Start pairing again on studio-mini."
+        );
+        let unreachable = anyhow!("100.101.102.103:47428: Connection refused")
+            .context("cannot reach the host over Tailscale");
+        assert_eq!(
+            pair_error_text("studio-mini", &unreachable),
+            "Cannot pair with studio-mini: cannot reach the host over Tailscale: 100.101.102.103:47428: Connection refused"
+        );
     }
 }

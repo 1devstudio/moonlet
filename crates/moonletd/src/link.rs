@@ -176,16 +176,6 @@ fn save(path: &Path, data: &LinkFile) -> anyhow::Result<()> {
     crate::mobile::write_private(path, &serde_json::to_vec_pretty(data)?)
 }
 
-/// Why pairing with the central host `name` failed, as the Add host dialog
-/// says it (X57).
-fn pair_error_text(name: &str, error: &anyhow::Error) -> String {
-    if error.downcast_ref::<moonlet_link::Refused>().is_some() {
-        format!("The code was not accepted. Start pairing again on {name}.")
-    } else {
-        format!("Cannot pair with {name}: {error:#}")
-    }
-}
-
 /// Whether the link should be open: a central host is set, and either this
 /// Mac takes heavy commands or it keeps at least one session in sync (X60).
 pub fn should_link(enabled: bool, central: bool, synced_copies: usize) -> bool {
@@ -308,7 +298,7 @@ impl WorkerLink {
         let device = self.store.lock().unwrap().worker().name.clone();
         let paired = moonlet_link::tailnet::pair(&central.addrs, &code, &device, DeviceKind::Desktop)
             .await
-            .map_err(|e| RpcError::new("pair_failed", pair_error_text(&central.name, &e)))?;
+            .map_err(|e| RpcError::new("pair_failed", moonlet_link::tailnet::pair_error_text(&central.name, &e)))?;
         self.set(
             LinkSet {
                 central: Some(Some(LinkCentral {
