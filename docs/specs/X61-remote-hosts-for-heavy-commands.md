@@ -16,7 +16,7 @@ As in X41, nothing is routed yet: the switch links the host as a worker, and rou
 
 ## User journey
 
-1. On the MacBook, Settings › Machines › Hosts lists `studio-mini`, marked **Central host**, and `build-box`, a Linux server added over the tailnet. Both are connected.
+1. On the MacBook, Settings › Machines › Hosts lists `studio-mini`, this Mac's central host, and `build-box`, a Linux server added over the tailnet. Both are connected.
 2. `build-box`'s row has a **Use for heavy commands** switch with the status line "Not linked". `studio-mini`'s row has none: it is the central host.
 3. You turn the switch on. `build-box` has never paired with `studio-mini`, so a dialog asks for a pairing code from `studio-mini`. It says where to get one: **Let another Mac connect** in moonlet on `studio-mini`, or `moonletd pair` there.
 4. On `studio-mini` you run `moonletd pair` and type the code into the dialog. The line under `build-box`'s switch reads "Linking to studio-mini…", then "Linked to studio-mini since 10:42".
@@ -100,7 +100,7 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
   - A bad `central` (empty name, `studio-mini` as an address, one of the host's own addresses) is refused without contacting the central host.
   - A paired phone and the CLI get `forbidden` for `link.set`, `link.retry` and `link.pair`; a paired Mac gets `forbidden` for `link.set` with `central`.
 - **Vitest, `apps/desktop/src/lib/workerLink.test.ts`:** which host rows get the switch; the status line for each state; what turning on needs (enable, pair, or confirm a move), from literal `LinkInfo` values.
-- **e2e, `apps/desktop/e2e/specs/remote-worker.e2e.ts`:** two scratch daemons: a central host on `::1` and a remote host on 127.0.0.1, which counts 127.0.0.1 as its own address and so never takes `::1` for itself. The app pairs with both and marks the first **Central host**. On the remote host's row, turning the switch on asks for a code (from `moonletd pair` on the central host), and the line reads "Linked to …"; the central host's `worker.list` lists the remote host. Turning it off reads "Not linked"; turning it on again links without a code. Saving settings is a crucial feature (X12).
+- **e2e, `apps/desktop/e2e/specs/remote-worker.e2e.ts`:** two scratch daemons: a central host on `::1` and a remote host on 127.0.0.1, which counts 127.0.0.1 as its own address and so never takes `::1` for itself. The app pairs with both and makes the first its central host with **Make central host**. On the remote host's row, turning the switch on asks for a code (from `moonletd pair` on the central host), and the line reads "Linked to …"; the central host's `worker.list` lists the remote host. Turning it off reads "Not linked"; turning it on again links without a code. Saving settings is a crucial feature (X12).
 
 ## Open questions
 
