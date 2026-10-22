@@ -60,23 +60,40 @@ const asked = new Set<string>();
 /** The last differing-files notification, for the jump back when the user comes to the window. */
 let lastNotice: { key: string; at: number } | null = null;
 
+/** Loads under way, and what events changed while each was out: those are
+ * newer than the list it reads, so they win. */
+const loading = new Set<{ copies: Set<string>; link: boolean }>();
+
 async function load() {
+  const seen = { copies: new Set<string>(), link: false };
+  loading.add(seen);
   try {
     const [copies, link, info] = await Promise.all([
       rpc<Copy[]>(LOCAL, M.syncList),
       rpc<LinkInfo>(LOCAL, M.linkGet),
       rpc<DaemonInfo>(LOCAL, M.daemonInfo).catch(() => null),
     ]);
-    setSync({ copies: Object.fromEntries(copies.map((c) => [copyKey(c), c])), ...fromLink(link), dataDir: info?.data_dir ?? null });
-    for (const c of copies) maybeAskSetup(c);
+    const listed = copies.filter((c) => !seen.copies.has(copyKey(c)));
+    setSync((s) => {
+      const kept = Object.entries(s.copies).filter(([key]) => seen.copies.has(key));
+      return {
+        copies: Object.fromEntries([...listed.map((c) => [copyKey(c), c] as const), ...kept]),
+        ...(seen.link ? {} : fromLink(link)),
+        dataDir: info?.data_dir ?? null,
+      };
+    });
+    for (const c of listed) maybeAskSetup(c);
   } catch {
     /* an older daemon without sync */
+  } finally {
+    loading.delete(seen);
   }
 }
 
 function onChanged(ev: CopyChanged) {
   const { newly_differing, removed, ...copy } = ev;
   const key = copyKey(copy);
+  for (const l of loading) l.copies.add(key);
   if (removed) {
     setSync((s) => {
       const copies = { ...s.copies };
@@ -274,7 +291,10 @@ export async function startSync() {
   await onDaemonEvent((e) => {
     if (e.host !== LOCAL) return;
     if (e.name === EV.syncChanged) onChanged(e.data as CopyChanged);
-    else if (e.name === EV.linkChanged) setSync(fromLink(e.data as LinkInfo));
+    else if (e.name === EV.linkChanged) {
+      for (const l of loading) l.link = true;
+      setSync(fromLink(e.data as LinkInfo));
+    }
   });
   await onHostStatus((h) => {
     if (h.id === LOCAL && h.status === "connected") void load();

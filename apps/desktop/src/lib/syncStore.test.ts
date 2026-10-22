@@ -8,6 +8,7 @@ const calls = vi.hoisted(() => [] as { method: string; params: unknown }[]);
 /** What the daemon answers, by method; a function may throw a daemon error. */
 const answers = vi.hoisted(() => ({}) as Record<string, (params: unknown) => unknown>);
 const events = vi.hoisted(() => ({ emit: (_e: { host: string; name: string; data: unknown }) => {} }));
+const hostStatus = vi.hoisted(() => ({ emit: (_h: { id: string; status: string }) => {} }));
 const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
 
 vi.mock("./daemon", () => {
@@ -26,7 +27,7 @@ vi.mock("./daemon", () => {
       return answer ? Promise.resolve().then(() => answer(params)) : Promise.reject(new DaemonError({ code: "unknown", message: `no ${method}` }));
     }),
     onDaemonEvent: (cb: (e: { host: string; name: string; data: unknown }) => void) => ((events.emit = cb), Promise.resolve(() => {})),
-    onHostStatus: () => Promise.resolve(() => {}),
+    onHostStatus: (cb: (h: { id: string; status: string }) => void) => ((hostStatus.emit = cb), Promise.resolve(() => {})),
     hostsApi: {
       setCentral: (id: string | null) => {
         calls.push({ method: "host_set_central", params: id });
@@ -165,6 +166,24 @@ describe("the setup modal (X60)", () => {
     await settle();
     expect(useStore.getState().confirm?.options).toMatchObject({ code: "make" });
     answerConfirm(false, false);
+  });
+});
+
+describe("reading the copies again after this Mac's daemon reconnects (X60)", () => {
+  it("lets a change that arrives while the list is read win over the list", async () => {
+    let list: (copies: Copy[]) => void = () => {};
+    answers["sync.list"] = () => new Promise<Copy[]>((r) => (list = r));
+    useSync.setState({ copies: { "studio-mini/s1": copy() } });
+    hostStatus.emit({ id: "local", status: "connected" });
+    await settle();
+    changed({ ...copy(), removed: { reason: "stopped", folder: "", leftovers: [] } });
+    changed(copy({ id: "c7", session: "s7", state: { kind: "syncing", files: 2 } }));
+    list([copy(), copy({ id: "c7", session: "s7" })]);
+    await settle();
+    await settle();
+    expect(useSync.getState().copies["studio-mini/s1"]).toBeUndefined();
+    expect(useSync.getState().copies["studio-mini/s7"]?.state).toEqual({ kind: "syncing", files: 2 });
+    answers["sync.list"] = () => [];
   });
 });
 
