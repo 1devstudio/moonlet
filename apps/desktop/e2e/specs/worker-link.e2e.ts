@@ -1,7 +1,7 @@
 // This Mac links to its central host as a worker (X41). A second scratch
 // daemon plays the central host. It listens on ::1, because the app's own
 // daemon counts 127.0.0.1 as one of its addresses and never links to itself.
-// The app pairs with it, marks it Central host, turns on "Use this Mac for
+// The app pairs with it, makes it the central host, turns on "Use this Mac for
 // heavy commands", and the central host lists this Mac as a worker.
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
@@ -75,10 +75,8 @@ describe("worker link", () => {
     await $(`${dialog}//button[normalize-space()="Add"]`).click();
     await $(`${row()}//*[starts-with(normalize-space(), "Connected · moonletd ")]`).waitForExist({ timeout: 20000 });
 
-    const central = $(`${row()}//button[normalize-space()="Central host"]`);
-    await expect(central).toHaveAttribute("aria-pressed", "false");
-    await central.click();
-    await expect(central).toHaveAttribute("aria-pressed", "true");
+    await $(`${row()}//button[normalize-space()="Make central host"]`).click();
+    await expect($(`${row()}//button[normalize-space()="Clear central host"]`)).toBeDisplayed();
   });
 
   it("links this Mac when heavy commands are on, and the central host lists it", async () => {
@@ -90,10 +88,9 @@ describe("worker link", () => {
     });
   });
 
-  it("choosing the central host again clears it, and the link goes", async () => {
-    const central = $(`${row()}//button[normalize-space()="Central host"]`);
-    await central.click();
-    await expect(central).toHaveAttribute("aria-pressed", "false");
+  it("Clear central host clears it, and the link goes", async () => {
+    await $(`${row()}//button[normalize-space()="Clear central host"]`).click();
+    await expect($(`${row()}//button[normalize-space()="Make central host"]`)).toBeDisplayed();
     await $(`${heavy}//*[normalize-space()="Not linked"]`).waitForExist({ timeout: 10000 });
     await browser.waitUntil(async () => (await centralRpc<unknown[]>("worker.list")).length === 0, {
       timeout: 10000,
@@ -103,7 +100,7 @@ describe("worker link", () => {
 
   it("removing the central host from this Mac's list clears it", async () => {
     const centralName = () => rpc<{ central: { name: string } | null }>(w, "link.get", {}).central?.name ?? null;
-    await $(`${row()}//button[normalize-space()="Central host"]`).click();
+    await $(`${row()}//button[normalize-space()="Make central host"]`).click();
     await browser.waitUntil(async () => centralName() === name, { timeout: 10000, timeoutMsg: "the host never became central" });
     await $(`button[title="Remove ${name}"]`).click();
     if (await $(sel.confirmButton("Remove")).isExisting()) await $(sel.confirmButton("Remove")).click();

@@ -3,7 +3,7 @@
 
 import { useEffect, useId, useState } from "react";
 import { encode } from "uqr";
-import { Check, Copy, Laptop, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "lucide-react";
+import { Copy, Laptop, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi, onDaemonEvent, onHostStatus, rpc } from "../../lib/daemon";
 import { countdown, deviceLine, devicesOfKind, pairEndedText } from "../../lib/mobile";
@@ -12,7 +12,7 @@ import { EV, M, type HostInfo, type LinkInfo, type MobilePairing, type MobileSta
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
-import { centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "../../lib/workerLink";
+import { centralHostButton, centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
 
@@ -297,18 +297,12 @@ function HeavyCommandsRow({ link }: { link: LinkInfo | null }) {
   );
 }
 
-/** A tailnet host's Central host choice (X41): pressed on the central host. */
+/** A tailnet host's central host choice (X41): makes it the central host, or clears it. */
 function CentralHostButton({ host, central, onPick }: { host: string; central: string | null; onPick: (next: string | null) => void }) {
-  const on = central === host;
+  const { label, title } = centralHostButton(central, host);
   return (
-    <Button
-      size="sm"
-      variant={on ? "subtle" : "ghost"}
-      aria-pressed={on}
-      title={on ? `${host} is this Mac's central host. Click to clear it.` : `Make ${host} this Mac's central host`}
-      onClick={() => onPick(pickCentral(central, host))}
-    >
-      {on && <Check size={12} />} Central host
+    <Button size="sm" title={title} onClick={() => onPick(pickCentral(central, host))}>
+      {label}
     </Button>
   );
 }
