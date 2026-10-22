@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DoneBursts, alertFor } from "./alerts";
+import { DoneBursts, alertFor, differsAlert } from "./alerts";
 
 const away = { focused: false, visible: false, settings: { notifyWhenFocused: false }, now: 1_000_000 };
 
@@ -72,5 +72,19 @@ describe("DoneBursts", () => {
     b.alert("s1", at(0));
     b.seen("s1");
     expect(b.alert("s1", at(30_000)).sound).toBe("Hero");
+  });
+});
+
+describe("differsAlert (X60 a file differs between machines)", () => {
+  it("notifies in the background, and with a toast instead while moonlet is in front", () => {
+    expect(differsAlert({ focused: false, notifyWhenFocused: false, banner: true })).toEqual({ banner: true, toast: false });
+    expect(differsAlert({ focused: true, notifyWhenFocused: false, banner: true })).toEqual({ banner: false, toast: true });
+  });
+  it("notifies instead of the toast in front too when notifications are wanted while focused", () => {
+    expect(differsAlert({ focused: true, notifyWhenFocused: true, banner: true })).toEqual({ banner: true, toast: false });
+  });
+  it("sends nothing with its switch off; the mark and the popover still show the files", () => {
+    expect(differsAlert({ focused: false, notifyWhenFocused: false, banner: false })).toEqual({ banner: false, toast: false });
+    expect(differsAlert({ focused: true, notifyWhenFocused: true, banner: false })).toEqual({ banner: false, toast: false });
   });
 });

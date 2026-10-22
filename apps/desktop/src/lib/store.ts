@@ -93,6 +93,8 @@ export interface Settings {
   sessionRows?: RowStyle;
   /** The Claude Code release the user said Later to (X36). */
   claudeUpdateDismissed?: string | null;
+  /** Desktop notification when a file differs between machines; on unless false (X60). */
+  syncBanner?: boolean;
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -239,7 +241,9 @@ interface State extends UiPersist {
     /** Add a board, or a board's settings when `board` is given (X50). */
     | { kind: "add-board"; host: string; workspace: string; board?: string; connection?: string; build?: "repo" }
     | { kind: "palette" }
-    | { kind: "commit" };
+    | { kind: "commit" }
+    /** A file that differs between the central host and this Mac, side by side (X60). */
+    | { kind: "sync-compare"; host: string; session: string; path: string };
   /** The open confirm modal, above any dialog (X23). */
   confirm: PendingConfirm | null;
   /** The settings page over the window, when open (X43). */

@@ -143,6 +143,7 @@ function index(c: SearchContext): Entry[] {
     app("notifications", "App › Notifications", "banner-blocked", "Notification when an agent needs you", onOff(bannerOn(s.banners, "blocked")), "desktop banner"),
     app("notifications", "App › Notifications", "banner-done", "Notification when an agent is done", onOff(bannerOn(s.banners, "done")), "desktop banner"),
     app("notifications", "App › Notifications", "banner-error", "Notification when an agent fails", onOff(bannerOn(s.banners, "error")), "desktop banner"),
+    app("notifications", "App › Notifications", "banner-sync", "Notification when a file differs between machines", onOff(s.syncBanner !== false), "desktop banner keep in sync conflict"),
     app("notifications", "App › Notifications", "muted", "Mute all sounds", onOff(!!s.muted), "silence quiet bell"),
     app("notifications", "App › Notifications", "sound-blocked", "Sound when an agent needs you", soundFor(s.sounds, "blocked") ?? "Off"),
     app("notifications", "App › Notifications", "sound-done", "Sound when an agent is done", soundFor(s.sounds, "done") ?? "Off"),

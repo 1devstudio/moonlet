@@ -102,7 +102,10 @@ describe("searching settings (X43)", () => {
       ["Notification when an agent needs you", "App › Notifications", "On"],
       ["Notification when an agent is done", "App › Notifications", "Off"],
       ["Notification when an agent fails", "App › Notifications", "On"],
+      ["Notification when a file differs between machines", "App › Notifications", "On"],
     ]);
+    const off: SearchContext = { ...ctx, settings: { ...ctx.settings, syncBanner: false } };
+    expect(searchSettings("differs between", off).map((r) => [r.before + r.hit + r.after, r.path, r.value])).toEqual([["Notification when a file differs between machines", "App › Notifications", "Off"]]);
     expect(searchSettings("mute all sounds", quiet).map((r) => [r.before + r.hit + r.after, r.value])).toEqual([["Mute all sounds", "On"]]);
   });
 

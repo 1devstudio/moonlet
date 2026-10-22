@@ -20,6 +20,8 @@ export interface ConfirmOptions {
   alt?: { label: string; disabled?: string };
   /** Work only on this machine that the action would remove (X55). */
   unpushed?: UnpushedView;
+  /** A command shown exactly, in a code block under the message, such as a setup to approve (X60). */
+  code?: string;
 }
 
 export interface ConfirmResult {

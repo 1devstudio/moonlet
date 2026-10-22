@@ -6,10 +6,12 @@ import { RightPanel } from "./components/RightPanel";
 import { Splitter } from "./components/Splitter";
 import { Dialogs } from "./components/Dialogs";
 import { ConfirmHost } from "./components/ConfirmHost";
+import { SyncPopoverHost } from "./components/SyncPopover";
 import { ReadHost } from "./components/ReadHost";
 import { CommandPalette } from "./components/CommandPalette";
 import { Button, IconButton, Kbd, cx } from "./components/ui";
 import { selectedSession, startStore, useStore } from "./lib/store";
+import { startSync } from "./lib/syncStore";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
@@ -126,6 +128,7 @@ export default function App() {
 
   useEffect(() => {
     void startStore();
+    void startSync();
     void loadTrackersConfig();
     const off = installShortcuts();
     const onFind = () => setFinding(true);
@@ -168,6 +171,7 @@ export default function App() {
       )}
       {s.settingsPage && <SettingsPage route={s.settingsPage} />}
       <Dialogs />
+      <SyncPopoverHost />
       {s.dialog?.kind === "palette" && <CommandPalette />}
       <ConfirmHost />
       <ReadHost />

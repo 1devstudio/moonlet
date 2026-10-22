@@ -31,3 +31,23 @@ export function workspaceOpenTargets(targets: OpenTarget[], kind: HostKind): Ope
   if (kind === "ssh") return targets.filter((t) => REMOTE.includes(t.id));
   return targets;
 }
+
+/**
+ * Open in for an entry of a session kept in sync (X60): its copy on this
+ * Mac, at the same place under the copy as under the session, with this
+ * Mac's apps. Null without a copy, or for a path outside the session.
+ */
+export function syncedOpenIn(targets: OpenTarget[], dir: boolean, roots: { copy: string | null; session: string }, path: string): { path: string; choices: OpenTarget[] } | null {
+  if (!roots.copy) return null;
+  const root = roots.session.replace(/\/$/, "");
+  const rel = path === root ? "" : path.startsWith(`${root}/`) ? path.slice(root.length) : null;
+  if (rel === null) return null;
+  return { path: `${roots.copy.replace(/\/$/, "")}${rel}`, choices: openInChoices(targets, { dir, kind: "local" }) };
+}
+
+/** The session header's Open in (X25): a session kept in sync opens from its
+ * copy with this Mac's apps (X60); any other where it is, with its host's. */
+export function workspaceOpenIn(targets: OpenTarget[], ws: { kind: HostKind; host: string; path: string }, copyPath: string | null): { choices: OpenTarget[]; path: string; host: string | undefined } {
+  if (copyPath) return { choices: workspaceOpenTargets(targets, "local"), path: copyPath, host: undefined };
+  return { choices: workspaceOpenTargets(targets, ws.kind), path: ws.path, host: ws.host };
+}

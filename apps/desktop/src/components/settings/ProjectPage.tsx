@@ -13,7 +13,9 @@ import { tildePath } from "../../lib/profiles";
 import { loadTrackersConfig, useTasks } from "../../lib/tasksStore";
 import { projectTrackers } from "../../lib/trackerSources";
 import { Button, IconButton, cx } from "../ui";
-import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, fieldCls } from "./controls";
+import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, SwitchRow, fieldCls } from "./controls";
+import { syncOffered } from "../../lib/sync";
+import { projectKeepsNew, setProjectKeepsNew, useSync } from "../../lib/syncStore";
 import { useUnsaved } from "./useUnsaved";
 
 const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [] };
@@ -97,7 +99,32 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   const boards = useTasks((t) => t.config?.boards);
   useEffect(() => void loadTrackersConfig(), []);
   const trackers = projectTrackers(boards, form.trackers);
-  const dirty = !parseError && isDirty(form, orig);
+  // This Mac's choice for a project on its central host (X60), saved with
+  // the page to this Mac's daemon, not to the project's file.
+  const central = useSync((s) => s.central);
+  const keepShown = syncOffered(host, central);
+  // null until this Mac's daemon has said; the switch waits for it.
+  const [keepNew, setKeepNew] = useState<boolean | null>(null);
+  const [origKeepNew, setOrigKeepNew] = useState<boolean | null>(null);
+  const [keepLoaded, setKeepLoaded] = useState(false);
+  const keepUnknown = keepLoaded && keepNew === null;
+  useEffect(() => {
+    if (!keepShown) return;
+    let live = true;
+    setKeepLoaded(false);
+    void projectKeepsNew(project?.identity).then((k) => {
+      if (!live) return;
+      setKeepNew(k);
+      setOrigKeepNew(k);
+      setKeepLoaded(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [keepShown, project?.identity?.origin, project?.identity?.root]); // eslint-disable-line react-hooks/exhaustive-deps
+  const keepDirty = keepShown && keepNew !== origKeepNew;
+  const configDirty = !parseError && isDirty(form, orig);
+  const dirty = configDirty || keepDirty;
   const canSave = !loading && !parseError && dirty && !v.any && !saving;
   const path = file?.path ?? "";
   const name = configName(file?.path);
@@ -105,13 +132,27 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   const save = async () => {
     if (!canSave || !file) return;
     setSaving(true);
+    // The project's file first: a stale file stops the save before this
+    // Mac's choice changes, and a failure names the part that failed.
     try {
-      show(await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id, version: file.version, config: fromForm(form) }));
-      toast(`Saved ${name}`);
+      if (configDirty) show(await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id, version: file.version, config: fromForm(form) }));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const stale = message.includes("config changed on disk");
       setSaveErr({ message: stale ? "The file changed on disk. Reload to see the new version." : message, stale });
+      setSaving(false);
+      return;
+    }
+    try {
+      if (keepDirty && keepNew !== null && project?.identity) {
+        const r = await setProjectKeepsNew(project.identity, keepNew);
+        setKeepNew(r.keep_new);
+        setOrigKeepNew(r.keep_new);
+      }
+      toast(configDirty ? `Saved ${name}` : "Saved");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setSaveErr({ message: `${configDirty ? `Saved ${name}, but not` : "Could not save"} Keep new sessions in sync with this Mac: ${message}`, stale: false });
     } finally {
       setSaving(false);
     }
@@ -214,7 +255,15 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
               </span>
             </div>
           )}
-          <SaveBar dirty={dirty} canSave={canSave} onDiscard={() => set({ ...orig })} onSave={() => void save()}>
+          <SaveBar
+            dirty={dirty}
+            canSave={canSave}
+            onDiscard={() => {
+              set({ ...orig });
+              setKeepNew(origKeepNew);
+            }}
+            onSave={() => void save()}
+          >
             <button type="button" title="Copy path" className="truncate text-left font-mono ui-text-11.5 text-faint hover:text-muted" onClick={() => copyPath(path)}>
               {tildePath(path, home)}
             </button>
@@ -229,7 +278,7 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
           No <span className="font-mono text-fg">.moonlet/config.toml</span> yet. Saving creates it.
         </p>
       )}
-      <fieldset disabled={loading} className={cx("m-0 flex min-w-0 flex-col gap-8 border-0 p-0", loading && "opacity-50")}>
+      <fieldset disabled={loading || saving} className={cx("m-0 flex min-w-0 flex-col gap-8 border-0 p-0", loading && "opacity-50")}>
         <Section title="Scripts">
           <Card>
             <Row setting="project-setup" label="Setup" htmlFor="settings-p-setup" hint="Runs in a new session's worktree after it is created.">
@@ -353,6 +402,27 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
             </Row>
           </Card>
         </Section>
+
+        {keepShown && (
+          <Section title="This Mac">
+            <Card>
+              <SwitchRow
+                setting="project-keep-new"
+                label="Keep new sessions in sync with this Mac"
+                hint={
+                  !project?.identity?.root
+                    ? `${project?.name ?? "This project"} has no commit yet to know it by on this Mac.`
+                    : keepUnknown
+                      ? "This Mac's daemon could not say whether it keeps new sessions in sync."
+                      : `New sessions in ${project.name} on ${host} get a live copy on this Mac.`
+                }
+                on={!!keepNew}
+                disabled={!project?.identity?.root || keepNew === null}
+                onChange={setKeepNew}
+              />
+            </Card>
+          </Section>
+        )}
       </fieldset>
     </PageBody>
   );
