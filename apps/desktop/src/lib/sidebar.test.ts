@@ -162,4 +162,10 @@ describe("sessionMenu (X46 linking from the right-click menu)", () => {
     expect(sessionMenu({ linked: true, sources: true })).toEqual(["open", "archive"]);
     expect(sessionMenu({ linked: false, sources: false })).toEqual(["open", "archive"]);
   });
+
+  it("offers Keep in sync with this Mac where the session can be kept in sync (X60)", () => {
+    expect(sessionMenu({ linked: false, sources: true, sync: true })).toEqual(["open", "link-task", "keep-sync", "archive"]);
+    expect(sessionMenu({ linked: true, sources: false, sync: true })).toEqual(["open", "keep-sync", "archive"]);
+    expect(sessionMenu({ linked: true, sources: false, sync: false })).toEqual(["open", "archive"]);
+  });
 });

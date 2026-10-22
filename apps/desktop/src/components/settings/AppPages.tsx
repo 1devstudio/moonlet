@@ -377,6 +377,7 @@ export function NotificationsPage() {
   const sounds = useStore((s) => s.settings.sounds);
   const banners = useStore((s) => s.settings.banners);
   const muted = useStore((s) => !!s.settings.muted);
+  const syncBanner = useStore((s) => s.settings.syncBanner !== false);
   return (
     <>
       <PageHeading title="Notifications">How moonlet gets your attention when an agent finishes, fails or needs you.</PageHeading>
@@ -398,6 +399,13 @@ export function NotificationsPage() {
               onChange={(on) => updateSettings({ banners: { ...banners, [ev.id]: on } })}
             />
           ))}
+          <SwitchRow
+            setting="banner-sync"
+            label="Notification when a file differs between machines"
+            hint="A session kept in sync had the same file changed on its central host and on this Mac."
+            on={syncBanner}
+            onChange={(on) => updateSettings({ syncBanner: on })}
+          />
         </Card>
       </Section>
       <Section title="Sounds" hint="Played when you are not watching the agent. macOS system sounds.">

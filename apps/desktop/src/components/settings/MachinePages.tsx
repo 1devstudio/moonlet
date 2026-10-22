@@ -13,6 +13,7 @@ import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
 import { centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "../../lib/workerLink";
+import { changeCentral } from "../../lib/syncStore";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
 
 const iconBox = "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted";
@@ -320,7 +321,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
   const { pairing, note, now, start, cancel } = usePairing();
   const link = useLink();
   const central = centralHostId(Object.values(hosts), link);
-  const pickCentralHost = (next: string | null) => void hostsApi.setCentral(next).catch(errorToast);
+  const pickCentralHost = (next: string | null) => void changeCentral(next);
   const open = (h: string) => (sessions[h] ?? []).filter((s) => !s.archived).length;
   const local = hosts.local;
   const remotes = Object.values(hosts).filter((h) => h.remote);

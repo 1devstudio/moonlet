@@ -1,4 +1,5 @@
 import { AddBoardDialog } from "./tasks/AddBoard";
+import { SyncCompare } from "./SyncCompare";
 import { AddProjectDialog } from "./AddProject";
 import { useEffect, useState } from "react";
 import { rpc } from "../lib/daemon";
@@ -207,6 +208,8 @@ export function Dialogs() {
       return <CommitDialog />;
     case "create-pr":
       return <CreatePrDialog />;
+    case "sync-compare":
+      return <SyncCompare host={dialog.host} session={dialog.session} path={dialog.path} />;
     default:
       return null;
   }

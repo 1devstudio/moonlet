@@ -208,7 +208,7 @@ export function Menu({
       {trigger(toggle)}
       {rect &&
         createPortal(
-          <div ref={panel} style={style} className="z-[60] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
+          <div ref={panel} data-menu-panel style={style} className="z-[60] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
             {search && (
               <input
                 autoFocus

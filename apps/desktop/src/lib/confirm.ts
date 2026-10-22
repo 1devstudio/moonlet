@@ -25,6 +25,31 @@ export function askConfirm(options: ConfirmOptions): Promise<ConfirmResult | nul
   });
 }
 
+/**
+ * As askConfirm, but tells a modal that another question replaced apart
+ * from one the user cancelled: "covered" instead of null.
+ */
+export async function askConfirmOrCovered(options: ConfirmOptions): Promise<ConfirmResult | null | "covered"> {
+  const asked = askConfirm(options);
+  const id = useStore.getState().confirm?.id;
+  const result = await asked;
+  if (result) return result;
+  const now = useStore.getState().confirm;
+  return now && now.id !== id ? "covered" : null;
+}
+
+/** Resolves once no confirm modal is open. */
+export function whenNoConfirm(): Promise<void> {
+  if (!useStore.getState().confirm) return Promise.resolve();
+  return new Promise((resolve) => {
+    const stop = useStore.subscribe((st) => {
+      if (st.confirm) return;
+      stop();
+      resolve();
+    });
+  });
+}
+
 /** Answers the open confirm: `ok` confirms, otherwise it is cancelled. */
 export function answerConfirm(ok: boolean, checked: boolean, alt = false) {
   const pending = useStore.getState().confirm;
