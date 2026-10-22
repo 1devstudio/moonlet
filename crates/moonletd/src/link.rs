@@ -17,7 +17,7 @@ use moonlet_core::session::SessionManager;
 use moonlet_link::tailnet::TailnetConnector;
 use moonlet_link::{BoxFuture, Events, Host, HostInfo, HostOptions, HostStatus, Requests};
 use moonlet_proto::methods::{
-    self as m, LinkCentral, LinkCentralInfo, LinkInfo, LinkSet, LinkState, LinkWorker,
+    self as m, DeviceKind, LinkCentral, LinkCentralInfo, LinkInfo, LinkPair, LinkSet, LinkState, LinkWorker,
     WorkerProject, WorkerRegister,
 };
 use moonlet_proto::{Message, RpcError};
@@ -39,6 +39,9 @@ struct LinkFile {
 pub struct LinkStore {
     path: PathBuf,
     data: LinkFile,
+    /// How many times `central` was set since the daemon started: a
+    /// pairing saves its token only if it has not moved meanwhile (X61).
+    revision: u64,
 }
 
 impl LinkStore {
@@ -59,7 +62,7 @@ impl LinkStore {
                         enabled: false,
                     },
                 };
-                return LinkStore { path, data };
+                return LinkStore { path, data, revision: 0 };
             }
         };
         let read = bytes
@@ -90,7 +93,7 @@ impl LinkStore {
                 d
             }
         };
-        LinkStore { path, data }
+        LinkStore { path, data, revision: 0 }
     }
 
     pub fn central(&self) -> Option<&LinkCentral> {
@@ -111,7 +114,23 @@ impl LinkStore {
 
     /// Applies `link.set`. `own` are this machine's Tailscale addresses: the
     /// central host never links to itself. Nothing is stored on an error.
+    #[cfg(test)]
     pub fn set(&mut self, req: LinkSet, own: &[IpAddr]) -> Result<(), RpcError> {
+        self.set_at(req, own, None)
+    }
+
+    /// The current [`LinkStore::revision`] of `central`.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// [`LinkStore::set`], refused with `conflict` when `central` has been
+    /// set since `revision`.
+    fn set_at(&mut self, req: LinkSet, own: &[IpAddr], revision: Option<u64>) -> Result<(), RpcError> {
+        if revision.is_some_and(|r| r != self.revision) {
+            return Err(RpcError::new("conflict", "the central host changed"));
+        }
+        let moves = req.central.is_some();
         let mut next = self.data.clone();
         if let Some(central) = req.central {
             if let Some(c) = &central {
@@ -131,6 +150,9 @@ impl LinkStore {
         save(&self.path, &next)
             .map_err(|e| RpcError::new("internal", format!("cannot write {}: {e:#}", self.path.display())))?;
         self.data = next;
+        if moves {
+            self.revision += 1;
+        }
         Ok(())
     }
 }
@@ -147,11 +169,20 @@ fn check_name(name: &str) -> Result<(), RpcError> {
 }
 
 fn check_central(c: &LinkCentral, own: &[IpAddr]) -> Result<(), RpcError> {
-    check_name(&c.name)?;
-    if c.addrs.is_empty() {
+    check_target(&c.name, &c.addrs, own)?;
+    if c.token.len() != 64 || !c.token.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(invalid("the token is not 64 hex characters"));
+    }
+    Ok(())
+}
+
+/// The central host's name and addresses, which are never this machine's.
+fn check_target(name: &str, addrs: &[String], own: &[IpAddr]) -> Result<(), RpcError> {
+    check_name(name)?;
+    if addrs.is_empty() {
         return Err(invalid("the central host has no address"));
     }
-    for a in &c.addrs {
+    for a in addrs {
         let addr: SocketAddr = a
             .parse()
             .map_err(|_| invalid(format!("{a} is not an ip:port address")))?;
@@ -159,9 +190,6 @@ fn check_central(c: &LinkCentral, own: &[IpAddr]) -> Result<(), RpcError> {
         if own.contains(&addr.ip().to_canonical()) {
             return Err(invalid("this Mac is the central host"));
         }
-    }
-    if c.token.len() != 64 || !c.token.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err(invalid("the token is not 64 hex characters"));
     }
     Ok(())
 }
@@ -256,9 +284,14 @@ impl WorkerLink {
 
     /// `link.set`: stores the settings, then opens, moves or closes the link.
     pub fn set(self: &Arc<Self>, req: LinkSet, own: &[IpAddr]) -> Result<LinkInfo, RpcError> {
+        self.set_at(req, own, None)
+    }
+
+    /// [`WorkerLink::set`], only while `central` is still at `revision`.
+    fn set_at(self: &Arc<Self>, req: LinkSet, own: &[IpAddr], revision: Option<u64>) -> Result<LinkInfo, RpcError> {
         let moved = req.central.is_some();
         let renamed = req.worker.as_ref().is_some_and(|w| w.name.is_some());
-        self.store.lock().unwrap().set(req, own)?;
+        self.store.lock().unwrap().set_at(req, own, revision)?;
         // One link.changed for the whole change, at the end.
         self.quiet.store(true, Ordering::SeqCst);
         if moved {
@@ -281,6 +314,40 @@ impl WorkerLink {
         self.quiet.store(false, Ordering::SeqCst);
         self.changed();
         Ok(self.info())
+    }
+
+    /// `link.pair` (X61): pairs this machine with the central host using a
+    /// code from it, then makes it the central host with the new token.
+    /// Nothing is stored when the pairing fails, nor when the central host
+    /// was changed while it ran: the newer choice stands.
+    pub async fn pair(self: &Arc<Self>, req: LinkPair, own: &[IpAddr]) -> Result<LinkInfo, RpcError> {
+        let LinkPair { central, code } = req;
+        check_target(&central.name, &central.addrs, own)?;
+        let (device, revision) = {
+            let store = self.store.lock().unwrap();
+            (store.worker().name.clone(), store.revision())
+        };
+        let paired = moonlet_link::tailnet::pair(&central.addrs, &code, &device, DeviceKind::Desktop)
+            .await
+            .map_err(|e| RpcError::new("pair_failed", moonlet_link::tailnet::pair_error_text(&central.name, &e)))?;
+        let name = central.name.clone();
+        let req = LinkSet {
+            central: Some(Some(LinkCentral {
+                name: central.name,
+                addrs: central.addrs,
+                token: paired.token,
+            })),
+            worker: None,
+        };
+        self.set_at(req, own, Some(revision)).map_err(|e| match e.code.as_str() {
+            "conflict" => RpcError::new("conflict", format!("The central host changed while pairing with {name}. Pair again.")),
+            // The central host has paired this machine, and only the token
+            // in hand could use that pairing.
+            _ => RpcError::new(
+                "pair_unsaved",
+                format!("Paired with {name}, but could not save it. Remove {device} on {name} and pair again: {}", e.message),
+            ),
+        })
     }
 
     /// Whether the link waits for the user: an update, or pairing again.

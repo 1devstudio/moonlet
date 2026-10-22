@@ -466,15 +466,6 @@ pub fn tailnet_host_id(typed: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-/// What the Add host dialog says when pairing fails.
-pub fn pair_error_text(id: &str, error: &anyhow::Error) -> String {
-    if error.downcast_ref::<moonlet_link::Refused>().is_some() {
-        format!("The code was not accepted. Start pairing again on {id}.")
-    } else {
-        format!("Cannot pair with {id}: {error:#}")
-    }
-}
-
 /// This Mac's name, as Sharing settings show it (`scutil --get ComputerName`),
 /// or else its host name without `.local`.
 fn device_name_from(computer_name: Option<&str>, hostname: &str) -> String {
@@ -533,7 +524,7 @@ pub async fn pair_tailnet(
         moonlet_proto::methods::DeviceKind::Desktop,
     )
     .await
-    .map_err(|e| failed(pair_error_text(&id, &e)))?;
+    .map_err(|e| failed(moonlet_link::tailnet::pair_error_text(&id, &e)))?;
     Ok(mgr.add_tailnet(TailnetHost {
         id,
         device_id: paired.device_id,
@@ -629,23 +620,6 @@ mod tests {
                 "{bad:?}"
             );
         }
-    }
-
-    #[test]
-    fn a_refused_code_says_to_start_again_on_the_host() {
-        let refused = anyhow::Error::new(moonlet_link::Refused(
-            "this phone is not paired with this Mac".into(),
-        ));
-        assert_eq!(
-            pair_error_text("studio-mini", &refused),
-            "The code was not accepted. Start pairing again on studio-mini."
-        );
-        let unreachable = anyhow::anyhow!("100.101.102.103:47428: Connection refused")
-            .context("cannot reach the host over Tailscale");
-        assert_eq!(
-            pair_error_text("studio-mini", &unreachable),
-            "Cannot pair with studio-mini: cannot reach the host over Tailscale: 100.101.102.103:47428: Connection refused"
-        );
     }
 
     #[test]
