@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { Copy, CopyChanged } from "./protocol";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
-import { declineSync, openSyncPopover, runSetupAgain, startSync, stopSync, useSync } from "./syncStore";
+import { changeCentral, declineSync, openSyncPopover, runSetupAgain, startSync, stopSync, useSync } from "./syncStore";
 
 const calls = vi.hoisted(() => [] as { method: string; params: unknown }[]);
 /** What the daemon answers, by method; a function may throw a daemon error. */
@@ -27,7 +27,12 @@ vi.mock("./daemon", () => {
     }),
     onDaemonEvent: (cb: (e: { host: string; name: string; data: unknown }) => void) => ((events.emit = cb), Promise.resolve(() => {})),
     onHostStatus: () => Promise.resolve(() => {}),
-    hostsApi: { setCentral: () => Promise.resolve({ central: { name: "studio-mini" } }) },
+    hostsApi: {
+      setCentral: (id: string | null) => {
+        calls.push({ method: "host_set_central", params: id });
+        return Promise.resolve({ central: id ? { name: id } : null, state: { kind: id ? "connecting" : "off" } });
+      },
+    },
   };
 });
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
@@ -183,5 +188,40 @@ describe("files that start to differ (X60)", () => {
     vi.spyOn(Date, "now").mockReturnValue(now + 121_000);
     window.dispatchEvent(new Event("focus"));
     expect(toasts()).toEqual([]);
+  });
+});
+
+describe("changing the central host while sessions are kept in sync (X41, X60)", () => {
+  it("stops the copies left behind once the user agrees, then moves it", async () => {
+    answers["sync.stop"] = () => ({ folder: "", leftovers: [] });
+    useSync.setState({ central: "studio-mini", copies: { a: copy(), b: copy({ id: "c2", session: "s2" }) } });
+    const moved = changeCentral("build-box");
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ title: "Change the central host", action: "Stop keeping in sync" });
+    answerConfirm(true, false);
+    await moved;
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["sync.stop", { copy: "c1" }],
+      ["sync.stop", { copy: "c2" }],
+      ["host_set_central", "build-box"],
+    ]);
+    expect(useSync.getState().central).toBe("build-box");
+  });
+
+  it("changes nothing when the user says no", async () => {
+    useSync.setState({ central: "studio-mini", copies: { a: copy() } });
+    const moved = changeCentral(null);
+    await settle();
+    answerConfirm(false, false);
+    await moved;
+    expect(calls).toEqual([]);
+    expect(useSync.getState().central).toBe("studio-mini");
+  });
+
+  it("moves it without asking when no session is kept in sync", async () => {
+    useSync.setState({ central: "studio-mini", copies: {} });
+    await changeCentral("build-box");
+    expect(useStore.getState().confirm).toBeNull();
+    expect(calls.map((c) => c.method)).toEqual(["host_set_central"]);
   });
 });

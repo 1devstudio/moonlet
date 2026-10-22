@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Copy } from "./protocol";
-import { centralPrompt, compareReadError, differsNotice, endedToast, markTone, setupActions, setupPrompt, stopPrompt, syncChoice, syncLine, syncOffered, tooBigLine } from "./sync";
+import { centralChangePrompt, centralPrompt, compareReadError, differsNotice, endedToast, markTone, setupActions, setupPrompt, stopPrompt, syncChoice, syncLine, syncOffered, tooBigLine } from "./sync";
 
 const copy = (patch: Partial<Copy> = {}): Copy => ({
   id: "c1",
@@ -174,5 +174,29 @@ describe("compareReadError (X60 Compare)", () => {
       "cannot open /Users/alex/.moonlet/worktrees/shop/fix-cart/src/cart.ts: Permission denied (os error 13)",
     );
     expect(compareReadError(new Error("disconnected: studio-mini is not reachable"))).toBe("disconnected: studio-mini is not reachable");
+  });
+});
+
+describe("moving or clearing the central host while sessions are kept in sync (X41, X60)", () => {
+  it("asks only when copies of the current central host would be left behind", () => {
+    expect(centralChangePrompt("studio-mini", "studio-mini", 2, "/Users/alex/.moonlet", "/Users/alex")).toBeNull();
+    expect(centralChangePrompt("studio-mini", "build-box", 0, "/Users/alex/.moonlet", "/Users/alex")).toBeNull();
+    expect(centralChangePrompt(null, "studio-mini", 0, "/Users/alex/.moonlet", "/Users/alex")).toBeNull();
+  });
+
+  it("says what moving it does", () => {
+    expect(centralChangePrompt("studio-mini", "build-box", 2, "/Users/alex/.moonlet", "/Users/alex")).toEqual({
+      title: "Change the central host",
+      message:
+        "2 sessions are kept in sync with studio-mini. Making build-box the central host stops keeping them in sync: their copies on this Mac are removed, and files only this Mac has are saved to a folder in ~/.moonlet/sync-leftovers first.",
+      action: "Stop keeping in sync",
+      variant: "danger",
+    });
+  });
+
+  it("says what clearing it does, for one session", () => {
+    expect(centralChangePrompt("studio-mini", null, 1, "/Users/alex/.moonlet", "/Users/alex")?.message).toBe(
+      "1 session is kept in sync with studio-mini. Clearing the central host stops keeping it in sync: its copy on this Mac is removed, and files only this Mac has are saved to a folder in ~/.moonlet/sync-leftovers first.",
+    );
   });
 });

@@ -94,6 +94,24 @@ export function stopPrompt(session: string, differing: number, moonletHome: stri
   };
 }
 
+/** The modal before the central host moves to `next` (or is cleared, `null`)
+ * while `kept` sessions of the current one are kept in sync: their copies
+ * would wait for a host that is no longer central, so the app stops them
+ * first. Null when nothing is left behind. */
+export function centralChangePrompt(current: string | null, next: string | null, kept: number, moonletHome: string, home: string | null | undefined): ConfirmOptions | null {
+  if (!current || current === next || kept === 0) return null;
+  const folder = tilde(`${moonletHome}/sync-leftovers`, home);
+  const what = next ? `Making ${next} the central host` : "Clearing the central host";
+  const them = kept === 1 ? "1 session is kept in sync" : `${kept} sessions are kept in sync`;
+  const copies = kept === 1 ? "it in sync: its copy on this Mac is removed" : "them in sync: their copies on this Mac are removed";
+  return {
+    title: "Change the central host",
+    message: `${them} with ${current}. ${what} stops keeping ${copies}, and files only this Mac has are saved to a folder in ${folder} first.`,
+    action: "Stop keeping in sync",
+    variant: "danger",
+  };
+}
+
 /** The toast when a copy went: turned off, or its session archived on the central host. */
 export function endedToast(session: string, host: string, removed: { reason: "stopped" | "archived"; folder: string; leftovers: string[] }, home: string | null | undefined): string {
   const n = removed.leftovers.length;

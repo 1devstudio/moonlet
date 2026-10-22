@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { askConfirm } from "./confirm";
 import { EV, M, type Copy, type CopyChanged, type DaemonInfo, type LinkInfo, type LinkState, type ProjectIdentity } from "./protocol";
-import { centralPrompt, differsNotice, endedToast, setupActions, setupPrompt, stopPrompt, syncChoice } from "./sync";
+import { centralChangePrompt, centralPrompt, differsNotice, endedToast, setupActions, setupPrompt, stopPrompt, syncChoice } from "./sync";
 import { errorToast, notify, selectSession, sesKey, toast, useStore } from "./store";
 import { differsAlert } from "./alerts";
 import { readStored, writeStored } from "./storage";
@@ -167,6 +167,32 @@ export async function keepInSync(host: string, session: string): Promise<void> {
   try {
     const copy = await rpc<Copy>(LOCAL, M.syncStart, { session });
     setSync((s) => ({ copies: { ...s.copies, [copyKey(copy)]: copy } }));
+  } catch (e) {
+    errorToast(e);
+  }
+}
+
+/** Settings' Central host choice: moving or clearing it while sessions of
+ * the current central host are kept in sync asks first, then stops them,
+ * since they would wait for a host that is no longer central (X41, X60). */
+export async function changeCentral(next: string | null): Promise<void> {
+  const { copies, central } = getSync();
+  const kept = Object.values(copies).filter((c) => c.host === central);
+  const ask = centralChangePrompt(central, next, kept.length, syncDataDir(), home());
+  if (ask) {
+    if (!(await askConfirm(ask))) return;
+    for (const c of kept) {
+      try {
+        await rpc(LOCAL, M.syncStop, { copy: c.id });
+      } catch (e) {
+        if (e instanceof DaemonError && (e.code === "not_saved" || e.code === "failed")) toast(`${sessionName(c, "A session")} is still kept in sync: ${e.message}`, "error");
+        else errorToast(e);
+        return;
+      }
+    }
+  }
+  try {
+    setSync(fromLink(await hostsApi.setCentral(next)));
   } catch (e) {
     errorToast(e);
   }
