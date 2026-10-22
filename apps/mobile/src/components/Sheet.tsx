@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 /** A bottom sheet over the screen; a tap outside closes it. It renders into
- *  the body: iOS stacks a `.scroll` screen's fixed children inside it, which
- *  left the tab bar over sheets opened from a tab. */
+ * the body: iOS stacks a `.scroll` screen's fixed children inside it, which
+ * left the tab bar over sheets opened from a tab. */
 export function Sheet({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
   return createPortal(
     <div className="fixed inset-0 z-40 flex flex-col justify-end">
