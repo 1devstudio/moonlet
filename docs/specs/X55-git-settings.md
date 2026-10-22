@@ -50,12 +50,12 @@ Settings gains a **Git** page under App: how new sessions name and start their b
 - [x] "Local branch": Ask each time (the prompt's "Also delete the branch" checkbox, as today), Keep, Delete when its PR merged (default), Always delete. The hint under it explains the picked option. A kept folder keeps its branch (it is checked out there), and the project's base branch is never deleted.
 - [x] With "Delete when its PR merged", the branch is deleted when the session's PR is known to be merged, and kept otherwise. The prompt says which.
 - [x] "Also delete the branch on origin" (default off): when the session's PR merged and the local branch is deleted, `origin/<branch>` is deleted too. A failure to delete it on origin does not stop the archive; it shows as a toast.
-- [x] "Warn before losing unpushed work" (default on): before archiving, moonlet reads the session's uncommitted files (shown when the folder will be removed) and its commits not on origin (shown when the folder is removed or the branch deleted). Commits not on origin are those ahead of the upstream, or, without one, on no other branch or remote.
+- [x] "Warn before losing unpushed work" (default on): before archiving, moonlet reads the session's uncommitted files (shown when the folder will be removed) and its commits not on origin (shown when the folder is removed or the branch deleted). Commits not on origin are those on the session's branch, or on a detached HEAD, that no other branch or remote has. It is the session's branch even when an agent checked out another one in the folder: that other branch is kept, and its commits with it. A merged PR's head commit, and every commit it contains, counts as on origin: GitHub keeps it after a squash merge and once the branch is deleted. (`git.rs` tests `commits_on_a_branch_the_worktree_moved_to_are_not_lost`, `the_session_branch_is_read_when_another_is_checked_out`, `a_squash_merged_prs_commits_are_not_lost`, `a_prs_head_commit_is_read`, `the_checked_out_branch_is_read_when_a_tag_shares_its_name`; daemon test `unpushed_work_is_read_from_the_session_branch_over_rpc`; `lib/gitSettings.test.ts` "asks about the session's own branch, which archiving deletes" and "counts a merged PR's head as saved, since GitHub keeps it after a squash merge")
 
 ### Archive prompt with unpushed work
 
 - [x] When there is such work, the prompt shows an amber box "This work is only on this Mac" (or "…only on <host>") listing up to 8 uncommitted files with their status letter, and a line "<n> uncommitted files · <n> commits not pushed to origin/<branch>".
-- [x] Its buttons are Cancel, "Push, then archive" and "Archive anyway" (danger). "Push, then archive" is disabled while there are uncommitted files, titled "Commit the changes first"; otherwise it runs `git push -u origin HEAD`, then archives. A failed push shows the error and archives nothing.
+- [x] Its buttons are Cancel, "Push, then archive" and "Archive anyway" (danger). "Push, then archive" is disabled while there are uncommitted files, titled "Commit the changes first"; otherwise it runs `git push -u origin <session branch>`, then archives. The branch then stays on origin even when "Also delete the branch on origin" is on: the push just saved commits there that a merged PR does not have. While a detached HEAD has commits that neither a branch nor the merged PR's head has, the push refuses with "<n> commits on a detached HEAD are on no branch. Put them on a branch first.", since pushing the branch would not save them. (`git.rs` tests `push_sends_the_session_branch_not_the_checked_out_one`, `push_refuses_while_a_detached_head_has_commits_of_its_own`, `push_lets_a_detached_head_at_the_merged_prs_head_go`; `lib/confirm.test.ts` "keeps the branch on origin after Push, then archive: the push just saved the commits there") A failed push shows the error and archives nothing.
 - [x] Without such work, or with the warning off, the prompt is the X23 archive prompt as today.
 
 ### Keeping base branches current
@@ -72,8 +72,9 @@ As the design (`Settings · Git` and `Archive prompt · unpushed work`): page he
 - `git.settings` `{}` → `GitSettings`.
 - `git.set_settings` `{ ...partial GitSettings }` → `GitSettings` (the whole, after the change). Refuses an invalid branch prefix.
 - Event `git.settings_changed`: the whole `GitSettings` after a change, to every client (a change made with the CLI reaches the app).
-- `git.unpushed` `{ path }` → `{ files: [{ status, path }], commits, upstream }`.
-- `git.push` `{ path }`: `git push -u origin HEAD`.
+- `git.unpushed` `{ path, branch?, merged_head? }` → `{ files: [{ status, path }], commits, upstream }`. `branch` is the session's branch (absent: the checked-out one); `merged_head` the head commit of its merged PR. `upstream` is `branch`'s.
+- `git.push` `{ path, branch?, merged_head? }`: `git push -u origin <branch>`, else HEAD.
+- `PullRequest` gains `head_oid` (gh's `headRefOid`).
 - `session.archive` gains `delete_remote` (default false) and returns `{ remote_error }`: why origin refused the delete, if it did.
 - `session.create` reads the host's prefix and start point when `branch` and `from` are absent. New branches are created with `--no-track`.
 - `daemon.info` gains `data_dir`, the daemon's data folder (the page shows its `worktrees`).
@@ -100,7 +101,7 @@ As the design (`Settings · Git` and `Archive prompt · unpushed work`): page he
 
 ## Security considerations
 
-The prefix ends up in a `git worktree add -b` argument: it is validated on the daemon too, and git is run without a shell. `git.push` and `git.unpushed` take a path, like the other `git.*` RPCs.
+The prefix ends up in a `git worktree add -b` argument: it is validated on the daemon too, and git is run without a shell. `git.push` and `git.unpushed` take a path, like the other `git.*` RPCs. Their `branch` is used only when it does not start with `-` and `refs/heads/<branch>` exists (`git update-ref` can make a branch named like an option), and is passed to `rev-list` and `push` as a full `refs/heads/` name; `merged_head` only when it is hex and a commit git has. (`git.rs` test `a_branch_named_like_an_option_is_not_passed_to_git`)
 
 ## Out of scope
 
@@ -110,9 +111,9 @@ The prefix ends up in a `git worktree add -b` argument: it is validated on the d
 
 ## Test plan
 
-- Rust unit tests: `git.toml` defaults, partial files, a bad file, prefix validation, the branch name with a prefix, start point from origin, `git.unpushed` parsing.
-- Daemon tests (`crates/moonletd/tests/daemon.rs`): settings round trip over RPC and in `git.toml`; a session starting from `origin/main`; a prefixed branch; archive with `delete_remote`; `git.unpushed` on a real repository.
-- Vitest: host switch options, defaults for an old daemon, prefix validation, archive plan (which flags, prompt text), fetch interval due, auto fast-forward decision.
+- Rust unit tests: `git.toml` defaults, partial files, a bad file, prefix validation, the branch name with a prefix, start point from origin, `git.unpushed` parsing; unpushed work read from the session's branch when another is checked out, a squash-merged PR's head, a PR's `headRefOid`, `git.push` of the session's branch, a detached HEAD, a branch named like an option.
+- Daemon tests (`crates/moonletd/tests/daemon.rs`): settings round trip over RPC and in `git.toml`; a session starting from `origin/main`; a prefixed branch; archive with `delete_remote`; `git.unpushed` on a real repository, and with the session's `branch` and `merged_head` after the worktree moved to another branch.
+- Vitest: host switch options, defaults for an old daemon, prefix validation, archive plan (which flags, prompt text), fetch interval due, auto fast-forward decision, `git.unpushed` params (`unpushedParams`).
 - e2e (`git-settings.e2e.ts`): change a setting, leave and come back, it is kept.
 
 ## Open questions
