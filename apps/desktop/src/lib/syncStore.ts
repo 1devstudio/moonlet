@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc } from "./daemon";
-import { askConfirm } from "./confirm";
+import { askConfirm, askConfirmOrCovered, whenNoConfirm } from "./confirm";
 import { EV, M, type Copy, type CopyChanged, type DaemonInfo, type LinkInfo, type LinkState, type ProjectIdentity } from "./protocol";
 import { centralChangePrompt, centralPrompt, differsNotice, endedToast, setupActions, setupPrompt, stopPrompt, syncChoice } from "./sync";
 import { errorToast, notify, selectSession, sesKey, toast, useStore } from "./store";
@@ -117,28 +117,53 @@ function maybeAskSetup(copy: Copy) {
   void askSetup(copy, s.command);
 }
 
-/** The setup modal: Run setup approves this exact command; Skip leaves it unrun. */
-export async function askSetup(copy: Copy, command: string): Promise<void> {
+/** Setup questions wait for each other, so one never covers another. */
+let setupQueue: Promise<void> = Promise.resolve();
+
+/** The setup modal: Run setup approves this exact command; Skip leaves it
+ * unrun. Only an explicit Skip skips: a modal that another question covered
+ * is asked again once that question is answered. */
+export function askSetup(copy: Copy, command: string): Promise<void> {
+  const turn = setupQueue.then(() => askSetupNow(copy, command));
+  setupQueue = turn.catch(() => {});
+  return turn;
+}
+
+async function askSetupNow(copy: Copy, first: string): Promise<void> {
   const project = useStore.getState().projects[copy.host]?.find((p) => p.id === sessionOf(copy)?.project_id)?.name ?? "the project";
-  const ok = await askConfirm(setupPrompt(project, command));
-  if (!ok) {
-    await rpc(LOCAL, M.syncSkipSetup, { copy: copy.id }).catch(errorToast);
-    return;
+  let command: string | null = first;
+  while (command !== null) {
+    await whenNoConfirm();
+    const answer = await askConfirmOrCovered(setupPrompt(project, command));
+    if (answer === "covered") continue;
+    if (!answer) {
+      await rpc(LOCAL, M.syncSkipSetup, { copy: copy.id }).catch(errorToast);
+      return;
+    }
+    command = await runSetupNow(copy, command);
   }
-  await runSetup(copy, command);
 }
 
 /** Runs `command`, asking again when the copy's setup changed meanwhile. */
 export async function runSetup(copy: Copy, command: string): Promise<void> {
+  const changed = await runSetupNow(copy, command);
+  if (changed !== null) await askSetup(copy, changed);
+}
+
+/** Runs `command`. Gives the new command when the copy's setup changed
+ * meanwhile, for the caller to ask about. */
+async function runSetupNow(copy: Copy, command: string): Promise<string | null> {
   try {
     await rpc(LOCAL, M.syncRunSetup, { copy: copy.id, command });
   } catch (e) {
     if (e instanceof DaemonError && e.code === "setup_changed") {
       asked.add(`${copy.id}\n${e.message}`);
-      await askSetup(copy, e.message);
-    } else if (e instanceof DaemonError && e.code === "no_setup") toast(`${sessionName(copy, "The session")} has no setup script any more.`);
+      return e.message;
+    }
+    if (e instanceof DaemonError && e.code === "no_setup") toast(`${sessionName(copy, "The session")} has no setup script any more.`);
     else errorToast(e);
   }
+  return null;
 }
 
 /** The popover's Run setup (again): asks first unless this exact command was approved. */

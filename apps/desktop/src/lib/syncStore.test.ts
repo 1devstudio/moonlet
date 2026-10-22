@@ -119,6 +119,44 @@ describe("the setup modal (X60)", () => {
     expect(useStore.getState().confirm).toBeNull();
   });
 
+  it("asks for two copies one after the other, skipping neither", async () => {
+    answers["sync.run_setup"] = () => copy();
+    answers["sync.skip_setup"] = () => copy();
+    changed(copy({ id: "q1", setup: needs("pnpm install") }));
+    changed(copy({ id: "q2", session: "s2", setup: needs("make") }));
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ code: "pnpm install" });
+    answerConfirm(true, false);
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ code: "make" });
+    answerConfirm(true, false);
+    await settle();
+    expect(calls.filter((c) => c.method.startsWith("sync.") && c.method.endsWith("setup")).map((c) => [c.method, c.params])).toEqual([
+      ["sync.run_setup", { copy: "q1", command: "pnpm install" }],
+      ["sync.run_setup", { copy: "q2", command: "make" }],
+    ]);
+  });
+
+  it("asks again, not skipping, when another question covered the setup modal", async () => {
+    answers["sync.run_setup"] = () => copy();
+    answers["sync.skip_setup"] = () => copy();
+    changed(copy({ id: "q3", setup: needs("pnpm install") }));
+    await settle();
+    const stopping = stopSync(copy({ id: "other" }));
+    await settle();
+    expect(useStore.getState().confirm?.options.title).not.toBe("Run setup");
+    answerConfirm(false, false);
+    await stopping;
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ title: "Run setup", code: "pnpm install" });
+    answerConfirm(true, false);
+    await settle();
+    expect(calls.filter((c) => c.method === "sync.skip_setup")).toEqual([]);
+    expect(calls.filter((c) => c.method === "sync.run_setup")).toEqual([{ method: "sync.run_setup", params: { copy: "q3", command: "pnpm install" } }]);
+  });
+
   it("runs an approved command again without asking, and asks for one not approved", async () => {
     answers["sync.run_setup"] = () => copy();
     await runSetupAgain(copy({ id: "c5", setup: { state: { kind: "done" }, command: "pnpm install", approved: true } }));
