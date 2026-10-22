@@ -263,6 +263,16 @@ async fn worker(origin: &Path) -> Daemon {
 
 /// [`worker`]; with no `origin`, [`ORIGIN_URL`] stays unreachable.
 async fn worker_with(origin: Option<&Path>) -> Daemon {
+    worker_as(
+        origin,
+        "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37",
+        "Alex's MacBook Pro",
+    )
+    .await
+}
+
+/// [`worker_with`], as the worker `id` named `name`.
+async fn worker_as(origin: Option<&Path>, id: &str, name: &str) -> Daemon {
     let home = tempfile::tempdir().unwrap();
     let config = home.path().join("gitconfig");
     write(
@@ -273,7 +283,7 @@ async fn worker_with(origin: Option<&Path>) -> Daemon {
     );
     write(
         &home.path().join("link.json"),
-        &json!({ "central": null, "worker": { "id": "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37", "name": "Alex's MacBook Pro", "enabled": false } })
+        &json!({ "central": null, "worker": { "id": id, "name": name, "enabled": false } })
             .to_string(),
     );
     Daemon::start(
@@ -433,32 +443,182 @@ async fn an_edit_on_the_central_host_shows_in_the_copy_within_a_second() {
 }
 
 #[tokio::test]
-async fn an_edit_made_in_the_copy_is_never_overwritten_and_differs() {
+async fn an_edit_in_the_copy_reaches_the_central_host_within_a_second() {
     let (central, worker, c) = synced().await;
     let s = central.session_path();
+    write(&c.join("node_modules/left-pad/index.js"), "ignored\n");
+    write(&c.join("src/cart.ts"), "from the mac\n");
+    let took = reads(&s.join("src/cart.ts"), "from the mac\n").await;
+    assert!(took < Duration::from_secs(1), "took {took:?}");
+    assert!(!s.join("node_modules").exists(), "an ignored file synced");
+
+    // A new file and a deleted one.
+    write(&c.join("docs/notes.md"), "notes\n");
+    std::fs::remove_file(c.join("src/cart.ts")).unwrap();
+    reads(&s.join("docs/notes.md"), "notes\n").await;
+    eventually("the deletion reaches the central host", || async {
+        !s.join("src/cart.ts").exists()
+    })
+    .await;
+    eventually("nothing differs", || async {
+        let c = copies(&worker).await;
+        c[0].differs.is_empty() && c[0].state == CopyState::InSync
+    })
+    .await;
+}
+
+/// The next `sync.changed` on `events` within `wait`.
+async fn next_change(events: &mut Client, wait: Duration) -> Option<Value> {
+    use moonlet_proto::{Frame, Message};
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let f = tokio::time::timeout_at(deadline, events.next_frame())
+            .await
+            .ok()?
+            .unwrap()?;
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "sync.changed"
+        {
+            return Some(data);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_change_applied_on_one_side_is_not_sent_back() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    let mut events = worker.app().await;
+    let _: Value = events.request("daemon.info", json!({})).await.unwrap();
+
+    write(&c.join("src/cart.ts"), "from the mac\n");
+    reads(&s.join("src/cart.ts"), "from the mac\n").await;
+    write(&s.join("docs/notes.md"), "from studio-mini\n");
+    reads(&c.join("docs/notes.md"), "from studio-mini\n").await;
+    // The rounds those made settle, within 10 s.
+    let start = Instant::now();
+    while next_change(&mut events, Duration::from_secs(1))
+        .await
+        .is_some()
+    {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the copy never settled"
+        );
+    }
+    // Then nothing goes back and forth.
+    let echo = next_change(&mut events, Duration::from_secs(2)).await;
+    assert_eq!(echo, None, "a round after both sides agreed");
+    assert_eq!(copies(&worker).await[0].state, CopyState::InSync);
+    assert_eq!(
+        read(&s.join("src/cart.ts")).as_deref(),
+        Some("from the mac\n")
+    );
+    assert_eq!(
+        read(&c.join("docs/notes.md")).as_deref(),
+        Some("from studio-mini\n")
+    );
+}
+
+#[tokio::test]
+async fn a_file_both_sides_change_differs_until_one_version_is_kept() {
+    let (mut central, worker, c) = synced().await;
+    let s = central.session_path();
+    // Both edit src/cart.ts differently; each also changes a file alone.
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
     write(&c.join("src/cart.ts"), "mine\n");
     write(&c.join("src/local.ts"), "local\n");
     write(&s.join("src/cart.ts"), "theirs\n");
     write(&s.join("docs/new.md"), "new\n");
+    central.daemon.restart().await;
+
     reads(&c.join("docs/new.md"), "new\n").await;
-    eventually("the copy lists what differs", || async {
-        copies(&worker).await[0].differs == ["src/cart.ts", "src/local.ts"]
+    reads(&s.join("src/local.ts"), "local\n").await;
+    let copy = copy_in(&worker, |s| *s == CopyState::InSync, "in sync").await;
+    eventually("src/cart.ts differs", || async {
+        copies(&worker).await[0].differs == ["src/cart.ts"]
     })
     .await;
+    // Neither version was lost.
     assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("mine\n"));
-    assert_eq!(read(&c.join("src/local.ts")).as_deref(), Some("local\n"));
     assert_eq!(read(&s.join("src/cart.ts")).as_deref(), Some("theirs\n"));
-    assert!(!s.join("src/local.ts").exists());
 
-    // Later edits on the central host still arrive, and the files that
-    // differ still keep this Mac's version.
-    write(&s.join("src/cart.ts"), "theirs again\n");
+    // Later edits elsewhere still sync both ways, and the file still differs.
     write(&s.join("docs/new.md"), "newer\n");
     reads(&c.join("docs/new.md"), "newer\n").await;
     assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("mine\n"));
+    assert_eq!(copies(&worker).await[0].differs, ["src/cart.ts"]);
+
+    // Keep studio-mini's: both have "theirs".
+    let kept: Copy = worker
+        .call(
+            "sync.resolve",
+            json!({ "copy": copy.id, "path": "src/cart.ts", "keep": "central" }),
+        )
+        .await;
+    assert!(kept.differs.is_empty(), "{kept:?}");
+    reads(&c.join("src/cart.ts"), "theirs\n").await;
+    assert_eq!(read(&s.join("src/cart.ts")).as_deref(), Some("theirs\n"));
+
+    // Again, keeping this Mac's.
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("src/cart.ts"), "mine again\n");
+    write(&s.join("src/cart.ts"), "theirs again\n");
+    central.daemon.restart().await;
+    eventually("src/cart.ts differs again", || async {
+        copies(&worker).await[0].differs == ["src/cart.ts"]
+    })
+    .await;
+    let kept: Copy = worker
+        .call(
+            "sync.resolve",
+            json!({ "copy": copy.id, "path": "src/cart.ts", "keep": "worker" }),
+        )
+        .await;
+    assert!(kept.differs.is_empty(), "{kept:?}");
+    reads(&s.join("src/cart.ts"), "mine again\n").await;
     assert_eq!(
-        copies(&worker).await[0].differs,
-        ["src/cart.ts", "src/local.ts"]
+        read(&c.join("src/cart.ts")).as_deref(),
+        Some("mine again\n")
+    );
+}
+
+/// The copy offers an edit to one file while the central host's daemon is
+/// frozen; before the central host answers, both sides edit another file.
+/// The answer brings the central host's version of that file, which the
+/// copy's newer edit was not made on: both edits must count, and differ.
+#[tokio::test]
+async fn an_edit_kept_through_an_answer_still_differs_from_the_central_hosts() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    let pid = nix::unistd::Pid::from_raw(central.daemon.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    // The copy's offer of notes.md waits on the frozen central host.
+    write(&c.join("notes.md"), "notes\n");
+    copy_in(
+        &worker,
+        |s| matches!(s, CopyState::Syncing { .. }),
+        "offering",
+    )
+    .await;
+    write(&s.join("src/cart.ts"), "the agent's\n");
+    write(&c.join("src/cart.ts"), "mine\n");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+
+    reads(&s.join("notes.md"), "notes\n").await;
+    eventually("src/cart.ts differs", || async {
+        copies(&worker).await[0].differs == ["src/cart.ts"]
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(copies(&worker).await[0].differs, ["src/cart.ts"]);
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("mine\n"));
+    assert_eq!(
+        read(&s.join("src/cart.ts")).as_deref(),
+        Some("the agent's\n")
     );
 }
 
@@ -473,6 +633,103 @@ async fn while_the_link_is_down_the_copy_waits_and_then_catches_up() {
     central.daemon.restart().await;
     reads(&c.join("src/cart.ts"), "while away\n").await;
     in_sync(&worker).await;
+}
+
+#[tokio::test]
+async fn edits_on_both_sides_while_the_link_is_down_reach_both_sides() {
+    let (mut central, worker, c) = synced().await;
+    let s = central.session_path();
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("docs/train.md"), "written offline\n");
+    std::fs::remove_file(c.join(".gitignore")).unwrap();
+    write(&s.join("src/cart.ts"), "the agent's\n");
+    central.daemon.restart().await;
+
+    reads(&s.join("docs/train.md"), "written offline\n").await;
+    reads(&c.join("src/cart.ts"), "the agent's\n").await;
+    eventually("the deletion reaches the central host", || async {
+        !s.join(".gitignore").exists()
+    })
+    .await;
+    let copy = in_sync(&worker).await;
+    assert!(copy.differs.is_empty(), "{copy:?}");
+}
+
+#[tokio::test]
+async fn two_macs_keeping_one_session_in_sync_each_get_the_others_edits() {
+    let (central, pro, c1) = synced().await;
+    let air = worker_as(
+        Some(&central.origin),
+        "5b0c7a3e-0d7e-4a51-8f1e-6c2b9a4d3e10",
+        "Alex's MacBook Air",
+    )
+    .await;
+    link(&central, &air).await;
+    let _: Copy = air
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let c2 = PathBuf::from(in_sync(&air).await.path);
+    assert_ne!(c1, c2);
+    let s = central.session_path();
+
+    // An edit on studio-mini reaches both Macs.
+    write(&s.join("src/cart.ts"), "the agent's\n");
+    reads(&c1.join("src/cart.ts"), "the agent's\n").await;
+    reads(&c2.join("src/cart.ts"), "the agent's\n").await;
+
+    // An edit on one Mac reaches the other, through studio-mini.
+    write(&c1.join("docs/pro.md"), "from the Pro\n");
+    reads(&s.join("docs/pro.md"), "from the Pro\n").await;
+    reads(&c2.join("docs/pro.md"), "from the Pro\n").await;
+    write(&c2.join("docs/air.md"), "from the Air\n");
+    reads(&c1.join("docs/air.md"), "from the Air\n").await;
+    assert!(copies(&pro).await[0].differs.is_empty());
+    assert!(copies(&air).await[0].differs.is_empty());
+}
+
+#[tokio::test]
+async fn a_live_upgrade_of_the_central_host_loses_no_edit() {
+    let (central, worker, c) = synced().await;
+    let s = central.session_path();
+    write(&c.join("docs/before.md"), "before the upgrade\n");
+    reads(&s.join("docs/before.md"), "before the upgrade\n").await;
+
+    write(&c.join("docs/during.md"), "during the upgrade\n");
+    let status = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("upgrade")
+        .env("MOONLET_HOME", central.daemon.home.path())
+        .env("MOONLET_SOCK", &central.daemon.socket)
+        .envs(
+            central
+                .daemon
+                .env
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "moonletd upgrade failed");
+    write(&s.join("src/cart.ts"), "after the upgrade\n");
+
+    reads(&s.join("docs/during.md"), "during the upgrade\n").await;
+    reads(&c.join("src/cart.ts"), "after the upgrade\n").await;
+    write(&c.join("docs/after.md"), "after it too\n");
+    reads(&s.join("docs/after.md"), "after it too\n").await;
+    assert!(in_sync(&worker).await.differs.is_empty());
+
+    // The upgraded daemon is not the test's child.
+    let mut app = central.daemon.app().await;
+    let info: Value = app.request("daemon.info", json!({})).await.unwrap();
+    let _: Value = app
+        .request("daemon.shutdown", json!({}))
+        .await
+        .unwrap_or(Value::Null);
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = Command::new("kill").arg(info["pid"].to_string()).status();
 }
 
 #[tokio::test]
@@ -744,11 +1001,20 @@ fn mktree(repo: &Path, listing: &str) -> String {
         .to_string()
 }
 
+/// What a central host with no changes of its own answers an offer: the
+/// worker's files as they are, now the base.
+fn took_offer(offer: &Value) -> Value {
+    json!({
+        "from": "", "tree": offer["tree"], "base": offer["tree"], "head": offer["head"],
+        "differs": [], "too_big": [], "pack": null,
+    })
+}
+
 /// A fake central host serving one session (the clone `repo`, on branch
 /// `fix-cart`) that, once the copy is made, sends an update whose tree
 /// holds `..`: a path outside the copy.
-async fn hostile_central(repo: PathBuf) -> String {
-    fake_central(repo, Update::Outside, Default::default()).await
+async fn hostile_central(repo: PathBuf, go: std::sync::Arc<tokio::sync::Notify>) -> String {
+    fake_central(repo, Update::Outside, Default::default(), go).await
 }
 
 /// What [`fake_central`] sends once the copy is made.
@@ -758,18 +1024,26 @@ enum Update {
     /// `src/cart.ts` as `c`, against a base the worker never had, as when
     /// the central host missed the worker's last reply.
     StaleBase,
-    /// `src/cart.ts` as `c`, once the gate opens.
-    Gated(std::sync::Arc<tokio::sync::Notify>),
+    /// `src/cart.ts` as `c`.
+    Edit,
     /// A tree id that is no object id at all.
     BadId,
+    /// No update; the first offers are turned away as `busy`, as many as
+    /// the count, and the one taken lands in `seen`.
+    OffersBusy(std::sync::Arc<std::sync::atomic::AtomicUsize>),
+    /// Offers are turned away until `src/cart.ts` as `c` is sent; the
+    /// worker's first reply lands in `seen`, and no update follows it.
+    EditWhileOffersWait,
 }
 
 /// A fake central host serving one session (the clone `repo`, on branch
-/// `fix-cart`); the worker's reply to its update goes in `seen`.
+/// `fix-cart`). It sends its update once `go` is notified, and the worker's
+/// reply to it goes in `seen`.
 async fn fake_central(
     repo: PathBuf,
     update: Update,
     seen: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
+    go: std::sync::Arc<tokio::sync::Notify>,
 ) -> String {
     use moonlet_proto::{Frame, Message, read_frame, write_frame};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -798,6 +1072,8 @@ async fn fake_central(
         let tree = git(&repo, &["rev-parse", "HEAD^{tree}"]);
         let root = git(&repo, &["rev-list", "--max-parents=0", "HEAD"]);
         let mut copy_id = String::new();
+        let mut updated = false;
+        let busy = || moonlet_proto::RpcError::new("busy", "not now");
         while let Ok(Some(frame)) = read_frame(&mut s).await {
             let Frame::Json(Message::Request { id, method, params }) = frame else {
                 continue;
@@ -806,19 +1082,37 @@ async fn fake_central(
                 copy_id = c.to_string();
             }
             let reply = match method.as_str() {
-                "sync.open" => json!({
+                "sync.open" => Ok(json!({
                     "path": repo.join("fix-cart"), "branch": "fix-cart", "head": head,
                     "name": "Fix cart", "project": "shop",
                     "identity": { "origin": "git.invalid/acme/shop", "root": root },
                     "origin_url": ORIGIN_URL,
-                }),
-                "sync.fetch" => json!({ "tree": tree, "head": head, "too_big": [], "pack": null }),
-                _ => json!({}),
+                })),
+                "sync.fetch" => {
+                    Ok(json!({ "tree": tree, "head": head, "too_big": [], "pack": null }))
+                }
+                "sync.offer" => match &update {
+                    Update::OffersBusy(left)
+                        if left.load(std::sync::atomic::Ordering::SeqCst) > 0 =>
+                    {
+                        left.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        Err(busy())
+                    }
+                    Update::OffersBusy(_) => {
+                        *seen.lock().unwrap() = Some(params.clone());
+                        Ok(took_offer(&params))
+                    }
+                    Update::EditWhileOffersWait if !updated => Err(busy()),
+                    _ => Ok(took_offer(&params)),
+                },
+                _ => Ok(json!({})),
             };
-            write_frame(&mut s, &Frame::Json(Message::ok(id, reply)))
-                .await
-                .unwrap();
-            if method != "sync.fetch" {
+            let reply = match reply {
+                Ok(v) => Message::ok(id, v),
+                Err(e) => Message::err(id, e),
+            };
+            write_frame(&mut s, &Frame::Json(reply)).await.unwrap();
+            if method != "sync.fetch" || updated || matches!(update, Update::OffersBusy(_)) {
                 continue;
             }
             let listing = git(&repo, &["ls-tree", "HEAD"]);
@@ -830,7 +1124,8 @@ async fn fake_central(
                     let bad = mktree(&repo, &format!("{listing}\n040000 tree {sub}\t..\n"));
                     (bad, sub, tree.clone())
                 }
-                Update::StaleBase | Update::Gated(_) | Update::BadId => {
+                Update::OffersBusy(_) => unreachable!("no update"),
+                Update::StaleBase | Update::Edit | Update::BadId | Update::EditWhileOffersWait => {
                     write(&repo.join("c.txt"), "c\n");
                     let blob = git(&repo, &["hash-object", "-w", "c.txt"]);
                     let src = mktree(&repo, &format!("100644 blob {blob}\tcart.ts\n"));
@@ -847,7 +1142,9 @@ async fn fake_central(
                             format!("{src}\n{blob}"),
                             "4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_string(),
                         ),
-                        Update::Gated(_) => (new, format!("{src}\n{blob}"), tree.clone()),
+                        Update::Edit | Update::EditWhileOffersWait => {
+                            (new, format!("{src}\n{blob}"), tree.clone())
+                        }
                         _ => ("--output=/tmp/x".to_string(), src, tree.clone()),
                     }
                 }
@@ -869,11 +1166,13 @@ async fn fake_central(
                     .unwrap();
                 child.wait_with_output().unwrap().stdout
             };
-            if let Update::Gated(gate) = &update {
-                gate.notified().await;
-            }
-            // Until the copy is made, the worker answers `copying`.
-            for try_id in 1u64.. {
+            // The test opens the gate once it has seen the copy made.
+            go.notified().await;
+            // The first reply is the one asked about: no update follows it.
+            let once = matches!(update, Update::EditWhileOffersWait);
+            // Until the copy is made, the worker answers `copying`, or that
+            // it didn't apply the update while it is busy making it.
+            for try_id in 1u64..200 {
                 for f in moonlet_proto::pack_frames(try_id as u32, &pack) {
                     write_frame(&mut s, &f).await.unwrap();
                 }
@@ -895,15 +1194,51 @@ async fn fake_central(
                         {
                             break (result, error);
                         }
+                        // An offer the worker makes meanwhile. A real central
+                        // host would answer it with its own change; this one
+                        // turns it away until its update is in, unless the
+                        // first reply is all it asks about.
+                        Ok(Some(Frame::Json(Message::Request { id, method, params }))) => {
+                            let reply = if method == "sync.offer" && once {
+                                Message::ok(id, took_offer(&params))
+                            } else {
+                                Message::err(id, moonlet_proto::RpcError::new("busy", "not now"))
+                            };
+                            write_frame(&mut s, &Frame::Json(reply)).await.unwrap();
+                        }
                         Ok(Some(_)) => {}
                         _ => return,
                     }
                 };
-                if error.as_ref().is_some_and(|e| e.code == "copying") {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                let not_yet = error.as_ref().is_some_and(|e| e.code == "copying")
+                    || result
+                        .as_ref()
+                        .is_some_and(|r| r["applied"] == json!(false));
+                if not_yet && !once {
+                    // Turn the worker's offers away (it backs off and lets go
+                    // of the copy), and send again once it has been quiet a
+                    // while.
+                    loop {
+                        let next =
+                            tokio::time::timeout(Duration::from_millis(300), read_frame(&mut s))
+                                .await;
+                        match next {
+                            Err(_) => break,
+                            Ok(Ok(Some(Frame::Json(Message::Request { id, .. })))) => {
+                                let reply = Message::err(
+                                    id,
+                                    moonlet_proto::RpcError::new("busy", "not now"),
+                                );
+                                write_frame(&mut s, &Frame::Json(reply)).await.unwrap();
+                            }
+                            Ok(Ok(Some(_))) => {}
+                            Ok(_) => return,
+                        }
+                    }
                     continue;
                 }
                 *seen.lock().unwrap() = Some(json!({ "result": result, "error": error }));
+                updated = true;
                 break;
             }
         }
@@ -920,7 +1255,8 @@ async fn an_update_reaching_outside_the_copy_pauses_it_and_writes_nothing() {
         scratch.path(),
         &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
     );
-    let addr = hostile_central(repo.clone()).await;
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    let addr = hostile_central(repo.clone(), go.clone()).await;
     let worker = worker(&origin).await;
     let token = "ab".repeat(32);
     let _: Value = worker
@@ -930,6 +1266,8 @@ async fn an_update_reaching_outside_the_copy_pauses_it_and_writes_nothing() {
         )
         .await;
     let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    in_sync(&worker).await;
+    go.notify_one();
     let copy = copy_in(&worker, paused, "paused").await;
     assert_eq!(reason(&copy), "studio-mini sent a path outside the copy.");
     let c = PathBuf::from(&copy.path);
@@ -938,7 +1276,7 @@ async fn an_update_reaching_outside_the_copy_pauses_it_and_writes_nothing() {
 }
 
 #[tokio::test]
-async fn an_update_against_a_base_the_copy_moved_past_applies_and_gives_the_copys_base() {
+async fn an_update_against_a_base_the_copy_never_had_applies_while_the_copy_is_unchanged() {
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     let repo = scratch.path().join("studio-mini-shop");
@@ -947,7 +1285,8 @@ async fn an_update_against_a_base_the_copy_moved_past_applies_and_gives_the_copy
         &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
     );
     let reply = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let addr = fake_central(repo.clone(), Update::StaleBase, reply.clone()).await;
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    let addr = fake_central(repo.clone(), Update::StaleBase, reply.clone(), go.clone()).await;
     let worker = worker(&origin).await;
     let _: Value = worker
         .call(
@@ -957,6 +1296,7 @@ async fn an_update_against_a_base_the_copy_moved_past_applies_and_gives_the_copy
         .await;
     let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
     let copy = in_sync(&worker).await;
+    go.notify_one();
     let c = PathBuf::from(&copy.path);
     reads(&c.join("src/cart.ts"), "c\n").await;
     eventually("the worker replies", || async {
@@ -965,9 +1305,9 @@ async fn an_update_against_a_base_the_copy_moved_past_applies_and_gives_the_copy
     .await;
     let got = reply.lock().unwrap().clone().unwrap();
     assert_eq!(got["error"], Value::Null, "{got}");
-    // Nothing differs, so the new base is the update's tree.
-    assert_eq!(got["result"]["base"], got["result"]["tree"], "{got}");
-    assert_eq!(got["result"]["differs"], json!([]));
+    // The copy's own files were its base, so it took the update.
+    assert_eq!(got["result"]["applied"], json!(true), "{got}");
+    assert_eq!(copies(&worker).await[0].differs, Vec::<String>::new());
 }
 
 /// A worker linked to `fake_central` serving a clone of `origin`, with a
@@ -984,7 +1324,8 @@ async fn worker_of_fake(
         &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
     );
     let reply = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let addr = fake_central(repo, update, reply.clone()).await;
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    let addr = fake_central(repo, update, reply.clone(), go.clone()).await;
     let worker = worker(&origin).await;
     let _: Value = worker
         .call(
@@ -993,6 +1334,8 @@ async fn worker_of_fake(
         )
         .await;
     let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    in_sync(&worker).await;
+    go.notify_one();
     eventually("the worker replies", || async {
         reply.lock().unwrap().is_some()
     })
@@ -1012,7 +1355,7 @@ async fn an_update_that_fails_leaves_the_copy_as_it_was_not_syncing() {
         &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
     );
     let reply = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let addr = fake_central(repo, Update::Gated(gate.clone()), reply.clone()).await;
+    let addr = fake_central(repo, Update::Edit, reply.clone(), gate.clone()).await;
     let worker = worker(&origin).await;
     let _: Value = worker
         .call(
@@ -1068,4 +1411,194 @@ async fn two_starts_at_once_make_one_copy() {
     assert_eq!(x.unwrap().id, y.unwrap().id);
     let copies: Vec<Copy> = worker.call("sync.list", json!({})).await;
     assert_eq!(copies.len(), 1);
+}
+
+/// A worker linked to a `fake_central` that sends no update and turns its
+/// first `busy` offers away; the offer it takes lands in the returned slot.
+async fn worker_turned_away(
+    scratch: &Path,
+    busy: usize,
+) -> (
+    Daemon,
+    Copy,
+    std::sync::Arc<std::sync::Mutex<Option<Value>>>,
+) {
+    let origin = origin(scratch);
+    git(
+        scratch,
+        &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
+    );
+    let taken = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(busy));
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    let addr = fake_central(
+        scratch.join("studio-mini-shop"),
+        Update::OffersBusy(left),
+        taken.clone(),
+        go,
+    )
+    .await;
+    let worker = worker(&origin).await;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    let copy = in_sync(&worker).await;
+    (worker, copy, taken)
+}
+
+#[tokio::test]
+async fn an_offer_the_central_host_turns_away_is_made_again_until_it_is_taken() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (worker, copy, taken) = worker_turned_away(scratch.path(), 2).await;
+    let c = PathBuf::from(&copy.path);
+    // One edit, and no other change after it.
+    write(&c.join("src/cart.ts"), "mine\n");
+    eventually("the third offer is taken", || async {
+        taken.lock().unwrap().is_some()
+    })
+    .await;
+    let offer = taken.lock().unwrap().clone().unwrap();
+    let tree = offer["tree"].as_str().unwrap();
+    assert_eq!(
+        git(&c, &["cat-file", "-p", &format!("{tree}:src/cart.ts")]),
+        "mine"
+    );
+    eventually("the copy is in sync", || async {
+        copies(&worker).await[0].state == CopyState::InSync
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_edit_made_while_an_update_waits_is_offered_not_overwritten() {
+    let scratch = tempfile::tempdir().unwrap();
+    let origin = origin(scratch.path());
+    git(
+        scratch.path(),
+        &["clone", "-q", origin.to_str().unwrap(), "studio-mini-shop"],
+    );
+    let reply = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    let addr = fake_central(
+        scratch.path().join("studio-mini-shop"),
+        Update::EditWhileOffersWait,
+        reply.clone(),
+        go.clone(),
+    )
+    .await;
+    let worker = worker(&origin).await;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": "ab".repeat(32) } }),
+        )
+        .await;
+    let _: Copy = worker.call("sync.start", json!({ "session": "s1" })).await;
+    let copy = in_sync(&worker).await;
+    let c = PathBuf::from(&copy.path);
+    // This Mac's edit is not taken yet when studio-mini's change to the
+    // same file arrives.
+    write(&c.join("src/cart.ts"), "mine\n");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    go.notify_one();
+    eventually("the worker replies", || async {
+        reply.lock().unwrap().is_some()
+    })
+    .await;
+    let got = reply.lock().unwrap().clone().unwrap();
+    assert_eq!(got["result"]["applied"], json!(false), "{got}");
+    eventually("the copy's offer is taken", || async {
+        copies(&worker).await[0].state == CopyState::InSync
+    })
+    .await;
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("mine\n"));
+}
+
+#[tokio::test]
+async fn a_path_that_starts_to_differ_is_named_once() {
+    let (mut central, worker, c) = synced().await;
+    let s = central.session_path();
+    let mut events = worker.app().await;
+    let _: Value = events.request("daemon.info", json!({})).await.unwrap();
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("src/cart.ts"), "mine\n");
+    write(&s.join("src/cart.ts"), "theirs\n");
+    central.daemon.restart().await;
+    eventually("src/cart.ts differs", || async {
+        copies(&worker).await[0].differs == ["src/cart.ts"]
+    })
+    .await;
+    // Another round, in which it still differs.
+    write(&s.join("docs/new.md"), "new\n");
+    reads(&c.join("docs/new.md"), "new\n").await;
+    let mut named = Vec::new();
+    while let Some(ev) = next_change(&mut events, Duration::from_secs(2)).await {
+        for p in ev["newly_differing"].as_array().unwrap() {
+            named.push(p.as_str().unwrap().to_string());
+        }
+    }
+    assert_eq!(named, ["src/cart.ts"]);
+}
+
+#[tokio::test]
+async fn resolving_says_why_it_could_not() {
+    let (mut central, worker, c) = synced().await;
+    let s = central.session_path();
+    let id = copies(&worker).await[0].id.clone();
+    let resolve = |path: &str| json!({ "copy": id, "path": path, "keep": "worker" });
+    let code = |r: Result<Copy, anyhow::Error>| {
+        r.unwrap_err()
+            .to_string()
+            .split(':')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+
+    let mut app = worker.app().await;
+    assert_eq!(
+        code(app.request("sync.resolve", resolve("src/cart.ts")).await),
+        "invalid_params"
+    );
+
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    write(&c.join("src/cart.ts"), "mine\n");
+    write(&s.join("src/cart.ts"), "theirs\n");
+    central.daemon.restart().await;
+    eventually("src/cart.ts differs", || async {
+        copies(&worker).await[0].differs == ["src/cart.ts"]
+    })
+    .await;
+    central.daemon.stop();
+    copy_in(&worker, |s| *s == CopyState::Waiting, "waiting").await;
+    assert_eq!(
+        code(app.request("sync.resolve", resolve("src/cart.ts")).await),
+        "disconnected"
+    );
+}
+
+#[tokio::test]
+async fn resolving_a_paused_copy_says_it_is_paused() {
+    let central = central_with(None).await;
+    let worker = worker_with(None).await;
+    link(&central, &worker).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let copy = copy_in(&worker, paused, "paused").await;
+    let mut app = worker.app().await;
+    let e = app
+        .request::<_, Copy>(
+            "sync.resolve",
+            json!({ "copy": copy.id, "path": "src/cart.ts", "keep": "worker" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(e.to_string().starts_with("paused:"), "{e}");
 }
