@@ -28,43 +28,45 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 
 ### Link settings
 
-- [ ] `link.set {central, worker: {enabled, name}}` stores the link settings in `$MOONLET_HOME/link.json`, written with mode 0600. `link.get` returns them together with the link's state, without the token.
+- [x] `link.set {central, worker: {enabled, name}}` stores the link settings in `$MOONLET_HOME/link.json`, written with mode 0600. `link.get` returns them together with the link's state, without the token. (`the_file_is_private_and_the_shown_settings_have_no_token`, `a_linked_worker_is_listed_on_the_central_host_with_its_projects`)
 - [ ] `central` is `null` or `{name, addrs, token}`:
   - `name` is the host's label, such as `studio-mini`;
   - `addrs` are one or more `ip:port` addresses of the host's tailnet listener;
   - `token` is the device token this Mac got when it paired with the host.
 
   When the user chooses **Central host**, the app's Rust side fills these in from its own entry for the host and calls `link.set` itself, so the token never reaches the webview (X57). The Mac is one paired device, so the app and its daemon share the token, and removing the Mac on the central host cuts both.
-- [ ] The first time the daemon reads `link.json`, it gives this machine a **worker id**. The id is a random UUID that never changes afterwards and that `link.set` cannot edit. Workers are told apart by id, never by name.
-- [ ] `name` is a label. It defaults to the Mac's computer name (the hostname on Linux) and `link.set` can change it.
-- [ ] An invalid `central` is rejected with an error, and nothing is stored: an empty `name` or one with control characters, no `addrs` or one that is not `ip:port`, or a `token` that is not 64 hex characters.
-- [ ] With `enabled: false` or `central: null`, no link is opened, and an open link is closed within 1 s. [X60](X60-keep-in-sync.md) also opens the link while a session is kept in sync, whatever `enabled` says.
-- [ ] The central host never links to itself. When one of `central.addrs` is one of this machine's own Tailscale addresses, `link.set` is rejected with "this Mac is the central host". Later slices count the central host as a worker directly.
+- [x] The first time the daemon reads `link.json`, it gives this machine a **worker id**. The id is a random UUID that never changes afterwards and that `link.set` cannot edit. Workers are told apart by id, never by name. (`the_first_load_makes_a_worker_id_that_later_loads_keep`, `link_set_cannot_change_the_worker_id`, `a_worker_id_links_once_and_names_may_repeat`) A `link.json` that cannot be parsed (not JSON, not text) is moved aside to `link.json.bad` rather than written over, and this machine starts afresh with a new id. One that exists but cannot be opened is left as it is and not written at start. (`a_link_json_that_is_not_text_is_kept_aside_too`, `a_link_json_that_cannot_be_opened_is_never_written_over`) A `link.set` whose settings cannot be written fails, and the settings stay as they were. (`a_link_json_that_cannot_be_read_is_kept_aside_not_written_over`, `link_set_fails_and_keeps_the_settings_when_link_json_cannot_be_written`)
+- [x] `name` is a label. It defaults to the Mac's computer name (the hostname on Linux) and `link.set` can change it. (`the_name_defaults_to_the_computer_name_and_link_set_changes_it`)
+- [x] An invalid `central` is rejected with an error, and nothing is stored: an empty `name` or one with control characters, no `addrs` or one that is not `ip:port`, or a `token` that is not 64 hex characters. (`an_invalid_central_is_refused_and_nothing_is_stored`)
+- [x] With `enabled: false` or `central: null`, no link is opened, and an open link is closed within 1 s. [X60](X60-keep-in-sync.md) also opens the link while a session is kept in sync, whatever `enabled` says. (`the_link_is_open_while_heavy_commands_are_on_or_a_session_is_kept_in_sync`, `turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
+- [x] The central host never links to itself. When one of `central.addrs` is one of this machine's own Tailscale addresses, `link.set` is rejected with "this Mac is the central host". Later slices count the central host as a worker directly. (`the_central_host_never_links_to_itself`, `a_mac_cannot_link_to_itself`)
+- [x] Only the Mac's app sets or retries the link, as only it manages phone access (X39). `link.set` and `link.retry` from a paired device over the tailnet, from a phone routed through the Mac, or from the `moonlet` CLI are refused with `forbidden`. A paired device or an agent could otherwise point this Mac's link at a host of its choosing, which X60 would then let write into copies. (`only_the_macs_app_sets_or_retries_the_link`, `a_phone_reaches_an_ssh_host_through_the_mac`)
 
 ### The link
 
-- [ ] The link is a `moonlet-link` `Host` with the tailnet `Connector` from ADR 0011's pairing slice. It tries `central.addrs` in order, 5 s each, and sends `auth {token}` as its first frame. The link is its own TCP connection, separate from the app's.
-- [ ] After `authed`, the worker sends `Hello {client: "moonletd-worker"}` and then `worker.register`. The central host accepts that client name on a tailnet connection and serves it as any paired device (X57): `mobile.*` other than `mobile.hosts` and `mobile.unpair` is refused. The worker never calls `mobile.unpair`, which would also remove this Mac's app.
-- [ ] A central host whose `authed` reply reports another protocol (the pairing slice adds `protocol` and `daemon_version` to it) puts the link in state `needs_update {daemon_version}`. An `unauthorized` reply to `auth` puts it in state `error` with "studio-mini no longer accepts this Mac". In both states the link does not retry until `link.set` or `link.retry` is called.
-- [ ] A dropped link reconnects with `moonlet-link`'s backoff: 300 ms, doubling, capped at 5 s, as for the apps' host links.
-- [ ] The link's state is `off`, or one of `moonlet-link`'s host statuses: `connecting`, `connected {since}`, `reconnecting`, `needs_update {daemon_version}` or `error {message}`. `link.get` reports it, and the event `link.changed` fires on every change.
-- [ ] A worker linking with the same worker id as a linked worker replaces it, and the older connection is closed. Two workers with the same name and different ids are both linked.
+- [x] The link is a `moonlet-link` `Host` with the tailnet `Connector` from ADR 0011's pairing slice. It tries `central.addrs` in order, 5 s each, and sends `auth {token}` as its first frame. The link is its own TCP connection, separate from the app's. (`a_linked_worker_is_listed_on_the_central_host_with_its_projects`)
+- [x] After `authed`, the worker sends `Hello {client: "moonletd-worker"}` and then `worker.register`. The central host accepts that client name on a tailnet connection and serves it as any paired device (X57): `mobile.*` other than `mobile.hosts` and `mobile.unpair` is refused. The worker never calls `mobile.unpair`, which would also remove this Mac's app. (`the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_devices`)
+- [x] A central host whose `authed` reply reports another protocol (the pairing slice adds `protocol` and `daemon_version` to it) puts the link in state `needs_update {daemon_version}`. An `unauthorized` reply to `auth` puts it in state `refused`, which the app words "studio-mini no longer accepts this Mac". In both states the link does not retry until `link.set` or `link.retry` is called; any `link.set` retries it. `link.retry` leaves a link that is connected or connecting alone. (`a_retry_leaves_a_working_link_alone`, `a_central_host_on_another_protocol_needs_an_update_and_waits_for_a_retry`, `a_mac_the_central_host_removed_says_so_and_waits_for_a_retry`)
+- [x] A dropped link reconnects with `moonlet-link`'s backoff: 300 ms, doubling, capped at 5 s, as for the apps' host links. (`retries_wait_longer_each_time_up_to_five_seconds`, `turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
+- [x] The link's state is `off`, or one of `moonlet-link`'s host statuses: `connecting`, `connected {since}`, `reconnecting`, `needs_update {daemon_version}`, `refused` or `error {message}`. `link.get` reports it, and the event `link.changed` fires on every change, once for each `link.set`. (`a_linked_worker_is_listed_on_the_central_host_with_its_projects`, `one_link_set_says_link_changed_once`, `a_central_host_on_another_protocol_needs_an_update_and_waits_for_a_retry`)
+- [x] A worker linking with the same worker id as a linked worker replaces it, and the older connection is closed. Two workers with the same name and different ids are both linked. (`a_worker_id_links_once_and_names_may_repeat`)
+- [x] A worker id belongs to the paired device that first registered it since the central host started. Another paired device registering the same id is refused with `forbidden`, and the real worker keeps its link. Removing that device (revoked on the central host, or unpaired by itself) releases its ids, so the same Mac pairing again links with its worker id. (`another_paired_device_cannot_take_a_workers_id`, `a_mac_removed_and_paired_again_links_with_its_worker_id`)
 
 ### Registration and liveness (central host)
 
-- [ ] `worker.register` carries:
+- [x] `worker.register` carries: (`a_linked_worker_is_listed_on_the_central_host_with_its_projects`)
   - `id` and `name`;
   - `os` and `arch` (`macos`/`linux`, `arm64`/`x86_64`);
   - `cores`;
   - `version`;
   - `projects`: the worker's projects, each with its identity and path.
 
-  The worker registers again, with current values, every time it links.
-- [ ] `worker.list` returns every linked worker with those fields, plus `connected_since` and `rtt_ms`. The event `workers.changed` fires when a worker registers or disconnects.
-- [ ] The central host sends `worker.ping` over each worker's connection every 10 s. This is the first request that goes from the central host to a worker. `rtt_ms` is the last round trip in milliseconds.
-- [ ] Requests from the central host to a worker are numbered from 1. Id 0 stays reserved for an error that ends the link, which `moonlet-link` reports as the host's failure.
-- [ ] A worker that misses 3 pings in a row is disconnected and removed from `worker.list`, about 30 s after it stops answering. A sleeping laptop does not close its connection, so the pings are what notice a closed lid.
-- [ ] A worker whose connection closes is removed from `worker.list` at once.
+  The worker registers again, with current values, every time it links, and at once when `link.set` renames it while linked. (`a_new_name_reaches_the_central_host_while_linked`) A registration the central host refuses, such as a second Mac with a copied `link.json` and so the same worker id, puts the link in state `error` with the central host's message, which waits for a retry. (`a_second_mac_with_the_same_worker_id_says_so_and_waits`) A device that removed itself cannot register on the connection that stays open a moment for the reply. (`a_mac_that_removed_itself_cannot_register_on_its_closing_connection`)
+- [x] `worker.list` returns every linked worker with those fields, plus `connected_since` and `rtt_ms`. The event `workers.changed` fires when a worker registers or disconnects. (`a_linked_worker_is_listed_on_the_central_host_with_its_projects`, `turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
+- [x] The central host sends `worker.ping` over each worker's connection every 10 s. This is the first request that goes from the central host to a worker. `rtt_ms` is the last round trip in milliseconds. (`a_linked_worker_is_listed_on_the_central_host_with_its_projects`, `the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_devices`)
+- [x] Requests from the central host to a worker are numbered from 1. Id 0 stays reserved for an error that ends the link, which `moonlet-link` reports as the host's failure. (`the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_devices`, `a_request_from_the_daemon_gets_the_handlers_answer_with_the_same_id`)
+- [x] A worker that misses 3 pings in a row is disconnected and removed from `worker.list`, about 30 s after it stops answering. A sleeping laptop does not close its connection, so the pings are what notice a closed lid. (`a_worker_that_stops_answering_pings_is_dropped`)
+- [x] A worker whose connection closes is removed from `worker.list` at once. (`turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
 
 ### Project identity
 
@@ -99,7 +101,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - With several roots (merged histories), it is the oldest by committer date, with ties broken by the smallest hash.
   - A shallow clone (`git rev-parse --is-shallow-repository` prints `true`) and a repository with no commits have `root: null`. A shallow clone's boundary commits look like roots but are not.
 - [x] Two projects are the same project when their roots are equal and not `null`, and their origins are equal (two `null` origins count as equal). A local clone without an origin therefore never matches a fork that happens to share its root. (`same_project_needs_a_known_root_and_the_same_origin`)
-- [ ] Only the normalized `origin` is stored or sent. A token in a remote URL never appears in `project.list`, `project.identity` or `worker.list`. (`project.list` and `project.identity`: `a_project_has_an_identity_without_credentials`; `worker.list` comes with the link)
+- [x] Only the normalized `origin` is stored or sent. A token in a remote URL never appears in `project.list`, `project.identity` or `worker.list`. (`a_project_has_an_identity_without_credentials`, `a_linked_worker_is_listed_on_the_central_host_with_its_projects`)
 
 ## UI
 
@@ -156,6 +158,8 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 - The token lets anyone holding it act as this Mac on the central host. It is stored only in `link.json` (mode 0600) and the app's host list, and `link.get` never returns it.
 - Linking makes the worker a daemon that answers the central host's requests. In this slice the only such request is `worker.ping`. Routed commands come later, with their own checks on the worker.
 - Normalizing removes credentials from origin URLs before anything is stored or sent.
+- A paired device can say `moonletd-worker` in its hello and register a worker id it knows. That is no new power: a paired device, phone or Mac, can already do everything the app can on the central host (X39).
+- On this Mac's Unix socket the `moonlet` CLI is told apart only by the client name it gives, as for phone access (X39). A process running as the user could also edit `link.json` itself, so the socket check guards against mistakes, not against such a process.
 
 ## Out of scope
 
@@ -194,7 +198,7 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
   - Killing the link removes the worker at once and fires `workers.changed`. The worker reconnects after the central daemon restarts.
   - `link.set {enabled: false}` closes the link within 1 s.
   - A fake central host on 127.0.0.1 whose `authed` reports protocol 99 and version `9.9.9` gives `needs_update` with `9.9.9`. No reconnect happens until `link.retry`.
-  - Removing the worker's device on the central host gives `error` with "studio-mini no longer accepts this Mac". No reconnect happens until `link.retry`.
+  - Removing the worker's device on the central host gives `refused`. No reconnect happens until `link.retry` or `link.set`.
   - A second link with the same worker id replaces the first. Two workers with the same name and different ids are both listed.
   - `link.set` with one of the worker's own Tailscale addresses (injected through `MOONLET_MOBILE_ADDRS`) in `central.addrs` is rejected.
   - A project whose origin is `https://user:token@github.com/acme/shop.git` shows `github.com/acme/shop` in `project.list`, `project.identity` and `worker.list`, and the text `token` appears in none of them.

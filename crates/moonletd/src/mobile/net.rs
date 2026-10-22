@@ -259,23 +259,30 @@ async fn route(stream: TcpStream, alias: &str, close: &mut watch::Receiver<bool>
 }
 
 /// Copies a routed phone's frames to the host, except requests to manage
-/// phones: the host's daemon cannot tell the phone from the Mac's app, and
-/// a phone that paired itself there would keep access after the Mac
-/// removes it. The Mac answers those itself.
+/// phones or the host's worker link: the host's daemon cannot tell the
+/// phone from the Mac's app, and a phone that paired itself there would
+/// keep access after the Mac removes it. The Mac answers those itself.
 async fn forward_from_phone(
     from: &mut tokio::net::tcp::OwnedReadHalf,
     to: &mut tokio::process::ChildStdin,
     reply: &tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>,
 ) -> Result<()> {
     while let Some(frame) = read_frame(from).await? {
-        if let Frame::Json(Message::Request { id, method, .. }) = &frame
-            && method.starts_with("mobile.")
-            && method != m::MOBILE_HOSTS
-        {
-            let err = Message::err(
-                *id,
-                RpcError::new("forbidden", "manage phones from the Mac"),
-            );
+        let refusal = match &frame {
+            Frame::Json(Message::Request { method, .. })
+                if method.starts_with("mobile.") && method != m::MOBILE_HOSTS =>
+            {
+                Some("manage phones from the Mac")
+            }
+            Frame::Json(Message::Request { method, .. })
+                if method == m::LINK_SET || method == m::LINK_RETRY =>
+            {
+                Some("manage the link from the Mac")
+            }
+            _ => None,
+        };
+        if let (Frame::Json(Message::Request { id, .. }), Some(refusal)) = (&frame, refusal) {
+            let err = Message::err(*id, RpcError::new("forbidden", refusal));
             write_frame(&mut *reply.lock().await, &Frame::Json(err)).await?;
             continue;
         }

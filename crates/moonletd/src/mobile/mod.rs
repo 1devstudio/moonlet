@@ -487,6 +487,12 @@ impl Mobile {
         Ok(())
     }
 
+    /// Whether device `id` is still paired. A device that removed itself
+    /// keeps its connection a moment longer, for the reply.
+    pub fn is_paired(&self, id: &str) -> bool {
+        self.data.lock().unwrap().devices.iter().any(|d| d.id == id)
+    }
+
     fn forget(&self, id: &str) -> Result<(), RpcError> {
         let mut data = self.data.lock().unwrap();
         let before = data.devices.len();
@@ -636,7 +642,7 @@ impl Mobile {
 }
 
 /// Writes `bytes` to `path` with mode 0600, through a temporary file.
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {

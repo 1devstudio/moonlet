@@ -332,3 +332,167 @@ async fn an_error_the_daemon_sends_unasked_becomes_the_hosts_message() {
     })
     .await;
 }
+
+/// Answers `worker.ping` with the params it got, and nothing else (X41).
+struct Pong;
+
+impl moonlet_link::Requests for Pong {
+    fn request(&self, method: String, params: Value) -> BoxFuture<'static, Result<Value, RpcError>> {
+        Box::pin(async move {
+            match method.as_str() {
+                "worker.ping" => Ok(json!({ "pong": params })),
+                _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
+            }
+        })
+    }
+}
+
+/// The next reply the app sent, skipping its own requests.
+async fn next_reply(daemon: &mut FakeDaemon) -> Message {
+    loop {
+        match daemon.next().await {
+            Frame::Json(m @ Message::Response { .. }) => return m,
+            Frame::Json(Message::Request { id, method, .. }) if method == "daemon.info" => {
+                daemon.send(Frame::Json(Message::ok(id, json!({})))).await;
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_request_from_the_daemon_gets_the_handlers_answer_with_the_same_id() {
+    let (host, _seen, mut rx) = start();
+    host.set_requests(Arc::new(Pong));
+    let mut daemon = FakeDaemon::accept(&mut rx).await;
+    daemon
+        .send(Frame::Json(Message::Request {
+            id: 1,
+            method: "worker.ping".into(),
+            params: json!({ "n": 7 }),
+        }))
+        .await;
+    match next_reply(&mut daemon).await {
+        Message::Response { id, result, error } => {
+            assert_eq!(id, 1);
+            assert_eq!(error, None);
+            assert_eq!(result, Some(json!({ "pong": { "n": 7 } })));
+        }
+        other => panic!("expected a response, got {other:?}"),
+    }
+    daemon
+        .send(Frame::Json(Message::Request {
+            id: 2,
+            method: "sync.nothing".into(),
+            params: json!({}),
+        }))
+        .await;
+    match next_reply(&mut daemon).await {
+        Message::Response { id, error: Some(e), .. } => {
+            assert_eq!((id, e.code.as_str()), (2, "unknown_method"));
+        }
+        other => panic!("expected an error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_host_without_a_handler_refuses_the_daemons_requests() {
+    let (_host, _seen, mut rx) = start();
+    let mut daemon = FakeDaemon::accept(&mut rx).await;
+    daemon
+        .send(Frame::Json(Message::Request {
+            id: 1,
+            method: "worker.ping".into(),
+            params: json!({}),
+        }))
+        .await;
+    match next_reply(&mut daemon).await {
+        Message::Response { id, error: Some(e), .. } => {
+            assert_eq!((id, e.code.as_str()), (1, "unknown_method"));
+        }
+        other => panic!("expected an error, got {other:?}"),
+    }
+}
+
+/// Answers `worker.slow` only once the test lets it.
+struct Gate(Arc<tokio::sync::Notify>);
+
+impl moonlet_link::Requests for Gate {
+    fn request(&self, _method: String, _params: Value) -> BoxFuture<'static, Result<Value, RpcError>> {
+        let gate = self.0.clone();
+        Box::pin(async move {
+            gate.notified().await;
+            Ok(json!({ "late": true }))
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_reply_goes_only_on_the_link_its_request_came_on() {
+    let (host, _seen, mut rx) = start();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    host.set_requests(Arc::new(Gate(gate.clone())));
+    let mut first = FakeDaemon::accept(&mut rx).await;
+    first
+        .send(Frame::Json(Message::Request {
+            id: 1,
+            method: "worker.slow".into(),
+            params: json!({}),
+        }))
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    drop(first);
+    let mut second = FakeDaemon::accept(&mut rx).await;
+    // The new link numbers its requests from 1 again.
+    second
+        .send(Frame::Json(Message::Request {
+            id: 1,
+            method: "worker.slow".into(),
+            params: json!({}),
+        }))
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Only the first request's handler wakes: its answer belongs to a
+    // link that is gone.
+    gate.notify_one();
+    let late = tokio::time::timeout(Duration::from_millis(500), next_reply(&mut second)).await;
+    assert!(late.is_err(), "the old link's answer reached the new one: {late:?}");
+}
+
+/// Hands out connections that fail as refused, after the test lets them.
+struct SlowRefusal(Arc<tokio::sync::Notify>);
+
+impl Connector for SlowRefusal {
+    fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
+        let gate = self.0.clone();
+        Box::pin(async move {
+            gate.notified().await;
+            Err(moonlet_link::Refused("studio-mini no longer accepts this Mac".into()).into())
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_stopped_host_reports_nothing_more() {
+    let seen = Arc::new(Seen::default());
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let host = Host::start(
+        HostOptions {
+            id: "studio-mini".into(),
+            label: "Studio".into(),
+            remote: true,
+            client: "moonlet-test".into(),
+        },
+        Arc::new(SlowRefusal(gate.clone())),
+        seen.clone(),
+        tokio::runtime::Handle::current(),
+    );
+    eventually("connecting", || {
+        seen.statuses.lock().unwrap().contains(&HostStatus::Connecting)
+    })
+    .await;
+    host.stop();
+    gate.notify_one();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(*seen.statuses.lock().unwrap(), [HostStatus::Connecting]);
+}

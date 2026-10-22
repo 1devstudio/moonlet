@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 moonlet-proto.workspace = true
 moonlet-core.workspace = true
+moonlet-link.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,8 +24,8 @@ nix = { workspace = true, features = ["net"] }
 libc.workspace = true
 dirs.workspace = true
 sha2 = "0.10"
+uuid.workspace = true
 qrcodegen = "1.8"
 
 [dev-dependencies]
 tempfile.workspace = true
-moonlet-link.workspace = true
