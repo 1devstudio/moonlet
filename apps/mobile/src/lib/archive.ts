@@ -18,8 +18,8 @@ export interface ArchiveSheet {
   unpushed: UnpushedView | null;
   /** Why work may be lost unseen: the host could not list it. */
   checkFailed: string | null;
-  /** `session.archive`'s flags. */
-  flags: (checked: boolean) => { remove_worktree: boolean; delete_branch: boolean; delete_remote: boolean };
+  /** `session.archive`'s flags, after Push, then archive when `pushed`. */
+  flags: (checked: boolean, pushed?: boolean) => { remove_worktree: boolean; delete_branch: boolean; delete_remote: boolean };
 }
 
 /** The sheet for archiving `session`. `git` null: the defaults (a daemon
@@ -46,7 +46,7 @@ export function archiveSheet(o: {
     push: prompt.alt ?? null,
     unpushed: view,
     checkFailed: failed ? `Couldn't check for work only on ${o.hostLabel}. Archiving may remove uncommitted files or unpushed commits.` : null,
-    flags: (checked) => archiveFlags(plan, checked),
+    flags: (checked, pushed) => archiveFlags(plan, checked, pushed),
   };
 }
 

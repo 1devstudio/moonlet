@@ -779,6 +779,10 @@ pub struct PullRequest {
     /// A draft does not count as opened for Keep in step (X46).
     #[serde(default)]
     pub draft: bool,
+    /// The PR branch's last commit (`headRefOid`). GitHub keeps it after a
+    /// merge, so it is not unpushed work (X55).
+    #[serde(default)]
+    pub head_oid: Option<String>,
 }
 
 /// A GitHub stack of dependent pull requests (spec X11).

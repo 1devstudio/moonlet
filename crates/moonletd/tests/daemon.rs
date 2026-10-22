@@ -789,6 +789,53 @@ async fn unpushed_work_is_read_and_pushed_over_rpc() {
 }
 
 #[tokio::test]
+async fn unpushed_work_is_read_from_the_session_branch_over_rpc() {
+    use moonlet_proto::types::{Project, UnpushedWork};
+    let d = TestDaemon::start().await;
+    let root = d.home.path();
+    let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
+    let (origin, repo) = (root.join("origin.git"), root.join("repo"));
+    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
+    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    let mut c = d.client().await;
+    let p: Project = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    let s = new_session(&mut c, &p.id, "Search").await;
+    let dir = std::path::Path::new(&s.path);
+    git(dir, &["commit", "-q", "--allow-empty", "-m", "ranking"]);
+    let ranking = git(dir, &["rev-parse", "HEAD"]);
+    // An agent moved the worktree to a branch of its own.
+    git(dir, &["checkout", "-q", "-b", "refactor/lint", "main"]);
+    git(dir, &["commit", "-q", "--allow-empty", "-m", "lint"]);
+
+    let w: UnpushedWork = c
+        .request(methods::GIT_UNPUSHED, serde_json::json!({"path": s.path, "branch": s.branch}))
+        .await
+        .unwrap();
+    assert_eq!((w.commits, w.upstream), (1, None));
+    let w: UnpushedWork = c
+        .request(methods::GIT_UNPUSHED, serde_json::json!({"path": s.path, "branch": s.branch, "merged_head": ranking}))
+        .await
+        .unwrap();
+    assert_eq!(w.commits, 0);
+
+    let _: bool = c
+        .request(methods::GIT_PUSH, serde_json::json!({"path": s.path, "branch": s.branch}))
+        .await
+        .unwrap();
+    assert_eq!(git(&origin, &["log", "-1", "--format=%s", &s.branch]).trim(), "ranking");
+    let w: UnpushedWork = c
+        .request(methods::GIT_UNPUSHED, serde_json::json!({"path": s.path, "branch": s.branch}))
+        .await
+        .unwrap();
+    assert_eq!((w.commits, w.upstream), (0, Some(format!("origin/{}", s.branch))));
+}
+
+#[tokio::test]
 async fn archiving_still_archives_when_origin_refuses_the_delete() {
     use moonlet_proto::types::{Session, SessionArchived};
     let d = TestDaemon::start().await;

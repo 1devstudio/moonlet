@@ -19,6 +19,8 @@ describe("archiveSheet (X55)", () => {
     expect(sheet.message(false)).toBe('Archive "Fix checkout button on mobile"? Its terminals stop and the worktree folder is removed. The branch is deleted, on origin too.');
     expect(sheet.danger(false)).toBe(true);
     expect(sheet.flags(false)).toEqual({ remove_worktree: true, delete_branch: true, delete_remote: true });
+    // Push, then archive keeps what the push just saved on origin.
+    expect(sheet.flags(false, true)).toEqual({ remove_worktree: true, delete_branch: true, delete_remote: false });
   });
 
   it("asks about the branch with a checkbox under Ask each time", () => {

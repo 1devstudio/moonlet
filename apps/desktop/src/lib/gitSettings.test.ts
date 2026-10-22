@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchPreview, defaultStartLabel, fetchLabel, fetchOptions, gitHosts, gitSettingsOf, prefixError, tooOldText, worktreesFolder, worktreesText } from "./gitSettings";
+import { branchPreview, defaultStartLabel, fetchLabel, fetchOptions, gitHosts, gitSettingsOf, prefixError, tooOldText, unpushedParams, worktreesFolder, worktreesText } from "./gitSettings";
 import type { HostInfo } from "./protocol";
 
 const host = (id: string, label: string, remote: boolean, status: HostInfo["status"] = "connected"): HostInfo => ({
@@ -94,5 +94,19 @@ describe("Fetch from origin (X55)", () => {
     expect(fetchOptions(10).map((o) => o.label)).toEqual(["5 min", "10 min", "15 min", "Manually"]);
     expect(fetchLabel(10)).toBe("10 min");
     expect(fetchLabel(0)).toBe("Manually");
+  });
+});
+
+describe("unpushedParams", () => {
+  const ws = { path: "/Users/ana/.moonlet/worktrees/shop/search", branch: "moonlet/search" };
+
+  it("asks about the session's own branch, which archiving deletes", () => {
+    expect(unpushedParams(ws, null)).toEqual({ path: "/Users/ana/.moonlet/worktrees/shop/search", branch: "moonlet/search" });
+  });
+
+  it("counts a merged PR's head as saved, since GitHub keeps it after a squash merge", () => {
+    const pr = { number: 328, url: "https://github.com/1devstudio/moonlet/pull/328", state: "merged", title: "feat: check for updates", checks: [], review_decision: null, head_oid: "cd463af7f84581530cb97eafa5ccbc70c9be2646" };
+    expect(unpushedParams(ws, pr)).toEqual({ path: "/Users/ana/.moonlet/worktrees/shop/search", branch: "moonlet/search", merged_head: "cd463af7f84581530cb97eafa5ccbc70c9be2646" });
+    expect(unpushedParams(ws, { ...pr, state: "open" })).toEqual({ path: "/Users/ana/.moonlet/worktrees/shop/search", branch: "moonlet/search" });
   });
 });

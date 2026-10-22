@@ -90,6 +90,11 @@ describe("archiving as the host's Git settings say (X55)", () => {
     expect(archiveFlags(archivePlan(g, "open", branch, "main"), false)).toEqual({ remove_worktree: true, delete_branch: true, delete_remote: false });
   });
 
+  it("keeps the branch on origin after Push, then archive: the push just saved the commits there", () => {
+    const merged = archivePlan(git({ archive_branch: "always", delete_remote_branch: true }), "merged", branch, "main");
+    expect(archiveFlags(merged, false, true)).toEqual({ remove_worktree: true, delete_branch: true, delete_remote: false });
+  });
+
   it("asks with the checkbox, as before, when set to Ask each time", () => {
     const ask = archivePlan(git({ archive_branch: "ask", delete_remote_branch: true }), "merged", branch, "main");
     expect(archivePrompt(name, ask).checkbox?.label).toBe("Also delete the branch");

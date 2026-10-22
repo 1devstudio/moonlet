@@ -105,9 +105,9 @@ pub const GIT_SETTINGS: &str = "git.settings";
 /// Changes some of the host's Git settings: a partial `GitSettings` → the
 /// whole, as saved (X55).
 pub const GIT_SET_SETTINGS: &str = "git.set_settings";
-/// `{path}` → `UnpushedWork`: what in a session is only on its host (X55).
+/// `GitUnpushed` → `UnpushedWork`: what in a session is only on its host (X55).
 pub const GIT_UNPUSHED: &str = "git.unpushed";
-/// `{path}`: `git push -u origin HEAD` (X55 "Push, then archive").
+/// `GitUnpushed`: `git push -u origin <branch>`, else HEAD (X55 "Push, then archive").
 pub const GIT_PUSH: &str = "git.push";
 pub const GH_PR_CREATE: &str = "gh.pr_create";
 pub const GH_ISSUES: &str = "gh.issues";
@@ -836,6 +836,20 @@ pub struct GitPath {
     /// Diff base: a ref, or absent for HEAD.
     #[serde(default)]
     pub base: Option<String>,
+}
+
+/// `git.unpushed` and `git.push` (X55).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitUnpushed {
+    /// The session's worktree.
+    pub path: String,
+    /// The session's branch, which archiving deletes; absent for the
+    /// checked-out one.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// The head commit of the branch's merged PR, which GitHub keeps.
+    #[serde(default)]
+    pub merged_head: Option<String>,
 }
 
 /// `git.base_status` and `git.pull_base` (spec X13).
