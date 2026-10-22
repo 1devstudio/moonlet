@@ -98,4 +98,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X58 | Install moonlet on a Linux host with one command (systemd service, release assets) | P1 | 3 | implemented (untried on a real release) | [X58-linux-install-script.md](X58-linux-install-script.md) |
 | X59 | Add a project from GitHub (clone tab, your repositories, live progress) | P1 | 3 | implemented (remote hosts untried) | [X59-add-project-from-github.md](X59-add-project-from-github.md) |
 | X60 | Keep in sync: a live copy of a remote session on this Mac | P1 | 4 | implemented (untried between two real Macs) | [X60-keep-in-sync.md](X60-keep-in-sync.md) |
-| X61 | Remote hosts take heavy commands (a switch per tailnet host; the host pairs with the central host itself) | P1 | 4 | draft | [X61-remote-hosts-for-heavy-commands.md](X61-remote-hosts-for-heavy-commands.md) |
+| X61 | Remote hosts take heavy commands (a switch per tailnet host; the host pairs with the central host itself) | P1 | 4 | implemented (untried between real machines) | [X61-remote-hosts-for-heavy-commands.md](X61-remote-hosts-for-heavy-commands.md) |
