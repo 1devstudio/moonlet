@@ -536,6 +536,7 @@ impl Daemon {
                 ok(self.sync.resolve(r).await?)
             }
             m::SYNC_USE_CENTRAL_BRANCH => {
+                app_only(conn, "sync")?;
                 let r: m::CopyRef = params(p)?;
                 ok(self.sync.use_central_branch(&r.copy).await?)
             }
