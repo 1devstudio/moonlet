@@ -12,7 +12,7 @@ import { EV, M, type HostInfo, type LinkInfo, type MobilePairing, type MobileSta
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
-import { centralHostButton, centralHostId, heavyHostIds, linkLine, linkPairError, linkRetries, pickCentral, remoteLinkAction, remoteLinkLine, turnOnNeeds, watchLink } from "../../lib/workerLink";
+import { centralHostButton, centralHostId, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, turnOnNeeds, watchLink } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
 
@@ -304,15 +304,16 @@ function RemoteHeavyRow({ host, central }: { host: string; central: LinkInfo["ce
   const id = useId();
   const link = useLink(host);
   const [pairing, setPairing] = useState(false);
-  const enable = (enabled: boolean) => rpc(host, M.linkSet, { worker: { enabled } });
+  const enable = (enabled: boolean) => rpc(host, M.linkSet, { worker: { enabled } }).catch((e) => errorToast(remoteLinkError(e, host)));
   const turnOn = async () => {
     if (!link || !central) return;
     const needs = turnOnNeeds(link, host, central.name);
-    if (needs.kind === "enable") return void enable(true).catch(errorToast);
+    if (needs.kind === "enable") return void enable(true);
     const move = needs.confirm ? { title: "Use for heavy commands", message: needs.confirm, action: "Link" } : null;
     if (!move || (await askConfirm(move))) setPairing(true);
   };
-  const action = link && remoteLinkAction(link, central?.name ?? null);
+  const centralName = central?.name ?? null;
+  const action = link && remoteLinkAction(link, centralName);
   return (
     <>
       <Row
@@ -321,7 +322,7 @@ function RemoteHeavyRow({ host, central }: { host: string; central: LinkInfo["ce
         labelId={id}
         hint={
           <>
-            {link && <Status line={remoteLinkLine(link, host, central?.name ?? null)} />}
+            {link && <Status line={remoteLinkLine(link, host, centralName)} />}
             <span className="mt-0.5 block">For now this only links {host} to the central host. Commands are not routed there yet.</span>
           </>
         }
@@ -336,7 +337,7 @@ function RemoteHeavyRow({ host, central }: { host: string; central: LinkInfo["ce
             Pair again
           </Button>
         )}
-        <Switch on={!!link?.worker.enabled && !!central} disabled={!link || !central} labelledBy={id} onChange={(on) => void (on ? turnOn() : enable(false).catch(errorToast))} />
+        <Switch on={!!link && remoteSwitchOn(link, centralName)} disabled={!link || !central} labelledBy={id} onChange={(on) => void (on ? turnOn() : enable(false))} />
       </Row>
       {pairing && central && <PairCentralDialog host={host} central={central} onClose={() => setPairing(false)} />}
     </>
@@ -355,18 +356,11 @@ function PairCentralDialog({ host, central, onClose }: { host: string; central: 
     if (!code || busy) return;
     setError(null);
     setBusy(true);
-    try {
-      await rpc(host, M.linkPair, {
-        central: { name: central.name, addrs: central.addrs },
-        code,
-      });
-      await rpc(host, M.linkSet, { worker: { enabled: true } });
-      onClose();
-    } catch (e) {
-      setError(linkPairError(e, host));
-    } finally {
-      setBusy(false);
-    }
+    const r = await pairThenLink((method, params) => rpc(host, method, params), central, code);
+    setBusy(false);
+    if (!r.paired) return setError(remoteLinkError(r.error, host));
+    onClose();
+    if (r.error) errorToast(remoteLinkError(r.error, host));
   };
   return (
     <Dialog

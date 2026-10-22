@@ -110,6 +110,12 @@ describe("remote worker", () => {
     await $(heavySwitch).click();
     const code = dialog("Pair build-box with studio-mini");
     await $(code).waitForExist({ timeout: 5000 });
+    // A code the central host never gave: the dialog says so and stays.
+    await fill(`${code}//input`, "7KQ2M-X9PDA");
+    await $(`${code}//button[normalize-space()="Pair"]`).click();
+    await expect($(`${code}//*[@role="alert"]`)).toHaveText("The code was not accepted. Start pairing again on studio-mini.", { wait: 20000 });
+    await expect($(heavySwitch)).toHaveAttribute("aria-checked", "false");
+
     const started = startPairing(central);
     pairings.push(started.proc);
     await fill(`${code}//input`, new URL(await started.link).searchParams.get("code")!);
