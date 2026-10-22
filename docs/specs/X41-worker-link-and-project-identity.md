@@ -38,7 +38,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 - [ ] The first time the daemon reads `link.json`, it gives this machine a **worker id**. The id is a random UUID that never changes afterwards and that `link.set` cannot edit. Workers are told apart by id, never by name.
 - [ ] `name` is a label. It defaults to the Mac's computer name (the hostname on Linux) and `link.set` can change it.
 - [ ] An invalid `central` is rejected with an error, and nothing is stored: an empty `name` or one with control characters, no `addrs` or one that is not `ip:port`, or a `token` that is not 64 hex characters.
-- [ ] With `enabled: false` or `central: null`, no link is opened, and an open link is closed within 1 s.
+- [ ] With `enabled: false` or `central: null`, no link is opened, and an open link is closed within 1 s. [X60](X60-keep-in-sync.md) also opens the link while a session is kept in sync, whatever `enabled` says.
 - [ ] The central host never links to itself. When one of `central.addrs` is one of this machine's own Tailscale addresses, `link.set` is rejected with "this Mac is the central host". Later slices count the central host as a worker directly.
 
 ### The link
@@ -158,7 +158,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 Everything else in [ADR 0009](../adr/0009-central-host-workers-live-copies.md)'s later slices, including:
 
 - the central host setup switch;
-- live copies and cloning projects onto a worker;
+- live copies and cloning projects onto a worker ([X60](X60-keep-in-sync.md));
 - routed commands, together with what only routing uses: slots, tool detection, project changes sent between reconnects, a Workers screen and renaming a worker in the UI;
 - takeover and cloud workers. Phone access is ADR 0008's.
 
