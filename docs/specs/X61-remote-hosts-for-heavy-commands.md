@@ -34,19 +34,19 @@ As in X41, nothing is routed yet: the switch links the host as a worker, and rou
 - [ ] When the central host paired this machine but its token cannot be saved, `link.pair` fails with `pair_unsaved`, "Paired with studio-mini, but could not save it. Remove build-box on studio-mini and pair again: …", since the used code cannot pair again. (`a_pairing_that_cannot_be_saved_says_how_to_undo_it`)
 - [ ] `link.set`, `link.retry` and `link.pair` are accepted from the Mac's own app, as before, and now also from a paired **Mac** (a `desktop` device) over the tailnet. A paired phone and the `moonlet` CLI are still refused with `forbidden`. (`a_paired_mac_sets_the_link_and_a_phone_or_the_cli_cannot`)
 - [ ] From a paired Mac, `link.set` may change `worker` only. A `central` in it is refused with `forbidden`, so a paired Mac never hands a remote host a token; the central host changes only through `link.pair`. (`a_paired_mac_cannot_set_the_central_host_directly`)
-- [ ] A daemon from before this spec answers `link.pair` with an unknown-method error. The app then shows "Update moonlet on build-box". `PROTOCOL_VERSION` does not change. (`linkPair.test.ts` an older host)
+- [ ] A daemon from before this spec answers `link.pair` with an unknown-method error. The app then shows "Update moonlet on build-box". `PROTOCOL_VERSION` does not change. (`workerLink.test.ts` turning a remote host's switch on)
 
 ### Desktop
 
-- [ ] Each tailnet host in **Remote hosts** has a **Use for heavy commands** row while it is connected, with a switch and the status line of its link, read with `link.get` from that host and following its `link.changed`. A disconnected host shows no such row. SSH hosts never do. (`remoteLink.test.ts` which hosts get the switch, `remote-worker.e2e.ts`)
-- [ ] The central host's own row has no switch: the central host never links to itself (X41). (`remoteLink.test.ts` which hosts get the switch)
-- [ ] While this Mac has no central host, the switch is off and disabled, and the line reads "Choose a central host first". (`remoteLink.test.ts` the remote status line)
-- [ ] Turning the switch on: (`remoteLink.test.ts` what turning on needs, `remote-worker.e2e.ts`)
+- [ ] Each tailnet host in **Remote hosts** has a **Use for heavy commands** row while it is connected, with a switch and the status line of its link, read with `link.get` from that host and following its `link.changed`. A disconnected host shows no such row. SSH hosts never do. (`workerLink.test.ts` which remote hosts take heavy commands, `remote-worker.e2e.ts`)
+- [ ] The central host's own row has no switch: the central host never links to itself (X41). (`workerLink.test.ts` which remote hosts take heavy commands)
+- [ ] While this Mac has no central host, the switch is off and disabled, and the line reads "Choose a central host first". (`workerLink.test.ts` a remote host's link line)
+- [ ] Turning the switch on: (`workerLink.test.ts` turning a remote host's switch on, `remote-worker.e2e.ts`)
   - if the host's central host is this Mac's central host and its state is not `refused`, the app calls `link.set {worker: {enabled: true}}` on the host;
   - otherwise (no central host there, another one, or `refused`) the app asks for a pairing code from this Mac's central host, calls `link.pair` on the host with this Mac's entry for the central host (its name and addresses, never its token) and the code, and then `link.set {worker: {enabled: true}}`. Cancelling the dialog leaves the switch off.
-- [ ] When the host's central host is another host, the dialog says so first: "build-box is linked to other-mini. Link it to studio-mini instead?". (`remoteLink.test.ts` what turning on needs)
+- [ ] When the host's central host is another host, the dialog says so first: "build-box is linked to other-mini. Link it to studio-mini instead?". (`workerLink.test.ts` turning a remote host's switch on)
 - [ ] Turning the switch off calls `link.set {worker: {enabled: false}}` on the host. Its pairing stays, so turning it on again needs no code. (`remote-worker.e2e.ts`)
-- [ ] The status line, one per link state, names the host: (`remoteLink.test.ts` the remote status line)
+- [ ] The status line, one per link state, names the host: (`workerLink.test.ts` a remote host's link line)
   - "Not linked"
   - "Linking to studio-mini…"
   - "Linked to studio-mini since 10:42"
@@ -61,7 +61,7 @@ As in X41, nothing is routed yet: the switch links the host as a worker, and rou
 
 - **Settings › Machines › Hosts › Remote hosts:** under a connected tailnet host's row, a **Use for heavy commands** row like This Mac's: label, status line, the help text "For now this only links build-box to the central host. Commands are not routed there yet.", **Retry** or **Pair again** when the state calls for it, and the switch.
 - **Pairing code dialog:** title "Pair build-box with studio-mini", one code field, the help text "Get a code on studio-mini: Let another Mac connect in moonlet, or `moonletd pair`.", **Cancel** and **Pair**. While pairing, **Pair** reads "Pairing…" and is disabled. An error shows under the field and keeps the dialog open.
-- Settings search finds the row by "heavy commands".
+- Settings search already leads to the Hosts page for "heavy commands" (X43).
 
 ## Protocol and RPCs
 
@@ -99,7 +99,7 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
   - A wrong code: `link.pair` fails and `link.get` is unchanged.
   - A bad `central` (empty name, `studio-mini` as an address, one of the host's own addresses) is refused without contacting the central host.
   - A paired phone and the CLI get `forbidden` for `link.set`, `link.retry` and `link.pair`; a paired Mac gets `forbidden` for `link.set` with `central`.
-- **Vitest, `apps/desktop/src/lib/remoteLink.test.ts`:** which host rows get the switch; the status line for each state; what turning on needs (enable, pair, or confirm a move), from literal `LinkInfo` values.
+- **Vitest, `apps/desktop/src/lib/workerLink.test.ts`:** which host rows get the switch; the status line for each state; what turning on needs (enable, pair, or confirm a move), from literal `LinkInfo` values.
 - **e2e, `apps/desktop/e2e/specs/remote-worker.e2e.ts`:** two scratch daemons: a central host on `::1` and a remote host on 127.0.0.1, which counts 127.0.0.1 as its own address and so never takes `::1` for itself. The app pairs with both and marks the first **Central host**. On the remote host's row, turning the switch on asks for a code (from `moonletd pair` on the central host), and the line reads "Linked to …"; the central host's `worker.list` lists the remote host. Turning it off reads "Not linked"; turning it on again links without a code. Saving settings is a crucial feature (X12).
 
 ## Open questions
