@@ -30,6 +30,19 @@ pub(crate) async fn run_raw(
     stdin: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<Output> {
+    run_raw_env(program, cwd, args, &[], stdin, timeout).await
+}
+
+/// [`run_raw`], with variables set after the inherited ones are cleared,
+/// such as a private `GIT_INDEX_FILE` (X60).
+pub(crate) async fn run_raw_env(
+    program: &str,
+    cwd: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Output> {
     let mut cmd = Command::new(program);
     // Repository-location variables inherited from whoever started the
     // daemon (a git hook, say) would point every call at another repo.
@@ -46,6 +59,7 @@ pub(crate) async fn run_raw(
     ] {
         cmd.env_remove(var);
     }
+    cmd.envs(env.iter().copied());
     cmd.args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -78,7 +92,18 @@ pub(crate) async fn run_raw(
 
 /// Runs git and fails on a non-zero exit.
 pub async fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let out = run_raw("git", cwd, args, None, Duration::from_secs(60)).await?;
+    git_with(cwd, &[], args, None, Duration::from_secs(60)).await
+}
+
+/// [`git`] with environment variables, input and a timeout of its own.
+pub(crate) async fn git_with(
+    cwd: &Path,
+    env: &[(&str, &str)],
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let out = run_raw_env("git", cwd, args, env, stdin, timeout).await?;
     if out.status != 0 {
         bail!("git {}: {}", args.join(" "), out.stderr);
     }
@@ -92,10 +117,7 @@ pub async fn git_text(cwd: &Path, args: &[&str]) -> Result<String> {
 }
 
 async fn git_stdin(cwd: &Path, args: &[&str], stdin: &[u8]) -> Result<()> {
-    let out = run_raw("git", cwd, args, Some(stdin), Duration::from_secs(60)).await?;
-    if out.status != 0 {
-        bail!("git {}: {}", args.join(" "), out.stderr);
-    }
+    git_with(cwd, &[], args, Some(stdin), Duration::from_secs(60)).await?;
     Ok(())
 }
 

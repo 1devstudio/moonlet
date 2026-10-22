@@ -23,6 +23,7 @@ pub mod pty;
 pub mod session;
 pub mod shell;
 pub mod ssh;
+pub mod sync;
 pub mod tailnet;
 pub mod term;
 pub mod terminal;
