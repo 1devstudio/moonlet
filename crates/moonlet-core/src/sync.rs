@@ -746,6 +746,21 @@ pub async fn pack_objects(repo: &Path, new: &[&str], not: &[&str]) -> Result<Vec
     .await
 }
 
+/// The tree of `commit` in `repo`.
+pub async fn commit_tree(repo: &Path, commit: &str) -> Result<String> {
+    if !is_object_id(commit) {
+        bail!("not an object id: {commit:?}");
+    }
+    let tree = git_env(
+        repo,
+        &[],
+        &["rev-parse", "--verify", "--end-of-options", &format!("{commit}^{{tree}}")],
+        None,
+    )
+    .await?;
+    Ok(String::from_utf8_lossy(&tree).trim().to_string())
+}
+
 /// Which of `oids` are objects in `repo`, in their order: what another
 /// side says it has can only be left out of a pack if this side has it too.
 pub async fn present(repo: &Path, oids: &[String]) -> Result<Vec<String>> {

@@ -67,6 +67,10 @@ struct Kept {
     /// Why the copy waits for `sync.retry`.
     #[serde(default)]
     paused: Option<String>,
+    /// The tree of the commit the worktree was made at, until the copy is
+    /// finished: what the files were before anyone edited them there.
+    #[serde(default)]
+    made_from: Option<String>,
 }
 
 /// A copy the central host serves, as saved.
@@ -479,30 +483,82 @@ impl LiveCopies {
                 &others,
                 fallback,
             );
-            git_sync::add_worktree(&repo, &path, &opened.branch, &fetched.head)
+            let made_from = git_sync::commit_tree(&repo, &fetched.head)
                 .await
-                .map_err(|e| match e {
+                .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+            // Saved first, so a worktree made just before a crash is
+            // found again rather than made a second time.
+            self.update_kept(&k.id, |kept| {
+                kept.path = path.display().to_string();
+                kept.made_from = Some(made_from.clone());
+            });
+            if let Err(e) =
+                git_sync::add_worktree(&repo, &path, &opened.branch, &fetched.head).await
+            {
+                self.update_kept(&k.id, |kept| {
+                    kept.path.clear();
+                    kept.made_from = None;
+                });
+                return Err(match e {
                     git_sync::WorktreeError::Ahead => Stop::Paused(format!(
                         "{} on this Mac has commits {}'s doesn't.",
                         opened.branch, k.host
                     )),
                     e => Stop::Paused(e.to_string()),
-                })?;
-            self.update_kept(&k.id, |kept| kept.path = path.display().to_string());
+                });
+            }
             path
         };
 
-        // The worktree is at the session's commit; its files follow.
+        // The worktree is at the session's commit; its files follow. A
+        // worktree made before and edited since keeps those edits.
         let host_name = k.host.clone();
-        apply_tries(&path, &fetched.tree, &host_name).await?;
-        git_sync::set_base_ref(&repo, &k.id, &fetched.tree)
+        let mut target = fetched.tree.clone();
+        let mut base = fetched.tree.clone();
+        let mut differs = Vec::new();
+        let made_from = self.kept(&k.id).and_then(|kept| kept.made_from);
+        if made
+            && let Some(from) = made_from
+        {
+            let local = git_sync::snapshot(&path, MAX_FILE)
+                .await
+                .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+            if local.tree != from {
+                let read = |t: String| {
+                    let repo = repo.clone();
+                    async move { git_sync::read_files(&repo, &t).await }
+                };
+                let (Ok(from_f), Ok(central_f), Ok(local_f)) = (
+                    read(from).await,
+                    read(fetched.tree.clone()).await,
+                    read(local.tree).await,
+                ) else {
+                    return Err(Stop::Paused("cannot read the copy's files".into()));
+                };
+                let r = resume(&from_f, &central_f, &local_f);
+                let write = |f: Files| {
+                    let repo = repo.clone();
+                    async move { git_sync::write_files(&repo, &f).await }
+                };
+                target = write(r.worker)
+                    .await
+                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+                base = write(r.base)
+                    .await
+                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+                differs = r.differs;
+            }
+        }
+        apply_tries(&path, &target, &host_name).await?;
+        git_sync::set_base_ref(&repo, &k.id, &base)
             .await
             .map_err(|e| Stop::Paused(format!("{e:#}")))?;
         self.update_kept(&k.id, |kept| {
-            kept.base = Some(fetched.tree.clone());
+            kept.base = Some(base.clone());
             kept.base_head = Some(fetched.head.clone());
             kept.too_big = fetched.too_big.clone();
-            kept.differs.clear();
+            kept.differs = differs.clone();
+            kept.made_from = None;
         });
         Ok(())
     }
@@ -1061,6 +1117,27 @@ fn mark_local_changes(base: &Files, central: &mut Files, local: &Files) {
     }
 }
 
+/// Reconciles a copy made before and never finished: `made_from` (the
+/// worktree's files when it was made) against the central host's files and
+/// the copy's own. Files only this Mac changed keep its version and stay a
+/// change against the base, so they are offered rather than taken as
+/// agreed.
+fn resume(made_from: &Files, central: &Files, local: &Files) -> git_sync::Reconciled<Files> {
+    let mut r = git_sync::reconcile(made_from, central, local);
+    let edited: Vec<&String> = made_from
+        .keys()
+        .chain(local.keys())
+        .filter(|p| local.get(*p) != made_from.get(*p) && !r.differs.contains(*p))
+        .collect();
+    for p in edited {
+        match made_from.get(p) {
+            Some(e) => r.base.insert(p.clone(), e.clone()),
+            None => r.base.remove(p),
+        };
+    }
+    r
+}
+
 /// How many files differ between two trees.
 async fn changed_paths(repo: &Path, a: &str, b: &str) -> u32 {
     let (Ok(a), Ok(b)) = (
@@ -1396,6 +1473,27 @@ mod tests {
         let outer = clone_dir(home, "git.example.com/acme");
         let inner = clone_dir(home, "git.example.com/acme/shop");
         assert!(!inner.starts_with(&outer) && !outer.starts_with(&inner));
+    }
+
+    #[test]
+    fn a_copy_made_again_keeps_the_edits_made_in_it_meanwhile() {
+        // The worktree was made at a (`made_from`) and never finished;
+        // since then studio-mini edited README.md and added new.ts, and
+        // this Mac edited cart.ts and README.md.
+        let made_from = files(&[("cart.ts", "a"), ("README.md", "a")]);
+        let central = files(&[("cart.ts", "a"), ("README.md", "c"), ("new.ts", "n")]);
+        let local = files(&[("cart.ts", "b"), ("README.md", "d")]);
+        let r = resume(&made_from, &central, &local);
+        assert_eq!(r.differs, ["README.md"]);
+        assert_eq!(
+            r.worker,
+            files(&[("cart.ts", "b"), ("README.md", "d"), ("new.ts", "n")])
+        );
+        // cart.ts stays a change of this Mac's against the base.
+        assert_eq!(
+            r.base,
+            files(&[("cart.ts", "a"), ("README.md", "a"), ("new.ts", "n")])
+        );
     }
 
     #[test]
