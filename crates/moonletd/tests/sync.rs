@@ -2476,3 +2476,108 @@ async fn a_copy_never_made_whose_session_was_archived_goes() {
     })
     .await;
 }
+
+/// Another machine, `build-box`, with no projects: a daemon this Mac can
+/// pair with and make its central host instead of studio-mini.
+async fn build_box() -> (Daemon, String) {
+    for _ in 0..5 {
+        let home = tempfile::tempdir().unwrap();
+        let port = free_port();
+        write(
+            &home.path().join("mobile.json"),
+            &format!(r#"{{ "enabled": true, "port": {port} }}"#),
+        );
+        let d = Daemon::start(
+            home,
+            &[
+                ("MOONLET_MOBILE_ADDRS", "127.0.0.1"),
+                ("MOONLET_WORKER_PING_MS", "200"),
+            ],
+        )
+        .await;
+        let addr = format!("127.0.0.1:{port}");
+        for _ in 0..40 {
+            let st: Value = d.call("mobile.status", json!({})).await;
+            if st["listening"]
+                .as_array()
+                .is_some_and(|l| l.contains(&json!(addr)))
+            {
+                return (d, addr);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    panic!("build-box never listened");
+}
+
+/// Pairs `worker` with `central` as [`link`] does; returns the token.
+async fn pair_with(central: &Central) -> String {
+    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({})).await;
+    moonlet_link::tailnet::pair(
+        &[central.addr.clone()],
+        &p.code,
+        "Alex's MacBook Pro",
+        DeviceKind::Desktop,
+    )
+    .await
+    .unwrap()
+    .token
+}
+
+#[tokio::test]
+async fn a_copy_waits_while_another_host_is_the_central_host() {
+    let central = central().await;
+    let worker = worker(&central.origin).await;
+    let token = pair_with(&central).await;
+    let studio_mini =
+        json!({ "central": { "name": "studio-mini", "addrs": [central.addr], "token": token } });
+    let _: Value = worker.call("link.set", studio_mini.clone()).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let path = PathBuf::from(in_sync(&worker).await.path);
+    let (other, addr) = build_box().await;
+    let p: MobilePairing = other.call("mobile.pair_start", json!({})).await;
+    let token = moonlet_link::tailnet::pair(
+        &[addr.clone()],
+        &p.code,
+        "Alex's MacBook Pro",
+        DeviceKind::Desktop,
+    )
+    .await
+    .unwrap()
+    .token;
+    let _: Value = worker
+        .call(
+            "link.set",
+            json!({ "central": { "name": "build-box", "addrs": [addr], "token": token } }),
+        )
+        .await;
+    let c = copy_in(&worker, paused, "paused while build-box is central").await;
+    assert_eq!(
+        reason(&c),
+        "studio-mini is no longer this Mac's central host."
+    );
+    // Kept, and not mistaken for a session build-box archived.
+    write(&path.join("README.md"), "made while away\n");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let all = copies(&worker).await;
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(
+        reason(&all[0]),
+        "studio-mini is no longer this Mac's central host."
+    );
+    assert_eq!(
+        read(&path.join("README.md")).as_deref(),
+        Some("made while away\n")
+    );
+
+    // studio-mini again: the copy goes on, and the edit reaches it.
+    let _: Value = worker.call("link.set", studio_mini).await;
+    in_sync(&worker).await;
+    reads(
+        &central.session_path().join("README.md"),
+        "made while away\n",
+    )
+    .await;
+}

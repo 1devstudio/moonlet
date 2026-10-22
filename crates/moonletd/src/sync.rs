@@ -318,6 +318,22 @@ impl LiveCopies {
 
     // ---- This Mac, keeping copies ----
 
+    /// Why copy `k` waits for its central host when another host is this
+    /// Mac's central host now: it talks to the host it was made with only,
+    /// which would not know it and might be taken to have archived it.
+    fn elsewhere(&self, k: &Kept) -> Option<String> {
+        (self.link.central_name().as_deref() != Some(k.host.as_str()))
+            .then(|| format!("{} is no longer this Mac's central host.", k.host))
+    }
+
+    /// The link's connection, when it goes to copy `k`'s central host.
+    fn host_for(&self, k: &Kept) -> Option<Arc<moonlet_link::Host>> {
+        self.elsewhere(k)
+            .is_none()
+            .then(|| self.link.host())
+            .flatten()
+    }
+
     fn kept(&self, id: &str) -> Option<Kept> {
         self.data
             .lock()
@@ -343,10 +359,8 @@ impl LiveCopies {
     }
 
     fn copy_of(&self, k: &Kept) -> Copy {
-        let state = match &k.paused {
-            Some(reason) => CopyState::Paused {
-                reason: reason.clone(),
-            },
+        let state = match k.paused.clone().or_else(|| self.elsewhere(k)) {
+            Some(reason) => CopyState::Paused { reason },
             None => self
                 .states
                 .lock()
@@ -631,7 +645,9 @@ impl LiveCopies {
     /// Asks the central host for the session's state again. A copy it no
     /// longer serves, because the session was archived meanwhile, goes.
     async fn ask_again(self: &Arc<Self>, id: &str) {
-        let Some(host) = self.link.host() else { return };
+        let Some(host) = self.kept(id).and_then(|k| self.host_for(&k)) else {
+            return;
+        };
         let req = SyncFetch {
             copy: id.to_string(),
             have: Vec::new(),
@@ -660,6 +676,9 @@ impl LiveCopies {
         self.send_closed_soon();
         let kept = self.data.lock().unwrap().worker.clone();
         for k in kept {
+            if self.elsewhere(&k).is_some() {
+                continue;
+            }
             if k.paused.is_none() && k.base.is_none() {
                 tokio::spawn(self.clone().make(k.id));
             } else if k.base.is_some() && !k.path.is_empty() {
@@ -719,7 +738,7 @@ impl LiveCopies {
     }
 
     async fn make_copy(&self, k: &Kept) -> Result<PathBuf, Stop> {
-        let host = self.link.host().ok_or(Stop::Offline)?;
+        let host = self.host_for(k).ok_or(Stop::Offline)?;
         let open = SyncOpen {
             copy: k.id.clone(),
             session: k.session.clone(),
@@ -1117,7 +1136,7 @@ impl LiveCopies {
                 }
                 return Ok(Round::Made);
             }
-            let Some(host) = self.link.host() else {
+            let Some(host) = self.host_for(&k) else {
                 self.set_state(id, CopyState::Waiting);
                 return Ok(Round::Offline);
             };
