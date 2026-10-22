@@ -218,6 +218,24 @@ pub const EV_LINK_CHANGED: &str = "link.changed";
 /// [`WorkerInfo`]s, when a worker registers or goes away.
 pub const EV_WORKERS_CHANGED: &str = "workers.changed";
 
+// Live copies of sessions on the central host (X60)
+/// [`SyncStart`] → [`Copy`]: keep a session on the central host in sync
+/// with this Mac. Asked of this Mac's own daemon.
+pub const SYNC_START: &str = "sync.start";
+/// This Mac's [`Copy`]s.
+pub const SYNC_LIST: &str = "sync.list";
+/// [`CopyRef`]: a paused copy tries again.
+pub const SYNC_RETRY: &str = "sync.retry";
+/// Worker to central host: [`SyncOpen`] → [`SyncOpened`].
+pub const SYNC_OPEN: &str = "sync.open";
+/// Worker to central host: [`SyncFetch`] → [`SyncFetched`], the session's
+/// files and commits as they are now.
+pub const SYNC_FETCH: &str = "sync.fetch";
+/// Central host to worker: [`SyncUpdate`] → [`SyncUpdated`].
+pub const SYNC_UPDATE: &str = "sync.update";
+/// A [`Copy`], on every change of its state.
+pub const EV_SYNC_CHANGED: &str = "sync.changed";
+
 // Events
 pub const EV_TERMINAL_CREATED: &str = "terminal.created";
 pub const EV_TERMINAL_UPDATED: &str = "terminal.updated";
@@ -1269,4 +1287,129 @@ pub struct WorkerInfo {
     pub connected_since: u64,
     /// The last `worker.ping` round trip; none before the first.
     pub rtt_ms: Option<u64>,
+}
+
+/// `sync.start` params: the session's id on the central host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncStart {
+    pub session: String,
+}
+
+/// Names one of this Mac's copies.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopyRef {
+    pub copy: String,
+}
+
+/// Where a copy is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CopyState {
+    Copying,
+    InSync,
+    Syncing { files: u32 },
+    /// The link is down; changes made here sync when it is back.
+    Waiting,
+    /// Waits for `sync.retry`: `reason` is shown after "Paused: ".
+    Paused { reason: String },
+}
+
+/// The setup script in a copy (X60, "Setup in the copy").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopySetup {
+    pub state: String,
+    pub command: String,
+}
+
+/// Commits each side has that the other lacks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Diverged {
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+/// A live copy on this Mac of a session on its central host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Copy {
+    pub id: String,
+    /// The central host's name, such as `studio-mini`.
+    pub host: String,
+    /// The session's id on the central host.
+    pub session: String,
+    /// Where the copy is on this Mac; empty until it is made.
+    pub path: String,
+    pub state: CopyState,
+    pub setup: Option<CopySetup>,
+    /// Paths that differ between the two sides, sorted.
+    pub differs: Vec<String>,
+    /// Files too big to sync, which stay on each machine.
+    pub too_big: Vec<String>,
+    pub diverged: Option<Diverged>,
+}
+
+/// `sync.open`: a worker starts a copy of `session`, under the id it chose.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncOpen {
+    pub copy: String,
+    pub session: String,
+}
+
+/// What a worker needs to make a copy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncOpened {
+    /// The session's worktree on the central host.
+    pub path: String,
+    pub branch: String,
+    pub head: String,
+    /// The session's name and its project's.
+    pub name: String,
+    pub project: String,
+    pub identity: crate::types::ProjectIdentity,
+    /// The project's origin URL without a password or token.
+    pub origin_url: Option<String>,
+}
+
+/// `sync.fetch`: the objects the worker has, so they are left out. With
+/// `again`, a made copy asks the central host to send its state as an
+/// update instead, as after `sync.retry`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncFetch {
+    pub copy: String,
+    pub have: Vec<String>,
+    #[serde(default)]
+    pub again: bool,
+}
+
+/// The session's files (`tree`) and commit (`head`) now; their objects
+/// come in `pack`, a transfer id, or none when nothing is missing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncFetched {
+    pub tree: String,
+    pub head: String,
+    pub too_big: Vec<String>,
+    pub pack: Option<u32>,
+}
+
+/// `sync.update`: the central host's files and commit, against the base
+/// it last agreed on with the worker. The worker reconciles against its
+/// own base, which wins when a lost reply left the two apart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncUpdate {
+    pub copy: String,
+    pub base: String,
+    pub tree: String,
+    pub head: String,
+    pub too_big: Vec<String>,
+    pub pack: Option<u32>,
+}
+
+/// The worker's files after an update, the paths it kept its own version
+/// of, and the new base both sides keep. Objects of `base` that the update
+/// lacked come in `pack`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncUpdated {
+    pub tree: String,
+    pub base: String,
+    pub differs: Vec<String>,
+    pub pack: Option<u32>,
 }

@@ -496,3 +496,67 @@ async fn a_stopped_host_reports_nothing_more() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(*seen.statuses.lock().unwrap(), [HostStatus::Connecting]);
 }
+
+/// Answers with the size of the pack its request names, taken from the
+/// host (X60).
+struct PackSize(Mutex<std::sync::Weak<Host>>);
+
+impl moonlet_link::Requests for PackSize {
+    fn request(&self, _method: String, params: Value) -> BoxFuture<'static, Result<Value, RpcError>> {
+        let host = self.0.lock().unwrap().upgrade();
+        Box::pin(async move {
+            let transfer = params["pack"].as_u64().unwrap() as u32;
+            let pack = host.and_then(|h| h.take_pack(transfer));
+            Ok(json!({ "bytes": pack.map(|p| p.len()) }))
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_pack_sent_before_a_request_is_there_for_its_handler() {
+    let (host, _seen, mut rx) = start();
+    host.set_requests(Arc::new(PackSize(Mutex::new(Arc::downgrade(&host)))));
+    let mut daemon = FakeDaemon::accept(&mut rx).await;
+    let pack = vec![7u8; 1_500_000];
+    for f in moonlet_proto::pack_frames(3, &pack) {
+        daemon.send(f).await;
+    }
+    daemon
+        .send(Frame::Json(Message::Request {
+            id: 1,
+            method: "sync.update".into(),
+            params: json!({ "pack": 3 }),
+        }))
+        .await;
+    match next_reply(&mut daemon).await {
+        Message::Response { id, result, error } => {
+            assert_eq!((id, error), (1, None));
+            assert_eq!(result, Some(json!({ "bytes": 1_500_000 })));
+        }
+        other => panic!("expected a response, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_pack_the_host_sends_arrives_whole_under_its_transfer_id() {
+    let (host, _seen, mut rx) = start();
+    let mut daemon = FakeDaemon::accept(&mut rx).await;
+    let pack: Vec<u8> = (0..2_100_000).map(|i| (i % 253) as u8).collect();
+    let mut transfer = None;
+    eventually("the link", || {
+        transfer = host.send_pack(&pack).ok();
+        transfer.is_some()
+    })
+    .await;
+    let mut got = moonlet_proto::PackAssembler::default();
+    let id = transfer.unwrap();
+    loop {
+        if let Frame::Pack { transfer, data } = daemon.next().await {
+            got.push(transfer, data).unwrap();
+            if let Some(p) = got.take(id) {
+                assert_eq!(p, pack);
+                break;
+            }
+        }
+    }
+}

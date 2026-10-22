@@ -45,6 +45,9 @@ pub struct Daemon {
     pub link: Arc<crate::link::WorkerLink>,
     /// The workers linked to this daemon as their central host (X41).
     pub workers: Arc<crate::workers::Workers>,
+    /// Live copies: this Mac's of sessions on its central host, and the
+    /// ones this daemon serves as a central host (X60).
+    pub sync: Arc<crate::sync::LiveCopies>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -168,6 +171,15 @@ impl Daemon {
         );
         let emitter = terminals.clone();
         let workers = Arc::new(crate::workers::Workers::new(move |m| emitter.emit(m)));
+        let emitter = terminals.clone();
+        let sync = crate::sync::LiveCopies::new(
+            moonlet_core::paths::home(),
+            sessions.clone(),
+            link.clone(),
+            workers.clone(),
+            move |m| emitter.emit(m),
+        );
+        link.set_sync(Arc::downgrade(&sync));
         Arc::new(Self {
             clones,
             terminals,
@@ -184,6 +196,7 @@ impl Daemon {
             mobile,
             link,
             workers,
+            sync,
         })
     }
 
@@ -499,8 +512,34 @@ impl Daemon {
                     return Err(RpcError::new("forbidden", "this Mac is no longer paired"));
                 }
                 let r: m::WorkerRegister = params(p)?;
+                let id = r.id.clone();
                 self.workers.register(conn.clone(), device, r)?;
+                self.sync.worker_linked(&id);
                 ok(true)
+            }
+            // A copy clones and writes on this Mac: only its app starts one
+            // (X60). Anyone may list them.
+            m::SYNC_START => {
+                app_only(conn, "sync")?;
+                let r: m::SyncStart = params(p)?;
+                ok(self.sync.start(r.session)?)
+            }
+            m::SYNC_LIST => ok(self.sync.list()),
+            m::SYNC_RETRY => {
+                app_only(conn, "sync")?;
+                let r: m::CopyRef = params(p)?;
+                ok(self.sync.retry(&r.copy)?)
+            }
+            m::SYNC_OPEN | m::SYNC_FETCH => {
+                // Only a worker's daemon, over the tailnet (X60).
+                if conn.phone.is_none() || conn.client != crate::link::WORKER_CLIENT {
+                    return Err(RpcError::new("forbidden", "only a worker keeps copies"));
+                }
+                if method == m::SYNC_OPEN {
+                    ok(self.sync.open(conn, params(p)?).await?)
+                } else {
+                    ok(self.sync.fetch(conn, params(p)?).await?)
+                }
             }
             _ => self.handle_project(conn, method, p).await,
         }
@@ -767,7 +806,12 @@ impl Daemon {
             }
             m::PROJECT_WORKTREES => {
                 let r: m::IdRef = params(p)?;
-                ok(w.project_worktrees(&r.id).await.map_err(internal)?)
+                // This Mac's copies of remote sessions are moonlet's own (X60).
+                let real = |p: &std::path::Path| std::fs::canonicalize(p).ok();
+                let copies: Vec<_> = self.sync.copy_paths().iter().filter_map(|p| real(p)).collect();
+                let mut list = w.project_worktrees(&r.id).await.map_err(internal)?;
+                list.retain(|t| real(std::path::Path::new(&t.path)).is_none_or(|p| !copies.contains(&p)));
+                ok(list)
             }
             m::SESSION_CREATE => ok(w.create_session(params(p)?).await.map_err(internal)?),
             m::SESSION_LIST => ok(w.list_sessions()),

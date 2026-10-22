@@ -14,6 +14,7 @@ mod mobile;
 mod notify;
 mod server;
 mod service;
+mod sync;
 mod tailnet_cli;
 mod upgrade;
 mod workers;
@@ -259,6 +260,8 @@ fn run_daemon(
         });
         // Phones over Tailscale, when the user allows them (X39).
         mobile::spawn(daemon.clone());
+        // Live copies, before the link they may open (X60).
+        sync::spawn(daemon.clone());
         // This Mac's link to its central host, when one is set (X41).
         link::spawn(daemon.clone());
         // A daemon that took over already told systemd (X58).
