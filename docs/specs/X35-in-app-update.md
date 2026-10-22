@@ -12,14 +12,14 @@ moonlet checks GitHub for a newer release, downloads it, verifies its signature 
 ## User journey
 
 1. A new version is published (a `v*` tag builds and publishes a GitHub release with `latest.json`).
-2. Within ten seconds of launch, and every six hours after, moonlet checks for it. When one is found, a toast says "moonlet 0.1.15 is available" with an **Install** button, and an "Update to 0.1.15" button appears in the sidebar footer.
+2. Within ten seconds of launch, and every hour after, moonlet checks for it. When one is found, a toast says "moonlet 0.1.15 is available" with an **Install** button, and an "Update to 0.1.15" button appears in the sidebar footer.
 3. The user clicks **Install**. The footer button shows the download progress, then "Restart to update".
 4. The user clicks it. moonlet relaunches as 0.1.15, upgrades the daemon, and every terminal and agent is still there.
 5. **Settings › General › Updates** (X43) shows the running version, a **Check now** button and a "Check for updates automatically" checkbox. **Check for updates…** in the Run action modal (⌘K) does the same as **Check now**.
 
 ## Behaviour and acceptance criteria
 
-- [x] The app asks the updater endpoint ten seconds after launch and every six hours, while "Check for updates automatically" is on (the default). With it off, the app only checks when asked.
+- [x] The app asks the updater endpoint ten seconds after launch and every hour, while "Check for updates automatically" is on (the default). With it off, the app only checks when asked.
 - [x] A found update shows the "Update to X.Y.Z" footer button and announces itself once per version with a toast and an **Install** action. A periodic check that finds the same version again does not toast again.
 - [x] A check that runs while an update is downloading, installing or waiting for a restart leaves that state alone.
 - [x] While downloading, the footer button shows the percentage when the size is known, and the downloaded megabytes when it isn't.

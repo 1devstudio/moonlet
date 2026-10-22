@@ -128,7 +128,7 @@ describe("updateStatus", () => {
 describe("scheduleUpdateChecks", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("checks ten seconds after launch, then every six hours", () => {
+  it("checks ten seconds after launch, then every hour", () => {
     vi.useFakeTimers();
     const check = vi.fn();
     scheduleUpdateChecks(check, () => true);
@@ -136,9 +136,11 @@ describe("scheduleUpdateChecks", () => {
     expect(check).toHaveBeenCalledTimes(0);
     vi.advanceTimersByTime(1);
     expect(check).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+    vi.advanceTimersByTime(3_589_999);
+    expect(check).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
     expect(check).toHaveBeenCalledTimes(2);
-    vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+    vi.advanceTimersByTime(3_600_000);
     expect(check).toHaveBeenCalledTimes(3);
   });
 
@@ -147,10 +149,10 @@ describe("scheduleUpdateChecks", () => {
     const check = vi.fn();
     let on = false;
     scheduleUpdateChecks(check, () => on);
-    vi.advanceTimersByTime(10_000 + 6 * 60 * 60 * 1000);
+    vi.advanceTimersByTime(10_000 + 3_600_000);
     expect(check).toHaveBeenCalledTimes(0);
     on = true;
-    vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+    vi.advanceTimersByTime(3_600_000);
     expect(check).toHaveBeenCalledTimes(1);
   });
 });
