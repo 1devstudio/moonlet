@@ -886,6 +886,7 @@ export const M = {
   linkGet: "link.get",
   linkSet: "link.set",
   linkRetry: "link.retry",
+  linkPair: "link.pair",
   syncStart: "sync.start",
   syncList: "sync.list",
   syncRetry: "sync.retry",

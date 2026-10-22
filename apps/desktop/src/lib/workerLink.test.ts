@@ -1,20 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { centralHostButton, centralHostId, linkLine, linkRetries, pickCentral, watchLink } from "./workerLink";
+import { centralHostButton, centralHostId, heavyHostIds, linkLine, linkPairError, linkRetries, pickCentral, remoteLinkAction, remoteLinkLine, turnOnNeeds, watchLink } from "./workerLink";
+import { DaemonError } from "./daemon";
 import type { HostInfo, LinkInfo, LinkState } from "./protocol";
 
 const info = (state: LinkState, central: string | null = "studio-mini"): LinkInfo => ({
   central: central ? { name: central, addrs: ["100.101.102.103:47428"] } : null,
-  worker: { id: "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37", name: "Alex's MacBook Pro", enabled: true },
+  worker: {
+    id: "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37",
+    name: "Alex's MacBook Pro",
+    enabled: true,
+  },
   state,
 });
 
 describe("the link's status line (X41)", () => {
   it("reads one line per link state", () => {
     const since = new Date(2026, 9, 21, 10, 42).getTime();
-    expect(linkLine(info({ kind: "off" }, null))).toEqual({ tone: "muted", text: "Not linked" });
-    expect(linkLine(info({ kind: "connecting" }))).toEqual({ tone: "blocked", text: "Linking to studio-mini…" });
-    expect(linkLine(info({ kind: "connected", since }))).toEqual({ tone: "done", text: "Linked to studio-mini since 10:42" });
-    expect(linkLine(info({ kind: "reconnecting" }))).toEqual({ tone: "blocked", text: "Reconnecting to studio-mini…" });
+    expect(linkLine(info({ kind: "off" }, null))).toEqual({
+      tone: "muted",
+      text: "Not linked",
+    });
+    expect(linkLine(info({ kind: "connecting" }))).toEqual({
+      tone: "blocked",
+      text: "Linking to studio-mini…",
+    });
+    expect(linkLine(info({ kind: "connected", since }))).toEqual({
+      tone: "done",
+      text: "Linked to studio-mini since 10:42",
+    });
+    expect(linkLine(info({ kind: "reconnecting" }))).toEqual({
+      tone: "blocked",
+      text: "Reconnecting to studio-mini…",
+    });
     expect(linkLine(info({ kind: "needs_update", daemon_version: "0.1.26" }))).toEqual({ tone: "error", text: "Update moonlet on studio-mini" });
     expect(linkLine(info({ kind: "refused" }))).toEqual({
       tone: "error",
@@ -37,7 +54,17 @@ describe("the link's status line (X41)", () => {
 });
 
 describe("the central host choice (X41)", () => {
-  const host = (id: string, kind: HostInfo["kind"]): HostInfo => ({ id, label: id, remote: true, kind, status: "connected", message: null, daemon_version: null, hostname: null, home: null });
+  const host = (id: string, kind: HostInfo["kind"]): HostInfo => ({
+    id,
+    label: id,
+    remote: true,
+    kind,
+    status: "connected",
+    message: null,
+    daemon_version: null,
+    hostname: null,
+    home: null,
+  });
   const hosts = [host("studio-mini", "tailnet"), host("build-box", "tailnet"), host("devbox", "ssh")];
 
   it("is the tailnet host the link goes to", () => {
@@ -70,7 +97,11 @@ describe("the central host choice (X41)", () => {
 describe("following the link (X41)", () => {
   const info = (kind: "off" | "connecting", name = "studio-mini"): LinkInfo => ({
     central: { name, addrs: ["100.101.102.103:47428"] },
-    worker: { id: "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37", name: "Alex's MacBook Pro", enabled: kind !== "off" },
+    worker: {
+      id: "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37",
+      name: "Alex's MacBook Pro",
+      enabled: kind !== "off",
+    },
     state: { kind } as LinkState,
   });
 
@@ -92,7 +123,13 @@ describe("following the link (X41)", () => {
       },
       set: (l) => seen.push(l),
     });
-    return { answers, changed: (l: LinkInfo) => changed(l), reconnected: () => reconnected(), seen, stop };
+    return {
+      answers,
+      changed: (l: LinkInfo) => changed(l),
+      reconnected: () => reconnected(),
+      seen,
+      stop,
+    };
   }
 
   it("drops a snapshot that an event overtook", async () => {
@@ -120,5 +157,137 @@ describe("following the link (X41)", () => {
     f.changed(info("connecting"));
     await Promise.resolve();
     expect(f.seen).toEqual([]);
+  });
+});
+
+describe("which remote hosts take heavy commands (X61)", () => {
+  const host = (id: string, kind: HostInfo["kind"], status: HostInfo["status"] = "connected"): HostInfo => ({
+    id,
+    label: id,
+    remote: true,
+    kind,
+    status,
+    message: null,
+    daemon_version: null,
+    hostname: null,
+    home: null,
+  });
+
+  it("is every connected tailnet host but the central host", () => {
+    const hosts = [host("studio-mini", "tailnet"), host("build-box", "tailnet"), host("old-mini", "tailnet", "reconnecting"), host("spare-mini", "tailnet", "needs_update"), host("devbox", "ssh")];
+    expect(heavyHostIds(hosts, "studio-mini")).toEqual(["build-box"]);
+    expect(heavyHostIds(hosts, null)).toEqual(["studio-mini", "build-box"]);
+  });
+});
+
+describe("a remote host's link line (X61)", () => {
+  const remote = (state: LinkState, central: string | null = "studio-mini", enabled = true): LinkInfo => ({
+    central: central ? { name: central, addrs: ["100.101.102.103:47428"] } : null,
+    worker: {
+      id: "9b1e4c7d-2f3a-4d5e-8a6b-0c1d2e3f4a5b",
+      name: "build-box",
+      enabled,
+    },
+    state,
+  });
+
+  it("reads one line per link state, naming the remote host", () => {
+    const since = new Date(2026, 9, 22, 10, 42).getTime();
+    const line = (l: LinkInfo) => remoteLinkLine(l, "build-box", "studio-mini");
+    expect(line(remote({ kind: "off" }, null, false))).toEqual({
+      tone: "muted",
+      text: "Not linked",
+    });
+    expect(line(remote({ kind: "connecting" }))).toEqual({
+      tone: "blocked",
+      text: "Linking to studio-mini…",
+    });
+    expect(line(remote({ kind: "connected", since }))).toEqual({
+      tone: "done",
+      text: "Linked to studio-mini since 10:42",
+    });
+    expect(line(remote({ kind: "reconnecting" }))).toEqual({
+      tone: "blocked",
+      text: "Reconnecting to studio-mini…",
+    });
+    expect(line(remote({ kind: "needs_update", daemon_version: "0.1.26" }))).toEqual({ tone: "error", text: "Update moonlet on studio-mini" });
+    expect(line(remote({ kind: "refused" }))).toEqual({
+      tone: "error",
+      text: "studio-mini no longer accepts build-box",
+    });
+    expect(line(remote({ kind: "error", message: "connection refused" }))).toEqual({ tone: "error", text: "connection refused" });
+  });
+
+  it("says so when the host is linked to another central host", () => {
+    expect(remoteLinkLine(remote({ kind: "connected", since: 0 }, "other-mini"), "build-box", "studio-mini")).toEqual({
+      tone: "blocked",
+      text: "Linked to other-mini, not to studio-mini",
+    });
+    // Off, its old central host does not matter.
+    expect(remoteLinkLine(remote({ kind: "off" }, "other-mini", false), "build-box", "studio-mini")).toEqual({ tone: "muted", text: "Not linked" });
+  });
+
+  it("asks for a central host first while this Mac has none", () => {
+    expect(remoteLinkLine(remote({ kind: "off" }, null, false), "build-box", null)).toEqual({ tone: "muted", text: "Choose a central host first" });
+  });
+
+  it("offers Retry for a connection error or an update, and Pair again for a central host that removed the host", () => {
+    const action = (l: LinkInfo) => remoteLinkAction(l, "studio-mini");
+    expect(action(remote({ kind: "error", message: "connection refused" }))).toBe("retry");
+    expect(action(remote({ kind: "needs_update", daemon_version: "0.1.26" }))).toBe("retry");
+    expect(action(remote({ kind: "refused" }))).toBe("pair-again");
+    expect(action(remote({ kind: "connected", since: 0 }))).toBeNull();
+    expect(action(remote({ kind: "refused" }, "other-mini"))).toBeNull();
+    expect(remoteLinkAction(remote({ kind: "refused" }), null)).toBeNull();
+  });
+});
+
+describe("turning a remote host's switch on (X61)", () => {
+  const remote = (state: LinkState, central: string | null): LinkInfo => ({
+    central: central ? { name: central, addrs: ["100.101.102.103:47428"] } : null,
+    worker: {
+      id: "9b1e4c7d-2f3a-4d5e-8a6b-0c1d2e3f4a5b",
+      name: "build-box",
+      enabled: false,
+    },
+    state,
+  });
+
+  it("only enables a host that is paired with this Mac's central host", () => {
+    expect(turnOnNeeds(remote({ kind: "off" }, "studio-mini"), "build-box", "studio-mini")).toEqual({ kind: "enable" });
+    expect(turnOnNeeds(remote({ kind: "error", message: "connection refused" }, "studio-mini"), "build-box", "studio-mini")).toEqual({ kind: "enable" });
+  });
+
+  it("pairs a host with no central host, or one the central host removed", () => {
+    expect(turnOnNeeds(remote({ kind: "off" }, null), "build-box", "studio-mini")).toEqual({ kind: "pair" });
+    expect(turnOnNeeds(remote({ kind: "refused" }, "studio-mini"), "build-box", "studio-mini")).toEqual({ kind: "pair" });
+  });
+
+  it("asks before moving a host linked to another central host", () => {
+    expect(turnOnNeeds(remote({ kind: "connected", since: 0 }, "other-mini"), "build-box", "studio-mini")).toEqual({
+      kind: "pair",
+      confirm: "build-box is linked to other-mini. Link it to studio-mini instead?",
+    });
+  });
+
+  it("says an older host needs an update for link.pair", () => {
+    expect(
+      linkPairError(
+        new DaemonError({
+          code: "unknown_method",
+          message: "unknown method link.pair",
+        }),
+        "build-box",
+      ),
+    ).toBe("Update moonlet on build-box");
+    expect(
+      linkPairError(
+        new DaemonError({
+          code: "pair_failed",
+          message: "The code was not accepted. Start pairing again on studio-mini.",
+        }),
+        "build-box",
+      ),
+    ).toBe("The code was not accepted. Start pairing again on studio-mini.");
   });
 });
