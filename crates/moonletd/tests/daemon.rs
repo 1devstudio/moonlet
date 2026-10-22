@@ -1758,3 +1758,118 @@ async fn looks_repositories_up_and_lists_them_through_gh() {
     let added: Vec<(&str, bool)> = list.iter().map(|r| (r["repo"].as_str().unwrap(), r["added"].as_bool().unwrap())).collect();
     assert_eq!(added, [("acme/storefront", false), ("acme/storefront-admin", false), ("acme/payments-api", true), ("sam-rivera/store-locator", false)]);
 }
+
+/// A repository whose one commit has a fixed hash, `5af9891b…`, so tests can
+/// expect its root as a literal; its origin carries a token.
+fn shop_repo(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"],
+        &["remote", "add", "origin", "https://user:token@github.com/acme/shop.git"],
+    ] {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_DATE", "2026-10-21T12:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-10-21T12:00:00Z")
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+}
+
+/// X41: a project's identity is its normalized origin, without the token in
+/// the remote URL, and its root commit.
+#[tokio::test]
+async fn a_project_has_an_identity_without_credentials() {
+    use moonlet_proto::types::{Project, ProjectIdentity};
+    let d = TestDaemon::start().await;
+    let repo = d.home.path().join("shop");
+    shop_repo(&repo);
+    let mut c = d.client().await;
+    let _: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let want = ProjectIdentity {
+        origin: Some("github.com/acme/shop".into()),
+        root: Some("5af9891b3892ce4e1d3fd498c75b6aaf1b27d96a".into()),
+    };
+    let list: serde_json::Value = c.request(methods::PROJECT_LIST, ()).await.unwrap();
+    let listed: Vec<Project> = serde_json::from_value(list.clone()).unwrap();
+    assert_eq!(listed[0].identity, want);
+    let one: serde_json::Value = c.request(methods::PROJECT_IDENTITY, serde_json::json!({"path": repo})).await.unwrap();
+    assert_eq!(serde_json::from_value::<ProjectIdentity>(one.clone()).unwrap(), want);
+    for text in [list.to_string(), one.to_string()] {
+        assert!(!text.contains("token"), "{text}");
+    }
+}
+
+/// X41: projects saved before identities existed get one when the daemon starts.
+#[tokio::test]
+async fn projects_saved_without_an_identity_get_one_on_start() {
+    use moonlet_proto::types::Project;
+    let home = tempfile::tempdir().unwrap();
+    let repo = home.path().join("shop");
+    shop_repo(&repo);
+    // Saved with only half an identity, as when the root could not be read.
+    let half = home.path().join("shop-half");
+    shop_repo(&half);
+    std::fs::create_dir_all(home.path().join(".moonlet")).unwrap();
+    let state = serde_json::json!({"version": 3, "projects": [
+        {"id": "p1", "name": "shop", "path": repo, "base_branch": "main"},
+        {"id": "p2", "name": "gone", "path": home.path().join("gone"), "base_branch": "main"},
+        {"id": "p3", "name": "shop-half", "path": half, "base_branch": "main",
+         "identity": {"origin": "github.com/acme/shop", "root": null}},
+    ]});
+    std::fs::write(home.path().join(".moonlet/state.json"), state.to_string()).unwrap();
+    let d = HomeDaemon::start(home, None).await;
+    let mut c = d.client().await;
+    let list: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
+    let ids: Vec<_> = list.iter().map(|p| (p.id.as_str(), p.identity.origin.as_deref(), p.identity.root.as_deref())).collect();
+    assert_eq!(
+        ids,
+        [
+            ("p1", Some("github.com/acme/shop"), Some("5af9891b3892ce4e1d3fd498c75b6aaf1b27d96a")),
+            ("p2", None, None),
+            ("p3", Some("github.com/acme/shop"), Some("5af9891b3892ce4e1d3fd498c75b6aaf1b27d96a")),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_projects_origin_is_read_again_on_start() {
+    use moonlet_proto::types::Project;
+    let home = tempfile::tempdir().unwrap();
+    // Its origin moved since it was saved.
+    let moved = home.path().join("shop");
+    shop_repo(&moved);
+    // Its origin remote was removed since.
+    let local = home.path().join("local");
+    shop_repo(&local);
+    git_in(&local, &["remote", "remove", "origin"]).unwrap();
+    std::fs::create_dir_all(home.path().join(".moonlet")).unwrap();
+    let root = "5af9891b3892ce4e1d3fd498c75b6aaf1b27d96a";
+    let state = serde_json::json!({"version": 3, "projects": [
+        {"id": "p1", "name": "shop", "path": moved, "base_branch": "main",
+         "identity": {"origin": "github.com/acme/old-shop", "root": root}},
+        {"id": "p2", "name": "local", "path": local, "base_branch": "main",
+         "identity": {"origin": "github.com/acme/shop", "root": root}},
+        // A folder that cannot be read keeps what was known.
+        {"id": "p3", "name": "gone", "path": home.path().join("gone"), "base_branch": "main",
+         "identity": {"origin": "github.com/acme/gone", "root": root}},
+    ]});
+    std::fs::write(home.path().join(".moonlet/state.json"), state.to_string()).unwrap();
+    let d = HomeDaemon::start(home, None).await;
+    let mut c = d.client().await;
+    let list: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
+    let ids: Vec<_> = list.iter().map(|p| (p.id.as_str(), p.identity.origin.as_deref(), p.identity.root.as_deref())).collect();
+    assert_eq!(
+        ids,
+        [
+            ("p1", Some("github.com/acme/shop"), Some(root)),
+            ("p2", None, Some(root)),
+            ("p3", Some("github.com/acme/gone"), Some(root)),
+        ]
+    );
+}

@@ -13,6 +13,7 @@ pub mod git;
 pub mod git_settings;
 pub mod history;
 pub mod hooks;
+pub mod identity;
 pub mod node;
 pub mod paths;
 pub mod profiles;

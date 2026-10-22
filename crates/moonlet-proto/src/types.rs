@@ -104,6 +104,18 @@ pub struct Project {
     pub name: String,
     pub path: String,
     pub base_branch: String,
+    /// Projects saved before X41 load with an empty identity, which the
+    /// daemon fills in on start.
+    #[serde(default)]
+    pub identity: ProjectIdentity,
+}
+
+/// What makes two folders, on any machines, the same project (X41): the
+/// normalized origin (never its credentials) and the root commit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectIdentity {
+    pub origin: Option<String>,
+    pub root: Option<String>,
 }
 
 /// A host's Git settings (X55), kept by its daemon in `~/.moonlet/git.toml`.

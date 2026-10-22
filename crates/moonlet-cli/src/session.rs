@@ -52,7 +52,7 @@ mod tests {
     use super::*;
 
     fn project(id: &str, name: &str, path: &str) -> Project {
-        Project { id: id.into(), name: name.into(), path: path.into(), base_branch: "main".into() }
+        Project { id: id.into(), name: name.into(), path: path.into(), base_branch: "main".into(), identity: Default::default() }
     }
 
     fn projects() -> Vec<Project> {

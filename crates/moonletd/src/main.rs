@@ -227,6 +227,9 @@ fn run_daemon(
             tracing::info!(chats, "restored structured agent conversations");
         }
         daemon.sessions.relink_terminals();
+        // Before anything can ask, phones and the socket alike, so
+        // `project.list` never lacks one (X41).
+        daemon.sessions.fill_identities().await;
         let restored = daemon.sessions.restore_after_restart();
         if restored > 0 {
             tracing::info!(restored, "restarted workspace sessions after daemon restart");

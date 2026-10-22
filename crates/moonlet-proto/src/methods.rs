@@ -43,6 +43,8 @@ pub const HOOKS_UNINSTALL: &str = "hooks.uninstall";
 // Repos and workspaces
 pub const PROJECT_ADD: &str = "project.add";
 pub const PROJECT_LIST: &str = "project.list";
+/// `{path}` → `ProjectIdentity` of any folder inside a repository (X41).
+pub const PROJECT_IDENTITY: &str = "project.identity";
 pub const PROJECT_REMOVE: &str = "project.remove";
 pub const PROJECT_CONFIG: &str = "project.config";
 pub const PROJECT_CONFIG_FILE: &str = "project.config_file";
