@@ -5,6 +5,7 @@
 mod attach;
 mod hosts;
 mod login_item;
+mod native_menu;
 mod remote;
 mod secrets;
 mod shared;
@@ -490,6 +491,9 @@ pub fn run() {
         .setup(|app| {
             let hosts = HostManager::new(app.handle().clone());
             app.manage(hosts);
+            if let Some(window) = app.get_webview_window("main") {
+                native_menu::hide(&window);
+            }
             if login_item::bundled() {
                 std::thread::spawn(login_item::launch);
             }

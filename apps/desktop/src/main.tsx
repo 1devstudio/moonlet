@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { installNoNativeMenu } from "./lib/nativeMenu";
 import { invoke } from "@tauri-apps/api/core";
 
 /** Never throws: circular objects and bigints must not break logging. */
@@ -26,6 +27,8 @@ for (const level of ["warn", "error"] as const) {
 }
 window.addEventListener("error", (e) => console.error(e.error ?? e.message));
 window.addEventListener("unhandledrejection", (e) => console.error(e.reason));
+
+installNoNativeMenu();
 
 window.addEventListener("keydown", (e) => e.key === "Tab" && document.body.classList.add("kbd-nav"), true);
 window.addEventListener("mousedown", () => document.body.classList.remove("kbd-nav"), true);
