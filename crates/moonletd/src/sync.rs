@@ -169,6 +169,10 @@ struct Kept {
     /// stopped meanwhile ends them when it starts again.
     #[serde(default)]
     setup_sid: Option<u32>,
+    /// When that session's leader started ([`moonlet_core::pty::process_start`]),
+    /// so a process that later got its pid is never taken for it.
+    #[serde(default)]
+    setup_started: Option<u64>,
     /// The session's name on the central host, for the setup's
     /// `MOONLET_SESSION_NAME`.
     #[serde(default)]
@@ -353,6 +357,9 @@ pub struct LiveCopies {
     runs: std::sync::atomic::AtomicU64,
     /// One writer of `projects.json` at a time.
     projects: Mutex<()>,
+    /// The environment terminals get (the login shell's, without the
+    /// daemon's own tokens): setups run in it too.
+    base_env: std::collections::BTreeMap<String, String>,
 }
 
 impl LiveCopies {
@@ -361,6 +368,7 @@ impl LiveCopies {
         sessions: Arc<SessionManager>,
         link: Arc<WorkerLink>,
         workers: Arc<Workers>,
+        base_env: std::collections::BTreeMap<String, String>,
         emit: impl Fn(Message) + Send + Sync + 'static,
     ) -> Arc<LiveCopies> {
         let file = home.join("sync").join("copies.json");
@@ -395,6 +403,7 @@ impl LiveCopies {
                 setups: Mutex::new(HashMap::new()),
                 runs: std::sync::atomic::AtomicU64::new(0),
                 projects: Mutex::new(()),
+                base_env,
             }
         })
     }
@@ -1775,21 +1784,33 @@ impl LiveCopies {
     // ---- Setup in the copy ----
 
     fn load_projects(&self) -> std::collections::BTreeMap<String, ProjectChoices> {
-        std::fs::read(self.home.join("sync").join("projects.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        self.read_projects().unwrap_or_default()
     }
 
-    fn update_projects(&self, key: &str, f: impl FnOnce(&mut ProjectChoices)) {
+    /// `projects.json`: empty when there is none yet, an error when it
+    /// cannot be read, so nothing writes over choices it failed to read.
+    fn read_projects(&self) -> anyhow::Result<std::collections::BTreeMap<String, ProjectChoices>> {
+        let file = self.home.join("sync").join("projects.json");
+        match std::fs::read(&file) {
+            Ok(b) => serde_json::from_slice(&b)
+                .map_err(|e| anyhow::anyhow!("{} cannot be read: {e}", file.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+            Err(e) => Err(anyhow::anyhow!("{}: {e}", file.display())),
+        }
+    }
+
+    fn update_projects(
+        &self,
+        key: &str,
+        f: impl FnOnce(&mut ProjectChoices),
+    ) -> Result<(), RpcError> {
         let _one = self.projects.lock().unwrap();
-        let mut all = self.load_projects();
+        let mut all = self.read_projects().map_err(internal)?;
         f(all.entry(key.to_string()).or_default());
         let file = self.home.join("sync").join("projects.json");
         let bytes = serde_json::to_vec_pretty(&all).unwrap();
-        if let Err(e) = crate::mobile::write_private(&file, &bytes) {
-            tracing::warn!("cannot write {}: {e:#}", file.display());
-        }
+        crate::mobile::write_private(&file, &bytes)
+            .map_err(|e| internal(format!("cannot write {}: {e:#}", file.display())))
     }
 
     fn set_setup(&self, id: &str, setup: Option<CopySetup>) {
@@ -1821,7 +1842,10 @@ impl LiveCopies {
 
     /// `sync.run_setup`: the user approved `command`, which must still be
     /// the copy's setup; it is remembered for the project and runs.
-    pub fn run_setup(self: &Arc<Self>, copy: &str, command: &str) -> Result<Copy, RpcError> {
+    pub async fn run_setup(self: &Arc<Self>, copy: &str, command: &str) -> Result<Copy, RpcError> {
+        // Not while the copy is being removed, nor two at once.
+        let lock = self.lock(copy);
+        let _one = lock.lock().await;
         let k = self
             .kept(copy)
             .ok_or_else(|| RpcError::new("not_found", "no such copy"))?;
@@ -1839,7 +1863,7 @@ impl LiveCopies {
                 if !p.approved_setup.contains(&current) {
                     p.approved_setup.push(current.clone());
                 }
-            });
+            })?;
         }
         self.run_setup_now(copy, current);
         self.copy(copy)
@@ -1879,7 +1903,11 @@ impl LiveCopies {
         self.end_setup(id);
         let Some(k) = self.kept(id) else { return };
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let log = self.home.join("sync").join("logs").join(format!("{id}.log"));
+        let log = self
+            .home
+            .join("sync")
+            .join("logs")
+            .join(format!("{id}.log"));
         let started = self.spawn_setup(id, run, &k, &command, &log);
         let running = move |state| CopySetup {
             state,
@@ -1904,23 +1932,19 @@ impl LiveCopies {
                 Err(_) => -1,
             };
             reaped.store(true, std::sync::atomic::Ordering::SeqCst);
-            // A setup stopped or run again meanwhile reports nothing.
-            let current = {
-                let mut setups = me.setups.lock().unwrap();
-                let current = setups.get(&id).is_some_and(|s| s.run == run);
-                if current {
-                    setups.remove(&id);
-                }
-                current
-            };
-            if current {
+            // A setup stopped or run again meanwhile reports nothing. The run
+            // stays recorded, and its session too: jobs the setup left
+            // running end when the copy goes or setup runs again.
+            let setups = me.setups.lock().unwrap();
+            if setups.get(&id).is_some_and(|s| s.run == run) {
                 let state = if exit == 0 {
                     SetupState::Done
                 } else {
                     SetupState::Failed { exit }
                 };
-                me.update_kept(&id, |k| k.setup_sid = None);
-                me.set_setup(&id, Some(running(state)));
+                me.update_kept(&id, |k| k.setup = Some(running(state)));
+                drop(setups);
+                me.changed(&id);
             }
         });
     }
@@ -1939,6 +1963,8 @@ impl LiveCopies {
         let mut cmd = tokio::process::Command::new(moonlet_core::pty::user_shell());
         cmd.args(["-lic", command])
             .current_dir(&k.path)
+            .env_clear()
+            .envs(&self.base_env)
             .envs([
                 ("MOONLET_ROOT_PATH", k.repo.as_str()),
                 ("MOONLET_SESSION_PATH", k.path.as_str()),
@@ -1952,6 +1978,10 @@ impl LiveCopies {
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();
+                // The daemon ignores SIGHUP and SIGPIPE; a setup must not.
+                for sig in [libc::SIGPIPE, libc::SIGHUP] {
+                    libc::signal(sig, libc::SIG_DFL);
+                }
                 Ok(())
             });
         }
@@ -1966,7 +1996,11 @@ impl LiveCopies {
                     reaped: reaped.clone(),
                 },
             );
-            self.update_kept(id, |k| k.setup_sid = Some(pid));
+            let started = moonlet_core::pty::process_start(pid);
+            self.update_kept(id, |k| {
+                k.setup_sid = Some(pid);
+                k.setup_started = started;
+            });
         }
         Ok((child, reaped))
     }
@@ -1978,7 +2012,16 @@ impl LiveCopies {
         let Some(s) = self.setups.lock().unwrap().remove(id) else {
             return;
         };
-        self.update_kept(id, |k| k.setup_sid = None);
+        // A setup still running when stopped reads as ended by a signal.
+        self.update_kept(id, |k| {
+            k.setup_sid = None;
+            k.setup_started = None;
+            if let Some(setup) = &mut k.setup
+                && setup.state == SetupState::Running
+            {
+                setup.state = SetupState::Failed { exit: -1 };
+            }
+        });
         end_session(s.sid, s.reaped);
     }
 
@@ -3170,6 +3213,23 @@ fn save_one(from: &Path, folder: &Path, rel: &Path, link: bool) -> std::io::Resu
 /// Ends every process in session `sid` as X1 ends a closed tab's script:
 /// SIGHUP, then SIGTERM after 1.5 s, then SIGKILL after 3 s more, until
 /// none is left. `reaped` says the session's leader was waited for.
+/// Ends a setup's session recorded before this daemon started. Its leader
+/// is signalled only while it is the process that started at `started`; a
+/// leader gone leaves its session's id unused by anyone else while members
+/// remain, so those are ended.
+fn end_recorded_session(sid: u32, started: Option<u64>) {
+    let leader = moonlet_core::pty::process_start(sid);
+    let gone = leader.is_none();
+    if !gone && (started.is_none() || leader != started) {
+        tracing::info!(
+            sid,
+            "a setup's recorded session is now another process's; left alone"
+        );
+        return;
+    }
+    end_session(sid, Arc::new(std::sync::atomic::AtomicBool::new(gone)));
+}
+
 fn end_session(sid: u32, reaped: Arc<std::sync::atomic::AtomicBool>) {
     use moonlet_core::pty::signal_session;
     use nix::sys::signal::Signal;
@@ -3200,20 +3260,25 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
     for k in &kept {
         // The daemon stopped during a setup: its processes, in a session of
         // their own, outlived it, so they end now.
-        if let Some(setup) = &k.setup
-            && setup.state == SetupState::Running
-        {
-            if let Some(sid) = k.setup_sid {
-                end_session(sid, Arc::new(std::sync::atomic::AtomicBool::new(false)));
-            }
-            let failed = CopySetup {
+        if let Some(sid) = k.setup_sid {
+            end_recorded_session(sid, k.setup_started);
+        }
+        let failed = k
+            .setup
+            .as_ref()
+            .filter(|s| s.state == SetupState::Running)
+            .map(|setup| CopySetup {
                 state: SetupState::Failed { exit: -1 },
                 command: setup.command.clone(),
                 approved: false,
-            };
+            });
+        if k.setup_sid.is_some() || failed.is_some() {
             sync.update_kept(&k.id, |k| {
-                k.setup = Some(failed);
+                if let Some(failed) = failed {
+                    k.setup = Some(failed);
+                }
                 k.setup_sid = None;
+                k.setup_started = None;
             });
         }
         sync.states

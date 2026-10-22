@@ -177,6 +177,7 @@ impl Daemon {
             sessions.clone(),
             link.clone(),
             workers.clone(),
+            terminals.base_env().clone(),
             move |m| emitter.emit(m),
         );
         link.set_sync(Arc::downgrade(&sync));
@@ -531,7 +532,7 @@ impl Daemon {
                 app_only(conn, "setup")?;
                 if method == m::SYNC_RUN_SETUP {
                     let r: m::SyncRunSetup = params(p)?;
-                    ok(self.sync.run_setup(&r.copy, &r.command)?)
+                    ok(self.sync.run_setup(&r.copy, &r.command).await?)
                 } else {
                     let r: m::CopyRef = params(p)?;
                     ok(self.sync.skip_setup(&r.copy)?)

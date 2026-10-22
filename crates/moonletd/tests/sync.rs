@@ -317,6 +317,8 @@ async fn worker_as(origin: Option<&Path>, id: &str, name: &str) -> Daemon {
             // Setups run in a login shell: not the user's own, with its rc
             // files.
             ("SHELL", "/bin/sh"),
+            // A token in the daemon's own environment, which no setup gets.
+            ("AGENT_TOKEN", "sk-leak"),
         ],
     )
     .await
@@ -2747,7 +2749,10 @@ async fn a_copy_runs_the_projects_setup_once_the_user_approves_the_command() {
         )
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages setup");
+    assert_eq!(
+        e.to_string(),
+        "forbidden: only the moonlet app manages setup"
+    );
 
     let _: Copy = worker
         .call(
@@ -3000,6 +3005,60 @@ async fn a_setup_running_when_this_macs_daemon_stops_ends_with_it() {
 }
 
 #[tokio::test]
+async fn a_setup_gets_the_terminals_environment_not_the_daemons() {
+    let central = central().await;
+    let command = "printf %s \"${AGENT_TOKEN-unset}\" > ignored-by-setup";
+    give_setup(&central, command);
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    let _: Copy = worker
+        .call(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": command }),
+        )
+        .await;
+    let done = setup_is(&worker, json!({ "kind": "done" })).await;
+    assert_eq!(
+        read(&PathBuf::from(&done.path).join("ignored-by-setup")).as_deref(),
+        Some("unset")
+    );
+}
+
+#[tokio::test]
+async fn a_job_a_finished_setup_left_running_ends_with_the_copy() {
+    let central = central().await;
+    let scratch = tempfile::tempdir().unwrap();
+    let pid_file = scratch.path().join("pid");
+    // The shell exits at once; its job, in the setup's session, does not.
+    let command = format!(
+        "sh -c 'echo $$ > \"{}\"; exec sleep 317' & sleep 1",
+        pid_file.display()
+    );
+    give_setup(&central, &command);
+    let worker = worker(&central.origin).await;
+    link(&central, &worker).await;
+    let copy: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+    let _: Copy = worker
+        .call(
+            "sync.run_setup",
+            json!({ "copy": copy.id, "command": command }),
+        )
+        .await;
+    setup_is(&worker, json!({ "kind": "done" })).await;
+    let pid: i32 = read(&pid_file).unwrap().trim().parse().unwrap();
+
+    let _: Value = worker.call("sync.stop", json!({ "copy": copy.id })).await;
+    ends(pid, "the setup's job outlived the copy").await;
+}
+
+#[tokio::test]
 async fn a_setup_stopped_as_soon_as_it_is_approved_ends() {
     let central = central().await;
     let scratch = tempfile::tempdir().unwrap();
@@ -3027,7 +3086,11 @@ async fn a_setup_stopped_as_soon_as_it_is_approved_ends() {
 
     tokio::time::sleep(Duration::from_secs(1)).await;
     if let Some(pid) = read(&pid_file).and_then(|p| p.trim().parse::<i32>().ok()) {
-        ends(pid, "a setup stopped right after it was approved kept running").await;
+        ends(
+            pid,
+            "a setup stopped right after it was approved kept running",
+        )
+        .await;
     }
 }
 
@@ -3161,10 +3224,16 @@ async fn the_setup_shown_is_the_current_command_and_says_whether_it_was_approved
         let setup = copies(&worker).await.remove(0).setup.unwrap();
         if setup.command == "touch other" {
             assert!(!setup.approved, "{setup:?}");
-            assert_eq!(serde_json::to_value(&setup.state).unwrap(), json!({ "kind": "done" }));
+            assert_eq!(
+                serde_json::to_value(&setup.state).unwrap(),
+                json!({ "kind": "done" })
+            );
             break;
         }
-        assert!(start.elapsed() < Duration::from_secs(15), "never shown: {last:?}");
+        assert!(
+            start.elapsed() < Duration::from_secs(15),
+            "never shown: {last:?}"
+        );
         last = Some(setup);
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
