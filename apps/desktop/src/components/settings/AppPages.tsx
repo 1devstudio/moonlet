@@ -90,7 +90,7 @@ function Updates() {
         <SwitchRow
           setting="auto-update"
           label="Check for updates automatically"
-          hint="At launch and every six hours, for both moonlet and Claude Code."
+          hint="At launch and every hour, for both moonlet and Claude Code."
           on={auto}
           onChange={(on) => updateSettings({ autoUpdateCheck: on })}
         />
