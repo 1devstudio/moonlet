@@ -41,6 +41,11 @@ jobs:
 
       - run: pnpm check
 
+      # X60's 1 s sync budget, measured only here: a busy laptop cannot hold
+      # a wall-clock budget, so the default suite leaves it out.
+      - name: Sync latency
+        run: cargo test -p moonletd --test sync -- --ignored within_a_second
+
   # The Linux install script (X58) on a real systemd: install, a damaged
   # download, an update that keeps a session (the unit follows the new
   # daemon), uninstall. Debug builds stand in for the release's static ones.
