@@ -2,7 +2,7 @@
 // commands, their load and slots, what they run now, and why one was
 // skipped. Pure: components/settings/WorkersPage.tsx renders it.
 
-import type { ExecStatus, WorkerInfo } from "./protocol";
+import type { ExecStatus, LinkInfo, WorkerInfo } from "./protocol";
 
 export interface WorkerRow {
   id: string;
@@ -81,4 +81,10 @@ export function workersPage(input: WorkersInput): { rows: WorkerRow[]; summary: 
     summary: `${n} ${n === 1 ? "command" : "commands"} running · ${n} of ${total} slots in use`,
     empty: linked.length === 0,
   };
+}
+
+/** The host Approve on worker `worker`'s row goes to: the one whose own
+ * `link.get` (`links`, by host id) names it; null when the app reaches none. */
+export function workerHost(worker: string, links: Record<string, LinkInfo | null>): string | null {
+  return Object.entries(links).find(([, l]) => l?.worker.id === worker)?.[0] ?? null;
 }

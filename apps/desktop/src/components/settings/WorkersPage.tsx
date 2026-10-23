@@ -11,7 +11,8 @@ import { EV, M, type ExecStatus, type HeavyInfo, type LinkInfo, type Project, ty
 import { goSettings } from "../../lib/settingsNavigation";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { centralHostId } from "../../lib/workerLink";
-import { workersPage, type WorkerRow } from "../../lib/workers";
+import { workerHost, workersPage, type WorkerRow } from "../../lib/workers";
+import { readLinks } from "../../lib/heavyApproval";
 import { Button, cx } from "../ui";
 import { Card, PageHeading, Section } from "./controls";
 
@@ -114,8 +115,8 @@ export function WorkersPage() {
   const approve = async (projectName: string, row: WorkerRow) => {
     const project = (projects ?? []).find((p: Project) => p.name === projectName);
     if (!project) return void toast(`${projectName} is not a project of ${name}`, "error");
-    // This Mac, or a remote host of the same name: the app reaches them.
-    const worker = row.id === link?.worker.id ? "local" : Object.values(hosts).find((h) => h.remote && h.label === row.name)?.id;
+    // The host whose own link is this worker, among those the app reaches.
+    const worker = workerHost(row.id, await readLinks(Object.values(hosts)));
     if (!worker) return void toast(`Approve ${projectName}'s heavy commands from moonlet on ${row.name}.`, "error");
     try {
       const info = await rpc<HeavyInfo>(target, M.heavyGet, { project: project.id });

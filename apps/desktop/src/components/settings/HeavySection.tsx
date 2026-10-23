@@ -6,7 +6,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { Plus, ShieldCheck, TriangleAlert, X } from "lucide-react";
 import { rpc } from "../../lib/daemon";
 import { approvalBanner, entryStates, heavyChanged, heavyDraft, heavyFromDraft, secretWarning, type HeavyDraft } from "../../lib/heavyCommands";
-import { approvalMachines, approveHeavy } from "../../lib/heavyApproval";
+import { approvalTargets, approveHeavy, readLinks } from "../../lib/heavyApproval";
 import { M, type HeavyInfo, type HeavyOs, type LinkInfo, type ProjectIdentity } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { Button, IconButton, cx } from "../ui";
@@ -55,14 +55,22 @@ export function HeavySection({
 }) {
   const osId = useId();
   const hosts = useStore((s) => s.hosts);
-  const [localLink, setLocalLink] = useState<LinkInfo | null>(null);
+  const [links, setLinks] = useState<Record<string, LinkInfo | null>>({});
   const [approving, setApproving] = useState(false);
-  useEffect(() => void rpc<LinkInfo>("local", M.linkGet).then(setLocalLink, () => setLocalLink(null)), []);
+  // Which machines take this host's heavy commands: the banner names them.
+  const reached = Object.values(hosts)
+    .filter((h) => h.remote && h.kind === "tailnet" && h.status === "connected")
+    .map((h) => h.id)
+    .join(",");
+  useEffect(() => void readLinks(Object.values(useStore.getState().hosts)).then(setLinks), [reached]);
   const { info, draft, setDraft, dirty } = heavy;
   if (!info) return null;
   const host_label = host === "local" ? "this Mac" : (hosts[host]?.label ?? host);
   const states = new Map(entryStates(info).map((e) => [e.command, e.approved]));
-  const banner = approvalBanner(info, approvalMachines(host, Object.values(hosts), localLink));
+  const banner = approvalBanner(
+    info,
+    approvalTargets(host, Object.values(hosts), links).map((t) => t.label),
+  );
   const set = (patch: Partial<HeavyDraft>) => setDraft({ ...draft, ...patch });
   const secrets = heavyFromDraft(draft)
     .env.map(secretWarning)
@@ -70,7 +78,7 @@ export function HeavySection({
   const approve = async () => {
     setApproving(true);
     try {
-      const r = await approveHeavy(host, id, project, info, Object.values(hosts));
+      const r = await approveHeavy(host, id, project, info, Object.values(hosts), await readLinks(Object.values(hosts)));
       heavy.show(r.info);
       toast(r.toast);
     } catch (e) {
