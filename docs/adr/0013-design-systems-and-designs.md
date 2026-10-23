@@ -36,7 +36,7 @@ Three questions had to be settled:
 - `systems/<slug>/` for design systems
 - `designs/<slug>/` for workspace designs
 
-The source projects stay read only. The sync agent works in the design system's folder and reads the sources through `--add-dir`.
+The source projects stay read only. The sync agent works in the design system's folder and reads the sources through `--add-dir`. Accept edits lets it write anything in that folder, so nothing moonlet trusts lives there: the sources, the commits of the last sync and the agent's chat are kept in `<workspace>/.records/<slug>.toml` beside the folders, and `config.toml` holds only what the agent may change (name, scope, card settings).
 
 **A session design is committed in the project.**
 - It is made inside a session and lives in the worktree under `docs/design/<slug>/`, so the design, the spec it led to and the code ship in one PR.

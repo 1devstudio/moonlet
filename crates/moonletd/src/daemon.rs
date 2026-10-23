@@ -1034,11 +1034,11 @@ impl Daemon {
             }
             m::DESIGN_SYSTEM_SYNCED => {
                 let r: m::DesignSystemRef = params(p)?;
-                let config = self.design.config(&r.workspace, &r.slug).map_err(internal)?;
+                let record = self.design.record(&r.workspace, &r.slug).map_err(internal)?;
                 // Every source gets an entry: one whose HEAD cannot be read
                 // gets none, so no stale commit stays recorded.
                 let mut commits = Vec::new();
-                for s in &config.sources {
+                for s in &record.sources {
                     commits.push((s.project.clone(), git::head(Path::new(&s.path)).await.ok()));
                 }
                 blocking(move || store.synced(&r.workspace, &r.slug, &commits, now_ms())).await?;
@@ -1071,18 +1071,27 @@ impl Daemon {
         use moonlet_core::design::{agent, anchor, store};
         let dir = self.design.system_dir(workspace, slug)?.canonicalize()?;
         let config = self.design.config(workspace, slug)?;
+        // The folders and the chat come from the record moonlet keeps outside
+        // the system's folder, never from files the agent can edit.
+        let record = self.design.record(workspace, slug)?;
         let mut sources = Vec::new();
-        for root in store::source_roots(&config) {
+        for root in store::source_roots(&record) {
             let real = root.canonicalize().map_err(|e| anyhow::anyhow!("{}: {e}", root.display()))?;
             sources.push(real.display().to_string());
         }
         let bin = moonlet_cli_path()?;
         let synced = dir.join(anchor::FILE).is_file();
-        let status = if synced { anchor::status(&dir, &store::source_roots(&config), &config.exceptions())? } else { Vec::new() };
+        let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
         let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
         let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
-        if let Some(id) = self.design.agent(workspace, slug)?
-            && self.chats.state(id).is_ok()
+        // Reused only while it is still this system's agent: a chat that is
+        // gone, or now another (the ids of a restarted daemon), gets none of
+        // its prompts.
+        let ours = |id: u32| {
+            self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && t.title == launch.title && Path::new(&t.cwd) == dir)
+        };
+        if let Some(id) = record.agent
+            && ours(id)
         {
             self.chats.send(id, &launch.prompt, &[])?;
             return Ok(id);

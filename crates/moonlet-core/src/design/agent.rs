@@ -133,8 +133,6 @@ mod tests {
         SystemConfig {
             name: "moonlet desktop".into(),
             created_at: 1,
-            synced_at: None,
-            sources: vec![],
             cards: BTreeMap::new(),
         }
     }

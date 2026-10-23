@@ -1,5 +1,8 @@
 //! Where design systems live (X64, ADR 0013): `~/.moonlet/design/<workspace
-//! id>/systems/<slug>/`, each with a `config.toml` naming its sources.
+//! id>/systems/<slug>/`. What the sync agent may edit is in the system's
+//! folder, `config.toml` among it; what moonlet trusts (the source folders,
+//! the commits of the last sync, the agent's chat) is in
+//! `<workspace>/.records/<slug>.toml`, outside the agent's reach.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,15 +36,11 @@ fn is_unknown(i: &ProjectIdentity) -> bool {
     i.origin.is_none() && i.root.is_none()
 }
 
-/// `config.toml`.
+/// `config.toml`, which the sync agent may edit (the scope, per-card settings).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemConfig {
     pub name: String,
     pub created_at: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub synced_at: Option<u64>,
-    #[serde(default)]
-    pub sources: Vec<Source>,
     /// Per-card settings, by card path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cards: BTreeMap<String, CardSettings>,
@@ -74,6 +73,20 @@ impl SystemConfig {
             })
             .collect()
     }
+}
+
+/// What moonlet trusts about a design system, kept where its agent cannot
+/// write: the sync agent's `--add-dir` folders and deny rules come from here,
+/// and Sync sends its prompt only to the chat named here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Record {
+    #[serde(default)]
+    pub sources: Vec<Source>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_at: Option<u64>,
+    /// The chat of its sync agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<u32>,
 }
 
 /// The design folders of one moonlet home.
@@ -129,11 +142,17 @@ impl Store {
         let config = SystemConfig {
             name: name_n,
             created_at: now,
-            synced_at: None,
-            sources,
             cards: BTreeMap::new(),
         };
         std::fs::write(systems.join(&slug).join(CONFIG), toml::to_string(&config)?)?;
+        self.write_record(
+            workspace,
+            &slug,
+            &Record {
+                sources,
+                ..Record::default()
+            },
+        )?;
         Ok(slug)
     }
 
@@ -149,15 +168,16 @@ impl Store {
                 continue;
             };
             let slug = e.file_name().to_string_lossy().into_owned();
+            let record = self.record(workspace, &slug).unwrap_or_default();
             // A system that cannot be read still lists, with its error, so
             // one broken folder never hides the others.
             out.push(
-                summary(&dir, slug.clone(), &config).unwrap_or_else(|err| SystemSummary {
+                summary(&dir, slug.clone(), &config, &record).unwrap_or_else(|err| SystemSummary {
                     slug,
                     name: config.name.clone(),
-                    sources: config.sources.iter().map(|s| s.path.clone()).collect(),
-                    synced_at: config.synced_at,
-                    synced_commit: config.sources.first().and_then(|s| s.commit.clone()),
+                    sources: record.sources.iter().map(|s| s.path.clone()).collect(),
+                    synced_at: record.synced_at,
+                    synced_commit: record.sources.first().and_then(|s| s.commit.clone()),
                     cards: 0,
                     layouts: 0,
                     changed_sources: Vec::new(),
@@ -166,7 +186,7 @@ impl Store {
                     step: None,
                     step_summary: None,
                     error: Some(format!("{err:#}")),
-                    agent: read_agent(&dir),
+                    agent: record.agent,
                 }),
             );
         }
@@ -194,20 +214,50 @@ impl Store {
     /// Deletes a design system. Designs that use it keep their pages.
     pub fn remove_system(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
-        std::fs::remove_dir_all(&dir).with_context(|| format!("cannot remove {}", dir.display()))
+        std::fs::remove_dir_all(&dir)
+            .with_context(|| format!("cannot remove {}", dir.display()))?;
+        let _ = std::fs::remove_file(self.record_path(workspace, slug)?);
+        Ok(())
+    }
+
+    /// What moonlet trusts about a system (see [`Record`]).
+    pub fn record(&self, workspace: &str, slug: &str) -> Result<Record> {
+        let path = self.record_path(workspace, slug)?;
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(toml::from_str(&text)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Record::default()),
+            Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+        }
+    }
+
+    fn write_record(&self, workspace: &str, slug: &str, record: &Record) -> Result<()> {
+        let path = self.record_path(workspace, slug)?;
+        std::fs::create_dir_all(path.parent().unwrap_or(&self.root))?;
+        std::fs::write(&path, toml::to_string(record)?)?;
+        Ok(())
+    }
+
+    fn record_path(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
+        if !is_name(slug) {
+            bail!("bad design system \"{slug}\"");
+        }
+        Ok(self
+            .workspace(workspace)?
+            .join(".records")
+            .join(format!("{slug}.toml")))
     }
 
     /// The chat of the system's sync agent, kept for the app's Open agent
     /// and across daemon restarts (chats restore themselves).
     pub fn set_agent(&self, workspace: &str, slug: &str, terminal: u32) -> Result<()> {
-        let dir = self.system_dir(workspace, slug)?;
-        std::fs::create_dir_all(dir.join(".cache"))?;
-        std::fs::write(dir.join(AGENT), format!("terminal = {terminal}\n"))?;
-        Ok(())
+        self.system_dir(workspace, slug)?;
+        let mut record = self.record(workspace, slug)?;
+        record.agent = Some(terminal);
+        self.write_record(workspace, slug, &record)
     }
 
     pub fn agent(&self, workspace: &str, slug: &str) -> Result<Option<u32>> {
-        Ok(read_agent(&self.system_dir(workspace, slug)?))
+        Ok(self.record(workspace, slug)?.agent)
     }
 
     /// What a running sync reports as it goes (`design.system.progress`).
@@ -244,18 +294,19 @@ impl Store {
         now: u64,
     ) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
-        let mut config = read_config(&dir)?;
-        // The anchor first: until it is written the sync is not done, and
-        // config.toml and the progress still say so.
-        anchor::write(&dir, &source_roots(&config), &config.exceptions())?;
-        for s in &mut config.sources {
+        let config = read_config(&dir)?;
+        let mut record = self.record(workspace, slug)?;
+        // The anchor first: until it is written the sync is not done, and the
+        // record and the progress still say so.
+        anchor::write(&dir, &source_roots(&record), &config.exceptions())?;
+        for s in &mut record.sources {
             if let Some((_, c)) = commits.iter().find(|(p, _)| *p == s.project) {
                 // A HEAD that could not be read leaves no commit, not a stale one.
                 s.commit = c.clone();
             }
         }
-        config.synced_at = Some(now);
-        std::fs::write(dir.join(CONFIG), toml::to_string(&config)?)?;
+        record.synced_at = Some(now);
+        self.write_record(workspace, slug, &record)?;
         let _ = std::fs::remove_file(dir.join(PROGRESS));
         Ok(())
     }
@@ -367,8 +418,8 @@ pub struct SystemSummary {
 
 /// Each source's folder: the repository, or its sub-folder when it names one.
 /// Card sources are relative to it.
-pub fn source_roots(config: &SystemConfig) -> Vec<PathBuf> {
-    config
+pub fn source_roots(record: &Record) -> Vec<PathBuf> {
+    record
         .sources
         .iter()
         .map(|s| match &s.subdir {
@@ -379,12 +430,17 @@ pub fn source_roots(config: &SystemConfig) -> Vec<PathBuf> {
 }
 
 /// What the list shows of one design system.
-fn summary(dir: &Path, slug: String, config: &SystemConfig) -> Result<SystemSummary> {
+fn summary(
+    dir: &Path,
+    slug: String,
+    config: &SystemConfig,
+    record: &Record,
+) -> Result<SystemSummary> {
     let progress: Option<Progress> = std::fs::read_to_string(dir.join(PROGRESS))
         .ok()
         .and_then(|t| toml::from_str(&t).ok());
     let cards = manifest::build(dir)?.cards;
-    let status = anchor::status(dir, &source_roots(config), &config.exceptions())?;
+    let status = anchor::status(dir, &source_roots(record), &config.exceptions())?;
     let mut changed: Vec<String> = status
         .iter()
         .flat_map(|s| s.changed_sources.clone())
@@ -398,9 +454,9 @@ fn summary(dir: &Path, slug: String, config: &SystemConfig) -> Result<SystemSumm
     Ok(SystemSummary {
         slug,
         name: config.name.clone(),
-        sources: config.sources.iter().map(|s| s.path.clone()).collect(),
-        synced_at: config.synced_at,
-        synced_commit: config.sources.first().and_then(|s| s.commit.clone()),
+        sources: record.sources.iter().map(|s| s.path.clone()).collect(),
+        synced_at: record.synced_at,
+        synced_commit: record.sources.first().and_then(|s| s.commit.clone()),
         cards: cards
             .iter()
             .filter(|c| c.path.starts_with("components/"))
@@ -415,7 +471,7 @@ fn summary(dir: &Path, slug: String, config: &SystemConfig) -> Result<SystemSumm
         step: progress.as_ref().map(|p| p.step.clone()),
         step_summary: progress.and_then(|p| p.summary),
         error: None,
-        agent: read_agent(dir),
+        agent: record.agent,
     })
 }
 
@@ -467,16 +523,6 @@ fn read_config(dir: &Path) -> Result<SystemConfig> {
 /// The sync's steps, in order (X64).
 pub const STEPS: [&str; 4] = ["inventory", "tokens", "cards", "layouts"];
 const PROGRESS: &str = ".cache/progress.toml";
-const AGENT: &str = ".cache/agent.toml";
-
-fn read_agent(dir: &Path) -> Option<u32> {
-    #[derive(Deserialize)]
-    struct Agent {
-        terminal: u32,
-    }
-    let text = std::fs::read_to_string(dir.join(AGENT)).ok()?;
-    toml::from_str::<Agent>(&text).ok().map(|a| a.terminal)
-}
 
 #[derive(Serialize, Deserialize)]
 struct Progress {
@@ -564,10 +610,16 @@ mod tests {
                     .join("design/w-1devstudio/systems/moonlet-desktop/config.toml")
             )
             .unwrap(),
-            "name = \"moonlet desktop\"
-created_at = 1761200000000
-
-[[sources]]
+            "name = \"moonlet desktop\"\ncreated_at = 1761200000000\n"
+        );
+        // The sources are moonlet's, outside the folder the agent edits.
+        assert_eq!(
+            std::fs::read_to_string(
+                home.path()
+                    .join("design/w-1devstudio/.records/moonlet-desktop.toml")
+            )
+            .unwrap(),
+            "[[sources]]
 project = \"p-moonlet\"
 path = \"/Users/alex/Workspace/1devstudio/moonlet\"
 
@@ -1009,5 +1061,32 @@ root = \"9c1e0a2\"
         store.set_agent("w1", &slug, 42).unwrap();
         assert_eq!(store.agent("w1", &slug).unwrap(), Some(42));
         assert_eq!(store.systems("w1").unwrap()[0].agent, Some(42));
+    }
+
+    #[test]
+    fn what_the_agent_can_edit_never_changes_the_sources_or_its_chat() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![source()], 1)
+            .unwrap();
+        store.set_agent("w1", &slug, 7).unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        // The agent works in `dir` and may write anything there.
+        put(
+            &dir,
+            &[
+                (
+                    "config.toml",
+                    "name = \"storefront\"\ncreated_at = 1\n\n[[sources]]\nproject = \"x\"\npath = \"/etc\"\n",
+                ),
+                (".cache/agent.toml", "terminal = 3\n"),
+                (".records/storefront.toml", "agent = 3\n"),
+            ],
+        );
+        let record = store.record("w1", &slug).unwrap();
+        assert_eq!(record.sources, vec![source()]);
+        assert_eq!(record.agent, Some(7));
+        assert!(!store.record_path("w1", &slug).unwrap().starts_with(&dir));
     }
 }
