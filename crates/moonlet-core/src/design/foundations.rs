@@ -33,6 +33,8 @@ pub fn cards(tokens: &[Token]) -> Vec<(String, String)> {
                 "line-height"
             } else if t.name.contains("tracking") || t.name.contains("letter") {
                 "letter-spacing"
+            } else if t.name.contains("weight") {
+                "font-weight"
             } else if LENGTH.is_match(&t.value) {
                 "font-size"
             } else {
@@ -267,5 +269,13 @@ mod tests {
         assert!(root.join("foundations/colours/colours.html").is_file());
         assert!(!root.join("foundations/spacing").exists());
         assert_eq!(super::super::check::check(root).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_font_weight_token_shows_as_a_weight() {
+        let got = cards(&[token("--font-weight-bold", "700", Family::Typography)]);
+        assert!(got[0].1.contains(
+            "<section class=\"ds-cell\"><div style=\"font-weight: var(--font-weight-bold)\">Add search to the product list</div><h4>--font-weight-bold</h4><p>700</p></section>\n"
+        ));
     }
 }

@@ -28,7 +28,7 @@ pub struct Token {
 }
 
 /// The tokens of the files under `tokens/` that `styles.css` imports, in
-/// import order, each name once.
+/// import order, each name once with its last value.
 pub fn read(root: &Path) -> Vec<Token> {
     let mut tokens: Vec<Token> = Vec::new();
     for file in styles_closure(root) {
@@ -38,23 +38,29 @@ pub fn read(root: &Path) -> Vec<Token> {
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
+        let text = COMMENT.replace_all(&text, "");
         for c in TOKEN.captures_iter(&text) {
             let (name, value) = (c[1].to_string(), c[2].trim().to_string());
-            if tokens.iter().any(|t| t.name == name) {
-                continue;
+            // A later declaration wins, as in the cascade; the token keeps its place.
+            match tokens.iter_mut().find(|t| t.name == name) {
+                Some(t) => {
+                    t.family = family(&name, &value);
+                    t.value = value;
+                }
+                None => tokens.push(Token {
+                    family: family(&name, &value),
+                    name,
+                    value,
+                }),
             }
-            tokens.push(Token {
-                family: family(&name, &value),
-                name,
-                value,
-            });
         }
     }
     tokens
 }
 
 static TOKEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(--[A-Za-z0-9_-]+)\s*:\s*([^;]+);").unwrap());
+    LazyLock::new(|| Regex::new(r"(--[A-Za-z0-9_-]+)\s*:\s*([^;}]+)").unwrap());
+static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
 static COLOUR_VALUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(#[0-9a-fA-F]{3,8}\b|(rgba?|hsla?|oklch|oklab|lab|lch|color)\()").unwrap()
 });
@@ -142,6 +148,33 @@ mod tests {
                     Family::Shadow
                 ),
                 t("--z-menu", "40", Family::Other),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_last_declaration_without_a_semicolon_counts_a_commented_one_does_not_and_a_later_one_wins()
+    {
+        let dir = system(&[
+            (
+                "styles.css",
+                "@import \"tokens/colors.css\";\n@import \"tokens/dark.css\";\n",
+            ),
+            (
+                "tokens/colors.css",
+                ":root {\n  /* --color-old: red; */\n  --color-bg: #fff;\n  --color-fg: #111 }\n",
+            ),
+            ("tokens/dark.css", ":root { --color-bg: #0b0c0e; }\n"),
+        ]);
+        let got: Vec<(String, String)> = read(dir.path())
+            .into_iter()
+            .map(|t| (t.name, t.value))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("--color-bg".to_string(), "#0b0c0e".to_string()),
+                ("--color-fg".to_string(), "#111".to_string())
             ]
         );
     }
