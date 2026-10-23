@@ -4,12 +4,21 @@ import {
   cloudDraft,
   cloudErrors,
   machineTypeLabel,
+  newRemovalErrors,
+  policyAddress,
+  reachWarning,
   policySnippet,
   projectCloudFooter,
+  projectCloudChange,
+  projectCloudDraft,
+  projectCloudErrors,
+  projectCloudKey,
   providerForm,
+  providerName,
   providerStatus,
   removalError,
   removalToast,
+  removeProviderPrompt,
   usageLine,
 } from "./cloudSettings";
 import type { CloudInfo, CloudKind, CloudMachine } from "./protocol";
@@ -104,6 +113,19 @@ describe("Settings › Cloud workers (X63)", () => {
     );
   });
 
+  it("puts the central host's Tailscale address in the policy", () => {
+    expect(policyAddress({ port: 47428, listening: ["127.0.0.1:47428", "100.101.102.103:47428"] }, "studio-mini")).toBe("100.101.102.103:47428");
+    expect(policyAddress({ port: 47428, listening: [] }, "studio-mini")).toBe("studio-mini:47428");
+    expect(policyAddress({ port: 0, listening: [] }, "studio-mini")).toBe("studio-mini:47428");
+  });
+
+  it("warns while the central host takes no tailnet connections", () => {
+    expect(reachWarning({ listening: [] }, "studio-mini")).toBe(
+      "studio-mini does not accept connections from your tailnet, so a cloud machine cannot pair with it. Turn on Allow connections from my tailnet in Hosts.",
+    );
+    expect(reachWarning({ listening: ["100.101.102.103:47428"] }, "studio-mini")).toBeNull();
+  });
+
   it("the usage line", () => {
     expect(usageLine(12.5, 40)).toEqual({ text: "12.5 of 40 machine-hours this month", fraction: 0.3125 });
     expect(usageLine(40, 40)).toEqual({ text: "40 of 40 machine-hours this month", fraction: 1 });
@@ -127,8 +149,26 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(removalError(machine(), "Hetzner")).toBeNull();
   });
 
+  it("toasts a removal error once, when it starts", () => {
+    const failing = machine({ state: "removing", error: "503 Service Unavailable" });
+    expect(newRemovalErrors(null, [failing])).toEqual([]);
+    expect(newRemovalErrors([machine({ state: "removing" })], [failing]).map((m) => m.name)).toEqual(["moonlet-shop-x81c"]);
+    expect(newRemovalErrors([failing], [{ ...failing, error_at: 2 }])).toEqual([]);
+  });
+
+  it("asks before removing a provider, naming its machines", () => {
+    expect(removeProviderPrompt("Hetzner Cloud", 2, "studio-mini")).toEqual({
+      title: "Remove Hetzner Cloud?",
+      message: "Its 2 machines are removed first, once their commands end. studio-mini forgets the token after the last one is gone.",
+      action: "Remove",
+      variant: "danger",
+    });
+    expect(removeProviderPrompt("Hetzner Cloud", 0, "studio-mini").message).toBe("studio-mini forgets the token.");
+  });
+
   it("the removal toast", () => {
     const m = machine({ state: "removing", error: "503 Service Unavailable" });
+    expect(providerName("hetzner")).toBe("Hetzner");
     expect(removalToast(m, "Hetzner")).toBe("Could not remove moonlet-shop-x81c at Hetzner: 503 Service Unavailable. It is billed until removed.");
   });
 });
@@ -137,6 +177,35 @@ describe("a project's cloud workers (X63)", () => {
   it("names a machine type as the design does", () => {
     expect(machineTypeLabel({ name: "cpx41", cores: 8, memory_gb: 16, arch: "x86" })).toBe("cpx41 · 8 cores · 16 GB · x86");
     expect(machineTypeLabel({ name: "cax11", cores: 2, memory_gb: 4, arch: "arm" })).toBe("cax11 · 2 cores · 4 GB · arm");
+  });
+
+  it("keys a project by its origin and root commit, as the central host does", () => {
+    const root = "3f1c9a0b7d2e4f6a8b0c1d2e3f4a5b6c7d8e9f0a";
+    expect(projectCloudKey({ origin: "git@github.com:acme/shop.git", root })).toBe("git@github.com:acme/shop.git 3f1c9a0b7d2e4f6a8b0c1d2e3f4a5b6c7d8e9f0a");
+    expect(projectCloudKey({ origin: null, root })).toBe(" 3f1c9a0b7d2e4f6a8b0c1d2e3f4a5b6c7d8e9f0a");
+    expect(projectCloudKey({ origin: null, root: null })).toBeNull();
+    expect(projectCloudKey({ origin: null, root: "abc" })).toBeNull();
+  });
+
+  it("saves a project's cloud setting, and None removes it", () => {
+    const key = " 3f1c9a0b7d2e4f6a8b0c1d2e3f4a5b6c7d8e9f0a";
+    const shop = { overflow: true, provider: "hetzner", type: "cpx41", location: "fsn1", image: "ubuntu-24.04" };
+    const none = projectCloudDraft(info(), key);
+    expect(none).toEqual({ overflow: false, provider: "", type: "", location: "", image: "ubuntu-24.04" });
+    expect(projectCloudChange(info(), key, none)).toBeNull();
+    expect(projectCloudChange(info(), key, { ...none, provider: "hetzner", type: "cpx41", location: "fsn1", overflow: true })).toEqual({ projects: { [key]: shop } });
+    const saved = info({ projects: { [key]: shop } });
+    expect(projectCloudDraft(saved, key)).toEqual(shop);
+    expect(projectCloudChange(saved, key, { ...shop, provider: "" })).toEqual({ projects: { [key]: null } });
+  });
+
+  it("says what a project's cloud setting misses", () => {
+    expect(projectCloudErrors({ overflow: true, provider: "hetzner", type: "", location: " ", image: "" })).toEqual({
+      type: "Pick a machine type.",
+      location: "Name a location, such as fsn1.",
+      image: "Name an image, such as ubuntu-24.04.",
+    });
+    expect(projectCloudErrors({ overflow: false, provider: "", type: "", location: "", image: "" })).toEqual({});
   });
 
   it("the footer counts the project's machines and their commands", () => {
