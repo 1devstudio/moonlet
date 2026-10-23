@@ -101,7 +101,7 @@ pub fn build(root: &Path, name: &str) -> Result<String> {
 /// `conventions.md` that do not exist, and a README over the design agent's budget.
 pub fn write(root: &Path, name: &str) -> Result<Vec<Problem>> {
     let readme = build(root, name)?;
-    std::fs::write(root.join("README.md"), &readme)?;
+    super::fsx::write_inside(root, &root.join("README.md"), readme.as_bytes())?;
     let mut problems = Vec::new();
     let length = readme.chars().count();
     if length > BUDGET {

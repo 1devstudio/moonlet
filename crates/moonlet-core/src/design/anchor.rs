@@ -46,7 +46,7 @@ pub fn write(
     exceptions: &BTreeMap<String, String>,
 ) -> Result<()> {
     let json = serde_json::to_string_pretty(&compute(root, sources, exceptions)?)?;
-    std::fs::write(root.join(FILE), json + "\n")?;
+    super::fsx::write_inside(root, &root.join(FILE), (json + "\n").as_bytes())?;
     Ok(())
 }
 

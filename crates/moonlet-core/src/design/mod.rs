@@ -6,6 +6,7 @@ pub mod anchor;
 pub mod card;
 pub mod check;
 pub mod foundations;
+pub(crate) mod fsx;
 pub mod manifest;
 pub mod mid;
 pub mod readme;
