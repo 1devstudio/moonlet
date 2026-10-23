@@ -572,6 +572,11 @@ impl LiveCopies {
     /// Whether `command` was approved for copy `k`'s project on its
     /// central host.
     fn approved(&self, k: &Kept, command: &str) -> bool {
+        // A cloud machine runs its routing copies' setup without asking: it
+        // holds no git credentials or user tokens (X63).
+        if k.kind == CopyKind::Run && self.link.info().worker.cloud {
+            return true;
+        }
         k.identity
             .as_ref()
             .and_then(|i| project_key(&k.host, i))

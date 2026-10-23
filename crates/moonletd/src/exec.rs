@@ -75,6 +75,8 @@ struct Going {
 
 pub struct Runs {
     next: AtomicU32,
+    /// The central host's cloud machines (X63).
+    machines: Mutex<std::sync::Weak<crate::machines::Machines>>,
     /// Cancel signals of this machine's own runs going on here, by run.
     running: Mutex<HashMap<u32, Arc<Notify>>>,
     /// Cancel signals of runs this machine does for its central host, by
@@ -124,6 +126,10 @@ pub struct Plan {
     pub tool_use_id: Option<String>,
     /// The project's name, for the Workers page's skip reasons.
     pub project: String,
+    /// The project's id.
+    pub project_id: String,
+    /// The session asked for the cloud (X63).
+    pub cloud: bool,
 }
 
 enum Fail {
@@ -140,6 +146,7 @@ impl Runs {
     pub fn new(base_env: BTreeMap<String, String>, jobs: Arc<Jobs>) -> Arc<Self> {
         Arc::new(Self {
             next: AtomicU32::new(0),
+            machines: Mutex::new(std::sync::Weak::new()),
             running: Mutex::default(),
             routed: Mutex::default(),
             owners: Mutex::default(),
@@ -152,6 +159,15 @@ impl Runs {
             base_env,
             jobs,
         })
+    }
+
+    /// The cloud machines, which routing starts and sends commands to (X63).
+    pub fn set_machines(&self, machines: std::sync::Weak<crate::machines::Machines>) {
+        *self.machines.lock().unwrap() = machines;
+    }
+
+    fn machines(&self) -> Option<Arc<crate::machines::Machines>> {
+        self.machines.lock().unwrap().upgrade()
     }
 
     /// `exec.run` on the central host: starts `plan` for `client`, as a
@@ -272,12 +288,15 @@ impl Runs {
                 // a worker's last slot, nor its copy of the session.
                 let mut claims = self.claims.lock().unwrap();
                 let candidates = self.candidates(plan, workers, &skipped, &claims);
-                let Some(chosen) = heavy::pick(&candidates, plan.os, false).cloned() else {
+                let chosen = heavy::pick(&candidates, plan.os, plan.cloud).cloned();
+                let Some(chosen) = chosen.filter(|c| c.kind != Kind::Central) else {
+                    // No worker is free: a project that allows it gets a
+                    // cloud machine for the next command (X63).
+                    if let Some(m) = self.machines() {
+                        m.overflow(&plan.project_id);
+                    }
                     break;
                 };
-                if chosen.kind != Kind::Linked {
-                    break;
-                }
                 claims.insert(run, (chosen.id.clone(), plan.session.clone()));
                 chosen
             };
@@ -287,9 +306,16 @@ impl Runs {
                 .find(|w| w.worker.id == chosen.id)
                 .map(|w| w.worker.name)
                 .unwrap_or_else(|| chosen.id.clone());
+            let machines = (chosen.kind == Kind::Cloud).then(|| self.machines()).flatten();
+            if let Some(m) = &machines {
+                m.run_started(&chosen.id);
+            }
             let ran = self
                 .remote(run, job, client, plan, &chosen, &name, workers, sync)
                 .await;
+            if let Some(m) = &machines {
+                m.run_ended(&chosen.id);
+            }
             self.claims.lock().unwrap().remove(&run);
             match ran {
                 Ok((status, brought, back_ms)) => {
@@ -401,10 +427,16 @@ impl Runs {
         skipped: &HashSet<String>,
         claims: &HashMap<u32, (String, String)>,
     ) -> Vec<Candidate> {
+        // Cloud machines run only their own project's commands (X63).
+        let (cloud, mine) = match self.machines() {
+            Some(m) => (m.cloud_workers(), m.workers_for(&plan.project_id)),
+            None => (Vec::new(), Vec::new()),
+        };
         let mut out: Vec<Candidate> = workers
             .list()
             .into_iter()
             .filter(|w| w.worker.heavy && !skipped.contains(&w.worker.id))
+            .filter(|w| !cloud.contains(&w.worker.id) || mine.contains(&w.worker.id))
             .filter(|w| {
                 !claims
                     .values()
@@ -412,8 +444,12 @@ impl Runs {
             })
             .map(|w| Candidate {
                 used: claims.values().filter(|(id, _)| *id == w.worker.id).count() as u32,
+                kind: if mine.contains(&w.worker.id) {
+                    Kind::Cloud
+                } else {
+                    Kind::Linked
+                },
                 id: w.worker.id,
-                kind: Kind::Linked,
                 os: w.worker.os,
                 cores: w.worker.cores,
                 load: w.load.unwrap_or(0.0),
@@ -820,25 +856,30 @@ impl Runs {
         sync: Arc<LiveCopies>,
         host: Arc<moonlet_link::Host>,
         slots: u32,
+        cloud: bool,
     ) -> Result<bool, RpcError> {
-        let approved = sync.heavy_approval(&req.copy).ok_or_else(|| {
-            RpcError::new(
-                "not_approved",
-                "this machine has not approved the project's heavy commands",
-            )
-        })?;
-        let command = req
-            .argv
-            .iter()
-            .map(|w| crate::heavy::quote(w))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let words_ok = !req.argv.is_empty() && heavy::route(&command, &approved.commands).is_some();
-        if !words_ok || !req.env.keys().all(|k| approved.env.contains(k)) {
-            return Err(RpcError::new(
-                "not_approved",
-                "not an approved heavy command here",
-            ));
+        // A cloud machine runs what the central host that made it approved
+        // (X63); any other worker keeps its own approval.
+        if !cloud {
+            let approved = sync.heavy_approval(&req.copy).ok_or_else(|| {
+                RpcError::new(
+                    "not_approved",
+                    "this machine has not approved the project's heavy commands",
+                )
+            })?;
+            let command = req
+                .argv
+                .iter()
+                .map(|w| crate::heavy::quote(w))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let words_ok = !req.argv.is_empty() && heavy::route(&command, &approved.commands).is_some();
+            if !words_ok || !req.env.keys().all(|k| approved.env.contains(k)) {
+                return Err(RpcError::new(
+                    "not_approved",
+                    "not an approved heavy command here",
+                ));
+            }
         }
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
         let load = crate::link::load().unwrap_or(0.0);

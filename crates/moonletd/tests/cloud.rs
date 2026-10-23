@@ -1038,3 +1038,149 @@ async fn cloud_types_lists_the_providers_machine_types() {
     assert_eq!(types[0]["name"], json!("small"));
     assert_eq!(types[0]["cores"], json!(2));
 }
+
+const ROUTE_CONFIG: &str =
+    "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\"]\nmachine_setup = \"ci.sh\"\n";
+
+/// What a run sent back: its stdout, its stderr and its exit status.
+#[derive(Debug)]
+struct Ran {
+    stdout: String,
+    stderr: String,
+    status: i32,
+}
+
+fn ran_on(r: &Ran) -> String {
+    r.stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("moonlet: running on "))
+        .last()
+        .unwrap_or("")
+        .to_string()
+}
+
+impl Cloud {
+    /// Approves the project's heavy commands on the central host.
+    async fn approve(&self) {
+        let info: Value = self
+            .d
+            .call("heavy.get", json!({ "project": self.project }))
+            .await;
+        let _: Value = self
+            .d
+            .call(
+                "heavy.approve",
+                json!({ "project": self.project, "commands": info["config"]["commands"], "env": info["config"]["env"] }),
+            )
+            .await;
+    }
+
+    async fn set_project(&self, patch: Value) {
+        let mut p = json!({ "overflow": false, "provider": "fake", "type": "small", "location": "here", "image": "none" });
+        for (k, v) in patch.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        let _: Value = self
+            .d
+            .call("cloud.set", json!({ "projects": { self.key.clone(): p } }))
+            .await;
+    }
+
+    async fn session(&self, name: &str, cloud: bool) -> Value {
+        self.d
+            .call(
+                "session.create",
+                json!({ "project_id": self.project, "name": name, "agent": "none", "cloud": cloud }),
+            )
+            .await
+    }
+
+    /// Starts `argv` routed for `session`; gives the client and the run.
+    async fn start(&self, session: &Value, argv: &[&str]) -> (Client, u32) {
+        let mut c = self.d.app().await;
+        let started: Value = c
+            .request(
+                "exec.run",
+                json!({ "session": session["id"], "argv": argv, "cwd": session["path"], "env": {} }),
+            )
+            .await
+            .unwrap();
+        (c, started["run"].as_u64().unwrap() as u32)
+    }
+
+    async fn run(&self, session: &Value, argv: &[&str]) -> Ran {
+        let (c, run) = self.start(session, argv).await;
+        collect(c, run).await
+    }
+}
+
+async fn collect(mut c: Client, run: u32) -> Ran {
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(30), c.next_frame())
+            .await
+            .expect("the run never ended")
+            .unwrap()
+            .expect("the daemon closed the connection");
+        match frame {
+            Frame::RunOutput {
+                run: r,
+                stream,
+                data,
+            } if r == run => {
+                if stream == 1 {
+                    stdout.extend(data)
+                } else {
+                    stderr.extend(data)
+                }
+            }
+            Frame::Json(Message::Event { name, data })
+                if name == "exec.exited" && data["run"] == json!(run) =>
+            {
+                return Ran {
+                    stdout: String::from_utf8_lossy(&stdout).into(),
+                    stderr: String::from_utf8_lossy(&stderr).into(),
+                    status: data["status"].as_i64().unwrap() as i32,
+                };
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A central host whose project routes `sh run.sh` and `sh -c`, approved.
+async fn routing(env: &[(&str, &str)]) -> Cloud {
+    let c = cloud_with(ROUTE_CONFIG, env).await;
+    c.approve().await;
+    c
+}
+
+#[tokio::test]
+async fn overflow_starts_a_machine_and_the_next_command_runs_there() {
+    // The central host is busy.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    let s = c.session("fix-cart", false).await;
+    // No worker is free: it runs here, and a machine starts.
+    let first = c.run(&s, &["sh", "run.sh"]).await;
+    assert_eq!(ran_on(&first), "studio-mini");
+    assert_eq!(first.stdout, "out\n");
+    let machines = c.machines().await;
+    let m = machines["machines"][0].clone();
+    assert_eq!(m["project"], json!("shop"));
+    let ready = c.until(m["id"].as_str().unwrap(), "ready").await;
+    let next = c.run(&s, &["sh", "run.sh"]).await;
+    assert_eq!(ran_on(&next), ready["name"].as_str().unwrap(), "{next:?}");
+    assert_eq!((next.stdout.as_str(), next.status), ("out\n", 0));
+}
+
+#[tokio::test]
+async fn overflow_starts_no_second_machine_while_one_is_starting() {
+    let c = routing(&[]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    c.steer("slow-create", "5000");
+    let s = c.session("fix-cart", false).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    assert_eq!(c.machines().await["machines"].as_array().unwrap().len(), 1);
+}

@@ -86,6 +86,9 @@ struct Record {
     /// Waits for its machine setup to end before it is ready.
     #[serde(default)]
     setup: bool,
+    /// When its last routed command ended.
+    #[serde(default)]
+    last_end: Option<u64>,
 }
 
 impl Record {
@@ -472,6 +475,7 @@ impl Machines {
             worker: None,
             down_since: None,
             setup: setup.is_some(),
+            last_end: None,
         };
         {
             // The limits and the record in one step, so two calls at once
@@ -763,6 +767,91 @@ impl Machines {
                 }
             }
         });
+    }
+
+    /// The worker ids of every cloud machine.
+    pub fn cloud_workers(&self) -> Vec<String> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.worker.clone())
+            .collect()
+    }
+
+    /// The worker ids of project `project`'s ready cloud machines.
+    pub fn workers_for(&self, project: &str) -> Vec<String> {
+        let Some(key) = self.project_key(project) else {
+            return Vec::new();
+        };
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.shown.project_key == key && r.shown.state == "ready")
+            .filter_map(|r| r.worker.clone())
+            .collect()
+    }
+
+    fn project_key(&self, project: &str) -> Option<String> {
+        let p = self
+            .sessions
+            .list_projects()
+            .into_iter()
+            .find(|p| p.id == project)?;
+        crate::heavy::key(&p.identity)
+    }
+
+    /// No worker was free for a command of project `project`: a machine
+    /// starts when the project allows it and none is starting yet.
+    pub fn overflow(&self, project: &str) {
+        let Some(key) = self.project_key(project) else {
+            return;
+        };
+        if !self
+            .settings
+            .file()
+            .projects
+            .get(&key)
+            .is_some_and(|p| p.overflow)
+        {
+            return;
+        }
+        let starting = self.records.lock().unwrap().iter().any(|r| {
+            r.shown.project_key == key && matches!(r.shown.state.as_str(), "creating" | "starting")
+        });
+        if !starting && let Err(e) = self.up(project, None) {
+            tracing::info!("no overflow machine for {project}: {}", e.message);
+        }
+    }
+
+    fn by_worker(&self, worker: &str) -> Option<String> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.worker.as_deref() == Some(worker))
+            .map(|r| r.shown.id.clone())
+    }
+
+    /// A routed command started on cloud machine `worker`.
+    pub fn run_started(&self, worker: &str) {
+        if let Some(id) = self.by_worker(worker) {
+            self.update(&id, |r| {
+                r.shown.running += 1;
+                r.shown.idle_until = None;
+            });
+        }
+    }
+
+    /// A routed command ended on cloud machine `worker`.
+    pub fn run_ended(&self, worker: &str) {
+        if let Some(id) = self.by_worker(worker) {
+            self.update(&id, |r| {
+                r.shown.running = r.shown.running.saturating_sub(1);
+                r.last_end = Some(now_ms());
+            });
+        }
     }
 
     /// `cloud.down`: removes machine `machine` (id or name).
