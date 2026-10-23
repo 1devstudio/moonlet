@@ -66,11 +66,11 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 - [ ] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries and the exact list of `env` names. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. A name added to `env` stops routing for the project until the list is approved again, because approving is the user's consent to send those variables to every worker, cloud machines included. Removing an entry or a name needs no approval.
 - [ ] Only the Mac's app and paired desktops approve. `heavy.approve` from the `moonlet` CLI or a phone is refused with `forbidden`, so an agent cannot approve the commands it adds.
 - [ ] Each linked worker keeps its own approval, for the machine it runs on. **Approve** on the project page approves the list on the central host and on every linked worker the app reaches: this Mac, and remote hosts through their tailnet connection (X61). A worker linked later, or one the app could not reach, shows "not approved for shop" on the Workers screen, with **Approve**. `heavy.approve` on a worker follows X61's rule for `link.set`: the worker's own app or a paired Mac, never a phone or the CLI.
-- [ ] A command is not routed when the user's Claude Code settings that apply to the session (user, project, local and the X33 profile's) have a `deny` or `ask` rule for `Bash` that matches it. Prefix rules (`Bash(pnpm build:*)`, `Bash(pnpm build)`) are matched as prefixes. A rule that moonlet cannot read as a prefix stops routing for every command that starts with the rule's first word. A rule that starts with a wildcard, and a settings file that exists but is not valid JSON, stop routing for every command. Prefixes are matched as text, so `Bash(pnpm build:*)` also keeps `pnpm builder` where it is.
+- [ ] A command is not routed when the Claude Code settings that apply to the session (managed, user or the X33 profile's, project and local) have a `deny` or `ask` rule for `Bash` that matches it. Prefix rules (`Bash(pnpm build:*)`, `Bash(pnpm build)`) are matched as prefixes. A rule that moonlet cannot read as a prefix stops routing for every command that starts with the rule's first word. A rule that starts with a wildcard, and a settings file that exists but is not valid JSON, stop routing for every command. Prefixes are matched as text, so `Bash(pnpm build:*)` also keeps `pnpm builder` where it is.
 
 ### The hook
 
-- [ ] moonlet's `PreToolUse` hook (A2) asks the daemon `exec.route {terminal, command, cwd}` for Bash calls. With `route: false`, an error, or no answer within 2 s, it prints nothing and the call runs as it would without moonlet.
+- [ ] moonlet's `PreToolUse` hook (A2) asks the daemon `exec.route {session, command, cwd, tool_use_id}` for Bash calls, with the session from `MOONLET_SESSION`. With `route: false`, an error, or no answer within 2 s, it prints nothing and the call runs as it would without moonlet.
 - [ ] With `route: true`, it prints:
 
   ```json
@@ -301,7 +301,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 **Daemon, local and on the central host:**
 
-- `exec.route {terminal, command, cwd}` returns `{route: bool, reason}`.
+- `exec.route {session, command, cwd, tool_use_id}` returns `{route: bool, reason}`. `reason` says why a call stays where it is: `no_session` (unknown or archived), `outside_worktree`, `invalid_config`, `not_heavy`, `not_approved`, `env_not_approved` or `claude_rule`. The decision reads `[heavy]` from the session's own worktree, so an agent's edit there counts, and fails closed when it cannot be read or checked.
 - `exec.run {session, argv, cwd, env}` returns `{run}`, then:
   - frames of kind 5, `Output`, with payload `[u32 BE run][u8 stream: 1 stdout, 2 stderr][bytes]`;
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
@@ -311,7 +311,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - `job.stop {job}`, `job.stop_all {session}`, and `job.run_here {job}` (a job waiting for a cloud machine).
 - The event `job.changed {job}`.
 - `exec.route` and `exec.run` take the tool call's id (`tool_use_id` from the hook payload), so the chat can match its row to the job.
-- `heavy.get {project}` returns `{entries: [{command, approved}], os, env, outputs, approved_on: [worker]}`.
+- `heavy.get {project}` returns `{config, approved, error}`: the `[heavy]` table of the project's folder, the approved `{commands, env}` or `null`, and why the table cannot be used, if it cannot. The app works out each entry's state and the machines that approved it from these and the workers' answers.
 - `heavy.set {project, commands, os, env, outputs}` writes `[heavy]` in `.moonlet/config.toml` as X8 writes the other keys. It never approves.
 - `heavy.approve {project, commands, env}` approves exactly those commands and `env` names, together as one record. It fails with `changed` when either list differs from the config as it is now, so the user never approves a list they did not see. It needs the app or a paired desktop.
 
@@ -346,6 +346,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 - **Routing never skips a prompt the user would have seen.** The hook answers `allow` only for entries the user approved in moonlet's UI, which says that they run without asking. A prompt-injected agent can add `rm -rf ~` to `[heavy] commands`, but it is not approved, so it is not routed and not allowed. Deny and ask rules in the user's Claude Code settings still apply. Claude Code checks the rewritten command, and moonlet does not route commands that match the user's rules for the original.
 - **An approved prefix allows any arguments.** `pnpm test --config evil.js` runs code the agent chose, as `pnpm test` already runs scripts the agent can edit. On a Mac, that code runs as the user. ADR 0009 accepts this for one user's own machines. The approval text names it: "Approved commands can run code from the project, including code the agent wrote, on this Mac."
+- **Who approves.** On this Mac's Unix socket, the app and an agent's `moonlet` CLI are told apart by the name each gives, as for phone access (X39) and the link (X41, X61). A process running as the user that lies about its name could also edit `~/.moonlet/heavy.json` itself, so the check guards against an agent's ordinary use of the CLI, not against such a process.
 - **The worker checks again.** It runs a command only when the command matches its own approved list for that project and central host. It runs an argument list, never `sh -c`, and only with a working directory inside the routing copy. Paths and folder names from the central host follow X60's rules.
 - **Environment.** Only `[heavy] env` crosses machines, and only once the user has approved its exact names, so an agent cannot add a name and have its value sent. The approval banner names secret-looking ones (`*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`) and says they reach every machine, cloud machines included.
 - **Outputs.** Bringing back `outputs` never follows a symbolic link on either machine, so a run cannot make the central host read or write outside the worktree through one.
@@ -378,7 +379,7 @@ Where the tests live:
 | Approval of the exact entries and `env` names | `an_unapproved_entry_is_not_routed`, `a_changed_entry_needs_approving_again`, `a_new_env_name_stops_routing_until_approved`, `removing_an_entry_needs_no_approval`, `approving_records_the_commands_and_env_names_together`, `approving_a_list_that_changed_meanwhile_fails` |
 | Who approves | `only_the_app_or_a_paired_mac_approves_heavy_commands` |
 | Each linked worker's own approval | `a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it`; Vitest "the approval toast names every machine it covers", "a worker that was not reachable is named in the toast" |
-| The user's Claude Code deny and ask rules | `deny_and_ask_rules_stop_routing_in_each_form`, `a_rule_moonlet_cannot_read_stops_routing_for_its_first_word` |
+| The user's Claude Code deny and ask rules | `deny_and_ask_rules_stop_routing_in_each_form`, `a_rule_moonlet_cannot_read_stops_routing_for_its_first_word`, `a_deny_rule_in_the_worktree_keeps_the_command_here`, `a_managed_deny_rule_keeps_the_command_here` |
 | The hook stays silent | `the_hook_prints_nothing_when_the_daemon_says_no`, `the_hook_prints_nothing_when_the_daemon_is_gone` |
 | The hook's rewrite | `the_hook_rewrites_a_captured_bash_call_to_moonlet_exec` |
 | `moonlet exec` without routing | `moonlet_exec_without_routing_runs_the_command_here` |
@@ -422,6 +423,7 @@ Where the tests live:
 | Jobs summary (worked examples) | Vitest "the summary line, as in the worked examples" |
 | Row second line (worked examples) | Vitest "a row's second line, as in the worked examples" |
 | Chat chip (UI) | Vitest "the chip from a job", "the chip from a result's first line", "a rewritten command shows without moonlet exec" |
+| `heavy.set` writes `[heavy]` and never approves | `heavy_set_writes_the_heavy_table_and_keeps_the_rest`, `heavy_set_writes_the_projects_config_and_never_approves` |
 | Project page (UI) | Vitest "a new entry, a changed entry, all approved", "the secret-looking env warning"; e2e "approving heavy commands saves them" |
 | Jobs tab (UI) | e2e "the Jobs tab lists the job and opens its output" |
 

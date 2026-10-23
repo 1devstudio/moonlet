@@ -48,6 +48,8 @@ pub struct Daemon {
     /// Live copies: this Mac's of sessions on its central host, and the
     /// ones this daemon serves as a central host (X60).
     pub sync: Arc<crate::sync::LiveCopies>,
+    /// Approved heavy commands and routing decisions (X62).
+    heavy: Arc<crate::heavy::Heavy>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -181,7 +183,9 @@ impl Daemon {
             move |m| emitter.emit(m),
         );
         link.set_sync(Arc::downgrade(&sync));
+        let heavy = crate::heavy::Heavy::new(&moonlet_core::paths::home(), sessions.clone());
         Arc::new(Self {
+            heavy,
             clones,
             terminals,
             chats,
@@ -214,12 +218,11 @@ impl Daemon {
             .collect()
     }
 
-    /// Refuses all but those who may change the worker link: the Mac's app,
-    /// or a paired Mac over the tailnet (X61), which may not set `central`,
-    /// as that hands over a token. A phone and an agent's CLI may not.
-    fn link_managers_only(&self, conn: &Conn, sets_central: bool) -> Result<(), RpcError> {
+    /// Refuses all but the Mac's app and a paired Mac over the tailnet
+    /// (X61): never a phone, nor an agent's CLI.
+    fn app_or_paired_mac(&self, conn: &Conn, what: &str) -> Result<(), RpcError> {
         let Some(device) = conn.phone.as_deref() else {
-            return app_only(conn, "the link");
+            return app_only(conn, what);
         };
         let mac = self
             .mobile
@@ -228,9 +231,17 @@ impl Daemon {
             .iter()
             .any(|d| d.id == device && d.kind == m::DeviceKind::Desktop);
         if !mac {
-            return app_only(conn, "the link");
+            return app_only(conn, what);
         }
-        if sets_central {
+        Ok(())
+    }
+
+    /// Refuses all but those who may change the worker link: the Mac's app,
+    /// or a paired Mac over the tailnet (X61), which may not set `central`,
+    /// as that hands over a token. A phone and an agent's CLI may not.
+    fn link_managers_only(&self, conn: &Conn, sets_central: bool) -> Result<(), RpcError> {
+        self.app_or_paired_mac(conn, "the link")?;
+        if sets_central && conn.phone.is_some() {
             return Err(RpcError::new(
                 "forbidden",
                 "a paired Mac cannot set the central host; pair with it instead",
@@ -536,6 +547,23 @@ impl Daemon {
                 self.link_managers_only(conn, false)?;
                 let r: m::LinkPair = params(p)?;
                 ok(self.link.pair(r, &crate::mobile::tailscale_addresses()).await?)
+            }
+            m::HEAVY_GET => {
+                let r: m::HeavyGet = params(p)?;
+                ok(self.heavy.get(&r.project)?)
+            }
+            m::HEAVY_SET => {
+                let r: m::HeavySet = params(p)?;
+                ok(self.heavy.set(&r.project, &r.heavy)?)
+            }
+            // An agent could otherwise approve the commands it adds (X62).
+            m::HEAVY_APPROVE => {
+                self.app_or_paired_mac(conn, "heavy commands")?;
+                ok(self.heavy.approve(params(p)?)?)
+            }
+            m::EXEC_ROUTE => {
+                let r: m::ExecRoute = params(p)?;
+                ok(self.heavy.route(&r))
             }
             m::WORKER_LIST => ok(self.workers.list()),
             m::WORKER_REGISTER => {
