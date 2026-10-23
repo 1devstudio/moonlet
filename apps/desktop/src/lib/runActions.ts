@@ -35,6 +35,7 @@ export const ACTIONS: ActionDef[] = [
   ["rerun", "Re-run last command", "Terminal", ""],
   ["history", "Show archived sessions", "Session", ""],
   ["tasks", "Switch between Sessions and Tasks", "App", "ctrl+cmd+t"],
+  ["design", "Switch between Sessions and Design", "App", "ctrl+cmd+d"],
   ["settings", "Settings…", "App", "cmd+,"],
   ["check-updates", "Check for updates…", "App", ""],
 ].map(([id, label, group, keys]) => ({ id, label, group, keys }));
