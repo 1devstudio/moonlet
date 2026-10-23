@@ -2603,6 +2603,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "moonlet-cloud"
+version = "0.1.29"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "moonlet-core"
 version = "0.1.29"
 dependencies = [
