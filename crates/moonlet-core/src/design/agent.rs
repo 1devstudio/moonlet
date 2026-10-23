@@ -135,6 +135,7 @@ mod tests {
         SystemConfig {
             name: "moonlet desktop".into(),
             created_at: 1,
+            cover: None,
             cards: BTreeMap::new(),
         }
     }

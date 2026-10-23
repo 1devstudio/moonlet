@@ -41,9 +41,23 @@ fn is_unknown(i: &ProjectIdentity) -> bool {
 pub struct SystemConfig {
     pub name: String,
     pub created_at: u64,
+    /// What the user chose to cover when creating it, so the agent does not ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<Cover>,
     /// Per-card settings, by card path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cards: BTreeMap<String, CardSettings>,
+}
+
+/// What a design system covers (X64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cover {
+    /// The 20 to 40 components that matter most.
+    Core,
+    All,
+    /// None yet: honest floor cards only.
+    None,
 }
 
 /// A card's exceptions to the defaults (X64).
@@ -114,6 +128,7 @@ impl Store {
         workspace: &str,
         name: &str,
         sources: Vec<Source>,
+        cover: Cover,
         now: u64,
     ) -> Result<String> {
         let systems = self.systems_dir(workspace, true)?;
@@ -144,6 +159,7 @@ impl Store {
         let config = SystemConfig {
             name: name_n,
             created_at: now,
+            cover: Some(cover),
             cards: BTreeMap::new(),
         };
         let dir = systems.join(&slug);
@@ -711,6 +727,7 @@ mod tests {
                     "w-1devstudio",
                     "moonlet desktop",
                     vec![source()],
+                    Cover::Core,
                     1_761_200_000_000
                 )
                 .unwrap(),
@@ -722,7 +739,7 @@ mod tests {
                     .join("design/w-1devstudio/systems/moonlet-desktop/config.toml")
             )
             .unwrap(),
-            "name = \"moonlet desktop\"\ncreated_at = 1761200000000\n"
+            "name = \"moonlet desktop\"\ncreated_at = 1761200000000\ncover = \"core\"\n"
         );
         // The sources are moonlet's, outside the folder the agent edits.
         assert_eq!(
@@ -742,7 +759,13 @@ root = \"9c1e0a2\"
         );
         assert_eq!(
             store
-                .create_system("w-1devstudio", "moonlet desktop", vec![source()], 1)
+                .create_system(
+                    "w-1devstudio",
+                    "moonlet desktop",
+                    vec![source()],
+                    Cover::Core,
+                    1
+                )
                 .unwrap(),
             "moonlet-desktop-2"
         );
@@ -774,7 +797,7 @@ root = \"9c1e0a2\"
         let mut src = source();
         src.path = project.path().display().to_string();
         let slug = store
-            .create_system("w1", "moonlet desktop", vec![src], 5)
+            .create_system("w1", "moonlet desktop", vec![src], Cover::Core, 5)
             .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
@@ -840,7 +863,9 @@ root = \"9c1e0a2\"
     fn removing_a_system_deletes_its_folder_and_files_resolve_only_inside_the_workspace() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         put(
             &home.path().join("design/w1/systems/storefront"),
             &[("styles.css", "")],
@@ -873,7 +898,9 @@ root = \"9c1e0a2\"
     fn checking_a_system_writes_its_generated_files_and_returns_every_problem() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
             &dir,
@@ -926,7 +953,9 @@ root = \"9c1e0a2\"
     fn settling_a_card_keeps_mine_uses_the_synced_one_or_removes_it() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         let mine = "<!-- @dsCard group=\"Custom\" -->\n<div>mine</div>\n";
         let synced = "<!-- @dsCard group=\"Custom\" -->\n<div>synced</div>\n";
@@ -965,7 +994,9 @@ root = \"9c1e0a2\"
     fn sync_progress_shows_in_the_list_until_the_sync_is_recorded() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         store
             .progress("w1", &slug, "cards", Some("1 of 3"))
             .unwrap();
@@ -1011,7 +1042,9 @@ root = \"9c1e0a2\"
             ],
         );
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
             &dir,
@@ -1073,7 +1106,7 @@ root = \"9c1e0a2\"
         src.path = repo.path().display().to_string();
         src.subdir = Some("apps/mobile".into());
         let slug = store
-            .create_system("w1", "moonlet mobile", vec![src], 1)
+            .create_system("w1", "moonlet mobile", vec![src], Cover::Core, 1)
             .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
@@ -1109,7 +1142,7 @@ root = \"9c1e0a2\"
         let mut src = source();
         src.commit = Some("old1234".into());
         let slug = store
-            .create_system("w1", "storefront", vec![src], 1)
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
@@ -1149,8 +1182,12 @@ root = \"9c1e0a2\"
     fn one_broken_system_still_lists_with_its_error_beside_the_others() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let a = store.create_system("w1", "alpha", vec![], 1).unwrap();
-        store.create_system("w1", "beta", vec![], 1).unwrap();
+        let a = store
+            .create_system("w1", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
+        store
+            .create_system("w1", "beta", vec![], Cover::Core, 1)
+            .unwrap();
         put(
             &home.path().join("design/w1/systems").join(&a),
             &[("_ds_sync.json", "{ not json")],
@@ -1168,7 +1205,9 @@ root = \"9c1e0a2\"
     fn a_system_remembers_its_agents_chat() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         assert_eq!(store.agent("w1", &slug).unwrap(), None);
         store.set_agent("w1", &slug, 42, "l").unwrap();
         assert_eq!(store.agent("w1", &slug).unwrap(), Some(42));
@@ -1180,7 +1219,7 @@ root = \"9c1e0a2\"
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
         let slug = store
-            .create_system("w1", "storefront", vec![source()], 1)
+            .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
             .unwrap();
         store.set_agent("w1", &slug, 7, "l").unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
@@ -1213,7 +1252,9 @@ root = \"9c1e0a2\"
             &[("record.toml", "trusted\n"), ("dir/keep.txt", "keep\n")],
         );
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
             &dir,
@@ -1248,7 +1289,7 @@ root = \"9c1e0a2\"
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
         let slug = store
-            .create_system("w1", "storefront", vec![source()], 1)
+            .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
             .unwrap();
         std::fs::write(
             home.path()
@@ -1563,7 +1604,9 @@ root = \"9c1e0a2\"
     fn a_recorded_agent_is_reused_only_with_the_launch_it_was_started_with() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         store.set_agent("w1", &slug, 7, "settings A").unwrap();
         assert_eq!(store.agent_for("w1", &slug, "settings A").unwrap(), Some(7));
         assert_eq!(store.agent_for("w1", &slug, "settings B").unwrap(), None);

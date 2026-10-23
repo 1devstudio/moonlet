@@ -172,6 +172,9 @@ enum SystemAction {
         /// Project id, path or name (see `moonlet project ls`); repeat for several.
         #[arg(long = "from", required = true)]
         from: Vec<String>,
+        /// What to cover: core (the components that matter most), all, or none (floor cards only).
+        #[arg(long, default_value = "core", value_parser = ["core", "all", "none"])]
+        cover: String,
         #[arg(long)]
         workspace: Option<String>,
     },
@@ -882,7 +885,7 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
                 let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": w})).await?;
                 println!("{}", serde_json::to_string_pretty(&list)?);
             }
-            SystemAction::New { name, from, workspace } => {
+            SystemAction::New { name, from, cover, workspace } => {
                 let (w, _) = design_target(&mut c, workspace, None).await?;
                 let projects: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await?;
                 let home = std::env::var("HOME").unwrap_or_default();
@@ -891,7 +894,7 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
                     sources.push(serde_json::json!({"project": session::find_project(&projects, q, &home)?.id}));
                 }
                 let created: serde_json::Value = c
-                    .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": w, "name": name, "sources": sources}))
+                    .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": w, "name": name, "sources": sources, "cover": cover}))
                     .await?;
                 println!("{}", created["slug"].as_str().unwrap_or_default());
                 if let Some(e) = created["agent_error"].as_str() {
