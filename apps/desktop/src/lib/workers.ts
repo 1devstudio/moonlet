@@ -115,7 +115,7 @@ export function workersPage(input: WorkersInput): { rows: WorkerRow[]; cloud: Cl
     cloud,
     removed: (input.removed ?? []).map(removedLine),
     summary: `${n} ${n === 1 ? "command" : "commands"} running · ${n} of ${total} slots in use`,
-    empty: linked.length === 0 && machines.length === 0 && !input.removed?.length,
+    empty: linked.length === 0 && machines.length === 0,
   };
 }
 
