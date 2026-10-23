@@ -99,6 +99,6 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X59 | Add a project from GitHub (clone tab, your repositories, live progress) | P1 | 3 | implemented (remote hosts untried) | [X59-add-project-from-github.md](X59-add-project-from-github.md) |
 | X60 | Keep in sync: a live copy of a remote session on this Mac | P1 | 4 | implemented (untried between two real Macs) | [X60-keep-in-sync.md](X60-keep-in-sync.md) |
 | X61 | Remote hosts take heavy commands (a switch per tailnet host; the host pairs with the central host itself) | P1 | 4 | implemented (untried between real machines) | [X61-remote-hosts-for-heavy-commands.md](X61-remote-hosts-for-heavy-commands.md) |
-| X64 | Design systems from a project's code (static HTML cards, tokens, custom elements, layouts; per workspace; incremental sync) | P1 | 4 | draft | [X64-design-systems.md](X64-design-systems.md) |
-| X65 | Design mode: prototype with an agent beside a live canvas, comments to the chat, a visual editor, snapshots, Build it | P1 | 4 | draft | [X65-design-mode.md](X65-design-mode.md) |
+| X64 | Design systems from a project's code (design-sync's layout in static HTML: README, styles.css, tokens, foundations, cards, layouts; render check and grading; hash-anchored sync) | P1 | 4 | draft | [X64-design-systems.md](X64-design-systems.md) |
+| X65 | Design mode: workspace and session designs beside a live canvas, comments to the chat, a visual editor, snapshots, Build it, design → spec → PR | P1 | 4 | draft | [X65-design-mode.md](X65-design-mode.md) |
 | X66 | Task comments (read and post a tracker issue's comments in the Task detail and Task tab) | P1 | 3 | implemented (Linear and ClickUp untried on a real account) | [X66-task-comments.md](X66-task-comments.md) |
