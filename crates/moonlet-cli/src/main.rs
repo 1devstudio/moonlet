@@ -164,13 +164,21 @@ enum SystemAction {
         #[arg(long)]
         workspace: Option<String>,
     },
-    /// Create a design system from projects' code. Prints its slug.
+    /// Create a design system from projects' code and start its sync agent.
+    /// Prints its slug.
     New {
         /// Its name, such as "moonlet desktop".
         name: String,
         /// Project id, path or name (see `moonlet project ls`); repeat for several.
         #[arg(long = "from", required = true)]
         from: Vec<String>,
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Ask the system's sync agent to sync it with its sources again.
+    Sync {
+        #[arg(long)]
+        system: Option<String>,
         #[arg(long)]
         workspace: Option<String>,
     },
@@ -877,10 +885,19 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
                 for q in &from {
                     sources.push(serde_json::json!({"project": session::find_project(&projects, q, &home)?.id}));
                 }
-                let slug: String = c
+                let created: serde_json::Value = c
                     .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": w, "name": name, "sources": sources}))
                     .await?;
-                println!("{slug}");
+                println!("{}", created["slug"].as_str().unwrap_or_default());
+                if let Some(e) = created["agent_error"].as_str() {
+                    eprintln!("the sync agent did not start: {e}");
+                }
+            }
+            SystemAction::Sync { system, workspace } => {
+                let (w, s) = design_target(&mut c, workspace, system).await?;
+                let r: serde_json::Value =
+                    c.request(methods::DESIGN_SYSTEM_SYNC, serde_json::json!({"workspace": w, "slug": need(s)?})).await?;
+                println!("{}", serde_json::to_string_pretty(&r)?);
             }
             SystemAction::Rm { slug, workspace } => {
                 let (w, _) = design_target(&mut c, workspace, None).await?;
