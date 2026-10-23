@@ -74,6 +74,9 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
     let socket = home.join("run").join("d.sock");
     let setup_dir = dir.join("setup");
     let _ = std::fs::create_dir_all(&setup_dir);
+    // With a long home the daemon's own socket directory is elsewhere, so
+    // this one must exist, private, before it binds.
+    let _ = moonlet_core::paths::ensure_private_dir(socket.parent().unwrap_or(&home));
     let mut cmd = tokio::process::Command::new(&exe);
     cmd.arg("daemon")
         .env("MOONLET_HOME", &home)
