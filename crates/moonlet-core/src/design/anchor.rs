@@ -274,12 +274,20 @@ fn source_key(files: &BTreeMap<String, String>, exceptions: Option<&str>) -> Str
     sha16(lines.as_bytes())
 }
 
-/// The hash of `path` in the first source project that has it.
+/// The hash of `path` in the source projects. A path that more than one
+/// project has could be any of them, so all their files count: a change in
+/// either shows.
 fn source_hash(sources: &[PathBuf], path: &str) -> Option<String> {
-    sources
+    let hashes: Vec<String> = sources
         .iter()
-        .find_map(|root| std::fs::read(root.join(path)).ok())
+        .filter_map(|root| std::fs::read(root.join(path)).ok())
         .map(|b| sha16(&b))
+        .collect();
+    match hashes.as_slice() {
+        [] => None,
+        [one] => Some(one.clone()),
+        many => Some(sha16(many.join("\n").as_bytes())),
+    }
 }
 
 #[cfg(test)]
@@ -652,5 +660,36 @@ mod tests {
                 .source_key,
             "5ced44ca6deea951"
         );
+    }
+
+    #[test]
+    fn a_path_in_two_source_projects_is_out_of_date_when_either_changes() {
+        let (system, web, admin) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        files(
+            system.path(),
+            &[("components/buttons/button/button.html", CARD)],
+        );
+        files(web.path(), &[("src/ui.tsx", UI)]);
+        files(
+            admin.path(),
+            &[("src/ui.tsx", "export const Button = () => \"admin\";\n")],
+        );
+        let sources = [web.path().to_path_buf(), admin.path().to_path_buf()];
+        write(system.path(), &sources, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            status(system.path(), &sources, &BTreeMap::new()).unwrap(),
+            vec![]
+        );
+        files(
+            admin.path(),
+            &[("src/ui.tsx", "export const Button = () => \"admin 2\";\n")],
+        );
+        let got = status(system.path(), &sources, &BTreeMap::new()).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].changed_sources, vec!["src/ui.tsx".to_string()]);
     }
 }
