@@ -57,11 +57,12 @@ pub fn compute(root: &Path, sources: &[PathBuf]) -> Result<Anchor> {
             continue;
         }
         let text = std::fs::read_to_string(&path)?;
-        let Ok(marker) = card::parse_marker(&text) else {
-            continue;
-        };
-        let files: BTreeMap<String, String> = marker
-            .source
+        // A card whose marker broke stays in the anchor, with no sources, so
+        // its status still shows what it was made from.
+        let source = card::parse_marker(&text)
+            .map(|m| m.source)
+            .unwrap_or_default();
+        let files: BTreeMap<String, String> = source
             .iter()
             .map(|s| (s.clone(), source_hash(sources, s).unwrap_or_default()))
             .collect();
@@ -109,11 +110,17 @@ fn all_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
             continue;
         };
         for e in entries.flatten() {
+            // `file_type` does not follow symlinks: a linked folder is never
+            // entered, so it cannot loop or reach outside the system.
+            let Ok(kind) = e.file_type() else { continue };
             let p = e.path();
-            if p.is_dir() {
+            if kind.is_dir() {
                 if e.file_name() != ".cache" {
                     todo.push(p);
                 }
+                continue;
+            }
+            if !kind.is_file() {
                 continue;
             }
             let r = rel(root, &p);
@@ -164,12 +171,22 @@ pub fn status(root: &Path, sources: &[PathBuf]) -> Result<Vec<CardStatus>> {
         match anchored.cards.get(&path) {
             None => st.new = true,
             Some(then) => {
-                st.changed_sources = now
+                // Sources whose hash moved or that are gone, and those the
+                // card no longer names.
+                let mut changed: Vec<String> = now
                     .sources
                     .iter()
                     .filter(|(p, h)| then.sources.get(*p) != Some(*h))
                     .map(|(p, _)| p.clone())
                     .collect();
+                changed.extend(
+                    then.sources
+                        .keys()
+                        .filter(|p| !now.sources.contains_key(*p))
+                        .cloned(),
+                );
+                changed.sort();
+                st.changed_sources = changed;
                 st.edited_by_hand = now.render_hash != then.render_hash;
                 st.orphaned = !now.sources.is_empty() && now.sources.values().all(String::is_empty);
             }
@@ -407,5 +424,76 @@ mod tests {
             "f9da201cb900b445"
         );
         assert_eq!(status(system.path(), &sources).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_dropped_source_or_a_broken_marker_still_shows_and_symlinked_folders_are_not_followed() {
+        let (system, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        files(
+            system.path(),
+            &[
+                (
+                    "components/buttons/button/button.html",
+                    "<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx,src/icon.tsx\" -->\n<button>Run</button>\n",
+                ),
+                (
+                    "components/forms/field/field.html",
+                    "<!-- @dsCard group=\"Forms\" source=\"src/field.tsx\" -->\n<input>\n",
+                ),
+            ],
+        );
+        files(
+            project.path(),
+            &[
+                ("src/ui.tsx", UI),
+                ("src/icon.tsx", "icon\n"),
+                ("src/field.tsx", "field\n"),
+            ],
+        );
+        // A folder that links back to the system: scans must not loop through it.
+        std::os::unix::fs::symlink(system.path(), system.path().join("components/loop")).unwrap();
+        let sources = [project.path().to_path_buf()];
+        write(system.path(), &sources).unwrap();
+        assert!(
+            !compute(system.path(), &sources)
+                .unwrap()
+                .files
+                .keys()
+                .any(|k| k.starts_with("components/loop"))
+        );
+
+        files(
+            system.path(),
+            &[
+                (
+                    "components/buttons/button/button.html",
+                    "<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n<button>Run</button>\n",
+                ),
+                (
+                    "components/forms/field/field.html",
+                    "<!-- @dsCard Forms -->\n<input>\n",
+                ),
+            ],
+        );
+        let got: Vec<(String, Vec<String>, bool)> = status(system.path(), &sources)
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.path, s.changed_sources, s.edited_by_hand))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "components/buttons/button/button.html".into(),
+                    vec!["src/icon.tsx".into()],
+                    false
+                ),
+                (
+                    "components/forms/field/field.html".into(),
+                    vec!["src/field.tsx".into()],
+                    false
+                ),
+            ]
+        );
     }
 }

@@ -111,7 +111,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 ### Styles and tokens
 
 - [ ] `styles.css` holds only `@import` lines, in this order: each `tokens/*.css`, `fonts/fonts.css`, then `components.css` last. Cards, layouts and design pages link only `styles.css`, so a card shows exactly what a prototype gets.
-- [ ] Token files the source already has as CSS custom properties are copied as they are, keeping their names and sub-folders. Tokens defined in code are written to `tokens/tokens.css` under the source's own names, and `NOTES.md` records where each came from.
+- [ ] Token files the source already has as CSS custom properties are copied as they are, keeping their names and sub-folders. Reading them ignores comments, takes a last declaration without a `;`, and lets a later declaration of a name win, as the cascade does (`design/tokens.rs` a_last_declaration_without_a_semicolon_counts_a_commented_one_does_not_and_a_later_one_wins). Tokens defined in code are written to `tokens/tokens.css` under the source's own names, and `NOTES.md` records where each came from.
 - [ ] `components.css` holds the classes the cards use. They are named after the project's own components and variants (`.btn`, `.btn--primary`, `.session-row`), and use only tokens for colour, space, type, radius and shadow.
 - [ ] Fonts the source uses are copied with an `@font-face` in `fonts/fonts.css`. The check reports a font family that is used but has no face.
 
@@ -119,7 +119,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
 - [ ] A card's first line is `<!-- @dsCard group="<Group>" name="<Name>" source="<path>[,<path>…]" viewport="<w>x<h>" -->`.
   - `group` is required, as in design-sync.
-  - `source` lists the source files, relative to the source project, that the card was made from.
+  - `source` lists the source files, relative to the source project, that the card was made from. A path that is absolute or climbs out with `..` makes the marker malformed, so nothing outside a project is ever read (`design/card.rs` a_source_outside_the_project_is_malformed).
   - `viewport` defaults to 900x700.
   - The folder name is the group's slug.
 
