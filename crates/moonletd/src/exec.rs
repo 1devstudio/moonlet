@@ -50,7 +50,6 @@ pub struct Command {
 struct Remote {
     /// The `moonlet exec` connection the output goes to.
     client: Arc<Conn>,
-    worker: String,
     /// The routing copy the run was fenced on.
     copy: String,
     /// The `outputs` checked when the run started: the session's config
@@ -73,6 +72,15 @@ pub struct Runs {
     owners: Mutex<HashMap<u32, ClientId>>,
     /// Runs this central host routed to a worker.
     remote: Mutex<HashMap<u32, Remote>>,
+    /// The worker each run was given, and its session, from the moment it
+    /// is picked: a slot is taken at once, and a worker runs one command
+    /// of a session at a time, as it has one routing copy of it.
+    claims: Mutex<HashMap<u32, (String, String)>>,
+    /// Runs stopped before their command started, with the status they end
+    /// with.
+    stops: Mutex<HashMap<u32, i32>>,
+    /// Routing copies a run is using on this worker.
+    copies_in_use: Mutex<HashSet<String>>,
     /// The daemon's own environment, which commands start from.
     base_env: BTreeMap<String, String>,
 }
@@ -99,6 +107,8 @@ enum Fail {
     Refused(String),
     /// The worker went away mid-run.
     Gone,
+    /// Stopped before the command started, ending with this status.
+    Stopped(i32),
 }
 
 impl Runs {
@@ -109,6 +119,9 @@ impl Runs {
             routed: Mutex::default(),
             owners: Mutex::default(),
             remote: Mutex::default(),
+            claims: Mutex::default(),
+            stops: Mutex::default(),
+            copies_in_use: Mutex::default(),
             base_env,
         })
     }
@@ -131,6 +144,7 @@ impl Runs {
         tokio::spawn(async move {
             let status = runs.route(run, &client, &plan, &workers, &sync).await;
             runs.owners.lock().unwrap().remove(&run);
+            runs.stops.lock().unwrap().remove(&run);
             let exited = ExecExited { run, status };
             client
                 .tx
@@ -157,23 +171,34 @@ impl Runs {
         };
         let mut skipped = HashSet::new();
         loop {
-            let candidates = self.candidates(plan, workers, &skipped);
-            let Some(chosen) = heavy::pick(&candidates, plan.os, false).cloned() else {
-                break;
-            };
-            if chosen.kind != Kind::Linked {
-                break;
+            if let Some(status) = self.stopped(run, client) {
+                return status;
             }
+            let chosen = {
+                // Picked and claimed at once, so two runs never both take
+                // a worker's last slot, nor its copy of the session.
+                let mut claims = self.claims.lock().unwrap();
+                let candidates = self.candidates(plan, workers, &skipped, &claims);
+                let Some(chosen) = heavy::pick(&candidates, plan.os, false).cloned() else {
+                    break;
+                };
+                if chosen.kind != Kind::Linked {
+                    break;
+                }
+                claims.insert(run, (chosen.id.clone(), plan.session.clone()));
+                chosen
+            };
             let name = workers
                 .list()
                 .into_iter()
                 .find(|w| w.worker.id == chosen.id)
                 .map(|w| w.worker.name)
                 .unwrap_or_else(|| chosen.id.clone());
-            match self
+            let ran = self
                 .remote(run, client, plan, &chosen.id, &name, workers, sync)
-                .await
-            {
+                .await;
+            self.claims.lock().unwrap().remove(&run);
+            match ran {
                 Ok((status, brought)) => {
                     for note in &brought.notes {
                         say(note.clone());
@@ -196,7 +221,11 @@ impl Runs {
                     say(format!("{name} went away. Running again on {}.", plan.host));
                     break;
                 }
+                Err(Fail::Stopped(status)) => return status,
             }
+        }
+        if let Some(status) = self.stopped(run, client) {
+            return status;
         }
         say(format!("running on {}", plan.host));
         self.here(run, client, &plan.local).await
@@ -209,20 +238,19 @@ impl Runs {
         plan: &Plan,
         workers: &Workers,
         skipped: &HashSet<String>,
+        claims: &HashMap<u32, (String, String)>,
     ) -> Vec<Candidate> {
-        let busy: Vec<String> = self
-            .remote
-            .lock()
-            .unwrap()
-            .values()
-            .map(|r| r.worker.clone())
-            .collect();
         let mut out: Vec<Candidate> = workers
             .list()
             .into_iter()
             .filter(|w| w.worker.heavy && !skipped.contains(&w.worker.id))
+            .filter(|w| {
+                !claims
+                    .values()
+                    .any(|(id, s)| *id == w.worker.id && *s == plan.session)
+            })
             .map(|w| Candidate {
-                used: busy.iter().filter(|b| **b == w.worker.id).count() as u32,
+                used: claims.values().filter(|(id, _)| *id == w.worker.id).count() as u32,
                 id: w.worker.id,
                 kind: Kind::Linked,
                 os: w.worker.os,
@@ -264,29 +292,39 @@ impl Runs {
         let prepare = m::ExecPrepare {
             session: plan.session.clone(),
         };
-        let prepared: ExecPrepared = conn
-            .request(
-                m::EXEC_PREPARE,
-                serde_json::to_value(prepare).unwrap(),
-                PREPARE_TIMEOUT,
+        let prepared: ExecPrepared = self
+            .unless_stopped(
+                run,
+                client,
+                conn.request(
+                    m::EXEC_PREPARE,
+                    serde_json::to_value(prepare).unwrap(),
+                    PREPARE_TIMEOUT,
+                ),
             )
-            .await
+            .await?
             .ok()
             .and_then(|v| serde_json::from_value(v).ok())
             .ok_or_else(|| Fail::Refused("cannot prepare".into()))?;
         if prepared.state != "ready" {
             return Err(Fail::Refused(prepared.state));
         }
-        let (tree, head, session_path) = sync
-            .fence(&prepared.copy, worker, &plan.session)
-            .await
+        let (tree, head, session_path) = self
+            .unless_stopped(
+                run,
+                client,
+                sync.fence(&prepared.copy, worker, &plan.session),
+            )
+            .await?
             .map_err(|e| Fail::Refused(e.code))?;
+        if let Some(status) = self.stopped(run, client) {
+            return Err(Fail::Stopped(status));
+        }
         let (tx, mut rx) = oneshot::channel();
         self.remote.lock().unwrap().insert(
             run,
             Remote {
                 client: client.clone(),
-                worker: worker.to_string(),
                 copy: prepared.copy.clone(),
                 outputs: plan.outputs.clone(),
                 conn: conn.clone(),
@@ -320,6 +358,10 @@ impl Runs {
             stream: 2,
             data: format!("moonlet: running on {name}\n").into_bytes(),
         });
+        // Stopped while it was being started: the worker stops it now.
+        if self.stops.lock().unwrap().contains_key(&run) {
+            self.cancel_remote(run).await;
+        }
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let mut cancelled = false;
         loop {
@@ -363,6 +405,9 @@ impl Runs {
     async fn here(self: &Arc<Self>, run: u32, client: &Arc<Conn>, cmd: &Command) -> i32 {
         let cancel = Arc::new(Notify::new());
         self.running.lock().unwrap().insert(run, cancel.clone());
+        if self.stops.lock().unwrap().contains_key(&run) {
+            cancel.notify_one();
+        }
         let send =
             |stream: u8, data: Vec<u8>| client.tx.send(Frame::RunOutput { run, stream, data });
         let full = || client.tx.queued() > MAX_QUEUED && !client.is_gone();
@@ -377,16 +422,43 @@ impl Runs {
         if self.owners.lock().unwrap().get(&run) != Some(&conn) {
             return false;
         }
+        // Kept, so a run still being prepared never starts its command.
+        self.stops.lock().unwrap().entry(run).or_insert(130);
         let here = self.running.lock().unwrap().get(&run).cloned();
         if let Some(n) = here {
             n.notify_one();
-            return true;
-        }
-        let remote = self.remote.lock().unwrap().contains_key(&run);
-        if remote {
+        } else if self.remote.lock().unwrap().contains_key(&run) {
             self.cancel_remote(run).await;
         }
-        remote
+        true
+    }
+
+    /// The status run `run` ends with when it was stopped, or its client
+    /// went away, before its command started.
+    fn stopped(&self, run: u32, client: &Conn) -> Option<i32> {
+        let stopped = self.stops.lock().unwrap().get(&run).copied();
+        stopped.or_else(|| client.is_gone().then_some(130))
+    }
+
+    /// `f`'s result, unless run `run` is stopped first.
+    async fn unless_stopped<T>(
+        &self,
+        run: u32,
+        client: &Conn,
+        f: impl std::future::Future<Output = T>,
+    ) -> Result<T, Fail> {
+        tokio::pin!(f);
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        loop {
+            tokio::select! {
+                v = &mut f => return Ok(v),
+                _ = tick.tick() => {
+                    if let Some(status) = self.stopped(run, client) {
+                        return Err(Fail::Stopped(status));
+                    }
+                }
+            }
+        }
     }
 
     /// Output of a remote run, from the worker on connection `from`.
@@ -452,10 +524,27 @@ impl Runs {
         }
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
         let load = crate::link::load().unwrap_or(0.0);
-        let used = self.routed.lock().unwrap().len() as u32;
-        if used >= slots || load >= 0.7 * f64::from(cores) {
-            return Err(RpcError::new("busy", "no free slot"));
-        }
+        let cancel = Arc::new(Notify::new());
+        // A slot and the copy are taken at once, before the copy is
+        // checked, and given back on every refusal and at the end.
+        let claim = {
+            let mut routed = self.routed.lock().unwrap();
+            if routed.contains_key(&req.run) {
+                return Err(RpcError::new("busy", "that run is going on"));
+            }
+            if routed.len() as u32 >= slots || load >= 0.7 * f64::from(cores) {
+                return Err(RpcError::new("busy", "no free slot"));
+            }
+            if !self.copies_in_use.lock().unwrap().insert(req.copy.clone()) {
+                return Err(RpcError::new("busy", "a command of the session runs here"));
+            }
+            routed.insert(req.run, cancel.clone());
+            Claim {
+                runs: self.clone(),
+                run: req.run,
+                copy: req.copy.clone(),
+            }
+        };
         let copy = sync.run_copy_at(&req.copy, &req.tree, &req.head).await?;
         let rel = Path::new(&req.cwd);
         if rel.is_absolute()
@@ -490,21 +579,16 @@ impl Runs {
         let mut env = self.base_env.clone();
         env.extend(req.env.clone());
         env.insert("MOONLET_ROUTED".into(), "1".into());
+        // As on the central host: the session the command runs for.
+        if let Some(session) = sync.run_copy_session(&req.copy) {
+            env.insert("MOONLET_SESSION".into(), session);
+        }
         if !found(&req.argv[0], &cwd, env.get("PATH").map(String::as_str)) {
             return Err(RpcError::new(
                 "missing_tool",
                 format!("missing {}", req.argv[0]),
             ));
         }
-        let cancel = Arc::new(Notify::new());
-        {
-            let mut routed = self.routed.lock().unwrap();
-            if routed.contains_key(&req.run) {
-                return Err(RpcError::new("busy", "that run is going on"));
-            }
-            routed.insert(req.run, cancel.clone());
-        }
-        let runs = self.clone();
         tokio::spawn(async move {
             let run = req.run;
             let cmd = Command {
@@ -547,7 +631,6 @@ impl Runs {
                     raw(if i == 0 { 1 } else { 2 }, rest);
                 }
             }
-            runs.routed.lock().unwrap().remove(&run);
             let lock = sync.run_lock(&req.copy);
             let _one = lock.lock().await;
             if connected() {
@@ -561,11 +644,13 @@ impl Runs {
                             None
                         }
                     };
-                send_back(&sync, &host, run, &req.copy, status, outputs).await;
+                let fence = (req.tree.clone(), req.head.clone());
+                send_back(&sync, &host, run, &req.copy, status, outputs, fence, &say).await;
             }
             // Its changes went back, or the run was abandoned: the copy
             // returns to its fence either way.
             sync.reset_run(&req.copy).await;
+            drop(claim);
         });
         Ok(true)
     }
@@ -582,7 +667,24 @@ impl Runs {
     }
 }
 
+/// A run's slot and routing copy on a worker, given back when dropped.
+struct Claim {
+    runs: Arc<Runs>,
+    run: u32,
+    copy: String,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        self.runs.routed.lock().unwrap().remove(&self.run);
+        self.runs.copies_in_use.lock().unwrap().remove(&self.copy);
+    }
+}
+
 /// Sends the central host routing copy `copy`'s changes after run `run`.
+/// When they cannot be read or sent, the run still ends, with none: the
+/// fence's `tree` and `head` and no pack.
+#[allow(clippy::too_many_arguments)]
 async fn send_back(
     sync: &LiveCopies,
     host: &moonlet_link::Host,
@@ -590,23 +692,25 @@ async fn send_back(
     copy: &str,
     status: i32,
     outputs: Option<String>,
+    (fence_tree, fence_head): (String, String),
+    say: &impl Fn(String) -> bool,
 ) {
-    let (tree, head, pack) = match sync.run_changes(copy, outputs.as_deref()).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(run, "cannot read the run's changes: {e:#}");
-            return;
-        }
-    };
-    let pack = if pack.is_empty() {
-        None
-    } else {
-        match host.send_pack(&pack) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                tracing::warn!(run, "cannot send the run's changes: {}", e.message);
-                return;
+    let changes = sync
+        .run_changes(copy, outputs.as_deref())
+        .await
+        .map_err(|e| format!("{e:#}"))
+        .and_then(|(tree, head, pack)| {
+            if pack.is_empty() {
+                return Ok((tree, head, None));
             }
+            let t = host.send_pack(&pack).map_err(|e| e.message)?;
+            Ok((tree, head, Some(t)))
+        });
+    let (tree, head, pack, outputs) = match changes {
+        Ok((tree, head, pack)) => (tree, head, pack, outputs),
+        Err(e) => {
+            say(format!("cannot bring back the run's changes: {e}"));
+            (fence_tree, fence_head, None, None)
         }
     };
     let done = ExecDone {
@@ -782,10 +886,11 @@ fn found(program: &str, cwd: &Path, path: Option<&str>) -> bool {
     if program.contains('/') {
         return runnable(&cwd.join(program));
     }
+    // A relative entry, or an empty one, is looked up from `cwd`, as the
+    // command will be.
     path.unwrap_or("/usr/bin:/bin")
         .split(':')
-        .filter(|d| !d.is_empty())
-        .any(|d| runnable(&Path::new(d).join(program)))
+        .any(|d| runnable(&cwd.join(d).join(program)))
 }
 
 /// `path` with the home folder as `~`.
@@ -911,4 +1016,27 @@ async fn pump(
 /// The error `exec.run` gives a call it refuses.
 pub fn refused(reason: &str) -> RpcError {
     RpcError::new("not_routable", reason.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tool_on_a_relative_path_entry_is_found_from_the_folder_it_runs_in() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("bin")).unwrap();
+        let tool = dir.path().join("bin/shop-tool");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(found("shop-tool", dir.path(), Some("bin:/usr/bin")));
+        // An empty entry is the folder itself.
+        assert!(found(
+            "shop-tool",
+            &dir.path().join("bin"),
+            Some("/usr/bin::")
+        ));
+        assert!(!found("shop-tool", dir.path(), Some("/usr/bin")));
+    }
 }

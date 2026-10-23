@@ -3452,6 +3452,13 @@ impl LiveCopies {
         self.lock(copy)
     }
 
+    /// The central host's session routing copy `copy` is of.
+    pub fn run_copy_session(&self, copy: &str) -> Option<String> {
+        self.kept(copy)
+            .filter(|k| k.kind == CopyKind::Run)
+            .map(|k| k.session)
+    }
+
     /// Routing copy `copy`'s folder.
     pub fn run_copy_path(&self, copy: &str) -> Option<PathBuf> {
         self.kept(copy)

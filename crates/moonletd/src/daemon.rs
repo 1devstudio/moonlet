@@ -621,14 +621,27 @@ impl Daemon {
                 let Some(outputs) = self.runs.runs_on(conn.id, r.run, &r.copy) else {
                     return Err(RpcError::new("not_found", "no such run"));
                 };
-                let pack = match r.pack {
-                    Some(t) => Some(conn.take_pack(t).ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))?),
-                    None => None,
-                };
                 let host = self.link.info().worker.name;
-                let brought = self.sync.run_back(conn, &r, pack, &host, &outputs).await?;
-                self.runs.done(conn.id, r.run, r.status, brought.clone());
-                ok(brought)
+                let brought = match r.pack {
+                    Some(t) => conn
+                        .take_pack(t)
+                        .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive")),
+                    None => Ok(Vec::new()),
+                };
+                let brought = match brought {
+                    Ok(pack) => {
+                        let pack = r.pack.map(|_| pack);
+                        self.sync.run_back(conn, &r, pack, &host, &outputs).await
+                    }
+                    Err(e) => Err(e),
+                };
+                // The run ends either way: its client is told what was lost.
+                let ended = brought.clone().unwrap_or_else(|e| m::ExecBrought {
+                    notes: vec![format!("cannot bring back the run's changes: {}", e.message)],
+                    ..Default::default()
+                });
+                self.runs.done(conn.id, r.run, r.status, ended);
+                ok(brought?)
             }
             m::EXEC_ROUTE => {
                 let r: m::ExecRoute = params(p)?;
