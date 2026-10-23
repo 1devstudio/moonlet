@@ -1,7 +1,7 @@
 // Design mode (X65) and the New design system dialog (X64): the third mode
 // of the sidebar, and a design system built from the workspace's project.
 
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { fill, PROJECT, rpc, sel, SESSION, world } from "../fixtures";
@@ -11,6 +11,21 @@ const mode = (label: string) => $(`//div[@role="group"][@aria-label="Mode"]/butt
 const dialog = () => $('//div[@role="dialog"][@aria-label="New design system"]');
 const systemRow = (name: string) => $(`//nav[@aria-label="Design systems"]//button[.//span[normalize-space()="${name}"]]`);
 const workspaceId = () => rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
+const FAKE = join(w.root, "bin", "claude");
+// A sync agent that asks to approve its plan for every message (as in
+// plan-approval.e2e.ts). printf, because /bin/sh's echo expands the \n in the JSON.
+const PLANNING_CLAUDE = String.raw`#!/bin/sh
+out() { printf '%s\n' "$1"; }
+plan='{"plan":"# Cards for the storefront\n\n- Button, Input and Card first\n","planFilePath":"/tmp/plans/storefront-cards.md"}'
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) out '{"type":"system","subtype":"init","session_id":"e2e-design","model":"e2e-model","permissionMode":"plan","slash_commands":[]}' ;;
+    *'"type":"user"'*)
+      out "{\"type\":\"assistant\",\"message\":{\"id\":\"m1\",\"content\":[{\"type\":\"tool_use\",\"id\":\"p1\",\"name\":\"ExitPlanMode\",\"input\":$plan}]}}"
+      out "{\"type\":\"control_request\",\"request_id\":\"r1\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"ExitPlanMode\",\"tool_use_id\":\"p1\",\"input\":$plan,\"requires_user_interaction\":true}}" ;;
+  esac
+done
+`;
 
 describe("Design mode", () => {
   after(async () => {
@@ -57,5 +72,25 @@ describe("Design mode", () => {
     await expect(agent()).not.toBeExisting();
     await $(sel.button("Show agent")).click();
     await expect(agent()).toBeDisplayed();
+  });
+
+  it("shows a sync agent's plan from its docked chat, before it is approved", async () => {
+    const blocked = readFileSync(FAKE, "utf8");
+    writeFileSync(FAKE, PLANNING_CLAUDE);
+    chmodSync(FAKE, 0o755);
+    try {
+      rpc(w, "design.system.create", { workspace: workspaceId(), name: "Checkout", sources: [] });
+      await systemRow("Checkout").click();
+      const agent = $('//section[@aria-label="Design · Checkout"]');
+      await agent.$(sel.button("Open plan")).click();
+      const plan = $('//div[@role="dialog"][@aria-label="Plan"]');
+      await expect(plan.$(sel.text("Button, Input and Card first"))).toBeDisplayed();
+      // The approval stays in the chat, under the dialog.
+      await expect(agent.$(sel.button("Approve, ask before edits"))).toBeExisting();
+      await browser.keys("Escape");
+      await expect(plan).not.toBeExisting();
+    } finally {
+      writeFileSync(FAKE, blocked);
+    }
   });
 });
