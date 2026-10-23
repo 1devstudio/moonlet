@@ -134,6 +134,20 @@ describe("the setup modal (X60)", () => {
     expect(calls.filter((c) => c.method === "sync.skip_setup")).toEqual([{ method: "sync.skip_setup", params: { copy: "r1" } }]);
   });
 
+  it("asks again about a routing copy made anew after its setup was skipped (X62)", async () => {
+    const ask = { copy: "r3", host: "studio-mini", project: "shop", command: "pnpm install" };
+    answers["sync.skip_setup"] = () => copy();
+    events.emit({ host: "local", name: "exec.setup", data: ask });
+    await settle();
+    answerConfirm(false, false);
+    await settle();
+    events.emit({ host: "local", name: "exec.setup", data: ask });
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ title: "Run setup", code: "pnpm install" });
+    answerConfirm(false, false);
+    await settle();
+  });
+
   it("asks about a routing copy's setup that waited before the app started (X62)", async () => {
     answers["exec.setups"] = () => [{ copy: "r2", host: "studio-mini", project: "shop", command: "pnpm i" }];
     answers["sync.run_setup"] = () => copy();
