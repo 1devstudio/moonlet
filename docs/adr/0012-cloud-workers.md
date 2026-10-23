@@ -43,6 +43,6 @@ Today every machine moonlet talks to was set up by the user: they install Tailsc
 
 - **ADR 0011 changes for cloud machines:** moonlet installs Tailscale on machines it creates. The user still sets up Tailscale on their own machines.
 - **New secrets on the central host:** the provider token and the Tailscale OAuth client. The central host may be a headless Linux machine with no keychain, so they live in `$MOONLET_HOME/cloud.json` with mode 0600, as `link.json` does. Settings recommend a dedicated provider project and a Tailscale ACL that lets the worker tag reach only the central host's listener.
-- **Trust.** A cloud machine runs what the central host sends it, as any worker does. It holds the project's files and history, including untracked files that are not ignored, but not `.env` or the other files that never sync (X60).
+- **Trust.** A cloud machine runs what the central host sends it, as any worker does. It holds the session's current files and `HEAD` commit, but no older history: its copy is shallow. That includes every tracked file and every untracked file that is not ignored, but not `.env` or the other files that never sync (X60).
 - **Spending** is bounded by the limits, not by who asks. An agent can ask for a machine with `moonlet worker up`, but it cannot change the limits or the tokens.
 - **Delivery:** X62 (routing) first, then X63 (cloud workers). Takeover stays in ADR 0009's last slice.
