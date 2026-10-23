@@ -29,6 +29,9 @@ lol_html = "3"
 # Where a stylesheet's comments are, read as a browser reads them; the
 # version lol_html already builds.
 cssparser = "0.36"
+# Writes in a design system's folder through directory handles, never
+# through a symlink out of it, with no check-then-use gap (X64).
+cap-std = "4"
 sha2 = "0.10"
 
 [dev-dependencies]
