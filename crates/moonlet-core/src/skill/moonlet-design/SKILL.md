@@ -14,7 +14,9 @@ A **design system** is a folder of static HTML and CSS that shows a project's UI
 - **You work in a session of a project** (the user ran `/moonlet-design sync`): run `"$MOONLET_BIN" design system ls`. If a design system is built from this project, run `"$MOONLET_BIN" design system sync --system <slug>`; otherwise `"$MOONLET_BIN" design system new "<name>" --from <this project's path>`. Tell the user its own agent now does the work in Design mode, and stop.
 - **You are the sync agent**: your working folder holds `config.toml`, and your first message names the source folders and the path of `moonlet`. On a **build**, do steps 1 to 4. On a **sync**, do the steps of [Sync](#sync).
 
-Run moonlet with the exact path your first message gives; it is written `moonlet` below. Those commands run without asking; anything else waits for the user.
+Run moonlet with the exact path your first message gives; it is written `moonlet` below. Those three commands run without asking.
+
+The user is away while you work, and every approval stops you until they come back. Read, search and write files with your file tools (Read, Grep, Glob, Write, Edit): they run without asking here. Keep Bash for the `moonlet` commands.
 
 ## Ground rules
 
@@ -23,12 +25,13 @@ Run moonlet with the exact path your first message gives; it is written `moonlet
 - Put a fix in a file the next sync reads: a card, a component's `.css`, `config.toml`, `NOTES.md`, `conventions.md`. moonlet rewrites `README.md`, `_ds_manifest.json`, `foundations/` and `_ds_sync.json` itself.
 - `NOTES.md` holds one line per gotcha (`symptom -> cause -> fix`), where values came from, and a **Re-sync risks** section: what the next sync should watch.
 - After every step run `moonlet design check`. It prints the problems as JSON and exits 0 when there are none. Fix every problem before the next step.
+- Ask the user only what the code and `config.toml` cannot settle: one question at a time, your recommendation first. When something is a judgement call you can make (a name, a group), make it and write it in `NOTES.md` instead.
 
 ## 1. Inventory
 
 Find the reusable UI in the sources (buttons, fields, menus, rows, dialogs, panels) and the main screens built from it. Group components as the source's folders do; else by kind: Buttons, Forms, Navigation, Data display, Feedback. Elements only this project has go in **Custom**.
 
-Ask the user what to cover: the 20 to 40 components that matter most, all of them, or none yet (floor cards only). Write the answer to `config.toml` as `scope = ["Button", "Session row", ...]`.
+Cover what `cover` in `config.toml` says: `core` is the 20 to 40 components that matter most, `all` is every one, `none` is floor cards only. Ask the user only when `cover` is missing. Write the components you chose to `config.toml` as `scope = ["Button", "Session row", ...]`.
 
 Done when every component in scope has a name and a group. Then `moonlet design system progress inventory "<n> components in <m> groups"`.
 
