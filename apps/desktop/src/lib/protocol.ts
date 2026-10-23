@@ -411,6 +411,96 @@ export interface JobChunk {
 }
 
 /** A routing copy's setup waiting for the user's approval (X62), from `exec.setups` and `exec.setup`. */
+/** A settings field of a cloud provider (X63). */
+export interface CloudField {
+  name: string;
+  label: string;
+  secret: boolean;
+  help: string;
+}
+
+export interface CloudKind {
+  id: string;
+  label: string;
+  fields: CloudField[];
+}
+
+/** A project's cloud setting, by its identity key. */
+export interface ProjectCloud {
+  overflow: boolean;
+  provider: string;
+  type: string;
+  location: string;
+  image: string;
+}
+
+/** `cloud.get`: a secret field `x` shows as `has_x: true`, never its value. */
+export interface CloudInfo {
+  host_id: string;
+  providers: Record<string, Record<string, string | boolean>>;
+  tailscale: { client_id: string; has_client_secret: boolean; tag: string };
+  idle_minutes: number;
+  max_machines: number;
+  max_hours_month: number;
+  projects: Record<string, ProjectCloud>;
+  kinds: CloudKind[];
+}
+
+/** `cloud.set`: what changes; null removes a provider or project. */
+export interface CloudSet {
+  providers?: Record<string, Record<string, string | null> | null>;
+  tailscale?: { client_id?: string; client_secret?: string; tag?: string };
+  idle_minutes?: number;
+  max_machines?: number;
+  max_hours_month?: number;
+  projects?: Record<string, ProjectCloud | null>;
+}
+
+export interface CloudStep {
+  step: string;
+  label: string;
+  state: "pending" | "running" | "done" | "failed";
+  took_ms?: number | null;
+  error?: string | null;
+}
+
+/** A cloud machine (X63). */
+export interface CloudMachine {
+  id: string;
+  name: string;
+  project: string;
+  project_key: string;
+  provider: string;
+  type: string;
+  location: string;
+  state: "creating" | "starting" | "ready" | "removing" | "removed" | "failed";
+  since: number;
+  steps: CloudStep[];
+  deadline?: number | null;
+  idle_until?: number | null;
+  for_session?: string | null;
+  running: number;
+  error?: string | null;
+  error_since?: number | null;
+  error_at?: number | null;
+  reason?: string | null;
+}
+
+export interface CloudMachines {
+  machines: CloudMachine[];
+  removed: CloudMachine[];
+  hours_this_month: number;
+  max_hours_month: number;
+  max_machines: number;
+}
+
+export interface MachineType {
+  name: string;
+  cores: number;
+  memory_gb: number;
+  arch: string;
+}
+
 export interface ExecSetup {
   copy: string;
   /** The central host's name. */
@@ -442,6 +532,8 @@ export interface Session {
   id: string;
   project_id: string;
   name: string;
+  /** Its heavy commands go to the project's cloud machine first (X63). */
+  cloud?: boolean;
   branch: string;
   base: string;
   path: string;
@@ -768,7 +860,7 @@ export interface HostInfo {
 }
 
 /** What paired: a phone (X39) or another Mac's app (X57). */
-export type DeviceKind = "phone" | "desktop";
+export type DeviceKind = "phone" | "desktop" | "cloud";
 
 /** A paired device (X39, X57). */
 export interface MobileDevice {
@@ -1010,6 +1102,12 @@ export const M = {
   workerList: "worker.list",
   execStatus: "exec.status",
   execSetups: "exec.setups",
+  cloudGet: "cloud.get",
+  cloudSet: "cloud.set",
+  cloudTypes: "cloud.types",
+  cloudMachines: "cloud.machines",
+  cloudUp: "cloud.up",
+  cloudDown: "cloud.down",
   jobList: "job.list",
   jobOutput: "job.output",
   jobStop: "job.stop",
@@ -1048,6 +1146,7 @@ export const EV = {
   workersChanged: "workers.changed",
   jobChanged: "job.changed",
   execSetup: "exec.setup",
+  cloudChanged: "cloud.changed",
   jobOutput: "job.output",
 } as const;
 
