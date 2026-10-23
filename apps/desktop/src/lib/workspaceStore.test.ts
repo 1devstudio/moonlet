@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { focusTerminal, selectSession, sessionNeedsYou, shownWorkspace, useStore } from "./store";
+import { focusTerminal, selectSession, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "./store";
 import { visibleSessionOrder } from "./actions";
 import type { Section, Session, TerminalInfo, Workspace } from "./protocol";
 
@@ -27,6 +27,7 @@ beforeEach(() =>
     unread: {},
     collapsed: {},
     showHistory: false,
+    mode: {},
   }),
 );
 
@@ -41,6 +42,21 @@ describe("opening a session elsewhere (X32)", () => {
   it("selecting a session shows its workspace too", () => {
     selectSession("local", "s3");
     expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
+  });
+
+  it("shows the session in Sessions mode, from Design or Tasks (X65)", () => {
+    useStore.setState({ mode: { "local/acme": "design", "local/personal": "tasks" } });
+    focusTerminal("local", 7);
+    expect(useStore.getState().mode).toEqual({ "local/acme": "sessions", "local/personal": "tasks" });
+    selectSession("local", "s1");
+    expect(useStore.getState().mode).toEqual({ "local/acme": "sessions", "local/personal": "sessions" });
+  });
+
+  it("switching workspace keeps the mode it was left in, while its last session is restored", () => {
+    useStore.setState({ mode: { "local/acme": "design" }, lastSession: { "local/acme": "s2" } });
+    switchWorkspace({ host: "local", id: "acme" });
+    expect(useStore.getState().selected).toEqual({ host: "local", session: "s2" });
+    expect(useStore.getState().mode).toEqual({ "local/acme": "design" });
   });
 });
 
