@@ -166,7 +166,8 @@ function maybeAskRunSetup(ask: ExecSetup) {
   const key = `${ask.copy}\n${ask.command}`;
   if (asked.has(key)) return;
   asked.add(key);
-  void askFor({ id: ask.copy, project: ask.project || "the project", name: `${ask.project || "The project"}'s routing copy` }, ask.command);
+  // Once answered, a copy made anew that waits again is asked again.
+  void askFor({ id: ask.copy, project: ask.project || "the project", name: `${ask.project || "The project"}'s routing copy` }, ask.command).finally(() => asked.delete(key));
 }
 
 async function askSetupNow(target: SetupTarget, first: string): Promise<void> {

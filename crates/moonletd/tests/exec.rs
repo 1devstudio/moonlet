@@ -1284,6 +1284,8 @@ async fn a_routing_copy_on_a_mac_waits_for_setup_approval() {
     let config = format!("setup = \"touch set-up\"\n{RUN_CONFIG}");
     let (c, mac) = linked_with(&config, &[], true).await;
     let mut app = mac.app().await;
+    // An agent's CLI on the Mac never hears what only the app answers.
+    let mut cli = Client::connect(&mac.socket, "moonlet-cli").await.unwrap();
     // Until the user approves the setup, the Mac refuses and the central host runs it.
     assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
     // The Mac's app is asked, as for a live copy (X60).
@@ -1299,6 +1301,13 @@ async fn a_routing_copy_on_a_mac_waits_for_setup_approval() {
             break data;
         }
     };
+    while let Ok(Ok(Some(frame))) =
+        tokio::time::timeout(Duration::from_millis(300), cli.next_frame()).await
+    {
+        if let Frame::Json(Message::Event { name, .. }) = frame {
+            assert_ne!(name, "exec.setup", "the CLI heard it");
+        }
+    }
     let copy = asked["copy"].as_str().unwrap().to_string();
     assert_eq!(
         asked,

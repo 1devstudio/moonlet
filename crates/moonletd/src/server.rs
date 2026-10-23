@@ -282,6 +282,7 @@ where
     // A job's output is for the app and paired devices, as `job.output` is
     // (X62): neither an agent's CLI nor a worker hears it.
     let no_jobs = is_cli || conn.client == crate::link::WORKER_CLIENT;
+    let phone = conn.phone.is_some();
     let event_task = tokio::spawn(async move {
         loop {
             match events.recv().await {
@@ -291,6 +292,9 @@ where
                     if no_jobs
                         && (name == moonlet_proto::methods::EV_JOB_OUTPUT
                             || name == moonlet_proto::methods::EV_JOB_CHANGED) => {}
+                // Setup questions go where they are answered: the app (X62).
+                Ok(Message::Event { name, .. })
+                    if (no_jobs || phone) && name == moonlet_proto::methods::EV_EXEC_SETUP => {}
                 Ok(m) => {
                     if !ev_tx.send(Frame::Json(m)) {
                         break;
