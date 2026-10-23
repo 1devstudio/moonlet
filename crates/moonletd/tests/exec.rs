@@ -1512,3 +1512,348 @@ async fn a_routing_copy_unused_for_seven_days_is_removed() {
         "Alex's MacBook Pro"
     );
 }
+
+async fn jobs(c: &Central) -> Vec<Value> {
+    c.daemon
+        .call("job.list", json!({ "session": c.session }))
+        .await
+}
+
+/// A job's stored output, as one text per stream.
+async fn stored(c: &Central, job: &str) -> (String, String) {
+    let (mut out, mut err, mut from) = (String::new(), String::new(), 0u64);
+    loop {
+        let got: Value = c
+            .daemon
+            .call("job.output", json!({ "job": job, "from": from }))
+            .await;
+        for chunk in got["chunks"].as_array().unwrap() {
+            let text = chunk["text"].as_str().unwrap();
+            if chunk["stream"] == json!(1) {
+                out.push_str(text)
+            } else {
+                err.push_str(text)
+            }
+        }
+        from = got["next"].as_u64().unwrap();
+        if got["more"] != json!(true) {
+            return (out, err);
+        }
+    }
+}
+
+#[tokio::test]
+async fn jobs_outlive_a_daemon_restart_and_keep_the_last_fifty() {
+    let mut c = central_with(RUN_CONFIG, &[("MOONLET_TEST_JOBS_KEPT", "3")]).await;
+    c.approve_runs().await;
+    for n in ["1", "2", "3", "4"] {
+        c.run(&["sh", "run.sh", n]).await;
+    }
+    let commands = |list: &[Value]| -> Vec<String> {
+        list.iter()
+            .map(|j| j["command"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let before = jobs(&c).await;
+    assert_eq!(
+        commands(&before),
+        ["sh run.sh 4", "sh run.sh 3", "sh run.sh 2"]
+    );
+    assert_eq!(before[0]["state"], json!({ "kind": "done", "exit": 4 }));
+    c.daemon.restart().await;
+    let after = jobs(&c).await;
+    assert_eq!(
+        commands(&after),
+        ["sh run.sh 4", "sh run.sh 3", "sh run.sh 2"]
+    );
+    let id = after[0]["id"].as_str().unwrap();
+    assert_eq!(
+        stored(&c, id).await,
+        (
+            "out\n".to_string(),
+            "moonlet: running on studio-mini\nerr\n".to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn archiving_the_session_removes_its_jobs() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    c.run(&["sh", "run.sh"]).await;
+    assert_eq!(jobs(&c).await.len(), 1);
+    let _: Value = c
+        .daemon
+        .call("session.archive", json!({ "id": c.session, "force": true }))
+        .await;
+    assert_eq!(jobs(&c).await, Vec::<Value>::new());
+    assert!(!c.daemon.home.path().join("jobs").join(&c.session).exists());
+}
+
+#[tokio::test]
+async fn a_job_lists_what_came_back_and_the_env_names_only() {
+    let (c, _mac) = linked().await;
+    let (client, run) = c
+        .start(
+            &["sh", "-c", "echo one > out.txt; printf 'a\\nb\\n' > run.sh; mkdir -p coverage; printf 12345 > coverage/x"],
+            &c.worktree.clone(),
+            json!({ "CI": "secret-value" }),
+        )
+        .await;
+    assert_eq!(collect(client, run).await.status, 0);
+    let list = jobs(&c).await;
+    let job = &list[0];
+    assert!(!job.to_string().contains("secret-value"), "{job}");
+    assert_eq!(job["env"], json!(["CI"]));
+    assert_eq!(job["state"], json!({ "kind": "done", "exit": 0 }));
+    assert_eq!(
+        job["brought"],
+        json!([
+            { "path": "out.txt", "added": 1, "removed": 0 },
+            { "path": "run.sh", "added": 2, "removed": 3 },
+        ])
+    );
+    assert_eq!(job["outputs"], json!([{ "path": "coverage", "bytes": 5 }]));
+    assert_eq!(job["worker"]["name"], json!("Alex's MacBook Pro"));
+    assert_eq!(job["worker"]["slot"], json!(1));
+    assert_eq!(job["worker"]["slots"], json!(2));
+    assert!(
+        job["worker"]["copy"].as_str().unwrap().ends_with(&format!(
+            "runs/studio-mini/shop/{}",
+            c.worktree.file_name().unwrap().to_str().unwrap()
+        )),
+        "{job}"
+    );
+    let phases: Vec<&str> = job["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            "Copy matched the session",
+            "Ran on Alex's MacBook Pro",
+            "Brought back",
+            "Exit status to Claude"
+        ]
+    );
+    assert!(job["phases"][1]["took_ms"].is_u64(), "{job}");
+}
+
+#[tokio::test]
+async fn output_over_ten_mib_keeps_its_start_and_end() {
+    let c = central_with(RUN_CONFIG, &[("MOONLET_TEST_JOB_OUTPUT_MAX", "1000")]).await;
+    c.approve_runs().await;
+    let ran = c
+        .run(&[
+            "sh",
+            "-c",
+            "i=0; while [ $i -lt 300 ]; do echo line$i; i=$((i+1)); done",
+        ])
+        .await;
+    assert_eq!(ran.stdout.lines().count(), 300);
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    let (out, err) = stored(&c, &id).await;
+    assert!(out.starts_with("line0\nline1\n"), "{out}");
+    assert!(out.ends_with("line298\nline299\n"), "{out}");
+    assert!(out.len() < 1100, "{}", out.len());
+    assert!(
+        err.lines()
+            .any(|l| l.starts_with("moonlet: ") && l.ends_with(" of output dropped here")),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn a_jobs_phases_and_timeline_after_a_rerun() {
+    let (c, mac) = linked().await;
+    let (mut client, run) = c
+        .start(
+            &["sh", "-c", "echo started; sleep 3"],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        if let Frame::RunOutput {
+            stream: 1, data, ..
+        } = client.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    let pid = nix::unistd::Pid::from_raw(mac.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let ran = collect(client, run).await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    assert_eq!(ran.status, 0);
+    let job = jobs(&c).await[0].clone();
+    let texts: Vec<&str> = job["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Started on Alex's MacBook Pro",
+            "Alex's MacBook Pro went away",
+            "Ran again on studio-mini, from the same files",
+            "Exited 0 · status went to Claude",
+        ]
+    );
+    assert_eq!(
+        job["timeline"][1]["detail"],
+        json!("It missed 3 pings. That run's changes were dropped.")
+    );
+    let (_, err) = stored(&c, job["id"].as_str().unwrap()).await;
+    assert!(err.contains("──── run 2 · studio-mini ────\n"), "{err}");
+}
+
+#[tokio::test]
+async fn stopping_a_job_gives_exit_143_and_brings_its_changes_back() {
+    let (c, _mac) = linked().await;
+    let (mut client, run) = c
+        .start(
+            &["sh", "-c", "echo x > done.txt; echo started; sleep 30"],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        if let Frame::RunOutput {
+            stream: 1, data, ..
+        } = client.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    let stopped: bool = c.daemon.call("job.stop", json!({ "job": id })).await;
+    assert!(stopped);
+    let ran = collect(client, run).await;
+    assert_eq!(ran.status, 143);
+    assert!(
+        ran.stderr
+            .contains("moonlet: stopped from the Jobs panel\n"),
+        "{}",
+        ran.stderr
+    );
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("done.txt")).unwrap(),
+        "x\n"
+    );
+    assert_eq!(
+        jobs(&c).await[0]["state"],
+        json!({ "kind": "stopped", "exit": 143 })
+    );
+}
+
+#[tokio::test]
+async fn stop_all_stops_every_running_and_waiting_job() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let mut started = Vec::new();
+    for _ in 0..2 {
+        let (mut client, run) = c
+            .start(
+                &["sh", "-c", "echo started; sleep 30"],
+                &c.worktree.clone(),
+                json!({}),
+            )
+            .await;
+        loop {
+            if let Frame::RunOutput {
+                stream: 1, data, ..
+            } = client.next_frame().await.unwrap().unwrap()
+                && data.starts_with(b"started")
+            {
+                break;
+            }
+        }
+        started.push((client, run));
+    }
+    let n: u32 = c
+        .daemon
+        .call("job.stop_all", json!({ "session": c.session }))
+        .await;
+    assert_eq!(n, 2);
+    for (client, run) in started {
+        assert_eq!(collect(client, run).await.status, 143);
+    }
+}
+
+#[tokio::test]
+async fn job_run_here_needs_a_waiting_job() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    c.run(&["sh", "run.sh"]).await;
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        c.daemon.fails("job.run_here", json!({ "job": id })).await,
+        "not_waiting: the job is not waiting for a machine"
+    );
+}
+
+#[tokio::test]
+async fn a_job_going_on_when_the_daemon_stops_is_lost() {
+    let mut c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let (mut client, _run) = c
+        .start(
+            &["sh", "-c", "echo started; sleep 30"],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        if let Frame::RunOutput {
+            stream: 1, data, ..
+        } = client.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    c.daemon.restart().await;
+    assert_eq!(jobs(&c).await[0]["state"], json!({ "kind": "lost" }));
+}
+
+#[tokio::test]
+async fn an_agents_cli_neither_reads_nor_stops_jobs() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    c.run(&["sh", "run.sh"]).await;
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    let mut cli = Client::connect(&c.daemon.socket, "moonlet-cli")
+        .await
+        .unwrap();
+    for (method, params) in [
+        ("job.list", json!({ "session": c.session })),
+        ("job.output", json!({ "job": id })),
+        ("job.stop", json!({ "job": id })),
+        ("job.stop_all", json!({ "session": c.session })),
+    ] {
+        let e = cli.request::<_, Value>(method, params).await.unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "forbidden: only the moonlet app manages jobs",
+            "{method}"
+        );
+    }
+    // Nor does it hear a job's output as it comes.
+    let mut listening = Client::connect(&c.daemon.socket, "moonlet-cli").await.unwrap();
+    c.run(&["sh", "run.sh"]).await;
+    while let Ok(Ok(Some(frame))) =
+        tokio::time::timeout(Duration::from_millis(500), listening.next_frame()).await
+    {
+        if let Frame::Json(Message::Event { name, .. }) = frame {
+            assert!(!name.starts_with("job."), "the CLI heard {name}");
+        }
+    }
+}

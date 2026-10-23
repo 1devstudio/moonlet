@@ -52,6 +52,8 @@ pub struct Daemon {
     heavy: Arc<crate::heavy::Heavy>,
     /// Heavy commands running on this machine or routed to its workers (X62).
     pub runs: Arc<crate::exec::Runs>,
+    /// Every session's routed commands, with their output (X62).
+    jobs: Arc<crate::jobs::Jobs>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -85,6 +87,15 @@ pub(crate) fn app_only(conn: &Conn, what: &str) -> Result<(), RpcError> {
     }
     if conn.client == CLI_CLIENT {
         return Err(RpcError::new("forbidden", format!("only the moonlet app manages {what}")));
+    }
+    Ok(())
+}
+
+/// Jobs hold commands' output: the app and paired devices read and stop
+/// them, never an agent's CLI nor a worker (X62).
+fn jobs_reader(conn: &Conn) -> Result<(), RpcError> {
+    if conn.client == CLI_CLIENT || conn.client == crate::link::WORKER_CLIENT {
+        return Err(RpcError::new("forbidden", "only the moonlet app manages jobs"));
     }
     Ok(())
 }
@@ -186,11 +197,17 @@ impl Daemon {
         );
         link.set_sync(Arc::downgrade(&sync));
         let heavy = crate::heavy::Heavy::new(&moonlet_core::paths::home(), sessions.clone());
-        let runs = crate::exec::Runs::new(terminals.base_env().clone());
+        let emitter = terminals.clone();
+        let jobs = Arc::new(crate::jobs::Jobs::load(
+            moonlet_core::paths::home().join("jobs"),
+            move |m| emitter.emit(m),
+        ));
+        let runs = crate::exec::Runs::new(terminals.base_env().clone(), jobs.clone());
         link.set_runs(Arc::downgrade(&runs));
         Arc::new(Self {
             heavy,
             runs,
+            jobs,
             clones,
             terminals,
             chats,
@@ -596,6 +613,8 @@ impl Daemon {
                 let me = self.link.info().worker;
                 let plan = crate::exec::Plan {
                     session: r.session,
+                    worktree: checked.worktree.display().to_string(),
+                    tool_use_id: r.tool_use_id.clone(),
                     argv: r.argv.clone(),
                     cwd_rel: checked.cwd_rel,
                     env: checked.env,
@@ -622,6 +641,7 @@ impl Daemon {
                     return Err(RpcError::new("not_found", "no such run"));
                 };
                 let host = self.link.info().worker.name;
+                let began = std::time::Instant::now();
                 let brought = match r.pack {
                     Some(t) => conn
                         .take_pack(t)
@@ -635,13 +655,42 @@ impl Daemon {
                     }
                     Err(e) => Err(e),
                 };
+                let back_ms = began.elapsed().as_millis() as u64;
                 // The run ends either way: its client is told what was lost.
                 let ended = brought.clone().unwrap_or_else(|e| m::ExecBrought {
                     notes: vec![format!("cannot bring back the run's changes: {}", e.message)],
                     ..Default::default()
                 });
-                self.runs.done(conn.id, r.run, r.status, ended);
+                self.runs.done(conn.id, r.run, r.status, ended, back_ms);
                 ok(brought?)
+            }
+            m::JOB_LIST => {
+                jobs_reader(conn)?;
+                let r: m::JobList = params(p)?;
+                ok(self.jobs.list(&r.session))
+            }
+            m::JOB_OUTPUT => {
+                jobs_reader(conn)?;
+                let r: m::JobOutputGet = params(p)?;
+                ok(self.jobs.read(&r.job, r.from).ok_or_else(|| RpcError::new("not_found", "no such job"))?)
+            }
+            m::JOB_STOP => {
+                jobs_reader(conn)?;
+                let r: m::JobRef = params(p)?;
+                ok(self.runs.stop_job(&r.job).await)
+            }
+            m::JOB_STOP_ALL => {
+                jobs_reader(conn)?;
+                let r: m::JobList = params(p)?;
+                ok(self.runs.stop_session(&r.session).await)
+            }
+            // A job waits for a machine only once cloud workers come (X63).
+            m::JOB_RUN_HERE => {
+                let r: m::JobRef = params(p)?;
+                match self.jobs.get(&r.job).map(|j| j.state) {
+                    None => Err(RpcError::new("not_found", "no such job")),
+                    Some(_) => Err(RpcError::new("not_waiting", "the job is not waiting for a machine")),
+                }
             }
             m::EXEC_ROUTE => {
                 let r: m::ExecRoute = params(p)?;
@@ -1034,6 +1083,7 @@ impl Daemon {
                 let archiving = self.sync.archiving(&id).await;
                 let done = w.archive(r).await.map_err(internal)?;
                 self.sync.archived(archiving);
+                self.jobs.forget(&id);
                 self.reads.clear_grant(&id);
                 ok(done)
             }
