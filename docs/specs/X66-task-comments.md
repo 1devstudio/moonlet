@@ -1,17 +1,17 @@
 # X66 — Task comments
 
-- **Status:** draft
+- **Status:** implemented (2026-10-23; Linear and ClickUp read from documented answers, untried on a real account)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** X44 (task trackers), X45 (Tasks mode), X46 (tasks in sessions), X50 (boards)
 - **Related ADRs:** [0010](../adr/0010-task-trackers-in-the-app.md)
 
 ## Summary
 
-A task's column shows the comments its tracker holds, and takes a new one. Until now moonlet only wrote comments (the PR-link comment of Keep in step, X46) and X45 left the tracker's own comments out. The Comments section sits at the end of both places a task is shown in full: the Task detail beside a board in Tasks mode (X45) and the Task tab of a linked session's right panel (X46). It works for every tracker moonlet connects: Linear, Jira, ClickUp and GitHub issues.
+A task's column shows the comments its tracker holds, and takes a new one. Until now moonlet only wrote comments (the PR-link comment of Keep in step, X46) and X45 left the tracker's own comments out. The Comments section closes both places a task is shown in full: the Task detail beside a board in Tasks mode (X45) and the Task tab of a linked session's right panel (X46). It works for every tracker moonlet connects: Linear, Jira, ClickUp and GitHub issues.
 
 ## User journey
 
-1. In Tasks mode the user selects `ENG-124`. The Task detail ends with **Comments 3**: Ada Lovelace "2 h ago", her comment rendered as Markdown, then two more, oldest first.
+1. In Tasks mode the user selects `ENG-124`. Under its sessions, the Task detail shows **Comments 3**: Ada Lovelace "2 h ago", her comment rendered as Markdown, then two more, oldest first.
 2. The user types "Picked this up, PR later today" in the box under them and presses ⌘↵. The comment is posted to Linear, shows last in the list, and the box empties.
 3. The user opens a session linked to `ENG-124`. Its Task tab shows the same comments at the end, with the same box.
 4. Linear is offline: the section says "Couldn't load comments: <Linear's message>" with **Retry**. A comment that fails to post stays in the box, with the error under it; **Comment** sends it again.
@@ -20,27 +20,27 @@ A task's column shows the comments its tracker holds, and takes a new one. Until
 
 ### Reading
 
-- [ ] The Task detail (Tasks mode) and the Task tab (a linked session) end with a **Comments** section headed `Comments <n>`, `<n>` being the comments shown.
-- [ ] Each comment shows its author, how long ago it was written (`just now`, `5 min ago`, `2 h ago`, `3 days ago`, the full date and time on hover) and its body. Comments are listed oldest first, so the newest sits just above the box.
-- [ ] A Linear, Jira or GitHub comment's body is shown as Markdown, rendered as the task's description is (X46: sanitized, checklist items as boxes, images as links, HTML comments left out). A Jira comment's rich text is turned into Markdown as its description is. A ClickUp comment is shown as its plain text, line breaks kept.
-- [ ] The author is the tracker's display name: Linear's user name (or the bot's name for an integration's comment), Jira's `displayName`, ClickUp's `username`, and GitHub's `@login`. A comment with no author reads "Someone".
-- [ ] A GitHub comment that is hidden (minimized) on GitHub is not shown.
-- [ ] moonlet reads at most 100 comments of a task (the newest, where the tracker lets it choose). When the tracker has more, the section ends with "More comments are in <tracker>", linking to the issue.
-- [ ] While the first load runs, the section reads "Loading comments…"; a task with none reads "No comments yet."
-- [ ] A load that fails shows "Couldn't load comments: <the tracker's message>" with **Retry**, which loads them again.
-- [ ] Comments are loaded when the task is shown, again when a sync (X44) sees the task's updated time change, and again after the user posts one. Showing a task whose comments were loaded before shows those at once while they load again.
+- [x] The Task detail (Tasks mode, above Activity) and the Task tab (a linked session, last) show a **Comments** section headed `Comments <n>`, `<n>` being the comments shown. (`tasks-mode.e2e.ts` lists an issue's comments in the detail and posts a new one through gh (X66), and shows a linked session's task … in the Task tab; both seen in the app with `e2e/snap.ts`)
+- [x] Each comment shows its author, how long ago it was written (`just now`, `5 min ago`, `2 h ago`, `3 days ago`, the full date and time on hover) and its body. Comments are listed oldest first, so the newest sits just above the box. (`taskComments.test.ts` lists a tracker issue's comments oldest first with author, age and body; `comment.rs` past a hundred the oldest are left out; each tracker's parser test)
+- [x] A Linear, Jira or GitHub comment's body is shown as Markdown, rendered as the task's description is (X46: sanitized, checklist items as boxes, images as links, HTML comments left out). A Jira comment's rich text is turned into Markdown as its description is. A ClickUp comment is shown as its plain text, line breaks kept. (`jira.rs` an_issues_comments_oldest_first_as_markdown_with_more_flagged, `clickup.rs` a_tasks_comments_as_plain_text_a_page_at_a_time, `tasks-mode.e2e.ts` lists an issue's comments in the detail and posts a new one through gh (X66))
+- [x] The author is the tracker's display name: Linear's user name (or the bot's name for an integration's comment), Jira's `displayName`, ClickUp's `username`, and GitHub's `@login`. A comment with no author reads "Someone". (`linear.rs` an_issues_comments_oldest_first_with_bots_named_and_more_flagged, `jira.rs`, `clickup.rs`, `gh_issues.rs` an_issues_comments_by_login_oldest_first_without_hidden_ones, `taskComments.test.ts`)
+- [x] A GitHub comment that is hidden (minimized) on GitHub is not shown. (`gh_issues.rs` an_issues_comments_by_login_oldest_first_without_hidden_ones, `daemon.rs` an_issues_comments_are_read_and_a_new_one_posted_through_gh, `tasks-mode.e2e.ts` lists an issue's comments in the detail and posts a new one through gh (X66))
+- [x] moonlet reads at most 100 comments of a task (the newest, where the tracker lets it choose). When the tracker has more, the section ends with "More comments are in <tracker>", linking to the issue. (`comment.rs`, each tracker's parser test for `more`, `taskComments.test.ts` reads a GitHub issue's comments through gh)
+- [x] While the first load runs, the section reads "Loading comments…"; a task with none reads "No comments yet." (`taskComments.test.ts` shows loading until the first answer; says no project has a GitHub issue's repository)
+- [x] A load that fails shows "Couldn't load comments: <the tracker's message>" with **Retry**, which loads them again. (`taskComments.test.ts` says no project has a GitHub issue's repository, and loads again on Retry)
+- [x] Comments are loaded when the task is shown, again when a sync (X44) sees the task's updated time change (even while an older load is under way), when a GitHub issue's project becomes known, and again after the user posts one. Showing a task again shows the comments loaded before at once; a load under way keeps them shown, and an older load's answer never replaces a newer one's. (`taskComments.test.ts` loads again only once the task's updated time changes; keeps the comments shown while they load again; drops an older load's answer; loads again for a sync that changes the task while an older load runs; loads a GitHub issue's comments once its project is known)
 
 ### Posting
 
-- [ ] Under the comments, a box (placeholder "Leave a comment") and a **Comment** button post its text to the tracker as a comment on the issue. ⌘↵ in the box does the same. Empty or blank text posts nothing: the button is disabled.
-- [ ] What the user types is Markdown: Linear and GitHub take it as it is; Jira gets it as rich text, converted as a new issue's description is (X52); ClickUp gets it as the comment's text.
-- [ ] While a comment is posted, the box and button are disabled. Once the tracker takes it, the box empties and the comments load again, so the new one shows last. Activity (X45) records "You commented".
-- [ ] A comment the tracker refuses stays in the box, and the tracker's message shows under it; pressing **Comment** again sends it again. Nothing is posted again by itself.
-- [ ] A GitHub issue's comment is posted by `gh` on the host whose project has the issue's repository as its origin (as X46's assign does); with no such project the error says so.
+- [x] Under the comments, a box (placeholder "Leave a comment") and a **Comment** button post its text to the tracker as a comment on the issue. ⌘↵ in the box does the same. Empty or blank text posts nothing: the button is disabled. (`tasks-mode.e2e.ts` lists an issue's comments in the detail and posts a new one through gh (X66); `taskComments.test.ts` allows no blank comment; ⌘↵ seen in the app)
+- [x] What the user types is Markdown: Linear and GitHub take it as it is; Jira gets it as rich text, converted as a new issue's description is (X52); ClickUp gets it as the comment's text. (`linear.rs` a_new_comment_is_the_users_markdown_on_the_issue, `jira.rs` a_new_comment_is_the_users_markdown_as_rich_text, `gh_issues.rs` a_comment_goes_to_gh_on_stdin)
+- [x] While a comment is posted, and until the comments have loaded again with it, the box and button are disabled, so it cannot be sent twice. Then the box empties, unless the user typed something else meanwhile; what is typed in the box is kept per task, so switching tasks never loses or clears another task's draft. Activity (X45) records "You commented". (`taskComments.test.ts` posts the user's comment to the tracker, lists it, and records it in Activity; keeps Comment unavailable until the posted comment shows; clears only the draft it posted; `tasks-mode.e2e.ts` lists an issue's comments in the detail and posts a new one through gh (X66))
+- [x] A comment the tracker refuses stays in the box, and the tracker's message shows under it; pressing **Comment** again sends it again. Nothing is posted again by itself. (`taskComments.test.ts` keeps a refused comment's error, posts nothing again by itself)
+- [x] A GitHub issue's comment is posted by `gh` on the host whose project has the issue's repository as its origin (as X46's assign does); with no such project the error says so. (`taskComments.test.ts` posts a GitHub issue's comment through gh; `daemon.rs` an_issues_comments_are_read_and_a_new_one_posted_through_gh)
 
 ## UI
 
-The section is the last block of the Task detail (after Activity) and of the Task tab (after Link to another task / Unlink).
+In the Task detail the section follows the sessions and worktrees, above Activity (moonlet's own log, up to 20 lines, would otherwise push the comments out of sight). In the Task tab it is the last block, after Link to another task / Unlink.
 
 ```
 Comments 3

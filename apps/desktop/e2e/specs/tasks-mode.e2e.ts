@@ -69,6 +69,16 @@ const OTHER_ISSUE = JSON.stringify({
   closedByPullRequestsReferences: [],
 });
 
+// `gh issue view <n> --json comments` (X66): the captured comments, and the
+// user's own once `gh issue comment` has kept it in ghCommentBody (before
+// it logs the call, so the body is there once the log shows it).
+const ghCommentBody = join(w.root, "gh-comment-body");
+const COMMENTS_AFTER = (() => {
+  const v = JSON.parse(readFileSync(join(process.cwd(), "../../crates/moonlet-core/tests/fixtures/gh-issue-comments.json"), "utf8"));
+  v.comments.push({ ...v.comments[0], id: "IC_e2e0009", body: "Picked this up, PR later today", createdAt: "2026-10-23T17:00:00Z" });
+  return JSON.stringify(v);
+})();
+
 const LINKED = "Checkout on Safari";
 // While this file exists, the fake gh fails to list issues.
 const ghFails = join(w.root, "gh-fails");
@@ -101,7 +111,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ] || [ "$1 $2" = "issue reopen" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *addProjectV2ItemById*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-add.json")}'; exit 0;; *"/issues -X POST"*) echo "$@" >> "${ghLog}"; sed -e 's#issues/1"#issues/57"#g' -e 's/"number": 1,/"number": 57,/' -e 's#acme/web#acme/storefront#g' '${ghFixture("gh-issue-create.json")}'; exit 0;; "api user --jq .login") echo sam-rivera; exit 0;; *"/assignees?per_page=100") cat '${ghFixture("gh-assignees.json")}'; exit 0;; *"/labels?per_page=100") cat '${ghFixture("gh-labels.json")}'; exit 0;; "api repos/acme/storefront") cat '${ghFixture("gh-repo-permissions.json")}'; exit 0;; *clearProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-clear.json")}'; exit 0;; *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ] || [ "$1 $2" = "issue reopen" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2" = "issue comment" ]; then cat > "${ghCommentBody}"; echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $4 $5" = "issue view --json comments" ] && [ -e "${ghCommentBody}" ]; then cat <<'JSON'\n${COMMENTS_AFTER}\nJSON\nexit 0; fi\nif [ "$1 $2 $4 $5" = "issue view --json comments" ]; then cat '${ghFixture("gh-issue-comments.json")}'; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *addProjectV2ItemById*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-add.json")}'; exit 0;; *"/issues -X POST"*) echo "$@" >> "${ghLog}"; sed -e 's#issues/1"#issues/57"#g' -e 's/"number": 1,/"number": 57,/' -e 's#acme/web#acme/storefront#g' '${ghFixture("gh-issue-create.json")}'; exit 0;; "api user --jq .login") echo sam-rivera; exit 0;; *"/assignees?per_page=100") cat '${ghFixture("gh-assignees.json")}'; exit 0;; *"/labels?per_page=100") cat '${ghFixture("gh-labels.json")}'; exit 0;; "api repos/acme/storefront") cat '${ghFixture("gh-repo-permissions.json")}'; exit 0;; *clearProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-clear.json")}'; exit 0;; *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -456,6 +466,24 @@ describe("Tasks mode", () => {
     await expectRenderedDescription('//aside[@aria-label="Task detail"]');
   });
 
+  it("lists an issue's comments in the detail and posts a new one through gh (X66)", async () => {
+    rmSync(ghCommentBody, { force: true });
+    await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
+    const comments = $('//aside[@aria-label="Task detail"]//section[@aria-label="Comments"]');
+    await expect(comments.$('.//div[normalize-space()="Comments 2"]')).toBeDisplayed({ wait: 10_000 });
+    // Markdown rendered, the hidden comment left out.
+    await expect(comments.$('.//li[@aria-label="Comment by @sam-rivera"]//strong[normalize-space()="also"]')).toBeDisplayed();
+    await expect(comments.$('.//li[@aria-label="Comment by @lee-moreno"]')).toBeDisplayed();
+    await expect(comments.$('.//*[contains(text(), "Off topic.")]')).not.toBeExisting();
+    await fill('//aside[@aria-label="Task detail"]//textarea[@aria-label="New comment"]', "Picked this up, PR later today");
+    await comments.$('.//button[starts-with(normalize-space(), "Comment")]').click();
+    await browser.waitUntil(() => asked().includes("issue comment 12 --body-file -"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+    expect(readFileSync(ghCommentBody, "utf8")).toBe("Picked this up, PR later today");
+    await expect(comments.$('.//div[normalize-space()="Comments 3"]')).toBeDisplayed({ wait: 10_000 });
+    await expect(comments.$('.//p[normalize-space()="Picked this up, PR later today"]')).toBeDisplayed();
+    await expect($('//aside[@aria-label="Task detail"]//textarea[@aria-label="New comment"]')).toHaveValue("");
+  });
+
   it("shows each session's card in the detail, and ↵ opens the first", async () => {
     await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
     const session = $('//aside[@aria-label="Task detail"]').$(`.//div[@role="group"][@aria-label="Session ${LINKED}"]`);
@@ -528,6 +556,8 @@ describe("Tasks mode", () => {
     await $('//button[@role="tab"][normalize-space()="Task"]').click();
     // The whole description, its Markdown rendered.
     await expectRenderedDescription('//*[@role="tabpanel"]');
+    // The issue's comments close the tab, as in the detail (X66).
+    await expect($('//*[@role="tabpanel"]//section[@aria-label="Comments"]//li[@aria-label="Comment by @sam-rivera"]')).toBeDisplayed({ wait: 10_000 });
     // The issue's state moves from the tab, as from the task bar and the detail.
     const state = '//*[@role="tabpanel"]//select[@aria-label="State of acme/storefront#12"]';
     await choose(state, "1");

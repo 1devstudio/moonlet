@@ -1,8 +1,8 @@
-// A task's comments (X66), at the end of the Task detail and the Task tab.
+// A task's comments (X66), in the Task detail and the Task tab.
 
 import { ExternalLink } from "lucide-react";
 import { useEffect, useMemo } from "react";
-import { commentsView, ensureComments, loadComments, useComments, type Where } from "../../lib/taskComments";
+import { canPost, commentsView, ensureComments, loadComments, postComment, setDraft, useComments, type Where } from "../../lib/taskComments";
 import type { Task } from "../../lib/tasks";
 import { taskId } from "../../lib/tasks";
 import { useStore } from "../../lib/store";
@@ -10,7 +10,7 @@ import { repoPath, useTasks } from "../../lib/tasksStore";
 import { wsKey } from "../../lib/workspaces";
 import { useNow } from "../../lib/useNow";
 import { Markdown } from "../AgentView";
-import { Button } from "../ui";
+import { Button, inputCls, Kbd } from "../ui";
 
 export function TaskComments({ host, workspaceId, task }: { host: string; workspaceId: string | null; task: Task }) {
   const entry = useComments((s) => s.byTask[taskId(task)]);
@@ -26,6 +26,10 @@ export function TaskComments({ host, workspaceId, task }: { host: string; worksp
     void ensureComments(task, where());
     // Loaded again when the task changes in its tracker (its updated time) or its project shows up.
   }, [host, path, task.connection, task.key, task.updatedMs]); // eslint-disable-line react-hooks/exhaustive-deps
+  // What the user is writing, kept per task.
+  const text = entry?.draft ?? "";
+  const posting = !!entry?.posting;
+  const post = () => void postComment(task, where());
   const view = commentsView(entry, task, now);
   return (
     <section aria-label="Comments">
@@ -58,6 +62,30 @@ export function TaskComments({ host, workspaceId, task }: { host: string; worksp
           {view.more} <ExternalLink size={12} />
         </a>
       )}
+      <textarea
+        rows={3}
+        aria-label="New comment"
+        placeholder="Leave a comment"
+        className={`${inputCls} mt-3`}
+        value={text}
+        disabled={posting}
+        onChange={(e) => setDraft(task, e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" || !e.metaKey) return;
+          e.preventDefault();
+          post();
+        }}
+      />
+      {entry?.postError && (
+        <p role="alert" className="mt-1 ui-text-12 text-error">
+          {entry.postError}
+        </p>
+      )}
+      <div className="mt-1.5 flex justify-end">
+        <Button size="sm" variant="primary" disabled={posting || !canPost(text)} onClick={post}>
+          Comment <Kbd>⌘↵</Kbd>
+        </Button>
+      </div>
     </section>
   );
 }
