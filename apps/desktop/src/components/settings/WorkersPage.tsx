@@ -202,6 +202,32 @@ export function WorkersPage() {
       Machines that run heavy commands for {name}'s sessions. A command goes to the free worker with the lowest load, and runs on {name} when none is free.
     </PageHeading>
   );
+  // The central host's cloud machines (X63), and those removed in the last hour.
+  const cloudSection = cloud && page && (page.cloud.length > 0 || page.removed.length > 0) && (
+    <Section
+      title="Cloud machines"
+      hint={
+        <>
+          {cloudSummary(cloud)} ·{" "}
+          <button type="button" className="text-accent hover:underline" onClick={() => void goSettings({ page: "cloud" })}>
+            Cloud workers settings
+          </button>
+        </>
+      }
+    >
+      <Card>
+        {page.cloud.map((r) => (
+          <CloudLine key={r.id} row={r} now={now} host={target} />
+        ))}
+        {page.removed.map((line) => (
+          <div key={line} className="flex items-center gap-2 px-4 py-2.5 font-mono ui-text-12 text-faint">
+            <Check size={12} />
+            {line}
+          </div>
+        ))}
+      </Card>
+    </Section>
+  );
   if (page?.empty)
     return (
       <>
@@ -216,6 +242,7 @@ export function WorkersPage() {
             <Server size={13} /> Open Hosts
           </Button>
         </div>
+        {cloudSection}
       </>
     );
   return (
@@ -236,31 +263,7 @@ export function WorkersPage() {
           {!page && <div className="px-4 py-3.5 ui-text-12.5 text-muted">Could not reach {name}.</div>}
         </Card>
       </Section>
-      {cloud && page && (page.cloud.length > 0 || page.removed.length > 0) && (
-        <Section
-          title="Cloud machines"
-          hint={
-            <>
-              {cloudSummary(cloud)} ·{" "}
-              <button type="button" className="text-accent hover:underline" onClick={() => void goSettings({ page: "cloud" })}>
-                Cloud workers settings
-              </button>
-            </>
-          }
-        >
-          <Card>
-            {page.cloud.map((r) => (
-              <CloudLine key={r.id} row={r} now={now} host={target} />
-            ))}
-            {page.removed.map((line) => (
-              <div key={line} className="flex items-center gap-2 px-4 py-2.5 font-mono ui-text-12 text-faint">
-                <Check size={12} />
-                {line}
-              </div>
-            ))}
-          </Card>
-        </Section>
-      )}
+      {cloudSection}
     </>
   );
 }

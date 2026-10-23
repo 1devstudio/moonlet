@@ -141,12 +141,13 @@ describe("cloud machines on the Workers page (X63)", () => {
     expect(page.summary).toBe("1 command running · 1 of 6 slots in use");
   });
 
-  it("keeps a removed machine's line for the hour, so the page is not empty", () => {
+  it("keeps a removed machine's line for the hour, under the empty page", () => {
     const at = new Date(2026, 9, 22, 10, 42).getTime();
     const gone = machine({ name: "moonlet-shop-4hn0", state: "removed", since: at, reason: "removed after 15 min idle" });
     const page = workersPage({ workers: [], status: status(), me: null, sessions, cloud: [], removed: [gone], now: 0, cloudSessions: {} });
     expect(page.removed).toEqual(["moonlet-shop-4hn0 removed after 15 min idle · 10:42"]);
-    expect(page.empty).toBe(false);
+    // Only the central host runs heavy commands now; the line is history.
+    expect(page.empty).toBe(true);
   });
 
   it("is not empty with only cloud machines", () => {
