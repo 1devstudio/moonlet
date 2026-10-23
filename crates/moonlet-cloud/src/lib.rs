@@ -12,8 +12,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod cloud_init;
 pub mod hetzner;
+pub mod idle;
 pub mod machine;
+pub mod sweep;
 pub mod tailscale;
+pub mod usage;
 
 /// What a provider's machine is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
