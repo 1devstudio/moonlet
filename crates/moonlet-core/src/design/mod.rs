@@ -8,4 +8,5 @@ pub mod foundations;
 pub mod manifest;
 pub mod mid;
 pub mod readme;
+pub mod store;
 pub mod tokens;
