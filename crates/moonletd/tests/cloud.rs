@@ -110,6 +110,17 @@ async fn pair(d: &Daemon, addr: &str, device: &str, kind: DeviceKind) -> String 
 
 /// The error code a paired device gets for `method`, or None.
 async fn as_device(addr: &str, token: &str, method: &str, params: Value) -> Option<String> {
+    as_device_client(addr, token, "moonlet-app", method, params).await
+}
+
+/// [`as_device`], as connection `client`.
+async fn as_device_client(
+    addr: &str,
+    token: &str,
+    client: &str,
+    method: &str,
+    params: Value,
+) -> Option<String> {
     use moonlet_proto::{read_frame, write_frame};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     let auth = Message::Auth {
@@ -123,7 +134,7 @@ async fn as_device(addr: &str, token: &str, method: &str, params: Value) -> Opti
     read_frame(&mut s).await.unwrap();
     let hello = Message::Hello {
         protocol: moonlet_proto::PROTOCOL_VERSION,
-        client: "moonlet-app".into(),
+        client: client.into(),
     };
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     read_frame(&mut s).await.unwrap();
@@ -225,6 +236,13 @@ async fn cloud_set_from_the_cli_or_a_phone_is_forbidden() {
         Some("forbidden")
     );
     let desktop = pair(&d, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    // A paired Mac's daemon, linked as a worker, speaks for no one.
+    assert_eq!(
+        as_device_client(&addr, &desktop, "moonletd-worker", "cloud.set", settings())
+            .await
+            .as_deref(),
+        Some("forbidden")
+    );
     assert_eq!(
         as_device(&addr, &desktop, "cloud.set", settings()).await,
         None
