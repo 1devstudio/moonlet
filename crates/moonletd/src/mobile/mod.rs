@@ -256,6 +256,57 @@ pub fn claim(slot: &mut Option<Pairing>, code: &str, now: u64) -> Option<(PairCh
     Some((check, current))
 }
 
+/// How long a cloud machine's join code works (X63).
+pub const JOIN_TTL_MS: u64 = 30 * 60_000;
+
+/// One-use codes the central host makes for the cloud machines it creates
+/// (X63), each bound to its machine: its id and the name it joins with.
+#[derive(Debug, Default)]
+pub struct JoinCodes {
+    codes: Vec<JoinCode>,
+}
+
+#[derive(Debug, Clone)]
+struct JoinCode {
+    code: String,
+    machine: String,
+    name: String,
+    expires_at: u64,
+}
+
+impl JoinCodes {
+    /// A new code for machine `machine`, which joins as `name`.
+    pub fn mint(&mut self, machine: &str, name: &str, now: u64) -> String {
+        self.codes.retain(|c| c.expires_at > now);
+        let code = new_code();
+        self.codes.push(JoinCode {
+            code: code.clone(),
+            machine: machine.to_string(),
+            name: name.to_string(),
+            expires_at: now + JOIN_TTL_MS,
+        });
+        code
+    }
+
+    /// The machine a code joins `name` as, using the code up; None for a
+    /// code that is unknown, expired, used or for another machine.
+    pub fn redeem(&mut self, code: &str, name: &str, now: u64) -> Option<String> {
+        let code = normalize_code(code);
+        let i = self.codes.iter().position(|c| c.code == code)?;
+        let c = &self.codes[i];
+        if c.expires_at <= now || c.name != name {
+            return None;
+        }
+        Some(self.codes.remove(i).machine)
+    }
+
+    /// Whether `code` is a join code waiting to be used.
+    pub fn knows(&self, code: &str) -> bool {
+        let code = normalize_code(code);
+        self.codes.iter().any(|c| c.code == code)
+    }
+}
+
 /// An authenticated phone connection.
 pub struct Authed {
     pub device_id: String,
@@ -665,6 +716,34 @@ pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_join_code_works_once() {
+        let mut j = JoinCodes::default();
+        let code = j.mint("m7k2q", "moonlet-shop-7k2q", 1_000);
+        assert_eq!(code.len(), 10);
+        assert_eq!(j.redeem(&code, "moonlet-shop-7k2q", 2_000).as_deref(), Some("m7k2q"));
+        assert_eq!(j.redeem(&code, "moonlet-shop-7k2q", 3_000), None);
+    }
+
+    #[test]
+    fn an_expired_join_code_is_refused() {
+        let mut j = JoinCodes::default();
+        let code = j.mint("m7k2q", "moonlet-shop-7k2q", 1_000);
+        assert_eq!(j.redeem(&code, "moonlet-shop-7k2q", 1_000 + 30 * 60_000), None);
+    }
+
+    #[test]
+    fn a_join_code_for_another_machine_is_refused() {
+        let mut j = JoinCodes::default();
+        let code = j.mint("m7k2q", "moonlet-shop-7k2q", 1_000);
+        assert_eq!(j.redeem(&code, "moonlet-shop-m3x9", 2_000), None);
+        // Typed as a pairing code: the same code, read the same way.
+        assert_eq!(
+            j.redeem(&code.to_lowercase(), "moonlet-shop-7k2q", 2_000).as_deref(),
+            Some("m7k2q")
+        );
+    }
 
     #[test]
     fn the_pairing_link_carries_the_host_every_address_and_the_code() {
