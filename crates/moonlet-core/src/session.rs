@@ -107,6 +107,10 @@ impl State {
     /// The profile of a session's workspace (X33).
     fn profile_of(&self, session: &str) -> Option<&ClaudeProfile> {
         let ws = self.sessions.iter().find(|s| s.id == session)?.workspace_id.as_deref()?;
+        self.profile_of_workspace(ws)
+    }
+
+    fn profile_of_workspace(&self, ws: &str) -> Option<&ClaudeProfile> {
         let profile = self.workspaces.iter().find(|w| w.id == ws)?.claude_profile.as_deref()?;
         self.profiles.iter().find(|p| p.id == profile)
     }
@@ -975,7 +979,11 @@ impl SessionManager {
     /// and name.
     pub fn session_launch(&self, session: &str) -> crate::chat::runtime::SessionLaunch {
         let st = self.state.lock().unwrap();
-        match st.profile_of(session) {
+        let profile = match session.strip_prefix(crate::chat::runtime::WORKSPACE_KEY) {
+            Some(ws) => st.profile_of_workspace(ws),
+            None => st.profile_of(session),
+        };
+        match profile {
             Some(p) => crate::chat::runtime::SessionLaunch {
                 env: BTreeMap::from([(crate::profiles::CONFIG_DIR_VAR.to_string(), p.path.clone())]),
                 profile: Some(p.name.clone()),
@@ -1094,6 +1102,7 @@ impl SessionManager {
                 env: req.env.iter().filter(|(k, _)| *k != crate::profiles::CONFIG_DIR_VAR).map(|(k, v)| (k.clone(), v.clone())).collect(),
                 add_dirs: req.add_dirs.clone(),
                 settings: None,
+                workspace: None,
             })?,
             None => self.terminals.create(req.clone())?,
         };
@@ -2168,6 +2177,38 @@ mod tests {
         assert!(!args.last().unwrap().contains("--resume"), "{args:?}");
         let notes: Vec<String> = chats.state(chat).unwrap().items.into_iter().filter(|i| i.kind == "system").map(|i| i.text).collect();
         assert!(notes.contains(&"Started a new conversation: this workspace now uses Private".to_string()), "{notes:?}");
+    }
+
+    /// X64: a design system's agent has no session; it starts in its
+    /// workspace's profile, with its own settings.
+    #[tokio::test]
+    async fn a_chat_of_a_workspace_without_a_session_starts_in_the_workspaces_profile() {
+        let (_repo, home, mgr, chats) = structured().await;
+        let work = mgr.create_profile("Work", Some(&folder(&home, "claude-work"))).unwrap();
+        let ws = mgr.list_workspaces()[0].clone();
+        set_profile(&mgr, &ws.id, Some(&work.id));
+        let dir = tempfile::tempdir().unwrap();
+        let settings = r#"{"permissions":{"deny":["Edit(//src/**)"]}}"#;
+        let info = chats
+            .create(crate::chat::runtime::ChatCreate {
+                cwd: dir.path().display().to_string(),
+                agent: "claude".into(),
+                model: None,
+                effort: None,
+                mode: Some("acceptEdits".into()),
+                name: "Design · storefront".into(),
+                title: Some("Design · storefront".into()),
+                session_id: None,
+                workspace: Some(ws.id.clone()),
+                env: BTreeMap::new(),
+                add_dirs: vec![],
+                settings: Some(settings.into()),
+            })
+            .unwrap();
+        assert_eq!((info.session_id.as_deref(), info.title.as_str()), (None, "Design · storefront"));
+        chats.send(info.id, "build it", &[]).unwrap();
+        assert_eq!(nth_line(&dir.path().join("claude-env"), 1).await, folder(&home, "claude-work"));
+        assert!(lines_of(&dir.path().join("claude-args"))[0].contains(&format!("--settings {settings}")));
     }
 
     /// A manager whose login shells get a scratch HOME and a PATH finding the

@@ -35,6 +35,9 @@ pub struct ChatCreate {
     pub add_dirs: Vec<String>,
     /// Claude settings for this chat alone (X64), as JSON.
     pub settings: Option<String>,
+    /// For a chat with no session, such as a design system's agent (X64):
+    /// the workspace whose Claude profile it starts in.
+    pub workspace: Option<String>,
 }
 
 /// What is persisted per chat.
@@ -82,6 +85,10 @@ pub struct SessionLaunch {
 }
 
 pub type SessionEnv = Box<dyn Fn(&str) -> SessionLaunch + Send + Sync>;
+
+/// How a chat with no session asks [`SessionEnv`] for its workspace's launch:
+/// `workspace:<id>` instead of a session id.
+pub const WORKSPACE_KEY: &str = "workspace:";
 
 pub struct ChatManager {
     terms: Arc<TerminalManager>,
@@ -171,7 +178,7 @@ impl ChatManager {
         // Only Claude has a permission mode.
         let mode = req.mode.filter(|_| req.agent == "claude");
         let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
-        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, config_dir: None };
+        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, workspace: req.workspace, config_dir: None };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
         command.extend(args);
@@ -668,8 +675,9 @@ impl ChatManager {
 
     /// How the session's agents start: its Claude profile and environment.
     fn launch(&self, inner: &Inner) -> SessionLaunch {
-        match (&inner.info.session_id, self.session_env.get()) {
-            (Some(s), Some(f)) => f(s),
+        match (&inner.info.session_id, &inner.cfg.workspace, self.session_env.get()) {
+            (Some(s), _, Some(f)) => f(s),
+            (None, Some(w), Some(f)) => f(&format!("{WORKSPACE_KEY}{w}")),
             _ => SessionLaunch::default(),
         }
     }

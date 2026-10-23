@@ -63,6 +63,8 @@ pub struct ChatConfig {
     /// Settings for this chat alone, as JSON (Claude's `--settings`): design
     /// agents get the folders they may only read and the commands they may run (X64).
     pub settings: Option<String>,
+    /// The workspace of a chat with no session, for its Claude profile (X64).
+    pub workspace: Option<String>,
     /// The `CLAUDE_CONFIG_DIR` of the last start (X33): a conversation kept
     /// in another profile's folder cannot be resumed.
     pub config_dir: Option<String>,
