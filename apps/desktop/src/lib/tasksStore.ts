@@ -350,6 +350,12 @@ export function saveTrackersConfig(update: (c: TrackersConfig) => TrackersConfig
   return write;
 }
 
+/** Resolves once every write queued so far has landed or failed, including
+ * those nobody waits for, such as the board columns a sync saves. */
+export function settleSaves(): Promise<void> {
+  return saving;
+}
+
 /** Fixes moonlet already made by itself, by `driftKey`, so each happens once (X46). */
 const AUTO_KEY = "tasks.autoFixed";
 export function autoFixed(): Record<string, true> {
