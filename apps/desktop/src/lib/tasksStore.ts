@@ -879,7 +879,7 @@ export function setColumnShow(boardId: string, name: string, show: ColumnShow) {
 }
 
 /** The project path of a workspace project in GitHub repository `repo`. */
-function repoPath(host: string, workspaceId: string, repo: string): string | null {
+export function repoPath(host: string, workspaceId: string, repo: string): string | null {
   const repos = useTasks.getState().data[wsKey(host, workspaceId)]?.repos ?? {};
   const id = Object.keys(repos).find((p) => repos[p]?.toLowerCase() === repo.toLowerCase());
   return useStore.getState().projects[host]?.find((p) => p.id === id)?.path ?? null;

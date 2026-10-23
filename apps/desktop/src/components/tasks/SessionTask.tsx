@@ -14,6 +14,7 @@ import { wsKey } from "../../lib/workspaces";
 import { Markdown } from "../AgentView";
 import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
+import { TaskComments } from "./TaskComments";
 
 const COLUMN_LABEL: Record<Card["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };
 
@@ -139,6 +140,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
           Unlink
         </Button>
       </div>
+      <TaskComments host={host} workspaceId={ws.workspace_id ?? null} task={card.task} />
     </div>
   );
 }
