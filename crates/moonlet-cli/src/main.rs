@@ -573,6 +573,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                         mode,
                         pr: None,
                         tui: false,
+                        cloud: false,
                         spawned_by: terminal_from_env(),
                         workspace_id: None,
                         add_dirs: vec![],

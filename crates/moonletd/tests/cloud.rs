@@ -248,3 +248,65 @@ async fn cloud_set_from_the_cli_or_a_phone_is_forbidden() {
         None
     );
 }
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A project `shop` with one commit, added to `d`; gives its id.
+async fn shop(d: &Daemon) -> String {
+    let repo = d.home.path().join("src/shop");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("README.md"), "shop\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "shop"]);
+    let project: Value = d.call("project.add", json!({ "path": repo })).await;
+    project["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a_session_asks_for_the_cloud_when_it_is_made() {
+    let d = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
+    let project = shop(&d).await;
+    let cloudy: Value = d
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "big-refactor", "agent": "none", "cloud": true }),
+        )
+        .await;
+    let plain: Value = d
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "fix-cart", "agent": "none" }),
+        )
+        .await;
+    let listed: Vec<Value> = d.call("session.list", json!({})).await;
+    let cloud_of = |id: &Value| {
+        listed
+            .iter()
+            .find(|s| s["id"] == *id)
+            .map(|s| s["cloud"].clone())
+            .unwrap()
+    };
+    assert_eq!(cloud_of(&cloudy["id"]), json!(true));
+    assert_eq!(cloud_of(&plain["id"]), Value::Null);
+}
