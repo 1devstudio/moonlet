@@ -109,6 +109,8 @@ pub struct Conn {
     next_transfer: AtomicU32,
     /// Set once the connection has ended.
     gone: std::sync::atomic::AtomicBool,
+    /// A cloud machine's connection (X63).
+    pub cloud: std::sync::atomic::AtomicBool,
 }
 
 impl Conn {
@@ -270,6 +272,7 @@ where
         packs: Mutex::new(PackAssembler::default()),
         next_transfer: AtomicU32::new(1),
         gone: std::sync::atomic::AtomicBool::new(false),
+        cloud: std::sync::atomic::AtomicBool::new(false),
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
 
@@ -289,6 +292,7 @@ where
         .phone
         .as_deref()
         .is_some_and(|d| daemon.machines.machine_of(d).is_some());
+    conn.cloud.store(cloud, Ordering::Relaxed);
     let event_task = tokio::spawn(async move {
         loop {
             match events.recv().await {

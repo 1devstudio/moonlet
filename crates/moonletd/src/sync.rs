@@ -1008,6 +1008,12 @@ impl LiveCopies {
                 k.host
             )));
         }
+        // Its parents never come: git must know before it reads the pack.
+        if fetched.shallow {
+            git_sync::mark_shallow(&repo, &fetched.head)
+                .await
+                .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+        }
         if let Some(t) = fetched.pack {
             let pack = host
                 .take_pack(t)
@@ -2581,6 +2587,7 @@ impl LiveCopies {
                 head: String::new(),
                 too_big: Vec::new(),
                 pack: None,
+                shallow: false,
             });
         }
         let lock = self.lock(&format!("session:{}", served.path));
@@ -2590,9 +2597,14 @@ impl LiveCopies {
         let head = git_sync::head(path).await.map_err(internal)?;
         let have = git_sync::present(path, &req.have).await.map_err(internal)?;
         let have: Vec<&str> = have.iter().map(String::as_str).collect();
-        let pack = git_sync::pack_objects(path, &[&snap.tree, &head], &have)
-            .await
-            .map_err(internal)?;
+        // A cloud machine gets the commit and the files, never older history.
+        let shallow = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+        let pack = if shallow {
+            git_sync::pack_shallow(path, &head, &snap.tree).await
+        } else {
+            git_sync::pack_objects(path, &[&snap.tree, &head], &have).await
+        }
+        .map_err(internal)?;
         let pack = send_pack(&pack, |p| conn.send_pack(p))?;
         git_sync::set_base_ref(path, &req.copy, &snap.tree)
             .await
@@ -2603,6 +2615,7 @@ impl LiveCopies {
             head,
             too_big: snap.too_big,
             pack,
+            shallow,
         })
     }
 

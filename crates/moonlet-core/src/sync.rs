@@ -721,6 +721,34 @@ pub async fn delete_base_ref(repo: &Path, copy: &str) -> Result<()> {
     Ok(())
 }
 
+/// A pack of commit `head` without its parents, its tree and `tree`: what a
+/// cloud machine starts from, with no older history (X63).
+pub async fn pack_shallow(repo: &Path, head: &str, tree: &str) -> Result<Vec<u8>> {
+    if !is_object_id(head) || !is_object_id(tree) {
+        bail!("not an object id");
+    }
+    let revs = format!("{head}\n{tree}\n");
+    let objects = git_env(repo, &[], &["rev-list", "--objects", "--no-walk", "--stdin"], Some(revs.as_bytes())).await?;
+    git_env(repo, &[], &["pack-objects", "--stdout", "-q"], Some(&objects)).await
+}
+
+/// Records `head` as a shallow boundary of `repo`: git then reads it as a
+/// commit with no parents.
+pub async fn mark_shallow(repo: &Path, head: &str) -> Result<()> {
+    if !is_object_id(head) {
+        bail!("not an object id");
+    }
+    let dir = git_env(repo, &[], &["rev-parse", "--absolute-git-dir"], None).await?;
+    let file = PathBuf::from(String::from_utf8_lossy(&dir).trim()).join("shallow");
+    let mut lines = std::fs::read_to_string(&file).unwrap_or_default();
+    if !lines.lines().any(|l| l == head) {
+        lines.push_str(head);
+        lines.push('\n');
+        std::fs::write(&file, lines)?;
+    }
+    Ok(())
+}
+
 /// A git pack of the objects `new` (trees or commits) reach and none of
 /// `not` does: what the other side, which has `not`, lacks. Empty when it
 /// lacks nothing.
