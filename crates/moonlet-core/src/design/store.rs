@@ -382,20 +382,18 @@ impl Store {
         if !(shape && plain && html) {
             bail!("{card} is not a card of {slug}");
         }
+        // Through handles opened from the system's folder: nothing lands
+        // outside it, whatever links are in the way.
         let path = dir.join(card);
         let folder = path.parent().unwrap_or(&dir).to_path_buf();
-        let real_dir = std::fs::canonicalize(&dir)?;
-        if std::fs::canonicalize(&folder).map_or(true, |f| !f.starts_with(&real_dir)) {
-            bail!("{card} is not a card of {slug}");
-        }
         let proposed = path.with_extension("proposed.html");
         match choice {
-            Settle::Mine => std::fs::remove_file(&proposed)?,
-            Settle::Synced => std::fs::rename(&proposed, &path)?,
-            Settle::Remove if parts[0] == "components" => std::fs::remove_dir_all(&folder)?,
+            Settle::Mine => fsx::remove_file_inside(&dir, &proposed)?,
+            Settle::Synced => fsx::rename_inside(&dir, &proposed, &path)?,
+            Settle::Remove if parts[0] == "components" => fsx::remove_dir_inside(&dir, &folder)?,
             Settle::Remove => {
-                std::fs::remove_file(&path)?;
-                let _ = std::fs::remove_file(&proposed);
+                fsx::remove_file_inside(&dir, &path)?;
+                fsx::remove_file_inside(&dir, &proposed)?;
             }
             Settle::Keep => {}
         }
